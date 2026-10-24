@@ -8,6 +8,7 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@mcp/agent-runtime-contracts": "workspace:*"
+    "@mcp/agent-runtime-contracts": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*"
   }
 }

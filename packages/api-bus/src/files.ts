@@ -81,6 +81,7 @@ export interface HistoryRevision {
 
 export interface FilesApi {
   list(input: { projectId: number }, ctx: ApiContext): Promise<unknown[]>;
+  searchPaths(input: { projectId: number; query: string; limit?: number; fuzzy?: boolean }, ctx: ApiContext): Promise<Array<{ path: string }>>;
   manifest(input: { projectId: number }, ctx: ApiContext): Promise<ManifestInfo>;
   get(input: { projectId: number; path: string }, ctx: ApiContext): Promise<unknown>;
 

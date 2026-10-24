@@ -79,7 +79,9 @@ export function RunSection({
           ? { label: 'Pronto', tone: 'success' as const }
           : { label: 'Ausente', tone: 'warning' as const };
 
-  const watcherState = structural?.watcherActive
+  const watcherState = structural?.watcherMode === 'polling'
+    ? { label: 'Verificação periódica', tone: 'info' as const }
+    : structural?.watcherActive
     ? { label: 'Pronto', tone: 'success' as const }
     : phase === 'scanning' || phase === 'structural_indexing'
       ? { label: 'Iniciando', tone: 'info' as const }
@@ -181,7 +183,9 @@ export function RunSection({
           </CardHeader>
           <CardContent className="space-y-3 text-xs">
             <p className="text-muted-foreground">{t('index.overview.watcherDescription')}</p>
-            <Detail label="Estado observado" value={structural?.watcherActive ? 'Monitorando o projeto' : 'Sem lease ativo'} />
+            <Detail label="Estado observado" value={structural?.watcherMode === 'polling'
+              ? 'Arquivos abertos acompanhados; projeto reconciliado periodicamente'
+              : structural?.watcherActive ? 'Monitorando o projeto' : 'Sem lease ativo'} />
             <Detail label="Fila atual" value={`${structural?.dirtyPending ?? 0} alteração(ões)`} />
           </CardContent>
         </Card>

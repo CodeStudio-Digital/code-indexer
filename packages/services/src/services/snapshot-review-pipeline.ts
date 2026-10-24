@@ -61,6 +61,7 @@ export interface SnapshotReviewResult {
 }
 
 export interface SnapshotReviewInput {
+  signal?: AbortSignal;
   sessionKind: 'coder' | 'company';
   sessionId: string;
   resolveContext: ResolveContext;
@@ -183,11 +184,13 @@ export class SnapshotReviewPipeline {
     let pendingHunks = 0;
     let lastRaw = '';
     try {
+      input.signal?.throwIfAborted();
       // resolveChain lets a second configured reviewer binding (or the general
       // default) take over when the primary is uncallable/down. The runner
       // skips misconfigured bindings internally, so the explicit bindingProblem
       // pre-check is no longer needed.
       const chain = await this.resolver.resolveChain(PIPELINE_NAME, ROLE, input.resolveContext);
+      input.signal?.throwIfAborted();
       if (chain.length === 0) {
         return this.finish(input, startedAt, 0, 0, true, {
           ok: false,
@@ -217,12 +220,14 @@ export class SnapshotReviewPipeline {
             temperature: 0,
             maxTokens: toNumber(config.max_tokens) ?? 4000,
             timeoutMs,
+            signal: input.signal,
           });
         },
         {
           label: LABEL,
           codePrefix: 'review_pipeline',
           retry: { maxRetries: 0 },
+          signal: input.signal,
           invalidResultRetries: 1,
           validateResult: (chatResult) => {
             try {
@@ -238,6 +243,7 @@ export class SnapshotReviewPipeline {
       const result = failover.result;
       lastRaw = result.content;
       binding = failover.binding ?? chain[0];
+      input.signal?.throwIfAborted();
       if (result.errorBody) {
         const invalidResponse = result.errorBody.startsWith(INVALID_RESPONSE_PREFIX);
         return this.finish(input, startedAt, pendingHunks, 0, true, {
@@ -270,7 +276,7 @@ export class SnapshotReviewPipeline {
         raw: lastRaw,
         providerId: binding?.provider.id,
         modelId: binding?.modelId,
-        errorCode: 'review_pipeline_error',
+        errorCode: input.signal?.aborted ? 'review_pipeline_cancelled' : 'review_pipeline_error',
         error: e instanceof Error ? e.message : String(e),
       });
     }

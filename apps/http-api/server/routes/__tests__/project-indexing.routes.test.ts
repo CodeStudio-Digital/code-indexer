@@ -55,6 +55,10 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       ensureStructuralReady: vi.fn(async () => ({ status: 'ready', phase: 'ready' })),
       getStatus: vi.fn(() => ({ projectId: 7, phase: 'ready' })),
     },
+    semanticJobs: {
+      projectJobsPage: vi.fn(async () => ({ jobs: [...jobs], nextBeforeId: null })),
+      currentProjectJobs: vi.fn(async () => [...jobs]),
+    },
     semanticStore: {
       listProfiles: vi.fn(() => [{
         purpose: 'code',
@@ -72,7 +76,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
         },
         reranker_target: { kind: 'onnx', model: 'auto' },
       })),
-      listJobs: vi.fn(() => [...jobs]),
+      listJobs: vi.fn(() => { throw new Error('Unbounded main-thread job query'); }),
       getJob: vi.fn((id: number) => jobs.find((job) => job.id === id) ?? null),
       updateJob: vi.fn((_id: number, patch: Record<string, unknown>) => ({ ...jobs[0], ...patch })),
       getGeneration: vi.fn((id: number) => ({
@@ -118,6 +122,36 @@ function appWith(deps: ServerDeps): Hono {
 }
 
 describe('project indexing routes', () => {
+  it('returns a bounded worker page and a continuation cursor without scanning on main', async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.semanticJobs.projectJobsPage).mockResolvedValue({ jobs: [], nextBeforeId: 400 });
+    const response = await appWith(deps).request('/api/projects/7/indexing/jobs?limit=20&before_id=600');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ project_id: 7, jobs: [], next_before_id: 400 });
+    expect(deps.semanticJobs.projectJobsPage).toHaveBeenCalledWith({
+      namespaces: ['code:p7', 'snapshot:p7', 'memory:project:p7', 'semantic:reindex:code:p7'],
+      limit: 20, beforeId: 600,
+    }, expect.any(AbortSignal));
+    expect(deps.semanticStore.listJobs).not.toHaveBeenCalled();
+  });
+
+  it('rejects excessive or invalid history page sizes before querying the worker', async () => {
+    const deps = makeDeps(); const app = appWith(deps);
+    for (const path of ['indexing/jobs', 'semantic/status']) {
+      for (const query of ['limit=201', 'limit=NaN', 'before_id=0']) {
+        expect((await app.request(`/api/projects/7/${path}?${query}`)).status).toBe(400);
+      }
+    }
+    expect(deps.semanticJobs.projectJobsPage).not.toHaveBeenCalled();
+  });
+
+  it('keeps an older active job visible even when it is absent from recent history', async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.semanticJobs.projectJobsPage).mockResolvedValue({ jobs: [], nextBeforeId: 500 });
+    const response = await appWith(deps).request('/api/projects/7/semantic/status');
+    expect(await response.json()).toMatchObject({ jobs: [], next_before_id: 500, reindex_job: { id: 41, status: 'running' } });
+    expect(deps.semanticStore.listJobs).not.toHaveBeenCalled();
+  });
   it('reports every project summary with one batched namespace snapshot', async () => {
     const deps = makeDeps();
     const response = await appWith(deps).request('/api/projects/semantic/status');
@@ -134,7 +168,8 @@ describe('project indexing routes', () => {
       error: null,
     });
     expect(deps.localVectorRouter.getNamespaceStatuses).toHaveBeenCalledTimes(1);
-    expect(deps.semanticStore.listJobs).toHaveBeenCalledTimes(1);
+    expect(deps.semanticStore.listJobs).not.toHaveBeenCalled();
+    expect(deps.semanticJobs.currentProjectJobs).toHaveBeenCalledWith([{ projectId: 7, generationIds: [8] }], expect.any(AbortSignal));
     expect(deps.semanticProfileRuntime.rerankerDiagnostics).not.toHaveBeenCalled();
   });
 
@@ -193,29 +228,14 @@ describe('project indexing routes', () => {
 
   it('does not expose a paused job from a superseded generation as current project work', async () => {
     const deps = makeDeps();
-    vi.mocked(deps.semanticStore.listJobs).mockReturnValue([{
-      id: 59,
-      generation_id: 7,
-      namespace: 'code:p7',
-      kind: 'backfill',
-      status: 'paused',
-      priority: 10,
-      cursor: null,
-      expected_items: 100,
-      processed_items: 100,
-      failed_items: 0,
-      error: 'interrupted by application restart; waiting for an explicit resume',
-      created_at: '2026-07-15 00:00:00',
-      started_at: '2026-07-15 00:00:00',
-      updated_at: '2026-07-15 00:00:01',
-      completed_at: null,
-    }]);
+    vi.mocked(deps.semanticJobs.currentProjectJobs).mockResolvedValue([null]);
 
     const response = await appWith(deps).request('/api/projects/7/semantic/status');
     const body = await response.json() as { reindex_job: unknown };
 
     expect(response.status).toBe(200);
     expect(body.reindex_job).toBeNull();
+    expect(deps.semanticJobs.currentProjectJobs).toHaveBeenCalledWith([{ projectId: 7, generationIds: [8] }], expect.any(AbortSignal));
   });
 
   it('runs the explicit structural reconciliation without a provider', async () => {
@@ -246,13 +266,7 @@ describe('project indexing routes', () => {
 
   it('does not resume a paused job owned by an older generation', async () => {
     const deps = makeDeps();
-    vi.mocked(deps.semanticStore.listJobs).mockReturnValue([{
-      id: 59,
-      generation_id: 7,
-      namespace: 'code:p7',
-      kind: 'backfill',
-      status: 'paused',
-    } as never]);
+    vi.mocked(deps.semanticJobs.currentProjectJobs).mockResolvedValue([null]);
 
     const response = await appWith(deps).request('/api/projects/7/semantic/reindex', {
       method: 'POST',
@@ -263,11 +277,12 @@ describe('project indexing routes', () => {
     expect(response.status).toBe(202);
     expect(deps.semanticCoordinator.resumeJob).not.toHaveBeenCalled();
     expect(deps.semanticCoordinator.enqueueCodeProjectReindex).toHaveBeenCalledWith(7, false);
+    expect(deps.semanticJobs.currentProjectJobs).toHaveBeenCalledWith([{ projectId: 7, generationIds: [8], pausedOnly: true }], expect.any(AbortSignal));
   });
 
   it('resumes a paused job owned by the active generation', async () => {
     const deps = makeDeps();
-    vi.mocked(deps.semanticStore.listJobs).mockReturnValue([{
+    vi.mocked(deps.semanticJobs.currentProjectJobs).mockResolvedValue([{
       id: 60,
       generation_id: 8,
       namespace: 'code:p7',

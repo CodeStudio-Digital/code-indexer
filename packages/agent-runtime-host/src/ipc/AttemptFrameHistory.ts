@@ -115,6 +115,10 @@ export class AttemptFrameHistory {
     return this.#active.size + this.#tombstones.size < this.totalCapacity;
   }
 
+  get remainingIdentityCapacity(): number {
+    return this.totalCapacity - this.#active.size - this.#tombstones.size;
+  }
+
   get replayEntryCount(): number {
     return this.#active.size;
   }

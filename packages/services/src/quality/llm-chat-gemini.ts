@@ -91,12 +91,14 @@ export async function geminiChat(
   const timeoutMs = options.timeoutMs ?? Math.max(1000, toNumber(cfg.timeout) ?? 30_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
-    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    else options.signal.addEventListener('abort', onAbort, { once: true });
   }
   const fetchImpl = options.fetchFn ?? fetch;
   try {
+    controller.signal.throwIfAborted();
     const res = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -106,6 +108,7 @@ export async function geminiChat(
     const latencyMs = performance.now() - startedAt;
     if (!res.ok) {
       const errorBody = await res.text().catch(() => '');
+      controller.signal.throwIfAborted();
       return {
         content: '',
         errorBody: errorBody.slice(0, 2000),
@@ -115,6 +118,7 @@ export async function geminiChat(
       };
     }
     const parsed = (await res.json()) as GeminiResponse;
+    controller.signal.throwIfAborted();
     const content = (parsed.candidates?.[0]?.content?.parts ?? [])
       .map((p) => p.text ?? '')
       .join('');
@@ -125,8 +129,10 @@ export async function geminiChat(
       latencyMs,
     };
   } catch (e) {
-    return { content: '', errorBody: (e as Error).message, latencyMs: performance.now() - startedAt };
+    return { content: '', errorBody: e instanceof Error ? e.message : String(e), latencyMs: performance.now() - startedAt,
+      finishReason: controller.signal.aborted ? options.signal?.aborted ? 'aborted' : 'timeout' : 'error' };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
   }
 }

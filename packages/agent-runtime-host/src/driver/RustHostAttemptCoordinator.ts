@@ -49,12 +49,7 @@ export class RustHostAttemptCoordinator {
     input: RustHostAttemptRunInput,
     signal?: AbortSignal,
   ): Promise<RustHostAttemptRunResult> {
-    if (this.#started) {
-      throw new RustHostAttemptCoordinatorError(
-        'already_started',
-        'Rust Host attempt coordinator is single-use',
-      );
-    }
+    if (this.#started) throw new RustHostAttemptCoordinatorError('already_started', 'Rust Host attempt coordinator is single-use');
     const request = snapshotRustHostAttemptInput(input);
     this.#started = true;
     this.#signals.bindAbort(signal, (cause) => this.abort(cause));
@@ -113,8 +108,12 @@ export class RustHostAttemptCoordinator {
       this.#physicalReap = this.#active!.waitForPhysicalReap();
       return { kind: 'active', hello, authority };
     } catch (cause) {
-      this.#fail(cause);
-      throw cause;
+      // A Data failure can abort Control while activation is awaiting its ACK.
+      // Preserve the originating failure instead of reporting only the later
+      // transport error caused by our own cleanup.
+      const original = signal?.aborted ? rustHostAttemptAborted(signal.reason) : this.#abortCause ?? cause;
+      this.#fail(original);
+      throw original;
     } finally {
       scrubRustHostAttemptInput(request);
     }
@@ -122,6 +121,9 @@ export class RustHostAttemptCoordinator {
   inspectActive(handle: ActiveAttemptAuthorityHandle): ActiveAttemptAuthoritySnapshot {
     this.#assertOpen();
     return this.#requireActive().inspect(handle);
+  }
+  renewAuthority(handle: ActiveAttemptAuthorityHandle, request: import('./HostLifecycleTypes.js').HostAuthorityRenewalRequest): Promise<void> {
+    this.#assertOpen(); return this.#requireActive().renewAuthority(handle, request);
   }
   cancelActive(handle: ActiveAttemptAuthorityHandle, request: HostCancelAttemptRequest): Promise<void> {
     this.#assertOpen();

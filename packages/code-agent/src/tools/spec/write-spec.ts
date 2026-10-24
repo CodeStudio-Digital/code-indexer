@@ -1,4 +1,5 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { IFilesystemPort } from '@mcp/code-agent/ports/filesystem-port.js';
 import { LocalFilesystemAdapter } from '@mcp/code-agent/ports/filesystem-port.js';
@@ -48,10 +49,17 @@ export async function writeSpecToRepo(
   name: string,
   body: string,
 ): Promise<{ absPath: string; relPath: string; fileName: string }> {
-  const { relPath, fileName } = buildSpecPath(name);
+  const base = buildSpecPath(name);
+  // Multiple drafts may be submitted in one second. Each review must retain
+  // its own immutable artifact, even when the model reuses the same title.
+  const fileName = base.fileName.replace(/\.md$/, `-${randomUUID()}.md`);
+  const relPath = `.mcp/specs/${fileName}`;
   const absPath = isAbsolute(relPath) ? relPath : resolve(ctx.cwd, relPath);
   const fs = ctx.ports?.fs ?? FALLBACK_FS;
+  if (!fs.createFile) throw new Error('Specification storage requires exclusive file creation');
+  ctx.signal?.throwIfAborted();
   await fs.mkdir(dirname(absPath), { recursive: true });
-  await fs.writeFile(absPath, body);
+  ctx.signal?.throwIfAborted();
+  await fs.createFile(absPath, body);
   return { absPath, relPath, fileName };
 }

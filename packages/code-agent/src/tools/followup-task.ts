@@ -27,19 +27,15 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import { err } from '@mcp/code-agent/core/tool.js';
 import { sendMessage } from '@mcp/code-agent/tools/send-message.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { nativeAgentMessage } from './native-agent-message.js';
 
 const FOLLOWUP_TASK_DESC =
-  'Send a NEW TASK to a running spawned agent. Routing is identical to send_message; the difference is intent — ' +
-  'this is framed to the receiver as work to plan and execute, not a notification.\n' +
-  '\n' +
-  'Targets:\n' +
-  '  - `/root/master/<role>-<agentRunId>` — master→sub. The sub treats the payload as a fresh task.\n' +
-  '\n' +
-  "USE: when a sub finished its previous task and you want to hand it the next one without re-spawning.\n" +
-  "USE: when you (master) want to pipeline work through an existing sub session — cheaper than spawning fresh.\n" +
-  "DON'T: use for status acknowledgements ('thanks, continue') — that's send_message.\n" +
-  "DON'T: use for sub→master or sub→sub. Subs ask the master for work via ask_master.\n" +
-  "DON'T: use to interrupt a sub that's blocked on its own ask_user/submit_plan — that's send_input.";
+  'Assign new work to an owned descendant using its exact path from list_agents. A live target receives the task at its next provider boundary. ' +
+  'In a native tree, the original parent may also continue a completed or resumable child using its validated transcript; ' +
+  'this starts an owned background attempt and returns a jobId for collect_agents. Use the new child path for subsequent work. ' +
+  'Keep the task self-contained and within 4096 UTF-8 bytes. Never replay unfinished mutations or uncertain effects. ' +
+  'Use send_message for status updates and send_input to supersede a pending question. Human permission gates still apply. ' +
+  'Company sessions retain their existing live subordinate routing.';
 
 export const followupTask: CoderTool = {
   name: 'followup_task',
@@ -48,12 +44,13 @@ export const followupTask: CoderTool = {
   mutates: false,
   parallelSafe: false,
   riskLevel: 'read',
+  effectBoundary: 'control',
   parameters: {
     type: 'object',
     properties: {
       to: {
         type: 'string',
-        description: 'Target agent path (e.g. `/root/master/frontend-7a3f`). Use list_agents to discover paths.',
+        description: 'Exact owned descendant path returned by list_agents.',
       },
       task: {
         type: 'string',
@@ -65,6 +62,7 @@ export const followupTask: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    if (ctx.runtimeGeneration === 'rust_v1') return nativeAgentMessage(ctx, 'followup', args.to, args.task);
     const to = String(args.to ?? '').trim();
     const task = String(args.task ?? '').trim();
     if (!to) return err('followup_task: `to` is required (agent path).');

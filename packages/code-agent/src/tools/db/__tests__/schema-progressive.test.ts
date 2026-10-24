@@ -31,6 +31,39 @@ function fakeDriver(tableCount = 500): {
 }
 
 describe('progressive db_schema inspection', () => {
+  it('never contacts a driver when already cancelled', async () => {
+    const controller = new AbortController(); controller.abort();
+    const { driver, listTables, describeTable } = fakeDriver();
+    await expect(inspectRelationalSchemaResult(driver, {}, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(listTables).not.toHaveBeenCalled();
+    expect(describeTable).not.toHaveBeenCalled();
+  });
+
+  it('stops waiting for a stalled catalog and ignores its late table result', async () => {
+    const controller = new AbortController();
+    const { driver, listTables, describeTable } = fakeDriver();
+    let complete!: (refs: TableRef[]) => void;
+    listTables.mockImplementation(() => new Promise<TableRef[]>(resolve => { complete = resolve; }));
+    const pending = inspectRelationalSchemaResult(driver, { table: 'late' }, controller.signal);
+    await Promise.resolve();
+    expect(listTables).toHaveBeenCalledOnce();
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    complete([{ schema: 'dbo', name: 'late', kind: 'table' }]);
+    await Promise.resolve();
+    expect(describeTable).not.toHaveBeenCalled();
+  });
+
+  it('cancels while expanding one table', async () => {
+    const controller = new AbortController();
+    const { driver, describeTable } = fakeDriver();
+    describeTable.mockImplementation(async () => {
+      controller.abort(); return new Promise<TableInfo>(() => {});
+    });
+    await expect(inspectRelationalSchemaResult(driver, { table: 'table_042' }, controller.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(describeTable).toHaveBeenCalledOnce();
+  });
   it('reads the schema filter saved by the connection dialog', () => {
     expect(defaultSchemaFromOptions('{"defaultSchema":"  dbo  "}')).toBe('dbo');
     expect(defaultSchemaFromOptions('{broken')).toBeUndefined();

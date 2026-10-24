@@ -4,8 +4,10 @@
  * These are registered into the Master agent's ToolRegistry via runCoder's
  * companyContext integration. Subordinate agents never see them.
  */
-import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';

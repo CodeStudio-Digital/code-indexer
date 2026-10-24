@@ -41,7 +41,6 @@ export const REQUIRED_BUNDLE_DIRECTORIES = [
   'memory',
   'subagents',
   'company',
-  'sprite',
 ] as const;
 
 interface BundleRoots {
@@ -67,11 +66,6 @@ interface AppRow {
   project_id?: number | null;
   company_session_id?: number | null;
   coordinator_session_id?: number | null;
-}
-
-interface SpriteRow {
-  id: number;
-  project_id: number;
 }
 
 export class MissingProjectCatalogEntryError extends Error {
@@ -210,11 +204,6 @@ export function buildBundlePlans(
     'app_studio_sessions',
     ['id', 'project_id', 'company_session_id', 'coordinator_session_id'],
   );
-  const spriteRows = selectKnownColumns<SpriteRow>(
-    db,
-    'sprite_projects',
-    ['id', 'project_id'],
-  );
   const coderLinks = projectLinks(db, 'coder_session_projects', 'coder_session_id');
   const companyLinks = projectLinks(db, 'company_session_projects', 'company_session_id');
   const coderById = new Map(coderRows.map((row) => [row.id, row]));
@@ -304,55 +293,6 @@ export function buildBundlePlans(
       projectRoot,
       'coder_sessions',
     );
-  }
-
-  for (const sprite of spriteRows) {
-    const projectRoot = requireProjectRoot(roots, sprite.project_id, `Sprite project ${sprite.id}`);
-    addPlan({ kind: 'sprite', id: sprite.id }, 'project', projectRoot, 'sprite_projects');
-  }
-
-  if (tableExists(db, 'design_system_sessions')) {
-    const columns = new Set(tableColumns(db, 'design_system_sessions'));
-    if (!columns.has('id') || !columns.has('company_session_id')) {
-      throw new Error('design_system_sessions is missing its ownership columns');
-    }
-    const projectExpression = columns.has('project_id')
-      ? 'project_id'
-      : 'NULL AS project_id';
-    const rows = db.prepare(
-      `SELECT id, company_session_id, ${projectExpression}
-       FROM design_system_sessions ORDER BY id`,
-    ).all() as Array<{
-      id: number;
-      company_session_id: number | null;
-      project_id: number | null;
-    }>;
-    for (const row of rows) {
-      if (row.company_session_id != null) {
-        const parent = planByIdentity.get(`company:${row.company_session_id}`);
-        if (!parent) {
-          throw new Error(
-            `Design session ${row.id} references missing Company session ${row.company_session_id}`,
-          );
-        }
-        addPlan(
-          { kind: 'design', id: row.id },
-          parent.scope,
-          parent.projectRoot,
-          'design_system_sessions',
-        );
-        continue;
-      }
-      if (row.project_id == null) {
-        throw new Error(`Design session ${row.id} has neither Company nor project owner`);
-      }
-      addPlan(
-        { kind: 'design', id: row.id },
-        'project',
-        requireProjectRoot(roots, row.project_id, `Design session ${row.id}`),
-        'design_system_sessions',
-      );
-    }
   }
 
   if (tableExists(db, 'docs_research_sessions')) {

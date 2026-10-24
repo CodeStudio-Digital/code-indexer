@@ -1,25 +1,20 @@
 /**
- * Read tools for the draw.io capability — read one diagram's XML (so the model
- * can edit it surgically), list the saved diagrams, and request an image
- * export. Export is editor-mediated: the tool emits `diagram_export_request`
- * and the live DrawioFrame renders + persists the SVG/PNG (headless export is
- * a future enhancement).
+ * Bounded diagram reads and directory pagination. Export is implemented in
+ * export.ts through the owned renderer port and fenced exclusive file creation.
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import {
   fsPort,
-  fileExists,
   resolveDiagramPath,
   diagramsDirAbs,
-  emitDiagramExportRequest,
   DIAGRAMS_DIR,
 } from './shared.js';
 
 export const diagramReadTool: CoderTool = {
   name: 'diagram_read',
   description:
-    'Read the complete mxGraph XML of a saved draw.io diagram so you can edit it surgically with diagram_update. Oversized output is preserved by the runner and can be paged with get_tool_output.',
+    'Read the complete mxGraph XML of a saved draw.io diagram (up to 4 MiB) so you can edit it with diagram_update. Output beyond the model context limit is preserved by the runner and can be paged with get_tool_output. Larger files can be inspected with read_file.',
   source: 'native',
   mutates: false,
   parallelSafe: true,
@@ -31,14 +26,18 @@ export const diagramReadTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
     const r = resolveDiagramPath(ctx, String(args.name ?? ''));
     if ('error' in r) return r.error;
     const port = fsPort(ctx);
     let xml: string;
     try {
-      xml = await port.readFile(r.abs);
-    } catch {
-      return err(`No diagram named "${r.slug}" (${r.rel}). Use diagram_list to see existing diagrams.`);
+      if (!port.readFileBounded) return err('Filesystem adapter does not support bounded diagram reads.');
+      xml = await port.readFileBounded(r.abs, 4 * 1024 * 1024, ctx.signal);
+    } catch (error) {
+      ctx.signal?.throwIfAborted();
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return err(`No diagram named "${r.slug}" (${r.rel}). Use diagram_list to see existing diagrams.`);
+      return err(`Cannot read ${r.rel}: ${error instanceof Error ? error.message : String(error)}`);
     }
     // The central finalizer owns context shaping and exact spill recovery.
     // Cutting here permanently discarded the XML tail before it could be
@@ -49,64 +48,44 @@ export const diagramReadTool: CoderTool = {
 
 export const diagramListTool: CoderTool = {
   name: 'diagram_list',
-  description: 'List the draw.io diagrams saved in this project (under diagrams/).',
+  description: 'List saved draw.io diagrams under diagrams/ in filesystem order, 100 per page (maximum 500). Use next_offset for the next page. This is a live listing; restart at offset 0 after directory changes.',
   source: 'native',
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',
-  parameters: { type: 'object', properties: {}, additionalProperties: false },
-  handler: async (_args, ctx) => {
+  parameters: { type: 'object', properties: {
+    offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 500 },
+    format: { type: 'string', enum: ['text', 'json'] },
+  }, additionalProperties: false },
+  handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
+    const offset = args.offset ?? 0, limit = args.limit ?? 100;
+    if (!Number.isSafeInteger(offset) || Number(offset) < 0 || !Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 500) return err('offset must be a nonnegative integer and limit must be an integer from 1 to 500.');
     const dir = diagramsDirAbs(ctx);
     if (!dir) return err('Could not resolve the diagrams directory.');
     const port = fsPort(ctx);
-    let names: string[];
+    const names: string[] = [];
+    let seen = 0, more = false;
     try {
-      const entries = await port.readdir(dir, { withFileTypes: true });
-      names = entries
-        .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.drawio'))
-        .map((e) => e.name.replace(/\.drawio$/i, ''))
-        .sort();
-    } catch {
-      return ok('No diagrams yet. Create one with diagram_create.');
+      // Custom legacy ports retain compatibility; the local/native adapter
+      // streams entries and closes the directory when this page ends.
+      const entries = port.iterateDirectory?.(dir, ctx.signal) ?? await port.readdir(dir, { withFileTypes: true });
+      for await (const entry of entries) {
+        ctx.signal?.throwIfAborted();
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.drawio')) continue;
+        if (seen++ < Number(offset)) continue;
+        if (names.length === limit) { more = true; break; }
+        names.push(entry.name.replace(/\.drawio$/i, ''));
+      }
+    } catch (error) {
+      ctx.signal?.throwIfAborted();
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return err(`Cannot list diagrams: ${error instanceof Error ? error.message : String(error)}`);
     }
-    if (!names.length) return ok('No diagrams yet. Create one with diagram_create.');
-    return ok(`${names.length} diagram(s) in ${DIAGRAMS_DIR}/:\n${names.map((n) => `- ${n}`).join('\n')}`);
+    const next = more ? Number(offset) + names.length : null;
+    if (args.format === 'json') return { ...ok(JSON.stringify({ directory: DIAGRAMS_DIR, names, offset, next_offset: next, live_listing: true })), contentFormat: 'json' };
+    if (!names.length) return ok(offset ? 'No more diagrams at this offset. Restart at offset 0 after directory changes.' : 'No diagrams yet. Create one with diagram_create.');
+    return ok(`${names.length} diagram(s) in ${DIAGRAMS_DIR}/:\n${names.map((n) => `- ${n}`).join('\n')}${next === null ? '' : `\nMore diagrams: call diagram_list with offset=${next}.`}`);
   },
 };
 
-export const diagramExportTool: CoderTool = {
-  name: 'diagram_export',
-  description:
-    'Export a saved diagram to SVG or PNG, written next to the .drawio file (diagrams/<name>.<format>). Requires the Diagram panel/editor to be OPEN — it asks the live editor to render and persist the image. Use once the diagram looks right, e.g. to embed it in a README or PR.',
-  source: 'native',
-  mutates: true,
-  parallelSafe: false,
-  riskLevel: 'write',
-  parameters: {
-    type: 'object',
-    properties: {
-      name: { type: 'string', description: 'Diagram name (diagrams/<slug>.drawio).' },
-      format: { type: 'string', enum: ['svg', 'png'], description: 'Image format to export.' },
-    },
-    required: ['name', 'format'],
-    additionalProperties: false,
-  },
-  handler: async (args, ctx) => {
-    const r = resolveDiagramPath(ctx, String(args.name ?? ''));
-    if ('error' in r) return r.error;
-    const port = fsPort(ctx);
-    if (!(await fileExists(port, r.abs))) {
-      return err(`No diagram named "${r.slug}" (${r.rel}).`);
-    }
-    const format = args.format === 'png' ? 'png' : 'svg';
-    // The renderer performs the eventual file write after this event. It does
-    // not yet accept a lease-bound request id or cancellation signal, so this
-    // tool intentionally declares no physical effectBoundary. AgentRun
-    // ENFORCE therefore fails closed before reaching this handler; default and
-    // SHADOW modes preserve the existing editor-mediated export.
-    emitDiagramExportRequest(ctx, r.rel, format);
-    return ok(
-      `Requested ${format.toUpperCase()} export of ${r.rel}. If the Diagram panel is open it writes diagrams/${r.slug}.${format}; otherwise open the diagram first and retry.`,
-    );
-  },
-};
+export { diagramExportTool } from './export.js';

@@ -6,7 +6,15 @@
  *     always populating both `file`/`line` (compat) and `code_location`
  */
 import { describe, it, expect } from 'vitest';
-import { reviewSystemPrompt, parseReviewBlock } from '../review-subagent.js';
+import { reviewSystemPrompt, parseReviewBlock, runReviewSubagent } from '../review-subagent.js';
+import type { SubagentParent, SubagentRunResult } from '../implement-subagent.js';
+
+it.each(['completed', 'aborted', 'max_turns', 'error'] as const)('requires a completed review before accepting findings: %s', async reason => {
+  const result: SubagentRunResult = { reason, finalText: '<review>{"findings":[]}</review>', usage: { input_tokens: 1, output_tokens: 1 }, sandboxViolations: [] };
+  const parent = { provider: {}, tools: [], ctx: { cwd: '/fixture', runtimeGeneration: 'rust_v1', controlPlaneParentAgentRunId: 'root',
+    ports: { agentTree: { runtimeGeneration: 'rust_v1', ownerAgentRunId: 'root', run: async () => result } } } } as unknown as SubagentParent;
+  expect((await runReviewSubagent(parent, { spec: 'Review', diff: 'diff --git a/a b/a' })).parsed).toBe(reason === 'completed');
+});
 
 describe('reviewSystemPrompt — target framing', () => {
   it('frames uncommitted / base / commit differently', () => {

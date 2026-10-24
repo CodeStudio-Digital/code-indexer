@@ -107,6 +107,11 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
   return {
     ...createHistoryHandlers(deps),
 
+    async searchPaths({ projectId, query, limit, fuzzy }) {
+      requireProject(projectId);
+      if (typeof query !== 'string') throw new ApiError('bad_request', 400, 'query must be a string');
+      return db.searchFilePaths(projectId, query, limit, fuzzy);
+    },
     async list({ projectId }) {
       return db.listFiles(projectId);
     },

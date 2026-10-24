@@ -175,6 +175,7 @@ export interface Project {
 export interface LLMReference {
   symbol_name: string;
   kind: SymbolKind;
+  reference_kind?: 'call' | 'import';
   line?: number;
   /** Start column of the reference (1-based). Tree-sitter only; migration 141. */
   col?: number;
@@ -187,6 +188,8 @@ export interface LLMSymbol {
   signature: string;
   parent: string | null;
   extends_from?: string;
+  /** Multiple interface parents; extends_from retains first-parent compatibility. */
+  extends_list?: string[];
   implements_list?: string[];
   /** PHP trait mixins (`use TraitName;` in the class body) — persisted as 'mixes' relations. */
   uses_traits?: string[];
@@ -620,6 +623,7 @@ export interface DBSymbolReference {
   /** Start column (1-based) — migration 141; NULL on pre-141 rows. */
   col: number | null;
   context: string | null;
+  reference_kind?: 'call' | 'import' | null;
 }
 
 // ─── Symbol Relations (Hierarchy) ────────────────────────────────

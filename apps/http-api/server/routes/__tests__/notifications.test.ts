@@ -12,7 +12,7 @@ import {
   asCompanySessionId,
   asSessionId,
 } from '@mcp/session-storage';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 
 const CODER_ID = asSessionId(
   '00000000-0000-4000-8000-000000000012',

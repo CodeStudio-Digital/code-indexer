@@ -62,10 +62,6 @@ import { qaTestRuns043 } from './043_qa_test_runs.js';
 import { chromeService045 } from './045_chrome_service.js';
 import { qaArtifacts046 } from './046_qa_artifacts.js';
 import { qaKanbanAndPersistedPath047 } from './047_qa_kanban_and_persisted_path.js';
-import { designSystems048 } from './048_design_systems.js';
-import { verdaccioConfig049 } from './049_verdaccio_config.js';
-import { verdaccioBootstrapPassword050 } from './050_verdaccio_bootstrap_password.js';
-import { designSystemMcpInstall051 } from './051_design_system_mcp_install.js';
 import { providerModelMetadata052 } from './052_provider_model_metadata.js';
 import { coderSessionResponseId053 } from './053_coder_session_response_id.js';
 import { skillContextModeV2 } from './054_skill_context_mode_v2.js';
@@ -145,7 +141,6 @@ import { sessionSummaryBoundary128 } from './128_session_summary_boundary.js';
 import { sessionCompactionSummary129 } from './129_session_compaction_summary.js';
 import { sessionCompactionCounts130 } from './130_session_compaction_counts.js';
 import { sessionToolPermissions131 } from './131_session_tool_permissions.js';
-import { designSystemStudio132 } from './132_design_system_studio.js';
 import { coderToolCallsParent133 } from './133_coder_tool_calls_parent.js';
 import { projectDocCollections134 } from './134_project_doc_collections.js';
 import { modelMaxTools135 } from './135_model_max_tools.js';
@@ -202,16 +197,13 @@ import { coderToolCallsErrorClass186 } from './186_coder_tool_calls_error_class.
 import { symbolsNamespace187 } from './187_symbols_namespace.js';
 import { serviceHealthTransitionsLogs188 } from './188_service_health_transitions_logs.js';
 import { qaRunProgressAndErrorClass189 } from './189_qa_run_progress_and_error_class.js';
-import { dsPipeline190 } from './190_ds_pipeline.js';
 import { retireCompanySessionDatabases191 } from './191_retire_company_session_databases.js';
 import { companySessionEnvScope192 } from './192_company_session_env_scope.js';
 import { projectIndexIgnorePatterns193 } from './193_project_index_ignore_patterns.js';
 import { sessionConfigLock194 } from './194_session_config_lock.js';
 import { sessionEvents195 } from './195_session_events.js';
-import { spriteStudio196 } from './196_sprite_studio.js';
 import { sshSecrets197 } from './197_ssh_secrets.js';
 import { sshHostShared198 } from './198_ssh_host_shared.js';
-import { spriteFrameTracks199 } from './199_sprite_frame_tracks.js';
 import { appStudio200 } from './200_app_studio.js';
 import { appStudioBlueprint201 } from './201_app_studio_blueprint.js';
 import { qualitySystemError202 } from './202_quality_system_error.js';
@@ -272,6 +264,9 @@ import { filesystemSessionCutover263 } from './263_filesystem_session_cutover.js
 import { structuralRunPhaseTelemetry264 } from './264_structural_run_phase_telemetry.js';
 import { removeAgentPipelines265 } from './265_remove_agent_pipelines.js';
 import { removeDeadCodeRunSettings266 } from './266_remove_dead_code_run_settings.js';
+import { retireSpriteAndDesignSystem267 } from './267_retire_sprite_and_design_system.js';
+import { semanticJobLookup268 } from './268_semantic_job_lookup.js';
+import { symbolReferenceKind269 } from './269_symbol_reference_kind.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -357,10 +352,6 @@ export const MIGRATIONS: Migration[] = [
   chromeService045,
   qaArtifacts046,
   qaKanbanAndPersistedPath047,
-  designSystems048,
-  verdaccioConfig049,
-  verdaccioBootstrapPassword050,
-  designSystemMcpInstall051,
   providerModelMetadata052,
   coderSessionResponseId053,
   skillContextModeV2,
@@ -440,7 +431,6 @@ export const MIGRATIONS: Migration[] = [
   sessionCompactionSummary129,
   sessionCompactionCounts130,
   sessionToolPermissions131,
-  designSystemStudio132,
   coderToolCallsParent133,
   projectDocCollections134,
   modelMaxTools135,
@@ -497,16 +487,13 @@ export const MIGRATIONS: Migration[] = [
   symbolsNamespace187,
   serviceHealthTransitionsLogs188,
   qaRunProgressAndErrorClass189,
-  dsPipeline190,
   retireCompanySessionDatabases191,
   companySessionEnvScope192,
   projectIndexIgnorePatterns193,
   sessionConfigLock194,
   sessionEvents195,
-  spriteStudio196,
   sshSecrets197,
   sshHostShared198,
-  spriteFrameTracks199,
   appStudio200,
   appStudioBlueprint201,
   qualitySystemError202,
@@ -574,6 +561,9 @@ export const MIGRATIONS: Migration[] = [
   structuralRunPhaseTelemetry264,
   removeAgentPipelines265,
   removeDeadCodeRunSettings266,
+  retireSpriteAndDesignSystem267,
+  semanticJobLookup268,
+  symbolReferenceKind269,
 ];
 
 /**

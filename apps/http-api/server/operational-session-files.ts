@@ -1,7 +1,6 @@
 import {
   CompanySessionRepository,
   ControlPlaneFileRepository,
-  SpriteSessionRepository,
   asSessionId,
   assertExistingDirectory,
   type CatalogEntry,
@@ -15,10 +14,6 @@ import {
   type SessionLocator,
   type SessionMetadata,
   type SessionState,
-  type SpriteAssetData,
-  type SpriteEntityDataMap,
-  type SpriteEntityKind,
-  type SpriteProjectData,
 } from '@mcp/session-storage';
 
 export type OperationalRuntimeKind = 'company' | 'app_studio';
@@ -73,18 +68,6 @@ export interface CreateCompanyFileSessionInput {
   parent_session_id?: CompanySessionId | null;
 }
 
-export interface SpriteProjectFileRow {
-  id: SessionId;
-  project_id: ProjectId;
-  name: string;
-  style: Record<string, unknown>;
-  export_dir: string;
-  settings: Record<string, unknown>;
-  root_path: string;
-  created_at: string;
-  updated_at: string;
-}
-
 type CompanyMetadata = {
   name: string;
   template_id: number | null;
@@ -96,21 +79,10 @@ type CompanyMetadata = {
   recovered_reason: string | null;
 };
 
-type SpriteMetadata = {
-  name: string;
-  style: Record<string, unknown>;
-  export_dir: string;
-  settings: Record<string, unknown>;
-};
-
 function jsonObject(value: unknown): Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-}
-
-function cleanJsonObject(value: Record<string, unknown>): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
 function asCompanyMetadata(session: SessionMetadata): CompanyMetadata {
@@ -138,17 +110,6 @@ function asCompanyMetadata(session: SessionMetadata): CompanyMetadata {
   };
 }
 
-function asSpriteMetadata(session: SessionMetadata): SpriteMetadata {
-  const raw = jsonObject(session.metadata.sprite);
-  return {
-    name: typeof raw.name === 'string' ? raw.name : session.title ?? 'Sprites',
-    style: jsonObject(raw.style),
-    export_dir:
-      typeof raw.export_dir === 'string' ? raw.export_dir : 'assets/sprites',
-    settings: jsonObject(raw.settings),
-  };
-}
-
 function entityData(
   record: EntityRecord<Record<string, unknown>>,
 ): Record<string, unknown> {
@@ -162,8 +123,8 @@ function entityData(
 }
 
 /**
- * Host-owned filesystem authority for Company, App Studio, control-plane and
- * Sprite operational records. It deliberately receives only project-catalog
+ * Host-owned filesystem authority for Company, App Studio and control-plane
+ * records. It deliberately receives only project-catalog
  * reads: session state can never fall back to, or dual-write into, SQLite.
  */
 export class OperationalSessionFiles {
@@ -484,281 +445,4 @@ export class OperationalSessionFiles {
     });
   }
 
-  #spriteRow(
-    entry: CatalogEntry,
-    project?: EntityRecord<SpriteProjectData> | null,
-  ): SpriteProjectFileRow {
-    const sprite = asSpriteMetadata(entry.session);
-    const data: Partial<SpriteProjectData> = project?.data ?? {};
-    return {
-      id: entry.session.id,
-      project_id: entry.session.owner_project_id as ProjectId,
-      name: typeof data.name === 'string' ? data.name : sprite.name,
-      style: jsonObject(data.style ?? sprite.style),
-      export_dir:
-        typeof data.exportDir === 'string' ? data.exportDir : sprite.export_dir,
-      settings: jsonObject(data.settings ?? sprite.settings),
-      root_path: entry.session.linked_projects[0]?.root_path ?? '',
-      created_at: entry.session.created_at,
-      updated_at: project?.updatedAt ?? entry.session.updated_at,
-    };
-  }
-
-  async getSpriteProject(
-    projectId: ProjectId,
-  ): Promise<SpriteProjectFileRow | null> {
-    await this.#ready();
-    const entry = this.#catalog
-      .list()
-      .find((candidate) =>
-        candidate.session.kind === 'sprite' &&
-        candidate.session.owner_project_id === projectId,
-      );
-    if (!entry) return null;
-    const repository = new SpriteSessionRepository({
-      sessionRoot: entry.location.bundle_path,
-    });
-    return this.#spriteRow(
-      entry,
-      await repository.getProject(entry.session.id),
-    );
-  }
-
-  async createSpriteProject(input: {
-    project_id: ProjectId;
-    name: string;
-    style: Record<string, unknown>;
-    export_dir?: string;
-    settings?: Record<string, unknown>;
-  }): Promise<SpriteProjectFileRow> {
-    const existing = await this.getSpriteProject(input.project_id);
-    if (existing) return existing;
-    const project = await this.#project(input.project_id);
-    const sprite: SpriteMetadata = {
-      name: input.name,
-      style: cleanJsonObject(input.style),
-      export_dir: input.export_dir ?? 'assets/sprites',
-      settings: cleanJsonObject(input.settings ?? {}),
-    };
-    const entry = await this.#repository.createSession({
-      kind: 'sprite',
-      scope: { kind: 'project', project_id: input.project_id },
-      owner_project_id: input.project_id,
-      linked_projects: [{
-        project_id: input.project_id,
-        root_path: project.root_path,
-      }],
-      title: input.name,
-      status: 'idle',
-      metadata: { sprite } as unknown as Record<string, JsonValue>,
-    });
-    const repository = new SpriteSessionRepository({
-      sessionRoot: entry.location.bundle_path,
-    });
-    const row = await repository.createProject({
-      id: entry.session.id,
-      data: {
-        name: input.name,
-        status: 'active',
-        style: input.style as unknown as JsonValue,
-        exportDir: sprite.export_dir,
-        settings: sprite.settings as unknown as JsonValue,
-      },
-    });
-    return this.#spriteRow(entry, row);
-  }
-
-  async updateSpriteProject(
-    projectId: ProjectId,
-    patch: {
-      name?: string;
-      style?: Record<string, unknown>;
-      export_dir?: string;
-      settings?: Record<string, unknown>;
-    },
-  ): Promise<SpriteProjectFileRow | null> {
-    await this.#ready();
-    const entry = this.#catalog
-      .list()
-      .find((candidate) =>
-        candidate.session.kind === 'sprite' &&
-        candidate.session.owner_project_id === projectId,
-      );
-    if (!entry) return null;
-    const repository = new SpriteSessionRepository({
-      sessionRoot: entry.location.bundle_path,
-    });
-    const current = await repository.getProject(entry.session.id);
-    if (!current) throw new Error(`Sprite project ${projectId} is incomplete`);
-    const next = await repository.updateProject(entry.session.id, {
-      data: {
-        ...current.data,
-        ...(patch.name === undefined ? {} : { name: patch.name }),
-        ...(patch.style === undefined
-          ? {}
-          : { style: cleanJsonObject(patch.style) as unknown as JsonValue }),
-        ...(patch.export_dir === undefined
-          ? {}
-          : { exportDir: patch.export_dir }),
-        ...(patch.settings === undefined
-          ? {}
-          : {
-              settings: cleanJsonObject(
-                patch.settings,
-              ) as unknown as JsonValue,
-            }),
-      },
-    });
-    await this.#repository.updateSession(entry.location, (session) => ({
-      ...session,
-      title: patch.name ?? session.title,
-      metadata: {
-        ...session.metadata,
-        sprite: {
-          ...asSpriteMetadata(session),
-          ...(patch.name === undefined ? {} : { name: patch.name }),
-          ...(patch.style === undefined
-            ? {}
-            : { style: cleanJsonObject(patch.style) }),
-          ...(patch.export_dir === undefined ? {} : { export_dir: patch.export_dir }),
-          ...(patch.settings === undefined
-            ? {}
-            : { settings: cleanJsonObject(patch.settings) }),
-        },
-      },
-    }) as SessionMetadata);
-    return this.#spriteRow(
-      {
-        ...entry,
-        session: this.#repository.readSessionSync(entry.location),
-      },
-      next,
-    );
-  }
-
-  async deleteSpriteProject(projectId: ProjectId): Promise<boolean> {
-    await this.#ready();
-    const entry = this.#catalog
-      .list()
-      .find((candidate) =>
-        candidate.session.kind === 'sprite' &&
-        candidate.session.owner_project_id === projectId,
-      );
-    if (!entry) return false;
-    await this.#repository.trashSession(entry.location);
-    return true;
-  }
-
-  async spriteByProject(
-    projectId: ProjectId,
-  ): Promise<{
-    project: SpriteProjectFileRow;
-    repository: SpriteSessionRepository;
-  } | null> {
-    await this.#ready();
-    const entry = this.#catalog
-      .list()
-      .find((candidate) =>
-        candidate.session.kind === 'sprite' &&
-        candidate.session.owner_project_id === projectId,
-      );
-    if (!entry) return null;
-    const repository = new SpriteSessionRepository({
-      sessionRoot: entry.location.bundle_path,
-    });
-    const project = this.#spriteRow(
-      entry,
-      await repository.getProject(entry.session.id),
-    );
-    return { project, repository };
-  }
-
-  async listSpriteProjectContexts(): Promise<Array<{
-    project: SpriteProjectFileRow;
-    repository: SpriteSessionRepository;
-  }>> {
-    await this.#ready();
-    const contexts: Array<{
-      project: SpriteProjectFileRow;
-      repository: SpriteSessionRepository;
-    }> = [];
-    for (const entry of this.#catalog.list()) {
-      if (entry.session.kind !== 'sprite') continue;
-      const repository = new SpriteSessionRepository({
-        sessionRoot: entry.location.bundle_path,
-      });
-      contexts.push({
-        project: this.#spriteRow(
-          entry,
-          await repository.getProject(entry.session.id),
-        ),
-        repository,
-      });
-    }
-    return contexts;
-  }
-
-  async findSpriteEntity<K extends SpriteEntityKind>(
-    kind: K,
-    id: string,
-  ): Promise<{
-    project: SpriteProjectFileRow;
-    repository: SpriteSessionRepository;
-    record: EntityRecord<SpriteEntityDataMap[K]>;
-  } | null> {
-    for (const context of await this.listSpriteProjectContexts()) {
-      const record = await context.repository.get(kind, id);
-      if (record) return { ...context, record };
-    }
-    return null;
-  }
-
-  async createSpriteAsset(
-    projectId: ProjectId,
-    data: SpriteAssetData,
-  ): Promise<EntityRecord<SpriteAssetData>> {
-    const sprite = await this.spriteByProject(projectId);
-    if (!sprite) throw new Error(`Sprite project ${projectId} is not initialized`);
-    return sprite.repository.createAsset({ data });
-  }
-
-  async listSpriteAssets(
-    projectId: ProjectId,
-  ): Promise<Array<EntityRecord<SpriteAssetData>>> {
-    const sprite = await this.spriteByProject(projectId);
-    if (!sprite) return [];
-    return (await sprite.repository.list('asset', { limit: 1_000 })).items;
-  }
-
-  async getSpriteAsset(
-    projectId: ProjectId,
-    assetId: string,
-  ): Promise<EntityRecord<SpriteAssetData> | null> {
-    const sprite = await this.spriteByProject(projectId);
-    return sprite?.repository.get('asset', assetId) ?? null;
-  }
-
-  async updateSpriteAsset(
-    projectId: ProjectId,
-    assetId: string,
-    data: SpriteAssetData,
-  ): Promise<EntityRecord<SpriteAssetData>> {
-    const sprite = await this.spriteByProject(projectId);
-    if (!sprite) throw new Error(`Sprite project ${projectId} is not initialized`);
-    return sprite.repository.update('asset', assetId, {
-      data,
-    });
-  }
-
-  async deleteSpriteAsset(
-    projectId: ProjectId,
-    assetId: string,
-  ): Promise<boolean> {
-    const sprite = await this.spriteByProject(projectId);
-    if (!sprite) return false;
-    const current = await sprite.repository.get('asset', assetId);
-    if (!current) return false;
-    await sprite.repository.moveToTrash('asset', assetId);
-    return true;
-  }
 }

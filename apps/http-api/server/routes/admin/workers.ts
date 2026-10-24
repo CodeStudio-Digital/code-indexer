@@ -7,7 +7,7 @@
  */
 import type { Hono } from 'hono';
 import type { AgentRun } from '@mcp/agent-runtime-contracts';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import {
   ControlPlaneFileRepository,
   type ControlPlaneEntityDataMap,

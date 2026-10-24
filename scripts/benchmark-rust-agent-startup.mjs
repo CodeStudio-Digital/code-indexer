@@ -12,7 +12,9 @@ const targetDirectory = join(
   'target',
   'performance-harness',
 );
-const reportDirectory = join(root, '.tmp', 'rust-agent-performance');
+const reportDirectory = process.env.MCP_RUST_STARTUP_REPORT_DIR
+  ? resolve(process.env.MCP_RUST_STARTUP_REPORT_DIR)
+  : join(root, '.tmp', 'rust-agent-performance');
 const cargo = process.env.CARGO ?? 'cargo';
 const shared = [
   '+1.97.1',

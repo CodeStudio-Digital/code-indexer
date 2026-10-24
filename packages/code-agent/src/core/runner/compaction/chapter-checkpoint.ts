@@ -7,7 +7,7 @@ import {
 import type {
   FsCommitConversationChapterResult,
   FsSessionStore,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/session-storage';
 
 export interface PersistChapterCheckpointInput {

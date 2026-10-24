@@ -8,8 +8,8 @@ import {
   newSessionId,
   type SessionId,
 } from '@mcp/session-storage';
-import type { SessionFilesystemAccess } from '@mcp/code-agent/sessions/types.js';
-import type { FsSessionFilesystemRoot } from '@mcp/code-agent/sessions/fs-store/operational-types.js';
+import type { SessionFilesystemAccess } from '@mcp/session-storage/session-state-types.js';
+import type { FsSessionFilesystemRoot } from '@mcp/session-storage/fs-store/operational-types.js';
 import type { ServerDeps } from '../../../deps.js';
 import { mountCoderFilesystemRootRoutes } from '../filesystem-roots.js';
 

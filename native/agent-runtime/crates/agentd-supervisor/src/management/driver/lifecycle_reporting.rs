@@ -16,6 +16,7 @@ where
         self.lifecycle_fact_outbox.has_capacity()
     }
 
+    #[cfg(test)]
     pub(super) fn stage_reaped_lifecycle(
         &mut self,
         key: &OwnershipKey,
@@ -23,18 +24,12 @@ where
         cause: wire::PhysicalExitCause,
         reaped_at_unix_ms: i64,
     ) -> bool {
-        let exited = AttemptExitedFact::new(reaped, &self.trusted_runner, cause);
-        let reaped = AttemptReapedFact::new(reaped, reaped_at_unix_ms);
-        self.lifecycle_fact_outbox.push(PreparedFactEmission::new(
-            exited.to_wire(),
-            PendingFactAction::new(
-                FactIntent::Unregistered,
-                PendingFactStage::Exited {
-                    key: key.clone(),
-                    reaped: Box::new(reaped),
-                },
-            ),
-            key.clone(),
+        self.lifecycle_fact_outbox.push(prepare_reaped_lifecycle(
+            &self.trusted_runner,
+            key,
+            reaped,
+            cause,
+            reaped_at_unix_ms,
         ))
     }
 
@@ -45,4 +40,26 @@ where
     pub(in crate::management) fn pending_lifecycle_facts(&self) -> usize {
         self.lifecycle_fact_outbox.len()
     }
+}
+
+pub(super) fn prepare_reaped_lifecycle(
+    trusted: &super::TrustedRunnerConfig,
+    key: &OwnershipKey,
+    reaped: &ReapedAttempt,
+    cause: wire::PhysicalExitCause,
+    reaped_at_unix_ms: i64,
+) -> PreparedFactEmission {
+    let exited = AttemptExitedFact::new(reaped, trusted, cause);
+    let reaped = AttemptReapedFact::new(reaped, reaped_at_unix_ms);
+    PreparedFactEmission::new(
+        exited.to_wire(),
+        PendingFactAction::new(
+            FactIntent::Unregistered,
+            PendingFactStage::Exited {
+                key: key.clone(),
+                reaped: Box::new(reaped),
+            },
+        ),
+        key.clone(),
+    )
 }

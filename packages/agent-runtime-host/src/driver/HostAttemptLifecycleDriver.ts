@@ -174,6 +174,7 @@ export class HostAttemptLifecycleDriver {
       return Object.freeze({
         ...this.#receipts.inspectActive(handle),
         heartbeat: this.#heartbeat?.inspect(),
+        remainingControlIdentities: this.#channel?.remainingInboundIdentities,
       });
     } catch (cause) {
       this.#raise(cause);

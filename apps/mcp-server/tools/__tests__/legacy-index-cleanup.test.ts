@@ -40,7 +40,11 @@ function context(): ToolContext {
     }),
     listFiles: () => [file],
     listSnapshots: () => [],
+    getAgentProjectShape: () => ({ topDirectories: [{ path: 'src', files: 1 }], keyFiles: [file.path] }),
+    countSnapshots: () => 0,
     getFile: () => file,
+    getAgentFileSkeleton: () => ({ file, files: 1, total: 1, offset: 0,
+      symbols: [{ file_path: file.path, line: 1, kind: 'function', parent: null, name: 'main', signature: 'main()', stable_id: 's1' }] }),
     getSymbolsByFile: () => [{
       line: 1,
       kind: 'function',
@@ -74,6 +78,28 @@ afterEach(() => {
 });
 
 describe('retired project indexer surfaces', () => {
+  it('cancels the in-flight owner request and does not schedule semantic work', async () => {
+    const abort = new AbortController();
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ctx = context(); ctx.signal = abort.signal;
+    const pending = Promise.resolve(projectTools.find(t => t.name === 'index_project')!.handler({ project_path: 'D:/demo' }, ctx));
+    const rejected = expect(pending).rejects.toThrow('stopped');
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    abort.abort(new Error('stopped')); await rejected;
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it('marks an unconfirmed semantic write as uncertain instead of claiming it never started', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ ok: true, status: { phase: 'ready' } }))
+      .mockRejectedValueOnce(new Error('connection lost after commit'));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await projectTools.find(t => t.name === 'index_project')!.handler({ project_path: 'D:/demo' }, context());
+    expect(result).toMatchObject({ effectOutcome: 'unknown' });
+    expect(JSON.stringify(result)).not.toContain('was not started');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
   it('routes index_project through structural and semantic owner APIs', async () => {
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.endsWith('/index/structural/reconcile')) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type { SessionContext } from '../SessionContext.js';
 import { createCompanyCoderSession } from '../company-coder-sessions.js';
 

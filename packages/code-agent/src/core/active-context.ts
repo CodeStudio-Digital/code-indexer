@@ -12,7 +12,7 @@
  * `currentTodos`, the session's persisted goal, and the active task scope
  * (if execute_task is in flight). It is never persisted to `this.messages`.
  */
-import type { TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { TasksState } from '@mcp/session-storage/session-state-types.js';
 import type { GoalStatus } from '@mcp/code-agent/core/tool.js';
 import { type TodoItem, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 

@@ -111,6 +111,7 @@ export class KimiCodeChatProvider implements ChatProvider {
 
     const stream = await this.client.chat.completions.create(
       params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+      req.signal ? { signal: req.signal } : undefined,
     );
 
     const toolAcc = new Map<

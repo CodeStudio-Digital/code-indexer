@@ -9,7 +9,7 @@
  */
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { extractLastAssistantText } from '@mcp/code-agent/tools/implement-subagent.js';
 
 export const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent coder agent delegated a focused investigation to you.

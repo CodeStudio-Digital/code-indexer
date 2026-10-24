@@ -29,6 +29,7 @@ pub(super) enum PendingWriteCompletion {
     Launch(Box<PreparedLaunchEmission>),
     Shutdown,
     Termination(SupervisorDriverStep),
+    Authority(SupervisorDriverStep),
 }
 
 pub(super) struct PendingServiceWrite {
@@ -142,6 +143,9 @@ where
             }
         };
         match pending.completion {
+            PendingWriteCompletion::Authority(step) => {
+                SupervisorAsyncServiceAdvance::AuthorityUpdated(step)
+            }
             PendingWriteCompletion::Shutdown => {
                 let _committed_stream_seq = receipt.stream_seq();
                 SupervisorAsyncServiceAdvance::ShutdownArmed

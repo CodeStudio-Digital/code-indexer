@@ -3,7 +3,7 @@ import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import {
   resolveSessionProjectAuthority,
   type FsCoderSession,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import {

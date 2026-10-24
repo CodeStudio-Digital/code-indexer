@@ -25,7 +25,7 @@ import { SelectionChips } from './SelectionChips.js';
 import { SessionPickerDropdown } from './SessionPickerDropdown.js';
 import { useEditorChatSession } from './useEditorChatSession.js';
 import type { AgentPreset } from '@mcp/api-bus';
-import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/code-agent/sessions/run-limits.js';
+import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/session-storage/run-limits.js';
 
 interface Props {
   projectId: number;

@@ -62,6 +62,13 @@ export interface ControlPlaneEntityDataMap {
   grant: ControlPlaneGrantData;
   policyDecision: ControlPlanePolicyDecisionData;
   checkpoint: ControlPlaneCheckpointData;
+  attemptPreparation: ControlPlaneCheckpointData;
+  runtimeRoute: ControlPlaneCheckpointData;
+  runtimeRequest: ControlPlaneCheckpointData;
+  supervisorFact: ControlPlaneCheckpointData;
+  nativePreparation: ControlPlaneCheckpointData;
+  nativeActivation: ControlPlaneCheckpointData;
+  nativeTree: ControlPlaneCheckpointData;
   approval: ControlPlaneApprovalData;
 }
 
@@ -91,6 +98,14 @@ const CONTROL_PLANE_DIRECTORIES: Record<ControlPlaneEntityKind, string> = {
   // different envelope schema, so sharing that directory makes either
   // reader reject the other one's records.
   checkpoint: 'checkpoints/control-plane',
+  // Main owns admission; worker-owned policy checkpoints keep a separate journal.
+  attemptPreparation: 'events/attempt-preparations',
+  runtimeRoute: 'events/runtime-routes',
+  runtimeRequest: 'events/runtime-requests',
+  supervisorFact: 'events/supervisor-facts',
+  nativePreparation: 'events/native-preparations',
+  nativeActivation: 'events/native-activations',
+  nativeTree: 'events/native-trees',
   approval: 'events/approvals',
 };
 
@@ -99,6 +114,12 @@ const IMMUTABLE_CONTROL_PLANE_ENTITIES =
     'event',
     'policyDecision',
     'checkpoint',
+    'attemptPreparation',
+    'runtimeRoute',
+    'runtimeRequest',
+    'supervisorFact',
+    'nativePreparation',
+    'nativeActivation',
   ]);
 
 /**

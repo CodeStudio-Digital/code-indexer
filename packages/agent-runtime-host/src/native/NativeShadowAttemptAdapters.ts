@@ -69,6 +69,7 @@ export function createNativeShadowAttemptAdapters(
     budget,
   );
   const pair = new NativeHostAttemptEndpointPair({
+    clock: options.control.clock ?? options.data.clock,
     binding: options.binding,
     launch: options.launch,
     openDeadlineAtUnixMs: options.openDeadlineAtUnixMs,

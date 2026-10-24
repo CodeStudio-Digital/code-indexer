@@ -127,7 +127,8 @@ const mockWorker = vi.hoisted(() => {
   return { MockWorkerHost, state };
 });
 
-vi.mock('@mcp/orchestrator-host', () => ({
+vi.mock('@mcp/orchestrator-host', async importOriginal => ({
+  ...await importOriginal<typeof import('@mcp/orchestrator-host')>(),
   WorkerHost: mockWorker.MockWorkerHost,
 }));
 
@@ -200,6 +201,21 @@ describe('CoderWorkerPool', () => {
     });
     return pool;
   }
+
+  it('recreates an evicted worker for retained history without launching a model or run', async () => {
+    const p = createPool();
+    mockWorker.state.requestImpl = async type => type === 'readAgentTranscript' ? { ok: true, text: 'Retained result' } : { ok: true };
+    await expect(p.readAgentTranscript(sid(99), 'retained-group', 1, 2000)).resolves.toMatchObject({ ok: true, text: 'Retained result' });
+    const first = mockWorker.state.hosts[0];
+    expect(first.bridge.requests.map(request => request.type)).not.toContain('runFresh');
+    expect(first.opts).toMatchObject({ workerData: { nativeChildHistory: { sessionRoot: expect.any(String) } } });
+    await p.evict(sid(99));
+    await expect(p.readAgentTranscript(sid(99), 'retained-group')).resolves.toMatchObject({ ok: true });
+    expect(mockWorker.state.hosts).toHaveLength(2);
+    expect(mockWorker.state.hosts[1].bridge.requests.map(request => request.type)).not.toContain('runFresh');
+    await expect(p.readAgentTranscript(sid(98), '')).resolves.toMatchObject({ reason: 'invalid_reference' });
+    expect(mockWorker.state.hosts).toHaveLength(2);
+  });
 
   it('resolves one immutable policy and sends it with the worker attempt', async () => {
     const runtimePolicy = resolveRuntimePolicyV1({
@@ -457,6 +473,28 @@ describe('CoderWorkerPool', () => {
     await p.evict(sid(96));
     expect(p.has(sid(96))).toBe(false);
     expect(host.evictCalls).toBe(1);
+  });
+
+  it('keeps attempt authority valid until the worker has acknowledged its drain', async () => {
+    const storeSpies = { terminalizeRun: vi.fn(), interruptRun: vi.fn(), renewAttemptLease: vi.fn() };
+    const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+    const context = makeRunContext(95, 'draining');
+    await p.runFresh(sid(95), { userMessage: 'first', controlPlaneRunContext: context });
+    let release!: () => void;
+    mockWorker.state.releaseWriterImpl = async () => {
+      expect(p.getControlPlaneRunContext(sid(95))).toEqual(context);
+      expect(storeSpies.terminalizeRun).not.toHaveBeenCalled();
+      expect(storeSpies.interruptRun).not.toHaveBeenCalled();
+      await new Promise<void>(resolve => { release = resolve; });
+      return { ok: true };
+    };
+    const eviction = p.evict(sid(95));
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(p.getControlPlaneRunContext(sid(95))).toEqual(context);
+    expect(mockWorker.state.hosts[0].evictCalls).toBe(0);
+    release(); await eviction;
+    expect(p.getControlPlaneRunContext(sid(95))).toBeNull();
+    expect(storeSpies.interruptRun).toHaveBeenCalledTimes(1);
   });
 
   it('routes host session diagnostics through the active worker writer', async () => {
@@ -794,6 +832,47 @@ describe('CoderWorkerPool', () => {
     expect(bus2).not.toBe(failedBus);
     expect(bus2.ended).toBe(false);
     expect(mockWorker.state.hosts[0].bridge.requests.filter((request) => request.type === 'runFresh')).toHaveLength(2);
+  });
+
+  it('drains an unacknowledged startup before revoking authority or admitting a replacement', async () => {
+    const store = { terminalizeRun: vi.fn(), interruptRun: vi.fn(), renewAttemptLease: vi.fn() };
+    const p = createPool(store as unknown as ControlPlaneAuthority);
+    const context = makeRunContext(92, 'lost-start-ack');
+    let release!: () => void;
+    mockWorker.state.requestImpl = async () => { throw Object.assign(new Error('start ACK lost'), { code: 'request_timeout' }); };
+    mockWorker.state.releaseWriterImpl = async () => {
+      await new Promise<void>(resolve => { release = resolve; }); return { ok: true };
+    };
+    const starting = p.runFresh(sid(92), { userMessage: 'first', controlPlaneRunContext: context });
+    const rejected = expect(starting).rejects.toThrow('start ACK lost');
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(p.getControlPlaneRunContext(sid(92))).toEqual(context);
+    expect(store.interruptRun).not.toHaveBeenCalled();
+    expect(mockWorker.state.hosts[0].evictCalls).toBe(0);
+    release(); await rejected;
+    expect(p.has(sid(92))).toBe(false);
+    expect(mockWorker.state.hosts[0].evictCalls).toBe(1);
+    mockWorker.state.requestImpl = null; mockWorker.state.releaseWriterImpl = null;
+    await p.runFresh(sid(92), { userMessage: 'second' });
+    expect(mockWorker.state.hosts).toHaveLength(2);
+  });
+
+  it('retains an unconfirmed startup and prevents replacement when drain also loses its ACK', async () => {
+    const store = { terminalizeRun: vi.fn(), interruptRun: vi.fn(), renewAttemptLease: vi.fn() };
+    const p = createPool(store as unknown as ControlPlaneAuthority);
+    const context = makeRunContext(91, 'lost-start-and-drain');
+    mockWorker.state.requestImpl = async () => { throw Object.assign(new Error('ACK lost'), { code: 'request_timeout' }); };
+    mockWorker.state.releaseWriterImpl = async () => { throw new Error('drain ACK lost'); };
+    await expect(p.runFresh(sid(91), { userMessage: 'first', controlPlaneRunContext: context }))
+      .rejects.toMatchObject({ code: 'CODER_STARTUP_UNCERTAIN' });
+    expect(p.getControlPlaneRunContext(sid(91))).toEqual(context);
+    expect(p.isRunning(sid(91))).toBe(true);
+    expect(store.interruptRun).not.toHaveBeenCalled();
+    await expect(p.runFresh(sid(91), { userMessage: 'second' })).rejects.toMatchObject({ code: 'CODER_STARTUP_UNCERTAIN' });
+    expect(mockWorker.state.hosts).toHaveLength(1);
+    expect(mockWorker.state.hosts[0].evictCalls).toBe(0);
+    mockWorker.state.releaseWriterImpl = null;
+    await p.evict(sid(91));
   });
 
   it('renews a silent active run for eleven minutes without depending on bus events', async () => {

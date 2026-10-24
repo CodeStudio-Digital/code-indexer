@@ -1,5 +1,4 @@
 use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::path::Path;
 
 use crate::authority_log::{activate, activate_transferred};
@@ -9,13 +8,14 @@ use crate::lease::WriterLease;
 use crate::manifest::ensure_manifest;
 use crate::payload::commit_payload;
 use crate::record::{JournalRecord, JournalRecordInput};
-use crate::recovery::{RecoveredJournal, StoredOperation, recover};
+use crate::recovery::{RecoveredJournal, recover};
 use crate::{
     DurabilityClass, SessionId, SessionRecordKind, SessionStateSnapshot, SessionStoreError,
     SessionStoreLimits, StorageAuthority,
 };
 
 mod committed_payload;
+mod io;
 mod page;
 mod receipt;
 pub use page::{CommittedRecordPage, ListCommittedRecordsRequest, MAX_COMMITTED_RECORD_PAGE};
@@ -33,6 +33,8 @@ pub struct SessionJournal {
     file: File,
     state: RecoveredJournal,
     poisoned: bool,
+    page_snapshot: Option<page::ValidatedRecordSnapshot>,
+    journal_source: page::JournalStamp,
 }
 
 impl SessionJournal {
@@ -77,6 +79,10 @@ impl SessionJournal {
         };
         let authority_log_bytes = authorities.log_bytes();
         let state = recover(&layout, &session_id, limits, &authorities)?;
+        let journal_source = page::journal_stamp(&layout)?;
+        if journal_source.bytes != state.journal_bytes {
+            return Err(SessionStoreError::ConcurrentMutation);
+        }
         let file = OpenOptions::new()
             .append(true)
             .open(layout.journal())
@@ -91,11 +97,12 @@ impl SessionJournal {
             file,
             state,
             poisoned: false,
+            page_snapshot: None,
+            journal_source,
         })
     }
 
     /// Durably commits a bounded content-addressed record.
-    ///
     /// # Errors
     ///
     /// Rejects divergent replay, exhausted limits, external mutation, or any
@@ -108,15 +115,16 @@ impl SessionJournal {
             return Err(SessionStoreError::Poisoned);
         }
         self.verify_authority()?;
+        self.verify_snapshot_source()?;
         let payload_bytes = u64::try_from(request.payload.len())
             .map_err(|_| SessionStoreError::PayloadLimitExceeded)?;
         if payload_bytes > self.limits.max_payload_bytes() {
             return Err(SessionStoreError::PayloadLimitExceeded);
         }
         let payload_hash = sha256(request.payload);
-        if let Some(stored) = self.state.operations.get(request.operation_id) {
+        if let Some(index) = self.state.operations.get(request.operation_id) {
             return replay(
-                stored,
+                &self.state.records[*index],
                 request.kind,
                 request.durability,
                 payload_hash,
@@ -187,6 +195,7 @@ impl SessionJournal {
             self.poisoned = true;
             return Err(error);
         }
+        self.refresh_snapshot_source()?;
         let receipt = CommitReceipt::from_record(&self.session_id, &record);
         self.state.count = sequence;
         self.state.previous_hash = record.record_hash;
@@ -195,29 +204,12 @@ impl SessionJournal {
             .journal_bytes
             .checked_add(u64::try_from(encoded.len()).expect("journal record length fits u64"))
             .ok_or(SessionStoreError::SequenceOverflow)?;
-        self.state.operations.insert(
-            request.operation_id.clone(),
-            StoredOperation {
-                receipt: receipt.clone(),
-                payload_hash,
-                payload_bytes,
-            },
-        );
+        self.state
+            .operations
+            .insert(request.operation_id.clone(), self.state.records.len());
+        self.state.records.push(receipt.clone());
         self.state.archived = request.kind == SessionRecordKind::Archive;
         Ok(CommitOutcome::Committed(receipt))
-    }
-
-    fn verify_journal_length(&mut self) -> Result<(), SessionStoreError> {
-        let length = self
-            .file
-            .metadata()
-            .map_err(|error| SessionStoreError::io("inspect session journal writer", error))?
-            .len();
-        if length != self.state.journal_bytes {
-            self.poisoned = true;
-            return Err(SessionStoreError::ConcurrentMutation);
-        }
-        Ok(())
     }
 
     fn verify_authority(&mut self) -> Result<(), SessionStoreError> {
@@ -233,14 +225,5 @@ impl SessionJournal {
             return Err(SessionStoreError::StaleAuthority);
         }
         Ok(())
-    }
-
-    fn write_record(&mut self, encoded: &[u8]) -> Result<(), SessionStoreError> {
-        self.file
-            .write_all(encoded)
-            .map_err(|error| SessionStoreError::io("append session journal", error))?;
-        self.file
-            .sync_all()
-            .map_err(|error| SessionStoreError::io("sync session journal", error))
     }
 }

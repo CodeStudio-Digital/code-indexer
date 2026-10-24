@@ -8,7 +8,7 @@ use super::super::validation::timestamp_within_local_peer;
 
 const MAX_NATIVE_READ_BYTES: u64 = 64 * 1_024 * 1_024;
 
-pub(super) fn validate_execute(
+pub(in crate::provider_data) fn validate_execute(
     value: &wire::CapabilityExecute,
     identity: &wire::AttemptIdentity,
     runtime_instance_id: &str,

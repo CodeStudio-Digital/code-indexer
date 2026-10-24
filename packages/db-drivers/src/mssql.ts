@@ -10,6 +10,7 @@
  * against a live server — exercise with a real instance before trusting writes.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { assertDatabaseDispatch } from './dispatch.js';
 import { quoteRelation } from './sql/identifiers.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
@@ -158,6 +159,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
   const pool = await new mssql.ConnectionPool(poolInput).connect();
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    assertDatabaseDispatch(opts);
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // SQL Server has no per-session `SET TRANSACTION READ ONLY`. For a saved
     // read-only connection, execute inside a pinned transaction and always roll
@@ -181,6 +183,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
       (opts.params ?? []).forEach((p, i) => request.input(`p${i}`, p ?? null));
+      assertDatabaseDispatch(opts);
       const result = shapeMssqlResult(await request.query(sql), max);
       if (txn && inTxn) {
         await txn.rollback();

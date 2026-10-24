@@ -22,6 +22,7 @@ import {
   reloadGroupUnderLease,
   tryAcquireResume,
   releaseResume,
+  resumeNeedsReconciliation,
   type ResumableAgentState,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
 
@@ -39,8 +40,8 @@ function attemptCap(state: ResumableAgentState): number {
 }
 
 function canResume(state: ResumableAgentState): boolean {
-  return state.reason !== 'completed'
-    && !!state.transcript
+  return !resumeNeedsReconciliation(state) && state.reason !== 'completed'
+    && !!(state.transcript || state.nativeTranscriptRef)
     && state.attempt < attemptCap(state);
 }
 
@@ -70,7 +71,7 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
       const spawnId = typeof args.spawn_id === 'string' ? args.spawn_id.trim() : '';
       if (!spawnId) return err('resume_agent: `spawn_id` is required.');
-      const sessionId = ctx.runner?.sessionId;
+      const sessionId = ctx.runner?.sessionId ?? ctx.sessionId;
       if (sessionId == null) return err('resume_agent: no active session.');
 
       const observed = await getGroup(
@@ -125,13 +126,21 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
         const skipped: string[] = [];
         const targets: ResumableAgentState[] = [];
         for (const state of unfinished) {
+          if (resumeNeedsReconciliation(state)) {
+            skipped.push(`#${state.agentIndex + 1} ${state.label} (outcome_unknown: reconcile the existing effect before resuming)`);
+            continue;
+          }
           const kind = classifyResumeKind(state.reason, state.failureNote);
           const chosen = explicit ? explicit.has(state.agentIndex) : kind !== 'aborted' && kind !== 'quality';
           if (!chosen) {
             if (!explicit) skipped.push(`#${state.agentIndex + 1} ${state.label} (${kind} — name it in \`agents\` to retry)`);
             continue;
           }
-          if (!state.transcript) {
+          if (state.nativeTranscriptRef && (ctx.runtimeGeneration !== 'rust_v1' || ctx.ports?.agentTree?.runtimeGeneration !== 'rust_v1')) {
+            skipped.push(`#${state.agentIndex + 1} ${state.label} (native continuation requires its owned Rust tree)`);
+            continue;
+          }
+          if (!state.transcript && !state.nativeTranscriptRef) {
             skipped.push(`#${state.agentIndex + 1} ${state.label} (resume state expired — re-spawn or decompose the task)`);
             continue;
           }
@@ -141,21 +150,24 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
           }
           targets.push(state);
         }
+        const unresolvedEffect = unfinished.some(resumeNeedsReconciliation);
+        if (unresolvedEffect) targets.length = 0;
 
         if (targets.length === 0) {
           const why = skipped.length ? `\nSkipped: ${skipped.join('; ')}` : '';
-          const retryable = unfinished.some(canResume);
+          const retryable = !unresolvedEffect && unfinished.some(canResume);
           const status = group.agents.some((state) => state.reason === 'completed')
             ? 'partial'
             : 'failed';
           return {
             content: `resume_agent: no eligible agents to resume in '${spawnId}'.${why}`,
             isError: true,
+            ...(unfinished.some(resumeNeedsReconciliation) ? { effectOutcome: 'unknown' as const } : {}),
             error: {
               code: retryable ? 'RESUME_AGENT_INCOMPLETE' : 'RESUME_AGENT_EXHAUSTED',
               kind: 'tool_error',
               retryable,
-              suggestedAction: retryable
+              suggestedAction: unresolvedEffect ? 'Reconcile the existing child effect before continuing or spawning replacement work.' : retryable
                 ? `Retry resume_agent with spawn_id '${spawnId}' and explicitly select the unfinished agents.`
                 : 'No unfinished agent has a resumable attempt left; decompose the task or spawn narrowly scoped replacement work.',
             },
@@ -201,7 +213,8 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
         };
         if (remainingCount > 0) {
           const partial = status === 'partial';
-          const retryable = remaining.some(canResume);
+          const uncertain = outcome.effectOutcome === 'unknown' || remaining.some(resumeNeedsReconciliation);
+          const retryable = !uncertain && remaining.some(canResume);
           const incompleteBecauseSkipped = outcome.stillFailed === 0;
           const errorCode = incompleteBecauseSkipped
             ? retryable ? 'RESUME_AGENT_INCOMPLETE' : 'RESUME_AGENT_EXHAUSTED'
@@ -209,11 +222,12 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
           return {
             content,
             isError: true,
+            ...(outcome.effectOutcome === 'unknown' || remaining.some(resumeNeedsReconciliation) ? { effectOutcome: 'unknown' as const } : {}),
             error: {
               code: errorCode,
               kind: 'tool_error',
               retryable,
-              suggestedAction: retryable
+              suggestedAction: uncertain ? 'Reconcile the existing child effect before continuing or spawning replacement work.' : retryable
                 ? `Retry resume_agent with spawn_id '${spawnId}' to continue only the unfinished agents.`
                 : 'No unfinished agent has a resumable attempt left; decompose or narrow the task before spawning replacement work.',
             },

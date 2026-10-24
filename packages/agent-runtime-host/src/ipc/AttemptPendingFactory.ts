@@ -25,9 +25,11 @@ export function pendingFromValidatedFrame(
     terminalPayloadSha256: body.case === 'terminalProposal'
       ? body.value.terminalPayloadSha256.slice()
       : undefined,
-    providerOperationId: body.case === 'providerStart'
+    providerOperationId: body.case === 'providerStart' || body.case === 'providerCheckpoint'
+      || body.case === 'providerRequestChunk' || body.case === 'providerRequestCommit'
       ? body.value.operationId
       : undefined,
+    providerCheckpointOnly: body.case === 'providerRequestCommit' ? body.value.checkpointOnly : undefined,
     capabilityOperationId: body.case === 'capabilityPrepare' || body.case === 'capabilityExecute'
       ? body.value.operationId
       : undefined,
@@ -37,6 +39,7 @@ export function pendingFromValidatedFrame(
     capabilityGrantId: body.case === 'capabilityExecute'
       ? body.value.grantId
       : undefined,
+    capabilityBatchId: body.case === 'capabilityReadBatchExecute' ? body.value.batchId : undefined,
     engineEventPayloadSha256: body.case === 'engineEventProposal'
       ? body.value.expectedPayloadSha256.slice()
       : undefined,

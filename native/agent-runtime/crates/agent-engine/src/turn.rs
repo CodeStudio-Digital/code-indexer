@@ -1,12 +1,19 @@
+mod budget;
 mod capability;
+mod capability_batch;
 mod capability_execution;
+mod capability_refusal;
+mod capability_started;
 mod model;
 mod resume;
 mod stream;
 mod terminal;
 
+pub use budget::TurnBudgetLimit;
 pub use capability::CapabilityPrepareError;
+pub use capability_batch::CapabilityBatch;
 pub use capability_execution::CapabilityExecutionError;
+pub use capability_started::StartedCapability;
 pub use model::{TurnEngineError, TurnInput, TurnOutcome};
 
 use crate::lifecycle::{RunLifecycle, RunState};
@@ -21,6 +28,7 @@ use stream::StreamPorts;
 pub struct TurnEngine {
     pub(super) lifecycle: RunLifecycle,
     pub(super) limits: EngineLimits,
+    capability_boundary: Option<std::sync::Arc<capability_batch::BatchState>>,
 }
 
 impl TurnEngine {
@@ -29,6 +37,7 @@ impl TurnEngine {
         Self {
             lifecycle: RunLifecycle::default(),
             limits,
+            capability_boundary: None,
         }
     }
 

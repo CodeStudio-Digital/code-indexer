@@ -1,3 +1,4 @@
+mod authority;
 mod fakes;
 mod fixtures;
 mod ownership;

@@ -15,7 +15,7 @@ import { err } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { runReviewSubagent, type ReviewInput, type ReviewFinding } from '@mcp/code-agent/tools/review-subagent.js';
 import type { SubagentParent } from '@mcp/code-agent/tools/implement-subagent.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/session-storage';
 
 export interface RequestReviewDeps {
@@ -26,6 +26,7 @@ export interface RequestReviewDeps {
   sessionStore?: FsSessionStore;
   /** Reviewer provider (different family). When unset, falls back to parent's. */
   reviewerProvider?: ChatProvider;
+  resolveReviewerProvider?: () => Promise<ChatProvider | undefined>;
 }
 
 export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
@@ -34,6 +35,8 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
     source: 'native',
     mutates: false,
     parallelSafe: false,
+    effectBoundary: 'nested',
+    riskLevel: 'read',
     description:
       'Request a second-opinion code review of the current diff (Camada 4). Spawns a fresh, ' +
       'read-only reviewer subagent on a CLEAN context — it cannot see your conversation, only ' +
@@ -101,18 +104,24 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
 
       const input: ReviewInput = { spec, diff, testSummary, constraints, target };
 
-      const parent: SubagentParent = {
-        provider: deps.reviewerProvider ?? deps.provider,
-        tools: deps.parentTools,
-        ctx,
-        sessionId: deps.sessionId,
-        sessionStore: deps.sessionStore,
-        // PR-6 R23: propagate v2 framing to the review subagent.
-        agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-      };
-
       try {
+        ctx.signal?.throwIfAborted();
+        const provider = deps.reviewerProvider ?? await deps.resolveReviewerProvider?.() ?? deps.provider;
+        ctx.signal?.throwIfAborted();
+        const parent: SubagentParent = {
+          provider,
+          tools: deps.parentTools,
+          ctx,
+          sessionId: deps.sessionId ?? ctx.sessionId,
+          sessionStore: deps.sessionStore,
+          // PR-6 R23: propagate v2 framing to the review subagent.
+          agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
+        };
+
         const result = await runReviewSubagent(parent, input);
+        ctx.signal?.throwIfAborted();
+        if (!result.parsed) return { ...err(formatReviewResult(result.findings, false, result.raw)), subUsage: result.usage,
+          structuredData: { kind: 'review_result', status: 'inconclusive', nativeTranscriptRef: result.nativeTranscriptRef } };
         if (deps.sessionStore && deps.sessionId != null) {
           try {
             await deps.sessionStore.markSessionReviewedNow(deps.sessionId);
@@ -122,6 +131,7 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
         }
         return {
           content: formatReviewResult(result.findings, result.parsed, result.raw),
+          structuredData: { kind: 'review_result', status: 'completed', findings: result.findings, nativeTranscriptRef: result.nativeTranscriptRef },
           subUsage: {
             input_tokens: result.usage.input_tokens,
             output_tokens: result.usage.output_tokens,

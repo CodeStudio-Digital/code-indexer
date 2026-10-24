@@ -13,11 +13,13 @@ import {
   setPromptDraft,
 } from '../../../hooks/agent-stream/prompt-resolution-store.js';
 import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
+import { usePromptSubmission } from '../../../hooks/agent-stream/usePromptSubmission.js';
 
 interface TaskListReviewProps {
   prompt: TasksPrompt;
   onResponse: (verdict: {
     approved: boolean;
+    interaction_id?: string;
     feedback?: string;
     tasks?: StreamTask[];
     execution_mode?: StreamTaskExecutionMode;
@@ -62,6 +64,7 @@ export function TaskListReview({ prompt, onResponse, signature, sessionId }: Tas
     prompt.tool_use_id, signature, sessionId,
   );
   const resolved = prompt.resolved ?? storedResolution;
+  const submission = usePromptSubmission();
   const [open, setOpen] = useState(() => !prompt.resolved);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   /**
@@ -87,7 +90,7 @@ export function TaskListReview({ prompt, onResponse, signature, sessionId }: Tas
 
   const tasksForRender = prompt.tasks; // live updates flow via the parent state
 
-  const handleApprove = async () => {
+  const handleApprove = () => submission.submit(async () => {
     // For per-task mode, mutate each task's suggested_mode with the user
     // override so the server-side resolver picks the right mode for
     // execute_task. Other modes leave the tasks untouched.
@@ -98,12 +101,12 @@ export function TaskListReview({ prompt, onResponse, signature, sessionId }: Tas
             suggested_mode: perTaskMode[t.id] ?? t.suggested_mode,
           }))
         : undefined;
-    await onResponse({ approved: true, feedback, execution_mode: executionMode, tasks: tasksOut });
+    await onResponse({ interaction_id: prompt.tool_use_id, approved: true, feedback, execution_mode: executionMode, tasks: tasksOut });
     markPromptResolved({
       id: prompt.tool_use_id, signature, sessionId, resolution: 'approved',
     });
     setOpen(false);
-  };
+  });
 
   return (
     <div className="my-3 overflow-hidden rounded-xl border border-border/70 bg-card/45">
@@ -139,6 +142,7 @@ export function TaskListReview({ prompt, onResponse, signature, sessionId }: Tas
                 executionMode={executionMode}
                 resolved={resolved}
                 perTaskMode={perTaskMode[task.id]}
+                submitting={submission.submitting}
                 onPerTaskModeChange={(mode) => setPerTaskMode((m) => ({ ...m, [task.id]: mode }))}
               />
             ))}
@@ -152,6 +156,7 @@ export function TaskListReview({ prompt, onResponse, signature, sessionId }: Tas
                   <button
                     key={mode}
                     type="button"
+                    disabled={submission.submitting}
                     onClick={() => setExecutionMode(mode)}
                     className={cn(
                       'rounded border px-2 py-1 text-[11px] transition-colors',
@@ -165,6 +170,7 @@ export function TaskListReview({ prompt, onResponse, signature, sessionId }: Tas
                 ))}
               </div>
               <Textarea
+                disabled={submission.submitting}
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
                 placeholder={t('chat:plan.feedbackPlaceholder')}
@@ -172,23 +178,25 @@ export function TaskListReview({ prompt, onResponse, signature, sessionId }: Tas
                 className="mb-2 text-xs"
               />
               <div className="flex gap-2">
-                <Button size="sm" variant="success" onClick={handleApprove}>
+                <Button size="sm" variant="success" disabled={submission.submitting} onClick={handleApprove}>
                   <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
                 </Button>
                 <Button
                   size="sm"
                   variant="destructive"
-                  onClick={async () => {
-                    await onResponse({ approved: false, feedback });
+                  disabled={submission.submitting}
+                  onClick={() => submission.submit(async () => {
+                    await onResponse({ interaction_id: prompt.tool_use_id, approved: false, feedback });
                     markPromptResolved({
                       id: prompt.tool_use_id, signature, sessionId, resolution: 'rejected',
                     });
                     setOpen(false);
-                  }}
+                  })}
                 >
                   <X className="h-3.5 w-3.5" /> {t('common:actions.reject')}
                 </Button>
               </div>
+              {submission.error && <p role="alert" className="mt-2 text-xs text-destructive">{submission.error}</p>}
             </>
           ) : (
             <div

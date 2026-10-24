@@ -9,6 +9,7 @@ import type { DurableEngineEventCommitRequest } from './DurableEngineEventCommit
 import { attemptIdentityEqual } from './FrameHeaderValidation.js';
 import type { HostDataBoundContext } from './HostDataAttemptChannelValidation.js';
 import { HostDataChannelError } from './HostDataChannelError.js';
+import { engineRecordStorage, validateEngineContent } from './EngineContentRecord.js';
 
 export function validateEngineEventProposal(
   proposal: agentV1Runtime.EngineEventProposal,
@@ -57,8 +58,8 @@ export function validateEngineEventReceipt(
     || receipt.authority.leaseEpoch === 0n
     || receipt.authority.writerId.length === 0
     || receipt.globalSequence === 0n
-    || receipt.kind !== agentV1SessionStore.SessionRecordKind.LIFECYCLE_EVENT
-    || receipt.durability !== expectedDurability(request.record)
+    || receipt.kind !== engineRecordStorage(request.record).kind
+    || receipt.durability !== engineRecordStorage(request.record).durability
     || receipt.payloadBytes !== BigInt(encoded.byteLength)
     || !sameDigest(receipt.payloadSha256, request.expectedPayloadSha256)
     || receipt.previousCommitSha256.byteLength !== 32
@@ -69,6 +70,7 @@ export function validateEngineEventReceipt(
 
 function validateRecordBody(record: agentV1SessionStore.EngineEventRecordV1): void {
   const body = record.body;
+  if (body.case === 'content') validateEngineContent(body.value);
   const operationId = body.case === undefined || body.case === 'terminal'
     ? undefined
     : body.value.operationId;
@@ -94,6 +96,13 @@ function validateRecordBody(record: agentV1SessionStore.EngineEventRecordV1): vo
       || started.effectiveInputSha256.byteLength !== 32
       || started.startedAtUnixMs <= 0n
     ) throw invalid('engine capability started record is invalid');
+  }
+  if (body.case === 'capabilityRefused') {
+    const value = body.value;
+    if ([value.toolUseId, value.decisionId, value.reasonCode, value.policyVersion]
+      .some((id) => !id || id.length > 1024 || id.includes('\0')) || value.decidedAtUnixMs <= 0n) {
+      throw invalid('engine capability refusal is invalid');
+    }
   }
   if (body.case === 'capabilityTerminal') {
     const terminal = body.value;
@@ -133,21 +142,6 @@ function validateRecordBody(record: agentV1SessionStore.EngineEventRecordV1): vo
         && terminal.usage.cachedInputTokens > terminal.usage.inputTokens)
     ) throw invalid('engine terminal record is invalid');
   }
-}
-
-function expectedDurability(record: agentV1SessionStore.EngineEventRecordV1) {
-  if (record.body.case === 'providerDelta') {
-    return agentV1SessionStore.SessionDurabilityClass.COALESCED;
-  }
-  if (
-    record.body.case === 'capabilityBoundary'
-    || record.body.case === 'capabilityDispatchStarted'
-    || record.body.case === 'capabilityTerminal'
-    || record.body.case === 'terminal'
-  ) {
-    return agentV1SessionStore.SessionDurabilityClass.AUTHORITATIVE;
-  }
-  return agentV1SessionStore.SessionDurabilityClass.DURABLE;
 }
 
 function sameDigest(actual: Uint8Array, expected: Uint8Array): boolean {

@@ -16,6 +16,8 @@ import {
 } from './semantic-search-client.js';
 
 export interface ToolContext {
+  /** Per-request cancellation; never store a request signal on the shared context. */
+  signal?: AbortSignal;
   config: IndexerConfig;
   db: CodeIndexDB;
   semanticStore: SemanticStore;

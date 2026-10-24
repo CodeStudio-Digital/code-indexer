@@ -79,7 +79,9 @@ pub(super) enum PendingFactStage {
         key: OwnershipKey,
         reaped: Box<AttemptReapedFact>,
     },
-    Reaped,
+    Reaped {
+        outbox_attempt_id: String,
+    },
     AcceptedReplay,
     Rejected,
 }
@@ -108,6 +110,13 @@ impl PendingFactAction {
     pub(super) fn into_parts(self) -> (FactIntent, PendingFactStage) {
         (self.intent, self.stage)
     }
+
+    pub(super) fn reap_successor(&self) -> Option<&AttemptReapedFact> {
+        match &self.stage {
+            PendingFactStage::Exited { reaped, .. } => Some(reaped),
+            _ => None,
+        }
+    }
 }
 
 impl Debug for PendingFactAction {
@@ -117,7 +126,7 @@ impl Debug for PendingFactAction {
             PendingFactStage::Spawned { authority, .. } => ("Spawned", Some(authority)),
             PendingFactStage::Containment => ("Containment", None),
             PendingFactStage::Exited { .. } => ("Exited", None),
-            PendingFactStage::Reaped => ("Reaped", None),
+            PendingFactStage::Reaped { .. } => ("Reaped", None),
             PendingFactStage::AcceptedReplay => ("AcceptedReplay", None),
             PendingFactStage::Rejected => ("Rejected", None),
         };

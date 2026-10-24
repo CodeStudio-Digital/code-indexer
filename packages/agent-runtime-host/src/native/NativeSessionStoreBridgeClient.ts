@@ -6,10 +6,18 @@ import type { NativeSessionStoreBridge } from './NativeHostBridgeBinding.js';
 const REQUEST_DOMAIN = Buffer.from('codestudio.agent.session-store-request.v1\0');
 const RESPONSE_DOMAIN = Buffer.from('codestudio.agent.session-store-response.v1\0');
 
+export class NativeSessionStoreRequestError extends Error {
+  constructor(readonly failure: agentV1SessionStore.SessionStoreFailure) {
+    super(`native session store rejected: ${failure.reasonCode}`);
+    this.name = 'NativeSessionStoreRequestError';
+  }
+}
+
 export class NativeSessionStoreBridgeClient {
   #sequence = 1n;
   #tail: Promise<void> = Promise.resolve();
   #closed = false;
+  #failure?: { cause: unknown };
 
   constructor(
     private readonly owner: NativeSessionStoreBridge,
@@ -24,7 +32,18 @@ export class NativeSessionStoreBridgeClient {
     body: agentV1SessionStore.SessionStoreRequest['body'],
   ): Promise<agentV1SessionStore.SessionStoreResponse['body']> {
     if (this.#closed) return Promise.reject(new Error('native session client is closed'));
-    const operation = this.#tail.then(() => this.#request(body));
+    const operation = this.#tail.then(async () => {
+      if (this.#failure) throw this.#failure.cause;
+      try { return await this.#request(body); }
+      catch (cause) {
+        // A framing/transport failure can mean the native writer committed
+        // without returning its ACK. Retain the first cause and never send a
+        // second request on that uncertain sequence. Domain failures consume
+        // the sequence and remain usable according to their typed contract.
+        if (!(cause instanceof NativeSessionStoreRequestError)) this.#failure = { cause };
+        throw cause;
+      }
+    });
     this.#tail = operation.then(() => undefined, () => undefined);
     return operation;
   }
@@ -87,13 +106,14 @@ export class NativeSessionStoreBridgeClient {
       agentV1SessionStore.SessionStoreResponseSchema,
       frame.encodedResponse,
     );
+    // Typed domain failures still consume the authenticated stream sequence.
+    this.#sequence = sequence + 1n;
     if (response.body.case === 'failure') {
-      throw new Error(`native session store rejected: ${response.body.value.reasonCode}`);
+      throw new NativeSessionStoreRequestError(response.body.value);
     }
     if (response.body.case === undefined) {
       throw new Error('native session response body is missing');
     }
-    this.#sequence = sequence + 1n;
     return response.body;
   }
 }

@@ -13,7 +13,7 @@ import { copyFileSync, existsSync, mkdtempSync, readdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
+import { extractZipToDir } from '@mcp/shared/utils/extract-zip.js';
 import type { InstallProgress } from '@mcp/api-bus';
 import { isWin, probe } from './detect-shared.js';
 import { downloadFile } from './runtime-shared.js';

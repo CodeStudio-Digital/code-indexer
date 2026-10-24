@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { recallConversationTool } from '../conversation-chapters.js';
 
@@ -63,6 +63,19 @@ function context(overrides: { chapterText?: string; sourceText?: string } = {}):
 }
 
 describe('recall_conversation', () => {
+  it('rejects malformed windows and checks cancellation after chapter lookup before source hydration', async () => {
+    const ctx = context();
+    const list = vi.spyOn(ctx.conversationHistory!, 'list');
+    for (const args of [{ limit: Infinity }, { limit: 0 }, { limit: 0.5 }, { cursor: 'x'.repeat(2049) }]) {
+      expect((await recallConversationTool.handler({ mode: 'list', ...args }, ctx)).isError).toBe(true);
+    }
+    expect(list).not.toHaveBeenCalled();
+    const ctrl = new AbortController(); ctx.signal = ctrl.signal;
+    vi.spyOn(ctx.conversationHistory!, 'get').mockImplementation(async () => { ctrl.abort(); return chapter as never; });
+    const source = vi.spyOn(ctx.conversationHistory!, 'source');
+    await expect(recallConversationTool.handler({ mode: 'source', chapter_id: CHAPTER_ID }, ctx)).rejects.toThrow();
+    expect(source).not.toHaveBeenCalled();
+  });
   it('supports list, search, get and original source modes', async () => {
     const ctx = context();
     const list = await recallConversationTool.handler({ mode: 'list' }, ctx);

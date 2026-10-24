@@ -3,6 +3,15 @@ import type { SettingDef } from './types.js';
 /** Agent settings that still map to an explicit runtime-policy or owning domain. */
 export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
   {
+    key: 'CODESTUDIO_NATIVE_CODER_DEV',
+    label: 'Rust Coder (Windows preview)',
+    description: 'Opt in to the native Rust Coder on Windows x64 after restarting. Uses your selected provider, tools and settings. Company stays on its current runtime. Disable for new legacy conversations; existing Rust transcripts still require this preview to continue.',
+    type: 'bool',
+    category: 'agent',
+    default: '0',
+    restartNeeded: true,
+  },
+  {
     key: 'CODER_PROFILE',
     label: 'Default coder profile',
     description: 'Which tool tiers start active. `auto` picks based on the user\'s first message.',

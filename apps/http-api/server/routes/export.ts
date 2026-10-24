@@ -18,7 +18,7 @@ export function mountExportRoutes(app: Hono, deps: ServerDeps): void {
     if (!project) return notFound(c);
 
     const body = await parseJsonBody<ExportBody>(c);
-    const output = exportService.export({
+    const output = await exportService.export({
       projectId,
       projectName: project.name,
       format: (body.format ?? 'markdown') as 'markdown' | 'json',
@@ -26,7 +26,7 @@ export function mountExportRoutes(app: Hono, deps: ServerDeps): void {
       outputPath: body.outputPath,
       includeSnapshots: true,
       includeCosts: true,
-    });
+    }, c.req.raw.signal);
 
     return c.text(output);
   });

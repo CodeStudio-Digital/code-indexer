@@ -1,5 +1,6 @@
 import type {
   agentV1Common,
+  agentV1Runtime,
   agentV1SessionStore,
 } from '@mcp/agent-runtime-contracts';
 
@@ -16,4 +17,8 @@ export interface DurableEngineEventCommitPort {
   commit(
     request: DurableEngineEventCommitRequest,
   ): Promise<agentV1SessionStore.CommitSessionRecordReceipt>;
+  /** Separate checkpoint payload, never diagnostic text in lifecycle events. */
+  commitProviderFrontier?(start: agentV1Runtime.ProviderStart, signal: AbortSignal): Promise<void>;
+  afterEngineEventAcknowledged?(record: agentV1SessionStore.EngineEventRecordV1,
+    receipt: agentV1SessionStore.CommitSessionRecordReceipt): void;
 }

@@ -12,10 +12,11 @@ import {
 import { buildContext } from './context.js';
 import { allTools, buildToolRegistry } from './tools/index.js';
 import { allResources, collectListedResources, readResource } from './resources/index.js';
+import { resourcePage } from './resources/page.js';
 import { coerceArgs } from './utils.js';
 import { VERSION, PACKAGE_NAME } from '@mcp/shared/version.js';
 import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
-import { normalizeMcpToolResult } from './tool.js';
+import { normalizeMcpToolResult, mcpToolResultFields } from './tool.js';
 
 const ctx = buildContext();
 const registry = buildToolRegistry();
@@ -36,7 +37,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   })),
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const { name, arguments: rawArgs } = request.params;
   const tool = registry.get(name);
   if (!tool) {
@@ -44,13 +45,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   try {
     const args = coerceArgs((rawArgs ?? {}) as Record<string, unknown>);
-    const result = normalizeMcpToolResult(await tool.handler(args, ctx));
+    extra.signal.throwIfAborted();
+    const result = normalizeMcpToolResult(await tool.handler(args, { ...ctx, signal: extra.signal }));
+    extra.signal.throwIfAborted();
     return {
       content: [{ type: 'text', text: result.text }],
-      ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
-      ...(result.sourceTruncations?.length
-        ? { _meta: { sourceTruncations: result.sourceTruncations } }
-        : {}),
+      ...mcpToolResultFields(result),
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -63,18 +63,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // transport mirrors these handlers with scope enforcement (see
 // http/mcp-http-transport.ts).
 
-server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-  resources: await collectListedResources(ctx),
-}));
+server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+  const page = resourcePage(await collectListedResources(ctx), 'resources', request.params?.cursor);
+  return { resources: page.items, nextCursor: page.nextCursor };
+});
 
-server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
-  resourceTemplates: allResources.map((r) => ({
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
+  const page = resourcePage(allResources.map((r) => ({
     uriTemplate: r.uriTemplate,
     name: r.name,
     description: r.description,
     ...(r.mimeType ? { mimeType: r.mimeType } : {}),
-  })),
-}));
+  })), 'templates', request.params?.cursor);
+  return { resourceTemplates: page.items, nextCursor: page.nextCursor };
+});
 
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const uri = request.params.uri;

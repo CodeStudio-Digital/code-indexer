@@ -20,6 +20,8 @@ message HostSupervisorBridgeOpenRequest {
   string supervisor_executable = 9;
   string runner_executable = 10;
   uint64 startup_timeout_ms = 11;
+  // Trusted product data directory. Empty only for isolated protocol fixtures.
+  string lifecycle_outbox_directory = 12;
 }
 
 // Private, single-use handoff delivered through inherited OS handles before
@@ -39,6 +41,18 @@ message SupervisorProcessHandoff {
   string runner_working_directory = 12;
   repeated SupervisorProcessEnvironmentEntry runner_environment = 13;
   ExpectedRuntimeProvenance trusted_runner_provenance = 14;
+  string lifecycle_outbox_directory = 15;
+}
+
+// Physical evidence retained before releasing admission. Recovery must match
+// the original connection, attempt and durable launch; this is not a new launch
+// capability and must never be replayed under a different management channel.
+message SupervisorLifecycleOutboxEntryV1 {
+  uint32 schema_version = 1;
+  string connection_id = 2;
+  AttemptProcessExited exited = 3;
+  AttemptProcessReaped reaped = 4;
+  bool host_acknowledged = 5;
 }
 
 message SupervisorProcessEnvironmentEntry {

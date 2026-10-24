@@ -99,7 +99,7 @@ export class SessionContext {
   /**
    * Effective company_session_id for **shared** project-wide artefacts:
    * kanban, env, services management, databases, docs,
-   * design-system, drive (the drive store has its own resolution but
+   * drive (the drive store has its own resolution but
    * uses the same logic). For sub-sessions (`parent_session_id != null`)
    * this returns the parent's id so every tab of the same root reads
    * and writes to the same parent-bundle entities.

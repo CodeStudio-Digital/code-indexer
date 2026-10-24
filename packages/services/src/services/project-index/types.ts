@@ -33,7 +33,7 @@ export interface ActiveIndexRun {
 
 /** A deferred structural reconciliation that has not started yet. */
 export interface ScheduledIndexRun {
-  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace';
+  reason: 'activation' | 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace' | 'poll';
   dueAt: number;
 }
 
@@ -41,6 +41,7 @@ export interface ProjectIndexStatus {
   projectId: number;
   phase: ProjectIndexPhase;
   watcherActive: boolean;
+  watcherMode?: 'live' | 'polling' | 'off';
   /** Files waiting in the dirty queue for the next incremental drain. */
   dirtyPending: number;
   fileCount: number;
@@ -208,7 +209,7 @@ export function readProjectIndexSettings(): ProjectIndexSettings {
   return {
     autoIndex: process.env.MCP_AUTO_INDEX_STRUCTURAL !== '0',
     autoWatch: process.env.MCP_AUTO_WATCH !== '0',
-    maxFiles: envInt('MCP_AUTO_INDEX_MAX_FILES', 20000),
+    maxFiles: envInt('MCP_AUTO_INDEX_MAX_FILES', 100000),
     maxWatchedProjects: envInt('MCP_WATCH_MAX_PROJECTS', 3),
     watchDebounceMs: envInt('MCP_WATCH_DEBOUNCE_MS', 1000),
     watchOpenDelayMs: envIntZero('MCP_WATCH_OPEN_DELAY_MS', 1200),

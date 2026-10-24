@@ -5,9 +5,9 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { gitTools, withManagedCommitAttribution } from '../git.js';
 
@@ -31,8 +31,29 @@ beforeAll(() => {
   git(['commit', '-m', 'initial commit'], repo);
 });
 afterAll(() => {
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(bare, { recursive: true, force: true });
+  for (const [target, prefix] of [[repo, 'git-tools-repo-'], [bare, 'git-tools-bare-']] as const) {
+    if (!target) continue;
+    if (dirname(resolve(target)) !== resolve(tmpdir()) || !basename(target).startsWith(prefix)) {
+      throw new Error('Refusing to remove a path outside the owned Git test fixture');
+    }
+    // Git loose objects are read-only on Windows. Electron's native recursive
+    // rm can return EPERM without clearing that bit, even after all Git children
+    // exit. Only touch regular files inside this verified, freshly owned fixture;
+    // never follow links or change permissions in the developer's repository.
+    if (process.platform === 'win32') {
+      const clearReadOnly = (directory: string): void => {
+        for (const name of readdirSync(directory)) {
+          const child = join(directory, name), stat = lstatSync(child);
+          if (stat.isSymbolicLink()) continue;
+          if (stat.isDirectory()) clearReadOnly(child);
+          else if (stat.isFile()) chmodSync(child, 0o600);
+        }
+      };
+      clearReadOnly(target);
+    }
+    // Git/antivirus handles may linger briefly after a Windows child exits.
+    rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
 });
 
 const ctxFor = (cwd: string): ToolContext => ({ cwd, projectName: 'git-tools-test' }) as ToolContext;

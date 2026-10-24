@@ -60,8 +60,14 @@ function payloadIdentity(
     case 'hydrationComplete':
     case 'hydrationCommitted':
     case 'providerStart':
+    case 'providerRequestChunk':
+    case 'providerRequestChunkAccepted':
+    case 'providerRequestCommit':
+    case 'providerCheckpoint':
+    case 'providerCheckpointCommitted':
     case 'providerAccepted':
     case 'providerCancel':
+    case 'providerEventConsumed':
     case 'providerTextDelta':
     case 'providerThinkingDelta':
     case 'providerToolCall':
@@ -73,6 +79,9 @@ function payloadIdentity(
     case 'capabilityUpdate':
     case 'capabilityExecute':
     case 'capabilityExecutionResult':
+    case 'capabilityReadBatchExecute':
+    case 'capabilityReadBatchAccepted':
+    case 'capabilityReadBatchResult':
       return {
         name: payload.body.case,
         identity: payload.body.value.identity,

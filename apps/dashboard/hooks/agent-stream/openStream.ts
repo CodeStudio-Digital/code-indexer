@@ -16,6 +16,7 @@ import { TurnProjector } from './turn-projector.js';
  * under a frame budget while a full replay costs only ~40 yields.
  */
 const EVENT_BATCH_SIZE = 50;
+const EVENT_BATCH_BUDGET_MS = 6;
 
 /**
  * Yield the renderer main thread between drain batches. Prefers
@@ -271,6 +272,7 @@ export async function openStream(
   // (1–2 events per tick) merely defers by one macrotask — invisible next to
   // the rAF-coalesced flush.
   const eventQueue: SSEEvent[] = [];
+  let eventQueueHead = 0;
   let draining = false;
   let drainDone: Promise<void> = Promise.resolve();
 
@@ -288,8 +290,22 @@ export async function openStream(
           eventQueue.length = 0;
           return;
         }
-        for (const ev of eventQueue.splice(0, EVENT_BATCH_SIZE)) processEvent(ev);
-      } while (eventQueue.length > 0);
+        const deadline = performance.now() + EVENT_BATCH_BUDGET_MS;
+        let processed = 0;
+        while (eventQueueHead < eventQueue.length && processed < EVENT_BATCH_SIZE) {
+          processEvent(eventQueue[eventQueueHead++]);
+          processed++;
+          if (performance.now() >= deadline) break;
+        }
+        // Amortized compaction avoids shifting the entire replay on each yield.
+        if (eventQueueHead === eventQueue.length) {
+          eventQueue.length = 0;
+          eventQueueHead = 0;
+        } else if (eventQueueHead >= 1024) {
+          eventQueue.splice(0, eventQueueHead);
+          eventQueueHead = 0;
+        }
+      } while (eventQueueHead < eventQueue.length);
     } finally {
       draining = false;
     }

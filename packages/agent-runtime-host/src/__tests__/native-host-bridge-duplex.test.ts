@@ -2,8 +2,19 @@ import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import type { NativeHostBridgeCloseAuthority } from '../native/NativeHostBridgeClose.js';
 import { NativeHostBridgeDuplex } from '../native/NativeHostBridgeDuplex.js';
+import { DelimitedByteChannel } from '../ipc/DelimitedByteChannel.js';
 
 describe('NativeHostBridgeDuplex', () => {
+  it('owns a failed first write before any receive has subscribed', async () => {
+    const bridge = authority({ read: async () => null, close: async () => undefined });
+    bridge.write = async () => { throw new Error('pipe already closed'); };
+    const stream = new NativeHostBridgeDuplex('data', bridge);
+    const channel = new DelimitedByteChannel(stream, stream, { maximumFrameBytes: 1024 });
+    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/transport|write/);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(channel.isFailed).toBe(true);
+    expect(stream.destroyed).toBe(true);
+  });
   it('keeps the shared sibling authority open after a clean read EOF', async () => {
     const close = vi.fn(async () => undefined);
     const stream = new NativeHostBridgeDuplex('data', authority({

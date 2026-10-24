@@ -126,10 +126,10 @@ impl CodexAppServerGateway {
         self.terminal = true;
         match status {
             "completed" => Ok(ProviderEvent::Completed {
-                response_id: format!(
+                response_id: Some(format!(
                     "codex-turn:{}",
                     self.turn_id.as_deref().unwrap_or("unknown")
-                ),
+                )),
                 response_message_count: None,
             }),
             "interrupted" => Ok(ProviderEvent::Interrupted {

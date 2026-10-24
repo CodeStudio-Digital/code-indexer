@@ -9,10 +9,10 @@
  *   pnpm tsx scripts/eval-agent-engineering.ts [--db <path>] [--since <ISO>] [--json]
  */
 import { resolve } from 'node:path';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import {
   listFilesystemTurnTelemetry,
-} from '@mcp/code-agent/sessions/fs-store/telemetry-dashboard.js';
+} from '@mcp/session-storage/fs-store/telemetry-dashboard.js';
 import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 

@@ -10,6 +10,7 @@ interface TaskRowProps {
   resolved: 'approved' | 'rejected' | undefined;
   perTaskMode: 'inline' | 'subagent' | undefined;
   onPerTaskModeChange: (mode: 'inline' | 'subagent') => void;
+  submitting?: boolean;
 }
 
 const STATUS_BADGE: Record<StreamTask['status'], string> = {
@@ -29,6 +30,7 @@ export function TaskRow({
   resolved,
   perTaskMode,
   onPerTaskModeChange,
+  submitting = false,
 }: TaskRowProps) {
   const { t } = useTranslation('chat');
   const statusBadgeClass = STATUS_BADGE[task.status] ?? 'bg-muted text-muted-foreground';
@@ -60,6 +62,7 @@ export function TaskRow({
             </span>
             {executionMode === 'per-task' && !resolved ? (
               <select
+                disabled={submitting}
                 value={perTaskMode ?? task.suggested_mode}
                 onChange={(e) => onPerTaskModeChange(e.target.value as 'inline' | 'subagent')}
                 className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-foreground border border-border cursor-pointer"

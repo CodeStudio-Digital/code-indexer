@@ -5,6 +5,11 @@
  * Lifecycle: instantiate → connectAll() → listAllTools() → closeAll().
  * Used inside runCoder() alongside the internal McpToolBridge.
  */
+import type { McpStdioTransportFactory, OwnedMcpStdioTransport } from './mcp-stdio-factory.js';
+import { createHash } from 'node:crypto';
+import { awaitMcpConnection } from './mcp-connection-wait.js';
+import { fetchWithMcpDispatch, McpDispatchRejected, withMcpWireDispatch } from './mcp-wire-dispatch.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
@@ -12,7 +17,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { ResultSchema, ToolSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
@@ -24,11 +29,12 @@ export type McpConnectionState = 'connected' | 'disconnected' | 'error';
 
 interface ServerConnection {
   client: Client;
+  transport: Transport;
   config: McpServerConfig;
   state: McpConnectionState;
   error?: string;
   /** Kept only for stdio servers, so their child pid stays discoverable. */
-  stdio?: StdioClientTransport;
+  stdio?: StdioClientTransport | OwnedMcpStdioTransport;
   /**
    * The server returned at least one malformed tool definition. Once detected,
    * bypass the SDK's all-or-nothing list validator for this connection and
@@ -42,29 +48,24 @@ interface ServerConnection {
 /** Connect timeout per server (ms). */
 const CONNECT_TIMEOUT_MS = 10_000;
 
-/**
- * Heuristic for recognising an OAuth-related error from the transport.
- * The MCP SDK surfaces these as JS Errors with the HTTP status in the
- * message; matching on 401/403 gives us a safe "try refresh & retry" signal.
- */
-function looksLikeAuthError(e: unknown): boolean {
-  const msg = e instanceof Error ? e.message : String(e);
-  return /\b401\b|\b403\b|unauthori[sz]ed|forbidden/i.test(msg);
-}
+/** Upper bound for the DELETE that ends a streamable HTTP session; cleanup never waits longer. */
+const TERMINATE_SESSION_TIMEOUT_MS = 2_000;
 
 /**
- * Heuristic for recognising a transient network failure — a server that's
- * temporarily down (process restart, container redeploy, Unity Editor's
- * AppDomain reload after a script change). These are exactly the cases where
- * a single retry after a fresh connection succeeds; treating them as
- * permanent disconnect — like the original code did — pinned the slot to
- * 'disconnected' for the rest of the session, forcing a manual restart of
- * the coder to recover.
+ * The SDK's close() only aborts requests. Without the DELETE the server keeps the
+ * session until its own idle timeout, so frequent reconnects fill its session limit
+ * (the Unity broker answered 503 for hours on 2026-10-08).
  */
-function looksLikeNetworkError(e: unknown): boolean {
-  const msg = e instanceof Error ? e.message : String(e);
-  return /ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND|\b503\b|\b502\b|\b504\b|fetch failed|socket hang up|connection refused|connection reset|server (?:closed|unavailable)|connect ECONN/i
-    .test(msg);
+async function terminateSession(transport: Transport): Promise<void> {
+  if (!(transport instanceof StreamableHTTPClientTransport)) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, TERMINATE_SESSION_TIMEOUT_MS);
+    timer.unref();
+  });
+  try { await Promise.race([transport.terminateSession(), elapsed]); }
+  catch { /* Best effort: an unreachable server reclaims the session by its idle timeout. */ }
+  finally { clearTimeout(timer); }
 }
 
 type ListedTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
@@ -161,9 +162,10 @@ async function buildAuthHeaders(
  * Create the appropriate transport for a server config. Async because
  * auth header resolution (OAuth) may require remote calls.
  */
-async function createTransport(config: McpServerConfig, resolver: ResolveMcpBearer | null) {
+async function createTransport(config: McpServerConfig, resolver: ResolveMcpBearer | null, stdioFactory?: McpStdioTransportFactory): Promise<Transport> {
   switch (config.transport) {
     case 'stdio': {
+      if (stdioFactory) return stdioFactory(config);
       if (!config.command) throw new Error(`stdio server "${config.id}" requires a command`);
       return new StdioClientTransport({
         command: config.command,
@@ -181,7 +183,7 @@ async function createTransport(config: McpServerConfig, resolver: ResolveMcpBear
       const hasHeaders = Object.keys(headers).length > 0;
       // SSE transport needs headers on both the EventSource (GET) and POST requests.
       // eventSourceInit.fetch wraps the SSE GET; requestInit covers recurring POSTs.
-      const opts: Record<string, unknown> = {};
+      const opts: Record<string, unknown> = { fetch: fetchWithMcpDispatch };
       if (hasHeaders) {
         opts.requestInit = { headers };
         opts.eventSourceInit = {
@@ -203,6 +205,7 @@ async function createTransport(config: McpServerConfig, resolver: ResolveMcpBear
       const headers = { ...extraHeaders, ...authHeaders };
       const hasHeaders = Object.keys(headers).length > 0;
       return new StreamableHTTPClientTransport(new URL(config.url), {
+        fetch: fetchWithMcpDispatch,
         requestInit: hasHeaders ? { headers } : undefined,
       });
     }
@@ -213,6 +216,10 @@ async function createTransport(config: McpServerConfig, resolver: ResolveMcpBear
 
 export class McpServerManager {
   private connections = new Map<string, ServerConnection>();
+  private connecting = new Map<string, { key: string; controller: AbortController; promise: Promise<void> }>();
+  private retiring = new Map<string, Promise<void>>();
+  private cleanupFailures = new Map<string, Error>();
+  private reconnecting = new WeakMap<ServerConnection, Promise<boolean>>();
 
   /**
    * @param bearerResolver  Optional resolver for auth_type='oauth2' servers.
@@ -220,7 +227,8 @@ export class McpServerManager {
    *                        servers attempt to connect unauthenticated and
    *                        the dashboard guides re-auth on failure.
    */
-  constructor(private readonly bearerResolver: ResolveMcpBearer | null = null) {}
+  constructor(private readonly bearerResolver: ResolveMcpBearer | null = null,
+    private readonly stdioFactory?: McpStdioTransportFactory) {}
 
   /**
    * Connect to all provided server configs in parallel, with per-server timeout.
@@ -244,38 +252,60 @@ export class McpServerManager {
   /**
    * Connect to a single external MCP server.
    */
-  async connectServer(config: McpServerConfig): Promise<void> {
-    const transport = await createTransport(config, this.bearerResolver);
-    const client = new Client(
-      { name: `coder-ext-${config.id}`, version: '0.1.0' },
-      { capabilities: {} },
-    );
+  connectServer(config: McpServerConfig): Promise<void> {
+    const cleanupFailure = this.cleanupFailures.get(config.id);
+    if (cleanupFailure) return Promise.reject(cleanupFailure);
+    const frozen = structuredClone(config);
+    const key = mcpServerConfigurationKey(frozen);
+    const existing = this.connecting.get(config.id);
+    if (existing?.key === key && !existing.controller.signal.aborted) return existing.promise;
+    // closeServer invalidates the previous attempt synchronously, including
+    // a handshake still awaiting OAuth. Its late completion cannot publish.
+    const retired = this.closeServer(config.id);
+    const controller = new AbortController();
+    const attempt = { key, controller, promise: Promise.resolve() };
+    this.connecting.set(config.id, attempt);
+    attempt.promise = this.openConnection(frozen, attempt, retired);
+    return attempt.promise;
+  }
 
-    // Connect with timeout
-    const connectPromise = client.connect(transport);
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Connect timeout after ${CONNECT_TIMEOUT_MS}ms`)), CONNECT_TIMEOUT_MS),
-    );
-
+  private async openConnection(config: McpServerConfig,
+    attempt: { key: string; controller: AbortController; promise: Promise<void> },
+    retired: Promise<void>): Promise<void> {
+    const { signal } = attempt.controller;
+    const timer = setTimeout(() => attempt.controller.abort(new Error('External MCP connection deadline elapsed')), CONNECT_TIMEOUT_MS);
+    timer.unref();
+    let client: Client | undefined;
+    let transport: Transport | undefined;
     try {
-      await Promise.race([connectPromise, timeoutPromise]);
-      this.connections.set(config.id, {
-        client,
-        config,
-        state: 'connected',
-        stdio: transport instanceof StdioClientTransport ? transport : undefined,
-      });
-      console.log(`[mcp-ext] server "${config.id}" connected (${config.transport})`);
-    } catch (e) {
-      this.connections.set(config.id, {
-        client,
-        config,
-        state: 'error',
-        error: e instanceof Error ? e.message : String(e),
-      });
-      // Try to clean up the failed transport
-      try { await client.close(); } catch { /* ignore */ }
-      throw e;
+      await awaitMcpConnection(retired, signal);
+      signal.throwIfAborted();
+      const cleanupFailure = this.cleanupFailures.get(config.id);
+      if (cleanupFailure) throw cleanupFailure;
+      transport = await awaitMcpConnection<Transport>(createTransport(config, this.bearerResolver, this.stdioFactory).then(async transport => {
+        if (signal.aborted) { await this.closeTransport(config.id, transport); signal.throwIfAborted(); }
+        return transport;
+      }), signal);
+      // No asynchronous boundary between the last authority check and connect.
+      signal.throwIfAborted();
+      client = new Client({ name: 'coder-ext-' + config.id, version: '0.1.0' }, { capabilities: {} });
+      await awaitMcpConnection(client.connect(transport), signal);
+      signal.throwIfAborted();
+      if (this.connecting.get(config.id) !== attempt) throw new Error('External MCP connection superseded');
+      this.connections.set(config.id, { client, transport, config, state: 'connected',
+        stdio: transport instanceof StdioClientTransport || ('processTreeContained' in transport && transport.processTreeContained === true)
+          ? transport as StdioClientTransport | OwnedMcpStdioTransport : undefined });
+      console.log('[mcp-ext] server "' + config.id + '" connected (' + config.transport + ')');
+    } catch (error) {
+      if (client && transport && this.connecting.get(config.id) === attempt && !signal.aborted) {
+        this.connections.set(config.id, { client, transport, config, state: 'error',
+          error: error instanceof Error ? error.message : String(error) });
+      }
+      if (transport) await this.closeTransport(config.id, transport);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      if (this.connecting.get(config.id) === attempt) this.connecting.delete(config.id);
     }
   }
 
@@ -325,7 +355,7 @@ export class McpServerManager {
               serverId,
               provenanceRef: `mcp-server:${serverId}`,
             },
-            handler: this.createHandler(serverId, t.name),
+            handler: this.createHandler(serverId, t.name, mcpServerConfigurationKey(conn.config)),
             repeatPolicy: repeatable ? 'pollable' : 'stable',
             mutates: true,
             parallelSafe: false,
@@ -406,77 +436,37 @@ export class McpServerManager {
     return valid;
   }
 
-  /**
-   * Create a tool call handler for a specific server + tool combination.
-   *
-   * Two layers of resilience on top of the bare callToolOnce:
-   *
-   *  1. **Pre-call lazy reconnect** — if the connection is already marked
-   *     disconnected/error (from an earlier failed call), try ONE reconnect
-   *     before refusing. Covers the case where the server was down, recovered
-   *     in the background, but our cached state still says dead.
-   *
-   *  2. **Post-call retry on network error** — if a call fails with what
-   *     looks like a transient network drop (ECONNREFUSED/RESET, 502/503/504,
-   *     socket hang up), reconnect and retry once. Covers Unity Editor's
-   *     AppDomain reload after a script compile (HttpListener dies for
-   *     ~1-2s, comes back at the same port) and analogous container/process
-   *     restarts on other MCP servers.
-   *
-   * OAuth 401/403 retains its own dedicated path (refresh token via the
-   * resolver). Both retries use reconnectServer (close + connectServer +
-   * patch local conn fields), which is the same primitive the existing OAuth
-   * path uses.
-   */
-  private createHandler(serverId: string, toolName: string): CoderTool['handler'] {
-    return async (args: Record<string, unknown>): Promise<ToolResult> => {
-      const conn = this.connections.get(serverId);
+  /** Reconnect only before dispatch. A lost response never authorizes a replay. */
+  private createHandler(serverId: string, toolName: string, configKey: string): CoderTool['handler'] {
+    return async (args, ctx): Promise<ToolResult> => {
+      if (ctx.signal?.aborted) return err('External MCP call cancelled before dispatch.');
+      let conn = this.connections.get(serverId);
+      if (conn && mcpServerConfigurationKey(conn.config) !== configKey) return err('External MCP configuration changed; refresh the catalogue before dispatch.');
       if (!conn) return err(`External MCP server "${serverId}" not found`);
-
-      // Layer 1: pre-call lazy reconnect when state is stale.
-      if (conn.state !== 'connected') {
-        if (!(await this.lazyReconnect(conn))) {
-          return err(`External MCP server "${serverId}" is ${conn.state}: ${conn.error ?? 'unknown error'}`);
-        }
+      if (conn.state !== 'connected' && !(await this.lazyReconnect(conn))) {
+        return err(`External MCP server "${serverId}" is ${conn.state}: ${conn.error ?? 'unknown error'}`);
       }
-
+      conn = this.connections.get(serverId);
+      if (!conn || conn.state !== 'connected' || mcpServerConfigurationKey(conn.config) !== configKey) {
+        return err('External MCP connection closed or changed before dispatch.');
+      }
+      if (ctx.signal?.aborted) return err('External MCP call cancelled before dispatch.');
+      try { ctx.assertExternalMcpDispatch?.(); }
+      catch { return err('External MCP run authority expired before dispatch.'); }
       try {
-        return await this.callToolOnce(conn, toolName, args);
+        const admitted = conn;
+        return await withMcpWireDispatch(() => {
+          if (ctx.signal?.aborted || this.connections.get(serverId) !== admitted || admitted.state !== 'connected'
+            || mcpServerConfigurationKey(admitted.config) !== configKey) throw new Error('MCP connection retired.');
+          ctx.assertExternalMcpDispatch?.();
+        }, () => this.callToolOnce(admitted, toolName, args, ctx.signal));
       } catch (e) {
-        // OAuth 401/403: refresh token + retry (existing behavior).
-        if (conn.config.auth_type === 'oauth2' && this.bearerResolver && looksLikeAuthError(e)) {
-          try {
-            await this.reconnectServer(conn);
-            return await this.callToolOnce(conn, toolName, args);
-          } catch (e2) {
-            conn.state = 'disconnected';
-            conn.error = e2 instanceof Error ? e2.message : String(e2);
-            return err(
-              `External MCP server "${serverId}" OAuth reconnect failed: ${conn.error}. ` +
-              'Please reconnect via the dashboard.',
-            );
-          }
-        }
-
-        // Layer 2: transient network drop → lazy reconnect + retry once.
-        if (looksLikeNetworkError(e) && (await this.lazyReconnect(conn))) {
-          try {
-            return await this.callToolOnce(conn, toolName, args);
-          } catch (e2) {
-            conn.state = 'disconnected';
-            conn.error = e2 instanceof Error ? e2.message : String(e2);
-            return err(
-              `External MCP server "${serverId}" reconnected but retry failed: ${conn.error}.`,
-            );
-          }
-        }
-
-        // Non-recoverable.
+        if (e instanceof McpDispatchRejected) return err(e.message);
         conn.state = 'disconnected';
         conn.error = e instanceof Error ? e.message : String(e);
-        return err(
-          `External MCP server "${serverId}" disconnected: ${conn.error}. ` +
-          'The server may have crashed. Inform the user.',
+        return unknownToolOutcome(
+          `External MCP result unknown for "${serverId}/${toolName}": ${conn.error}. ` +
+          'The operation may have taken effect. It was not retried; reconcile it before another mutation.',
         );
       }
     };
@@ -488,19 +478,17 @@ export class McpServerManager {
    * result. Sets conn.state to 'error' (with the failure message) when the
    * reconnect itself throws — keeps the cached state honest.
    */
-  private async lazyReconnect(conn: ServerConnection): Promise<boolean> {
-    try {
-      await this.reconnectServer(conn);
-      if (conn.state === 'connected') {
-        console.log(`[mcp-ext] server "${conn.config.id}" reconnected (lazy)`);
-        return true;
-      }
-      return false;
-    } catch (e) {
+  private lazyReconnect(conn: ServerConnection): Promise<boolean> {
+    const pending = this.reconnecting.get(conn);
+    if (pending) return pending;
+    const reconnect = this.reconnectServer(conn).then(() => true, error => {
       conn.state = 'error';
-      conn.error = e instanceof Error ? e.message : String(e);
+      conn.error = error instanceof Error ? error.message : String(error);
       return false;
-    }
+    });
+    this.reconnecting.set(conn, reconnect);
+    void reconnect.finally(() => this.reconnecting.delete(conn));
+    return reconnect;
   }
 
   /** Single tool call with no retry logic — used by createHandler. */
@@ -508,8 +496,9 @@ export class McpServerManager {
     conn: ServerConnection,
     toolName: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
-    const result = await conn.client.callTool({ name: toolName, arguments: args });
+    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, { signal });
     const blocks = (result.content ?? []) as ExternalMcpContent[];
     const textParts: string[] = [];
     const extraUserBlocks: ContentBlock[] = [];
@@ -596,19 +585,15 @@ export class McpServerManager {
         `${conn?.error ?? 'no active connection'}`,
       );
     }
-    return this.callToolOnce(conn, toolName, args);
+    return this.createHandler(serverId, toolName, mcpServerConfigurationKey(conn.config))(args, {
+      cwd: process.cwd(), projectName: 'MCP control plane',
+    });
   }
 
-  /** Close and re-open the connection for a server (used on OAuth auth error). */
+  /** Close and re-open a connection before a new dispatch. */
   private async reconnectServer(conn: ServerConnection): Promise<void> {
-    try { await conn.client.close(); } catch { /* ignore */ }
+    if (this.connections.get(conn.config.id) !== conn) throw new Error('External MCP connection was retired');
     await this.connectServer(conn.config);
-    const refreshed = this.connections.get(conn.config.id);
-    if (refreshed) {
-      conn.client = refreshed.client;
-      conn.state = refreshed.state;
-      conn.error = refreshed.error;
-    }
   }
 
   /**
@@ -619,6 +604,7 @@ export class McpServerManager {
     for (const [id, conn] of this.connections) {
       states.set(id, { state: conn.state, error: conn.error });
     }
+    for (const [id, error] of this.cleanupFailures) states.set(id, { state: 'error', error: error.message });
     return states;
   }
 
@@ -626,6 +612,11 @@ export class McpServerManager {
    * OS pids of stdio-transport servers, for the task manager's process tree.
    * Remote transports (SSE/HTTP) have no local process and are skipped.
    */
+  isStdioContained(serverId: string): boolean {
+    const transport = this.connections.get(serverId)?.stdio;
+    return !!transport && 'processTreeContained' in transport && transport.processTreeContained === true;
+  }
+
   listStdioProcesses(): Array<{ serverId: string; name: string; pid: number }> {
     const out: Array<{ serverId: string; name: string; pid: number }> = [];
     for (const [id, conn] of this.connections) {
@@ -678,28 +669,50 @@ export class McpServerManager {
    * Close all connections gracefully.
    */
   async closeAll(): Promise<void> {
-    const closePromises = [...this.connections.entries()].map(async ([id, conn]) => {
-      try {
-        await conn.client.close();
-      } catch {
-        // ignore close errors
-      }
-      console.log(`[mcp-ext] server "${id}" closed`);
-    });
-    await Promise.allSettled(closePromises);
-    this.connections.clear();
+    const ids = new Set([...this.connections.keys(), ...this.connecting.keys(),
+      ...this.retiring.keys(), ...this.cleanupFailures.keys()]);
+    const results = await Promise.allSettled([...ids].map(id => this.closeServer(id)));
+    const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, 'External MCP cleanup is unproven');
   }
 
-  /**
-   * Close a single server connection.
-   */
-  async closeServer(serverId: string): Promise<void> {
+  /** Keep the transport reference: SDK onclose discards it before physical reap. */
+  private async closeTransport(serverId: string, transport: Transport): Promise<void> {
+    await terminateSession(transport);
+    try { await transport.close(); }
+    catch (cause) {
+      const failure = new Error('External MCP cleanup is unproven for "' + serverId + '"; reconnect is blocked', { cause });
+      this.cleanupFailures.set(serverId, failure);
+      throw failure;
+    }
+  }
+
+  /** Retire synchronously, then serialize cleanup even across competing reconnects. */
+  closeServer(serverId: string): Promise<void> {
+    const previous = this.retiring.get(serverId);
+    const pending = this.connecting.get(serverId);
     const conn = this.connections.get(serverId);
-    if (!conn) return;
-    try {
-      await conn.client.close();
-    } catch { /* ignore */ }
+    this.connecting.delete(serverId);
     this.connections.delete(serverId);
+    this.toolCountCache.delete(serverId);
+    pending?.controller.abort(new Error('External MCP connection closed'));
+    const cleanup = (async () => {
+      const results = await Promise.allSettled([
+        ...(previous ? [previous] : []),
+        // Aborted handshakes are expected. Their cleanup failures are sticky below.
+        ...(pending ? [pending.promise.catch(() => {})] : []),
+        ...(conn ? [this.closeTransport(serverId, conn.transport)] : []),
+      ]);
+      const failure = this.cleanupFailures.get(serverId);
+      if (failure) throw failure;
+      const rejected = results.find(result => result.status === 'rejected');
+      if (rejected?.status === 'rejected') throw rejected.reason;
+    })();
+    this.retiring.set(serverId, cleanup);
+    void cleanup.finally(() => {
+      if (this.retiring.get(serverId) === cleanup) this.retiring.delete(serverId);
+    }).catch(() => {});
+    return cleanup;
   }
 
   /** Number of successfully connected servers. */
@@ -710,4 +723,9 @@ export class McpServerManager {
     }
     return count;
   }
+}
+
+/** Bind handlers to the complete persisted configuration, without exposing credentials. */
+export function mcpServerConfigurationKey(config: McpServerConfig): string {
+  return createHash('sha256').update(JSON.stringify(config)).digest('hex');
 }

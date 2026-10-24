@@ -20,10 +20,15 @@ export async function nextCommittedManagementFact(
   if (!facts) throw rustHostManagementSequenceFailure(
     'management fact stream is unavailable',
   );
-  for (let stepCount = 0; stepCount < MAXIMUM_MANAGEMENT_STEPS; stepCount += 1) {
+  for (let stepCount = 0; stepCount < MAXIMUM_MANAGEMENT_STEPS;) {
     const step = await facts.processNext(signal);
     if (signal.aborted) throw rustHostAttemptAborted(signal.reason);
-    if (step.kind !== 'committed') continue;
+    // Renewal ACKs are useful progress during long attempts. Only consecutive
+    // replay frames consume the replay bound.
+    if (step.kind !== 'committed') {
+      stepCount = step.kind === 'command_acknowledged' ? 0 : stepCount + 1;
+      continue;
+    }
     if (!expected.includes(step.factCase)) {
       throw rustHostManagementSequenceFailure(
         `unexpected management fact ${step.factCase}`,

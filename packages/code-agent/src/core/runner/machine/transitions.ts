@@ -21,12 +21,14 @@ import type {
 export const TRANSITIONS: TransitionTable = {
   Bootstrap: {
     TurnSucceeded: 'Executing',
+    ToolOutcomeUnknown: 'Done',
     Aborted: 'Done',
   },
   Executing: {
     TurnSucceeded: 'Executing',
     TokenThresholdHit: 'Compacting',
     ToolLoopDetected: 'Planning',
+    ToolOutcomeUnknown: 'Done',
     MaxTurnsReached: 'Reviewing',
     ProviderError: 'Recovering',
     CleanFinish: 'Done',
@@ -70,6 +72,7 @@ export const ALL_EVENT_KINDS: readonly BehaviorEventKind[] = [
   'TurnSucceeded',
   'TokenThresholdHit',
   'ToolLoopDetected',
+  'ToolOutcomeUnknown',
   'MaxTurnsReached',
   'ProviderError',
   'CompactionDone',

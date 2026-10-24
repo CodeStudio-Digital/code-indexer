@@ -8,6 +8,7 @@ import {
   packProtocolVersion,
 } from '@mcp/agent-runtime-contracts';
 import type { PreparedDurabilityPort } from '../driver/HostLifecycleTypes.js';
+import type { AuthorityClock } from '../ipc/AttemptClock.js';
 import type { PackedProtocolRange } from '../ipc/HostLaunchAuthority.js';
 import {
   validateActivationAuthoritySeal,
@@ -33,6 +34,8 @@ import {
 const CONTROL_MAXIMUM_FRAME_BYTES = 256 * 1024;
 
 export interface ShadowAttemptControlPlanInput {
+  /** Use the attempt's existing monotonic anchor on every owned channel. */
+  readonly clock?: AuthorityClock;
   readonly launch: agentV1Supervisor.LaunchAttemptProcess;
   readonly hostHello: agentV1Runtime.HostHello;
   readonly supportedProtocols: PackedProtocolRange;
@@ -50,6 +53,7 @@ export interface ShadowAttemptControlPlanInput {
 }
 
 export interface ShadowAttemptControlPlan {
+  readonly clock?: AuthorityClock;
   readonly identity: agentV1Common.AttemptIdentity;
   readonly resourceBudget: agentV1Common.ResourceBudget;
   readonly hardDeadlineAtUnixMs: bigint;
@@ -135,6 +139,7 @@ export function snapshotShadowAttemptControlPlan(
     );
     launchNonce = launch.launchNonce.slice();
     return Object.freeze({
+      ...(input.clock ? { clock: Object.freeze({ now: input.clock.now.bind(input.clock) }) } : {}),
       identity,
       resourceBudget,
       hardDeadlineAtUnixMs: launch.hardDeadlineAtUnixMs,
@@ -187,7 +192,7 @@ function validateDeadlines(input: ShadowAttemptControlPlanInput): void {
     || launch.authorityLeaseExpiresAtUnixMs <= 0n
     || launch.authorityLeaseExpiresAtUnixMs > launch.hardDeadlineAtUnixMs
     || input.specDeadlineAtUnixMs <= 0n
-    || input.specDeadlineAtUnixMs > launch.authorityLeaseExpiresAtUnixMs
+    || input.specDeadlineAtUnixMs > launch.hardDeadlineAtUnixMs
     || launch.launchNonce.byteLength < 16
     || launch.launchNonce.byteLength > 256
   ) throw new RangeError('launch deadline or nonce');

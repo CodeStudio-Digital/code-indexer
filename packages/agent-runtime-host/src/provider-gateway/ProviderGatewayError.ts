@@ -2,6 +2,8 @@ export type ProviderGatewayErrorCode =
   | 'invalid_provider_request'
   | 'provider_request_too_large'
   | 'provider_registry_full'
+  | 'provider_run_tree_budget_exhausted'
+  | 'provider_run_tree_fenced'
   | 'provider_operation_conflict'
   | 'provider_operation_not_found'
   | 'provider_operation_identity_mismatch'

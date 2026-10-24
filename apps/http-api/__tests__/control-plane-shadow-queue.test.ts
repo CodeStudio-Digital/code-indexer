@@ -5,6 +5,8 @@ import {
   mirrorLocalCoderToolBoundary,
   resetCoderControlPlaneShadowMetricsForTests,
   snapshotCoderControlPlaneShadowMetrics,
+  terminalizeLocalCoderCommand,
+  type LocalCoderShadowAcceptance,
 } from '../control-plane-shadow.js';
 
 const context = {
@@ -53,6 +55,29 @@ describe('control-plane observational write queue', () => {
         durationMs: 12,
       },
     }));
+  });
+
+  it('adopts the worker-owned terminal command without replacing its reason during HTTP setup failure', async () => {
+    const terminalizeCommand = vi.fn();
+    const acceptance = { commandContext: context, runContext: context } as unknown as LocalCoderShadowAcceptance;
+    const store = { terminalizeCommand, getAttemptState: vi.fn(async () => ({ command: {
+      commandId: acceptance.commandContext!.commandId, status: 'failed', reasonCode: 'worker-startup-failed',
+    } })) } as never;
+    await terminalizeLocalCoderCommand(store, acceptance, { status: 'failed', reason: 'request-setup-failed' });
+    expect(terminalizeCommand).toHaveBeenCalledWith(expect.objectContaining({ preserveExistingTerminal: true }));
+    expect(acceptance.commandReasonCode).toBe('worker-startup-failed');
+    expect(acceptance.commandStatus).toBe('failed');
+    expect(snapshotCoderControlPlaneShadowMetrics().lifecycleErrors).toBe(0);
+  });
+
+  it('still commits HTTP setup failure when no worker terminal exists', async () => {
+    const terminalizeCommand = vi.fn();
+    const acceptance = { commandContext: context, runContext: context } as unknown as LocalCoderShadowAcceptance;
+    const store = { terminalizeCommand, getAttemptState: vi.fn(async () => ({ command: {
+      commandId: acceptance.commandContext!.commandId, status: 'running',
+    } })) } as never;
+    await terminalizeLocalCoderCommand(store, acceptance, { status: 'failed', reason: 'request-setup-failed' });
+    expect(terminalizeCommand).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', reason: 'request-setup-failed' }));
   });
 
   it('never exceeds the queue cap under a pure observational burst', async () => {

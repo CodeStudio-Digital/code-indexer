@@ -76,6 +76,11 @@ export class ToolCallLedger {
   private readonly noProgressByOperation = new Map<string, number>();
   private readonly coverage = new Set<string>();
   private unsafeLane: Promise<void> = Promise.resolve();
+  private uncertainTool: string | undefined;
+
+  /** Sticky for the entire attempt, including nested code_exec calls. */
+  markOutcomeUnknown(toolName: string): void { this.uncertainTool ??= toolName; }
+  get outcomeUnknownTool(): string | undefined { return this.uncertainTool; }
 
   /**
    * Shared FIFO lane for mutations and other non-parallel-safe operations.

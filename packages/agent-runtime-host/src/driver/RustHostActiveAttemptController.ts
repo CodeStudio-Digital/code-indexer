@@ -16,6 +16,8 @@ import { RustHostActiveFactPump } from './RustHostActiveFactPump.js';
 
 export class RustHostActiveAttemptController {
   #facts?: RustHostActiveFactPump;
+  #renewal?: Promise<void>;
+  #terminating = false;
 
   constructor(
     private readonly lifecycle: AuthenticatedAttemptLifecyclePort,
@@ -23,11 +25,12 @@ export class RustHostActiveAttemptController {
   ) {}
 
   inspect(handle: ActiveAttemptAuthorityHandle): ActiveAttemptAuthoritySnapshot {
-    return callOwnedAttemptLifecycle(
+    const snapshot = callOwnedAttemptLifecycle(
       this.lifecycle,
       (lifecycle) => lifecycle.inspectActive(handle),
       this.fail,
     );
+    return Object.freeze({ ...snapshot, remainingManagementIdentities: this.#facts?.remainingIdentityCapacity });
   }
 
   startFactPump(facts: RustHostManagementFactPort): void {
@@ -44,15 +47,27 @@ export class RustHostActiveAttemptController {
     this.#facts?.abort(cause);
   }
 
+  async renewAuthority(handle: ActiveAttemptAuthorityHandle, request: import('./HostLifecycleTypes.js').HostAuthorityRenewalRequest): Promise<void> {
+    if (this.#terminating || this.#renewal) throw new Error('Authority renewal is already pending or the attempt is closing');
+    this.inspect(handle).signal.throwIfAborted();
+    this.#renewal = this.#callManagement((facts) => facts.renewAuthority(request));
+    try {
+      await this.#renewal;
+      if (!this.#terminating) this.inspect(handle).signal.throwIfAborted();
+    } finally { this.#renewal = undefined; }
+  }
+
   async cancel(
     handle: ActiveAttemptAuthorityHandle,
     request: HostCancelAttemptRequest,
   ): Promise<void> {
+    this.#terminating = true;
     await callOwnedAttemptLifecycleAsync(
       this.lifecycle,
       (lifecycle) => lifecycle.cancel(handle, request),
       this.fail,
     );
+    await this.#renewal;
     await this.#callManagement((facts) => facts.cancel(request));
   }
 
@@ -60,11 +75,13 @@ export class RustHostActiveAttemptController {
     handle: ActiveAttemptAuthorityHandle,
     request: HostFenceAttemptRequest,
   ): Promise<void> {
+    this.#terminating = true;
     await callOwnedAttemptLifecycleAsync(
       this.lifecycle,
       (lifecycle) => lifecycle.fence(handle, request),
       this.fail,
     );
+    await this.#renewal;
     await this.#callManagement((facts) => facts.fence(request));
   }
 

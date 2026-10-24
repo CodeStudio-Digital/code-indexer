@@ -13,7 +13,7 @@
  * Always registered (bootstrap tier). A settings toggle (CODER_SELF_REVIEW)
  * only controls the proactive reminder, not availability.
  */
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
@@ -24,11 +24,8 @@ import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import { reviewSessionSnapshots } from '@mcp/services/services/review-session-snapshots.js';
 import { IntentContractCompiler } from '@mcp/services/services/intent-contract.js';
 import { formatFindingsForAgent } from '@mcp/services/services/snapshot-review-format.js';
-import type {
-  ReviewReferenceHit,
-  ReviewReferenceLookup,
-} from '@mcp/services/services/review-absences.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { buildRegistryReferenceLookup } from './self-review-reference-lookup.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 import { buildVerifyEvidence, formatVerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
 
@@ -54,53 +51,6 @@ export interface SelfReviewDeps {
   projectId?: number;
 }
 
-/** Per-symbol budget for a reference lookup — an index hiccup must degrade
- *  to a no-absences review, never stall the whole self_review call. */
-const REFERENCE_LOOKUP_TIMEOUT_MS = 5_000;
-
-function parseReferenceHits(content: string): ReviewReferenceHit[] {
-  const parsed = JSON.parse(content) as {
-    references?: Array<{ file_path?: unknown; line?: unknown; context?: unknown }>;
-  };
-  if (!Array.isArray(parsed.references)) return [];
-  const hits: ReviewReferenceHit[] = [];
-  for (const ref of parsed.references) {
-    if (typeof ref?.file_path !== 'string' || !ref.file_path) continue;
-    hits.push({
-      filePath: ref.file_path,
-      line: typeof ref.line === 'number' && Number.isFinite(ref.line) ? ref.line : null,
-      context: typeof ref.context === 'string' ? ref.context : null,
-    });
-  }
-  return hits;
-}
-
-/**
- * Reference lookup over the session's own registry (`mcp__find_references`,
- * format=json). Absent tool / unindexed project / timeout → empty result,
- * which buildAbsenceReport treats as "no absences for this symbol".
- */
-function buildRegistryReferenceLookup(
-  registry: ToolRegistry,
-  ctx: ToolContext,
-): ReviewReferenceLookup {
-  return {
-    async findReferences(symbolName: string): Promise<ReviewReferenceHit[]> {
-      const invoke = registry.invoke(
-        'mcp__find_references',
-        { project_name: ctx.projectName, symbol_name: symbolName, format: 'json' },
-        ctx,
-      );
-      const timeout = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), REFERENCE_LOOKUP_TIMEOUT_MS).unref?.(),
-      );
-      const result = await Promise.race([invoke, timeout]);
-      if (!result || result.isError) return [];
-      return parseReferenceHits(result.content);
-    },
-  };
-}
-
 /** Pipeline-config problems (not transient) → an actionable hint, not a failure. */
 const CONFIG_ERROR_CODES = new Set([
   'review_pipeline_unconfigured',
@@ -114,6 +64,7 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
     source: 'native',
     mutates: false,
     parallelSafe: false,
+    effectBoundary: 'control',
     riskLevel: 'read',
     repeatable: true,
     description:
@@ -133,6 +84,7 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       properties: {
         focus: {
           type: 'string',
+          maxLength: 4000,
           description:
             'Optional. 1-3 sentences on what you changed and where the reviewer should pay extra attention.',
         },
@@ -140,6 +92,18 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       additionalProperties: false,
     },
     handler: async (args, ctx): Promise<ToolResult> => {
+      ctx.signal?.throwIfAborted();
+      const owner = ctx.runtimeGeneration === 'rust_v1' ? ctx.ports?.sessionReview : undefined;
+      if (ctx.runtimeGeneration === 'rust_v1' && (!owner || owner.runtimeGeneration !== 'rust_v1' || owner.sessionId !== deps.sessionId
+        || owner.sessionId !== ctx.sessionId || owner.agentRunId !== ctx.controlPlaneParentAgentRunId)) {
+        return err('self_review: native invocation has no owned session review scope.');
+      }
+      owner?.assertOwner();
+      const onCancellationSettled = owner && ctx.currentToolUseId ? owner.beginInvocation(ctx.currentToolUseId) : undefined;
+      if (owner && !onCancellationSettled) return err('self_review: native invocation lacks its admitted tool identity.');
+      if (args.focus !== undefined && (typeof args.focus !== 'string' || args.focus.length > 4000)) {
+        return err('self_review: focus must be a string of at most 4000 characters.');
+      }
       const snapshotStore = deps.sessionStore;
       const reviewStore = deps.sessionStore;
       const snapshotService = new SessionSnapshotService(snapshotStore, (kind, sessionId, projectId) => {
@@ -149,7 +113,7 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
           const sec = deps.secondaryRoots?.find((r) => r.projectId === projectId);
           if (sec) return sec.rootPath;
         }
-        return deps.projectRoot;
+        return owner?.workspaceRoot ?? deps.projectRoot;
       });
       const resolver = new PipelineProviderResolver(
         new PipelineProviderBindingsStore(deps.settingsDbHandle),
@@ -167,6 +131,8 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       } catch {
         /* review runs without intent */
       }
+      ctx.signal?.throwIfAborted();
+      owner?.assertOwner();
 
       // Recorded verification evidence (which verify commands actually ran +
       // staleness) replaces author claims. Best-effort like intent.
@@ -175,6 +141,8 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
         deps.sessionId,
       );
       const evidence = evidenceData ? formatVerifyEvidence(evidenceData) : null;
+      ctx.signal?.throwIfAborted();
+      owner?.assertOwner();
 
       // Consult the registered owner-backed tool live. Do not freeze this
       // capability from ToolContext.projectIndexed: a session may have started
@@ -211,12 +179,13 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
             projectId: deps.projectId,
           },
           deps.sessionId,
-          { focus, intent, evidence },
+          { focus, intent, evidence, signal: ctx.signal, assertOwner: owner?.assertOwner, onCancellationSettled },
         );
       } catch (e) {
         return err(`self_review failed: ${e instanceof Error ? e.message : String(e)}`);
       }
 
+      ctx.signal?.throwIfAborted(); owner?.assertOwner();
       if (!outcome.ok) {
         if (outcome.errorCode && CONFIG_ERROR_CODES.has(outcome.errorCode)) {
           return err(

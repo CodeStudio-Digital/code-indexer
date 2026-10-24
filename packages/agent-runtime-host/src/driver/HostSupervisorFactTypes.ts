@@ -96,6 +96,7 @@ export type HostSupervisorFactStep =
   | {
     readonly kind: 'command_acknowledged';
     readonly commandCase:
+      | 'updateAttemptAuthority'
       | 'cancelAttemptProcess'
       | 'fenceAttemptProcess'
       | 'reapAttemptProcess';

@@ -9,9 +9,7 @@ import { ArtifactStore } from '../../packages/session-storage/src/artifact-store
 import { canonicalJson } from '../../packages/session-storage/src/atomic-file.js';
 import { calculateSessionMetricsSummary } from '../../packages/session-storage/src/metrics-summary.js';
 import { CompanySessionRepository } from '../../packages/session-storage/src/entities/company-session-repository.js';
-import { DesignSystemSessionRepository } from '../../packages/session-storage/src/entities/design-system-session-repository.js';
 import { EntityFileRepository } from '../../packages/session-storage/src/entities/entity-file-repository.js';
-import { SpriteSessionRepository } from '../../packages/session-storage/src/entities/sprite-session-repository.js';
 import {
   asSessionId,
   type ArtifactRef,
@@ -29,9 +27,7 @@ export {
   canonicalJson,
   calculateSessionMetricsSummary,
   CompanySessionRepository,
-  DesignSystemSessionRepository,
   EntityFileRepository,
-  SpriteSessionRepository,
   asSessionId,
 };
 

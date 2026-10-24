@@ -31,7 +31,7 @@ export interface InvestigationSemanticIndexPort {
     sessionId: SessionId;
     query: string;
     limit: number;
-  }): Promise<string[]>;
+  }, signal?: AbortSignal): Promise<string[]>;
 }
 
 let indexPort: InvestigationSemanticIndexPort | null = null;

@@ -12,8 +12,6 @@ export interface ActiveView {
     | 'agents'
     | 'global'
     | 'admin'
-    | 'design-systems'
-    | 'sprites'
     | 'telemetry'
     | 'docs'
     | 'apps'
@@ -47,8 +45,6 @@ export function parseView(pathname: string, search: string): ActiveView {
   }
   if (pathname.startsWith('/admin')) return { page: 'admin', projectId: null, sessionId: null };
   if (pathname.startsWith('/apps')) return { page: 'apps', projectId: null, sessionId: null };
-  if (pathname.startsWith('/design-systems')) return { page: 'design-systems', projectId: null, sessionId: null };
-  if (pathname.startsWith('/sprites')) return { page: 'sprites', projectId: null, sessionId: null };
   if (pathname.startsWith('/telemetry')) return { page: 'telemetry', projectId: null, sessionId: null };
   if (pathname.startsWith('/docs')) return { page: 'docs', projectId: null, sessionId: null };
   return { page: 'other', projectId: null, sessionId: null };

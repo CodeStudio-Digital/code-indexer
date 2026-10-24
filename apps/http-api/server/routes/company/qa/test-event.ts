@@ -40,7 +40,7 @@ import {
   type QaKanbanStore,
 } from '@mcp/services/qa/kanban-bridge.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { classifyQaFailure } from '@mcp/services/qa/parsers/error-classifier.js';
 import {
   SIDECAR_DOWN_THRESHOLD,

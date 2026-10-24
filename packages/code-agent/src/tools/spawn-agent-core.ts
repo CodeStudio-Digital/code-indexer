@@ -138,9 +138,11 @@ export function toRetentionAgent(
   agent: NormalizedAgent,
   result: {
     reason: StopReason;
+    effectOutcome?: 'unknown';
     usage: ChatUsage;
     finalText: string;
     transcript?: AgentMessage[];
+    nativeTranscriptRef?: string;
     failureDetail?: string;
     toolCallCount?: number;
   },
@@ -158,9 +160,11 @@ export function toRetentionAgent(
     // re-resolving from env-only state.
     limits: limits ?? limitsForAgent(agent),
     reason: result.reason,
+    effectOutcome: result.effectOutcome,
     usage: result.usage,
     toolCallCount: result.toolCallCount ?? 0,
     transcript: result.transcript,
+    nativeTranscriptRef: result.nativeTranscriptRef,
     finalText: result.finalText,
     failureDetail: result.failureDetail,
   };

@@ -109,10 +109,11 @@ export async function importOpenApiInto(
     projectId: number;
     rootPath: string;
     specPath?: string;
+    signal?: AbortSignal;
     beforeWrite?: () => void;
   },
 ): Promise<ImportOutcome | { error: string }> {
-  const probed = await probeOpenApiOnHost(opts.rootPath, opts.specPath);
+  const probed = await probeOpenApiOnHost(opts.rootPath, opts.specPath, opts.signal);
   if (!probed) return { error: 'no OpenAPI/Swagger spec found in the project root' };
   return finalizeImport(
     store,

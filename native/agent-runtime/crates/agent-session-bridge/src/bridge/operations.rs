@@ -12,8 +12,11 @@ use crate::convert::{
     receipt_to_wire, state_to_wire,
 };
 
+mod lifecycle;
 mod list;
 mod read;
+mod reader;
+mod root_lock;
 
 impl AuthenticatedSessionStoreBridge {
     pub(super) fn dispatch(
@@ -34,6 +37,11 @@ impl AuthenticatedSessionStoreBridge {
             Body::CloseSessionWriter(request) => self.close(request),
             Body::ReadCommittedSessionPayload(request) => self.read_committed_payload(request),
             Body::ListCommittedSessionRecords(request) => self.list_committed_records(request),
+            Body::OpenSessionReader(request) => self.open_reader(request),
+            Body::CloseSessionReader(request) => self.close_reader(request),
+            Body::AcquireStorageRootLock(request) => self.acquire_root_lock(&request),
+            Body::ReleaseStorageRootLock(request) => self.release_root_lock(request),
+            Body::InspectSupervisorLifecycleEvidence(request) => self.inspect_lifecycle(&request),
         }
     }
 
@@ -107,6 +115,9 @@ impl AuthenticatedSessionStoreBridge {
     }
 
     fn query(&self, request: wire::QuerySessionState) -> wire::SessionStoreResponse {
+        if !request.reader_handle.is_empty() {
+            return self.query_reader(request);
+        }
         let Ok(authority) = authority_from_wire(request.authority) else {
             return invalid("invalid_storage_authority");
         };

@@ -6,7 +6,7 @@
  */
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
-import type { ResolvedSkill, SkillContextMode, SkillSource } from './skill-types.js';
+import type { ResolvedSkill, SkillContextMode, SkillSource, SkillTriggerDefinition } from './skill-types.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -170,7 +170,7 @@ function hydrate(r: SkillRaw): SkillDefinition {
 
 export function toResolved(def: SkillDefinition): ResolvedSkill {
   // Treat tags prefixed with `trigger:` as inline trigger tags (e.g.
-  // `trigger:design-system`). This keeps frontmatter terse while letting
+  // `trigger:api-docs`). This keeps frontmatter terse while letting
   // the matcher reuse a single field.
   const triggerTags = def.tags
     .filter((t) => t.startsWith('trigger:'))
@@ -202,9 +202,9 @@ export class SkillStore {
   private db: DB;
   private ownsConnection: boolean;
 
-  constructor(dbPathOrInstance: string | DB) {
+  constructor(dbPathOrInstance: string | DB, options?: { busyTimeoutMs?: number }) {
     if (typeof dbPathOrInstance === 'string') {
-      this.db = new Database(dbPathOrInstance);
+      this.db = new Database(dbPathOrInstance, { timeout: options?.busyTimeoutMs ?? 5000 });
       this.db.pragma('journal_mode = WAL');
       this.db.pragma('foreign_keys = ON');
       this.ownsConnection = true;
@@ -222,15 +222,58 @@ export class SkillStore {
 
   listSkills(filter?: SkillListFilter): SkillDefinition[] {
     const clauses: string[] = [];
-    if (filter?.scope !== undefined) clauses.push(`scope = '${filter.scope}'`);
-    if (filter?.enabled !== undefined) clauses.push(`enabled = ${filter.enabled ? 1 : 0}`);
-    if (filter?.source !== undefined) clauses.push(`source = '${filter.source}'`);
-    if (filter?.tag) clauses.push(`tags LIKE '%"${filter.tag}"%'`);
+    const parameters: Array<string | number> = [];
+    if (filter?.scope !== undefined) { clauses.push('scope = ?'); parameters.push(filter.scope); }
+    if (filter?.enabled !== undefined) { clauses.push('enabled = ?'); parameters.push(filter.enabled ? 1 : 0); }
+    if (filter?.source !== undefined) { clauses.push('source = ?'); parameters.push(filter.source); }
+    if (filter?.tag) { clauses.push("EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value = ?)"); parameters.push(filter.tag); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db
       .prepare(`SELECT * FROM skill_definitions ${where} ORDER BY sort_order, name`)
-      .all() as SkillRaw[];
+      .all(...parameters) as SkillRaw[];
     return rows.map(hydrate);
+  }
+
+  /** Bounded trigger projection: a collision report never loads prompt bodies.
+   * The total includes oversized legacy metadata omitted from this window. */
+  listSkillTriggerCatalog(projectId: number, limit = 500): { items: SkillTriggerDefinition[]; totalCount: number; partial: boolean } {
+    if (!Number.isSafeInteger(projectId) || projectId < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error('Invalid skill trigger window');
+    return this.db.transaction(() => {
+      const scope = String(projectId);
+      const where = "enabled = 1 AND scope IN ('global', ?)";
+      const totalCount = (this.db.prepare(`SELECT COUNT(*) AS count FROM skill_definitions WHERE ${where}`).get(scope) as { count: number }).count;
+      const rows = this.db.prepare(`SELECT id, context_mode, trigger_paths, trigger_roles, path_patterns, tags, sort_order
+        FROM skill_definitions WHERE ${where}
+        AND length(coalesce(trigger_paths,'')) <= 16384 AND length(coalesce(trigger_roles,'')) <= 16384
+        AND length(coalesce(path_patterns,'')) <= 16384 AND length(coalesce(tags,'')) <= 16384
+        ORDER BY sort_order, id LIMIT ?`).all(scope, limit) as Pick<SkillRaw, 'id' | 'context_mode' | 'trigger_paths' | 'trigger_roles' | 'path_patterns' | 'tags' | 'sort_order'>[];
+      let omittedMetadata = false;
+      const strings = (value: string | null) => {
+        const parsed: unknown = parseJson(value, null);
+        if (parsed == null) { if (value && value !== 'null') omittedMetadata = true; return null; }
+        if (!Array.isArray(parsed)) { omittedMetadata = true; return null; }
+        const bounded = parsed.filter((v): v is string => typeof v === 'string' && v.length <= 512).slice(0, 32);
+        if (bounded.length !== parsed.length) omittedMetadata = true;
+        return bounded;
+      };
+      const items = rows.map(row => ({ id: row.id, contextMode: (row.context_mode === 'inline' ? 'auto' : row.context_mode) as SkillContextMode,
+        triggerPaths: strings(row.trigger_paths ?? row.path_patterns), triggerRoles: strings(row.trigger_roles),
+        triggerTags: (strings(row.tags) ?? []).filter(tag => tag.startsWith('trigger:')).map(tag => tag.slice(8)), sortOrder: row.sort_order }));
+      return { items, totalCount, partial: omittedMetadata || rows.length < totalCount };
+    })();
+  }
+
+  /** Scope check and update share one write transaction, preventing a racing
+   * attempt from replacing another project's skill between read and commit. */
+  upsertAuthoredSkill(input: UpsertSkillInput, projectId: number, beforeWrite: () => void): SkillDefinition {
+    return this.db.transaction(() => {
+      const existing = this.getSkill(input.id);
+      if (existing && existing.scope !== 'global' && existing.scope !== String(projectId)) throw new Error('Skill belongs to another project');
+      const scope = input.scope ?? existing?.scope ?? 'global';
+      if (scope !== 'global' && (projectId <= 0 || scope !== String(projectId))) throw new Error('Skill scope is not owned by this project');
+      beforeWrite();
+      return this.upsertSkill({ ...input, scope });
+    }).immediate();
   }
 
   /**

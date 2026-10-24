@@ -80,6 +80,12 @@ fn validate(
     valid(value.containment.is_some(), "containment")?;
     valid_path(&value.runner_executable, "runner_executable")?;
     valid_path(&value.runner_working_directory, "runner_working_directory")?;
+    if !value.lifecycle_outbox_directory.is_empty() {
+        valid_path(
+            &value.lifecycle_outbox_directory,
+            "lifecycle_outbox_directory",
+        )?;
+    }
     validate_environment(&value.runner_environment)?;
     validate_expected_provenance(value.trusted_runner_provenance.as_ref())?;
     Ok(())

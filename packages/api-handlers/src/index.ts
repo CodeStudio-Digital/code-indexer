@@ -34,8 +34,6 @@ export type { HandlerDeps } from './types.js';
 export { createContext, createInternalContext } from './context.js';
 export { createProjectsHandlers } from './projects/index.js';
 export { runScaffoldStream } from './projects/scaffold.js';
-export { runDsStudioScaffoldStream } from './design-system/studio-scaffold.js';
-export type { DsStudioCreateInput, DsStudioStreamEvent } from './design-system/studio-scaffold.js';
 export { runAppStudioScaffoldStream } from './app-studio/studio-scaffold.js';
 export type {
   AppStudioCreateInput,
@@ -57,12 +55,6 @@ export { runAppLaunchStream } from './app-studio/launch-stream.js';
 export type { AppLaunchEvent } from './app-studio/launch-stream.js';
 export { reinstrumentBuilder, type ReinstrumentResult } from './projects/reinstrument.js';
 export { visualEdit, type VisualEditBody, type VisualEditOkResult } from './projects/visual-edit.js';
-export {
-  linkDesignSystem,
-  unlinkDesignSystem,
-  linkDsToDir,
-  type DsConsumerLink,
-} from './projects/link-design-system.js';
 export { createFilesHandlers, resolveSafe } from './files/index.js';
 export { createTerminalHandlers } from './terminal/index.js';
 export { createSshHandlers, sharedSshManager, disposeSharedSshResources } from './ssh/index.js';
@@ -115,8 +107,8 @@ export { createSystemHandlers } from './system/index.js';
  * Aggregate factory. As more namespaces are extracted, add them here so
  * the Electron main process can mount the full `Api` in one call.
  *
- * Not yet wired (Dia 4+): admin, docs, designSystem, company, workspace.
- * Those serve features (multi-agent, doc RAG, design system) that are
+ * Not yet wired (Dia 4+): admin, docs, company, workspace.
+ * Those serve features (multi-agent, doc RAG) that are
  * Pro-tier features and don't block the core IDE loop. Their Hono routes
  * continue to work as legacy adapters.
  */

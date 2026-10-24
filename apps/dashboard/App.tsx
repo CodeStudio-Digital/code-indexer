@@ -54,9 +54,6 @@ const ProjectView = lazy(() =>
 const AgentsTab = lazy(() =>
   import('./features/agents/AgentsTab.js').then((module) => ({ default: module.AgentsTab })),
 );
-const DesignSystemsTab = lazy(() =>
-  import('./features/design-systems/DesignSystemsTab.js').then((module) => ({ default: module.DesignSystemsTab })),
-);
 const AppStudioHome = lazy(() =>
   import('./features/app-studio/AppStudioHome.js').then((module) => ({ default: module.AppStudioHome })),
 );
@@ -82,11 +79,6 @@ const PreflightWizard = lazy(() =>
   import('./features/preflight/PreflightWizard.js').then((module) => ({ default: module.PreflightWizard })),
 );
 
-// Sprite Studio is a heavy standalone surface (virtualized library now,
-// canvas engine later) — lazy so it never weighs on the other routes.
-const SpriteStudioView = lazy(() =>
-  import('./features/sprite-studio/SpriteStudioView.js').then((m) => ({ default: m.SpriteStudioView })),
-);
 
 function RouteBoundary({ children }: { children: ReactNode }) {
   return (
@@ -301,18 +293,6 @@ function CompanyRedirectRoute() {
   return <Navigate to={buildAgentsDefaultUrl(id)} replace />;
 }
 
-function DesignSystemsRoute() {
-  const features = useFeatures();
-  if (!features.designSystemEnabled) return <Navigate to="/" replace />;
-  return <DesignSystemsTab />;
-}
-
-function SpritesRoute() {
-  const features = useFeatures();
-  if (!features.spriteStudioEnabled) return <Navigate to="/" replace />;
-  return <SpriteStudioView />;
-}
-
 function AppsRoute() {
   const features = useFeatures();
   if (!features.appStudioEnabled) return <Navigate to="/" replace />;
@@ -371,10 +351,8 @@ const router = createHashRouter([
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },
       { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <RouteBoundary><AgentsTab /></RouteBoundary> },
       { path: 'admin', element: <RouteBoundary><Admin /></RouteBoundary> },
-      { path: 'design-systems', element: <RouteBoundary><DesignSystemsRoute /></RouteBoundary> },
       { path: 'apps', element: <RouteBoundary><AppsRoute /></RouteBoundary> },
       { path: 'apps/:sessionId', element: <RouteBoundary><AppStudioSessionRoute /></RouteBoundary> },
-      { path: 'sprites', element: <RouteBoundary><SpritesRoute /></RouteBoundary> },
       { path: 'telemetry', element: <RouteBoundary><TelemetryDashboard /></RouteBoundary> },
       { path: 'docs', element: <RouteBoundary><DocsPage /></RouteBoundary> },
       { path: '*', element: <Navigate to="/" replace /> },

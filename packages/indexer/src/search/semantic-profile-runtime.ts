@@ -9,7 +9,7 @@ import {
   generationMatchesEmbeddingFingerprint,
   type VectorWriteTarget,
 } from '@mcp/store/vectors.js';
-import type { EmbeddingService } from './embeddings.js';
+import type { EmbeddingService, QueryEmbeddingOptions } from './embeddings.js';
 import type {
   RerankCandidate,
   RerankRequestOptions,
@@ -61,6 +61,8 @@ export class SemanticProfileRuntime {
   private readonly embeddingProxies = new Map<SemanticPurpose, EmbeddingService>();
   private readonly queryEmbeddingProxies = new Map<SemanticPurpose, EmbeddingService>();
   private readonly rerankerProxies = new Map<string, RerankerService>();
+  private readonly queryVectors = new Map<string, { vector: number[]; expiresAt: number }>();
+  private readonly queryInflight = new Map<string, Promise<{ vector: number[]; tokens: number }>>();
 
   constructor(
     private readonly semanticStore: Pick<SemanticStore, 'getProfile' | 'getActiveGeneration'>
@@ -78,7 +80,7 @@ export class SemanticProfileRuntime {
       embed: (texts) => resolve().embed(texts),
       embedDocumentsForNamespace: (namespace, texts) =>
         this.embedWriteDocuments(purpose, namespace, texts),
-      embedQuery: (text) => resolve().embedQuery(text),
+      embedQuery: (text, options) => resolve().embedQuery(text, options),
       fingerprint: () => this.desiredEmbeddingFingerprint(purpose),
       maxConcurrency: () => resolve().maxConcurrency?.() ?? 1,
       diagnostics: () => {
@@ -105,8 +107,8 @@ export class SemanticProfileRuntime {
     const proxy: EmbeddingService = {
       embed: async () => namespaceRequired(),
       embedQuery: async () => namespaceRequired(),
-      embedQueryForNamespace: (namespace, text) =>
-        this.embedActiveQuery(purpose, namespace, text),
+      embedQueryForNamespace: (namespace, text, options) =>
+        this.embedActiveQuery(purpose, namespace, text, options),
       cacheRevisionForNamespace: (namespace) =>
         this.activeQueryCacheRevision(purpose, namespace),
       queryBlockReasonForNamespace: (namespace) =>
@@ -247,6 +249,8 @@ export class SemanticProfileRuntime {
     }
     this.embeddings.clear();
     this.rerankers.clear();
+    this.queryVectors.clear();
+    this.queryInflight.clear();
   }
 
   private resolveEmbedding(purpose: SemanticPurpose): EmbeddingService {
@@ -277,6 +281,7 @@ export class SemanticProfileRuntime {
     purpose: SemanticPurpose,
     namespace: string,
     text: string,
+    options?: QueryEmbeddingOptions,
   ): Promise<{ vector: number[]; tokens: number; generationId: number }> {
     const blocked = this.activeQueryBlockReason(purpose, namespace);
     if (blocked) throw new Error(blocked);
@@ -301,13 +306,38 @@ export class SemanticProfileRuntime {
         `Active generation ${generation.id} backend context no longer matches its embedding service`,
       );
     }
-    const result = await snapshot.service.embedQuery(text);
+    options?.signal?.throwIfAborted();
+    const cacheKey = `${snapshot.fingerprint}\0${text}`;
+    const cached = this.queryVectors.get(cacheKey);
+    let result: { vector: number[]; tokens: number };
+    if (cached && cached.expiresAt > Date.now()) {
+      result = { vector: cached.vector, tokens: 0 };
+    } else {
+      // Collections sharing one embedding space coalesce query encoding. An
+      // abortable interactive request owns its own promise/cancellation.
+      const shared = !options?.signal && !options?.supersessionKey;
+      let pending = shared ? this.queryInflight.get(cacheKey) : undefined;
+      if (!pending) {
+        pending = snapshot.service.embedQuery(text, options);
+        if (shared && this.queryInflight.size < 128) this.queryInflight.set(cacheKey, pending);
+      }
+      try { result = await pending; }
+      finally {
+        if (this.queryInflight.get(cacheKey) === pending) this.queryInflight.delete(cacheKey);
+      }
+      options?.signal?.throwIfAborted();
+      if (result.vector.length === generation.dimension && result.vector.every(Number.isFinite) && text.length <= 8192) {
+        this.queryVectors.delete(cacheKey);
+        this.queryVectors.set(cacheKey, { vector: [...result.vector], expiresAt: Date.now() + 30_000 });
+        while (this.queryVectors.size > 128) this.queryVectors.delete(this.queryVectors.keys().next().value!);
+      }
+    }
     if (result.vector.length !== generation.dimension) {
       throw new Error(
         `Active generation for ${namespace} expects ${generation.dimension} dimensions, got ${result.vector.length}`,
       );
     }
-    return { ...result, generationId: generation.id };
+    return { ...result, vector: [...result.vector], generationId: generation.id };
   }
 
   private async embedWriteDocuments(

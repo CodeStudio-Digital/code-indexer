@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import {
   SessionLocator,

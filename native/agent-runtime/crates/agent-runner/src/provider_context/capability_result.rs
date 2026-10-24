@@ -5,8 +5,10 @@ use prost::Message;
 
 use super::ProviderContextError;
 
+mod extra_user;
 mod host_tool_result;
 
+#[cfg(test)]
 pub fn compose_capability_result_context(
     previous: &[u8],
     call: &ProviderToolCall,
@@ -14,6 +16,42 @@ pub fn compose_capability_result_context(
     outcome: &CapabilityExecutionOutcome,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, ProviderContextError> {
+    compose_capability_results_context(
+        previous,
+        std::slice::from_ref(call),
+        assistant_text,
+        "",
+        std::slice::from_ref(outcome),
+        maximum_bytes,
+    )
+}
+
+pub fn compose_capability_results_context(
+    previous: &[u8],
+    calls: &[ProviderToolCall],
+    assistant_text: &str,
+    assistant_thinking: &str,
+    outcomes: &[CapabilityExecutionOutcome],
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, ProviderContextError> {
+    let Some(call) = calls.first() else {
+        return Err(ProviderContextError::MalformedTurnContext);
+    };
+    let mut identifiers = std::collections::BTreeSet::new();
+    if calls.len() != outcomes.len()
+        || calls.len() > 256
+        || calls.iter().any(|item| {
+            item.operation_id != call.operation_id
+                || item.provider_response_id != call.provider_response_id
+                || item.provider_response_message_count != call.provider_response_message_count
+                || item.capability_name.is_empty()
+                || !identifiers.insert(item.tool_use_id.as_str())
+        })
+    {
+        return Err(ProviderContextError::InvalidCapabilityResult(
+            "inconsistent capability batch",
+        ));
+    }
     if previous.is_empty() || maximum_bytes == 0 {
         return Err(ProviderContextError::MalformedTurnContext);
     }
@@ -22,6 +60,9 @@ pub fn compose_capability_result_context(
     if context.encode_to_vec() != previous {
         return Err(ProviderContextError::NonCanonicalTurnContext);
     }
+    // This buffer was durably acknowledged before the preceding model stream.
+    // The authenticated chapter reference remains in its summary message.
+    context.pending_chapters.clear();
     if call.capability_name.is_empty()
         || (call.provider_response_id.is_none() && call.provider_response_message_count.is_some())
     {
@@ -30,31 +71,55 @@ pub fn compose_capability_result_context(
         ));
     }
     let mut assistant_content = Vec::with_capacity(2);
+    if !assistant_thinking.is_empty() {
+        assistant_content.push(wire::ProviderContentBlock {
+            body: Some(wire::provider_content_block::Body::Thinking(
+                wire::ProviderTextContent {
+                    body: Some(wire::provider_text_content::Body::InlineUtf8(
+                        assistant_thinking.to_owned(),
+                    )),
+                },
+            )),
+        });
+    }
     if !assistant_text.is_empty() {
         assistant_content.push(text_block(assistant_text));
     }
-    assistant_content.push(wire::ProviderContentBlock {
-        body: Some(wire::provider_content_block::Body::ToolUse(
-            wire::ProviderToolUseContent {
-                tool_use_id: call.tool_use_id.as_str().to_owned(),
-                capability_name: call.capability_name.clone(),
-                encoded_json_arguments: call.encoded_arguments.clone(),
-                arguments_sha256: call.arguments_sha256.to_vec(),
-            },
-        )),
-    });
+    for call in calls {
+        assistant_content.push(wire::ProviderContentBlock {
+            body: Some(wire::provider_content_block::Body::ToolUse(
+                wire::ProviderToolUseContent {
+                    tool_use_id: call.tool_use_id.as_str().to_owned(),
+                    capability_name: call.capability_name.clone(),
+                    encoded_json_arguments: call.encoded_arguments.clone(),
+                    arguments_sha256: call.arguments_sha256.to_vec(),
+                },
+            )),
+        });
+    }
     context.messages.push(wire::ProviderMessage {
         role: wire::ProviderMessageRole::Assistant as i32,
         content: assistant_content,
         phase: wire::ProviderMessagePhase::Commentary as i32,
         is_meta: false,
+        compacted_chapter: None,
     });
-    context.messages.push(wire::ProviderMessage {
-        role: wire::ProviderMessageRole::Tool as i32,
-        content: vec![tool_result_block(call, outcome)?],
-        phase: wire::ProviderMessagePhase::Unspecified as i32,
-        is_meta: false,
-    });
+    for (call, outcome) in calls.iter().zip(outcomes) {
+        context.messages.push(wire::ProviderMessage {
+            role: wire::ProviderMessageRole::Tool as i32,
+            content: vec![tool_result_block(call, outcome)?],
+            phase: wire::ProviderMessagePhase::Unspecified as i32,
+            is_meta: false,
+            compacted_chapter: None,
+        });
+    }
+    // Every tool result in the batch must precede synthetic user content, so
+    // provider tool pairing remains complete even when reads finish out of order.
+    for outcome in outcomes {
+        if let Some(message) = extra_user::message(outcome)? {
+            context.messages.push(message);
+        }
+    }
     if let (Some(response_id), Some(message_count)) = (
         call.provider_response_id.as_ref(),
         call.provider_response_message_count,

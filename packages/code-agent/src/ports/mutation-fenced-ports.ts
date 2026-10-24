@@ -86,8 +86,35 @@ class MutationFencedFilesystemPort implements IFilesystemPort {
     await this.inner.writeFile(absPath, data);
   }
 
+  async createFile(absPath: string, data: string): Promise<void> {
+    const fence = effectiveFence(this.fence);
+    assertAttested(fence, this.inner, 'filesystem');
+    assertMutationFence(fence, { kind: 'filesystem', operation: 'createFile', resource: absPath });
+    if (!this.inner.createFile) throw new Error('Filesystem adapter does not support exclusive creation');
+    await this.inner.createFile(absPath, data);
+  }
+
+  async createFileBytes(absPath: string, data: Uint8Array): Promise<void> {
+    const fence = effectiveFence(this.fence);
+    assertAttested(fence, this.inner, 'filesystem');
+    assertMutationFence(fence, { kind: 'filesystem', operation: 'createFileBytes', resource: absPath });
+    if (!this.inner.createFileBytes) throw new Error('Filesystem adapter does not support exclusive binary creation');
+    await this.inner.createFileBytes(absPath, data);
+  }
+
   readFile(absPath: string): Promise<string> {
     return this.inner.readFile(absPath);
+  }
+
+  readFileBounded(absPath: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
+    if (!this.inner.readFileBounded) throw new Error('Filesystem adapter does not support bounded reads');
+    return this.inner.readFileBounded(absPath, maxBytes, signal);
+  }
+
+  async *iterateDirectory(absPath: string, signal?: AbortSignal): AsyncIterable<PortDirent> {
+    signal?.throwIfAborted();
+    const entries = this.inner.iterateDirectory?.(absPath, signal) ?? await this.inner.readdir(absPath, { withFileTypes: true });
+    for await (const entry of entries) { signal?.throwIfAborted(); yield entry; }
   }
 
   async mkdir(absPath: string, options?: { recursive?: boolean }): Promise<void> {
@@ -138,6 +165,17 @@ class MutationFencedFilesystemPort implements IFilesystemPort {
       resource: newAbsPath,
     });
     await this.inner.rename(oldAbsPath, newAbsPath);
+  }
+
+  get exclusiveRenameSupported(): true | undefined { return this.inner.exclusiveRenameSupported; }
+
+  async renameNoReplace(source: string, destination: string): Promise<void> {
+    const fence = effectiveFence(this.fence);
+    assertAttested(fence, this.inner, 'filesystem');
+    assertMutationFence(fence, { kind: 'filesystem', operation: 'rename', resource: source });
+    assertMutationFence(fence, { kind: 'filesystem', operation: 'rename', resource: destination });
+    if (!this.inner.exclusiveRenameSupported || !this.inner.renameNoReplace) throw new Error('Atomic exclusive rename unavailable');
+    await this.inner.renameNoReplace(source, destination);
   }
 
   async rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {

@@ -3,7 +3,7 @@
  * sqlite) — validates list/get/update/mark_verified logic and api_run_request
  * against a real local server (status + last_status persistence).
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ApiClientStore } from '@mcp/store/api-client-store.js';
@@ -22,15 +22,18 @@ function fakeStore(reqs: Req[]): ApiClientStore {
   const map = new Map(reqs.map((r) => [r.id, r]));
   return {
     listRequests: (cid: number) => [...map.values()].filter((r) => r.collection_id === cid),
+    listRequestSummaries: (cid: number, limit: number, offset: number) => [...map.values()].filter(r => r.collection_id === cid).slice(offset, offset + limit),
     getRequest: (id: number) => map.get(id) ?? null,
     updateRequest: (id: number, patch: Record<string, unknown>) => Object.assign(map.get(id)!, patch),
     markVerified: (id: number, st: number, assert: string | null) =>
       Object.assign(map.get(id)!, { verified: true, expected_status: st, assert_json: assert }),
-    getCollection: (id: number) => ({ id }),
-    getDefaultEnvironment: () => ({ id: 1, base_url: BASE, variables_json: '{}' }),
-    getEnvironment: () => ({ id: 1, base_url: BASE, variables_json: '{}' }),
+    getCollection: (id: number) => ({ id, project_id: id === 5 ? 1 : 2 }),
+    getDefaultEnvironment: () => ({ id: 1, project_id: 1, base_url: BASE, variables_json: '{}' }),
+    getEnvironment: (id: number) => id === 999 ? null : ({ id, project_id: id === 1 ? 1 : 2, base_url: BASE, variables_json: '{}' }),
     createRun: () => 7,
     finishRun: () => undefined,
+    transaction: (fn: () => unknown) => fn(),
+    applyEnvVarUpdates: () => undefined,
   } as unknown as ApiClientStore;
 }
 
@@ -57,6 +60,37 @@ const REQ: Req = {
 
 describe('api_* tools', () => {
   beforeEach(() => setApiClientStore(fakeStore([{ ...REQ }])));
+
+  it.each([
+    ['api_list_requests', { collectionId: 6 }], ['api_get_request', { requestId: 2 }],
+    ['api_update_request', { requestId: 2, method: 'DELETE' }], ['api_mark_verified', { requestId: 2, expectedStatus: 200 }],
+    ['api_run_request', { requestId: 2 }], ['api_run_collection', { collectionId: 6, includeMutating: true }],
+  ] as const)('refuses foreign project IDs in %s before any effect', async (name, args) => {
+    const store = fakeStore([{ ...REQ }, { ...REQ, id: 2, collection_id: 6 }]);
+    const write = vi.spyOn(store, 'updateRequest'), run = vi.spyOn(store, 'createRun');
+    const readAll = vi.spyOn(store, 'listRequests');
+    setApiClientStore(store);
+    const result = await tool(name).handler(args, ctx());
+    expect(result.isError).toBe(true);
+    expect(write).not.toHaveBeenCalled(); expect(run).not.toHaveBeenCalled(); expect(readAll).not.toHaveBeenCalled();
+  });
+
+  it.each([2, 999, NaN])('refuses foreign or missing environment %s', async envId => {
+    for (const [name, args] of [['api_run_request', { requestId: 1 }], ['api_run_collection', { collectionId: 5 }]] as const) {
+      const result = await tool(name).handler({ ...args, envId }, ctx());
+      expect(result.isError).toBe(true); expect(result.content).toContain('Environment not found');
+    }
+  });
+
+  it('pages summaries without loading bodies or repeating rows', async () => {
+    const store = fakeStore(Array.from({ length: 4 }, (_, id) => ({ ...REQ, id: id + 1 })));
+    const full = vi.spyOn(store, 'listRequests'); setApiClientStore(store);
+    const first = await tool('api_list_requests').handler({ collectionId: 5, limit: 2 }, ctx());
+    const last = await tool('api_list_requests').handler({ collectionId: 5, limit: 2, offset: 2 }, ctx());
+    expect(first.content).toContain('offset 2'); expect(first.content).not.toContain('#3');
+    expect(last.content).toContain('#3'); expect(last.content).not.toContain('#1');
+    expect(full).not.toHaveBeenCalled();
+  });
 
   it('errors clearly when the store is not wired', async () => {
     setApiClientStore(null);

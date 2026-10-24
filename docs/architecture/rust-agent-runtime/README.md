@@ -6,7 +6,16 @@
 > **Autoridade:** este diretório governa o novo runtime de agentes em Rust  
 > **Checklist executiva:** [IMPLEMENTATION-CHECKLIST.md](./IMPLEMENTATION-CHECKLIST.md)
 
-> **Snapshot operacional:** o E2E físico Windows já comprova a lifecycle inteira
+> **Estado verificado em 2026-10-05:** o produto ainda usa `legacy_required`.
+> Componentes Rust e integrações físicas passaram por testes, mas a entrada
+> normal da interface ainda não usa essa composição. O pacote Windows validado
+> também executou o legado. Consulte o
+> [plano atualizado, entregas e estimativas](./IMPLEMENTATION-CHECKLIST.md#plano-de-execução-atualizado--2026-10-05)
+> e as [medições do candidato](./10-harness-performance-2026-10-03.md#candidato-validado-em-2026-10-05-produto-interface-e-continuidade-nativa).
+> As descrições abaixo preservam o histórico técnico de 2026-08-05, incluindo
+> números e limitações que já mudaram; não são o status atual do produto.
+
+> **Snapshot operacional histórico (2026-08-05):** o E2E físico Windows já comprova a lifecycle inteira
 > `Host TS → supervisor → agent-runner → AgentHello → hidratação → Prepared →
 > Activate/ACK → Active`, com `RunnerPulse`, heartbeat, métricas reais do
 > processo, Cancel/Fence, fatos `Exited/Reaped` duráveis e reap do runner sem

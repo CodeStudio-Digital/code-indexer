@@ -5,7 +5,6 @@
   "src/core/sandbox/": "@mcp/services/sandbox/",
   "src/core/ai-general/": "@mcp/services/ai-general/",
   "src/core/chrome-service/": "@mcp/services/chrome-service/",
-  "src/core/verdaccio/": "@mcp/services/verdaccio/",
   "src/core/qa/": "@mcp/services/qa/",
   "src/core/mcp-client/": "@mcp/services/mcp-client/"
 }

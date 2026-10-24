@@ -227,6 +227,10 @@ export interface SkeletonEntry { line: number; kind: string; name: string; signa
 export function extractSkeletonFromFile(absPath: string): SkeletonEntry[] {
   let content: string;
   try { content = readFileSync(absPath, 'utf-8'); } catch { return []; }
+  return extractSkeletonFromContent(content);
+}
+
+export function extractSkeletonFromContent(content: string): SkeletonEntry[] {
   const lines = content.split('\n');
   const out: SkeletonEntry[] = [];
   const patterns: Array<{ re: RegExp; kind: string }> = [

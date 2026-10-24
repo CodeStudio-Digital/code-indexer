@@ -28,16 +28,20 @@ interface BridgeLike {
  * Register the secrets handler on a worker bridge. Returns a disposer to call
  * from the pool's `detachBusMirror`.
  */
-export function registerWorkerSecretsHandlers(bridge: BridgeLike): () => void {
+export function registerWorkerSecretsHandlers(bridge: BridgeLike, owner?: (runId: unknown) => () => void): () => void {
   const offDecrypt = bridge.handle('secretsDecrypt', async (payload) => {
-    const { blob } = payload as { blob: string };
+    const { blob, runId } = payload as { blob: string; runId?: unknown };
+    const assertOwner = owner?.(runId); assertOwner?.();
     // await, not return: the decryptor may be an out-of-process RPC once the
     // backend no longer shares an address space with safeStorage.
-    return await getMainSecretDecryptor()(blob);
+    const result = await getMainSecretDecryptor()(blob);
+    assertOwner?.(); return result;
   });
   const offEncrypt = bridge.handle('secretsEncrypt', async (payload) => {
-    const { plaintext } = payload as { plaintext: string };
-    return await getMainSecretEncryptor()(plaintext);
+    const { plaintext, runId } = payload as { plaintext: string; runId?: unknown };
+    const assertOwner = owner?.(runId); assertOwner?.();
+    const result = await getMainSecretEncryptor()(plaintext);
+    assertOwner?.(); return result;
   });
 
   return (): void => {

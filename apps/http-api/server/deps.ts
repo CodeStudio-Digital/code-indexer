@@ -1,4 +1,7 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
+import { dirname } from 'node:path';
+import { installNativeSessionHistory } from '../native-session-history.js';
+import { nativeRuntimeStorageRecovery } from '../native-runtime-package.js';
 import { setSqlCallSink, sqlLabel } from '@mcp/store/db/sql-timing.js';
 import { noteSyncLeaf } from './perf/stall-evidence.js';
 import { recordSlowCall } from './perf/slow-ipc.js';
@@ -44,7 +47,8 @@ import {
 } from '../sse/dbMaintenanceSingleton.js';
 import { getMemoryLedger } from './perf/memory-ledger.js';
 import { createProjectFeatureStoreResolver } from './project-feature-store.js';
-import { SqliteWriteQueue, isSqliteBusyError } from './sqlite-write-queue.js';
+import { SqliteWriteQueue } from './sqlite-write-queue.js';
+import { nextSemanticRetry, SemanticRetryDeferredError } from './semantic-retry-policy.js';
 import {
   loadConfig,
   mcpDataDir,
@@ -84,7 +88,7 @@ import { SessionStore } from '@mcp/code-agent/index.js';
 import {
   FsPipelineTelemetrySink,
   requireSessionProjectAuthority,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 import {
   peekCoderWorkerPool,
   setCoderWorkerSessionRuntimeResolver,
@@ -116,13 +120,11 @@ import { SkillStore } from '@mcp/store/skill-store.js';
 import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
 import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.js';
 import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
-import { DesignSystemStore } from '@mcp/store/design-system-store.js';
 import { AppStudioStore } from '@mcp/store/app-studio-store.js';
 import { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { SshStore } from '@mcp/store/ssh-store.js';
 import { DbClientStore } from '@mcp/store/db-client-store.js';
 import { sharedDbConnectionManager } from '@mcp/db-drivers';
-import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
 import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver, generalDefaultAsFallback } from '@mcp/services/pipelines/index.js';
@@ -186,7 +188,6 @@ import {
 } from '@mcp/services/semantic-mutation-sink.js';
 import { randomUUID } from 'node:crypto';
 import { OperationalSessionFiles } from './operational-session-files.js';
-import { SpriteFileStore } from './sprite-files.js';
 import { CoderPreferencesFile } from './coder-preferences-file.js';
 
 interface EmbeddingFn {
@@ -242,6 +243,7 @@ export interface ProviderDeps {
 }
 
 export interface SearchDeps {
+  semanticJobs: import('../sse/semantic-job-query-port.js').SemanticJobQueryPort;
   embeddingService: EmbeddingService;
   docsEmbeddingService: EmbeddingService;
   memoryEmbeddingService: EmbeddingService;
@@ -280,13 +282,15 @@ export interface SearchDeps {
     save(
       projectId: number,
       projectName: string,
-      entry: { title: string; content: string; category: string },
+      entry: import('@mcp/shared/memory-write.js').LiteralMemoryEntry,
+      control?: import('@mcp/services/memory/mutation-control.js').MemoryMutationControl,
     ): Promise<{ created: number; merged: number; skipped: number } | null>;
     recall(
       projectId: number,
       projectName: string,
       query: string,
       limit?: number,
+      signal?: AbortSignal,
     ): Promise<Array<{
       id: string; title: string; content: string;
       category?: string; source?: string; importance?: number; staleNote?: string;
@@ -296,11 +300,13 @@ export interface SearchDeps {
       projectName: string,
       limit?: number,
       type?: string,
+      signal?: AbortSignal,
     ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
     forget(
       projectId: number,
       projectName: string,
       target: string,
+      control?: import('@mcp/services/memory/mutation-control.js').MemoryMutationControl,
     ): Promise<{ archived: number }>;
   };
   /**
@@ -359,7 +365,7 @@ export interface CoderDeps {
 
 export interface OperationalSessionDeps {
   /**
-   * Filesystem authority for Company/App Studio/control-plane/Sprite runtime
+   * Filesystem authority for Company/App Studio/control-plane runtime
    * state. It can read the essential project catalog but has no SQLite
    * session store or fallback.
    */
@@ -388,24 +394,13 @@ export interface ChromeServiceDeps {
   chromeServiceStore: ChromeServiceStore;
 }
 
-export interface DesignSystemDeps {
-  /**
-   * CRUD store for Design System Creator sessions, versions and
-   * components (migration 048). Read by the design-system routes and
-   * by the DS tools registered on subordinate runners.
-   */
-  designSystemStore: DesignSystemStore;
+export interface AppStudioDeps {
   /**
    * CRUD store for App Studio sessions and recorded features (migration
    * 200). Read by the /api/app-studio routes and by the app_* tools
    * registered on runners of `kind:'app'` workspaces.
    */
   appStudioStore: AppStudioStore;
-  /**
-   * Singleton config for the embedded Verdaccio registry (migration 049).
-   * The runtime `VerdaccioService` operates on this store.
-   */
-  verdaccioStore: VerdaccioStore;
 }
 
 export interface ApiClientDeps {
@@ -429,11 +424,6 @@ export interface ApiClientDeps {
   /** Embedded database client store (saved connections + history + saved queries). Project-scoped. */
   dbClientStore: DbClientStore;
   dbClientFor: (projectId: number) => DbClientStore;
-}
-
-export interface SpriteStudioDeps {
-  /** Filesystem-only operational authority for every Sprite record. */
-  spriteFileStore: SpriteFileStore;
 }
 
 export interface PipelineDeps {
@@ -602,9 +592,8 @@ export type ServerDeps = CoreDeps
   & CompanyDeps
   & QaDeps
   & ChromeServiceDeps
-  & DesignSystemDeps
+  & AppStudioDeps
   & ApiClientDeps
-  & SpriteStudioDeps
   & PipelineDeps
   & DocCorpusDeps
   & PluginRuntimeDeps
@@ -690,10 +679,13 @@ export function createDeps(): ServerDeps {
           } catch (error) {
             const attempt = (mutationDrainAttempts.get(namespace) ?? 0) + 1;
             mutationDrainAttempts.set(namespace, attempt);
-            const base = isSqliteBusyError(error) ? 50 : 1_000;
-            const ceiling = isSqliteBusyError(error) ? 1_000 : 30_000;
-            const retryMs = Math.min(ceiling, base * (2 ** Math.min(attempt - 1, 5)));
-            mutationDrainNotBefore.set(namespace, Date.now() + retryMs);
+            const retry = nextSemanticRetry(error, attempt - 1);
+            const persisted = semanticCoordinatorStore.getNamespaceBuildRetry(namespace);
+            const retryAt = error instanceof SemanticRetryDeferredError ? error.retryAt
+              : persisted?.blocked || retry.blocked ? Infinity
+              : Math.max(persisted?.not_before_ms ?? 0, retry.not_before_ms);
+            const retryMs = retryAt - Date.now();
+            mutationDrainNotBefore.set(namespace, retryAt);
             pendingMutationDrains.add(namespace);
             console.warn(
               `[semantic] mutation catch-up retry for ${namespace} in ${retryMs}ms: ${
@@ -710,6 +702,7 @@ export function createDeps(): ServerDeps {
         const now = Date.now();
         const nextAt = Math.min(...[...pendingMutationDrains]
           .map((namespace) => mutationDrainNotBefore.get(namespace) ?? now));
+        if (!Number.isFinite(nextAt)) return;
         scheduleMutationDrain(Math.max(0, nextAt - now));
       });
     }, Math.max(0, delayMs));
@@ -734,7 +727,13 @@ export function createDeps(): ServerDeps {
         if (semanticCoordinatorForMutations
           && !semanticCoordinatorForMutations.allowsNamespaceMutation(namespace)) return;
         pendingMutationDrains.add(namespace);
-        mutationDrainNotBefore.delete(namespace);
+        // A new source mutation must not reset a provider/runtime cooldown.
+        // A successful manual repair/new generation, however, reopens the circuit.
+        if (mutationDrainNotBefore.get(namespace) === Infinity
+          && !semanticCoordinatorStore.getNamespaceBuildRetry(namespace)) {
+          mutationDrainNotBefore.delete(namespace);
+          mutationDrainAttempts.delete(namespace);
+        }
         scheduleMutationDrain();
       },
     },
@@ -997,6 +996,8 @@ export function createDeps(): ServerDeps {
     },
   });
   const coderPreferences = CoderPreferencesFile.fromDataDir(mcpDataDir());
+  registerShutdownTask('native-session-history', installNativeSessionHistory(sessionStore, dirname(config.dbPath),
+    async (sessionId, query) => peekCoderWorkerPool()?.readNativeHistory(sessionId, query)));
   filesystemPipelineTelemetrySink = new FsPipelineTelemetrySink(sessionStore);
   // Builder checkpoints — run-end hook deps (worker pool + in-process
   // stream both notify through the builder-checkpoint module global).
@@ -1091,9 +1092,9 @@ export function createDeps(): ServerDeps {
       },
     },
   });
-  const spriteFileStore = new SpriteFileStore(operationalSessionFiles);
   const controlPlaneStore = new FileControlPlaneStore(sessionStore, {
     journalEnabled: process.env.CODER_RUNTIME_JOURNAL_SHADOW === '1',
+    nativeRecovery: nativeRuntimeStorageRecovery(dirname(config.dbPath)),
   });
   const investigationSemanticIndex = new InvestigationSemanticIndex(
     { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },
@@ -1116,7 +1117,6 @@ export function createDeps(): ServerDeps {
   const qaTestRunStore = new QaTestRunStore(sessionStore);
   const qaTestResultStore = new QaTestResultStore(sessionStore);
   const chromeServiceStore = new ChromeServiceStore(db.raw());
-  const designSystemStore = new DesignSystemStore(sessionStore);
   const appStudioStore = new AppStudioStore({
     repository: sessionStore.repository,
     catalog: sessionStore.catalog,
@@ -1149,7 +1149,6 @@ export function createDeps(): ServerDeps {
     dbClientStore,
     (handle) => new DbClientStore(handle),
   );
-  const verdaccioStore = new VerdaccioStore(db.raw());
   // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
   // EARLIER (before createSearchBundle) so the V2 search path can emit
   // per-stage telemetry. The references here are the same instances.
@@ -1292,7 +1291,8 @@ export function createDeps(): ServerDeps {
     'user', 'feedback',
   ]);
   const projectMemory: SearchDeps['projectMemory'] = {
-    save: async (projectId, projectName, entry) => {
+    save: async (projectId, projectName, entry, control) => {
+      control?.signal?.throwIfAborted(); control?.assertCurrent();
       // Same synthetic→primary redirect as runEndMemory: a global session's
       // save_note must persist on a real project, not the throwaway union.
       // Inert for ordinary projects and for user memory (id 0 → id unchanged).
@@ -1303,12 +1303,13 @@ export function createDeps(): ServerDeps {
         title: entry.title,
         content: entry.content,
         category: category as import('@mcp/shared/types.js').SnapshotCategory,
-        importance: 0.6, // per-category floors still apply inside the extractor
+        importance: entry.importance ?? 0.6, // per-category floors still apply inside the extractor
+        referencedFiles: entry.referencedFiles,
       };
       const literal = new MemoryExtractor(
         { distill: async () => [candidate] },
-        new AgentMemoryWriter(db, agentMemoryService, memoryRelationalWrites),
-        new AgentMemoryDedupeSearch(agentMemoryService),
+        new AgentMemoryWriter(db, agentMemoryService, memoryRelationalWrites, control),
+        new AgentMemoryDedupeSearch(agentMemoryService, control?.signal),
       );
       const res = await literal.extractAndPersist(projectId, projectName, 'agent', {});
       try {
@@ -1325,9 +1326,10 @@ export function createDeps(): ServerDeps {
       } catch { /* diagnostics are best-effort */ }
       return res;
     },
-    recall: (projectId, _projectName, query, limit) =>
-      agentMemoryRetriever.recall(projectId === 0 ? 'user' : 'project', projectId, query, limit ?? 5),
-    list: async (projectId, _projectName, limit, type) => {
+    recall: (projectId, _projectName, query, limit, signal) =>
+      agentMemoryRetriever.recall(projectId === 0 ? 'user' : 'project', projectId, query, limit ?? 5, undefined, signal),
+    list: async (projectId, _projectName, limit, type, signal) => {
+      signal?.throwIfAborted();
       const tgt = db.resolveMemoryWriteProject(projectId);
       const scope = tgt.id === 0 ? 'user' : 'project';
       return db
@@ -1340,14 +1342,18 @@ export function createDeps(): ServerDeps {
           created_at: m.created_at,
         }));
     },
-    forget: async (projectId, _projectName, target) => {
+    forget: async (projectId, _projectName, target, control) => {
+      control?.signal?.throwIfAborted(); control?.assertCurrent();
+      if (control?.deferEmbeddings && !agentMemoryService.hasDurableMutationQueue) throw new Error('Deferred memory archive requires a durable mutation queue');
       const tgt = db.resolveMemoryWriteProject(projectId);
       const scope = tgt.id === 0 ? 'user' : 'project';
       const row = db.getAgentMemoryByName(scope, tgt.id, target);
       if (!row) return { archived: 0 };
-      await memoryRelationalWrites.run(() =>
-        db.withBusyTimeout(0, () => agentMemoryService.archive(row.id, 'forgotten:agent')));
-      await agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
+      await memoryRelationalWrites.run(() => {
+        control?.signal?.throwIfAborted(); control?.assertCurrent();
+        return db.withBusyTimeout(0, () => agentMemoryService.archive(row.id, 'forgotten:agent'));
+      });
+      if (!control?.deferEmbeddings) await agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
       try {
         db.withBusyTimeout(0, () =>
           db.recordAgentMemoryEvent({ eventType: 'forget', scope, projectId: tgt.id, memoryId: row.id }));
@@ -1479,6 +1485,9 @@ export function createDeps(): ServerDeps {
   const semanticCoordinator = new SemanticIndexCoordinator({
     db,
     semanticStore: semanticCoordinatorStore,
+    listJobsOffThread: (filter) => semanticVectorWorker
+      ? semanticVectorWorker.listSemanticJobs(filter)
+      : Promise.reject(new Error('semantic job query worker unavailable')),
     router: localVectorRouter,
     vectorStore: vectorOverride,
     codeEmbedding: codeEmbeddingService,
@@ -1518,11 +1527,12 @@ export function createDeps(): ServerDeps {
       pendingMutationDrains.add(projectMemoryNamespace(row.project_id));
       scheduleMutationDrain();
     },
-    search: async ({ sessionId, query, limit }) => {
+    search: async ({ sessionId, query, limit }, signal) => {
+      signal?.throwIfAborted();
       const projectId = await sessionStore.investigationProjectId(sessionId);
       return projectId == null
         ? []
-        : investigationSemanticIndex.search(projectId, query, limit);
+        : investigationSemanticIndex.search(projectId, query, limit, signal);
     },
   };
   setInvestigationSemanticIndex(investigationSemantic);
@@ -1655,6 +1665,14 @@ export function createDeps(): ServerDeps {
     memoryEmbeddingService,
     vectorStore,
     semanticStore,
+    semanticJobs: {
+      projectJobsPage: (input, signal) => semanticVectorWorker
+        ? semanticVectorWorker.projectJobsPage(input, signal)
+        : Promise.reject(new Error('semantic job query worker unavailable')),
+      currentProjectJobs: (scopes, signal) => semanticVectorWorker
+        ? semanticVectorWorker.currentProjectJobs(scopes, signal)
+        : Promise.reject(new Error('semantic job query worker unavailable')),
+    },
     localVectorRouter,
     semanticProfileRuntime,
     semanticCoordinator,
@@ -1670,7 +1688,6 @@ export function createDeps(): ServerDeps {
     sessionStore,
     coderPreferences,
     operationalSessionFiles,
-    spriteFileStore,
     controlPlaneStore,
     companyStore,
     companySandboxStore,
@@ -1684,7 +1701,6 @@ export function createDeps(): ServerDeps {
     qaTestRunStore,
     qaTestResultStore,
     chromeServiceStore,
-    designSystemStore,
     appStudioStore,
     apiClientStore,
     apiClientFor,
@@ -1692,7 +1708,6 @@ export function createDeps(): ServerDeps {
     sshStoreFor,
     dbClientStore,
     dbClientFor,
-    verdaccioStore,
     pipelineTelemetryStore,
     pipelineBindingsStore,
     pipelineProviderResolver,

@@ -1,6 +1,6 @@
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import {
   asCompanySessionId,
   type CompanySessionId,

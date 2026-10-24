@@ -5,7 +5,9 @@ import {
   agentV1SessionStore,
 } from '@mcp/agent-runtime-contracts';
 import { validateAttemptIdentity } from '../ipc/FrameHeaderValidation.js';
+import { engineRecordStorage } from '../ipc/EngineContentRecord.js';
 import type { UnresolvedCapabilityDispatch } from './NativeEngineEventRecoveryTypes.js';
+import { NATIVE_SESSION_MAX_RECORDS } from './NativeSessionStoreLimits.js';
 
 export interface EngineEventRecoveryRecordPage {
   readonly records: readonly agentV1SessionStore.CommitSessionRecordReceipt[];
@@ -31,11 +33,14 @@ export async function inspectUnresolvedCapabilityDispatches(
   store: EngineEventRecoveryStorePort,
   sessionId: string,
   maximumRecords: number,
+  observer?: (receipt: agentV1SessionStore.CommitSessionRecordReceipt, payload: Uint8Array,
+    record?: agentV1SessionStore.EngineEventRecordV1) => void,
+  minimumCheckpointSequence = 0n,
 ): Promise<readonly UnresolvedCapabilityDispatch[]> {
   if (!validId(sessionId)
     || !Number.isSafeInteger(maximumRecords)
     || maximumRecords <= 0
-    || maximumRecords > 65_536) {
+    || maximumRecords > NATIVE_SESSION_MAX_RECORDS) {
     throw new RangeError('engine event recovery scan limits');
   }
   const unresolved = new Map<string, UnresolvedCapabilityDispatch>();
@@ -45,13 +50,22 @@ export async function inspectUnresolvedCapabilityDispatches(
     const remaining = maximumRecords - scanned;
     if (remaining <= 0) throw new Error('engine event recovery scan limit exceeded');
     const page = await store.list(cursor, Math.min(PAGE_SIZE, remaining));
-    validatePage(page, sessionId, cursor);
+    validateRecoveryPage(page, sessionId, cursor, Math.min(PAGE_SIZE, remaining));
     for (const receipt of page.records) {
       scanned += 1;
       cursor = receipt.globalSequence;
-      if (receipt.kind !== agentV1SessionStore.SessionRecordKind.LIFECYCLE_EVENT) continue;
+      const kind = agentV1SessionStore.SessionRecordKind;
+      if (receipt.kind !== kind.LIFECYCLE_EVENT
+        && (!observer || ![kind.CHECKPOINT, kind.CONVERSATION, kind.INPUT, kind.TOOL_OUTPUT].includes(receipt.kind))) continue;
+      // The selected complete frontier already contains older conversation
+      // material. Lifecycle effects are still scanned from the beginning.
+      if (receipt.kind !== kind.LIFECYCLE_EVENT && receipt.globalSequence < minimumCheckpointSequence) continue;
       const encoded = await store.read(receipt);
-      validatePayload(receipt, encoded);
+      validateRecoveryPayload(receipt, encoded);
+      if (receipt.kind === agentV1SessionStore.SessionRecordKind.CHECKPOINT) {
+        observer?.(receipt, encoded);
+        continue;
+      }
       const record = fromBinary(
         agentV1SessionStore.EngineEventRecordV1Schema,
         encoded,
@@ -62,7 +76,12 @@ export async function inspectUnresolvedCapabilityDispatches(
       )).equals(encoded)) {
         throw new Error('engine event recovery payload is not canonical');
       }
+      const storage = engineRecordStorage(record);
+      if (storage.kind !== receipt.kind || storage.durability !== receipt.durability) {
+        throw new Error('engine event recovery storage classification diverged');
+      }
       applyRecord(record, receipt, sessionId, unresolved);
+      observer?.(receipt, encoded, record);
     }
     if (page.complete) break;
     if (page.nextGlobalSequence !== cursor || page.records.length === 0) {
@@ -121,15 +140,31 @@ function applyRecord(
     || started.grantId !== value.grantId) {
     throw new Error('engine capability terminal lacks exact started authority');
   }
+  if (started.outcomeUnknownReason !== undefined) {
+    throw new Error('unknown capability outcome requires explicit reconciliation');
+  }
+  const classification = agentV1SessionStore.EngineCapabilityTerminalClassificationV1;
+  if (value.completedAtUnixMs < started.startedAtUnixMs
+    || ![classification.SUCCEEDED, classification.FAILED, classification.CANCELLED,
+      classification.OUTCOME_UNKNOWN].includes(value.classification)) {
+    throw new Error('engine capability terminal classification or time is invalid');
+  }
+  if (value.classification === classification.OUTCOME_UNKNOWN) {
+    // Recording uncertainty settles transport ownership, not the effect. A
+    // restart must still expose it for reconciliation, never silently retry.
+    unresolved.set(key, Object.freeze({ ...started, outcomeUnknownReason: value.reasonCode }));
+    return;
+  }
   unresolved.delete(key);
 }
 
-function validatePage(
+export function validateRecoveryPage(
   page: EngineEventRecoveryRecordPage,
   sessionId: string,
   after: bigint,
+  maximumRecords = PAGE_SIZE,
 ): void {
-  if (page.records.length > PAGE_SIZE
+  if (page.records.length > Math.min(PAGE_SIZE, maximumRecords)
     || page.nextGlobalSequence < after
     || (page.records.length === 0 && page.nextGlobalSequence !== after)) {
     throw new Error('engine event recovery page is invalid');
@@ -150,7 +185,7 @@ function validatePage(
   }
 }
 
-function validatePayload(
+export function validateRecoveryPayload(
   receipt: agentV1SessionStore.CommitSessionRecordReceipt,
   payload: Uint8Array,
 ): void {

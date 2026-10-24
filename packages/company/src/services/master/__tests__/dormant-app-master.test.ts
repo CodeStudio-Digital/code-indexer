@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({
+  getReadyDocsResearchTools: vi.fn(() => []),
   installDocsDeepResearch: vi.fn(),
 }));
 

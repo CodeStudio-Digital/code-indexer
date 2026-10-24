@@ -1,8 +1,7 @@
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
+import { createProjectWorktree, validateManagedWorktree, worktreeGit } from './worktree-operations.js';
+export { createProjectWorktree, WORKTREE_ROOT_REL } from './worktree-operations.js';
 
 /**
  * enter_worktree / exit_worktree — isolated git worktree session scope.
@@ -18,9 +17,6 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
  * branches — never auto-promoted.
  */
 
-export const WORKTREE_ROOT_REL = '.mcp-indexer/worktrees';
-const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-
 interface RunnerWithCwd {
   toolContext?: { cwd: string };
   // Back-references added below by the runner side of this file.
@@ -28,81 +24,14 @@ interface RunnerWithCwd {
   worktreePath?: string | null;
 }
 
-function runGit(args: string[], cwd: string): { ok: true; out: string } | { ok: false; error: string } {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf-8' });
-  if (r.error) return { ok: false, error: `git spawn failed: ${r.error.message}` };
-  const stdout = (r.stdout ?? '').trim();
-  const stderr = (r.stderr ?? '').trim();
-  if (r.status !== 0) {
-    return { ok: false, error: `git ${args.join(' ')} exited ${r.status}: ${stderr || stdout}` };
-  }
-  return { ok: true, out: stdout };
-}
-
-function ensureGitRepo(cwd: string): string | null {
-  if (!existsSync(join(cwd, '.git'))) {
-    const r = runGit(['rev-parse', '--is-inside-work-tree'], cwd);
-    if (!r.ok) return 'not inside a git repository (worktree requires git)';
-    if (r.out !== 'true') return 'not inside a git working tree';
-  }
-  return null;
-}
-
-/**
- * Create a git worktree under `<projectRoot>/.mcp-indexer/worktrees/<name>/`
- * and return its absolute path + the branch checked out. Extracted from the
- * `enter_worktree` tool handler so both runCoder() (session-start) and the
- * tool (mid-session) can share the same validation and git plumbing.
- *
- * Returns a tagged union so callers can distinguish "git missing" from
- * "name collision" without parsing error strings.
- */
-export function createProjectWorktree(
-  projectRoot: string,
-  options: { name?: string; branch?: string } = {},
-): { ok: true; path: string; branch: string; existed: boolean } | { ok: false; error: string } {
-  const gitErr = ensureGitRepo(projectRoot);
-  if (gitErr) return { ok: false, error: gitErr };
-
-  const rawName = typeof options.name === 'string' ? options.name.trim() : '';
-  const name =
-    rawName || `wt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-  if (!NAME_RE.test(name)) {
-    return {
-      ok: false,
-      error: `invalid worktree name '${name}'. Allowed: letters, digits, '.', '_', '-'. 1-64 chars.`,
-    };
-  }
-
-  const worktreesDir = resolve(projectRoot, WORKTREE_ROOT_REL);
-  mkdirSync(worktreesDir, { recursive: true });
-  const worktreePath = join(worktreesDir, name);
-  if (existsSync(worktreePath)) {
-    return {
-      ok: false,
-      error: `worktree path '${worktreePath}' already exists. Pick a different name.`,
-    };
-  }
-
-  const branch =
-    typeof options.branch === 'string' && options.branch.trim()
-      ? options.branch.trim()
-      : `coder/${name}`;
-
-  const branchExists = runGit(['rev-parse', '--verify', branch], projectRoot).ok;
-  const addArgs = branchExists
-    ? ['worktree', 'add', worktreePath, branch]
-    : ['worktree', 'add', '-b', branch, worktreePath];
-  const addResult = runGit(addArgs, projectRoot);
-  if (!addResult.ok) return { ok: false, error: addResult.error };
-
-  return { ok: true, path: worktreePath, branch, existed: branchExists };
-}
-
 // ── enter_worktree ───────────────────────────────────────────────
 
 export const enterWorktree: CoderTool = {
   name: 'enter_worktree',
+  mutates: true,
+  parallelSafe: false,
+  riskLevel: 'admin',
+  effectBoundary: 'shell',
   description:
     'Create an isolated git worktree under .mcp-indexer/worktrees/<name> and switch this session into it. Subsequent tool calls run against the worktree instead of the original working directory.\n' +
     "USE: risky experiments — schema migrations, dependency upgrades, large refactors — where you want to try something and keep the main branch pristine.\n" +
@@ -126,6 +55,10 @@ export const enterWorktree: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    if (ctx.runtimeGeneration === 'rust_v1') {
+      return ctx.ports?.worktree ? ctx.ports.worktree.request('enter_worktree', args, ctx)
+        : err('Native worktree switching requires the owned root attempt transition port.');
+    }
     const runner = ctx.runner as unknown as
       | (RunnerWithCwd & { enterWorktreeScope?: (abs: string) => void })
       | undefined;
@@ -141,11 +74,13 @@ export const enterWorktree: CoderTool = {
     // The ORIGINAL project root, not the current cwd (which could be a
     // worktree we failed to exit). Use the runner's remembered original.
     const projectRoot = runner.originalCwd ?? ctx.cwd;
-    const result = createProjectWorktree(projectRoot, {
+    if ((args.name !== undefined && typeof args.name !== 'string')
+      || (args.branch !== undefined && typeof args.branch !== 'string')) return err('Worktree name and branch must be strings.');
+    const result = await createProjectWorktree(projectRoot, {
       name: typeof args.name === 'string' ? args.name : undefined,
       branch: typeof args.branch === 'string' ? args.branch : undefined,
-    });
-    if (!result.ok) return err(result.error);
+    }, { shell: ctx.ports?.shell, signal: ctx.signal, runtimeEnv: ctx.runtimeEnv });
+    if (!result.ok) return result.outcomeUnknown ? unknownToolOutcome(result.error) : err(result.error);
 
     runner.enterWorktreeScope(result.path);
     return ok(
@@ -159,6 +94,10 @@ export const enterWorktree: CoderTool = {
 
 export const exitWorktree: CoderTool = {
   name: 'exit_worktree',
+  mutates: true,
+  parallelSafe: false,
+  riskLevel: 'admin',
+  effectBoundary: 'shell',
   description:
     'Leave the current worktree and restore the session cwd to the original project root.\n' +
     "USE: action:'keep' to preserve the worktree on disk (e.g. you want to come back to it, or it has uncommitted work you want to review).\n" +
@@ -183,6 +122,10 @@ export const exitWorktree: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    if (ctx.runtimeGeneration === 'rust_v1') {
+      return ctx.ports?.worktree ? ctx.ports.worktree.request('exit_worktree', args, ctx)
+        : err('Native worktree switching requires the owned root attempt transition port.');
+    }
     const runner = ctx.runner as unknown as
       | (RunnerWithCwd & { exitWorktreeScope?: () => void })
       | undefined;
@@ -198,6 +141,10 @@ export const exitWorktree: CoderTool = {
       return err('action must be "keep" or "remove"');
     }
     const projectRoot = runner.originalCwd ?? ctx.cwd;
+    ctx.signal?.throwIfAborted();
+    if (args.discard_changes !== undefined && typeof args.discard_changes !== 'boolean') {
+      return err('discard_changes must be a boolean.');
+    }
 
     if (action === 'keep') {
       runner.exitWorktreeScope();
@@ -208,9 +155,14 @@ export const exitWorktree: CoderTool = {
 
     // action === 'remove' — check for uncommitted changes unless the caller
     // explicitly said to discard.
-    const statusRes = runGit(['status', '--porcelain'], wtPath);
-    const hasChanges = statusRes.ok && statusRes.out.length > 0;
-    const discard = Boolean(args.discard_changes);
+    let actual: string;
+    try { actual = await validateManagedWorktree(projectRoot, wtPath); }
+    catch (cause) { return err(String(cause)); }
+    const execution = { shell: ctx.ports?.shell, signal: ctx.signal, runtimeEnv: ctx.runtimeEnv };
+    const statusRes = await worktreeGit(['status', '--porcelain'], actual, execution);
+    if (!statusRes.ok) return err(`Worktree status could not be verified; removal was not attempted. ${statusRes.error}`);
+    const hasChanges = statusRes.out.length > 0;
+    const discard = args.discard_changes === true;
 
     if (hasChanges && !discard) {
       return err(
@@ -224,12 +176,13 @@ export const exitWorktree: CoderTool = {
     runner.exitWorktreeScope();
 
     const removeArgs = discard
-      ? ['worktree', 'remove', '--force', wtPath]
-      : ['worktree', 'remove', wtPath];
-    const rm = runGit(removeArgs, projectRoot);
+      ? ['worktree', 'remove', '--force', '--', actual]
+      : ['worktree', 'remove', '--', actual];
+    const rm = await worktreeGit(removeArgs, projectRoot, execution, true);
     if (!rm.ok) {
+      if (rm.outcomeUnknown) return unknownToolOutcome(rm.error);
       return err(
-        `cwd restored to ${projectRoot} but git worktree remove failed: ${rm.error}. Clean up manually with 'git worktree remove --force ${wtPath}'.`,
+        `cwd restored to ${projectRoot} but git worktree remove failed: ${rm.error}. Inspect the worktree and its files before another removal attempt.`,
       );
     }
     return ok(

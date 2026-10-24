@@ -18,6 +18,7 @@
 // Workers import via relative paths only — Node's loader resolves these
 // before tsx/tsconfig `paths` get a chance (see coder-worker.ts header).
 import { randomUUID } from 'node:crypto';
+import { requestMemoryRead } from './memory-read-request.js';
 import {
   isMutationOutcomeUnknownError,
   type MessageBridge,
@@ -100,12 +101,14 @@ export interface WorkerMemoryShims {
       projectName: string,
       query: string,
       limit?: number,
+      signal?: AbortSignal,
     ): Promise<ShimRecalledMemory[]>;
     list(
       projectId: number,
       projectName: string,
       limit?: number,
       type?: string,
+      signal?: AbortSignal,
     ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
     forget(projectId: number, projectName: string, target: string): Promise<{ archived: number }>;
   };
@@ -298,27 +301,19 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
           throw error;
         }
       },
-      recall: async (projectId, projectName, query, limit) => {
-        try {
-          return await bridge.request<ShimRecalledMemory[]>(
+      recall: async (projectId, projectName, query, limit, signal) => {
+        return requestMemoryRead<ShimRecalledMemory[]>(bridge,
             'memoryRecall',
             { projectId, projectName, query, limit },
-            { timeoutMs: 10_000 },
+            signal,
           );
-        } catch {
-          return [];
-        }
       },
-      list: async (projectId, projectName, limit, type) => {
-        try {
-          return await bridge.request<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>(
+      list: async (projectId, projectName, limit, type, signal) => {
+        return requestMemoryRead<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>(bridge,
             'memoryList',
             { projectId, projectName, limit, type },
-            { timeoutMs: 10_000 },
+            signal,
           );
-        } catch {
-          return [];
-        }
       },
       forget: async (projectId, projectName, target) => {
         const operationId = randomUUID();
@@ -343,10 +338,11 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
         void bridge.request('investigationWake', record, { timeoutMs: 10_000 })
           .catch(() => undefined);
       },
-      search: async (input) => {
+      search: async (input, signal) => {
         try {
-          return await bridge.request<string[]>('investigationSearch', input, { timeoutMs: 10_000 });
+          return await requestMemoryRead<string[]>(bridge, 'investigationSearch', input, signal);
         } catch {
+          signal?.throwIfAborted();
           return [];
         }
       },

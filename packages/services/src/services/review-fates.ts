@@ -56,9 +56,12 @@ export async function recordSessionFates<
   sessionKind: string,
   sessionId: SessionKey,
   diffs: FileDiff<RecordId>[],
+  signal?: AbortSignal,
 ): Promise<void> {
   try {
+    signal?.throwIfAborted();
     const comments = await reviewStore.listComments(sessionKind, sessionId);
+    signal?.throwIfAborted();
     if (comments.length === 0) return;
     const fingerprintsByFile = new Map<string, Set<string>>();
     for (const diff of diffs) {
@@ -68,6 +71,7 @@ export async function recordSessionFates<
       );
     }
     for (const comment of comments) {
+      signal?.throwIfAborted();
       await intelStore.recordFate({
         comment_id: comment.id,
         session_kind: sessionKind,
@@ -95,10 +99,13 @@ export async function buildReviewPriors<
 >(
   intelStore: ReviewIntelPort<SessionKey, RecordId>,
   projectId?: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   try {
+    signal?.throwIfAborted();
     const lines: string[] = [];
     for (const agg of await intelStore.aggregateFates(projectId)) {
+      signal?.throwIfAborted();
       if (agg.severity === 'critical') continue; // never suppress critical
       const verdicts = agg.accepted + agg.dismissed;
       if (verdicts < SUPPRESS_MIN_SAMPLES) continue;
@@ -110,6 +117,7 @@ export async function buildReviewPriors<
           'line evidence and a concrete failure scenario.',
       );
     }
+    signal?.throwIfAborted();
     const dismissals = await intelStore.recentDismissals(
       FEW_SHOT_DISMISSALS,
       projectId,

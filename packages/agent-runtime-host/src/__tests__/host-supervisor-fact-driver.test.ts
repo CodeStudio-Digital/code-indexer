@@ -96,6 +96,29 @@ function commandAckFrame(
 }
 
 describe('HostSupervisorFactDriver', () => {
+  it('renews through the same authenticated management reader and preserves the hard deadline', async () => {
+    const source = new PassThrough();
+    const { capture, driver } = harness([], successfulPort(), { readable: source });
+    expect(driver.remainingIdentityCapacity).toBe(15);
+    const initial = [acceptedFact(), spawnedFact(), containmentFact()];
+    source.write(delimit(...initial.map((fact, index) => factFrame(fact, `initial-${index}`, BigInt(index + 2)))));
+    for (const _fact of initial) await driver.processNext();
+    expect(driver.remainingIdentityCapacity).toBe(12);
+    const receipt = driver.processNext();
+    const renewed = driver.renewAuthority({ leaseExpiresAtUnixMs: 65_000n, updatedAtUnixMs: 100n, idempotencyKey: 'renewal:one' });
+    const encoded = await capturedFrame(() => capture.frames(), 4);
+    const body = validateManagementFrame(encoded).payload.body;
+    expect(body.case).toBe('updateAttemptAuthority');
+    if (body.case !== 'updateAttemptAuthority') throw new Error('Expected renewal');
+    expect(body.value).toMatchObject({ identity: identity(), hardDeadlineAtUnixMs: 70_000n, authorityLeaseExpiresAtUnixMs: 65_000n });
+    source.write(delimit(commandAckFrame(encoded, 'renewal:ack', 5n)));
+    expect(await receipt).toMatchObject({ kind: 'command_acknowledged', commandCase: 'updateAttemptAuthority' });
+    await renewed;
+    expect(driver.remainingIdentityCapacity).toBe(11);
+    expect(() => driver.renewAuthority({ leaseExpiresAtUnixMs: 70_001n, updatedAtUnixMs: 100n, idempotencyKey: 'renewal:two' })).toThrow('sealed attempt window');
+    driver.abort(); source.destroy();
+  });
+
   it('durably commits and ACKs Exited then Reaped after the launch chain', async () => {
     const port = successfulPort();
     const facts = [

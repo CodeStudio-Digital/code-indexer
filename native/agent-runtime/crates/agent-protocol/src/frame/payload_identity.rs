@@ -46,8 +46,24 @@ const fn identity_field(
         Body::HydrationComplete(value) => Some(("HydrationComplete", value.identity.as_ref())),
         Body::HydrationCommitted(value) => Some(("HydrationCommitted", value.identity.as_ref())),
         Body::ProviderStart(value) => Some(("ProviderStart", value.identity.as_ref())),
+        Body::ProviderRequestChunk(value) => {
+            Some(("ProviderRequestChunk", value.identity.as_ref()))
+        }
+        Body::ProviderRequestChunkAccepted(value) => {
+            Some(("ProviderRequestChunkAccepted", value.identity.as_ref()))
+        }
+        Body::ProviderRequestCommit(value) => {
+            Some(("ProviderRequestCommit", value.identity.as_ref()))
+        }
+        Body::ProviderCheckpoint(value) => Some(("ProviderCheckpoint", value.identity.as_ref())),
+        Body::ProviderCheckpointCommitted(value) => {
+            Some(("ProviderCheckpointCommitted", value.identity.as_ref()))
+        }
         Body::ProviderAccepted(value) => Some(("ProviderAccepted", value.identity.as_ref())),
         Body::ProviderCancel(value) => Some(("ProviderCancel", value.identity.as_ref())),
+        Body::ProviderEventConsumed(value) => {
+            Some(("ProviderEventConsumed", value.identity.as_ref()))
+        }
         Body::ProviderTextDelta(value) => Some(("ProviderTextDelta", value.identity.as_ref())),
         Body::ProviderThinkingDelta(value) => {
             Some(("ProviderThinkingDelta", value.identity.as_ref()))
@@ -62,6 +78,15 @@ const fn identity_field(
         Body::CapabilityPrepare(value) => Some(("CapabilityPrepare", value.identity.as_ref())),
         Body::CapabilityUpdate(value) => Some(("CapabilityUpdate", value.identity.as_ref())),
         Body::CapabilityExecute(value) => Some(("CapabilityExecute", value.identity.as_ref())),
+        Body::CapabilityReadBatchExecute(value) => {
+            Some(("CapabilityReadBatchExecute", value.identity.as_ref()))
+        }
+        Body::CapabilityReadBatchAccepted(value) => {
+            Some(("CapabilityReadBatchAccepted", value.identity.as_ref()))
+        }
+        Body::CapabilityReadBatchResult(value) => {
+            Some(("CapabilityReadBatchResult", value.identity.as_ref()))
+        }
         Body::CapabilityExecutionResult(value) => {
             Some(("CapabilityExecutionResult", value.identity.as_ref()))
         }

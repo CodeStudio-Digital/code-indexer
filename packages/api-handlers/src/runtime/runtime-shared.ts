@@ -12,7 +12,7 @@ import { mkdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
+import { extractZipToDir } from '@mcp/shared/utils/extract-zip.js';
 import type { InstallProgress, RuntimeKind } from '@mcp/api-bus';
 import { assertRuntimeVersion } from './runtime-version.js';
 
@@ -113,7 +113,7 @@ export async function* downloadFile(opts: {
 
 /**
  * Download an archive and extract it into `destDir`, yielding progress
- * frames. Zip is extracted via the design-system util (Windows builds);
+ * frames. Zip is extracted via the shared util (Windows builds);
  * tarballs via the system `tar` (unix). Does NOT emit the final `done`
  * frame — the caller appends it after re-detecting the runtime, so it can
  * attach the resolved `Runtime`.

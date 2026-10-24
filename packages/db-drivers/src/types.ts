@@ -69,6 +69,7 @@ export interface QueryField {
 
 export interface QueryResult {
   rows: Array<Record<string, unknown>>;
+  /** Affected/observed rows. With truncated=true, this may be a lower bound. */
   rowCount: number;
   fields: QueryField[];
   /** Non-SELECT statement verb when known (e.g. 'INSERT', 'UPDATE'). */
@@ -160,6 +161,8 @@ export interface RunQueryOptions {
   timeoutMs?: number;
   /** Abort signal — drivers cancel the in-flight query when it fires. */
   signal?: AbortSignal;
+  /** Host authority rechecked immediately before each query/command dispatch. */
+  beforeDispatch?: () => void;
   /**
    * Scope the statement to a schema/database (a console opened on a schema):
    * pg sets `search_path`, MySQL runs `USE`, then resets afterwards — applied on

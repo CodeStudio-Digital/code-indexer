@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 
 use crate::authority_log::AuthorityHistory;
 use crate::hash::{ContentHash, sha256_reader};
@@ -9,18 +9,13 @@ use crate::record::{JournalRecord, MAX_JOURNAL_LINE_BYTES};
 use crate::{CommitReceipt, OperationId, SessionId, SessionStoreError, SessionStoreLimits};
 
 #[derive(Debug)]
-pub struct StoredOperation {
-    pub(super) receipt: CommitReceipt,
-    pub(super) payload_hash: ContentHash,
-    pub(super) payload_bytes: u64,
-}
-
-#[derive(Debug)]
 pub struct RecoveredJournal {
     pub(super) count: u64,
     pub(super) previous_hash: ContentHash,
     pub(super) journal_bytes: u64,
-    pub(super) operations: HashMap<OperationId, StoredOperation>,
+    pub(super) operations: HashMap<OperationId, usize>,
+    /// Journal order, validated once on recovery and extended only by commits.
+    pub(super) records: Vec<CommitReceipt>,
     pub(super) archived: bool,
 }
 
@@ -30,8 +25,31 @@ pub fn recover(
     limits: SessionStoreLimits,
     authorities: &AuthorityHistory,
 ) -> Result<RecoveredJournal, SessionStoreError> {
+    recover_inner(layout, session_id, limits, authorities, true)
+}
+
+pub fn read_committed(
+    layout: &SessionBundleLayout,
+    session_id: &SessionId,
+    limits: SessionStoreLimits,
+    authorities: &AuthorityHistory,
+) -> Result<RecoveredJournal, SessionStoreError> {
+    recover_inner(layout, session_id, limits, authorities, false)
+}
+
+fn recover_inner(
+    layout: &SessionBundleLayout,
+    session_id: &SessionId,
+    limits: SessionStoreLimits,
+    authorities: &AuthorityHistory,
+    repair: bool,
+) -> Result<RecoveredJournal, SessionStoreError> {
     let journal_path = layout.journal();
-    ensure_journal(&journal_path)?;
+    if repair {
+        ensure_journal(&journal_path)?;
+    } else {
+        validate_regular_file(&journal_path)?;
+    }
     let mut reader = BufReader::new(
         File::open(&journal_path)
             .map_err(|error| SessionStoreError::io("open session journal", error))?,
@@ -41,12 +59,15 @@ pub fn recover(
         previous_hash: JournalRecord::first_previous_hash(),
         journal_bytes: 0,
         operations: HashMap::new(),
+        records: Vec::new(),
         archived: false,
     };
     let mut line = Vec::with_capacity(MAX_JOURNAL_LINE_BYTES);
     loop {
         line.clear();
         let bytes = reader
+            .by_ref()
+            .take((MAX_JOURNAL_LINE_BYTES + 1) as u64)
             .read_until(b'\n', &mut line)
             .map_err(|error| SessionStoreError::io("read session journal", error))?;
         if bytes == 0 {
@@ -56,7 +77,9 @@ pub fn recover(
             return Err(SessionStoreError::CorruptJournal);
         }
         if !line.ends_with(b"\n") {
-            truncate_tail(&journal_path, recovered.journal_bytes)?;
+            if repair {
+                truncate_tail(&journal_path, recovered.journal_bytes)?;
+            }
             break;
         }
         apply_record(
@@ -105,19 +128,15 @@ fn apply_record(
     }
     verify_payload(layout, &record)?;
     let receipt = CommitReceipt::from_record(session_id, &record);
-    let stored = StoredOperation {
-        receipt,
-        payload_hash: record.payload_hash,
-        payload_bytes: record.payload_bytes,
-    };
     if recovered
         .operations
-        .insert(record.operation_id.clone(), stored)
+        .insert(record.operation_id.clone(), recovered.records.len())
         .is_some()
     {
         return Err(SessionStoreError::CorruptJournal);
     }
     recovered.count = expected_sequence;
+    recovered.records.push(receipt);
     recovered.previous_hash = record.record_hash;
     recovered.archived = record.kind == crate::SessionRecordKind::Archive;
     Ok(())

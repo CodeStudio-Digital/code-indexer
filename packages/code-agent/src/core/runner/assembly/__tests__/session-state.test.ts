@@ -93,12 +93,12 @@ describe('renderMemoryIndex', () => {
   it('renders one-liners under the char budget', () => {
     const entries = [
       { title: 'Embeddings switch requires re-index', category: 'gotcha' },
-      { title: 'Why Verdaccio for DS packages', category: 'decision' },
+      { title: 'Why local caching for packages', category: 'decision' },
     ];
     const text = renderMemoryIndex(entries, 1200)!;
     expect(text).toContain('project memory index');
     expect(text).toContain('- [gotcha] Embeddings switch requires re-index');
-    expect(text).toContain('- [decision] Why Verdaccio for DS packages');
+    expect(text).toContain('- [decision] Why local caching for packages');
   });
 
   it('stops adding entries at the char budget', () => {

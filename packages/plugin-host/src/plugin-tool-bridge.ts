@@ -4,12 +4,9 @@
  * dispatches to an injected invoker (the plugin worker in Phase 2b). The
  * invoker seam keeps this pure + unit-testable with no worker spawn.
  */
-import type {
-  CoderTool,
-  JsonSchema,
-  ToolResult,
-  ToolSourceTruncation,
-} from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import type { ToolResult, ToolSourceTruncation } from "@mcp/agent-runtime-host/tool-result.js";
 import type { PluginToolDecl } from '@mcp/plugin-sdk';
 import { sanitizeUntrustedCapabilityMetadata } from '@mcp/shared';
 

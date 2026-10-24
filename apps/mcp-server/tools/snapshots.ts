@@ -1,32 +1,9 @@
 import { defineTool, mcpAccess, type McpTool } from '../tool.js';
-import type { SnapshotCategory } from '@mcp/shared/types.js';
+import { searchMemory } from './search-memory.js';
+import { parseProjectMemoryInput, PROJECT_MEMORY_CATEGORIES } from '@mcp/shared/memory-write.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
 import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory/agent-memory-writer.js';
-import { withProject, type ProjectToolHandler } from './_helpers.js';
-
-/**
- * Wrap a memory tool handler so any thrown error becomes a structured
- * response instead of a raw stack trace at the MCP layer. JSON callers get
- * `{ error: "..." }`, text callers get `Memory operation failed: ...`.
- *
- * Stays inside this file on purpose — the surrounding tool catalogue does
- * its own error mapping, so a generic wrapper would overreach.
- */
-function withMemoryErrorHandling(
-  handler: ProjectToolHandler,
-): ProjectToolHandler {
-  return async (args, ctx, project, authCtx) => {
-    try {
-      return await handler(args, ctx, project, authCtx);
-    } catch (err) {
-      const message = (err as Error).message ?? String(err);
-      if (args.format === 'json') {
-        return JSON.stringify({ error: message });
-      }
-      return `Memory operation failed: ${message}`;
-    }
-  };
-}
+import { withProject } from './_helpers.js';
 
 // ─── Memory-framed tools (Mem D) ─────────────────────────────────────
 // Bridged to Agent Memory (migration 181) — the SAME store the native
@@ -36,64 +13,6 @@ function withMemoryErrorHandling(
 // 0 calls in telemetry, superseded by agent memory, and the host UI drives
 // snapshot CRUD through @mcp/api-handlers, not this server. The underlying
 // SnapshotService store is untouched — it's simply no longer exposed as tools.
-
-const search_memory = defineTool({
-  name: 'search_memory',
-  tier: 'navigate',
-  ...mcpAccess('read'),
-  description:
-    'Search PROJECT MEMORY (past decisions, conventions, gotchas, how-to recipes, architecture, and auto-indexed facts) by meaning — hybrid FTS+vector. USE before exploring code or figuring out how to run/build/test/deploy; many answers are already remembered. DON\'T use for live file contents (use read_file). Pass format="json" for structured results.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      project_name: { type: 'string' },
-      query: { type: 'string' },
-      limit: { type: 'number' },
-      format: { type: 'string', enum: ['text', 'json'] },
-    },
-    required: ['project_name', 'query'],
-  },
-  handler: withProject(withMemoryErrorHandling(async (args, {
-    db,
-    agentMemoryService,
-    semanticSearchClient,
-  }, project) => {
-    const query = (args.query as string).trim();
-    if (!query) return 'search_memory requires a non-empty query.';
-    const limit = (args.limit as number) ?? 5;
-    // Bridged to Agent Memory (migration 181) — the SAME store the native
-    // recall_memory reads, so company/external-MCP writes are recalled (no split-brain).
-    const remote = await semanticSearchClient.searchProjectMemory(project.id, query, limit);
-    // Local AgentMemoryService is deliberately constructed without an
-    // embedding/vector backend in the MCP process, so this branch is FTS-only
-    // and remains available even when the desktop/http server is stopped.
-    const results = remote.ok && remote.value
-      ? remote.value.results
-      : await agentMemoryService.search('project', project.id, query, limit);
-    if (results.length === 0) {
-      const total = db.countAgentMemory('project', project.id);
-      return total === 0
-        ? 'No project memory yet. Use save_memory (or remember) to record one.'
-        : `No memory matched "${query}" (${total} entries exist). Try broader terms.`;
-    }
-    if (args.format === 'json') {
-      return JSON.stringify({
-        query,
-        total: results.length,
-        semantic: remote.ok,
-        ...(remote.ok ? {} : { degraded_reason: remote.error }),
-        results: results.map((s) => ({
-          id: s.id, title: s.name, category: s.type, content: s.content,
-          source: s.source, importance: s.importance,
-        })),
-      });
-    }
-    const body = results.map((s) => `## ${s.name} [${s.type}]\n${s.content}`).join('\n\n---\n\n');
-    return remote.ok
-      ? body
-      : `${body}\n\n[note: semantic memory owner unavailable; results are FTS-only: ${remote.error ?? 'unknown error'}]`;
-  })),
-});
 
 const save_memory = defineTool({
   name: 'save_memory',
@@ -109,7 +28,7 @@ const save_memory = defineTool({
     properties: {
       project_name: { type: 'string' },
       title: { type: 'string' },
-      category: { type: 'string', enum: ['architecture', 'decision', 'pattern', 'convention', 'todo', 'note', 'gotcha', 'procedure'] },
+      category: { type: 'string', enum: [...PROJECT_MEMORY_CATEGORIES] },
       content: { type: 'string' },
       referenced_files: {
         type: 'array', items: { type: 'string' },
@@ -119,27 +38,24 @@ const save_memory = defineTool({
     },
     required: ['project_name', 'title', 'category', 'content'],
   },
-  handler: withProject(withMemoryErrorHandling(async (args, { db, agentMemoryService }, project) => {
-    // Bridged to Agent Memory — dedup/merge + embed via the SAME path as the
-    // native remember tool (deps.projectMemory.save). No more snapshot writes.
+  handler: withProject(async (args, { db, agentMemoryService, signal }, project) => {
+    signal?.throwIfAborted();
+    const entry = parseProjectMemoryInput(args);
+    const control = { signal, deferEmbeddings: agentMemoryService.hasDurableMutationQueue,
+      assertCurrent: () => signal?.throwIfAborted() };
     const literal = new MemoryExtractor(
-      { distill: async () => [{
-        title: args.title as string,
-        category: args.category as SnapshotCategory,
-        content: args.content as string,
-        importance: typeof args.importance === 'number' ? args.importance : 0.6,
-        referencedFiles: args.referenced_files as string[] | undefined,
-      }] },
-      new AgentMemoryWriter(db, agentMemoryService),
-      new AgentMemoryDedupeSearch(agentMemoryService),
+      { distill: async () => [{ ...entry, importance: entry.importance ?? 0.6 }] },
+      new AgentMemoryWriter(db, agentMemoryService, undefined, control),
+      new AgentMemoryDedupeSearch(agentMemoryService, signal),
     );
     const res = await literal.extractAndPersist(project.id, project.name, 'agent', {});
-    const what = res.merged > 0 ? 'merged into existing memory' : 'saved';
-    return `Memory "${args.title as string}" ${what} (created=${res.created} merged=${res.merged}).`;
-  })),
+    signal?.throwIfAborted();
+    const what = res.merged > 0 ? 'merged into existing memory' : res.created > 0 ? 'saved' : 'skipped';
+    return `Memory "${entry.title}" ${what} (created=${res.created} merged=${res.merged}).`;
+  }),
 });
 
 export const snapshotTools: McpTool[] = [
-  search_memory,
+  searchMemory,
   save_memory,
 ];

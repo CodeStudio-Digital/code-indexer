@@ -19,7 +19,7 @@ const list_agents = defineTool({
   description:
     'List CodeStudio built-in/custom agents and configured provider/model choices available for start_agent_run.',
   inputSchema: { type: 'object', properties: {} },
-  handler: async (_args, ctx) => output(await getMcpAgentRunManager(ctx).catalog()),
+  handler: async (_args, ctx) => output(await getMcpAgentRunManager(ctx).catalog(ctx.signal)),
 });
 
 const start_agent_run = defineTool({
@@ -77,7 +77,7 @@ const list_agent_runs = defineTool({
     properties: { limit: { type: 'number' } },
   },
   handler: async (args, ctx, authCtx) => {
-    const runs = await getMcpAgentRunManager(ctx).list(authCtx, Number(args.limit ?? 50));
+    const runs = await getMcpAgentRunManager(ctx).list(authCtx, Number(args.limit ?? 50), ctx.signal);
     return output({ runs });
   },
 });
@@ -93,7 +93,7 @@ const get_agent_run = defineTool({
     required: ['run_id'],
   },
   handler: async (args, ctx, authCtx) => output(
-    await getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx),
+    await getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx, ctx.signal),
   ),
 });
 
@@ -108,7 +108,7 @@ const get_agent_result = defineTool({
     required: ['run_id'],
   },
   handler: async (args, ctx, authCtx) => {
-    const run = await getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx);
+    const run = await getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx, ctx.signal);
     return output({
       run_id: run.id,
       status: run.status,

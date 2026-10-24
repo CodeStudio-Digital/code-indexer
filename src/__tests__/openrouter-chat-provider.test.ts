@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIChatProvider } from '@mcp/code-agent/providers/openai.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 import type { ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 
 async function* chunks(...items: Record<string, unknown>[]): AsyncIterable<Record<string, unknown>> {

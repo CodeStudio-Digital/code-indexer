@@ -145,7 +145,7 @@ export class SnapshotRecorder {
   async record(
     absPath: string,
     inner: IFilesystemPort,
-    info: { tool: string; expectedAfter: string | null; isDelete: boolean },
+    info: { tool: string; expectedAfter: string | null; isDelete: boolean; binaryAfter?: Uint8Array },
   ): Promise<PreparedSnapshotMutation | null> {
     const match = this.resolveRoot(absPath);
     if (!match) return null; // out of every known root — not tracked.
@@ -161,7 +161,7 @@ export class SnapshotRecorder {
     }
 
     const oversized = content != null && (content.length > MAX_BASELINE_BYTES || isBinaryLike(content));
-    const afterOversized = info.expectedAfter != null
+    const afterOversized = info.binaryAfter !== undefined || info.expectedAfter != null
       && (info.expectedAfter.length > MAX_BASELINE_BYTES || isBinaryLike(info.expectedAfter));
     const baselineHash = hashContent(content);
     const operationId = `snapshot-mutation:${newSessionId()}`;
@@ -177,7 +177,7 @@ export class SnapshotRecorder {
       oversized: oversized || afterOversized,
       operation_id: operationId,
     };
-    const afterHash = hashContent(info.expectedAfter);
+    const afterHash = info.binaryAfter ? createHash('md5').update(info.binaryAfter).digest('hex') : hashContent(info.expectedAfter);
     const { baseline } = await this.deps.store.recordBaselineAndEdit(create, {
       turn_number: this.deps.getTurn?.() ?? null,
       tool_name: info.tool,
@@ -237,6 +237,19 @@ export class SnapshotRecorder {
 export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
   private mutationFenceSource?: () => ToolMutationFence | undefined;
 
+  /** Replace the physical adapter at preparation, preserving the session's
+   * recorder. The executor installs its owned adapter before any dispatch. */
+  withPhysicalPort(inner: IFilesystemPort): SnapshotRecordingFilesystemPort {
+    return new SnapshotRecordingFilesystemPort(inner, this.recorder, this.currentToolName);
+  }
+
+  get exclusiveRenameSupported(): true | undefined { return this.inner.exclusiveRenameSupported; }
+
+  async renameNoReplace(source: string, destination: string): Promise<void> {
+    if (!this.inner.exclusiveRenameSupported || !this.inner.renameNoReplace) throw new Error('Atomic exclusive rename unavailable');
+    await this.recordRename(source, destination, () => this.inner.renameNoReplace!(source, destination));
+  }
+
   constructor(
     private readonly inner: IFilesystemPort,
     private readonly recorder: SnapshotRecorder,
@@ -276,6 +289,28 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
     await this.recorder.complete(prepared);
   }
 
+  async createFile(absPath: string, data: string): Promise<void> {
+    if (!this.inner.createFile) throw new Error('Filesystem adapter does not support exclusive creation');
+    const prepared = await this.recorder.record(absPath, this.inner, {
+      tool: this.currentToolName, expectedAfter: data, isDelete: false,
+    });
+    assertMutationFence(this.mutationFenceSource?.(), { kind: 'filesystem', operation: 'createFile', resource: absPath });
+    await this.inner.createFile(absPath, data);
+    await this.recorder.complete(prepared);
+  }
+
+  async createFileBytes(absPath: string, data: Uint8Array): Promise<void> {
+    if (!this.inner.createFileBytes) throw new Error('Filesystem adapter does not support exclusive binary creation');
+    const prepared = await this.recorder.record(absPath, this.inner, {
+      tool: this.currentToolName, expectedAfter: null, isDelete: false, binaryAfter: data,
+    });
+    assertMutationFence(this.mutationFenceSource?.(), { kind: 'filesystem', operation: 'createFileBytes', resource: absPath });
+    await this.inner.createFileBytes(absPath, data);
+    // Binary content is never encoded as lossy UTF-8 in review snapshots.
+    // This operation only creates; undo of its own successful creation deletes it.
+    await this.recorder.complete(prepared);
+  }
+
   async unlink(absPath: string): Promise<void> {
     const prepared = await this.recorder.record(absPath, this.inner, {
       tool: this.currentToolName,
@@ -293,6 +328,17 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
 
   readFile(absPath: string): Promise<string> {
     return this.inner.readFile(absPath);
+  }
+
+  readFileBounded(absPath: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
+    if (!this.inner.readFileBounded) throw new Error('Filesystem adapter does not support bounded reads');
+    return this.inner.readFileBounded(absPath, maxBytes, signal);
+  }
+
+  async *iterateDirectory(absPath: string, signal?: AbortSignal): AsyncIterable<PortDirent> {
+    signal?.throwIfAborted();
+    const entries = this.inner.iterateDirectory?.(absPath, signal) ?? await this.inner.readdir(absPath, { withFileTypes: true });
+    for await (const entry of entries) { signal?.throwIfAborted(); yield entry; }
   }
   mkdir(absPath: string, options?: { recursive?: boolean }): Promise<void> {
     assertMutationFence(this.mutationFenceSource?.(), {
@@ -312,6 +358,9 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
     return this.inner.stat(absPath);
   }
   async rename(oldAbsPath: string, newAbsPath: string): Promise<void> {
+    await this.recordRename(oldAbsPath, newAbsPath, () => this.inner.rename(oldAbsPath, newAbsPath));
+  }
+  private async recordRename(oldAbsPath: string, newAbsPath: string, dispatch: () => Promise<void>): Promise<void> {
     let expectedAfter: string | null = null;
     try {
       const st = await this.inner.stat(oldAbsPath);
@@ -339,7 +388,7 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       operation: 'rename',
       resource: newAbsPath,
     });
-    await this.inner.rename(oldAbsPath, newAbsPath);
+    await dispatch();
     await this.recorder.complete(oldPrepared);
     await this.recorder.complete(newPrepared);
   }

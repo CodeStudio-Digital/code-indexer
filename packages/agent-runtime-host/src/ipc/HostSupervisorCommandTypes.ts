@@ -1,6 +1,7 @@
 import type { agentV1Supervisor } from '@mcp/agent-runtime-contracts';
 
 export type HostSupervisorCommandCase =
+  | 'updateAttemptAuthority'
   | 'cancelAttemptProcess'
   | 'fenceAttemptProcess'
   | 'reapAttemptProcess';

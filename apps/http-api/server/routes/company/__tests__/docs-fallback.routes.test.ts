@@ -33,7 +33,7 @@ vi.mock('@mcp/services/sandbox/drivers/driver-factory.js', () => ({
   }),
 }));
 
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type { JsonValue } from '@mcp/session-storage';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import { mountCompanyDocsRoutes } from '../docs.js';

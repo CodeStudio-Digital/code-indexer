@@ -4,9 +4,21 @@ import type {
 import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import { ATTEMPT_FRAME_MAX_BYTES } from '../ipc/AttemptFrameLimits.js';
 import { MANAGEMENT_FRAME_MAX_BYTES } from '../ipc/ManagementFrame.js';
+import type { NativeDuplexOptions, NativeHostDuplexProcess } from './NativeHostDuplexProcess.js';
+import type { NativeHostCommandOptions, NativeHostCommand } from './NativeHostCommand.js';
 
 export const NATIVE_HOST_BRIDGE_API_VERSION = 2;
 export const MINIMUM_NODE_API_VERSION = 8;
+
+export interface NativeHostResourceBounds {
+  readonly version: number;
+  readonly supervisorMemoryBytes: number;
+  readonly supervisorProcesses: number;
+  readonly commandMemoryBytes: number;
+  readonly commandProcesses: number;
+  readonly duplexMemoryBytes: number;
+  readonly duplexProcesses: number;
+}
 
 export interface NativeHostBridgeAbi {
   readonly addonApiVersion: number;
@@ -14,6 +26,11 @@ export interface NativeHostBridgeAbi {
   readonly contractVersion: string;
   readonly minimumNodeApiVersion: number;
   readonly targetTriple: string;
+  /** Additive feature gate: tagged stdout/stderr before exposing interactive tools. */
+  readonly duplexOutputVersion?: number;
+  readonly pseudoconsoleVersion?: number;
+  /** Actual hard Job bounds; required for whole-tree resource admission. */
+  readonly resourceBounds?: NativeHostResourceBounds;
 }
 
 export interface NativeHostAttemptChannels {
@@ -56,6 +73,11 @@ export interface NativeSessionStoreBridge {
 }
 
 export interface NativeHostBridgeBinding {
+  /** Atomic destination exclusivity, with Windows parent handles pinned. */
+  renameNativePathNoReplace?(root: string, source: string, destination: string): void;
+  /** Optional additive API v2 extension; checked before exposing shell tools. */
+  startNativeHostCommand?(options: NativeHostCommandOptions): NativeHostCommand;
+  startNativeHostDuplexProcess?(options: NativeDuplexOptions): NativeHostDuplexProcess;
   nativeHostBridgeAbi(): NativeHostBridgeAbi;
   openHostAttemptBridge(
     request: Uint8Array,
@@ -89,10 +111,16 @@ export function assertNativeHostBridgeBinding(
   const abi = abiFunction() as unknown;
   assertAbi(abi, runtimePackage);
   return Object.freeze({
+    ...(typeof value.renameNativePathNoReplace === 'function'
+      ? { renameNativePathNoReplace: value.renameNativePathNoReplace.bind(value) } : {}),
     nativeHostBridgeAbi: abiFunction.bind(value),
     openHostAttemptBridge: openFunction.bind(value),
     openHostSupervisorBridge: openSupervisorFunction.bind(value),
     openNativeSessionStoreBridge: openSessionStoreFunction.bind(value),
+    ...(typeof value.startNativeHostDuplexProcess === 'function'
+      ? { startNativeHostDuplexProcess: value.startNativeHostDuplexProcess.bind(value) } : {}),
+    ...(typeof value.startNativeHostCommand === 'function'
+      ? { startNativeHostCommand: value.startNativeHostCommand.bind(value) } : {}),
   });
 }
 

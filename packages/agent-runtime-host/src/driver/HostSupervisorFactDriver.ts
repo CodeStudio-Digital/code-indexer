@@ -40,6 +40,8 @@ type LaunchFactPhase =
  * physical facts through their durable commit and exact ManagementAck.
  */
 export class HostSupervisorFactDriver {
+  get remainingIdentityCapacity(): number { return this.#channel.remainingInboundIdentities; }
+
   readonly #channel: HostSupervisorFactChannel;
   #phase: LaunchFactPhase = 'outcome';
   #reservationId?: string;
@@ -147,6 +149,11 @@ export class HostSupervisorFactDriver {
 
   abort(cause?: unknown): void {
     this.#channel.abort(cause);
+  }
+
+  renewAuthority(request: import('./HostLifecycleTypes.js').HostAuthorityRenewalRequest): Promise<void> {
+    if (this.#phase !== 'running') return Promise.reject(new Error('Authority renewal requires a live physical attempt'));
+    return this.#channel.renewAuthority(request, this.#commandResponseTimeoutMs);
   }
 
   cancel(request: HostCancelAttemptRequest): Promise<void> {

@@ -39,3 +39,6 @@ export interface ResolvedSkill {
   author: string | null;
   sortOrder: number;
 }
+
+/** Matcher input deliberately excludes prompt bodies and provider settings. */
+export type SkillTriggerDefinition = Pick<ResolvedSkill, 'id' | 'contextMode' | 'triggerPaths' | 'triggerRoles' | 'triggerTags' | 'sortOrder'>;

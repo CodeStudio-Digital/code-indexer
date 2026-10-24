@@ -1,0 +1,77 @@
+{
+  "root": "C:\\Users\\maico\\AppData\\Local\\Temp\\codestudio-owner-audit-ws1AxJ",
+  "http": [
+    {
+      "method": "GET",
+      "path": "/api/projects",
+      "status": 200,
+      "body": "[]"
+    },
+    {
+      "method": "GET",
+      "path": "/api/coder/sessions/recent",
+      "status": 200,
+      "body": "[]"
+    },
+    {
+      "method": "GET",
+      "path": "/api/features",
+      "status": 404,
+      "body": "{\"error\":\"codestudio route is unavailable: GET /api/features\"}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/system-info",
+      "status": 404,
+      "body": "{\"error\":\"codestudio route is unavailable: GET /api/admin/system-info\"}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/coder/sessions",
+      "status": 404,
+      "body": "{\"error\":\"codestudio route is unavailable: POST /api/coder/sessions\"}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/1/snapshots",
+      "status": 501,
+      "body": "{\"error\":\"codestudio route is not implemented by its owner: GET /api/projects/1/snapshots\"}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/1/runners",
+      "status": 501,
+      "body": "{\"error\":\"codestudio route is not implemented by its owner: GET /api/projects/1/runners\"}"
+    }
+  ],
+  "rpc": [
+    {
+      "method": "projects.list",
+      "ok": true
+    },
+    {
+      "method": "lsp.listServers",
+      "ok": false,
+      "error": "codestudio method is unavailable: lsp.listServers"
+    },
+    {
+      "method": "terminal.spawn",
+      "ok": false,
+      "error": "codestudio method is unavailable: terminal.spawn"
+    },
+    {
+      "method": "runner.events",
+      "ok": false,
+      "error": "codestudio method is unavailable: runner.events"
+    },
+    {
+      "method": "coder.sessions.list",
+      "ok": false,
+      "error": "codestudio method is unavailable: coder.sessions.list"
+    }
+  ],
+  "projectsWhenAgentOffline": {
+    "status": 400,
+    "body": "{\"error\":\"AUDIT_AGENT_OFFLINE\"}"
+  }
+}

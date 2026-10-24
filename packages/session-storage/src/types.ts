@@ -53,8 +53,6 @@ export type SessionKind =
   | 'coder'
   | 'company'
   | 'app_studio'
-  | 'sprite'
-  | 'design'
   | 'docs'
   | 'global'
   | (string & {});
@@ -248,7 +246,8 @@ export interface CatalogScanResult {
 }
 
 export type SessionRepositoryEvent =
-  | { readonly type: 'created' | 'updated' | 'archived' | 'restored'; readonly location: SessionLocation }
+  | { readonly type: 'created' | 'updated' | 'archived' | 'restored'; readonly location: SessionLocation;
+      readonly projection?: { readonly session: SessionMetadata; readonly state: SessionState } }
   | { readonly type: 'trashed'; readonly location: SessionLocation; readonly trash_path: string };
 
 export interface SessionStorageFaultContext {

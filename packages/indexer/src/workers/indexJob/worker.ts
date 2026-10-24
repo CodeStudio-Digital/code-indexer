@@ -1,6 +1,6 @@
 import { parentPort } from 'node:worker_threads';
 import { TreeSitterExtractor } from '@mcp/indexer/indexer/tree-sitter/index.js';
-import { computeSourceHash } from '@mcp/design-system/source-hash.js';
+import { computeSourceHash } from './source-hash.js';
 import type { IndexJobReq, IndexJobRes } from '@mcp/indexer/workers/indexJob/protocol.js';
 
 if (!parentPort) {

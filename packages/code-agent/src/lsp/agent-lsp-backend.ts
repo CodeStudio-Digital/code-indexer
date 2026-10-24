@@ -26,13 +26,13 @@ export interface AgentLspLocation {
 export interface AgentLspBackend {
   definition(input: {
     root: string; projectName: string; file: string; position: AgentLspPosition;
-  }): Promise<AgentLspLocation[] | null>;
+  }, signal?: AbortSignal): Promise<AgentLspLocation[] | null>;
   references(input: {
     root: string; projectName: string; file: string; position: AgentLspPosition;
-  }): Promise<AgentLspLocation[] | null>;
+  }, signal?: AbortSignal): Promise<AgentLspLocation[] | null>;
   hover(input: {
     root: string; projectName: string; file: string; position: AgentLspPosition;
-  }): Promise<{ contents: string } | null>;
+  }, signal?: AbortSignal): Promise<{ contents: string } | null>;
 }
 
 let backend: AgentLspBackend | null = null;

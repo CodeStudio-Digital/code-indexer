@@ -31,7 +31,7 @@ import {
   CompanySessionFileCollection,
   type CompanyOperationalSessionStore,
 } from '@mcp/store/company-session-file-collection.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { asSessionId, type CompanySessionId } from '@mcp/session-storage';
 
 export interface CompanyDriveStoreDeps {

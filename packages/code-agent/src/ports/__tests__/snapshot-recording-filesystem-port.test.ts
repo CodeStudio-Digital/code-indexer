@@ -10,6 +10,7 @@ import {
   SnapshotRecordingFilesystemPort,
 } from '../snapshot-recording-filesystem-port.js';
 import type { SessionSnapshotStorePort } from '@mcp/services/services/session-snapshot-port.js';
+import type { ToolMutationFence } from '../../core/tool.js';
 import {
   asSessionId,
   newSessionId,
@@ -18,12 +19,22 @@ import {
 
 class MemoryFilesystem implements IFilesystemPort {
   readonly files = new Map<string, string>();
+  readonly binaryFiles = new Map<string, Uint8Array>();
+  async createFileBytes(absPath: string, data: Uint8Array): Promise<void> {
+    if (this.files.has(absPath) || this.binaryFiles.has(absPath)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    this.binaryFiles.set(absPath, data.slice());
+  }
   failWrite = false;
   failRename = false;
 
   async writeFile(absPath: string, data: string): Promise<void> {
     if (this.failWrite) throw new Error('write failed');
     this.files.set(absPath, data);
+  }
+
+  async createFile(absPath: string, data: string): Promise<void> {
+    if (this.files.has(absPath)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    await this.writeFile(absPath, data);
   }
 
   async readFile(absPath: string): Promise<string> {
@@ -97,6 +108,46 @@ function harness(secondaryRoots?: ReadonlyArray<{ projectId: number; rootPath: s
 }
 
 describe('SnapshotRecordingFilesystemPort round snapshots', () => {
+  it('records binary creation as an opaque new file, with exact bytes and no lossy text snapshot', async () => {
+    const h = harness(), bytes = new Uint8Array([137,80,78,71,0,255]);
+    await h.fs.createFileBytes('C:\\repo\\new.png', bytes);
+    expect(h.inner.binaryFiles.get('C:\\repo\\new.png')).toEqual(bytes);
+    expect(h.recordRoundSnapshotMutation).toHaveBeenCalledWith(expect.objectContaining({ existed_before: false, existed_after: true, content_after: null, oversized: true }));
+  });
+
+  it('rechecks binary creation authority after recording and commits nothing on revocation', async () => {
+    const h = harness(); let revoked = false;
+    h.recordBaselineAndEdit.mockImplementation(() => { revoked = true; return { baseline: { id: h.baselineId }, created: true }; });
+    h.fs.setMutationFenceSource(() => ({ mode: 'enforce', assertMutation: () => { if (revoked) throw new Error('revoked'); } }) as unknown as ToolMutationFence);
+    await expect(h.fs.createFileBytes('C:\\repo\\no.png', new Uint8Array([1]))).rejects.toThrow('revoked');
+    expect(h.inner.binaryFiles.size).toBe(0); expect(h.recordRoundSnapshotMutation).not.toHaveBeenCalled();
+  });
+  it('records a successful exclusive creation only after the inner operation completes', async () => {
+    const h = harness();
+    await h.fs.createFile('C:\\repo\\new.ts', 'created');
+    expect(h.inner.files.get('C:\\repo\\new.ts')).toBe('created');
+    expect(h.recordRoundSnapshotMutation).toHaveBeenCalledWith(expect.objectContaining({ existed_before: false, existed_after: true, content_after: 'created' }));
+  });
+
+  it('does not commit a successful round when exclusive creation loses a race', async () => {
+    const h = harness();
+    h.recordBaselineAndEdit.mockImplementation(() => {
+      h.inner.files.set('C:\\repo\\race.ts', 'external');
+      return { baseline: { id: h.baselineId }, created: true };
+    });
+    await expect(h.fs.createFile('C:\\repo\\race.ts', 'ours')).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(h.inner.files.get('C:\\repo\\race.ts')).toBe('external');
+    expect(h.recordRoundSnapshotMutation).not.toHaveBeenCalled(); expect(h.onRecorded).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the mutation fence after durable snapshot preparation before exclusive creation', async () => {
+    const h = harness(); let revoked = false;
+    h.recordBaselineAndEdit.mockImplementation(() => { revoked = true; return { baseline: { id: h.baselineId }, created: true }; });
+    h.fs.setMutationFenceSource(() => ({ mode: 'enforce', assertMutation: () => { if (revoked) throw new Error('lease revoked'); } }) as unknown as ToolMutationFence);
+    await expect(h.fs.createFile('C:\\repo\\revoked.ts', 'ours')).rejects.toThrow('lease revoked');
+    expect(h.inner.files.size).toBe(0); expect(h.recordRoundSnapshotMutation).not.toHaveBeenCalled();
+  });
+
   it('commits the round envelope and emits all snapshot identities after a successful write', async () => {
     const {
       fs,

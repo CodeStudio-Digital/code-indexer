@@ -10,11 +10,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FsSessionStore } from '../../../packages/code-agent/src/sessions/fs-store/fs-session-store.js';
-import {
-  CompanySessionRepository,
-  SpriteSessionRepository,
-} from '../../../packages/session-storage/src/index.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
+import { CompanySessionRepository } from '../../../packages/session-storage/src/index.js';
 import {
   commitStagingBundle,
   prepareStagingBundle,
@@ -673,19 +670,14 @@ electronDescribe('migrated bundle runtime compatibility', () => {
     }
   });
 
-  it('reopens Company and Sprite operational entities through their canonical repositories', async () => {
+  it('reopens Company operational entities through the canonical repository', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sessions-fs-operational-compat-'));
     cleanup.push(root);
     const projectRoot = join(root, 'project');
     const dataDir = join(root, 'data');
-    mkdirSync(join(projectRoot, '.sprite-studio'), { recursive: true });
     mkdirSync(dataDir, { recursive: true });
     mkdirSync(join(dataDir, 'sandboxes'), { recursive: true });
     writeFileSync(join(dataDir, 'sandboxes', '3.tar'), Buffer.from('legacy-workdir'));
-    writeFileSync(
-      join(projectRoot, '.sprite-studio', 'hero.png'),
-      Buffer.from('fixture-sprite'),
-    );
 
     const Database = loadDatabaseConstructor();
     const db = new Database(':memory:');
@@ -715,26 +707,6 @@ electronDescribe('migrated bundle runtime compatibility', () => {
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
-        CREATE TABLE sprite_projects (
-          id INTEGER PRIMARY KEY,
-          project_id INTEGER NOT NULL REFERENCES projects(id),
-          name TEXT NOT NULL,
-          status TEXT NOT NULL,
-          style_json TEXT,
-          export_dir TEXT,
-          settings_json TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE sprite_assets (
-          id INTEGER PRIMARY KEY,
-          sprite_project_id INTEGER NOT NULL REFERENCES sprite_projects(id),
-          name TEXT NOT NULL,
-          status TEXT NOT NULL,
-          file_rel_path TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
       `);
       db.prepare(
         `INSERT INTO projects (id, root_path, name) VALUES (1, ?, 'fixture')`,
@@ -748,21 +720,11 @@ electronDescribe('migrated bundle runtime compatibility', () => {
           8, 3, 'Ship the cutover', 'doing',
           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z'
         );
-        INSERT INTO sprite_projects VALUES (
-          5, 1, 'Fixture Sprite', 'active', '{"palette":"warm"}',
-          'assets/sprites', '{"scale":2}',
-          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z'
-        );
-        INSERT INTO sprite_assets VALUES (
-          12, 5, 'Hero', 'ready', 'hero.png',
-          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z'
-        );
       `);
 
       const fingerprint = 'e'.repeat(64);
       const registry = new UuidRegistry(null, fingerprint);
       const companyUuid = registry.forSession({ kind: 'company', id: 3 });
-      const spriteUuid = registry.forSession({ kind: 'sprite', id: 5 });
       const plans: BundlePlan[] = [
         {
           identity: { kind: 'company', id: 3 },
@@ -774,19 +736,6 @@ electronDescribe('migrated bundle runtime compatibility', () => {
             'sessions',
             'global',
             `.migrating-${companyUuid}`,
-          ),
-        },
-        {
-          identity: { kind: 'sprite', id: 5 },
-          uuid: spriteUuid,
-          scope: 'project',
-          projectRoot,
-          finalDir: join(projectRoot, '.mcp-indexer', 'session', spriteUuid),
-          stagingDir: join(
-            projectRoot,
-            '.mcp-indexer',
-            'session',
-            `.migrating-${spriteUuid}`,
           ),
         },
       ];
@@ -848,27 +797,6 @@ electronDescribe('migrated bundle runtime compatibility', () => {
         },
       ]);
 
-      const sprite = new SpriteSessionRepository({
-        sessionRoot: plans[1].finalDir,
-      });
-      expect(await sprite.getProject(spriteUuid)).toMatchObject({
-        data: {
-          name: 'Fixture Sprite',
-          status: 'active',
-          exportDir: 'assets/sprites',
-        },
-      });
-      expect((await sprite.list('asset')).items).toMatchObject([
-        {
-          data: {
-            name: 'Hero',
-            status: 'ready',
-            product: {
-              path: '.sprite-studio/hero.png',
-            },
-          },
-        },
-      ]);
     } finally {
       db.close();
     }

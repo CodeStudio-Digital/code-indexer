@@ -30,8 +30,14 @@ const DATA_CASES: ReadonlySet<FramePayloadCase> = new Set([
   'hydrationComplete',
   'hydrationCommitted',
   'providerStart',
+  'providerRequestChunk',
+  'providerRequestChunkAccepted',
+  'providerRequestCommit',
+  'providerCheckpoint',
+  'providerCheckpointCommitted',
   'providerAccepted',
   'providerCancel',
+  'providerEventConsumed',
   'providerTextDelta',
   'providerThinkingDelta',
   'providerToolCall',
@@ -43,6 +49,9 @@ const DATA_CASES: ReadonlySet<FramePayloadCase> = new Set([
   'capabilityUpdate',
   'capabilityExecute',
   'capabilityExecutionResult',
+  'capabilityReadBatchExecute',
+  'capabilityReadBatchAccepted',
+  'capabilityReadBatchResult',
 ]);
 
 export function assertPayloadAllowed(

@@ -15,7 +15,7 @@ import {
 import { encodeBody, type BodyLike } from './body-encode.js';
 import { computeAuth, mergeAuthHeaders } from './apply-auth.js';
 import { parseAuth } from './auth-types.js';
-import { runPreScript, runTestScript } from './script-runtime/index.js';
+import { runScriptAsync } from './script-runtime/async.js';
 import type { ScriptResult } from './script-runtime/types.js';
 
 export interface ExecRequest extends BodyLike {
@@ -46,6 +46,18 @@ export interface ExecuteInput {
   fileRoot?: string;
   /** Allow absolute / out-of-root file paths for bodies (trusted local caller). */
   allowAbsoluteFiles?: boolean;
+  /** Attempt-owned transport; shared routes use the default engine. */
+  send?: typeof sendHttp;
+  beforeDispatch?: () => void;
+  /** Enforced against the final method after the pre-request script. */
+  allowMutating?: boolean;
+}
+
+export class ApiRequestOutcomeUnknown extends Error {
+  constructor(cause: unknown) {
+    super('API request completion is unconfirmed; reconcile before retrying.', { cause });
+    this.name = 'ApiRequestOutcomeUnknown';
+  }
 }
 
 export interface ExecuteResult {
@@ -66,6 +78,8 @@ export interface ExecuteResult {
 }
 
 export async function executeRequest(input: ExecuteInput): Promise<ExecuteResult> {
+  const assertCurrent = () => { input.signal?.throwIfAborted(); input.beforeDispatch?.(); };
+  assertCurrent();
   const req = input.request;
   const vars = { ...input.variables };
   const run = input.runScripts !== false;
@@ -82,8 +96,12 @@ export async function executeRequest(input: ExecuteInput): Promise<ExecuteResult
   // ── Pre-request script (mutates `vars` and `seed` in place via pm closures) ──
   let preScript: ScriptResult | undefined;
   if (run && req.pre_request_script?.trim()) {
-    preScript = runPreScript({ source: req.pre_request_script, variables: vars, request: seed, cookies: new Map() });
+    preScript = await runScriptAsync({ phase: 'pre', variables: vars, request: seed, cookies: new Map() }, req.pre_request_script, input.signal);
+    if (preScript.error) throw new Error(`Pre-request script failed: ${preScript.error}`);
   }
+  assertCurrent();
+  const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(seed.method.toUpperCase());
+  if (mutating && input.allowMutating === false) throw new Error('Mutating method requires includeMutating, including script changes');
 
   // ── Build URL (rows authoritative for query; templates resolve here) ──
   const url = buildUrlFromRows(input.baseUrl, seed.url, normalizeKvList(req.query_json), vars);
@@ -105,7 +123,8 @@ export async function executeRequest(input: ExecuteInput): Promise<ExecuteResult
     outBody = resolveTemplate(patchedBody, vars);
     defaultCt = defaultContentType(req.body_kind);
   } else {
-    const enc = await encodeBody(req, vars, { fileRoot: input.fileRoot, allowAbsoluteFiles: input.allowAbsoluteFiles });
+    const enc = await encodeBody(req, vars, { fileRoot: input.fileRoot, allowAbsoluteFiles: input.allowAbsoluteFiles,
+      signal: input.signal, beforeRead: assertCurrent });
     outBody = enc.body;
     defaultCt = enc.contentType;
   }
@@ -123,23 +142,29 @@ export async function executeRequest(input: ExecuteInput): Promise<ExecuteResult
   }
 
   // ── Send ──
-  const res = await sendHttp({
+  let dispatched = false;
+  const res = await (input.send ?? sendHttp)({
     url, method: seed.method, headers, body: outBody,
     jar: input.jar, insecure: input.insecure, timeoutMs: input.timeoutMs,
     maxBytes: input.maxBytes, blockPrivateHosts: input.blockPrivateHosts, signal: input.signal,
+    beforeDispatch: assertCurrent, onDispatch: () => { dispatched = true; },
+  }).catch(cause => {
+    if (dispatched && mutating) throw new ApiRequestOutcomeUnknown(cause);
+    throw cause;
   });
   const ms = Date.now() - t0;
 
   // ── Test script ──
   let testScript: ScriptResult | undefined;
   if (run && req.test_script?.trim()) {
-    testScript = runTestScript({
-      source: req.test_script,
+    assertCurrent();
+    testScript = await runScriptAsync({
+      phase: 'test',
       variables: vars,
       request: seed,
       response: { code: res.status, status: res.statusText, headers: flattenHeaders(res.headers), body: res.body, responseTime: ms },
       cookies: new Map(input.jar ? jarSnapshot(input.jar, url.host).map((c) => [c.name, c.value]) : []),
-    });
+    }, req.test_script, input.signal);
   }
 
   return {

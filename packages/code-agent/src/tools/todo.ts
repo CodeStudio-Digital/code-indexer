@@ -1,3 +1,4 @@
+import { bindTaskContext } from '../ports/task-tool-port.js';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { type TodoItem, generateTodoId, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
@@ -71,6 +72,7 @@ function validateTodos(raw: unknown): { ok: true; todos: TodoItem[] } | { ok: fa
     const status = obj.status;
     if (!content) return { ok: false, error: `todos[${i}].content cannot be empty` };
     if (!activeForm) return { ok: false, error: `todos[${i}].activeForm cannot be empty` };
+    if (content.length > 8192 || activeForm.length > 8192) return { ok: false, error: `todos[${i}] text exceeds 8192 characters` };
     if (status !== 'pending' && status !== 'in_progress' && status !== 'completed') {
       return { ok: false, error: `todos[${i}].status must be pending|in_progress|completed, got '${String(status)}'` };
     }
@@ -118,7 +120,7 @@ function todosSignature(todos: TodoItem[]): string {
 }
 
 function readKey(ctx: ToolContext): object | null {
-  return (ctx.runner as unknown as object) ?? null;
+  return ((ctx.ports?.tasks ?? ctx.runner) as unknown as object) ?? null;
 }
 
 /**
@@ -182,6 +184,7 @@ export const todoWrite: CoderTool = {
     "WHEN NOT TO USE: single-step work, simple questions, conversational replies, or when the user gave very specific one-shot instructions — just do the work.\n" +
     'If you find yourself unable to advance any task with your available tools, inform the user about what is blocking you instead of replanning.',
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: {
     type: 'object',
     properties: {
@@ -211,14 +214,16 @@ export const todoWrite: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    ctx = bindTaskContext(ctx, 'todo_write');
+    ctx.signal?.throwIfAborted();
     const guard = guardTrackWriteOverApprove(ctx);
     if (guard) return err(guard);
     const validation = validateTodos(args.todos);
     if (!validation.ok) return err(validation.error);
     const todos = validation.todos;
 
-    const runner = ctx.runner as unknown as
-      | { setTodos?: (t: TodoItem[]) => void; currentTodos?: TodoItem[] }
+    const runner = (ctx.taskRuntime ?? ctx.runner) as unknown as
+      | { setTodos?: (t: TodoItem[]) => void | Promise<void>; currentTodos?: TodoItem[] }
       | undefined;
     if (!runner || typeof runner.setTodos !== 'function') {
       return err('todo_write requires a runner that supports todo tracking.');
@@ -244,7 +249,7 @@ export const todoWrite: CoderTool = {
       if (key) WRITE_BURST_BY_RUNNER.delete(key);
     }
 
-    runner.setTodos(todos);
+    await runner.setTodos(todos);
 
     const inProgress = todos.filter((t) => t.status === 'in_progress');
     const warnings: string[] = [];
@@ -285,6 +290,9 @@ function parsePatch(raw: Record<string, unknown>, label: string): { ok: true; pa
   const status = raw.status;
   const content = typeof raw.content === 'string' ? raw.content.trim() : undefined;
   const activeForm = typeof raw.activeForm === 'string' ? raw.activeForm.trim() : undefined;
+  if (content && content.length > 8192 || activeForm && activeForm.length > 8192) {
+    return { ok: false, error: `update_todo: ${label} text exceeds 8192 characters` };
+  }
   const hasStatus = status === 'pending' || status === 'in_progress' || status === 'completed';
   // Validate status first — reject an explicitly bad value before falling
   // through to the "no fields provided" check, otherwise the caller gets a
@@ -322,6 +330,7 @@ export const updateTodo: CoderTool = {
     'Do not spend a turn on bookkeeping alone — emit update_todo in the SAME assistant turn as your next work tool call (parallel tool calls are supported).\n' +
     'At least one of {status, content, activeForm} is required per patch. Items not referenced are left untouched.',
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: {
     type: 'object',
     properties: {
@@ -354,6 +363,8 @@ export const updateTodo: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    ctx = bindTaskContext(ctx, 'update_todo');
+    ctx.signal?.throwIfAborted();
     const guard = guardTrackWriteOverApprove(ctx);
     if (guard) return err(guard);
     // Two mutually exclusive arg shapes: legacy single (top-level id) or batch.
@@ -394,8 +405,8 @@ export const updateTodo: CoderTool = {
       patches = [parsed.patch];
     }
 
-    const runner = ctx.runner as unknown as
-      | { setTodos?: (t: TodoItem[]) => void; currentTodos?: TodoItem[] }
+    const runner = (ctx.taskRuntime ?? ctx.runner) as unknown as
+      | { setTodos?: (t: TodoItem[]) => void | Promise<void>; currentTodos?: TodoItem[] }
       | undefined;
     if (!runner || typeof runner.setTodos !== 'function') {
       return err('update_todo requires a runner that supports todo tracking.');
@@ -427,7 +438,7 @@ export const updateTodo: CoderTool = {
       if (p.activeForm) target.activeForm = p.activeForm;
     }
 
-    runner.setTodos(next);
+    await runner.setTodos(next);
 
     // Invariant check runs on the FINAL state — the whole point of the batch
     // form is that the complete-current + start-next pair never produces a

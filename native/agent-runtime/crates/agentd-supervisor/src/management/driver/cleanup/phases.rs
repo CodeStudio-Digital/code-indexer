@@ -144,40 +144,49 @@ where
             }
             let trigger = self.state.cleanup_trigger(&key)?;
             report.reap_attempts += 1;
-            let mut reaped_at_unix_ms = None;
+            let outbox = &mut self.lifecycle_fact_outbox;
+            let durable = &mut self.durable_lifecycle_outbox;
+            let trusted_runner = &self.trusted_runner;
             let effect = self.ownership.reap_after_cleanup_gated(
                 self.containment.as_ref(),
                 &key,
                 reap_timeout,
                 || {
                     clock.sample().and_then(|after| {
-                        let validated = self
-                            .state
+                        self.state
                             .ensure_cleanup_deadline_for(&key, after)
-                            .map(|()| after);
-                        if validated.is_ok() {
-                            reaped_at_unix_ms = Some(after);
-                        }
-                        validated
+                            .map(|()| after)
                     })
+                },
+                |reaped, at| {
+                    let emission = super::super::lifecycle_reporting::prepare_reaped_lifecycle(
+                        trusted_runner,
+                        &key,
+                        reaped,
+                        physical_exit_cause(trigger, reaped.exit_code()),
+                        at,
+                    );
+                    if let Some(durable) = durable {
+                        let entry = emission
+                            .lifecycle_entry(durable.connection_id())
+                            .ok_or(CleanupStateError::InvalidTransition)?;
+                        durable
+                            .stage(entry)
+                            .map_err(|_| CleanupStateError::InvalidTransition)?;
+                    }
+                    outbox
+                        .push(emission)
+                        .then_some(())
+                        .ok_or(CleanupStateError::InvalidTransition)
                 },
             );
             match effect {
-                Ok(reaped) => {
-                    let reaped_at_unix_ms =
-                        reaped_at_unix_ms.ok_or(CleanupStateError::InvalidTransition)?;
-                    if !self.stage_reaped_lifecycle(
-                        &key,
-                        &reaped,
-                        physical_exit_cause(trigger, reaped.exit_code()),
-                        reaped_at_unix_ms,
-                    ) {
-                        return Err(CleanupStateError::InvalidTransition);
-                    }
+                Ok(_) => {
                     report.reaped += 1;
                     debug_assert!(!self.completion_cleanup.owns(&key));
                     self.launch_registry.mark_physical_reaped(&key);
                     self.pulse_registry.remove(&key);
+                    self.authority_registry.remove(&key);
                     self.state.complete_reap(&key)?;
                 }
                 Err(ReapAfterCleanupError::PostReapGate(error)) => return Err(error),

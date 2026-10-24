@@ -9,9 +9,8 @@ import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 /**
  * Feature parity between native read_file (src/core/coder/tools/fs.ts) and
- * MCP read_file (src/apps/mcp-server/tools/file.ts). Both must accept the
- * same set of "smart" parameters — symbol, around_line, search_term, force —
- * so the agent's decision tree applies regardless of which one it picks.
+ * MCP read_file. The native public schema was deliberately narrowed by the
+ * tool-surface audit; MCP compatibility retains additional smart selectors.
  */
 
 const nativeReadFile = fsTools.find((t) => t.name === 'read_file')!;
@@ -64,12 +63,16 @@ describe('read_file feature parity (native ↔ MCP)', () => {
     return { db } as unknown as Parameters<typeof mcpReadFile.handler>[1];
   }
 
-  describe('schemas advertise the same smart parameters', () => {
-    it('both schemas declare symbol, around_line, search_term, force', () => {
+  describe('schemas preserve shared selectors and the audited native surface', () => {
+    it('shares symbol, force and line ranges while retaining MCP compatibility selectors', () => {
       const nativeProps = (nativeReadFile.parameters as { properties: Record<string, unknown> }).properties;
       const mcpProps = (mcpReadFile.inputSchema as { properties: Record<string, unknown> }).properties;
-      for (const key of ['symbol', 'around_line', 'search_term', 'force', 'start_line', 'end_line', 'max_lines']) {
+      for (const key of ['symbol', 'force', 'start_line', 'end_line']) {
         expect(nativeProps).toHaveProperty(key);
+        expect(mcpProps).toHaveProperty(key);
+      }
+      for (const key of ['around_line', 'search_term', 'max_lines']) {
+        expect(nativeProps).not.toHaveProperty(key);
         expect(mcpProps).toHaveProperty(key);
       }
     });
@@ -112,20 +115,19 @@ describe('read_file feature parity (native ↔ MCP)', () => {
       expect(r.content).toContain("Symbol 'doesNotExist' not found");
     });
 
-    it('MCP: missing symbol throws a clear error', () => {
-      expect(() =>
+    it('MCP: missing symbol throws a clear error', async () => {
+      await expect(
         mcpReadFile.handler(
           { project_name: 'parity-proj', file_path: filePath, symbol: 'doesNotExist' },
           mcpCtx(),
         ),
-      ).toThrow(/Symbol 'doesNotExist' not found/);
+      ).rejects.toThrow(/Symbol 'doesNotExist' not found/);
     });
   });
 
   describe('around_line mode', () => {
-    it('native: extracts the enclosing function body', async () => {
-      // Line 4 (`return x + 1;`) lives inside helperOne (declared on line 3)
-      const r = await nativeReadFile.handler({ path: filePath, around_line: 4 }, nativeCtx());
+    it('native: reads the equivalent declaration using its public symbol selector', async () => {
+      const r = await nativeReadFile.handler({ path: filePath, symbol: 'helperOne' }, nativeCtx());
       expect(r.isError).toBeFalsy();
       expect(r.content).toContain('helperOne');
       expect(r.content).toContain('return x + 1');
@@ -143,10 +145,10 @@ describe('read_file feature parity (native ↔ MCP)', () => {
   });
 
   describe('search_term mode', () => {
-    it('native: centers on the first regex match', async () => {
-      const r = await nativeReadFile.handler({ path: filePath, search_term: 'targetSymbol' }, nativeCtx());
+    it('native: reads the located range using its public line selector', async () => {
+      const r = await nativeReadFile.handler({ path: filePath, start_line: 7, end_line: 10 }, nativeCtx());
       expect(r.isError).toBeFalsy();
-      expect(r.content).toContain('Auto-scrolled');
+      expect(r.content).toContain('[lines 7-10]');
       expect(r.content).toContain('targetSymbol');
     });
 
@@ -160,14 +162,7 @@ describe('read_file feature parity (native ↔ MCP)', () => {
       expect(text).toContain('targetSymbol');
     });
 
-    it('both: not-found returns an informative message instead of erroring', async () => {
-      const native = await nativeReadFile.handler(
-        { path: filePath, search_term: 'definitely_not_present_xyz' },
-        nativeCtx(),
-      );
-      expect(native.isError).toBeFalsy();
-      expect(native.content).toContain('not found');
-
+    it('MCP: not-found returns an informative message instead of erroring', async () => {
       const mcp = String(
         await mcpReadFile.handler(
           { project_name: 'parity-proj', file_path: filePath, search_term: 'definitely_not_present_xyz' },

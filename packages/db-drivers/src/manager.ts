@@ -28,6 +28,12 @@ interface PoolEntry {
   meta: ConnMeta;
 }
 
+interface OpeningEntry {
+  promise: Promise<DatabaseDriver>;
+  pinned: boolean;
+  closed: boolean;
+}
+
 const IDLE_TTL_MS = 5 * 60 * 1000;
 
 export interface AcquireOptions {
@@ -39,6 +45,7 @@ export interface AcquireOptions {
 
 export class DbConnectionManager {
   private pools = new Map<string, PoolEntry>();
+  private openings = new Map<string, OpeningEntry>();
   private sweeper: NodeJS.Timeout | null = null;
 
   private ensureSweeper(): void {
@@ -68,18 +75,35 @@ export class DbConnectionManager {
       if (opts.pinned) existing.pinned = true;
       return existing.driver;
     }
-    if (opts.invalidatePrefix) {
-      for (const [k, v] of this.pools.entries()) {
-        if (k.startsWith(opts.invalidatePrefix)) {
-          v.driver.close().catch(() => void 0);
-          this.pools.delete(k);
-        }
-      }
+    const pending = this.openings.get(key);
+    if (pending) {
+      pending.pinned ||= opts.pinned ?? false;
+      return pending.promise;
     }
-    const driver = await createDriver(config);
-    this.pools.set(key, { driver, lastUsed: Date.now(), pinned: opts.pinned ?? false, meta: {} });
-    this.ensureSweeper();
-    return driver;
+    const opening = { pinned: opts.pinned ?? false, closed: false } as OpeningEntry;
+    // Publish before invoking an asynchronous driver factory so concurrent
+    // callers share setup and close can fence a not-yet-connected resource.
+    opening.promise = Promise.resolve().then(async () => {
+      if (opening.closed) throw new Error('Database pool closed during connection setup');
+      if (opts.invalidatePrefix) {
+        const stale = [...new Set([...this.pools.keys(), ...this.openings.keys()])]
+          .filter(candidate => candidate !== key && candidate.startsWith(opts.invalidatePrefix!));
+        if (stale.length) await Promise.all(stale.map(candidate => this.closeKey(candidate)));
+      }
+      if (opening.closed) throw new Error('Database pool closed during connection setup');
+      const driver = await createDriver(config);
+      if (opening.closed) {
+        await driver.close().catch(() => void 0);
+        throw new Error('Database pool closed during connection setup');
+      }
+      this.pools.set(key, { driver, lastUsed: Date.now(), pinned: opening.pinned, meta: {} });
+      this.ensureSweeper();
+      return driver;
+    }).finally(() => {
+      if (this.openings.get(key) === opening) this.openings.delete(key);
+    });
+    this.openings.set(key, opening);
+    return opening.promise;
   }
 
   /** Attach metadata (engine / read-only) to a pooled connection. */
@@ -107,21 +131,31 @@ export class DbConnectionManager {
 
   /** Close + drop a single connection. */
   async closeKey(key: string): Promise<void> {
+    const pending = this.openings.get(key);
+    if (pending) {
+      pending.closed = true;
+      this.openings.delete(key);
+    }
     const entry = this.pools.get(key);
-    if (!entry) return;
     this.pools.delete(key);
-    await entry.driver.close().catch(() => void 0);
+    await Promise.allSettled([
+      ...(pending ? [pending.promise] : []),
+      ...(entry ? [entry.driver.close()] : []),
+    ]);
   }
 
   /** Close every pooled driver. For shutdown + tests. */
   async closeAll(): Promise<void> {
     const drivers = [...this.pools.values()].map((e) => e.driver);
+    const pending = [...this.openings.values()];
+    for (const opening of pending) opening.closed = true;
+    this.openings.clear();
     this.pools.clear();
     if (this.sweeper) {
       clearInterval(this.sweeper);
       this.sweeper = null;
     }
-    await Promise.allSettled(drivers.map((d) => d.close()));
+    await Promise.allSettled([...drivers.map((d) => d.close()), ...pending.map(entry => entry.promise)]);
   }
 }
 

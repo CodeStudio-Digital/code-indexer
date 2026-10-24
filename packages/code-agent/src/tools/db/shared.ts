@@ -25,6 +25,11 @@ export type ScopeResult =
   | { ok: false; error: string };
 
 export function resolveToolScope(ctx: ToolContext): ScopeResult {
+  if (ctx.ports?.database) {
+    if (ctx.companyContext || ctx.projectId == null) return { ok: false, error: 'Native databases require the owning project scope.' };
+    const connections = ctx.ports.database.listConnections(ctx.projectId).map(conn => ({ conn }));
+    return { ok: true, scope: resolveDbScope({ projectId: ctx.projectId, connections }) };
+  }
   const store = getDbToolsStore();
   if (!store) return { ok: false, error: 'db tools unavailable (store not wired in this process)' };
   if (ctx.companyContext) {

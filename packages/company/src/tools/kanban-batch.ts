@@ -12,8 +12,9 @@
  * item and continues — the result lists every outcome with the created ids
  * the master needs for dependencies/assignment.
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { KanbanColumn } from '@mcp/company/types.js';
 import { KANBAN_COLUMNS } from '@mcp/company/types.js';

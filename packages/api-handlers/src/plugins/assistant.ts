@@ -13,7 +13,7 @@ import { runMiniAgent, type MiniTool } from '@mcp/services/mini-agent/index.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { getInstalledPlugin } from '@mcp/plugin-host';
 import type { PluginAssistantChunk, PluginModelOption } from '@mcp/api-bus';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 
 interface ToolDecl {
   name: string;

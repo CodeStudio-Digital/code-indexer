@@ -6,7 +6,7 @@
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { importOpenApiInto } from '@mcp/services/api-client/import-openapi.js';
-import { resolveApiCtx } from './shared.js';
+import { resolveApiCtx, projectRequest } from './shared.js';
 import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 
 export const apiImportOpenApiTool: CoderTool = {
@@ -30,6 +30,7 @@ export const apiImportOpenApiTool: CoderTool = {
       projectId: r.projectId,
       rootPath: ctx.cwd,
       specPath: typeof args.specPath === 'string' ? args.specPath : undefined,
+      signal: ctx.signal,
       beforeWrite: () => assertMutationFence(ctx.mutationFence, {
         kind: 'control',
         operation: 'api_import_openapi.write',
@@ -69,7 +70,7 @@ export const apiUpdateRequestTool: CoderTool = {
     const r = resolveApiCtx(ctx);
     if ('error' in r) return err(r.error);
     const rid = Number(args.requestId);
-    if (!r.store.getRequest(rid)) return err(`request ${rid} not found`);
+    if (!projectRequest(r, rid)) return err(`request ${rid} not found in this project`);
     const patch: Record<string, unknown> = {};
     if (typeof args.method === 'string') patch.method = args.method.toUpperCase();
     if (typeof args.path_template === 'string') patch.path_template = args.path_template;
@@ -110,7 +111,7 @@ export const apiMarkVerifiedTool: CoderTool = {
     const r = resolveApiCtx(ctx);
     if ('error' in r) return err(r.error);
     const rid = Number(args.requestId);
-    if (!r.store.getRequest(rid)) return err(`request ${rid} not found`);
+    if (!projectRequest(r, rid)) return err(`request ${rid} not found in this project`);
     const assert = args.shape && typeof args.shape === 'object' ? JSON.stringify({ shape: args.shape }) : null;
     assertMutationFence(ctx.mutationFence, {
       kind: 'control',

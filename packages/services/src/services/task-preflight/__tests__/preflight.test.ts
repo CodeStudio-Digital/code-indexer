@@ -36,7 +36,7 @@ const MEMORY = [
 const SKILLS = [
   { id: 'api-collection', description: 'Build or import an HTTP API client collection', namespace: 'builtin', scope: '7' },
   { id: 'qa-playwright', description: 'Author Playwright E2E tests', namespace: 'builtin', scope: '7' },
-  { id: 'ds-docs', description: 'Generate design-system docs', namespace: 'builtin', scope: '7' },
+  { id: 'api-docs', description: 'Generate API documentation', namespace: 'builtin', scope: '7' },
   { id: 'init', description: 'Initialize a CLAUDE.md for the repo', namespace: 'builtin', scope: '7' },
 ];
 const PARSE_CTX = {
@@ -194,7 +194,7 @@ describe('parsePreflightOutput', () => {
 
   it('clamps skills to maxSkills and dedups', () => {
     const raw = JSON.stringify({
-      skills: ['api-collection', 'api-collection', 'qa-playwright', 'ds-docs'],
+      skills: ['api-collection', 'api-collection', 'qa-playwright', 'api-docs'],
     });
     const seed = parsePreflightOutput(raw, PARSE_CTX);
     expect(seed?.suggestedSkills?.map((s) => s.id)).toEqual(['api-collection', 'qa-playwright']);
@@ -203,9 +203,9 @@ describe('parsePreflightOutput', () => {
   it('clamps skills to the shipped cap (3) when more valid ids are returned', () => {
     // Pins the production MAX_SKILLS=3 (preflight-pipeline.ts) end of the clamp.
     const ctx3 = { ...PARSE_CTX, maxSkills: 3 };
-    const raw = JSON.stringify({ skills: ['api-collection', 'qa-playwright', 'ds-docs', 'init'] });
+    const raw = JSON.stringify({ skills: ['api-collection', 'qa-playwright', 'api-docs', 'init'] });
     const seed = parsePreflightOutput(raw, ctx3);
-    expect(seed?.suggestedSkills?.map((s) => s.id)).toEqual(['api-collection', 'qa-playwright', 'ds-docs']);
+    expect(seed?.suggestedSkills?.map((s) => s.id)).toEqual(['api-collection', 'qa-playwright', 'api-docs']);
   });
 
   it('a skills-only seed is usable (not null)', () => {
@@ -387,34 +387,34 @@ describe('TaskPreflightService.run', () => {
   });
 
   it('filters a global discovery-only skill unless the prompt explicitly names it', async () => {
-    const dsSkill = [{
-      id: 'ds-ctx-ui',
-      name: 'Design System: @corporate/ui',
-      description: 'Components from @corporate/ui',
+    const packageSkill = [{
+      id: 'charts-context',
+      name: 'Chart library: @corporate/charts',
+      description: 'Components from @corporate/charts',
       namespace: 'builtin',
       scope: 'global',
-      packageNames: ['@corporate/ui'],
+      packageNames: ['@corporate/charts'],
       dependencyMatched: false,
     }];
     const output = JSON.stringify({
       profile: 'navigate',
-      skills: [{ id: 'ds-ctx-ui', why: 'UI task' }],
+      skills: [{ id: 'charts-context', why: 'chart task' }],
     });
-    const implicit = await makeService(makeBinding(), { getSkillCatalog: () => dsSkill }).run({
+    const implicit = await makeService(makeBinding(), { getSkillCatalog: () => packageSkill }).run({
       ...INPUT,
       userMessage: 'mostre pagamentos pendentes na intranet',
       fetchFn: okFetch(output),
     });
     expect(implicit.seed?.suggestedSkills).toBeUndefined();
 
-    const explicit = await makeService(makeBinding(), { getSkillCatalog: () => dsSkill }).run({
+    const explicit = await makeService(makeBinding(), { getSkillCatalog: () => packageSkill }).run({
       ...INPUT,
-      userMessage: 'use @corporate/ui para mostrar pagamentos pendentes',
+      userMessage: 'use @corporate/charts para mostrar pagamentos pendentes',
       fetchFn: okFetch(output),
     });
     expect(explicit.seed?.suggestedSkills).toEqual([{
-      id: 'ds-ctx-ui',
-      reason: 'UI task',
+      id: 'charts-context',
+      reason: 'chart task',
       evidence: 'explicit',
     }]);
   });

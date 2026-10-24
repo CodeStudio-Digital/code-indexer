@@ -4,7 +4,7 @@
  * the fs-events stream (applied by the Workspace-level subscription).
  *
  * Filtering switches to a FLAT result list over the project's indexed
- * file paths (`files.list`) — a lazy tree can't filter what it hasn't
+ * file paths (`files.searchPaths`) — a lazy tree can't filter what it hasn't
  * loaded, and the flat list covers the whole project instantly.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -54,7 +54,8 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
   const refreshStore = useFileTreeStore((s) => s.refresh);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [allPaths, setAllPaths] = useState<string[] | null>(null);
+  const [filtered, setFiltered] = useState<string[]>([]);
+  const [filterLoading, setFilterLoading] = useState(false);
   const [gitStatus, setGitStatus] = useState<Map<string, GitFileStatus>>(() => new Map());
   // Repo flag + root (do mesmo poll de status) → habilita "Git ▸" e o caminho repo-relative.
   const [repo, setRepo] = useState<{ isRepo: boolean; repoRoot: string | null }>({ isRepo: false, repoRoot: null });
@@ -148,23 +149,25 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
     return () => window.removeEventListener('keydown', onKey);
   }, [activePath]);
 
-  // Flat filter source — fetched on first use, refreshed on tree refresh.
+  // Debounced, bounded path-only results. Cancel on query/project changes.
   useEffect(() => {
-    if (!search.trim() || allPaths) return;
-    let cancelled = false;
-    void apiCall<Array<{ path: string }>>('files.list', { projectId })
-      .then((rows) => { if (!cancelled) setAllPaths(rows.map((r) => r.path)); })
-      .catch(() => { if (!cancelled) setAllPaths([]); });
-    return () => { cancelled = true; };
-  }, [search, allPaths, projectId]);
+    setFiltered([]);
+    setFilterLoading(active && !!search.trim());
+    if (!active || !search.trim()) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void apiCall<Array<{ path: string }>>('files.searchPaths', {
+        projectId, query: search, limit: 300, fuzzy: false,
+      }, { signal: controller.signal })
+        .then((rows) => { if (!controller.signal.aborted) setFiltered(rows.map((r) => r.path)); })
+        .catch(() => { if (!controller.signal.aborted) setFiltered([]); })
+        .finally(() => { if (!controller.signal.aborted) setFilterLoading(false); });
+    }, 120);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [search, projectId, active, version]);
 
   const dirSeverity = useMemo(() => buildDirSeverity(gitStatus), [gitStatus]);
   const filterActive = search.trim().length > 0;
-  const filtered = useMemo(() => {
-    if (!filterActive || !allPaths) return [];
-    const q = search.trim().toLowerCase();
-    return allPaths.filter((p) => p.toLowerCase().includes(q)).slice(0, 300);
-  }, [filterActive, allPaths, search]);
 
   // Lê o snapshot children+expanded via getState(), keyed em `version` — evita assinar
   // `children` (cujo Map ref muda a cada load) e recomputa só em mudança estrutural.
@@ -200,7 +203,6 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
 
   const refresh = useCallback(() => {
     refreshStore();
-    setAllPaths(null);
   }, [refreshStore]);
 
   // Refs lidas LAZY dentro dos handlers estáveis (padrão getState-em-vez-de-subscribe):
@@ -255,7 +257,7 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
       </div>
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto py-1 px-0.5">
         {error && <div className="text-[11px] text-destructive px-3 py-2">{error}</div>}
-        {filterActive && allPaths && filtered.length === 0 && (
+        {filterActive && !filterLoading && filtered.length === 0 && (
           <div className="text-[11px] text-muted-foreground px-3 py-2">No files match &quot;{search}&quot;.</div>
         )}
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>

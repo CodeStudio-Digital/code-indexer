@@ -14,7 +14,7 @@
  */
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/session-storage';
 import {
   computeCutoffIndexByTokens,

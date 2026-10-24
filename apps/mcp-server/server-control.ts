@@ -1,4 +1,5 @@
 import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
+import { readServerResponse } from './server-response.js';
 import {
   semanticPurposeForNamespace,
   type SemanticStore,
@@ -36,11 +37,15 @@ export async function requestMcpLocalServer(
     config?: IndexerConfig;
     fetchImpl?: FetchLike;
     timeoutMs?: number;
+    maxResponseBytes?: number;
   } = {},
 ): Promise<McpLocalServerResult> {
   const config = options.config ?? loadConfig();
+  init.signal?.throwIfAborted();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 5_000);
+  const parentAbort = () => controller.abort(init.signal?.reason);
+  init.signal?.addEventListener('abort', parentAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(new DOMException('Local server request timed out', 'TimeoutError')), options.timeoutMs ?? 5_000);
   timer.unref?.();
   try {
     const response = await (options.fetchImpl ?? fetch)(`${loopbackBaseUrl(config)}${path}`, {
@@ -52,8 +57,8 @@ export async function requestMcpLocalServer(
         ...(init.headers ?? {}),
       },
     });
-    let body: unknown = null;
-    try { body = await response.json(); } catch { /* empty response */ }
+    const body = await readServerResponse(response, controller.signal, options.maxResponseBytes ?? 8 * 1024 * 1024);
+    controller.signal.throwIfAborted();
     return {
       reached: true,
       ok: response.ok,
@@ -66,6 +71,9 @@ export async function requestMcpLocalServer(
             : `server returned HTTP ${response.status}`),
     };
   } catch (error) {
+    // Caller cancellation is not server unavailability and must not cause a
+    // second (local fallback) operation after the attempt was stopped.
+    init.signal?.throwIfAborted();
     return {
       reached: false,
       ok: false,
@@ -75,6 +83,7 @@ export async function requestMcpLocalServer(
     };
   } finally {
     clearTimeout(timer);
+    init.signal?.removeEventListener('abort', parentAbort);
   }
 }
 

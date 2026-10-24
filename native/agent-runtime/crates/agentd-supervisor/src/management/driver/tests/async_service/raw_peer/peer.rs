@@ -30,6 +30,26 @@ pub(in crate::management::driver::tests::async_service) struct RawHost {
 }
 
 impl RawHost {
+    pub(in crate::management::driver::tests::async_service) async fn renew_authority(
+        &mut self,
+    ) -> i64 {
+        let launch = launch_attempt();
+        let expiry = launch.authority_lease_expires_at_unix_ms + 10_000;
+        self.send(
+            wire::management_payload::Body::UpdateAttemptAuthority(wire::UpdateAttemptAuthority {
+                identity: launch.identity,
+                authority_lease_expires_at_unix_ms: expiry,
+                hard_deadline_at_unix_ms: launch.hard_deadline_at_unix_ms,
+                updated_at_unix_ms: now_unix_ms(),
+                idempotency_key: "renewal:async".into(),
+            }),
+            None,
+            None,
+        )
+        .await;
+        expiry
+    }
+
     pub(in crate::management::driver::tests::async_service) async fn send_launch(&mut self) {
         let _sent = self
             .send(

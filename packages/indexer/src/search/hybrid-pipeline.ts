@@ -46,7 +46,8 @@ import {
   type Source,
   type TelemetrySink,
 } from '@mcp/candidate-pipeline';
-import { readFileSync } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { mapLimit } from '@mcp/shared/utils/map-limit.js';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { rrfMerge as cpRrfMerge, RRF_DEFAULT_K } from '@mcp/candidate-pipeline/scorers/rrf.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
@@ -284,11 +285,12 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
       const perVariant = Math.max(q.overFetch, 10);
       let totalRaw = 0;
       const variantResults: HybridSearchPipelineCandidate[][] = await Promise.all(
-        variants.map(async (v) => {
+        variants.map(async (v, index) => {
           const { vector, generationId } = await embedQueryForNamespace(
             this.deps.embeddingService,
             namespace,
             v,
+            { signal: q.signal, supersessionKey: q.supersessionKey ? `${q.supersessionKey}:embed:${index}` : undefined },
           );
           if (q.diag.generationUsed !== undefined && q.diag.generationUsed !== generationId) {
             throw new Error(`query variants resolved different semantic generations (${q.diag.generationUsed}, ${generationId})`);
@@ -644,19 +646,28 @@ export class DedupFilter implements Filter<HybridSearchPipelineQuery, HybridSear
 
 const MAX_RERANK_SOURCE_CHARS = 8_000;
 
-function sourceText(db: CodeIndexDB, projectId: number, filePath: string): string {
+async function sourceText(db: CodeIndexDB, projectId: number, filePath: string, budget: { bytes: number }, signal?: AbortSignal): Promise<string[]> {
   try {
+    if (signal?.aborted) return [];
     const root = db.getProject(projectId)?.root_path;
-    if (!root) return '';
+    if (!root) return [];
     const rootAbs = resolve(root);
     const fileAbs = resolve(rootAbs, filePath);
     const fromRoot = relative(rootAbs, fileAbs);
-    if (!fromRoot || fromRoot.startsWith('..') || isAbsolute(fromRoot)) return '';
-    // The final document is bounded below. Keep the full text here so a
-    // symbol declared late in a large file still contributes its real body.
-    return readFileSync(fileAbs, 'utf8');
+    if (!fromRoot || fromRoot.startsWith('..') || isAbsolute(fromRoot)) return [];
+    const file = await open(fileAbs, 'r');
+    try {
+      // Bound both allocation and I/O, even if the source grows after stat.
+      const maxBytes = 2 * 1024 * 1024;
+      const stats = await file.stat();
+      if (!stats.isFile() || stats.size > maxBytes || stats.size > budget.bytes || signal?.aborted) return [];
+      budget.bytes -= stats.size;
+      const buffer = Buffer.alloc(Math.min(maxBytes, stats.size));
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+      return signal?.aborted ? [] : buffer.toString('utf8', 0, bytesRead).split(/\r?\n/);
+    } finally { await file.close(); }
   } catch {
-    return '';
+    return [];
   }
 }
 
@@ -666,7 +677,7 @@ export function rerankDocumentText(
   result: HybridSearchResult,
   db?: CodeIndexDB,
   projectId?: number,
-  sourceCache?: Map<string, string>,
+  sourceCache?: Map<string, string[]>,
 ): string {
   const data = result.data as unknown as Record<string, unknown>;
   const filePath = String(result.type === 'file' ? data.path ?? '' : data.file_path ?? '');
@@ -694,17 +705,12 @@ export function rerankDocumentText(
       ].filter(Boolean).join('\n');
 
   let snippet = '';
-  if (db && projectId !== undefined) {
-    const cached = sourceCache?.get(filePath);
-    snippet = cached ?? sourceText(db, projectId, filePath);
-    if (cached === undefined) sourceCache?.set(filePath, snippet);
-  }
-  if (result.type === 'symbol' && snippet) {
-    const lines = snippet.split(/\r?\n/);
+  const lines = sourceCache?.get(filePath) ?? [];
+  if (result.type === 'symbol') {
     const start = Math.max(0, Number(data.line ?? 1) - 1);
-    const end = Math.min(lines.length, Math.max(start + 1, Number(data.end_line ?? start + 80)));
+    const end = Math.min(lines.length, start + 200, Math.max(start + 1, Number(data.end_line ?? start + 80)));
     snippet = lines.slice(start, end).join('\n');
-  }
+  } else snippet = lines.slice(0, 200).join('\n');
 
   return [
     `Path: ${filePath}`,
@@ -734,12 +740,6 @@ export class RerankerHydrator
       q.diag.rerankerReturned = 0;
       return [];
     }
-    const sourceCache = new Map<string, string>();
-    const rerankInput = candidates.map((candidate) => ({
-      id: candidate.candidateId,
-      text: rerankDocumentText(candidate.result, this.db, q.projectId, sourceCache),
-      originalScore: candidate.score,
-    }));
     // Pass the public top-K separately from the expanded candidate pool. The
     // semantic worker uses it to resolve the hardware tier (20/40/64) and
     // returns exactly the calibrated final set. Candidates outside that set
@@ -754,6 +754,24 @@ export class RerankerHydrator
           ? q.signal.reason
           : new Error('hybrid search request aborted before reranking');
       }
+      // At most four async reads; one decode/split per file in this query.
+      const sourceCache = new Map<string, string[]>();
+      const budget = { bytes: 8 * 1024 * 1024 };
+      if (this.db) {
+        const paths = [...new Set(candidates.map(({ result }) => {
+          const data = result.data as unknown as Record<string, unknown>;
+          return String(result.type === 'file' ? data.path ?? '' : data.file_path ?? '');
+        }))];
+        await mapLimit(paths, 4, async (path) => {
+          if (!q.signal?.aborted) sourceCache.set(path, await sourceText(this.db!, q.projectId, path, budget, q.signal));
+        });
+      }
+      q.signal?.throwIfAborted();
+      const rerankInput = candidates.map((candidate) => ({
+        id: candidate.candidateId,
+        text: rerankDocumentText(candidate.result, this.db, q.projectId, sourceCache),
+        originalScore: candidate.score,
+      }));
       const expected = Math.min(q.limit, candidates.length);
       const reranked = await this.reranker.rerank(q.query, rerankInput, expected, {
         supersessionKey: q.supersessionKey,

@@ -4,8 +4,9 @@
  * The shared board is the primary communication channel between agents
  * in a company session.
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 

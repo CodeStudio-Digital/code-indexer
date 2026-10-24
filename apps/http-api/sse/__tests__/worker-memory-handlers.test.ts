@@ -191,7 +191,7 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
       INVESTIGATION_ID,
       OTHER_INVESTIGATION_ID,
     ]);
-    expect(investigationSearch).toHaveBeenCalledWith(searchInput);
+    expect(investigationSearch).toHaveBeenCalledWith(searchInput, expect.any(AbortSignal));
     const record = {
       id: INVESTIGATION_ID,
       project_id: 1,

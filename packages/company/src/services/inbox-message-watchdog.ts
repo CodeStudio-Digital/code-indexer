@@ -28,7 +28,7 @@
  *   - `MCP_COMPANY_INBOX_WATCHDOG_STUCK_MS` — stuck threshold, default 5*60_000
  *   - `MCP_COMPANY_INBOX_WATCHDOG_ENABLED` — `'1'` to start at boot (default `'0'`)
  */
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type { AgentInboxMessage } from '@mcp/company/types.js';
 import { CompanySessionFiles } from './CompanySessionFiles.js';
 import type { IMetaBusPublisher } from './ports.js';

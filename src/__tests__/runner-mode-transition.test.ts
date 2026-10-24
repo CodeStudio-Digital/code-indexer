@@ -3,7 +3,7 @@ import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { submitPlan } from '@mcp/code-agent/tools/plan.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 
 /**

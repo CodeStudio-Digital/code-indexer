@@ -39,6 +39,39 @@ function baseArgs(registry: ToolRegistry): DispatchArgs {
 }
 
 describe('dispatchTools — Fix 2 (guarded bridge callbacks)', () => {
+  it('publishes a finished result before starting its slow sibling', async () => {
+    const registry = registryWith('first');
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    registry.register({ name: 'slow', description: '', source: 'native',
+      parameters: { type: 'object', properties: {} },
+      handler: async () => { entered(); await blocked; return { content: 'second' }; },
+    });
+    const visible: string[] = [];
+    const run = dispatchTools({ ...baseArgs(registry),
+      toolUses: [{ id: 't1', name: 'foo', input: {} }, { id: 't2', name: 'slow', input: {} }],
+      onToolResult: (result) => { visible.push(result.toolUseId); },
+    });
+    try {
+      await started;
+      expect(visible).toEqual(['t1']);
+    } finally { release(); }
+    const batch = await run;
+    expect(visible).toEqual(['t1', 't2']);
+    expect(batch.results.map((result) => result.toolUseId)).toEqual(visible);
+  });
+
+  it('does not retry an effect if its presentation observer throws', async () => {
+    const res = await dispatchTools({ ...baseArgs(registryWith('done')),
+      onToolResult: () => { throw new Error('disconnected UI'); },
+    });
+    expect(res.results).toHaveLength(1);
+    expect(res.results[0].content).toBe('done');
+    expect(res.results[0].isError).toBe(false);
+  });
+
   it('falls back to raw content when reduceToolResult throws', async () => {
     const res = await dispatchTools({
       ...baseArgs(registryWith('RAW')),

@@ -20,13 +20,15 @@ export class AttemptDeadlineGuard {
     this.#arm(this.hardDeadlineAtUnixMs);
   }
 
-  armPending(frameDeadlineAtUnixMs: bigint | undefined): void {
+  armPending(frameDeadlineAtUnixMs: bigint | undefined, waitsForCapability = false): void {
     const now = this.clock.now();
     const pendingWindow = BigInt(this.maximumPendingMs);
     const pendingDeadline = now > MAX_INT64 - pendingWindow
       ? MAX_INT64
       : now + pendingWindow;
-    let target = pendingDeadline < this.hardDeadlineAtUnixMs
+    // An authenticated capability may run longer than the frame I/O timeout.
+    // Its declared envelope and attempt authority still impose absolute bounds.
+    let target = !waitsForCapability && pendingDeadline < this.hardDeadlineAtUnixMs
       ? pendingDeadline
       : this.hardDeadlineAtUnixMs;
     if (

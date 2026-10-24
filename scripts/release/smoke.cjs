@@ -121,6 +121,24 @@ function probeIndexer() {
   });
 }
 
+async function probeApiScripts() {
+  try {
+    const { runPreScript } = require(path.join(asar, 'dist/packages/services/src/api-client/script-runtime/index.js'));
+    const variables = {};
+    const result = await runPreScript({ source: 'pm.environment.set("probe", "42");', variables,
+      request: { method: 'GET', url: '/', headers: {}, body: '' } });
+    return { ok: !result.error && variables.probe === '42', error: result.error };
+  } catch (cause) { return { ok: false, error: String(cause.message ?? cause) }; }
+}
+
+async function probeWebContent() {
+  try {
+    const { convertWebContent } = require(path.join(asar, 'dist/packages/code-agent/src/tools/web/content-worker.js'));
+    const text = await convertWebContent('html', '<h1>Web probe</h1>');
+    return { ok: text === '# Web probe' };
+  } catch (cause) { return { ok: false, error: String(cause.message ?? cause) }; }
+}
+
 app.on('ready', async () => {
   // The renderer talks to the backend over mcp://; stub it so probes exercise
   // packaging, not backend availability.
@@ -135,6 +153,9 @@ app.on('ready', async () => {
     const deep = await probeRenderer('/popout/task-manager');
     report.deepLink = { ok: deep.hash === '#/popout/task-manager', hash: deep.hash };
     report.indexer = await probeIndexer();
+    report.apiScripts = await probeApiScripts();
+    report.webContent = await probeWebContent();
+    report.agentLsp = await require('./lsp-probe.cjs')(asar);
   } catch (error) {
     report.harnessError = String(error.message || error).split('\n')[0];
   }

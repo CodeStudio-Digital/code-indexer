@@ -1,4 +1,6 @@
 import type { agentV1Supervisor } from '@mcp/agent-runtime-contracts';
+import { authorityCommandBody } from './HostSupervisorAuthorityCommand.js';
+import type { HostAuthorityRenewalRequest } from '../driver/HostLifecycleTypes.js';
 import type {
   HostCancelAttemptRequest,
   HostFenceAttemptRequest,
@@ -62,6 +64,11 @@ export class HostSupervisorCommandLane {
 
   cancel(request: HostCancelAttemptRequest, timeoutMs: number): Promise<void> {
     const command = cancelCommandBody(this.handoff, request, this.nowUnixMs());
+    return this.#send(command.body, command.deadlineAtUnixMs, timeoutMs);
+  }
+
+  renewAuthority(request: HostAuthorityRenewalRequest, timeoutMs: number): Promise<void> {
+    const command = authorityCommandBody(this.handoff, request, this.nowUnixMs());
     return this.#send(command.body, command.deadlineAtUnixMs, timeoutMs);
   }
 

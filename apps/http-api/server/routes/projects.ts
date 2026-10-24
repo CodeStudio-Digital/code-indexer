@@ -14,6 +14,7 @@ import {
 } from '@mcp/shared/vector-namespace.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
+import { readProjectJobPage, readCurrentProjectJobs } from './project-job-queries.js';
 import {
   BulkProjectDeleteError,
   executeBulkProjectDelete,
@@ -35,27 +36,6 @@ function mapApiError(c: Context, err: unknown) {
     return c.json({ error: err.message, code: err.code, ...(err.details ?? {}) }, err.status as never);
   }
   throw err;
-}
-
-type SemanticJob = ReturnType<ServerDeps['semanticStore']['listJobs']>[number];
-
-function currentProjectReindexJob(
-  projectId: number,
-  jobs: SemanticJob[],
-  generationIds: Set<number>,
-): SemanticJob | null {
-  const openStatuses = new Set(['pending', 'running', 'paused']);
-  const markerNamespace = `semantic:reindex:code:p${projectId}`;
-  const belongsToCurrentGeneration = (job: SemanticJob) =>
-    job.namespace === codeNamespace(projectId)
-    && (job.kind === 'backfill' || job.kind === 'build')
-    && (job.generation_id === null ? generationIds.size === 0 : generationIds.has(job.generation_id));
-  return jobs.find((job) =>
-    job.namespace === markerNamespace && openStatuses.has(job.status))
-    ?? jobs.find((job) => belongsToCurrentGeneration(job) && openStatuses.has(job.status))
-    ?? jobs.find((job) => job.namespace === markerNamespace)
-    ?? jobs.find(belongsToCurrentGeneration)
-    ?? null;
 }
 
 export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
@@ -199,38 +179,24 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     const allNamespaceStatuses = deps.localVectorRouter.getNamespaceStatuses(
       namespacesByProject.flat(),
     );
-    // Only the namespaces this response actually reports. Fetching every job
-    // ever recorded and filtering in JS grew with history, unbounded.
-    const allJobs = deps.semanticStore.listJobs({
-      namespaces: [
-        ...namespacesByProject.flat(),
-        ...projects.map((project) => `semantic:reindex:code:p${project.id}`),
-      ],
-    });
+    const byNamespace = new Map(allNamespaceStatuses.map(row => [row.namespace, row]));
+    const selectedJobs = await readCurrentProjectJobs(deps.semanticJobs, projects.map(project => {
+      const code = byNamespace.get(codeNamespace(project.id));
+      return { projectId: project.id, generationIds: [...new Set([code?.active?.generationId,
+        code?.building?.generationId].filter((value): value is number => typeof value === 'number'))] };
+    }), c.req.raw.signal);
     let statusCursor = 0;
     const results = projects.map((project, index) => {
       const nextStatusCursor = statusCursor + namespacesByProject[index].length;
       const namespaces = allNamespaceStatuses.slice(statusCursor, nextStatusCursor);
       statusCursor = nextStatusCursor;
-      const relevantNamespaces = new Set([
-        ...namespacesByProject[index],
-        `semantic:reindex:code:p${project.id}`,
-      ]);
-      const jobs = allJobs
-        .filter((job) => relevantNamespaces.has(job.namespace))
-        .sort((left, right) => right.id - left.id);
-      const codeStatus = namespaces.find((row) => row.namespace === codeNamespace(project.id));
-      const generationIds = new Set([
-        codeStatus?.active?.generationId,
-        codeStatus?.building?.generationId,
-      ].filter((value): value is number => typeof value === 'number'));
       return {
         project,
         status: {
           project_id: project.id,
           profiles,
           namespaces,
-          reindex_job: currentProjectReindexJob(project.id, jobs, generationIds),
+          reindex_job: selectedJobs[index],
         },
         error: null,
       };
@@ -301,7 +267,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     return c.json({ ok: readiness.status === 'ready', readiness, status }, httpStatus);
   });
 
-  app.get('/api/projects/:id/indexing/jobs', (c) => {
+  app.get('/api/projects/:id/indexing/jobs', async (c) => {
     const id = parseIdParam(c);
     if (!deps.db.getProject(id)) return notFound(c);
     const namespaces = new Set([
@@ -310,13 +276,14 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       projectMemoryNamespace(id),
       `semantic:reindex:code:p${id}`,
     ]);
-    const jobs = deps.semanticStore.listJobs()
-      .filter((job) => namespaces.has(job.namespace))
-      .sort((left, right) => right.id - left.id);
-    return c.json({ project_id: id, jobs });
+    try {
+      const page = await readProjectJobPage(c, deps.semanticJobs, [...namespaces]);
+      return c.json({ project_id: id, jobs: page.jobs, next_before_id: page.nextBeforeId });
+    } catch (error) { return mapApiError(c, error); }
   });
 
   app.get('/api/projects/:id/semantic/status', async (c) => {
+    try {
     const id = parseIdParam(c);
     if (!deps.db.getProject(id)) return notFound(c);
     const namespaces = [
@@ -331,9 +298,8 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       ...namespaces,
       `semantic:reindex:code:p${id}`,
     ]);
-    const jobs = deps.semanticStore.listJobs()
-      .filter((job) => relevantNamespaces.has(job.namespace))
-      .sort((left, right) => right.id - left.id);
+    const page = await readProjectJobPage(c, deps.semanticJobs, [...relevantNamespaces]);
+    const jobs = page.jobs;
     const codeStatus = namespaceStatus.find((row) => row.namespace === codeNamespace(id));
     const generationIds = new Set([
       codeStatus?.active?.generationId,
@@ -383,7 +349,8 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     // underlying code backfill in that case so the same project surface can
     // resume it instead of pretending there is no recoverable job. Jobs from
     // retired generations must never shadow a healthy active generation.
-    const reindexJob = currentProjectReindexJob(id, jobs, generationIds);
+    const [reindexJob] = await readCurrentProjectJobs(deps.semanticJobs,
+      [{ projectId: id, generationIds: [...generationIds] }], c.req.raw.signal);
     return c.json({
       project_id: id,
       profiles: deps.semanticStore.listProfiles(),
@@ -392,6 +359,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       active_generation: activeGeneration,
       building_generation: buildingGeneration,
       jobs,
+      next_before_id: page.nextBeforeId,
       reindex_job: reindexJob,
       automatic_backfill: {
         enabled: automatic,
@@ -418,6 +386,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
         last_error: lastError,
       } : null,
     });
+    } catch (error) { return mapApiError(c, error); }
   });
 
   app.post('/api/projects/:id/semantic/reindex', async (c) => {
@@ -444,17 +413,9 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
         codeState.active?.generationId,
         codeState.building?.generationId,
       ].filter((value): value is number => typeof value === 'number'));
-      const markerNamespace = `semantic:reindex:code:p${id}`;
       const pausedJob = action === 'resume'
-        ? deps.semanticStore.listJobs().filter((job) =>
-            job.status === 'paused'
-            && (job.namespace === markerNamespace
-              || (job.namespace === codeNamespace(id)
-                && (job.kind === 'backfill' || job.kind === 'build')
-                && (job.generation_id === null
-                  ? currentGenerationIds.size === 0
-                  : currentGenerationIds.has(job.generation_id)))))
-          .sort((left, right) => right.id - left.id)[0]
+        ? (await readCurrentProjectJobs(deps.semanticJobs,
+          [{ projectId: id, generationIds: [...currentGenerationIds], pausedOnly: true }], c.req.raw.signal))[0]
         : undefined;
       const job = pausedJob
         ? deps.semanticCoordinator.resumeJob(pausedJob.id)

@@ -57,7 +57,10 @@ export function buildFindToolsTool(
     name: 'find_tools',
     source: 'native',
     mutates: false,
-    parallelSafe: true,
+    parallelSafe: false,
+    riskLevel: 'read',
+    executionClass: 'control',
+    effectBoundary: 'control',
     description:
       'Find tools by capability — searches tool NAMES, DESCRIPTIONS, and ARGUMENT names ' +
       '(lazy discovery for tools NOT in your visible list).\n\n' +
@@ -93,9 +96,15 @@ export function buildFindToolsTool(
       additionalProperties: false,
     },
     handler: async (args, ctx): Promise<ToolResult> => {
+      ctx.signal?.throwIfAborted();
+      ctx.ports?.discovery?.assertCurrent();
       const query = typeof args.query === 'string' ? args.query.trim() : '';
       if (!query) return err('find_tools: `query` is required and must be non-empty.');
-      const limit = Math.max(1, Math.min(10, Number(args.limit ?? 5) || 5));
+      if (query.length > 2_000) return err('find_tools: query exceeds 2000 characters.');
+      if (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 10)) {
+        return err('find_tools: limit must be an integer from 1 to 10.');
+      }
+      const limit = (args.limit as number | undefined) ?? 5;
 
       // Pull active tiers + pins from the runner via ctx if available.
       // Subagents and tests may not have a runner — in that case treat all
@@ -110,7 +119,7 @@ export function buildFindToolsTool(
         | undefined;
       const active = runner?.activeTiers ?? null;
       const pinned = runner?.pinnedTools;
-      const visibleToolNames = runner?.visibleToolNames;
+      const visibleToolNames = ctx.ports?.discovery?.visibleToolNames ?? runner?.visibleToolNames;
 
       const tokens = tokenizeQuery(query);
       if (tokens.length === 0) {
@@ -120,7 +129,7 @@ export function buildFindToolsTool(
       // External MCP servers can become ready after this runner was built
       // (notably Unity's editor broker). Reconcile before reading the mutable
       // registry so the same live session can discover the late catalogue.
-      if (options?.beforeSearch) {
+      if (options?.beforeSearch && !registry.isSealed) {
         try {
           await options.beforeSearch();
         } catch (e) {
@@ -129,6 +138,8 @@ export function buildFindToolsTool(
           );
         }
       }
+      ctx.signal?.throwIfAborted();
+      ctx.ports?.discovery?.assertCurrent();
 
       // Coverage knob: fraction of distinct query tokens that must hit for
       // the strict pass (default 0.5 — see passesStrict/passesRelaxed).
@@ -145,6 +156,7 @@ export function buildFindToolsTool(
       };
       const all: Scored[] = [];
       for (const t of registry.list()) {
+        if (ctx.ports?.discovery && !visibleToolNames?.has(t.name)) continue;
         const score = scoreTool(tokens, getToolText(t));
         if (score.hitCount === 0) continue;
         const tier = getToolTier(t.name, tierOverrides);

@@ -10,8 +10,9 @@
  * to leave its sandbox.
  */
 
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { getServiceSupervisorStores } from '@mcp/company/services/service-supervisor/stores.js';
 
 const DEFAULT_LINES = 200;

@@ -9,38 +9,10 @@ import {
   mintInboundBinding,
 } from './AttemptInboundBinding.js';
 import { AttemptFrameReceiverError } from './AttemptFrameReceiverError.js';
+import type { PendingState, PendingSnapshot } from './AttemptPendingState.js';
+export type { PendingSnapshot } from './AttemptPendingState.js';
 
 export type { InboundBinding } from './AttemptInboundBinding.js';
-
-interface PendingState {
-  receiverBinding: object;
-  token: bigint;
-  messageId: string;
-  streamSeq: bigint;
-  payloadCase: agentV1Runtime.FramePayload['body']['case'];
-  replyToMessageId?: string;
-  deadlineAtUnixMs?: bigint;
-  sentAtUnixMs: bigint;
-  terminalPayloadSha256?: Uint8Array;
-  providerOperationId?: string;
-  capabilityOperationId?: string;
-  capabilityToolUseId?: string;
-  capabilityGrantId?: string;
-  engineEventPayloadSha256?: Uint8Array;
-  engineEventLocalSequence?: bigint;
-  engineEventRuntimeInstanceId?: string;
-  envelopeDigest: Uint8Array;
-  header: agentV1Runtime.FrameHeader;
-  identity: agentV1Common.AttemptIdentity;
-  payload?: agentV1Runtime.FramePayload;
-  payloadDigest: Uint8Array;
-  inboundBinding?: InboundBinding;
-}
-
-export type PendingSnapshot = Omit<
-  PendingState,
-  'receiverBinding' | 'header' | 'identity' | 'payload' | 'inboundBinding'
->;
 
 export interface PendingInbound {
   header(): agentV1Runtime.FrameHeader;
@@ -120,9 +92,11 @@ export function inspectPending(pending: PendingInbound): PendingSnapshot {
     sentAtUnixMs: state.sentAtUnixMs,
     terminalPayloadSha256: state.terminalPayloadSha256?.slice(),
     providerOperationId: state.providerOperationId,
+    providerCheckpointOnly: state.providerCheckpointOnly,
     capabilityOperationId: state.capabilityOperationId,
     capabilityToolUseId: state.capabilityToolUseId,
     capabilityGrantId: state.capabilityGrantId,
+    capabilityBatchId: state.capabilityBatchId,
     engineEventPayloadSha256: state.engineEventPayloadSha256?.slice(),
     engineEventLocalSequence: state.engineEventLocalSequence,
     engineEventRuntimeInstanceId: state.engineEventRuntimeInstanceId,

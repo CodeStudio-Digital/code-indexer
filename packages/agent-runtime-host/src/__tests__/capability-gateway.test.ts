@@ -3,6 +3,7 @@ import { create, toBinary } from '@bufbuild/protobuf';
 import {
   agentV1Capability,
   agentV1Common,
+  agentV1SessionStore,
 } from '@mcp/agent-runtime-contracts';
 import { describe, expect, it, vi } from 'vitest';
 import { CapabilityGateway } from '../capability-gateway/CapabilityGateway.js';
@@ -163,11 +164,132 @@ describe('CapabilityGateway', () => {
       .rejects.toThrow(/authority is invalid/);
     expect(executeHost).not.toHaveBeenCalled();
   });
+
+  it('releases large terminal results while permanently refusing another dispatch of retired operations', async () => {
+    const executeHost = vi.fn(async () => ({ case: 'failed' as const, reasonCode: 'tool_failed', durationMs: 2n }));
+    const { gateway, request, grantId } = hostGateway(executeHost);
+    for (let index = 0; index < 1_000; index++) {
+      const next = prepare({ ...request, operationId: `operation/${index}`, toolUseId: `tool/${index}` });
+      await gateway.prepare(next);
+      await gateway.execute(execute(next, grantId));
+      const terminal = create(agentV1SessionStore.EngineEventRecordV1Schema, {
+        identity: identity(), localSequence: BigInt(index + 1), body: { case: 'capabilityTerminal', value: {
+          operationId: next.operationId, toolUseId: next.toolUseId, grantId,
+          classification: agentV1SessionStore.EngineCapabilityTerminalClassificationV1.FAILED,
+          reasonCode: 'tool_failed', durationMs: 2n,
+        } },
+      });
+      if (terminal.body.case !== 'capabilityTerminal') throw new Error('terminal');
+      if (index === 0) {
+        terminal.body.value.toolUseId = 'foreign';
+        await expect(gateway.retireCommitted(terminal)).rejects.toThrow(/contradicts/);
+        expect(gateway.executedOperationCount).toBe(1);
+        terminal.body.value.toolUseId = next.toolUseId;
+      }
+      await gateway.retireCommitted(terminal);
+      await gateway.retireCommitted(terminal);
+      expect(gateway.preparedOperationCount).toBe(0);
+      expect(gateway.executedOperationCount).toBe(0);
+      expect(() => gateway.prepare(next)).toThrow(/durable terminal/);
+      await expect(gateway.execute(execute(next, grantId))).rejects.toThrow(/no prepared/);
+    }
+    expect(executeHost).toHaveBeenCalledTimes(1_000);
+  });
+
+  it.each(['provider-turn:', 'codex-turn:'])('tombstones %s engine budget refusals without creating a Host grant', async prefix => {
+    const gateway = rejectingGateway();
+    const provider = prefix + identity().attemptId;
+    const request = prepare({ operationId: 'capability:' + Buffer.byteLength(provider) + ':' + provider + ':budget-tool', toolUseId: 'budget-tool' });
+    const record = create(agentV1SessionStore.EngineEventRecordV1Schema, { identity: identity(), body: {
+      case: 'capabilityRefused', value: { operationId: request.operationId, toolUseId: request.toolUseId,
+        decisionId: 'tool-budget:' + identity().attemptId + ':1:0', reasonCode: 'max_tool_calls',
+        policyVersion: 'sealed-run-tree-budget:v1', decidedAtUnixMs: NOW },
+    } });
+    if (record.body.case !== 'capabilityRefused') throw new Error('refusal');
+    record.body.value.reasonCode = 'policy_denied';
+    await expect(gateway.retireCommitted(record)).rejects.toThrow(/no preparation/);
+    record.body.value.reasonCode = 'max_tool_calls';
+    await gateway.retireCommitted(record);
+    await gateway.retireCommitted(record);
+    expect(gateway.preparedOperationCount).toBe(0);
+    expect(gateway.executedOperationCount).toBe(0);
+    expect(() => gateway.prepare(request)).toThrow(/durable terminal/);
+    record.body.value.toolUseId = 'foreign';
+    await expect(gateway.retireCommitted(record)).rejects.toThrow(/replay diverged/);
+  });
+
+  it('tombstones exact workspace-boundary refusals without authorizing their unopened effects', async () => {
+    const gateway = rejectingGateway();
+    const provider = 'provider-turn:' + identity().attemptId + ':2';
+    const request = prepare({ operationId: 'capability:' + Buffer.byteLength(provider) + ':' + provider + ':wrong-cwd', toolUseId: 'wrong-cwd' });
+    const record = create(agentV1SessionStore.EngineEventRecordV1Schema, { identity: identity(), body: {
+      case: 'capabilityRefused', value: { operationId: request.operationId, toolUseId: request.toolUseId,
+        decisionId: 'workspace-transition:' + identity().attemptId + ':2:1', reasonCode: 'workspace_transition',
+        policyVersion: 'sealed-workspace-transition:v1', decidedAtUnixMs: NOW },
+    } });
+    if (record.body.case !== 'capabilityRefused') throw new Error('refusal');
+    record.body.value.decisionId = 'workspace-transition:' + identity().attemptId + ':1:1';
+    await expect(gateway.retireCommitted(record)).rejects.toThrow(/no preparation/);
+    record.body.value.decisionId = 'workspace-transition:' + identity().attemptId + ':2:1';
+    record.body.value.policyVersion = 'unsealed';
+    await expect(gateway.retireCommitted(record)).rejects.toThrow(/no preparation/);
+    record.body.value.policyVersion = 'sealed-workspace-transition:v1';
+    await gateway.retireCommitted(record);
+    expect(gateway.preparedOperationCount).toBe(0);
+    expect(gateway.executedOperationCount).toBe(0);
+    expect(() => gateway.prepare(request)).toThrow(/durable terminal/);
+  });
+
+  it('retires denied operations only with the exact durable policy decision', async () => {
+    const gateway = rejectingGateway();
+    const request = prepare();
+    const decision = await gateway.prepare(request);
+    if (decision.decision.case !== 'rejected') throw new Error('expected rejection');
+    const record = create(agentV1SessionStore.EngineEventRecordV1Schema, {
+      identity: identity(), body: { case: 'capabilityRefused', value: {
+        decisionId: decision.decision.value.decisionId, reasonCode: decision.decision.value.reasonCode,
+        policyVersion: decision.decision.value.policyVersion, decidedAtUnixMs: decision.decision.value.decidedAtUnixMs,
+        operationId: request.operationId, toolUseId: request.toolUseId,
+      } },
+    });
+    await gateway.retireCommitted(record);
+    expect(gateway.preparedOperationCount).toBe(0);
+    expect(() => gateway.prepare(request)).toThrow(/durable terminal/);
+  });
+});
+
+it.each([
+  { count: 4, safe: true, mutates: false, valid: true },
+  { count: 1, safe: true, mutates: false, valid: false },
+  { count: 5, safe: true, mutates: false, valid: false },
+  { count: 2, safe: false, mutates: false, valid: false },
+  { count: 2, safe: true, mutates: true, valid: false },
+])('validates a Host batch before any dispatch: %j', async ({ count, safe, mutates, valid }) => {
+  const dispatch = vi.fn(async () => ({ case: 'failed' as const, reasonCode: 'unused', durationMs: 0n }));
+  const { gateway, request, grantId } = hostGateway(dispatch, () => NOW, () => safe);
+  const members = [];
+  for (let index = 0; index < count; index++) {
+    const member = { ...request, operationId: `batch/read/${index}`, toolUseId: `read/${index}`, mutates };
+    await gateway.prepare(member); members.push(execute(member, grantId));
+  }
+  const batch = create(agentV1Capability.CapabilityReadBatchExecuteSchema, {
+    identity: identity(), runtimeInstanceId: RUNTIME, batchId: 'batch/1', members,
+  });
+  if (valid) {
+    const detached = await gateway.validateReadBatch(batch);
+    batch.members[0]!.grantId = 'changed';
+    expect(detached.members[0]!.grantId).toBe(grantId);
+    await expect(gateway.validateReadBatch({ ...detached, members: [detached.members[0]!, detached.members[0]!] })).rejects.toThrow();
+    await expect(gateway.validateReadBatch({ ...detached, runtimeInstanceId: 'foreign' })).rejects.toThrow();
+    await expect(gateway.validateReadBatch({ ...detached, members: [{ ...detached.members[0]!, effectiveInputSha256: new Uint8Array(32) }, detached.members[1]!] })).rejects.toThrow();
+  } else await expect(gateway.validateReadBatch(batch)).rejects.toThrow();
+  expect(dispatch).not.toHaveBeenCalled();
 });
 
 function hostGateway(
   executeHost: HostCapabilityExecutor['execute'],
   nowUnixMs: () => bigint = () => NOW,
+  isParallelSafe?: HostCapabilityExecutor['isParallelSafe'],
 ) {
   const request = prepare({
     capabilityId: 'host.test_tool',
@@ -200,7 +322,7 @@ function hostGateway(
         }),
       };
     },
-  }, nowUnixMs, undefined, { execute: executeHost });
+  }, nowUnixMs, undefined, { execute: executeHost, isParallelSafe });
   return { gateway, request, grantId };
 }
 

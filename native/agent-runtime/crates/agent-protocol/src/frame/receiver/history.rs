@@ -120,6 +120,10 @@ impl MessageHistory {
         self.tracked_count() < self.total_capacity
     }
 
+    pub(super) fn remaining_identity_capacity(&self) -> usize {
+        self.total_capacity.saturating_sub(self.tracked_count())
+    }
+
     pub(super) fn active_count(&self) -> usize {
         self.active.len()
     }

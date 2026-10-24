@@ -8,7 +8,7 @@
  * (which uses plan.txt via the plan section), so a new AgentId without a
  * matching `<id>.txt` crashes the run with ENOENT. These tests fail at build
  * time instead — they would have caught the missing `api.txt`, a dropped
- * standalone prompt (summarizer / crash-recovery / design-system), or a
+ * standalone prompt (summarizer / crash-recovery), or a
  * base.txt `{{var}}` that no caller interpolates (which the loader silently
  * renders as an empty string).
  */
@@ -43,10 +43,9 @@ describe('agent mode prompts', () => {
 describe('standalone prompts', () => {
   // Prompts loaded OUTSIDE the buildSystemPrompt agent loop: compaction
   // summarizers (core/summarizer.ts), the crash-recovery briefing
-  // (company reestablish-master route), and the Design-System blocks
-  // (index.ts ds-studio + ds-consumer-prompt.ts). A rename/delete would break
+  // (company reestablish-master route). A rename/delete would break
   // those call sites at runtime with no other guard.
-  const STANDALONE = ['summarize', 'summarize-v2', 'master-recovery', 'ds-studio', 'ds-consumer'];
+  const STANDALONE = ['summarize', 'summarize-v2', 'master-recovery'];
   for (const name of STANDALONE) {
     it(`standalone prompt "${name}" is loadable`, () => {
       expect(() => loadPrompt(name)).not.toThrow();

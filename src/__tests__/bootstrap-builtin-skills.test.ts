@@ -145,7 +145,7 @@ describe('frontmatterToBuiltinUpsert', () => {
         trigger: {
           paths: ['**/manifest.json', '**/source-inventory.json'],
           roles: ['extractor'],
-          tags: ['design-system'],
+          tags: ['api-docs'],
         },
       } as Record<string, unknown>,
       'body',
@@ -154,7 +154,7 @@ describe('frontmatterToBuiltinUpsert', () => {
     expect(out.trigger_paths).toEqual(['**/manifest.json', '**/source-inventory.json']);
     expect(out.trigger_roles).toEqual(['extractor']);
     // trigger.tags is folded into the tags column with a `trigger:` prefix
-    expect(out.tags).toEqual(expect.arrayContaining(['trigger:design-system']));
+    expect(out.tags).toEqual(expect.arrayContaining(['trigger:api-docs']));
   });
 
   it('falls back to flat trigger-paths/trigger-roles when "trigger" object is absent', () => {
@@ -298,7 +298,7 @@ describe('ensureBuiltinSkills', () => {
       [
         '---',
         'name: ds-extractor',
-        'description: Extract DesignSystemManifestV2 from source-inventory shards.',
+        'description: Extract API schemas from source files.',
         'context-mode: auto',
         'trigger:',
         '  paths:',
@@ -307,7 +307,7 @@ describe('ensureBuiltinSkills', () => {
         '  roles:',
         '    - extractor',
         '  tags:',
-        '    - design-system',
+        '    - api-docs',
         'allowed-tools:',
         '  - read_file',
         '  - ds_validate_manifest',

@@ -1,5 +1,5 @@
 import type { JsonValue } from '@mcp/session-storage';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 
 export interface FilesystemSkillUsageStats {
   total_invocations: number;

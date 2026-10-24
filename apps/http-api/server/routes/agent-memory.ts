@@ -22,7 +22,12 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
     const query = (c.req.query('q') ?? '').trim();
     if (!query) return c.json({ results: [] });
     const limit = Math.min(50, Math.max(1, parseIntQuery(c, 'limit', 5)));
-    const results = await agentMemoryService.search('project', projectId, query, limit);
+    if (query.length > 4096) return c.json({ error: 'query exceeds 4096 characters' }, 400);
+    const signal = c.req.raw.signal;
+    signal.throwIfAborted();
+    const results = await agentMemoryService.search('project', projectId, query, limit, undefined, signal);
+    signal.throwIfAborted();
+    if (c.req.query('projection') === 'ids') return c.json({ results: results.map(row => ({ id: row.id, score: row.score })) });
     return c.json({ results });
   });
 

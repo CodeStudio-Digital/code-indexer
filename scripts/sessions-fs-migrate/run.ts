@@ -77,11 +77,8 @@ import {
 } from './fs-ops.js';
 import {
   findUnclassifiedSessionSchema,
+  TABLE_DISPOSITIONS,
 } from './manifest.js';
-import {
-  buildDesignSessionIdRemap,
-  validateProjectDesignSystemLinks,
-} from './design-system-links.js';
 import type {
   BundlePlan,
   CliOptions,
@@ -344,8 +341,15 @@ function expectedExportCounts(
   inventory: SourceInventory,
   orphanCleanup: Readonly<Record<string, import('./model.js').LegacyOrphanCleanupAudit>> = {},
 ): Record<string, number> {
+  const retiredFeatureTables = new Set(
+    TABLE_DISPOSITIONS
+      .filter((item) => item.kind === 'drop' && (item.exportOwner === 'sprite' || item.exportOwner === 'design'))
+      .map((item) => item.table),
+  );
   return Object.fromEntries(
-    Object.entries(inventory.tables).map(([table, value]) => {
+    Object.entries(inventory.tables)
+      .filter(([table]) => !retiredFeatureTables.has(table))
+      .map(([table, value]) => {
       const orphanRows = orphanCleanup[table]?.rows ?? 0;
       if (orphanRows > value.rows) {
         throw new Error(
@@ -353,7 +357,7 @@ function expectedExportCounts(
         );
       }
       return [table, value.rows - orphanRows];
-    }),
+      }),
   );
 }
 
@@ -562,10 +566,6 @@ async function dryRun(
     );
     validateSessionRootChains(plans, paths.dataDir, false);
     validateSessionRootWriteAccess(plans, paths.dataDir);
-    validateProjectDesignSystemLinks(
-      db,
-      buildDesignSessionIdRemap(plans),
-    );
     logger.info('dry-run resolving every session-scoped row to exactly one bundle', {
       bundles: plans.length,
     });
@@ -780,8 +780,6 @@ async function applyMigration(
     );
     validateSessionRootChains(plans, paths.dataDir, true);
     validateSessionRootWriteAccess(plans, paths.dataDir);
-    const designSessionIdRemap = buildDesignSessionIdRemap(plans);
-    validateProjectDesignSystemLinks(db, designSessionIdRemap);
     const roots = rootsForPlans(plans, paths.dataDir);
     validateRootsAndSpace(roots, paths.dbPath, inventory, false);
     const projectDatabases = discoverProjectDatabases(
@@ -812,7 +810,7 @@ async function applyMigration(
     runState.phase = 'exporting';
     persistState(statePath, runState);
 
-    const essential = captureEssentialDigest(db, { designSessionIdRemap });
+    const essential = captureEssentialDigest(db);
     const sealer = await createElectronSecretSealer();
     for (let index = 0; index < plans.length; index += 1) {
       const plan = plans[index];
@@ -854,7 +852,6 @@ async function applyMigration(
 
     const preparedProjectDatabases = prepareCleanProjectDatabases(
       projectDatabaseAudits,
-      designSessionIdRemap,
       inventory.dbFingerprint,
     );
 
@@ -864,7 +861,7 @@ async function applyMigration(
       paths.dbPath,
       cleanDbPath,
       essential,
-      { designSessionIdRemap },
+      {},
     );
     await smokeCodeIndexDatabase(cleanDbPath, cleanEssential);
     runState.clean_clone_path = cleanDbPath;

@@ -14,10 +14,12 @@
  * so the handler can open a short-lived SkillStore and validate tool names.
  */
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ResolvedSkill, SkillContextMode } from '@mcp/code-agent/skills/types.js';
-import { SkillStore, toResolved, type UpsertSkillInput } from '@mcp/store/skill-store.js';
+import { SkillStore, type UpsertSkillInput } from '@mcp/store/skill-store.js';
+import { setImmediate as yieldToEvents } from 'node:timers/promises';
+import { validateSkillInput } from './create-skill-validation.js';
 import { evalSkillTriggers } from '@mcp/code-agent/tools/skill-trigger-eval.js';
 import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 
@@ -43,6 +45,7 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
     effectBoundary: 'control',
     source: 'native',
     mutates: true,
+    parallelSafe: false,
     riskLevel: 'write',
     description:
       'Author a NEW skill or update an existing one (reuse its id to update). A skill is a reusable prompt package that the agent loads on demand. ' +
@@ -61,7 +64,7 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
         context_mode: { type: 'string', enum: CONTEXT_MODES, description: 'auto = inject when triggers match; tool = invocable via invoke_skill; both. Default auto.' },
         trigger_paths: { type: 'array', items: { type: 'string' }, description: 'Glob patterns; auto-loads when recent files match (e.g. "**/*.test.ts").' },
         trigger_roles: { type: 'array', items: { type: 'string' }, description: 'Subordinate roles that auto-load this skill (e.g. ["extractor"]).' },
-        trigger_tags: { type: 'array', items: { type: 'string' }, description: 'Session tags that auto-load this skill (e.g. ["design-system"]).' },
+        trigger_tags: { type: 'array', items: { type: 'string' }, description: 'Session tags that auto-load this skill (e.g. ["qa"]).' },
         allowed_tools: { type: 'array', items: { type: 'string' }, description: 'Optional. Restrict the skill to this tool subset. Names are validated against the registry.' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Free-form tags for filtering.' },
         scope: { type: 'string', enum: ['global', 'project'], description: 'global (all projects, default) or project (current project only).' },
@@ -73,6 +76,8 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
       additionalProperties: false,
     },
     handler: async (args, ctx): Promise<ToolResult> => {
+      ctx.signal?.throwIfAborted();
+      try { validateSkillInput(args); } catch (error) { return err(error instanceof Error ? error.message : String(error)); }
       const id = String(args.id ?? '').trim();
       const name = String(args.name ?? '').trim();
       const description = String(args.description ?? '').trim();
@@ -99,8 +104,11 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
       const warnings: string[] = [];
       if (!description) warnings.push('description is empty — the agent relies on it to discover the skill. Add a specific one-liner.');
 
-      const store = new SkillStore(deps.dbPath);
+      let store: SkillStore | undefined;
+      let dispatched = false;
       try {
+        // No synchronous SQLite busy wait may stall cancellation in this worker.
+        store = new SkillStore(deps.dbPath, { busyTimeoutMs: 0 });
         // Validate allowed_tools against the live registry (catches typos).
         if (allowedTools) {
           const known = new Set(deps.registry.list().map((t) => t.name));
@@ -115,10 +123,12 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
         }
 
         const existing = store.getSkill(id);
+        if (existing && existing.scope !== 'global' && existing.scope !== String(deps.projectId)) return err('create_skill: this ID belongs to another project. Choose a different ID.');
+        if (args.scope === 'project' && (!Number.isSafeInteger(deps.projectId) || deps.projectId <= 0)) return err('create_skill: project scope requires a current project.');
         const isUpdate = !!existing;
 
         // Trigger eval against the current enabled catalog.
-        const catalog = store.listSkills({ enabled: true }).map(toResolved);
+        const catalog = store.listSkillTriggerCatalog(deps.projectId);
         const candidate: ResolvedSkill = {
           id, name, description, slashCommand,
           promptBody, allowedTools,
@@ -128,7 +138,9 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
           tags: baseTags, source: 'user', author: null,
           sortOrder: typeof args.sort_order === 'number' ? args.sort_order : 0,
         };
-        const triggerReport = evalSkillTriggers(candidate, catalog);
+        const triggerReport = evalSkillTriggers(candidate, catalog.items);
+        if (catalog.partial) warnings.push(`Trigger collisions checked in a bounded sample (${catalog.items.length}/${catalog.totalCount} skills); some definitions or metadata were omitted.`);
+        await yieldToEvents(); ctx.signal?.throwIfAborted();
 
         const header = `${dryRun ? '[dry run] ' : ''}${isUpdate ? 'Update' : 'Create'} skill "${id}"${slashCommand ? ` (/${slashCommand})` : ''}`;
         const reportText = [
@@ -143,7 +155,7 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
           return ok(`${reportText}\n\nValidation passed. Call again without dry_run to persist.`);
         }
 
-        const scope = args.scope === 'project' ? String(deps.projectId) : 'global';
+        const scope = args.scope === 'project' ? String(deps.projectId) : args.scope === 'global' ? 'global' : existing?.scope ?? 'global';
         const tags = [...new Set([...baseTags, ...(triggerTags ?? []).map((t) => `trigger:${t}`)])];
         const upsert: UpsertSkillInput = {
           id, name, description,
@@ -160,18 +172,19 @@ export function buildCreateSkillTool(deps: CreateSkillDeps): CoderTool {
           version: typeof args.version === 'string' && args.version.trim() ? args.version.trim() : '1.0.0',
           source: 'user',
         };
-        assertMutationFence(ctx.mutationFence, {
-          kind: 'control',
-          operation: 'create_skill.upsert',
-          resource: id,
-        });
-        store.upsertSkill(upsert);
+        const beforeWrite = () => {
+          ctx.signal?.throwIfAborted();
+          assertMutationFence(ctx.mutationFence, { kind: 'control', operation: 'create_skill.upsert', resource: id });
+        };
+        beforeWrite(); dispatched = true;
+        store.upsertAuthoredSkill(upsert, deps.projectId, beforeWrite);
 
-        return ok(`${reportText}\n\n✓ ${isUpdate ? 'Updated' : 'Created'} and saved (scope=${scope === 'global' ? 'global' : 'project'}). ${slashCommand ? `Available as /${slashCommand}.` : 'Discoverable via get_skills_list.'}`);
+        return ok(`${reportText}\n\n✓ ${isUpdate ? 'Updated' : 'Created'} and saved (scope=${scope === 'global' ? 'global' : 'project'}). ${slashCommand ? `Available as /${slashCommand}. ` : ''}The next attempt will load the updated skill catalog.`);
       } catch (e) {
+        if (dispatched) return unknownToolOutcome(`create_skill did not confirm its commit: ${e instanceof Error ? e.message : String(e)}. Read the existing skill before retrying.`);
         return err(`create_skill failed: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
-        store.close();
+        store?.close();
       }
     },
   };

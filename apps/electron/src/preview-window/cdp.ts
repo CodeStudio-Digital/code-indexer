@@ -7,6 +7,7 @@
  * can block until the console/network responds (Unity-style).
  */
 import type { BrowserWindow } from 'electron';
+import { assertPreviewDispatch } from './dispatch-scope.js';
 
 export interface Viewport {
   width: number;
@@ -120,6 +121,7 @@ export class PreviewWindow {
     const preview = new PreviewWindow(win, url);
     const dbg = win.webContents.debugger;
     try {
+      assertPreviewDispatch();
       if (!dbg.isAttached()) dbg.attach('1.3');
       if (!dbg.isAttached()) throw new Error('debugger did not attach');
       // Start CDP capture before navigation so the initial console/network
@@ -129,7 +131,7 @@ export class PreviewWindow {
       const pending = new Set<string>(CDP_DOMAINS);
       const initialize = Promise.all(
         CDP_DOMAINS.map((domain) =>
-          dbg.sendCommand(`${domain}.enable`).finally(() => pending.delete(domain)),
+          preview.send(`${domain}.enable`).finally(() => pending.delete(domain)),
         ),
       );
       const boundedInitialize = new Promise<void>((resolve, reject) => {
@@ -146,7 +148,7 @@ export class PreviewWindow {
       });
       if (navigate) await Promise.all([boundedInitialize, navigate()]);
       else await boundedInitialize;
-      await dbg.sendCommand('Page.setLifecycleEventsEnabled', { enabled: true });
+      await preview.send('Page.setLifecycleEventsEnabled', { enabled: true });
       return preview;
     } catch (error) {
       preview.close();
@@ -155,6 +157,7 @@ export class PreviewWindow {
   }
 
   async send(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    assertPreviewDispatch();
     return this.win.webContents.debugger.sendCommand(method, params ?? {});
   }
 
@@ -304,7 +307,10 @@ export class PreviewWindow {
     try { this.win.webContents.debugger.removeListener('message', this.onMessage); } catch { /* gone */ }
     try { this.win.webContents.debugger.removeListener('detach', this.onDetach); } catch { /* gone */ }
     try { this.win.webContents.debugger.detach(); } catch { /* gone */ }
-    try { this.win.close(); } catch { /* gone */ }
+    // close() can be vetoed by a page's beforeunload handler. Teardown is an
+    // ownership barrier: a detached debugger is not proof the window is gone.
+    if (!this.win.isDestroyed()) this.win.destroy();
+    if (!this.win.isDestroyed()) throw new Error('Preview window destruction is unconfirmed');
   }
 
   private push<T>(buf: T[], item: T): void {

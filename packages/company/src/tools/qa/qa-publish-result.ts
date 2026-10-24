@@ -8,8 +8,9 @@
  * routes) lands in phase 2 — for now the badge re-derives state from
  * the live event stream + buffered SSE replay.
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { publish as busPublish } from '@apps/http-api/coder-bus.js';
 import type {

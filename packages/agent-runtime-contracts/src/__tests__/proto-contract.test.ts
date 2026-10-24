@@ -96,7 +96,8 @@ describe('Rust agent V1 Protobuf contract', () => {
     const sessionStoreImports = [
       ...sessionStore.matchAll(/import "([^"]+)";/g),
     ].map((match) => match[1]);
-    expect(sessionStoreImports).toEqual(['codestudio/agent/v1/common.proto']);
+    expect(sessionStoreImports).toEqual(['codestudio/agent/v1/common.proto',
+      'codestudio/agent/v1/artifact.proto', 'codestudio/agent/v1/supervisor_bootstrap.proto']);
 
     for (const imported of [
       ...runtimeImports,
@@ -443,6 +444,19 @@ describe('Rust agent V1 Protobuf contract', () => {
       capability_update: 39,
       capability_execute: 40,
       capability_execution_result: 41,
+      capability_read_batch_execute: 42,
+      capability_read_batch_accepted: 43,
+      capability_read_batch_result: 44,
+      provider_checkpoint: 45,
+      provider_checkpoint_committed: 46,
+      provider_event_consumed: 47,
+      provider_request_chunk: 48,
+      provider_request_chunk_accepted: 49,
+      provider_request_commit: 50,
+    });
+    expect(fieldTags(messages.get('ProviderStart')!).get('consumption_ack_required')).toBe(15);
+    expect(Object.fromEntries(fieldTags(messages.get('ProviderEventConsumed')!))).toEqual({
+      identity: 1, operation_id: 2, event_sequence: 3,
     });
     expect(Object.fromEntries(fieldTags(messages.get('EngineEventProposal')!))).toEqual({
       identity: 1,
@@ -527,6 +541,19 @@ describe('Rust agent V1 Protobuf contract', () => {
       thinking_budget_tokens: 6,
       previous_response_id: 7,
       previous_response_message_count: 8,
+      prepared_user_context: 9,
+      prepared_boundary_context: 10,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('ProviderRequestChunk')!))).toEqual({
+      identity: 1, runtime_instance_id: 2, operation_id: 3, total_bytes: 4,
+      request_sha256: 5, chunk_offset: 6, encoded_chunk: 7, checkpoint_only: 8,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('ProviderRequestCommit')!))).toEqual({
+      identity: 1, runtime_instance_id: 2, operation_id: 3, total_bytes: 4,
+      request_sha256: 5, checkpoint_only: 6,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('ProviderPreparedUserContextV1')!))).toEqual({
+      message_index: 1, selected_skill_ids: 2, content_utf8: 3,
     });
     expect(Object.fromEntries(fieldTags(messages.get('ProviderToolDescriptor')!))).toEqual({
       capability_name: 1,
@@ -537,6 +564,8 @@ describe('Rust agent V1 Protobuf contract', () => {
       capability_version: 6,
       execution_class: 7,
       mutates: 8,
+      parallel_safe: 9,
+      read_only: 10,
     });
     expect(Object.fromEntries(
       fieldTags(messages.get('AgentDefinitionSnapshotV1')!),
@@ -665,6 +694,8 @@ describe('Rust agent V1 Protobuf contract', () => {
       terminal: 15,
       capability_dispatch_started: 16,
       capability_terminal: 17,
+      content: 18,
+      capability_refused: 19,
     });
     expect(Object.fromEntries(
       fieldTags(messages.get('EngineProviderDeltaRecordV1')!),
@@ -689,6 +720,11 @@ describe('Rust agent V1 Protobuf contract', () => {
       close_session_writer: 16,
       read_committed_session_payload: 17,
       list_committed_session_records: 18,
+      open_session_reader: 19,
+      close_session_reader: 20,
+      acquire_storage_root_lock: 21,
+      release_storage_root_lock: 22,
+      inspect_supervisor_lifecycle_evidence: 23,
     });
     expect(Object.fromEntries(fieldTags(messages.get('CommitSessionRecordReceipt')!))).toEqual({
       session_id: 1,
@@ -721,6 +757,7 @@ describe('Rust agent V1 Protobuf contract', () => {
       kind: 4,
       expected_payload_sha256: 5,
       expected_payload_bytes: 6,
+      reader_handle: 7,
     });
     expect(Object.fromEntries(fieldTags(messages.get('CommittedSessionPayload')!))).toEqual({
       commit_receipt: 1,
@@ -733,6 +770,8 @@ describe('Rust agent V1 Protobuf contract', () => {
       authority: 2,
       after_global_sequence: 3,
       max_records: 4,
+      snapshot_id: 5,
+      reader_handle: 6,
     });
     expect(Object.fromEntries(
       fieldTags(messages.get('CommittedSessionRecordPage')!),
@@ -741,6 +780,7 @@ describe('Rust agent V1 Protobuf contract', () => {
       records: 2,
       next_global_sequence: 3,
       complete: 4,
+      snapshot_id: 5,
     });
 
     const declarations = stripComments(sessionStore);
@@ -866,6 +906,17 @@ describe('Rust agent V1 Protobuf contract', () => {
         expect(Number(firstValue![2]), `enum ${name}`).toBe(0);
       }
     }
+  });
+
+  it('freezes the verified resume frontier fields', () => {
+    expect(Object.fromEntries(fieldTags(namedBlocks(runtime, 'message').get('ProviderResumeContextV1')!))).toEqual({
+      schema_version: 1, session_id: 2, agent_run_id: 3, source_attempt_id: 4,
+      provider_binding: 5, context: 6, unresolved_capability_operation_ids: 7,
+    });
+    expect(Object.fromEntries(fieldTags(namedBlocks(runtime, 'message').get('ProviderFrontierRecordV1')!))).toEqual({
+      schema_version: 1, operation_id: 2, frontier: 3, base_operation_id: 4,
+      retained_message_count: 5, base_frontier_sha256: 6, frontier_sha256: 7,
+    });
   });
 
   it('does not reuse a field number inside any message', () => {

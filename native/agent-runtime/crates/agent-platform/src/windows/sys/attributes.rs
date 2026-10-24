@@ -6,7 +6,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Threading::{
     DeleteProcThreadAttributeList, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST, UpdateProcThreadAttribute,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, UpdateProcThreadAttribute,
 };
 
 use crate::containment::ChildHandleAllowlist;
@@ -28,7 +29,9 @@ impl ProcessAttributeList {
         job: &OwnedHandle,
         allowlist: &ChildHandleAllowlist,
     ) -> Result<Self, WindowsContainmentError> {
-        let attribute_count = if allowlist.is_empty() { 1 } else { 2 };
+        let attribute_count = 1
+            + u32::from(!allowlist.is_empty())
+            + u32::from(allowlist.windows_pseudoconsole_raw().is_some());
         let mut required_bytes = 0_usize;
         // SAFETY: the documented sizing call uses a null list and writes only
         // the required byte count.
@@ -109,6 +112,27 @@ impl ProcessAttributeList {
             {
                 return Err(WindowsContainmentError::last_os_error(
                     "UpdateProcThreadAttribute(HANDLE_LIST)",
+                ));
+            }
+        }
+        if let Some(console) = allowlist.windows_pseudoconsole_raw() {
+            // SAFETY: the opaque console authority remains live in allowlist
+            // through CreateProcessW. This attribute takes HPCON itself, not
+            // the address of a handle, unlike HANDLE_LIST/JOB_LIST.
+            if unsafe {
+                UpdateProcThreadAttribute(
+                    result.list,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+                    console as *const c_void,
+                    size_of::<isize>(),
+                    ptr::null_mut(),
+                    ptr::null(),
+                )
+            } == 0
+            {
+                return Err(WindowsContainmentError::last_os_error(
+                    "UpdateProcThreadAttribute(PSEUDOCONSOLE)",
                 ));
             }
         }

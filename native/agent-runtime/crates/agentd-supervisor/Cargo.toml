@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 agent-platform = { path = "../agent-platform" }
 agent-protocol = { path = "../agent-protocol" }
+agent-lifecycle-store = { path = "../agent-lifecycle-store" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time"] }
 zeroize = { workspace = true }
 

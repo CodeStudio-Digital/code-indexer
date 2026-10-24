@@ -27,7 +27,7 @@ import type {
   CanonicalAgentEvent,
   EventCursor,
   InteractionResponse,
-  PreparedAgentAttempt,
+  ExecutableAgentAttempt,
   ResumeAgentCommand,
   StartAgentCommand,
 } from './types.js';
@@ -98,7 +98,7 @@ export class AgentRuntimeFacade implements AgentRuntimeFacadeApi {
   }
 
   private async launchPrepared(
-    prepared: PreparedAgentAttempt,
+    prepared: ExecutableAgentAttempt,
   ): Promise<AgentRunHandleApi> {
     let phase: AttemptStartFailurePhase = 'routing';
     try {
@@ -116,7 +116,7 @@ export class AgentRuntimeFacade implements AgentRuntimeFacadeApi {
   }
 
   private createHandle(
-    prepared: PreparedAgentAttempt,
+    prepared: ExecutableAgentAttempt,
     route: RuntimeRouteRecord,
   ): AgentRunHandle {
     return new AgentRunHandle({
@@ -155,7 +155,7 @@ export class AgentRuntimeFacade implements AgentRuntimeFacadeApi {
   }
 
   private async validatePreparedCommand(
-    prepared: PreparedAgentAttempt,
+    prepared: ExecutableAgentAttempt,
     command: StartAgentCommand | ResumeAgentCommand,
     expectedAgentRunId?: AgentRunId,
   ): Promise<void> {
@@ -168,7 +168,7 @@ export class AgentRuntimeFacade implements AgentRuntimeFacadeApi {
   }
 
   private async commitStartFailure(
-    prepared: PreparedAgentAttempt,
+    prepared: ExecutableAgentAttempt,
     phase: AttemptStartFailurePhase,
     error: unknown,
   ): Promise<void> {

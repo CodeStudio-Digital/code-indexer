@@ -14,6 +14,7 @@ use crate::provider_data::{ProviderDataClient, ProviderDataClock, ProviderDataTi
 
 mod error;
 mod mapping;
+mod read_batch;
 
 pub use error::CapabilityGatewayError;
 use mapping::{decision_from_wire, execution_class_to_wire, outcome_from_wire};
@@ -27,6 +28,22 @@ pub struct CapabilityDataGateway<S, C> {
     clock: Arc<C>,
     capability_set_sha256: [u8; 32],
     maximum_input_bytes: usize,
+    read_members: Vec<(CapabilityInvocation, SealedExecutionGrant)>,
+}
+
+impl<S, C> Clone for CapabilityDataGateway<S, C> {
+    fn clone(&self) -> Self {
+        Self {
+            client: Arc::clone(&self.client),
+            identity: self.identity.clone(),
+            runtime_instance_id: self.runtime_instance_id.clone(),
+            timing: self.timing,
+            clock: Arc::clone(&self.clock),
+            capability_set_sha256: self.capability_set_sha256,
+            maximum_input_bytes: self.maximum_input_bytes,
+            read_members: self.read_members.clone(),
+        }
+    }
 }
 
 impl<S, C> CapabilityDataGateway<S, C> {
@@ -48,6 +65,7 @@ impl<S, C> CapabilityDataGateway<S, C> {
             clock,
             capability_set_sha256,
             maximum_input_bytes,
+            read_members: Vec::new(),
         }
     }
 }

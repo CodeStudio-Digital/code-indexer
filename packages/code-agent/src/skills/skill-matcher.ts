@@ -11,7 +11,7 @@
  *
  *   - `trigger.roles` — a subordinate role name (e.g. `extractor`) that
  *     auto-loads the skill. Strongest signal: confidence 1.0.
- *   - `trigger.tags` — session-level tags (e.g. `design-system`). Stored
+ *   - `trigger.tags` — session-level tags (e.g. `qa`). Stored
  *     as `trigger:<tag>` markers in the flat tags column. Confidence 0.7.
  *   - `trigger.paths` — glob patterns matched against `recentFiles`.
  *     Confidence 0.6.
@@ -22,6 +22,7 @@
  */
 import { minimatch } from 'minimatch';
 import type { ResolvedSkill } from '@mcp/code-agent/skills/types.js';
+import type { SkillTriggerDefinition } from '@mcp/store/skill-types.js';
 
 export interface SkillMatchContext {
   /** Subordinate role (e.g. 'extractor') or 'master' for the orchestrator. */
@@ -36,7 +37,7 @@ export interface SkillMatchContext {
    */
   recentFiles?: string[];
   /**
-   * Session-level tags (e.g. ['design-system', 'qa']). Compared against
+   * Session-level tags (e.g. ['qa']). Compared against
    * each skill's `triggerTags`.
    */
   sessionTags?: string[];
@@ -70,7 +71,7 @@ const PATH_CONFIDENCE = 0.6;
  * cumulative.
  */
 export function scoreSkill(
-  skill: ResolvedSkill,
+  skill: SkillTriggerDefinition,
   ctx: SkillMatchContext,
 ): { confidence: number; reason: string } | null {
   if (skill.triggerRoles && ctx.role && skill.triggerRoles.includes(ctx.role)) {
@@ -105,15 +106,15 @@ export function scoreSkill(
  * `matchReason` so the caller can render explainability ("ds-extractor
  * [trigger:role=extractor]") and feed telemetry.
  */
-export function matchSkills(
-  skills: ResolvedSkill[],
+export function matchSkills<T extends SkillTriggerDefinition>(
+  skills: T[],
   ctx: SkillMatchContext,
   opts: SkillMatchOptions = {},
-): MatchedSkill[] {
+): Array<T & Pick<MatchedSkill, 'matchConfidence' | 'matchReason'>> {
   const threshold = opts.threshold ?? DEFAULT_THRESHOLD;
   const topK = opts.topK ?? DEFAULT_TOP_K;
 
-  const matched: MatchedSkill[] = [];
+  const matched: Array<T & Pick<MatchedSkill, 'matchConfidence' | 'matchReason'>> = [];
   for (const skill of skills) {
     if (skill.contextMode === 'tool') continue;
     const score = scoreSkill(skill, ctx);

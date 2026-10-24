@@ -1,196 +1,94 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { DiscoveredModel, ProviderName } from '@mcp/shared/types.js';
-import { ProviderStore } from '@mcp/store/provider-store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
 import { listDefinitions } from '@mcp/services/providers/registry.js';
+import { readModelPage, type ModelPage } from './model-catalog-read.js';
+import { fetchDiscoveryModels } from './model-discovery-fetch.js';
 
-/**
- * Hardcoded fallback models are now pulled from the provider registry:
- * each definition declares its `defaultModels`. When live discovery or
- * the provider_models DB table is empty we fall back to those.
- */
-function getHardcodedModels(kind: string): DiscoveredModel[] {
-  const def = listDefinitions().find((d) => d.kind === kind);
-  if (!def) return [];
-  return def.defaultModels.map((id) => ({
-    id,
-    provider: kind as ProviderName,
-    name: id,
-    capabilities: ['text'],
-    cached_at: '',
+export interface ModelDiscoveryOptions {
+  signal?: AbortSignal;
+  /** Tool reads never mutate the shared cache. Admin/CLI callers retain it. */
+  persistCache?: boolean;
+  onFallback?: (provider: string, reason: string) => void;
+}
+
+function defaults(kind: string): DiscoveredModel[] {
+  return (listDefinitions().find(d => d.kind === kind)?.defaultModels ?? []).map(id => ({
+    id, provider: kind as ProviderName, name: id, capabilities: ['text'], cached_at: '',
   }));
 }
 
-function getApiKeyEnv(kind: string): string | undefined {
-  const def = listDefinitions().find((d) => d.kind === kind);
-  return def?.envVars[0];
-}
-
 export class ModelDiscovery {
-  private providerStore: ProviderStore | null = null;
+  constructor(private db: CodeIndexDB) {}
 
-  constructor(private db: CodeIndexDB) {
-    // Reuse the same ProviderStore the admin UI + coder factory talk to,
-    // so the indexer's model list is always the same one the dashboard
-    // shows. Opened lazily so tests without a DB still work.
-    try {
-      const cfg = loadConfig();
-      this.providerStore = new ProviderStore(cfg.dbPath);
-    } catch {
-      this.providerStore = null;
+  /** A bounded projection for tool callers. The admin catalog is paged in SQL. */
+  async discoverPage(provider: ProviderName | undefined, live: boolean, offset: number, limit: number,
+    options: ModelDiscoveryOptions = {}): Promise<ModelPage> {
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error('Invalid model catalog page');
     }
+    options.signal?.throwIfAborted();
+    if (!live) {
+      const page = readModelPage(this.db, provider, offset, limit);
+      if (page.total) return page;
+    }
+    const all = await this.discoverModels(provider, live, { ...options, persistCache: false });
+    options.signal?.throwIfAborted();
+    const models = all.slice(offset, offset + limit);
+    return { models, total: all.length, offset,
+      ...(offset + models.length < all.length ? { next_offset: offset + models.length } : {}) };
   }
 
-  /**
-   * List models available for the indexer. SINGLE SOURCE OF TRUTH is the
-   * `provider_models` table (what the admin UI writes). We only fall back
-   * to the legacy live-fetch / hardcoded path when that table is empty,
-   * so brand-new installations can still surface something. When `live`
-   * is true we force a fresh refresh by bypassing the DB.
-   */
-  async discoverModels(provider?: ProviderName, live: boolean = false): Promise<DiscoveredModel[]> {
-    // 1. Preferred path — read provider_models directly. This covers
-    //    every kind (anthropic/openai/copilot/chatgpt/gemini/zai/...)
-    //    and the list is exactly what the admin card shows.
-    if (!live && this.providerStore) {
-      const fromStore = this.readFromProviderModels(provider);
-      if (fromStore.length > 0) return fromStore;
+  /** Default listing is local only. An explicit live refresh has one 10s budget,
+   * including body transfer, and at most four concurrent provider reads. */
+  async discoverModels(provider?: ProviderName, live = false, options: ModelDiscoveryOptions = {}): Promise<DiscoveredModel[]> {
+    options.signal?.throwIfAborted();
+    if (!live) {
+      const page = readModelPage(this.db, provider, 0, -1);
+      if (page.total) return page.models;
     }
-
-    // 2. Legacy fallback — cache / live fetch / registry defaults.
-    //    Provider list comes from the registry (no hardcoded array).
-    const allKinds = listDefinitions().map((d) => d.kind);
-    const providers: string[] = provider
-      ? [provider]
-      : allKinds;
-
-    const allModels: DiscoveredModel[] = [];
-
-    for (const p of providers) {
-      if (!live) {
-        const cached = this.db.getCachedModels(p as ProviderName);
-        if (cached) {
-          allModels.push(...cached);
-          continue;
+    const definitions = listDefinitions();
+    const kinds = provider ? [provider] : definitions.map(d => d.kind);
+    const results: DiscoveredModel[][] = new Array(kinds.length);
+    const deadline = new AbortController();
+    const timer = live ? setTimeout(() => deadline.abort(new DOMException('Model discovery deadline exceeded', 'TimeoutError')), 10_000) : undefined;
+    timer?.unref();
+    const signal = options.signal ? AbortSignal.any([options.signal, deadline.signal]) : deadline.signal;
+    let next = 0;
+    const read = async () => {
+      while (next < kinds.length) {
+        const index = next++, kind = kinds[index]; signal.throwIfAborted();
+        const cached = this.db.getCachedModels(kind as ProviderName);
+        if (!live) { results[index] = cached ?? defaults(kind); continue; }
+        const envVar = definitions.find(d => d.kind === kind)?.envVars[0];
+        const apiKey = envVar ? process.env[envVar] : undefined;
+        if (!apiKey) {
+          options.onFallback?.(kind, 'No environment credential for live listing; showing local catalog. Use the provider settings to refresh OAuth or custom providers.');
+          results[index] = this.localFallback(kind, cached); continue;
+        }
+        try {
+          const models = await fetchDiscoveryModels(kind as ProviderName, apiKey, signal);
+          signal.throwIfAborted();
+          if (options.persistCache !== false) this.db.setCachedModels(kind as ProviderName, models);
+          results[index] = models;
+        } catch {
+          // Cancellation is never converted into defaults or followed by a write.
+          signal.throwIfAborted();
+          options.onFallback?.(kind, 'Live listing failed; showing local catalog.');
+          results[index] = this.localFallback(kind, cached);
         }
       }
-
-      const envVar = getApiKeyEnv(p);
-      const apiKey = envVar ? process.env[envVar] : undefined;
-      if (!apiKey) {
-        allModels.push(...getHardcodedModels(p));
-        continue;
-      }
-
-      try {
-        const models = await this.fetchModels(p as ProviderName, apiKey);
-        this.db.setCachedModels(p as ProviderName, models);
-        allModels.push(...models);
-      } catch {
-        allModels.push(...getHardcodedModels(p));
-      }
-    }
-
-    return allModels;
+    };
+    try {
+      // Wait for every in-flight fetch to settle before releasing the caller.
+      const outcomes = await Promise.allSettled(Array.from({ length: Math.min(4, kinds.length) }, read));
+      signal.throwIfAborted();
+      for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+      return results.flat();
+    } finally { if (timer) clearTimeout(timer); }
   }
 
-  /**
-   * Pull `provider_models` rows from the ProviderStore and shape them as
-   * the legacy DiscoveredModel type. Returns [] if the store is empty or
-   * unavailable so the caller can fall back to the live/hardcoded path.
-   */
-  private readFromProviderModels(providerFilter?: ProviderName | string): DiscoveredModel[] {
-    if (!this.providerStore) return [];
-    const providers = this.providerStore.listProviders({ enabled: true });
-    const now = new Date().toISOString();
-    const out: DiscoveredModel[] = [];
-    for (const p of providers) {
-      if (providerFilter && p.id !== providerFilter && p.kind !== providerFilter) continue;
-      const models = this.providerStore.listModels(p.id, true);
-      for (const m of models) {
-        out.push({
-          id: m.model_id,
-          provider: (p.id as ProviderName) ?? (p.kind as ProviderName),
-          name: m.name,
-          capabilities: ['text'],
-          cached_at: now,
-        });
-      }
-    }
-    return out;
-  }
-
-  private async fetchModels(provider: ProviderName, apiKey: string): Promise<DiscoveredModel[]> {
-    const now = new Date().toISOString();
-
-    switch (provider) {
-      case 'anthropic':
-        return this.fetchAnthropicModels(apiKey, now);
-      case 'openai':
-        return this.fetchOpenAICompatModels('https://api.openai.com/v1/models', apiKey, 'openai', now);
-      case 'openrouter':
-        return this.fetchOpenAICompatModels('https://openrouter.ai/api/v1/models', apiKey, 'openrouter', now);
-      case 'deepseek':
-        return this.fetchOpenAICompatModels('https://api.deepseek.com/models', apiKey, 'deepseek', now);
-      case 'zai':
-        return this.fetchOpenAICompatModels('https://api.z.ai/api/paas/v4/models', apiKey, 'zai', now);
-      case 'kimi-code':
-        return this.fetchOpenAICompatModels('https://api.kimi.com/coding/v1/models', apiKey, 'kimi-code', now);
-      case 'gemini':
-        return this.fetchGeminiModels(apiKey, now);
-      default:
-        return getHardcodedModels(provider);
-    }
-  }
-
-  private async fetchAnthropicModels(apiKey: string, cachedAt: string): Promise<DiscoveredModel[]> {
-    const response = await fetch('https://api.anthropic.com/v1/models', {
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-    });
-    if (!response.ok) throw new Error(`Anthropic API error: ${response.status}`);
-
-    const data = await response.json() as { data: Array<{ id: string; display_name?: string }> };
-    return data.data.map(m => ({
-      id: m.id,
-      provider: 'anthropic' as ProviderName,
-      name: m.display_name ?? m.id,
-      capabilities: ['text'],
-      cached_at: cachedAt,
-    }));
-  }
-
-  private async fetchOpenAICompatModels(url: string, apiKey: string, provider: ProviderName, cachedAt: string): Promise<DiscoveredModel[]> {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (!response.ok) throw new Error(`${provider} API error: ${response.status}`);
-
-    const data = await response.json() as { data: Array<{ id: string; owned_by?: string }> };
-    return data.data.map(m => ({
-      id: m.id,
-      provider,
-      name: m.id,
-      capabilities: ['text'],
-      cached_at: cachedAt,
-    }));
-  }
-
-  private async fetchGeminiModels(apiKey: string, cachedAt: string): Promise<DiscoveredModel[]> {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-    if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
-
-    const data = await response.json() as { models: Array<{ name: string; displayName?: string; supportedGenerationMethods?: string[] }> };
-    return data.models
-      .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
-      .map(m => ({
-        id: m.name.replace('models/', ''),
-        provider: 'gemini' as ProviderName,
-        name: m.displayName ?? m.name,
-        capabilities: ['text'],
-        cached_at: cachedAt,
-      }));
+  private localFallback(kind: string, cached: DiscoveredModel[] | null): DiscoveredModel[] {
+    const page = readModelPage(this.db, kind, 0, -1);
+    return page.total ? page.models : cached ?? defaults(kind);
   }
 }

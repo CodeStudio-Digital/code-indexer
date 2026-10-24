@@ -16,10 +16,26 @@ export interface ApiCtx {
 
 /** Resolve the store + project id, or a human error string. */
 export function resolveApiCtx(ctx: ToolContext): ApiCtx | { error: string } {
+  ctx.signal?.throwIfAborted();
+  ctx.ports?.apiClient?.assertCurrent();
+  if (ctx.ports?.apiClient && ctx.ports.apiClient.projectId !== ctx.projectId) return { error: 'API client project changed during this attempt.' };
   const store = getApiClientStore();
   if (!store) return { error: 'API client store is not wired in this process.' };
   if (ctx.projectId == null) return { error: 'No project is bound to this session.' };
   return { store, projectId: ctx.projectId };
+}
+
+/** IDs are shared across projects; knowing an ID never grants access to it. */
+export function projectCollection(ctx: ApiCtx, id: number) {
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const row = ctx.store.getCollection(id);
+  return row?.project_id === ctx.projectId ? row : null;
+}
+
+export function projectRequest(ctx: ApiCtx, id: number) {
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const row = ctx.store.getRequest(id);
+  return row && projectCollection(ctx, row.collection_id) ? row : null;
 }
 
 const jars = new Map<number, CookieJar>();
@@ -34,7 +50,9 @@ export function resolveEnvFor(
   store: ApiClientStore,
   projectId: number,
   envId?: number,
-): { baseUrl: string; variables: Record<string, string>; envId: number | null } {
+): { baseUrl: string; variables: Record<string, string>; envId: number | null } | { error: string } {
   const env = envId != null ? store.getEnvironment(envId) : store.getDefaultEnvironment(projectId);
+  if ((envId != null && (!Number.isSafeInteger(envId) || envId <= 0 || !env))
+    || (env && env.project_id !== projectId)) return { error: 'Environment not found in this project.' };
   return { baseUrl: env?.base_url ?? '', variables: parseEnvVariables(env?.variables_json), envId: env?.id ?? null };
 }

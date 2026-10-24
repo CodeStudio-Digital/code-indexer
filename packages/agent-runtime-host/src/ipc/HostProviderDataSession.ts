@@ -9,18 +9,25 @@ import { HostDataChannelError } from './HostDataChannelError.js';
 import type { HostDataBoundContext } from './HostDataAttemptChannelValidation.js';
 import { ProviderDataEventSink } from './ProviderDataEventSink.js';
 import { ProviderDataOutboundLane } from './ProviderDataOutboundLane.js';
+import { HostCapabilityReadBatch } from './HostCapabilityReadBatch.js';
 import type { DurableEngineEventCommitPort } from './DurableEngineEventCommitPort.js';
 import { commitEngineEventProposal } from './EngineEventCommitHandler.js';
 import { AttemptFrameReceiverError } from './AttemptFrameReceiverError.js';
 import type { CapabilityGateway } from '../capability-gateway/CapabilityGateway.js';
+import { ProviderStreamCredit } from './ProviderStreamCredit.js';
+import { HostProviderRequestTransfer } from './HostProviderRequestTransfer.js';
 
 export class HostProviderDataSession {
   readonly #lane = new ProviderDataOutboundLane();
   readonly #operations = new Set<Promise<void>>();
+  readonly #credits = new Map<string, ProviderStreamCredit>();
+  #retiredCredit?: ProviderStreamCredit;
   #running = false;
   #closed = false;
   #engineTerminalCommitted = false;
   #terminating = false;
+  readonly #readBatch?: HostCapabilityReadBatch;
+  readonly #requestTransfer: HostProviderRequestTransfer;
 
   constructor(
     private readonly channel: EstablishedAttemptChannel,
@@ -28,7 +35,10 @@ export class HostProviderDataSession {
     private readonly gateway: ProviderGateway,
     private readonly eventCommitter?: DurableEngineEventCommitPort,
     private readonly capabilityGateway?: CapabilityGateway,
-  ) {}
+  ) {
+    this.#requestTransfer = new HostProviderRequestTransfer(channel, context, this.#lane);
+    if (capabilityGateway) this.#readBatch = new HostCapabilityReadBatch(channel, context, this.#lane, capabilityGateway);
+  }
 
   async run(signal?: AbortSignal): Promise<void> {
     if (this.#running) throw failure('provider Data session is single-use');
@@ -41,7 +51,41 @@ export class HostProviderDataSession {
         if (outcome.kind === 'replayed') continue;
         const pending = outcome.pending;
         const { body, payloadDigest } = pending.takeBodyAndDigest();
+        if (body.case === 'providerEventConsumed') {
+          const credit = this.#credits.get(body.value.operationId)
+            ?? (this.#retiredCredit?.operationId === body.value.operationId ? this.#retiredCredit : undefined);
+          if (!credit) throw failure('provider consumption receipt has no active stream');
+          const binding = pending.binding();
+          const receipt = this.channel.commitAccepted(pending);
+          if (!this.channel.receiptMatches(receipt, binding)) throw failure('provider consumption receipt is foreign');
+          credit.acknowledge(body.value);
+          continue;
+        }
+        if (body.case === 'providerRequestChunk' || body.case === 'providerRequestCommit') {
+          this.#readBatch?.assertIdle();
+          if (this.#engineTerminalCommitted || this.#terminating) throw failure('provider transfer follows termination');
+          if (this.gateway.activeOperationCount !== 0) throw failure('provider transfer overlaps an active stream');
+          if (body.case === 'providerRequestChunk') {
+            await this.#requestTransfer.receiveChunk(pending, body.value, payloadDigest);
+          } else {
+            const start = this.#requestTransfer.finish(body.value, pending.header().deadlineAtUnixMs);
+            if (body.value.checkpointOnly) {
+              await this.#requestTransfer.checkpoint(pending, start, payloadDigest, this.gateway, this.eventCommitter);
+            } else {
+              await this.#startProvider(pending, start, payloadDigest);
+            }
+          }
+          continue;
+        }
+        if (this.#requestTransfer.pending) throw failure('provider transfer interrupted by another operation');
+        if (body.case === 'providerCheckpoint') {
+          this.#readBatch?.assertIdle();
+          if (this.#engineTerminalCommitted) throw failure('checkpoint follows terminal');
+          await this.#requestTransfer.checkpoint(pending, body.value, payloadDigest, this.gateway, this.eventCommitter);
+          continue;
+        }
         if (body.case === 'providerStart') {
+          this.#readBatch?.assertIdle();
           await this.#startProvider(pending, body.value, payloadDigest);
           continue;
         }
@@ -63,17 +107,26 @@ export class HostProviderDataSession {
             this.#lane,
             this.eventCommitter,
           );
+          await this.capabilityGateway?.retireCommitted(body.value.record!);
           if (body.value.record?.body.case === 'terminal') {
             this.#engineTerminalCommitted = true;
           }
           continue;
         }
         if (body.case === 'capabilityPrepare' && this.capabilityGateway) {
+          this.#readBatch?.assertIdle();
           await this.#prepareCapability(pending, body.value);
           continue;
         }
         if (body.case === 'capabilityExecute' && this.capabilityGateway) {
+          this.#readBatch?.assertIdle();
           await this.#executeCapability(pending, body.value);
+          continue;
+        }
+        if (body.case === 'capabilityReadBatchExecute' && this.#readBatch) {
+          const { settled } = await this.#readBatch.start(pending, body.value);
+          const tracked = settled.catch((cause) => this.abort(cause)).finally(() => this.#operations.delete(tracked));
+          this.#operations.add(tracked);
           continue;
         }
         this.channel.reject(pending);
@@ -92,6 +145,7 @@ export class HostProviderDataSession {
       this.abort(cause);
       throw cause;
     } finally {
+      this.#requestTransfer.clear();
       signal?.removeEventListener('abort', abort);
     }
   }
@@ -99,6 +153,10 @@ export class HostProviderDataSession {
   abort(cause?: unknown): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#requestTransfer.clear();
+    for (const credit of this.#credits.values()) credit.close(cause ?? failure('provider Data session was aborted'));
+    this.#credits.clear();
+    this.#retiredCredit = undefined;
     try {
       this.gateway.fenceAttempt(this.context.identity);
     } finally {
@@ -109,6 +167,7 @@ export class HostProviderDataSession {
   /** Authorizes Data EOF caused by an already-dispatched Control termination. */
   beginTermination(): void {
     this.#terminating = true;
+    this.#requestTransfer.clear();
   }
 
   get activeOperationCount(): number {
@@ -120,17 +179,26 @@ export class HostProviderDataSession {
     start: agentV1Runtime.ProviderStart,
     payloadDigest: Uint8Array,
   ): Promise<void> {
+    if (this.#engineTerminalCommitted || this.#terminating) throw failure('provider start follows termination');
+    if (this.#credits.has(start.operationId)) throw failure('provider operation already owns consumption credit');
+    const credit = start.consumptionAckRequired ? new ProviderStreamCredit(start.operationId) : undefined;
+    if (credit) this.#credits.set(start.operationId, credit);
     const sink = new ProviderDataEventSink(
       this.channel,
       pending,
       this.context,
       this.#lane,
       start.operationId,
+      credit,
     );
-    const operation = this.gateway.run(start, payloadDigest, sink);
+    const operation = this.gateway.run(start, payloadDigest, sink,
+      this.eventCommitter?.commitProviderFrontier?.bind(this.eventCommitter));
     const tracked = operation
       .catch((cause) => { this.abort(cause); })
-      .finally(() => { this.#operations.delete(tracked); });
+      .finally(() => {
+        this.#operations.delete(tracked);
+        if (credit) { this.#credits.delete(start.operationId); this.#retiredCredit = credit; }
+      });
     this.#operations.add(tracked);
     await Promise.race([
       sink.waitAccepted(),
@@ -144,20 +212,8 @@ export class HostProviderDataSession {
     pending: Parameters<EstablishedAttemptChannel['commitAccepted']>[0],
     prepare: agentV1Capability.CapabilityPrepare,
   ): Promise<void> {
-    const update = await this.capabilityGateway!.prepare(prepare);
-    await this.#lane.run(async () => {
-      const binding = pending.binding();
-      const response = create(agentV1Runtime.FramePayloadSchema, {
-        body: { case: 'capabilityUpdate', value: update },
-      });
-      const receipt = await this.channel.commitResponse(
-        pending,
-        response,
-        { timeoutMs: this.context.timeoutMs },
-      );
-      if (!this.channel.receiptMatches(receipt, binding)) {
-        throw failure('CapabilityUpdate receipt is foreign');
-      }
+    await this.#commitCapabilityResponse(pending, {
+      case: 'capabilityUpdate', value: await this.capabilityGateway!.prepare(prepare),
     });
   }
 
@@ -165,20 +221,20 @@ export class HostProviderDataSession {
     pending: Parameters<EstablishedAttemptChannel['commitAccepted']>[0],
     execute: agentV1Capability.CapabilityExecute,
   ): Promise<void> {
-    const result = await this.capabilityGateway!.execute(execute);
+    await this.#commitCapabilityResponse(pending, {
+      case: 'capabilityExecutionResult', value: await this.capabilityGateway!.execute(execute),
+    });
+  }
+
+  async #commitCapabilityResponse(
+    pending: Parameters<EstablishedAttemptChannel['commitAccepted']>[0],
+    body: agentV1Runtime.FramePayload['body'],
+  ): Promise<void> {
     await this.#lane.run(async () => {
       const binding = pending.binding();
-      const response = create(agentV1Runtime.FramePayloadSchema, {
-        body: { case: 'capabilityExecutionResult', value: result },
-      });
-      const receipt = await this.channel.commitResponse(
-        pending,
-        response,
-        { timeoutMs: this.context.timeoutMs },
-      );
-      if (!this.channel.receiptMatches(receipt, binding)) {
-        throw failure('CapabilityExecutionResult receipt is foreign');
-      }
+      const receipt = await this.channel.commitResponse(pending,
+        create(agentV1Runtime.FramePayloadSchema, { body }), { timeoutMs: this.context.timeoutMs });
+      if (!this.channel.receiptMatches(receipt, binding)) throw failure('capability receipt is foreign');
     });
   }
 }

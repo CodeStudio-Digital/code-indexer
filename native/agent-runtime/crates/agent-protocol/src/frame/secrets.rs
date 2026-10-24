@@ -60,6 +60,9 @@ pub(in crate::frame) fn scrub_body_secrets(body: &mut wire::frame_payload::Body)
             chunk.encoded_chunk.as_mut_slice().zeroize();
             chunk.encoded_chunk.clear();
         }
+        wire::frame_payload::Body::ProviderRequestChunk(chunk) => {
+            chunk.encoded_chunk.zeroize();
+        }
         _ => {}
     }
 }

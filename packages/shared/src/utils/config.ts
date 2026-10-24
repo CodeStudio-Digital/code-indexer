@@ -39,18 +39,6 @@ export type IndexProfile = 'aggressive' | 'balanced' | 'conservative';
 
 export interface FeatureFlags {
   /**
-   * Master switch for the Design System module (UI tab, /api/design-system
-   * routes, and the design-system tool group registered in the coder).
-   * Default ON. Set `DESIGN_SYSTEM_ENABLED=false` to fully disable.
-   */
-  designSystemEnabled: boolean;
-  /**
-   * Master switch for the Sprite Studio module (/sprites surface,
-   * /api/sprite-studio routes, and the sprite_* tool group registered in
-   * the coder). Default ON. Set `SPRITE_STUDIO_ENABLED=false` to disable.
-   */
-  spriteStudioEnabled: boolean;
-  /**
    * Master switch for the App Studio module (Code Studio para leigos —
    * /apps surface, /api/app-studio routes, and the app_* tool group
    * registered in the coder). Default ON. Set `APP_STUDIO_ENABLED=false`
@@ -88,6 +76,14 @@ export interface IndexerConfig {
 export function mcpDataDir(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.MCP_DATA_DIR?.trim();
   return override ? resolve(override) : join(homedir(), '.mcp-code-indexer');
+}
+
+/** Workspace effects belong to the OS user, not to a database/profile. Tests
+ * and isolated installations may supply one common coordination directory;
+ * changing MCP_DATA_DIR must never silently create another workspace owner. */
+export function mcpRuntimeCoordinationDir(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.MCP_RUNTIME_COORDINATION_DIR?.trim();
+  return override ? resolve(override) : join(homedir(), '.mcp-code-indexer', 'runtime-coordination-v1');
 }
 
 const DEFAULT_DATA_DIR = mcpDataDir();
@@ -180,8 +176,6 @@ const DEFAULT_CONFIG: IndexerConfig = {
   ignorePatterns: [],
   indexProfile: 'balanced',
   features: {
-    designSystemEnabled: true,
-    spriteStudioEnabled: true,
     appStudioEnabled: true,
   },
   dashboard: {
@@ -219,12 +213,6 @@ const DEFAULT_CONFIG: IndexerConfig = {
 
 function applyEnvOverrides(config: IndexerConfig): void {
   // Feature flags
-  if (process.env.DESIGN_SYSTEM_ENABLED !== undefined) {
-    config.features.designSystemEnabled = process.env.DESIGN_SYSTEM_ENABLED !== 'false';
-  }
-  if (process.env.SPRITE_STUDIO_ENABLED !== undefined) {
-    config.features.spriteStudioEnabled = process.env.SPRITE_STUDIO_ENABLED !== 'false';
-  }
   if (process.env.APP_STUDIO_ENABLED !== undefined) {
     config.features.appStudioEnabled = process.env.APP_STUDIO_ENABLED !== 'false';
   }

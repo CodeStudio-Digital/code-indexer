@@ -63,11 +63,13 @@ pub(super) fn artifact(name: &str) -> wire::ArtifactRef {
         privacy_class: wire::ArtifactPrivacyClass::Internal as i32,
         redaction_policy_version: "redaction-v1".to_owned(),
         owner_session_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+        display_name: String::new(),
     }
 }
 
 pub(super) fn valid_spec() -> wire::ResolvedAttemptSpec {
     wire::ResolvedAttemptSpec {
+        execution_deadline_at_unix_ms: None,
         schema_version: 1,
         spec_version: 4,
         identity: Some(identity()),
@@ -115,6 +117,7 @@ pub(super) fn valid_spec() -> wire::ResolvedAttemptSpec {
         deadline_at_unix_ms: SPEC_DEADLINE,
         agent_definition_snapshot: Some(snapshot("agent-definition")),
         codex_app_server_process_snapshot: None,
+        initial_conversation_snapshot: None,
     }
 }
 

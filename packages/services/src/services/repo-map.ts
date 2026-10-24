@@ -1,145 +1,28 @@
-/**
- * Repository Map generator — Aider-style structural summary.
- *
- * Produces a compact (~2000 token) map of the project: file tree annotated
- * with key symbols, weighted by dependency hubs, entrypoint-like filenames
- * and exported-symbol richness. It uses structural data only.
- *
- * The agent gets this on turn 1 via `get_repo_map`, eliminating 2-3
- * exploratory turns that would otherwise be spent understanding the codebase.
- */
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { DBFile, DBSymbol } from '@mcp/shared/types.js';
+import type { RepoMapFile } from '@mcp/store/db/agent-repo-map.js';
 
-interface FileScore {
-  path: string;
-  score: number;
-  symbols: Array<{ name: string; kind: string; signature: string }>;
-  isEntryPoint: boolean;
-  dependentCount: number;
-}
-
-/**
- * Build a repo map for the given project.
- * @param maxTokens Approximate token budget (chars / 4).
- */
-export function buildRepoMap(
-  db: CodeIndexDB,
-  projectId: number,
-  maxTokens = 2000,
-): string {
-  const maxChars = maxTokens * 4;
-
-  // 1. Get all files
-  const files = db.listFiles(projectId) as DBFile[];
-  if (files.length === 0) return '(empty project)';
-
-  // 2. Compute importance scores
-  const scores = computeScores(db, projectId, files);
-
-  // 3. Sort by score descending
-  scores.sort((a, b) => b.score - a.score);
-
-  // 4. Build the map text within budget
-  const lines: string[] = [];
-  lines.push(`# Repository Map (${files.length} files)`);
-  lines.push('');
-
-  // Group by directory for readability
-  const byDir = new Map<string, FileScore[]>();
-  for (const f of scores) {
-    const dir = f.path.includes('/') ? f.path.split('/').slice(0, -1).join('/') : '.';
-    if (!byDir.has(dir)) byDir.set(dir, []);
-    byDir.get(dir)!.push(f);
+/** Render an already bounded ranked page. Symbols are previews, not a complete
+ * outline; the file/line recovery remains visible even without a token budget. */
+export function renderRepoMap(page: { items: RepoMapFile[]; total: number; offset: number; nextOffset?: number }): string {
+  if (!page.total) return '(empty project)';
+  const lines = [`# Repository Map (${page.total} files; ${page.items.length} shown at offset ${page.offset})`, ''];
+  for (const file of page.items) {
+    const badges = [...(file.is_entry_point ? ['entry'] : []), ...(file.dependent_count ? [`hub:${file.dependent_count}`] : [])];
+    lines.push(file.path + (badges.length ? ` [${badges.join(', ')}]` : ''));
+    for (const symbol of file.symbols) lines.push(`  ${symbol.line} ${symbol.kind} ${symbol.name}: ${symbol.signature}${symbol.signature_characters > 80 ? '…' : ''}`);
+    if (file.symbol_count > file.symbols.length) lines.push(`  [${file.symbols.length}/${file.symbol_count} supported symbols shown; get_file_skeleton for the outline]`);
   }
-
-  // Sort directories by max score of their files
-  const sortedDirs = [...byDir.entries()]
-    .map(([dir, files]) => ({ dir, files, maxScore: Math.max(...files.map(f => f.score)) }))
-    .sort((a, b) => b.maxScore - a.maxScore);
-
-  let charCount = lines.join('\n').length;
-
-  for (const { dir, files: dirFiles } of sortedDirs) {
-    const dirLine = `\n## ${dir}/`;
-    if (charCount + dirLine.length > maxChars) break;
-    lines.push(dirLine);
-    charCount += dirLine.length;
-
-    for (const f of dirFiles) {
-      const fileName = f.path.split('/').pop() ?? f.path;
-      const badges: string[] = [];
-      if (f.isEntryPoint) badges.push('entry');
-      if (f.dependentCount > 0) badges.push(`hub:${f.dependentCount}`);
-      const badgeStr = badges.length > 0 ? ` [${badges.join(', ')}]` : '';
-
-      const fileLine = `  ${fileName}${badgeStr}`;
-      if (charCount + fileLine.length > maxChars) break;
-      lines.push(fileLine);
-      charCount += fileLine.length;
-
-      // Add top 3 symbols per file
-      for (const sym of f.symbols.slice(0, 3)) {
-        const sigShort = sym.signature.length > 80 ? sym.signature.slice(0, 80) + '...' : sym.signature;
-        const symLine = `    ${sym.kind} ${sym.name}: ${sigShort}`;
-        if (charCount + symLine.length > maxChars) break;
-        lines.push(symLine);
-        charCount += symLine.length;
-      }
-    }
-  }
-
+  if (page.items.length < page.total) lines.push(`File continuation: get_repo_map(offset=${page.nextOffset ?? 0}). Restart at zero after index changes.`);
   return lines.join('\n');
 }
 
-/**
- * Simplified PageRank-like scoring based on dependency graph.
- *
- * Score components:
- *   - Dependent count (files that import this file) — strongest signal
- *   - Entrypoint-like filename (main, index, app, server, CLI)
- *   - Symbol count (files with many exports are architectural hubs)
- */
-function computeScores(
-  db: CodeIndexDB,
-  projectId: number,
-  files: DBFile[]
-): FileScore[] {
-  const results: FileScore[] = [];
-
-  for (const file of files) {
-    let score = 0;
-
-    // Dependents score (PageRank proxy)
-    const dependents = db.getDependents(projectId, file.id);
-    score += dependents.length * 3;
-
-    // The structural pass persists the same deterministic path classification;
-    // keep a path fallback for rows created before that backfill.
-    const isEntryPoint = file.is_entry_point === 1
-      || /(^|\/)(?:index|main|app|server|cli)\.[^/]+$/i.test(file.path)
-      || /(^|\/)(?:package\.json|pyproject\.toml|cargo\.toml|go\.mod)$/i.test(file.path);
-    if (isEntryPoint) score += 10;
-
-    // Symbol count (architectural richness)
-    const symbols = db.getSymbolsByFile(projectId, file.path);
-    const exportedSymbols = symbols.filter(s =>
-      ['function', 'class', 'interface', 'method', 'type'].includes(s.kind)
-    );
-    score += Math.min(exportedSymbols.length, 10); // Cap at 10
-
-    results.push({
-      path: file.path,
-      score,
-      symbols: exportedSymbols.slice(0, 5).map(s => ({
-        name: s.name,
-        kind: s.kind,
-        signature: s.signature ?? s.name,
-      })),
-      isEntryPoint,
-      dependentCount: dependents.length,
-    });
-  }
-
-  return results;
+/** Compatibility entry point for callers which request a compact text map. */
+export function buildRepoMap(db: CodeIndexDB, projectId: number, maxTokens = 2000): string {
+  const text = renderRepoMap(db.listAgentRepoMap(projectId));
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return '';
+  const chars = Math.floor(maxTokens * 4);
+  if (text.length <= chars) return text;
+  let end = chars;
+  if (end && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+  return text.slice(0, end) + '\n[Map text omitted by budget; use get_repo_map without max_tokens and follow file pages.]';
 }

@@ -1,4 +1,4 @@
-import { clone } from '@bufbuild/protobuf';
+import { detachedMessage } from '../ipc/DetachedMessage.js';
 import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import type {
   PreparedDurabilityFacts,
@@ -11,11 +11,11 @@ export function clonePreparedDurabilityFacts(
     connectionId: facts.connectionId,
     prepareMessageId: facts.prepareMessageId,
     preparedMessageId: facts.preparedMessageId,
-    prepare: clone(
+    prepare: detachedMessage(
       agentV1Runtime.PrepareAttemptSchema,
       facts.prepare,
     ),
-    prepared: clone(
+    prepared: detachedMessage(
       agentV1Runtime.AttemptPreparedSchema,
       facts.prepared,
     ),

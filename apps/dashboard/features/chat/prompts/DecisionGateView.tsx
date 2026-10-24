@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronLeft, ChevronRight, GitFork } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
+import { usePromptSubmission } from '../../../hooks/agent-stream/usePromptSubmission.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Markdown } from '../messages/Markdown.js';
 import type { DecisionPrompt, DecisionAnswers, DecisionQuestion } from '../../../hooks/agent-stream/types.js';
@@ -14,7 +15,7 @@ import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolu
 
 interface DecisionGateViewProps {
   decision: DecisionPrompt;
-  onConfirm: (answers: DecisionAnswers) => Promise<void>;
+  onConfirm: (answers: DecisionAnswers, interactionId?: string) => Promise<void>;
   /** Bridges this card to its persisted twin, which carries a different id. */
   signature?: string;
   sessionId?: string;
@@ -85,7 +86,7 @@ export function DecisionGateView({
   const storedResolution = usePromptResolution<DecisionAnswers>(decision.id, signature, sessionId);
   const resolved = decision.resolved ?? storedResolution;
   const [currentIndex, setCurrentIndex] = useState(draft?.currentIndex ?? 0);
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, error, submit } = usePromptSubmission();
 
   useEffect(() => {
     setPromptDraft(decision.id, { selections, notes, currentIndex });
@@ -115,13 +116,10 @@ export function DecisionGateView({
   const confirm = async () => {
     if (!allAnswered || submitting) return;
     const answers = buildDecisionAnswers(questions, selections, notes);
-    setSubmitting(true);
-    try {
-      await onConfirm(answers);
+    await submit(async () => {
+      await onConfirm(answers, decision.id);
       markPromptResolved({ id: decision.id, signature, sessionId, resolution: answers });
-    } finally {
-      setSubmitting(false);
-    }
+    });
   };
 
   const goNext = () => {
@@ -285,6 +283,7 @@ export function DecisionGateView({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-info/20 px-4 py-3">
+        {error && <p role="alert" className="w-full text-xs text-destructive">{error}</p>}
         <Button size="sm" variant="outline" onClick={goBack} disabled={safeIndex === 0 || submitting}>
           <ChevronLeft className="h-3.5 w-3.5" />
           {t('chat:decision.back')}

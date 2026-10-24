@@ -12,6 +12,7 @@
  * live server — exercise with a real instance before trusting writes.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { assertDatabaseDispatch } from './dispatch.js';
 import { resolveDriverEntry } from './driver-registry.js';
 import { quoteRelation } from './sql/identifiers.js';
 import { buildTablePreview } from './sql/preview.js';
@@ -68,11 +69,13 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
   });
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    assertDatabaseDispatch(opts);
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     const conn = await pool.getConnection();
     let onAbort: (() => void) | null = null;
     let readOnlyTxn = false;
     try {
+      assertDatabaseDispatch(opts);
       if (config.readOnly) {
         // Must be the first SQL statement in the Oracle transaction.
         await conn.execute('SET TRANSACTION READ ONLY');
@@ -83,6 +86,7 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
         onAbort = (): void => void conn.break().catch(() => undefined);
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
+      assertDatabaseDispatch(opts);
       const res = await conn.execute(sql, opts.params ?? [], {
         maxRows: max + 1,
         outFormat: oracledb.OUT_FORMAT_OBJECT,
@@ -303,7 +307,7 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
       return runQuery(sql, { params });
     },
     async close() {
-      await pool.close(0).catch(() => undefined);
+      await pool.close(0);
     },
   };
   return driver;

@@ -1,15 +1,12 @@
+import { openProviderIterator } from './ProviderOpen.js';
 import { create } from '@bufbuild/protobuf';
-import {
-  agentV1Common,
-  agentV1Runtime,
-} from '@mcp/agent-runtime-contracts';
-import type { ChatProvider } from '@mcp/provider-sdk/adapter.js';
-import type { ChatDelta } from '@mcp/provider-sdk/wire.js';
+import { agentV1Common, agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import { validateAttemptIdentity } from '../ipc/FrameHeaderValidation.js';
 import { ProviderGatewayError } from './ProviderGatewayError.js';
 import { ProviderOperationRegistry } from './ProviderOperationRegistry.js';
-import { adaptProviderRequest } from './ProviderRequestAdapter.js';
 import { ProviderStreamAssembler } from './ProviderStreamAssembler.js';
+import { coalesceProviderDeltas } from './ProviderDeltaCoalescer.js';
+import { checkpointProviderFrontier } from './ProviderCheckpoint.js';
 import {
   DEFAULT_PROVIDER_GATEWAY_LIMITS,
   type ProviderGatewayDependencies,
@@ -28,6 +25,7 @@ export class ProviderGateway {
   readonly #limits: ProviderGatewayLimits;
   readonly #registry: ProviderOperationRegistry;
   readonly #now: () => number;
+  #drainSignal?: AbortSignal;
 
   constructor(readonly dependencies: ProviderGatewayDependencies) {
     this.#limits = { ...DEFAULT_PROVIDER_GATEWAY_LIMITS, ...dependencies.limits };
@@ -41,10 +39,23 @@ export class ProviderGateway {
     return this.#registry.size;
   }
 
+  /** Stop opening providers and settle a live stream at the next frontier. */
+  drainWhen(signal: AbortSignal): void {
+    if (this.#drainSignal) throw new Error('Provider drain owner is already installed');
+    this.#drainSignal = signal;
+  }
+
+  /** Durable frontier only: no resolver, provider stream or usage charge. */
+  async checkpoint(start: agentV1Runtime.ProviderStart, digest: Uint8Array,
+    commit: (start: agentV1Runtime.ProviderStart, signal: AbortSignal) => Promise<void>): Promise<bigint> {
+    return checkpointProviderFrontier(start, digest, commit, this.dependencies, this.#limits, this.#registry, this.#now);
+  }
+
   async run(
     start: agentV1Runtime.ProviderStart,
     requestPayloadSha256: Uint8Array,
     sink: ProviderGatewayEventSinkPort,
+    beforeProviderOpen?: (start: agentV1Runtime.ProviderStart, signal: AbortSignal) => Promise<void>,
   ): Promise<void> {
     const openedAt = this.#now();
     validateProviderStart(start, requestPayloadSha256, openedAt, this.#limits);
@@ -52,6 +63,7 @@ export class ProviderGateway {
     const binding = start.binding;
     const lease = this.#registry.reserve(start.operationId, identity);
     const signal = lease.controller.signal;
+    const drain = () => lease.controller.abort(new ProviderGatewayError('provider_cancelled', 'ipc_identity_budget'));
     const deadline = Number(start.deadlineAtUnixMs);
     const timer = setTimeout(() => lease.controller.abort(new ProviderGatewayError(
       'provider_deadline_exceeded',
@@ -76,16 +88,16 @@ export class ProviderGateway {
         this.dependencies,
         this.#limits,
         signal,
+        beforeProviderOpen,
+        () => {
+          this.#drainSignal?.addEventListener('abort', drain, { once: true });
+          if (this.#drainSignal?.aborted) drain();
+        },
       );
       assembler = new ProviderStreamAssembler(identity, start.operationId, this.#limits);
       try {
-        for (;;) {
-          const next = await nextWithAbort(iterator, signal);
-          if (next.done) throw new ProviderGatewayError(
-            'provider_eof_before_done',
-            'provider stream ended before a terminal event',
-          );
-          const outcome = assembler.accept(next.value);
+        for await (const delta of coalesceProviderDeltas(iterator, signal, this.#limits)) {
+          const outcome = assembler.accept(delta);
           if (outcome.kind === 'done') {
             await this.#emit(sink, terminalEvent(
               identity,
@@ -97,8 +109,9 @@ export class ProviderGateway {
             ));
             return;
           }
-          if (outcome.event) await this.#emit(sink, outcome.event);
+          if (outcome.event) await this.#emit(sink, outcome.event, signal);
         }
+        throw new ProviderGatewayError('provider_eof_before_done', 'provider stream ended before a terminal event');
       } finally {
         if (iterator.return) void iterator.return().catch(() => undefined);
       }
@@ -124,6 +137,7 @@ export class ProviderGateway {
       }
     } finally {
       clearTimeout(timer);
+      this.#drainSignal?.removeEventListener('abort', drain);
       lease.release();
     }
   }
@@ -150,63 +164,13 @@ export class ProviderGateway {
     ));
   }
 
-  async #emit(sink: ProviderGatewayEventSinkPort, event: ProviderGatewayEvent): Promise<void> {
+  async #emit(sink: ProviderGatewayEventSinkPort, event: ProviderGatewayEvent, signal?: AbortSignal): Promise<void> {
     try {
-      await sink.emit(event);
+      await sink.emit(event, signal);
     } catch (cause) {
+      if (signal?.aborted) throw cause;
       throw new ProviderGatewayError('provider_sink_failed', 'provider event sink failed', { cause });
     }
-  }
-}
-
-async function openProviderIterator(
-  start: agentV1Runtime.ProviderStart,
-  binding: agentV1Runtime.ProviderBinding,
-  dependencies: ProviderGatewayDependencies,
-  limits: ProviderGatewayLimits,
-  signal: AbortSignal,
-): Promise<AsyncIterator<ChatDelta>> {
-  const request = await raceAbort(
-    adaptProviderRequest(start, dependencies.artifactReader, limits, signal),
-    signal,
-  );
-  const provider = await raceAbort(
-    Promise.resolve(dependencies.resolver.resolve(binding, signal)),
-    signal,
-  );
-  assertResolvedBinding(provider, binding);
-  return provider.chat(request)[Symbol.asyncIterator]();
-}
-
-function assertResolvedBinding(
-  provider: ChatProvider,
-  binding: agentV1Runtime.ProviderBinding,
-): void {
-  if (provider.name !== binding.effectiveProvider || provider.model !== binding.effectiveModel) {
-    throw new ProviderGatewayError(
-      'provider_binding_mismatch',
-      'resolved provider does not match the sealed effective binding',
-    );
-  }
-}
-
-async function nextWithAbort<T>(
-  iterator: AsyncIterator<T>,
-  signal: AbortSignal,
-): Promise<IteratorResult<T>> {
-  return raceAbort(iterator.next(), signal);
-}
-
-async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw signal.reason;
-  let rejectAbort!: (reason: unknown) => void;
-  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
-  const onAbort = () => rejectAbort(signal.reason);
-  signal.addEventListener('abort', onAbort, { once: true });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    signal.removeEventListener('abort', onAbort);
   }
 }
 

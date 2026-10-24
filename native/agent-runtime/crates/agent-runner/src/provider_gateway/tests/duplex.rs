@@ -39,6 +39,7 @@ async fn established_duplex_runs_one_text_turn_through_the_engine() {
             ..wire::ProviderBinding::default()
         },
         ProviderDataTiming {
+            settlement_deadline_at_unix_ms: 2_000,
             hard_deadline: deadline(),
             replay_write_timeout: Duration::from_secs(1),
         },
@@ -73,7 +74,7 @@ async fn established_duplex_runs_one_text_turn_through_the_engine() {
     assert_eq!(
         outcome,
         TurnOutcome::Completed {
-            response_id: "response/duplex".into(),
+            response_id: Some("response/duplex".into()),
             text: "hello from host".into(),
             usage: Some(agent_engine::ports::ProviderUsage {
                 input_tokens: 8,
@@ -99,6 +100,7 @@ async fn established_duplex_runs_one_text_turn_through_the_engine() {
     );
 }
 
+#[allow(clippy::too_many_lines)] // One sequential physical protocol fixture.
 async fn serve_host(
     mut host: AsyncEstablishedAttemptChannel<tokio::io::DuplexStream>,
     identity: wire::AttemptIdentity,
@@ -149,16 +151,9 @@ async fn serve_host(
     )
     .await
     .expect("text event");
-    host.send_new(
-        &provider_terminal(&identity, start.operation_id.as_str()),
-        1_000,
-        deadline(),
-        || 20,
-    )
-    .await
-    .expect("terminal event");
     let mut records = Vec::new();
-    for sequence in 1..=5 {
+    while records.len() < 5 {
+        let sequence = records.len() as u64 + 1;
         let FrameReceiveOutcome::Pending(mut pending) = host
             .begin_receive(deadline(), deadline(), Duration::from_secs(1), || 20)
             .await
@@ -167,6 +162,25 @@ async fn serve_host(
             panic!("fresh engine proposal expected");
         };
         let (body, _) = pending.take_body_and_digest().expect("proposal body");
+        if let wire::frame_payload::Body::ProviderEventConsumed(consumed) = &body {
+            assert_eq!(consumed.operation_id, start.operation_id);
+            assert_eq!(consumed.event_sequence, 1);
+            assert_eq!(
+                records.len(),
+                1,
+                "text buffered during ProviderStarted persistence is not consumed early"
+            );
+            host.commit_accepted(*pending).expect("credit receipt");
+            host.send_new(
+                &provider_terminal(&identity, start.operation_id.as_str()),
+                1_000,
+                deadline(),
+                || 20,
+            )
+            .await
+            .expect("terminal event");
+            continue;
+        }
         let wire::frame_payload::Body::EngineEventProposal(proposal) = body else {
             panic!("EngineEventProposal expected");
         };
@@ -188,7 +202,14 @@ async fn serve_host(
                         session_id: identity.session_id.clone(),
                         operation_id: format!("event/{sequence}"),
                         global_sequence: sequence,
-                        kind: wire::SessionRecordKind::LifecycleEvent as i32,
+                        kind: if matches!(
+                            record.body,
+                            Some(wire::engine_event_record_v1::Body::Content(_))
+                        ) {
+                            wire::SessionRecordKind::Conversation as i32
+                        } else {
+                            wire::SessionRecordKind::LifecycleEvent as i32
+                        },
                         durability: event_durability(&record),
                         previous_commit_sha256: vec![0; 32],
                         payload_sha256: proposal.expected_payload_sha256,
@@ -210,7 +231,9 @@ async fn serve_host(
 fn event_durability(record: &wire::EngineEventRecordV1) -> i32 {
     use wire::engine_event_record_v1::Body;
     match record.body.as_ref() {
-        Some(Body::ProviderDelta(_)) => wire::SessionDurabilityClass::Coalesced as i32,
+        Some(Body::ProviderDelta(_) | Body::Content(_)) => {
+            wire::SessionDurabilityClass::Coalesced as i32
+        }
         Some(
             Body::CapabilityBoundary(_)
             | Body::CapabilityDispatchStarted(_)

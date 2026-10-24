@@ -47,6 +47,12 @@ describe('buildDocNavVerbs materialized result preservation', () => {
       headingPath: `Heading ${index + 1}`,
     }));
     const docStore = {
+      withBusyTimeout: (_ms: number, fn: () => unknown) => fn(),
+      agentReads: () => ({
+        chunk: (id: number) => id === sectionChunks[0].id ? sectionChunks[0] : null,
+        section: () => ({ items: sectionChunks, offset: 0 }),
+        outline: () => ({ items: outlineChunks.map(c => ({ id: c.id, ord: c.ord, heading_path: c.heading_path, source_uri: c.source_uri, token_count: c.token_count })), offset: 0 }),
+      }),
       getChunk: (id: number) => (id === sectionChunks[0].id ? sectionChunks[0] : null),
       getCollection: () => ({ name: 'Regression docs' }),
       listChunksBySourceHeading: () => sectionChunks,

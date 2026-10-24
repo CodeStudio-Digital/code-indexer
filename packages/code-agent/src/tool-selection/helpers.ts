@@ -11,7 +11,7 @@ import { NEVER_TRIM } from '../tools/tool-priority.js';
  * relevance would risk a model picking poorly and getting stuck.
  *
  * Intentionally short: anything that the agent uses on EVERY task lives here.
- * Specialized tools (e.g. design-system, qa, sandbox) are scored normally.
+ * Specialized tools (e.g. qa, sandbox) are scored normally.
  */
 export const ESSENTIAL_TOOL_NAMES = new Set<string>(NEVER_TRIM);
 

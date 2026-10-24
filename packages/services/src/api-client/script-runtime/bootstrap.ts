@@ -1,10 +1,9 @@
 /**
- * Bootstrap source executed INSIDE the isolated-vm isolate.
+ * Bootstrap source executed INSIDE the QuickJS WebAssembly realm.
  *
  * It reads the JSON input from the `__PM_INPUT__` global, builds the Postman-style
  * `pm`, `console` and `expect` surface from the isolate's OWN intrinsics (never a
- * host object — passing a host object is what makes node:vm unsafe, and
- * isolated-vm forbids it outright), accumulates results, and exposes
+ * host object), accumulates results, and exposes
  * `__pmCollect()` which returns the accumulated result as a JSON string. Inputs
  * and outputs cross the isolate boundary ONLY as JSON strings (primitives), so no
  * live host reference is ever reachable from a script.
@@ -148,11 +147,23 @@ function pmBootstrap(): void {
       json: () => JSON.parse(resp.body),
     } : undefined,
     expect,
-    test: (name: string, fn: () => void) => {
-      try { fn(); tests.push({ name, passed: true }); }
+    test: (name: string, fn: () => unknown) => {
+      try {
+        const result = fn();
+        if (result && typeof (result as any).then === 'function') throw new Error('Async pm.test callbacks are not supported');
+        tests.push({ name, passed: true });
+      }
       catch (e: any) { tests.push({ name, passed: false, error: e && e.message ? String(e.message) : String(e) }); }
     },
   };
+
+  // Preserve the existing get/set API and support normal property assignment.
+  // Both routes use the same phase guard; assignments cannot bypass read-only.
+  for (const key of ['method', 'url', 'body'] as const) {
+    const accessor = pm.request[key];
+    Object.defineProperty(pm.request, key, { enumerable: true, configurable: false,
+      get: () => accessor, set: value => accessor.set(String(value)) });
+  }
 
   g.pm = pm;
   g.console = { log, warn: log, error: log, info: log, debug: log };

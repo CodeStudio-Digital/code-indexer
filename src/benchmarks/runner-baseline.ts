@@ -30,12 +30,12 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import {
   listFilesystemTurnTelemetry,
   telemetryTools,
   type FsTurnTelemetryRow,
-} from '@mcp/code-agent/sessions/fs-store/telemetry-dashboard.js';
+} from '@mcp/session-storage/fs-store/telemetry-dashboard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

@@ -42,7 +42,7 @@ const CONTENT_TYPES: Record<string, string> = {
 let cachedDir: string | null | undefined;
 
 /** Resolve the vendored draw.io directory once (env → packaged → source). */
-function vendorDir(): string | null {
+export function drawioVendorDir(): string | null {
   if (cachedDir !== undefined) return cachedDir;
   const candidates: string[] = [];
   if (process.env.MCP_DRAWIO_DIR) candidates.push(process.env.MCP_DRAWIO_DIR);
@@ -52,6 +52,9 @@ function vendorDir(): string | null {
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
     candidates.push(path.resolve(here, '../../vendor/drawio'));
+    // Development launches compiled dist/apps/http-api while the vendored
+    // editor stays in the source tree (electron-builder copies it separately).
+    candidates.push(path.resolve(here, '../../../../../apps/http-api/vendor/drawio'));
   } catch {
     /* import.meta.url unavailable — skip */
   }
@@ -66,7 +69,7 @@ const PLACEHOLDER = `<!doctype html><html><head><meta charset="utf-8"><title>dra
 
 export function mountDrawioStaticRoutes(app: Hono): void {
   app.get('/drawio/*', async (c) => {
-    const dir = vendorDir();
+    const dir = drawioVendorDir();
     const rel = c.req.path.replace(/^\/drawio\/?/, '') || 'index.html';
     // Containment: reject traversal outside the vendor dir.
     const safeRel = path.normalize(rel).replace(/^([/\\]|\.\.([/\\]|$))+/, '');

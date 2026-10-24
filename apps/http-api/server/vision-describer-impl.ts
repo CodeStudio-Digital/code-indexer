@@ -15,7 +15,7 @@
 import { createHash } from 'node:crypto';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { PipelineProviderResolver } from '@mcp/services/pipelines/provider-resolver.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 import {
   VISION_NOT_CONFIGURED,
   type IVisionDescriber,

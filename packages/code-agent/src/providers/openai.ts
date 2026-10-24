@@ -323,7 +323,8 @@ export class OpenAIChatProvider implements ChatProvider {
         p.stream_options = { include_usage: true };
       }
       stream = await this.client.chat.completions.create(
-        params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming
+        params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+        req.signal ? { signal: req.signal } : undefined,
       );
     } catch (apiErr: any) {
       await reportFailure(apiErr);

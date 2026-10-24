@@ -34,12 +34,12 @@ export function semanticSha256(input: SemanticHashInput): Uint8Array {
   const payloadLength = Buffer.allocUnsafe(8);
   payloadLength.writeBigUInt64BE(BigInt(input.canonicalBytes.byteLength));
 
-  return createHash('sha256')
+  return Uint8Array.from(createHash('sha256')
     .update(DOMAIN)
     .update(schemaIdLength)
     .update(schemaId)
     .update(schemaVersion)
     .update(payloadLength)
     .update(input.canonicalBytes)
-    .digest();
+    .digest());
 }

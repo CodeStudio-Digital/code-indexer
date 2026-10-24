@@ -53,8 +53,8 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
 
       const symId = result.lastInsertRowid as number;
 
-      if (sym.extends_from) {
-        insertRelation.run(projectId, symId, sym.extends_from, 'extends');
+      for (const parent of new Set([...(sym.extends_list ?? []), ...(sym.extends_from ? [sym.extends_from] : [])])) {
+        insertRelation.run(projectId, symId, parent, 'extends');
       }
       if (sym.implements_list && sym.implements_list.length > 0) {
         for (const iface of sym.implements_list) {

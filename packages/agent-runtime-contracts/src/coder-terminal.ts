@@ -27,6 +27,8 @@ export interface ClassifiedCoderTerminalOutcome {
 
 const INTERRUPTED_REASONS = new Set([
   'max_turns',
+  'max_tool_calls',
+  'ipc_identity_budget',
   'tool_budget',
   'time_budget',
 ]);

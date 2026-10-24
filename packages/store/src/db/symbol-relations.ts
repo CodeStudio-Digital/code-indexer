@@ -4,6 +4,7 @@ import type { DB } from './types.js';
 export interface SymbolReferenceInput {
   symbol_name: string;
   kind: string;
+  reference_kind?: 'call' | 'import';
   line?: number;
   /** Start column of the reference (1-based) — migration 141. */
   col?: number;
@@ -15,8 +16,8 @@ export function upsertReferences(db: DB, projectId: number, fileId: number, file
     db.prepare('DELETE FROM symbol_references WHERE referencing_file_id = ?').run(fileId);
 
     const insert = db.prepare(`
-      INSERT INTO symbol_references (project_id, symbol_id, symbol_name, referencing_file_id, referencing_file_path, line, col, context)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbol_references (project_id, symbol_id, symbol_name, referencing_file_id, referencing_file_path, line, col, context, reference_kind)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const ref of references) {
@@ -32,7 +33,8 @@ export function upsertReferences(db: DB, projectId: number, fileId: number, file
         filePath,
         ref.line ?? null,
         ref.col ?? null,
-        ref.snippet ?? null
+        ref.snippet ?? null,
+        ref.reference_kind ?? (ref.kind === 'call' || ref.kind === 'import' ? ref.kind : null)
       );
     }
   });
@@ -96,68 +98,4 @@ export function getHierarchy(db: DB, projectId: number, symbolName: string): Sym
   return { symbol: sym, extends_chain, implements_list, subclasses, implementors };
 }
 
-export interface UsageTraceNode {
-  file: string;
-  line: number | null;
-  symbols_in_file: string[];
-  callers: unknown[];
-}
-
-export interface UsageTraceResult {
-  symbol: string;
-  defined_in: string | null;
-  callers: UsageTraceNode[];
-}
-
-export function traceUsage(db: DB, projectId: number, symbolName: string, maxDepth: number = 3): UsageTraceResult {
-  const sym = db.prepare('SELECT * FROM symbols WHERE project_id = ? AND name = ? LIMIT 1')
-    .get(projectId, symbolName) as DBSymbol | undefined;
-
-  const definedIn = sym?.file_path ?? null;
-  const visited = new Set<string>();
-
-  const trace = (name: string, depth: number): UsageTraceNode[] => {
-    if (depth >= maxDepth || visited.has(name)) return [];
-    visited.add(name);
-
-    const refs = db.prepare(`
-      SELECT referencing_file_path, line, context
-      FROM symbol_references
-      WHERE project_id = ? AND symbol_name = ?
-      ORDER BY referencing_file_path
-    `).all(projectId, name) as Array<{ referencing_file_path: string; line: number | null; context: string | null }>;
-
-    const result: UsageTraceNode[] = [];
-
-    for (const ref of refs) {
-      if (ref.referencing_file_path === definedIn) continue;
-
-      const fileSymbols = db.prepare(
-        'SELECT name FROM symbols WHERE project_id = ? AND file_path = ? AND (kind = ? OR kind = ? OR kind = ?)'
-      ).all(projectId, ref.referencing_file_path, 'function', 'method', 'class') as Array<{ name: string }>;
-
-      const symNames = fileSymbols.map(s => s.name);
-
-      const nestedCallers: unknown[] = [];
-      for (const s of symNames) {
-        const nested = trace(s, depth + 1);
-        if (nested.length > 0) nestedCallers.push(...nested);
-      }
-
-      result.push({
-        file: ref.referencing_file_path,
-        line: ref.line,
-        symbols_in_file: symNames,
-        callers: nestedCallers,
-      });
-    }
-
-    return result;
-  };
-
-  return {
-    symbol: symbolName,
-    defined_in: definedIn,
-    callers: trace(symbolName, 0),
-  };
-}
+export { traceUsage, type UsageTraceNode, type UsageTraceResult } from './bounded-usage-trace.js';

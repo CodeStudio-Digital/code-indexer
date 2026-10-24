@@ -8,6 +8,7 @@ import type {
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { MemoryDedupeSearch, MemoryWriter } from './extractor.js';
 import type { AgentMemoryService } from './agent-memory-service.js';
+import type { MemoryMutationControl } from './mutation-control.js';
 
 /**
  * Write-path adapters that re-home the existing (tested) `MemoryExtractor` /
@@ -63,15 +64,20 @@ export class AgentMemoryWriter implements MemoryWriter {
     private readonly db: CodeIndexDB,
     private readonly service: AgentMemoryService,
     private readonly relationalQueue?: AgentMemoryRelationalQueue,
-  ) {}
+    private readonly control?: MemoryMutationControl,
+  ) {
+    if (control?.deferEmbeddings && !service.hasDurableMutationQueue) throw new Error('Deferred memory embedding requires a durable mutation queue');
+  }
 
   private runRelational<T>(operation: () => T): Promise<T> {
+    const guarded = () => { this.control?.signal?.throwIfAborted(); this.control?.assertCurrent(); return operation(); };
     return this.relationalQueue
-      ? this.relationalQueue.run(operation)
-      : Promise.resolve().then(operation);
+      ? this.relationalQueue.run(guarded)
+      : Promise.resolve().then(guarded);
   }
 
   runBatch<T>(operation: () => Promise<T>): Promise<T> {
+    this.control?.signal?.throwIfAborted(); this.control?.assertCurrent();
     return this.service.runMutationBatch(operation);
   }
 
@@ -97,20 +103,23 @@ export class AgentMemoryWriter implements MemoryWriter {
       importance: data.importance,
       referencedFiles: data.referencedFiles,
     }));
-    await this.service.embedAndUpsert(row).catch(() => undefined);
+    if (!this.control?.deferEmbeddings) await this.service.embedAndUpsert(row).catch(() => undefined);
     return row;
   }
 
   async update(
     id: number,
-    updates: { content?: string; projectId?: number; importance?: number },
+    updates: { content?: string; projectId?: number; importance?: number; referencedFiles?: string[] },
   ): Promise<AgentMemoryRow | undefined> {
     const old = this.db.getAgentMemoryById(id);
     if (!old) return undefined;
+    const references = old.referenced_files ? JSON.parse(old.referenced_files) as Array<string | { path: string }> : [];
+    const oldPaths = references.map(item => typeof item === 'string' ? item : item.path);
+    const referencedFiles = [...new Set([...oldPaths, ...(updates.referencedFiles ?? [])])];
     // Content change → logical-immutable replace (archive old + create fresh,
     // earliest created_at preserved), then swap the vectors.
-    if (updates.content != null && updates.content !== old.content) {
-      const content = updates.content;
+    if ((updates.content != null && updates.content !== old.content) || referencedFiles.length !== oldPaths.length) {
+      const content = updates.content ?? old.content;
       const fresh = await this.runRelational(() => this.service.replace(id, {
         scope: old.scope,
         projectId: old.project_id,
@@ -120,9 +129,12 @@ export class AgentMemoryWriter implements MemoryWriter {
         content,
         source: old.source,
         importance: updates.importance ?? old.importance,
+        referencedFiles,
       }));
-      await this.service.removeVectors(old.id, old.project_id).catch(() => undefined);
-      await this.service.embedAndUpsert(fresh).catch(() => undefined);
+      if (!this.control?.deferEmbeddings) {
+        await this.service.removeVectors(old.id, old.project_id).catch(() => undefined);
+        await this.service.embedAndUpsert(fresh).catch(() => undefined);
+      }
       return fresh;
     }
     // Importance-only corroboration → cheap metadata bump (no archive churn).
@@ -135,7 +147,7 @@ export class AgentMemoryWriter implements MemoryWriter {
 
 /** Satisfies `MemoryDedupeSearch` over `agent_memory` (scope from project id). */
 export class AgentMemoryDedupeSearch implements MemoryDedupeSearch {
-  constructor(private readonly service: AgentMemoryService) {}
+  constructor(private readonly service: AgentMemoryService, private readonly signal?: AbortSignal) {}
 
   async searchSnapshotsHybrid(
     projectId: number,
@@ -143,7 +155,7 @@ export class AgentMemoryDedupeSearch implements MemoryDedupeSearch {
     query: string,
     limit: number,
   ): Promise<ContextSnapshot[]> {
-    const hits = await this.service.search(scopeForProject(projectId), projectId, query, limit);
+    const hits = await this.service.search(scopeForProject(projectId), projectId, query, limit, undefined, this.signal);
     return hits.map(toSnapshotShape);
   }
 }

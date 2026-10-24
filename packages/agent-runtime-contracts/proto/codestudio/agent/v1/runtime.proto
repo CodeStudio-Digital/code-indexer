@@ -87,6 +87,18 @@ message FramePayload {
     CapabilityUpdate capability_update = 39;
     CapabilityExecute capability_execute = 40;
     CapabilityExecutionResult capability_execution_result = 41;
+    CapabilityReadBatchExecute capability_read_batch_execute = 42;
+    CapabilityReadBatchAccepted capability_read_batch_accepted = 43;
+    CapabilityReadBatchResult capability_read_batch_result = 44;
+    // Persists a resumable provider frontier without opening a provider stream.
+    // The receipt is emitted only after the authoritative store commit.
+    ProviderStart provider_checkpoint = 45;
+    ProviderAccepted provider_checkpoint_committed = 46;
+    ProviderEventConsumed provider_event_consumed = 47;
+    ProviderRequestChunk provider_request_chunk = 48;
+    // A transport receipt only; no provider has opened and no frontier has committed.
+    ProviderAccepted provider_request_chunk_accepted = 49;
+    ProviderRequestCommit provider_request_commit = 50;
   }
 }
 
@@ -239,6 +251,8 @@ message ProviderContentBlock {
     ProviderToolUseContent tool_use = 2;
     ProviderToolResultContent tool_result = 3;
     ArtifactRef attachment = 4;
+    // Provider reasoning retained for continuation; never converted to public text.
+    ProviderTextContent thinking = 5;
   }
 }
 
@@ -247,6 +261,22 @@ message ProviderMessage {
   repeated ProviderContentBlock content = 2;
   ProviderMessagePhase phase = 3;
   bool is_meta = 4;
+  // Engine-authored extractive summary. The exact replaced messages are in
+  // this authenticated cold chapter; it never grants tool authority.
+  ArtifactRef compacted_chapter = 5;
+}
+
+message ProviderContextChapterV1 {
+  uint32 schema_version = 1;
+  string session_id = 2;
+  repeated ProviderMessage messages = 3;
+}
+
+// One-shot transfer. Host commits all chunks before acknowledging the frontier.
+// Checkpoints retain the reference in ProviderMessage, never this transfer buffer.
+message ProviderContextChapterWriteV1 {
+  ArtifactRef reference = 1;
+  bytes encoded_chapter = 2;
 }
 
 message ProviderToolDescriptor {
@@ -258,6 +288,35 @@ message ProviderToolDescriptor {
   string capability_version = 6;
   CapabilityExecutionClass execution_class = 7;
   bool mutates = 8;
+  // Trusted catalog assertions. Unspecified tools are sequential barriers.
+  bool parallel_safe = 9;
+  bool read_only = 10;
+}
+
+// Durable provider frontier. A resumed attempt never executes unresolved
+// capabilities from this payload. The host must reconcile them first.
+message ProviderResumeContextV1 {
+  uint32 schema_version = 1;
+  string session_id = 2;
+  string agent_run_id = 3;
+  string source_attempt_id = 4;
+  ProviderBinding provider_binding = 5;
+  ProviderTurnContext context = 6;
+  repeated string unresolved_capability_operation_ids = 7;
+}
+
+// Host-owned journal checkpoint, committed before opening the provider. A
+// delta retains an exact prefix from the previous frontier of this attempt;
+// both the base and reconstructed frontier are content authenticated. Empty
+// base_operation_id denotes a full checkpoint (also used after compaction).
+message ProviderFrontierRecordV1 {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  ProviderResumeContextV1 frontier = 3;
+  string base_operation_id = 4;
+  uint64 retained_message_count = 5;
+  bytes base_frontier_sha256 = 6;
+  bytes frontier_sha256 = 7;
 }
 
 // Canonical payload for ResolvedAttemptSpec.agent_definition_snapshot in the
@@ -267,6 +326,35 @@ message AgentDefinitionSnapshotV1 {
   uint32 schema_version = 1;
   string agent_definition_id = 2;
   string system_prompt_utf8 = 3;
+}
+
+// Product-prepared conversation for a new attempt. Unlike a recovery frontier,
+// this contains no unfinished tool dispatch or remote continuation authority.
+// The sealed task is already present exactly once in messages.
+message InitialConversationSnapshotV1 {
+  uint32 schema_version = 1;
+  string session_id = 2;
+  repeated ProviderMessage messages = 3;
+  ProviderPreparedUserContextV1 prepared_user_context = 4;
+}
+
+// Immutable instructions selected by the user for this command. Kept apart
+// from visible transcript text and applied at USER priority by the gateway.
+// The checkpoint authenticates the resolved content, including on continuation.
+message ProviderPreparedUserContextV1 {
+  uint32 message_index = 1;
+  repeated string selected_skill_ids = 2;
+  string content_utf8 = 3;
+}
+
+// Read-only Host enrichment pinned to one existing user message. The Host
+// commits these exact bytes in the provider frontier before opening the vendor
+// stream. It cannot modify the sealed provider, tools or workspace authority.
+// Late retrieval is applied only by a later operation, never to an open stream.
+message ProviderPreparedBoundaryContextV1 {
+  uint32 message_index = 1;
+  bytes source_message_sha256 = 2;
+  string content_utf8 = 3;
 }
 
 // Canonical payload for ResolvedAttemptSpec.capability_set_snapshot. The
@@ -317,6 +405,9 @@ message ProviderTurnContext {
   optional uint64 thinking_budget_tokens = 6;
   optional string previous_response_id = 7;
   optional uint64 previous_response_message_count = 8;
+  ProviderPreparedUserContextV1 prepared_user_context = 9;
+  ProviderPreparedBoundaryContextV1 prepared_boundary_context = 10;
+  repeated ProviderContextChapterWriteV1 pending_chapters = 11;
 }
 
 // Runner -> Host. Starts one logical provider operation. Credentials and
@@ -335,6 +426,44 @@ message ProviderStart {
   optional uint64 previous_response_message_count = 11;
   int64 deadline_at_unix_ms = 12;
   string idempotency_key = 13;
+  ProviderPreparedUserContextV1 prepared_user_context = 14;
+  // When true, Host sends at most one non-terminal stream event until the
+  // runner consumes it. This is transport credit, never a durable commit ACK.
+  bool consumption_ack_required = 15;
+  ProviderPreparedBoundaryContextV1 prepared_boundary_context = 16;
+  repeated ProviderContextChapterWriteV1 pending_chapters = 17;
+}
+
+message ProviderEventConsumed {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  uint64 event_sequence = 3;
+}
+
+// Bounded transfer of one canonical ProviderStart that exceeds a Data frame.
+// At most 16 MiB, in contiguous chunks of at most 128 KiB. Exact frame replay
+// is handled by the authenticated channel, never by appending a chunk twice.
+message ProviderRequestChunk {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string operation_id = 3;
+  uint64 total_bytes = 4;
+  bytes request_sha256 = 5;
+  uint64 chunk_offset = 6;
+  bytes encoded_chunk = 7;
+  bool checkpoint_only = 8;
+}
+
+// References the complete transfer on this same attempt/channel. The Host
+// verifies length, digest, canonical encoding and inner authority before
+// admitting the provider or persisting a checkpoint. No paths cross the wire.
+message ProviderRequestCommit {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string operation_id = 3;
+  uint64 total_bytes = 4;
+  bytes request_sha256 = 5;
+  bool checkpoint_only = 6;
 }
 
 // Host -> Runner. Commits registry ownership before any provider delta.
@@ -441,6 +570,9 @@ enum AttemptTrigger {
   ATTEMPT_TRIGGER_RESUME = 2;
   ATTEMPT_TRIGGER_PROVIDER_FALLBACK = 3;
   ATTEMPT_TRIGGER_WORKER_RECOVERY = 4;
+  // First attempt of a new command/run continuing a settled session frontier.
+  // RESUME remains a later attempt of the same run.
+  ATTEMPT_TRIGGER_SESSION_CONTINUATION = 5;
 }
 
 enum AgentRunWaitMode {
@@ -506,6 +638,10 @@ message ResolvedAttemptSpec {
   int64 deadline_at_unix_ms = 24;
   SnapshotRef agent_definition_snapshot = 25;
   SnapshotRef codex_app_server_process_snapshot = 26;
+  SnapshotRef initial_conversation_snapshot = 27;
+  // Effects/provider work stop here; deadline_at_unix_ms still bounds durable
+  // terminal commits and cleanup. Absence preserves the original deadline.
+  optional int64 execution_deadline_at_unix_ms = 28;
 }
 
 message PrepareAttempt {

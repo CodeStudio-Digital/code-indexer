@@ -52,5 +52,11 @@ path = "examples/agent_runner_startup_benchmark.rs"
 required-features = ["performance-harness"]
 test = false
 
+[[example]]
+name = "agent-runner-dispatch-benchmark"
+path = "examples/agent_runner_dispatch_benchmark.rs"
+required-features = ["performance-harness"]
+test = false
+
 [lints]
 workspace = true

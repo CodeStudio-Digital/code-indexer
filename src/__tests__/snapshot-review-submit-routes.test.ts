@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Hono } from 'hono';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { asSessionId, type SessionId } from '@mcp/session-storage';
 import { mountSnapshotReviewRoutes } from '@apps/http-api/server/routes/snapshot-review-routes.js';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';

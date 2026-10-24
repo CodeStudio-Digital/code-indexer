@@ -55,13 +55,8 @@ export type SandboxStack =
   | 'local-process'
   /**
    * Bare Node.js sandbox — no scaffolding, no dev server, no preview.
-   * Used by Design System Creator sessions: the agent receives a
-   * container with Node + npm + git, the virtual project root is
-   * bind-mounted at `/app`, and the uploaded theme sits ready at
-   * `/app/design_system/`. The pipeline does NOT need a Vite app
-   * scaffold — that pollutes the workdir with `package.json`, `src/`,
-   * `node_modules/` etc. and confuses the extractor about what's
-   * "the theme" vs. "the scaffold".
+   * Provides Node + npm + git with the project root bind-mounted at
+   * `/app`, without adding generated application files.
    */
   | 'node-only';
 
@@ -78,7 +73,7 @@ export type BuilderStack = (typeof BUILDER_STACKS)[number];
 /**
  * Stacks the sandbox lifecycle routes (GET/POST /sandbox, restart-dev,
  * logs) accept. Superset of `BUILDER_STACKS`: includes internal-only
- * stacks like `'node-only'` (used by Design System Creator) that aren't
+ * stacks like `'node-only'` that aren't
  * exposed in user-facing pickers but still need to be provisionable,
  * inspectable, and restartable from the dashboard / API.
  *

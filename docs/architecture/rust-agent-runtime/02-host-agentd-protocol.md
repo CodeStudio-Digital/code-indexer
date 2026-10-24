@@ -1031,7 +1031,7 @@ Host → Supervisor:
 |---|---|
 | `HostSupervisorHello` | Seleciona versão, build policy e limites globais |
 | `LaunchAttemptProcess` | Solicita processo/resource group com identity, budget, deadline, launch nonce, activation authority seal e endpoints protegidos |
-| `UpdateAttemptAuthority` | Atualiza lease expiry/fence sem ultrapassar hard deadline |
+| `UpdateAttemptAuthority` | Renova expiry para a mesma identidade/fence sem ultrapassar hard deadline |
 | `CancelAttemptProcess` | Inicia grace física da attempt |
 | `FenceAttemptProcess` | Fecha admissão física imediatamente |
 | `ReapAttemptProcess` | Exige encerramento e coleta de todos os recursos |
@@ -1482,6 +1482,21 @@ O host envia `UpdateAttemptAuthority` pelo management channel com epoch e
 update ao hard deadline imutável e encerra o resource group quando lease ou
 pulse expira. Assim, host travado com pipe ainda aberto não mantém attempt viva.
 
+Implementado no cohort Coder Windows em 2026-10-06: o Host consulta o lease
+durável, envia a renovação e só estende seu próprio timer após o ACK físico.
+O supervisor reutiliza o watchdog instalado no launch; não há um segundo
+mecanismo de expiração. A atualização exige launch confirmado, identidade e
+fencing epoch exatos, lease atual vivo, prazo não regressivo e hard deadline
+inalterado. Cancelamento, fencing ou expiração não podem ser revertidos por
+renovação. Replay idêntico é reconhecido sem reinstalar um prazo antigo;
+reuso divergente da chave é rejeitado. Perda do ACK exige cleanup físico.
+
+Cancel/Fence revogam primeiro pelo Control; o comando Management aguarda uma
+renovação já enviada. A configuração do Coder admite até 4.096 identidades
+Management no Host e 65.536 no Control/Data, separadas dos créditos simultâneos.
+Esses limites continuam finitos: rotação autenticada ou terminal durável antes
+do esgotamento permanecem necessários para certificação de attempts extensas.
+
 ### IPC-049
 
 `CapabilityPrepare` trafega runner → Host no Data channel já autenticado. Ele é
@@ -1516,6 +1531,33 @@ retorna somente uma página; payload continua separado e só atravessa
 `ReadCommittedSessionPayload` com operation/kind/hash/length exatos. O scanner
 Host possui teto total explícito, valida encoding canônico e apenas classifica
 `started` sem terminal. Essa leitura nunca autoriza probe, retry ou novo efeito.
+
+### Consumo do stream Provider — implementacao de 2026-10-06
+
+ProviderStart.consumption_ack_required (tag 15) habilita uma janela de um
+ProviderTextDelta, ProviderThinkingDelta, ProviderToolCall ou ProviderUsageEvent.
+O Host reserva o credito antes do envio e aguarda ProviderEventConsumed
+(FramePayload tag 47, runner para Host no Data channel) com identity,
+operation_id e event_sequence exatos. Essa espera ocorre fora da faixa de
+escrita do Data channel: recibos de persistencia continuam trafegando.
+
+O runner confirma somente ao entregar o evento ao consumidor do engine.
+Eventos recebidos enquanto um EngineEventCommitted esta pendente ocupam a
+unica posicao de dados, sem devolver credito prematuramente. Um terminal pode
+ocupar uma posicao adicional ao concorrer com cancelamento. Credito nao e
+prova de gravacao, dispatch, efeito ou progresso duravel.
+
+O primeiro texto de cada segmento continua imediato; deltas seguintes sao
+agrupados pelo gateway por item/fase/tipo com tetos de 16 ms, 16 KiB ou 256
+fragmentos. Limites de evento/bytes sao verificados antes do agrupamento.
+Tools, uso, mudancas de segmento e terminal preservam a ordem.
+
+Cancelamento aborta a espera de credito. Um unico recibo ja em transito pode
+ser retirado da ultima operacao encerrada, sem liberar outro envio. Recibo
+com operacao/sequence divergente, duplicata em envelope novo ou consumo sem
+credito falha fechado; replay do mesmo envelope continua deduplicado pelo
+receiver. Ausencia da flag conserva compatibilidade com ProviderStart antigo;
+o runner nativo do produto sempre a habilita.
 
 ## 20. Verificação obrigatória
 

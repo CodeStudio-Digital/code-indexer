@@ -18,6 +18,19 @@ function tool(name: string, tier?: string): CoderTool {
 }
 
 describe('runtime tool tiers', () => {
+  it('never promotes or refreshes capabilities outside the native attempt', async () => {
+    const refresh = vi.fn();
+    const expand = buildExpandTools(undefined, { beforeExpand: refresh,
+      toolNamesForTier: tier => tier === 'navigate' ? ['write_file'] : [] })[0]!;
+    const ctx = { ports: { discovery: { capabilitySetDigest: 'a'.repeat(64),
+      visibleToolNames: new Set(['write_file']), eligibleCapabilityIds: new Set(['cap:native:write_file']), assertCurrent() {} } } };
+    expect((await expand.handler({ tier: 'navigate' }, ctx as never)).content).toContain('already visible');
+    expect((await expand.handler({ tier: 'company' }, ctx as never)).isError).toBe(true);
+    expect((await expand.handler({ tier: 'new-server' }, ctx as never)).isError).toBe(true);
+    ctx.ports.discovery.visibleToolNames.clear();
+    expect((await expand.handler({ tier: 'navigate' }, ctx as never)).isError).toBe(true);
+    expect(refresh).not.toHaveBeenCalled();
+  });
   it('groups dynamic tools into an opt-in tier and leaves undeclared tools alone', () => {
     const catalog = collectRuntimeToolTiers([
       tool('plugin__cloudflare__deploy', 'plugin:cloudflare'),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TasksState } from '@mcp/session-storage/session-state-types.js';
 import { taskList } from '../tasks.js';
 import {
   buildTrackState,

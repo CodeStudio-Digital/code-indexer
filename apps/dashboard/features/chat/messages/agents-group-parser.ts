@@ -197,7 +197,7 @@ function statusFromPersistedReason(reason: string) {
   if (reason === 'completed') return 'completed' as const;
   if (reason === 'aborted') return 'aborted' as const;
   if (reason === 'timed_out' || reason === 'timeout' || reason === 'stalled') return 'timed_out' as const;
-  if (reason === 'tool_budget' || reason === 'time_budget' || reason === 'max_turns') return 'partial' as const;
+  if (reason === 'tool_budget' || reason === 'time_budget' || reason === 'max_turns' || reason === 'max_tool_calls' || reason === 'ipc_identity_budget') return 'partial' as const;
   return 'error' as const;
 }
 

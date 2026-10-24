@@ -9,6 +9,7 @@ import type { PendingInbound } from './AttemptFrameReceiver.js';
 import { HostDataChannelError } from './HostDataChannelError.js';
 import type { HostDataBoundContext } from './HostDataAttemptChannelValidation.js';
 import type { ProviderDataOutboundLane } from './ProviderDataOutboundLane.js';
+import type { ProviderStreamCredit } from './ProviderStreamCredit.js';
 
 export class ProviderDataEventSink implements ProviderGatewayEventSinkPort {
   readonly #accepted: Promise<void>;
@@ -22,6 +23,7 @@ export class ProviderDataEventSink implements ProviderGatewayEventSinkPort {
     private readonly context: HostDataBoundContext,
     private readonly lane: ProviderDataOutboundLane,
     private readonly operationId: string,
+    private readonly credit?: ProviderStreamCredit,
   ) {
     this.#accepted = new Promise<void>((resolve, reject) => {
       this.#resolveAccepted = resolve;
@@ -33,7 +35,9 @@ export class ProviderDataEventSink implements ProviderGatewayEventSinkPort {
     return this.#accepted;
   }
 
-  async emit(event: ProviderGatewayEvent): Promise<void> {
+  async emit(event: ProviderGatewayEvent, signal?: AbortSignal): Promise<void> {
+    const waitConsumed = event.case !== 'providerAccepted' && event.case !== 'providerTerminal'
+      ? this.credit?.reserve(event.value.eventSequence) : undefined;
     try {
       await this.lane.run(async () => {
         if (this.#phase === 'waiting') {
@@ -56,7 +60,10 @@ export class ProviderDataEventSink implements ProviderGatewayEventSinkPort {
         }
         if (event.case === 'providerTerminal') this.#phase = 'terminal';
       });
+      if (waitConsumed) await waitConsumed(signal);
     } catch (cause) {
+      if (signal?.aborted) throw cause;
+      this.credit?.close(cause);
       this.#phase = 'failed';
       this.#rejectAccepted(cause);
       throw cause;

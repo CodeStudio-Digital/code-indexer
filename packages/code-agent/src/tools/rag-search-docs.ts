@@ -95,7 +95,7 @@ export const ragSearchDocsTool: CoderTool = {
   riskLevel: 'read',
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     const query = String(args.query ?? '').trim();
-    if (!query) return err('query cannot be empty');
+    if (!query || query.length > 4096) return err('query must contain between 1 and 4096 characters');
     if (!globalBackend) {
       return err(
         'rag_search_docs is not configured: the doc corpus backend is not wired into this process. Ask the user to ensure the Documentação feature is enabled.',
@@ -108,13 +108,15 @@ export const ragSearchDocsTool: CoderTool = {
 
     let response;
     try {
+      ctx.signal?.throwIfAborted();
       response = await globalBackend.search({
         query,
         collection: collection || undefined,
         limit,
         scope,
         project_id: ctx.projectId,
-      });
+      }, ctx.signal);
+      ctx.signal?.throwIfAborted();
     } catch (e) {
       return err(`doc search failed: ${e instanceof Error ? e.message : String(e)}`);
     }

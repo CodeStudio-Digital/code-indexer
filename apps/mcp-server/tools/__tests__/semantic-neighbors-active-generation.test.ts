@@ -40,7 +40,8 @@ function fixture(options: { remoteError?: string; vectorError?: string } = {}) {
   const db = {
     getProjectByName: () => ({ id: 7, name: 'renamed-demo', root_path: 'D:/demo' }),
     getProject: () => ({ id: 7, name: 'renamed-demo', root_path: 'D:/demo' }),
-    getSymbolById: (id: number) => id === 10 ? seed : id === 11 ? neighbor : undefined,
+    getAgentSemanticSeed: (id: number) => id === 10 ? seed : undefined,
+    listAgentSemanticNeighbors: (_projectId: number, ids: number[]) => ids.includes(11) ? [neighbor] : [],
   };
   return {
     ctx: {
@@ -56,10 +57,12 @@ function fixture(options: { remoteError?: string; vectorError?: string } = {}) {
 describe('semantic_neighbors server ownership', () => {
   it('delegates semantic work to the localhost owner using the stable project id', async () => {
     const h = fixture();
-    const output = await tool.handler({ symbol_id: 10, project_name: 'renamed-demo' }, h.ctx);
+    const output = await tool.handler({ symbol_id: 10, project_name: 'renamed-demo',
+      __mcp_session_id: 'session/1', __mcp_company_session_id: 'company/1' }, h.ctx);
 
     expect(h.searchProject).toHaveBeenCalledWith(7, expect.stringContaining('function seed'), {
       mode: 'hybrid', type: 'symbols', limit: 12,
+      consumer: 'agent', sessionId: 'session/1', companySessionId: 'company/1',
     });
     expect(h.ftsFallback).not.toHaveBeenCalled();
     expect(output).toContain('neighbor');

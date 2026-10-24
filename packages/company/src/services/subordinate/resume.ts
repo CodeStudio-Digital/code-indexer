@@ -1,3 +1,4 @@
+import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.js';
 /**
  * Resume an existing subordinate agent run from its persisted coder
  * session. Distinct from `spawn` (which creates a new agent_run row);
@@ -286,6 +287,7 @@ async function resumeSubordinateInner(
   let handle: Awaited<ReturnType<typeof runCoder>>;
   try {
     handle = await runCoder({
+        hostTools: getReadyDocsResearchTools(),
       session: { id: agentRun.coder_session_id },
       userMessage: resumeMessage,
       attachments,

@@ -18,7 +18,7 @@ export interface ProjectSemanticSearchResponse {
 }
 
 export interface MemorySemanticSearchResponse {
-  results: AgentMemoryHit[];
+  results: Array<Pick<AgentMemoryHit, 'id' | 'score'>>;
 }
 
 export interface McpSemanticSearchClient {
@@ -32,12 +32,14 @@ export interface McpSemanticSearchClient {
       consumer?: 'agent';
       sessionId?: string;
       companySessionId?: string;
+      signal?: AbortSignal;
     },
   ): Promise<SemanticClientResult<ProjectSemanticSearchResponse>>;
   searchProjectMemory(
     projectId: number,
     query: string,
     limit?: number,
+    signal?: AbortSignal,
   ): Promise<SemanticClientResult<MemorySemanticSearchResponse>>;
 }
 
@@ -55,7 +57,9 @@ function parseProjectResponse(body: unknown): ProjectSemanticSearchResponse | nu
 }
 
 function parseMemoryResponse(body: unknown): MemorySemanticSearchResponse | null {
-  if (!isObject(body) || !Array.isArray(body.results)) return null;
+  if (!isObject(body) || !Array.isArray(body.results) || body.results.length > 50) return null;
+  if (body.results.some(row => !isObject(row) || !Number.isSafeInteger(row.id) || Number(row.id) < 1
+    || typeof row.score !== 'number' || !Number.isFinite(row.score))) return null;
   return body as unknown as MemorySemanticSearchResponse;
 }
 
@@ -68,9 +72,9 @@ export function createMcpSemanticSearchClient(
   config: IndexerConfig,
   fetchImpl?: FetchLike,
 ): McpSemanticSearchClient {
-  const request = (path: string, headers?: Record<string, string>) => requestMcpLocalServer(
+  const request = (path: string, headers?: Record<string, string>, signal?: AbortSignal) => requestMcpLocalServer(
     path,
-    { method: 'GET', headers },
+    { method: 'GET', headers, signal },
     { config, fetchImpl, timeoutMs: 20_000 },
   );
 
@@ -89,6 +93,7 @@ export function createMcpSemanticSearchClient(
       const response = await request(
         `/api/projects/${projectId}/search?${params}`,
         headers,
+        options.signal,
       );
       if (!response.ok) return failed(response.error);
       const value = parseProjectResponse(response.body);
@@ -97,9 +102,9 @@ export function createMcpSemanticSearchClient(
         : failed('semantic server returned an invalid search payload');
     },
 
-    async searchProjectMemory(projectId, query, limit = 5) {
-      const params = new URLSearchParams({ q: query, limit: String(limit) });
-      const response = await request(`/api/projects/${projectId}/agent-memory/search?${params}`);
+    async searchProjectMemory(projectId, query, limit = 5, signal) {
+      const params = new URLSearchParams({ q: query, limit: String(limit), projection: 'ids' });
+      const response = await request(`/api/projects/${projectId}/agent-memory/search?${params}`, undefined, signal);
       if (!response.ok) return failed(response.error);
       const value = parseMemoryResponse(response.body);
       return value

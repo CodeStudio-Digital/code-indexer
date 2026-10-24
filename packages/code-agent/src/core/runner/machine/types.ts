@@ -50,6 +50,7 @@ export type BehaviorEvent =
   | { kind: 'ProviderError'; retryable: boolean; status: number; message?: string; code?: string }
   | { kind: 'CompactionDone'; collapsedFrom: number; collapsedTo: number }
   | { kind: 'CleanFinish' }
+  | { kind: 'ToolOutcomeUnknown' }
   | { kind: 'Aborted' };
 
 export type BehaviorEventKind = BehaviorEvent['kind'];

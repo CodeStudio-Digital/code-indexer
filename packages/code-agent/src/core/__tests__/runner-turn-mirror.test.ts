@@ -39,6 +39,16 @@ function makeRunner() {
 }
 
 describe('CoderRunner.turn mirror (turn_start)', () => {
+  it('uses the admitted runner identity in behavior-tree lifecycle events', async () => {
+    const runner = makeRunner();
+    const ids: string[] = [];
+    runner.on('run_started', event => ids.push(event.runId));
+    runner.on('provider_call', event => ids.push(event.runId));
+    runner.pushUserMessage('hello');
+    await runner.run();
+    expect(ids.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(ids)).toEqual(new Set([runner.runId]));
+  });
   it('starts at 0 and tracks each turn_start before listeners observe it', async () => {
     const runner = makeRunner();
     expect(runner.turn).toBe(0);

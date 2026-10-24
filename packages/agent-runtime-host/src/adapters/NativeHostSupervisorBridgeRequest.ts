@@ -28,6 +28,7 @@ export interface NativeHostSupervisorBridgeOpenRequestOwner {
 export interface NativeHostSupervisorBridgeOpenRequestInput {
   readonly runtimePackage: VerifiedRuntimePackage;
   readonly provision: HostSupervisorBootstrapProvision;
+  readonly lifecycleOutboxDirectory?: string;
 }
 
 class NativeSupervisorRequestOwner
@@ -88,6 +89,7 @@ export function encodeNativeHostSupervisorBridgeOpenRequest(
           input.runtimePackage.binaries.supervisor.absolutePath,
         runnerExecutable: input.runtimePackage.binaries.runner.absolutePath,
         startupTimeoutMs: 10_000n,
+        lifecycleOutboxDirectory: input.lifecycleOutboxDirectory ?? '',
       },
     );
     const encoded = toBinary(

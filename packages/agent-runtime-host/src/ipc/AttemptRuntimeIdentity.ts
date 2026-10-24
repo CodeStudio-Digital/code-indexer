@@ -26,12 +26,19 @@ function runtimeInstanceId(
     case 'hydrationProgress':
     case 'hydrationCommitted':
     case 'providerAccepted':
+    case 'providerRequestChunk':
+    case 'providerRequestChunkAccepted':
+    case 'providerRequestCommit':
+    case 'providerCheckpointCommitted':
     case 'engineEventProposal':
     case 'engineEventCommitted':
     case 'capabilityPrepare':
     case 'capabilityUpdate':
     case 'capabilityExecute':
     case 'capabilityExecutionResult':
+    case 'capabilityReadBatchExecute':
+    case 'capabilityReadBatchAccepted':
+    case 'capabilityReadBatchResult':
       return payload.body.value.runtimeInstanceId;
     case 'prepareAttempt':
     case 'activateAttempt':
@@ -42,7 +49,9 @@ function runtimeInstanceId(
     case 'hydrationChunk':
     case 'hydrationComplete':
     case 'providerStart':
+    case 'providerCheckpoint':
     case 'providerCancel':
+    case 'providerEventConsumed':
     case 'providerTextDelta':
     case 'providerThinkingDelta':
     case 'providerToolCall':

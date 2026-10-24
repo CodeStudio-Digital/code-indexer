@@ -76,6 +76,26 @@ afterEach(() => {
 });
 
 describe('openStream chunked replay pump', () => {
+  it('yields by elapsed time even before reaching the event count limit', async () => {
+    const frames = [busInfoFrame('budget-bus')];
+    for (let i = 0; i < 12; i++) frames.push(workerLogFrame(i, `e${i}`));
+    frames.push(doneFrame(12));
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse(frames)));
+    let elapsed = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (elapsed += 4));
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    const d = deps();
+    const pending = openStream(SESSION_ID, attachOpts, d);
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(timer.mock.calls.filter((call) => call[1] === 0).length).toBeGreaterThan(1);
+    expect(d.lastSeenSeqMap.get(SESSION_ID)).toBe(12);
+    expect(peekWorkerLog(SESSION_ID).map((event) => event.message))
+      .toEqual([...Array.from({ length: 12 }, (_, i) => `e${i}`), 'done']);
+    now.mockRestore();
+    timer.mockRestore();
+  });
+
   it('defers a since=-1 replay burst off the arrival tick and drains it in order', async () => {
     const N = 120;
     const frames = [busInfoFrame('bus-a')];

@@ -7,7 +7,6 @@
  * providers integrate against.
  */
 import type { ChatProvider } from './adapter.js';
-import type { ImageGenClient } from './images.js';
 import type { CredKind, ResolvedCreds, ProviderConfigLike } from './credentials.js';
 import type { AuthDescriptor, ProviderAuthHandlers, ProviderCredentials } from './auth.js';
 
@@ -284,12 +283,6 @@ export interface ProviderDefinition {
   testConnection?(ctx: ProviderTestContext): Promise<void>;
   /** Build a coder (streaming) client for this shape. */
   createCoder?(creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts): ChatProvider;
-  /**
-   * Build an image-generation client for this shape. Present only when the
-   * shape supports it (`capabilities.supportsImageGen`); the engine derives it
-   * per-wire like createCoder.
-   */
-  createImages?(creds: ResolvedCreds, model?: string): ImageGenClient;
 }
 
 export function defineProvider(def: ProviderDefinition): ProviderDefinition {

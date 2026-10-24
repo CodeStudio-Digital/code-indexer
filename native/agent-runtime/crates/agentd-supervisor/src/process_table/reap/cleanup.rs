@@ -25,18 +25,26 @@ impl<G> OwnershipRegistry<G> {
         self.reap_after_cleanup_with(&PlatformReaper(port), key, timeout, observed_at_unix_ms)
     }
 
-    pub(crate) fn reap_after_cleanup_gated<P, F, V>(
+    pub(crate) fn reap_after_cleanup_gated<P, F, C, V>(
         &mut self,
         port: &P,
         key: &OwnershipKey,
         timeout: Duration,
         post_reap_gate: F,
+        commit_evidence: C,
     ) -> Result<ReapedAttempt, ReapAfterCleanupError<P::Error, V>>
     where
         P: ContainmentPort<Group = G>,
         F: FnOnce() -> Result<i64, V>,
+        C: FnOnce(&ReapedAttempt, i64) -> Result<(), V>,
     {
-        self.reap_after_cleanup_with_gate(&PlatformReaper(port), key, timeout, post_reap_gate)
+        self.reap_after_cleanup_with_gate(
+            &PlatformReaper(port),
+            key,
+            timeout,
+            post_reap_gate,
+            commit_evidence,
+        )
     }
 
     pub(in crate::process_table) fn reap_after_cleanup_with<B>(
@@ -60,21 +68,23 @@ impl<G> OwnershipRegistry<G> {
         self.finish_reap(backend, reaping, timeout, Some(observed_at_unix_ms))
     }
 
-    pub(in crate::process_table) fn reap_after_cleanup_with_gate<B, F, V>(
+    pub(in crate::process_table) fn reap_after_cleanup_with_gate<B, F, C, V>(
         &mut self,
         backend: &B,
         key: &OwnershipKey,
         timeout: Duration,
         post_reap_gate: F,
+        commit_evidence: C,
     ) -> Result<ReapedAttempt, ReapAfterCleanupError<B::Error, V>>
     where
         B: ReapBackend<G>,
         F: FnOnce() -> Result<i64, V>,
+        C: FnOnce(&ReapedAttempt, i64) -> Result<(), V>,
     {
         let reaping = self.take_cleanup_reaping(key).map_err(|error| {
             ReapAfterCleanupError::Operation(ContainmentOperationError::Ownership(error))
         })?;
-        self.finish_reap_gated(backend, reaping, timeout, post_reap_gate)
+        self.finish_reap_gated(backend, reaping, timeout, post_reap_gate, commit_evidence)
     }
 
     fn take_cleanup_reaping(

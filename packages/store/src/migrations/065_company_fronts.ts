@@ -3,7 +3,7 @@
  *
  * A "front" is a sub-container inside a CompanySession with its own
  * master agent, board feed, composer and subordinate set, while sharing
- * the project, sandbox, services and design system with sibling fronts.
+ * the project, sandbox and services with sibling fronts.
  *
  * The user can open multiple fronts in one session and alternate
  * between them to parallelise unrelated work — while the master of

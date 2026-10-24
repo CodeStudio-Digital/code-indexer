@@ -101,6 +101,7 @@ export function extractCalls(
           refs.push({
             symbol_name: name,
             kind: 'function' as SymbolKind,
+            reference_kind: 'call',
             line,
             col: node.startPosition.column + 1,
             snippet: node.text.split('\n')[0]?.trim().slice(0, 120),

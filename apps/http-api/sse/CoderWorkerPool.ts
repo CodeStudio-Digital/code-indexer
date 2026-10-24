@@ -1,3 +1,5 @@
+import { authorizeNativeMcpDispatch } from '../native-mcp-dispatch.js';
+import { registerWorkerMcpCalls } from './worker-mcp-calls.js';
 /**
  * Pool of worker-backed coder runs (P17).
  *
@@ -23,7 +25,7 @@
  * The pool is the only owner of coder runners. Routes may use the compatibility
  * `runtime.activeRuns` facade, but that facade delegates exclusively here.
  */
-import { WorkerHost } from '@mcp/orchestrator-host';
+import { WorkerHost, isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import {
   createBus,
   publish,
@@ -35,12 +37,31 @@ import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { ToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
-import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
-import { getGlobalResearchBrowser, type ResearchBrowserInvoke } from '@mcp/code-agent/tools/browser/index.js';
+import { registerWorkerPreviewCalls } from './worker-preview-calls.js';
+import { nativeApplicationTarget, resolveNativeApplicationOwner } from './native-application-owner.js';
+import { registerWorkerNativeMemoryCalls } from './worker-native-memory-calls.js';
+import { registerWorkerNativeExportCalls } from './worker-native-export-calls.js';
+import { registerWorkerNativeIndexCalls } from './worker-native-index-calls.js';
+import { registerWorkerAgentReadCalls, type OwnedAgentReadService } from './worker-agent-read-calls.js';
+import { registerWorkerNativeChildHistory } from './worker-native-child-history.js';
+import { registerWorkerDiagramRender } from './worker-diagram-render.js';
+import { registerWorkerBrowserCalls } from './worker-browser-calls.js';
 import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
+import { admitWorkerAttempt } from './coder-attempt-bridge.js';
+import { activateCoderRuntimeFacade } from './coder-runtime-facade.js';
+import { nativeCoderDevelopmentConfig, nativeCoderWorkerHandle } from './native-coder-worker-handle.js';
+import { dispatchNativeAuthority, type NativeAuthorityOperation } from '../workers/native-authority-bridge.js';
+import { admitNativeWorktreeContinuation } from '../native-worktree-continuation-admission.js';
+import type { NativeCoderDevelopmentConfig } from '../workers/native-coder-execution.js';
+import type { NativeHistoryProjection } from '../native-history-projection.js';
+import type { FsConversationProjectionQuery } from '@mcp/session-storage/fs-store/index.js';
+import { CoderStartupUncertainError, isCoderInteractionNotPendingError } from './coder-runtime-errors.js';
+import type { AgentRunHandleApi } from '@mcp/agent-runtime-host';
+import { readFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { nativeRuntimePaths } from '../native-runtime-paths.js';
 import { notifyBuilderRunEnded } from './builder-checkpoint.js';
 import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
-import type { ISpriteStudioHost } from '@mcp/code-agent/tools/sprite-studio/index.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import type { CompanyRecommendFn } from '@mcp/company/services/scheduler/recommend-shim.js';
 import type { McpExternalPool } from './McpExternalPool.js';
@@ -57,6 +78,7 @@ import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js
 import { createHash, randomUUID } from 'node:crypto';
 import {
   classifyCoderTerminalOutcome,
+  isTerminalAgentRunStatus,
   normalizeCoderTerminalSignal,
   type ControlPlaneEventType,
   type ResolvedRuntimePolicyV1,
@@ -260,12 +282,13 @@ function mirrorBusLifecycleEvent(
  * emit when `setGlobalDocSearch(null)` was active.
  */
 export interface CoderWorkerDocDeps extends WorkerMemoryDeps {
+  projectIndex?: import('../server/owned-project-index.js').OwnedProjectIndexService | null;
+  documentExport?: Pick<import('@mcp/services/services/exporter.js').ExportService, 'exportProject'> | null;
+  agentReads?: OwnedAgentReadService | null;
   docSearch?: DocSearchBackend | null;
   docsResearch?: DocsResearchBridge | null;
   /** Main-side vision describer; worker reaches it via `visionDescribe` RPC. */
   vision?: IVisionDescriber | null;
-  /** Main-side Sprite Studio host; worker reaches it via `spriteStudioHost.<method>` RPC. */
-  spriteStudioHost?: ISpriteStudioHost | null;
   /**
    * Main-side role recommender (embedding-backed). The company worker reaches
    * it via the `recommend` RPC so the autonomous CompanyScheduler can resolve
@@ -355,6 +378,12 @@ interface PoolEntry {
   bus: CoderRunBus;
   sessionContext: SessionRuntimeContext;
   currentRunId: number;
+  runtimeHandle?: AgentRunHandleApi;
+  runtimeAdmission?: { hash: string; result: ReturnType<typeof admitWorkerAttempt> };
+  runtimeCancellationRequested?: boolean;
+  nativeDevelopment?: NativeCoderDevelopmentConfig;
+  nativeWorkspaceTransitions?: Map<string, Promise<ControlPlaneRunContext>>;
+  workerClosed: Promise<void>;
   lastTouchedAt: number;
   detachCurrentBusRuntimeLog: () => void;
   detachBusMirror: () => void;
@@ -615,6 +644,10 @@ export class CoderWorkerPool {
     const runId = this.nextRunId++;
     this.prepareRunBus(entry, sessionId, runId);
     entry.controlPlaneRunContext = controlPlaneRunContext ?? null;
+    entry.runtimeHandle = undefined;
+    entry.runtimeAdmission = undefined;
+    entry.nativeWorkspaceTransitions = new Map();
+    entry.runtimeCancellationRequested = false;
     // (B) — mark the run in-progress so the idle sweep keeps hands off
     // until the worker emits its terminal `done`/`error` via the bus
     // event mirror below.
@@ -624,13 +657,42 @@ export class CoderWorkerPool {
     }
     const bridge = entry.host.requireBridge();
     try {
+      entry.nativeDevelopment = await nativeCoderDevelopmentConfig({ context: controlPlaneRunContext, sessionId,
+        workerFile: this.opts.workerFile, dbPath: this.opts.dbPath, projectRoot: entry.sessionContext.projectRoot });
+      if (entry.nativeDevelopment) {
+        const store = this.opts.getControlPlaneStore?.();
+        if (!store) throw new Error('Native product authority is unavailable');
+        entry.runtimeHandle = nativeCoderWorkerHandle({ store, context: entry.nativeDevelopment.context,
+          bridge, bus: entry.bus, assertOwner: () => {
+            if (this.entries.get(sessionId) !== entry || entry.currentRunId !== runId || !entry.runInProgress) {
+              throw new Error('Native worker handle belongs to a retired attempt');
+            }
+          } });
+      }
       await bridge.request('runFresh', {
         ...workerOpts,
         ...(runtimePolicy ? { runtimePolicy } : {}),
         runId,
         controlPlaneParentAgentRunId: controlPlaneRunContext?.agentRunId,
+        controlPlaneAdmissionRequired: controlPlaneRunContext != null && !entry.nativeDevelopment,
+        nativeDevelopment: entry.nativeDevelopment,
       }, { timeoutMs: 60_000 });
     } catch (err) {
+      if (isMutationOutcomeUnknownError(err)) {
+        // A timed-out request does not cancel the worker handler. Keep its
+        // authority and writer fence until stop has acknowledged preparation
+        // and physical cleanup; never start another run over a lost ACK.
+        const uncertain = new CoderStartupUncertainError(err);
+        this.lifecycleFailures.set(sessionId, uncertain);
+        try { await this.evict(sessionId); }
+        catch (drainError) {
+          this.log('error', `[coder-pool] startup cleanup unconfirmed session=${sessionId}: ${String(drainError)}`);
+          throw uncertain;
+        }
+        if (this.entries.get(sessionId) === entry) throw uncertain;
+        this.lifecycleFailures.delete(sessionId);
+        throw err;
+      }
       this.stopControlPlaneLeaseRenewal(entry);
       entry.runInProgress = false;
       await terminalizeLocalCoderRun(
@@ -682,6 +744,13 @@ export class CoderWorkerPool {
       throw new Error(`coder-pool: worker did not persist follow-up message for ${sessionId}`);
     }
     return result.roundMessageId;
+  }
+
+  /** Read through the active native writer. Legacy or idle workers return no projection. */
+  async readNativeHistory(sessionId: string, query?: FsConversationProjectionQuery): Promise<NativeHistoryProjection | undefined> {
+    const entry = this.entries.get(sessionId as SessionId);
+    if (!entry?.nativeDevelopment || this.evictions.has(sessionId as SessionId)) return undefined;
+    return entry.host.requireBridge().request<NativeHistoryProjection | undefined>('native.readHistory', { query });
   }
 
   /**
@@ -902,6 +971,15 @@ export class CoderWorkerPool {
     if (!entry) return false;
     this.cancelPostRunEvict(entry);
     entry.lastTouchedAt = Date.now();
+    if (entry.runtimeHandle && entry.runInProgress && askId) {
+      try {
+        await entry.runtimeHandle.resolveInteraction(askId, { value, idempotencyKey: `coder-input:${askId}` });
+        return true;
+      } catch (error) {
+        if (isCoderInteractionNotPendingError(error)) return false;
+        throw error;
+      }
+    }
     const result = await entry.host
       .requireBridge()
       .request<{ ok: boolean }>('provideUserInput', { value, askId });
@@ -1004,17 +1082,24 @@ export class CoderWorkerPool {
       { ok: boolean; reason?: string };
   }
 
-  /** Fetch a finished subagent's retained transcript digest from the worker realm. */
+  /** Recreate an idle session worker for retained history without starting a run. */
   async readAgentTranscript(
     sessionId: SessionId,
     spawnId: string,
     agentRef?: number | string,
     maxChars?: number,
   ): Promise<{ ok: boolean; reason?: string; text?: string; label?: string; status?: string; hasTranscript?: boolean }> {
-    const entry = this.entries.get(sessionId);
-    if (!entry) return { ok: false, reason: 'no_worker' };
-    return await entry.host.requireBridge().request('readAgentTranscript', { spawnId, agentRef, maxChars }) as
-      { ok: boolean; reason?: string; text?: string; label?: string; status?: string; hasTranscript?: boolean };
+    if (!spawnId || spawnId.length > 1024 || typeof agentRef === 'string' && agentRef.length > 1024) {
+      return { ok: false, reason: 'invalid_reference' };
+    }
+    const entry = await this.ensureEntry(sessionId);
+    this.cancelPostRunEvict(entry); entry.lastTouchedAt = Date.now();
+    try {
+      return await entry.host.requireBridge().request('readAgentTranscript', { spawnId, agentRef, maxChars }) as
+        { ok: boolean; reason?: string; text?: string; label?: string; status?: string; hasTranscript?: boolean };
+    } finally {
+      if (this.entries.get(sessionId) === entry && !entry.runInProgress) this.schedulePostRunEvict(entry, sessionId);
+    }
   }
 
   /**
@@ -1049,7 +1134,63 @@ export class CoderWorkerPool {
   async abort(sessionId: SessionId): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
-    await entry.host.requireBridge().request('abort', {});
+    const reason = { code: 'user_cancelled' };
+    entry.runtimeCancellationRequested = true;
+    const abortWorker = () => entry.host.requireBridge().request('abort', {});
+    try {
+      if (entry.runtimeHandle && entry.runInProgress) {
+        await entry.runtimeHandle.cancel(reason);
+      } else {
+        const context = entry.controlPlaneRunContext;
+        const store = this.opts.getControlPlaneStore?.();
+        if (context && store) await store.commitRuntimeRequest(context, 'cancel', reason);
+        await abortWorker();
+      }
+    } catch (error) {
+      // Failure to journal a stop must not leave a live worker executing.
+      await abortWorker().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  getRuntimeHandle(sessionId: SessionId): AgentRunHandleApi | null {
+    return this.entries.get(sessionId)?.runtimeHandle ?? null;
+  }
+
+  private admitRuntimeAttempt(sessionId: SessionId, payload: unknown): ReturnType<typeof admitWorkerAttempt> {
+    const entry = this.entries.get(sessionId);
+    const store = this.opts.getControlPlaneStore?.();
+    if (!entry || !store) return Promise.reject(new Error('Worker runtime authority is unavailable'));
+    if (!entry.runInProgress || !entry.controlPlaneRunContext || entry.runtimeCancellationRequested
+      || (payload as { runId?: unknown } | null)?.runId !== entry.currentRunId) {
+      return Promise.reject(new Error('Worker admission rejected a stale or cancelled run'));
+    }
+    const hash = sha256Hex(JSON.stringify(payload));
+    if (entry.runtimeAdmission) {
+      if (entry.runtimeAdmission.hash !== hash) return Promise.reject(new Error('Worker admission replay changed its facts'));
+      return entry.runtimeAdmission.result;
+    }
+    // Reserve before I/O, including file hashing: concurrent/repeated RPCs may
+    // observe one activation, never two facade/adapter owners for one attempt.
+    const result = Promise.resolve().then(() => admitWorkerAttempt(payload, () => this.entries.get(sessionId), store,
+      async ({ context, preparation, admission, assertOwner }) => {
+        const bytes = await readFile(this.opts.workerDevTsEntry ?? this.opts.workerFile);
+        assertOwner();
+        const handle = await activateCoderRuntimeFacade({ store, context, preparation, admission,
+          bus: entry.bus, workerClosed: entry.workerClosed, assertOwner,
+          workerEntrypointSha256: createHash('sha256').update(bytes).digest('hex'),
+          abortWorker: async () => { assertOwner(); await entry.host.requireBridge().request('abort', {}); },
+          provideInput: async (askId, value) => {
+            assertOwner();
+            const reply = await entry.host.requireBridge().request<{ ok: boolean }>('provideUserInput', { askId, value });
+            return reply.ok === true;
+          },
+        });
+        assertOwner();
+        entry.runtimeHandle = handle;
+      }));
+    entry.runtimeAdmission = { hash, result };
+    return result;
   }
 
   /** True while a run is in flight for this session (drives the "busy" guard on
@@ -1083,13 +1224,6 @@ export class CoderWorkerPool {
     }
     const entry = this.entries.get(sessionId);
     if (!entry) return;
-    this.stopControlPlaneLeaseRenewal(entry);
-    await terminalizeLocalCoderRun(
-      this.opts.getControlPlaneStore?.(),
-      entry.controlPlaneRunContext,
-      { event: 'error', data: { reason: 'worker-evicted' }, mode: 'evicted' },
-    );
-    entry.controlPlaneRunContext = null;
     const activityId = enterBackgroundActivity(`coder-worker:evict:${sessionId}`);
     try {
       this.cancelPostRunEvict(entry);
@@ -1102,6 +1236,16 @@ export class CoderWorkerPool {
         {},
         { timeoutMs: 15_000 },
       );
+      // The native owner still needs its authority while cancellation commits
+      // the terminal receipt and drains physical effects. Revoke only after
+      // that acknowledged barrier; a timeout must leave recovery authority intact.
+      this.stopControlPlaneLeaseRenewal(entry);
+      await terminalizeLocalCoderRun(
+        this.opts.getControlPlaneStore?.(),
+        entry.controlPlaneRunContext,
+        { event: 'error', data: { reason: 'worker-evicted' }, mode: 'evicted' },
+      );
+      entry.controlPlaneRunContext = null;
       // Session truly going away → close the preview window AND stop the dev
       // server the preview started for it ("owned"). The user's own runner is
       // never owned, so it stays up.
@@ -1289,6 +1433,8 @@ export class CoderWorkerPool {
     };
     await this.opts.handoffSessionWriter?.(sessionContext);
 
+    let resolveWorkerClosed!: () => void;
+    const workerClosed = new Promise<void>((resolve) => { resolveWorkerClosed = resolve; });
     const host = new WorkerHost({
       name: `coder-session-${sessionId}`,
       workerFile: this.opts.workerFile,
@@ -1296,6 +1442,8 @@ export class CoderWorkerPool {
         sessionId,
         sessionContext,
         dbPath: this.opts.dbPath,
+        nativeChildHistory: { ...nativeRuntimePaths(resolve(dirname(this.opts.workerFile), '../../..')),
+          sessionRoot: join(dirname(this.opts.dbPath), 'native-sessions') },
         // Dev bootstrap reads this to dynamic-import the real TS entry
         // after registering tsx. Absent in production builds.
         tsEntry: this.opts.workerDevTsEntry,
@@ -1395,6 +1543,7 @@ export class CoderWorkerPool {
         }
       },
       onExit: (_code, planned) => {
+        resolveWorkerClosed();
         if (planned) return;
         const ownerId = sessionContext.writerOwnerId;
         if (!ownerId || this.evictions.has(sessionId)) return;
@@ -1527,6 +1676,54 @@ export class CoderWorkerPool {
     });
     const bridge = host.requireBridge();
     // ─── Wire RPC bridges from worker → main ─────────────────────────
+    const offAttemptAdmission = bridge.handle('attempt.admit', (payload) => this.admitRuntimeAttempt(sessionId, payload));
+    const offNativeWorkspaceTransition = bridge.handle('native.workspaceTransition', payload => {
+      const request = payload as { runId?: unknown; sourceAttemptId?: string; transitionId?: string };
+      const owner = this.entries.get(sessionId);
+      const store = this.opts.getControlPlaneStore?.();
+      if (!owner?.nativeDevelopment || !store || typeof request.transitionId !== 'string'
+        || !/^[a-f0-9]{64}$/.test(request.transitionId) || request.runId !== owner.currentRunId) throw new Error('Native workspace continuation is unavailable');
+      const previous = owner.nativeWorkspaceTransitions?.get(request.transitionId);
+      if (previous) return previous;
+      const config = owner.nativeDevelopment;
+      const assertOwner = () => {
+        if (this.entries.get(sessionId) !== owner || owner.host !== host || !owner.runInProgress
+          || owner.runtimeCancellationRequested || owner.currentRunId !== request.runId
+          || owner.controlPlaneRunContext?.attemptId !== config.context.attemptId
+          || request.sourceAttemptId !== config.context.attemptId) throw new Error('Native workspace transition lost its worker owner');
+      };
+      assertOwner();
+      owner.nativeWorkspaceTransitions ??= new Map();
+      if (owner.nativeWorkspaceTransitions.size >= 8) throw new Error('Native workspace transition bound exceeded');
+      const pending = (async () => {
+        const context = await admitNativeWorktreeContinuation(store, config, request.transitionId!, assertOwner, owner.bus.ctrl.signal);
+        assertOwner();
+        owner.controlPlaneRunContext = context;
+        owner.nativeDevelopment = { ...config, context };
+        owner.runtimeHandle?.dispose();
+        owner.runtimeHandle = nativeCoderWorkerHandle({ store, context, bridge, bus: owner.bus, assertOwner: () => {
+          if (this.entries.get(sessionId) !== owner || !owner.runInProgress || owner.currentRunId !== request.runId
+            || owner.controlPlaneRunContext?.attemptId !== context.attemptId) throw new Error('Native workspace handle was superseded');
+        } });
+        this.startControlPlaneLeaseRenewal(owner, sessionId, owner.currentRunId, context);
+        return context;
+      })();
+      owner.nativeWorkspaceTransitions.set(request.transitionId, pending); return pending;
+    });
+    const offNativeAuthority = bridge.handle('native.authority', (payload) => {
+      const request = payload as { runId?: unknown; agentRunId?: string; operation?: NativeAuthorityOperation } | null;
+      const owner = this.entries.get(sessionId);
+      const store = this.opts.getControlPlaneStore?.();
+      if (!owner?.nativeDevelopment || !store || !request?.operation) throw new Error('Native worker authority is unavailable');
+      const context = owner.nativeDevelopment.context;
+      const assertOwner = () => {
+        if (this.entries.get(sessionId) !== owner || owner.host !== host || !owner.runInProgress
+          || request.runId !== owner.currentRunId || owner.controlPlaneRunContext?.attemptId !== context.attemptId) {
+          throw new Error('Native authority rejected a stale worker');
+        }
+      };
+      return dispatchNativeAuthority({ authority: store, context, agentRunId: request.agentRunId, operation: request.operation, assertOwner });
+    });
     // `rag_search_docs` runs in the worker. Only structural navigation and
     // deep research cross this bridge; the navigation verbs are short SQLite
     // reads and the methods remain optional for compatibility with old hosts.
@@ -1562,28 +1759,29 @@ export class CoderWorkerPool {
     // Preview DevTools — routes to the main-process PreviewWindowService
     // (set by the Electron main via setGlobalPreviewDevtools). Unset in
     // headless → the tool surfaces a friendly "unavailable" error.
-    const offPreviewDevtools = bridge.handle('previewDevtools', async (payload) => {
-      const svc = getGlobalPreviewDevtools();
-      if (!svc) throw new Error('Preview DevTools unavailable — only in the desktop app with a preview open.');
-      return svc.invoke(payload as PreviewInvoke);
-    });
-    const offPreviewDevtoolsCancel = bridge.handle('previewDevtoolsCancel', async (payload) => {
-      const svc = getGlobalPreviewDevtools();
-      const requestId = (payload as { requestId?: unknown })?.requestId;
-      if (svc?.cancel && typeof requestId === 'string') await svc.cancel(requestId);
-      return { ok: true };
-    });
-    const offResearchBrowser = bridge.handle('researchBrowser', async (payload) => {
-      const browser = getGlobalResearchBrowser();
-      if (!browser) throw new Error('Research browser backend is unavailable.');
-      return browser.invoke(payload as ResearchBrowserInvoke);
-    });
-    const offResearchBrowserCancel = bridge.handle('researchBrowserCancel', async (payload) => {
-      const browser = getGlobalResearchBrowser();
-      const requestId = (payload as { requestId?: unknown })?.requestId;
-      if (browser?.cancel && typeof requestId === 'string') await browser.cancel(requestId);
-      return { ok: true };
-    });
+    const rootApplicationOwner = (runId: unknown, closing?: boolean) => {
+      const owner = this.entries.get(sessionId);
+      const assertOwner = () => {
+        if (!owner || this.entries.get(sessionId) !== owner || owner.host !== host || runId !== owner.currentRunId
+          || (!closing && (!owner.runInProgress || owner.bus.ended || owner.bus.ctrl.signal.aborted || owner.runtimeCancellationRequested))) {
+          throw new Error('Application tool rejected an inactive worker run');
+        }
+      };
+      assertOwner();
+      return { sessionId, projectId: owner!.sessionContext.projectId, config: owner!.nativeDevelopment,
+        projectRoot: owner!.sessionContext.projectRoot,
+        store: this.opts.getControlPlaneStore?.(), signal: owner!.bus.ctrl.signal, assertOwner };
+    };
+    const applicationOwner = (runId: unknown, closing?: boolean, agentRunId?: string) =>
+      resolveNativeApplicationOwner(rootApplicationOwner(runId, closing), this.opts.getControlPlaneStore?.(), agentRunId, closing);
+    const offPreviewDevtools = registerWorkerPreviewCalls(bridge, applicationOwner);
+    const offNativeMemory = registerWorkerNativeMemoryCalls(bridge, applicationOwner, () => this.opts.docDeps);
+    const offNativeExport = registerWorkerNativeExportCalls(bridge, applicationOwner, () => this.opts.docDeps?.documentExport);
+    const offNativeIndex = registerWorkerNativeIndexCalls(bridge, applicationOwner, () => this.opts.docDeps?.projectIndex);
+    const offAgentReads = registerWorkerAgentReadCalls(bridge, applicationOwner, () => this.opts.docDeps?.agentReads);
+    const offChildHistory = registerWorkerNativeChildHistory(bridge, applicationOwner);
+    const offDiagramRender = registerWorkerDiagramRender(bridge, applicationOwner);
+    const offResearchBrowser = registerWorkerBrowserCalls(bridge, applicationOwner);
     // Vision fallback — routes image→text describe to the main-process vision
     // describer (resolves the code-agent/vision Pipelines role + runs a one-off
     // chat). Unset/unbound → throws VISION_NOT_CONFIGURED; the worker-side
@@ -1597,23 +1795,6 @@ export class CoderWorkerPool {
       }
       return v.describe(payload as VisionDescribeRequest);
     });
-    // Sprite Studio host — routes the `sprite_*` tools' method calls to the
-    // main-process host (stores + repo writes + job runner). One channel
-    // forwards { method, args } so new host methods need no new RPC name.
-    // Unset (flag off / headless) → the worker shim surfaces the same
-    // SPRITE_STUDIO_NOT_CONFIGURED message the in-process tools use.
-    const offSpriteHost = bridge.handle('spriteStudioHost', async (payload) => {
-      const host = this.opts.docDeps?.spriteStudioHost;
-      if (!host) {
-        throw new Error(
-          'SPRITE_STUDIO_NOT_CONFIGURED: Sprite Studio is not available in this process.',
-        );
-      }
-      const { method, args } = payload as { method: keyof ISpriteStudioHost; args: unknown[] };
-      const fn = host[method] as ((...a: unknown[]) => Promise<unknown>) | undefined;
-      if (typeof fn !== 'function') throw new Error(`Unknown spriteStudioHost method: ${String(method)}`);
-      return fn.apply(host, args);
-    });
     // Project memory (Mem C) — routes retrieve / extract / isConfigured to
     // the canonical MemoryRetriever + RunEndMemory built in server/deps.ts.
     // Without these handlers the worker path silently loses per-turn memory
@@ -1622,7 +1803,7 @@ export class CoderWorkerPool {
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
     // Secret decryption (`enc:`/`plain:` blobs) — safeStorage lives only in
     // the Electron main process; db_* tools in the worker RPC here.
-    const offSecrets = registerWorkerSecretsHandlers(bridge);
+    const offSecrets = registerWorkerSecretsHandlers(bridge, runId => rootApplicationOwner(runId).assertOwner);
 
     // Agent LSP nav (lsp_definition/references/hover on non-TS files) —
     // routed to the main-process LSP router (external servers + structural
@@ -1651,13 +1832,25 @@ export class CoderWorkerPool {
       }
       return pool.getReadySnapshot();
     });
-    const offMcpCallTool = bridge.handle('mcpExt.callTool', async (payload) => {
-      const pool = this.opts.getMcpExternalPool?.() ?? null;
-      if (!pool) {
-        return { ok: false, text: 'External MCP pool not configured in this http-api process.' };
+    const offMcpCallTool = registerWorkerMcpCalls(bridge, () => this.opts.getMcpExternalPool?.() ?? null, async (request) => {
+      const { runId } = request;
+      const owner = this.entries.get(sessionId);
+      const assertOwner = () => {
+        if (!owner || this.entries.get(sessionId) !== owner || owner.host !== host
+          || !owner.runInProgress || owner.bus.ended || owner.bus.ctrl.signal.aborted
+          || owner.runtimeCancellationRequested || runId !== owner.currentRunId) {
+          throw new Error('External MCP rejected an inactive worker run');
+        }
+      };
+      assertOwner();
+      if (owner!.nativeDevelopment) {
+        const store = this.opts.getControlPlaneStore?.();
+        if (!store) throw new Error('Native MCP product authority is unavailable');
+        const scoped = await applicationOwner(runId, false, nativeApplicationTarget(request));
+        return authorizeNativeMcpDispatch(request, scoped.config!, store, assertOwner);
       }
-      const p = payload as { serverId: string; toolName: string; args: Record<string, unknown> };
-      return pool.callTool(p.serverId, p.toolName, p.args);
+      if (request.authority !== undefined) throw new Error('Native MCP authority cannot target a legacy run');
+      return assertOwner;
     });
 
     const offEvent = bridge.on('bus.event', (payload) => {
@@ -1725,23 +1918,31 @@ export class CoderWorkerPool {
         markEnded(e.bus, terminal.event, terminal.data);
       }
       const terminalContext = e.controlPlaneRunContext;
+      const nativeTerminalOwner = e.nativeDevelopment !== undefined;
       e.controlPlaneRunContext = null;
       // The bus terminal is already visible to SSE above. The filesystem
       // authority is queued before any following command for this session, then
       // the diagnostic comparison runs after that durable transition.
       void (async () => {
-        await terminalizeLocalCoderRun(
-          this.opts.getControlPlaneStore?.(),
-          terminalContext,
-          terminal,
-        );
+        const authority = this.opts.getControlPlaneStore?.();
+        // Native facade commits its terminal state before publishing bus.end.
+        // Preserve that exact reason/receipt; only startup failures that never
+        // reached the native owner need the main-process fallback transition.
+        const alreadyTerminal = nativeTerminalOwner && authority && terminalContext
+          && isTerminalAgentRunStatus(
+            (await authority.getAttemptState(terminalContext, false)).run.status);
+        if (!alreadyTerminal) await terminalizeLocalCoderRun(authority, terminalContext, terminal);
         await this.compareShadowTerminalState(
           sessionId,
           terminalContext,
           terminal.event,
           terminal.data,
         );
-      })();
+      })().catch((cause: unknown) => {
+        const failure = cause instanceof Error ? cause : new Error(String(cause));
+        this.lifecycleFailures.set(sessionId, failure);
+        this.log('error', `[coder-pool] terminal reconciliation failed session=${sessionId}: ${failure.message}`);
+      });
       // (B) — terminal event: run is no longer in progress; sweep may
       // now consider this entry for eviction once ttlMs elapses without
       // a follow-up `runFresh`/`pushUserMessage`.
@@ -1771,6 +1972,7 @@ export class CoderWorkerPool {
       bus,
       sessionContext,
       currentRunId: 0,
+      workerClosed,
       lastTouchedAt: Date.now(),
       detachCurrentBusRuntimeLog: detachRuntimeLog,
       postRunEvictTimer: null,
@@ -1782,6 +1984,9 @@ export class CoderWorkerPool {
       controlPlaneRunContext: null,
       controlPlaneLeaseRenewTimer: null,
       detachBusMirror: () => {
+        try { offAttemptAdmission(); } catch { /* best-effort */ }
+        try { offNativeAuthority(); } catch { /* best-effort */ }
+        try { offNativeWorkspaceTransition(); } catch { /* best-effort */ }
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }
@@ -1790,11 +1995,14 @@ export class CoderWorkerPool {
         try { offDocOutline(); } catch { /* best-effort */ }
         try { offDocsResearch(); } catch { /* best-effort */ }
         try { offPreviewDevtools(); } catch { /* best-effort */ }
-        try { offPreviewDevtoolsCancel(); } catch { /* best-effort */ }
+        try { offNativeMemory(); } catch { /* best-effort */ }
+        try { offNativeExport(); } catch { /* best-effort */ }
+        try { offNativeIndex(); } catch { /* best-effort */ }
+        try { offAgentReads(); } catch { /* best-effort */ }
+        try { offChildHistory(); } catch { /* best-effort */ }
+        try { offDiagramRender(); } catch { /* best-effort */ }
         try { offResearchBrowser(); } catch { /* best-effort */ }
-        try { offResearchBrowserCancel(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
-        try { offSpriteHost(); } catch { /* best-effort */ }
         try { offMemory(); } catch { /* best-effort */ }
         try { offSecrets(); } catch { /* best-effort */ }
         try { offLsp(); } catch { /* best-effort */ }

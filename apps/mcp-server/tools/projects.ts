@@ -6,13 +6,14 @@ import {
   type McpToolResult,
 } from '../tool.js';
 import { truncateToTokensDetailed } from '../utils.js';
-import { buildRepoMap } from '@mcp/services/services/repo-map.js';
+import { getRepoMap } from './repo-map.js';
 import { withProject } from './_helpers.js';
 import { basename, resolve } from 'node:path';
 import { requestMcpLocalServer } from '../server-control.js';
 import { buildProjectSummary } from '../project-summary.js';
+import { indexPageArgs } from './index-navigation.js';
 
-const UNBOUNDED_REPO_MAP_TOKENS = Number.MAX_SAFE_INTEGER / 4;
+
 
 function positiveBudget(value: unknown): number | undefined {
   const budget = Number(value);
@@ -60,14 +61,21 @@ const index_project = defineTool({
     required: ['project_path'],
   },
   handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
+    if (typeof args.project_path !== 'string' || !args.project_path.trim() || args.project_path.length > 32768
+      || args.project_path.includes('\0') || (args.rebuild_semantic != null && typeof args.rebuild_semantic !== 'boolean')) throw new Error('Invalid project indexing arguments');
     const projectPath = resolve(args.project_path as string);
+    const uncertain = (stage: string): McpToolResult => ({ effectOutcome: 'unknown',
+      text: `Indexing lost confirmation during ${stage}. Inspect the project index and its jobs before authorizing another mutation.` });
     let project = ctx.db.getProjectByPath(projectPath);
     if (!project) {
       const created = await requestMcpLocalServer('/api/projects', {
         method: 'POST',
+        signal: ctx.signal,
         body: JSON.stringify({ name: basename(projectPath), root_path: projectPath }),
       }, { config: ctx.config });
       if (!created.ok) {
+        if (!created.reached || (created.status ?? 500) >= 500) return uncertain('project registration');
         throw new Error(
           `Index writes require the local owner server; project registration failed: ${created.error ?? 'unavailable'}`,
         );
@@ -77,10 +85,11 @@ const index_project = defineTool({
     if (!project?.id) throw new Error(`Unable to resolve project for ${projectPath}`);
     const structuralResponse = await requestMcpLocalServer(
       `/api/projects/${project.id}/index/structural/reconcile`,
-      { method: 'POST' },
+      { method: 'POST', signal: ctx.signal },
       { config: ctx.config, timeoutMs: 190_000 },
     );
     if (!structuralResponse.ok) {
+      if (!structuralResponse.reached || (structuralResponse.status ?? 500) >= 500) return uncertain('structural reconciliation');
       throw new Error(
         `Structural indexing requires the local owner server: ${structuralResponse.error ?? 'unavailable'}`,
       );
@@ -96,12 +105,15 @@ const index_project = defineTool({
     }
 
     const semanticAction = args.rebuild_semantic === true ? 'rebuild' : 'start';
+    ctx.signal?.throwIfAborted();
     const semanticResponse = await requestMcpLocalServer(`/api/projects/${project.id}/semantic/reindex`, {
       method: 'POST',
+      signal: ctx.signal,
       body: JSON.stringify({ action: semanticAction }),
     }, { config: ctx.config, timeoutMs: 10_000 });
     const structuralState = structural?.status?.phase ?? structural?.readiness?.phase ?? 'ready';
     if (!semanticResponse.ok) {
+      if (!semanticResponse.reached || (semanticResponse.status ?? 500) >= 500) return uncertain('semantic scheduling');
       return `Structural index is ${structuralState}. Semantic indexing was not started (${semanticResponse.error ?? 'profile disabled or worker unavailable'}); FTS and structural tools remain available.`;
     }
     const semantic = semanticResponse.body as { job?: { id?: number; status?: string }; scheduled?: boolean } | null;
@@ -114,45 +126,40 @@ const get_project_overview = defineTool({
   name: 'get_project_overview',
   tier: 'navigate',
   ...mcpAccess('read'),
-  description: 'Get a structural project overview with files, symbols, languages and semantic-generation status. Use compact=true for dense output. In compact mode, file list is capped by max_files (default 50).',
+  description: 'Get a structural project overview with files, symbols, languages and semantic-generation status. File pages default to 500 entries (compact: 50). Use offset to continue; max_files is capped at 500.',
   inputSchema: {
     type: 'object',
     properties: {
       project_name: { type: 'string' },
       compact: { type: 'boolean' },
       max_tokens: { type: 'number' },
-      max_files: { type: 'number', description: 'Max files listed in compact mode (default 50)' },
+      max_files: { type: 'number', description: 'Files per page (compact default 50, otherwise 500; max 500). Zero omits file listing.' },
+      offset: { type: 'number', description: 'File offset; restart at 0 after index changes.' },
     },
     required: ['project_name'],
   },
   handler: withProject((args, ctx, project) => {
     const { db } = ctx;
+    ctx.signal?.throwIfAborted();
     const summary = buildProjectSummary(ctx, project);
-    const files = db.listFiles(project.id);
     const compact = args.compact === true;
+    const requested = args.max_files == null ? (compact ? 50 : 500) : Number(args.max_files);
+    if (!Number.isSafeInteger(requested) || requested < 0) throw new Error('max_files must be a non-negative integer');
+    const page = db.listAgentIndexFiles(project.id, indexPageArgs({ offset: args.offset, limit: Math.max(1, requested) }));
+    if (page.offset > page.total) throw new Error('Offset exceeds current files; restart from offset 0');
+    const files = requested === 0 ? [] : page.items;
+    const omitted = page.offset > 0 || files.length < page.total;
+    const next = requested === 0 ? page.offset : page.nextOffset;
+    const fileTrunc = omitted ? `\n  ... [${page.total - files.length} more files omitted — ${next != null ? 'Continue' : 'Earlier pages'}: mcp__get_project_overview(${JSON.stringify({ ...args, offset: next ?? 0, max_files: requested || 50 })}). Restart at offset 0 after index changes.]` : '';
+    const sourceTruncations: McpSourceTruncation[] = omitted ? [{ technique: 'mcp-project-overview-file-limit', inputSize: page.total, outputSize: files.length, unit: 'items', recoverable: true }] : [];
+    ctx.signal?.throwIfAborted();
 
     if (compact) {
-      const requestedMaxFiles = Number(args.max_files);
-      const maxFiles = Number.isFinite(requestedMaxFiles)
-        ? Math.max(0, Math.trunc(requestedMaxFiles))
-        : 50;
       const langs = Object.entries(summary.languages).sort((a, b) => b[1] - a[1]).map(([l, c]) => `${l}(${c})`).join(' ');
       const directories = summary.top_directories.map((row) => `${row.path}(${row.files})`).join(' ');
-      const shownFiles = files.slice(0, maxFiles);
-      const fileTrunc = files.length > maxFiles
-        ? `\n  ... [${files.length - maxFiles} more files omitted — use max_files to expand]`
-        : '';
+      const shownFiles = files;
       const semantic = `${summary.semantic.state} ${summary.semantic.indexed_items}/${summary.semantic.expected_items} (${summary.semantic.coverage_pct}%)`;
       const out = `${project.name} | ${summary.file_count}f ${summary.symbol_count}s ${summary.total_lines}L\nlangs: ${langs}\ndirectories: ${directories}\nstructural: ${summary.structural.state}\nsemantic: ${semantic}\nfiles:\n${shownFiles.map(f => `  ${f.path} (${f.language},${f.line_count}L)`).join('\n')}${fileTrunc}`;
-      const sourceTruncations: McpSourceTruncation[] = files.length > shownFiles.length
-        ? [{
-            technique: 'mcp-project-overview-file-limit',
-            inputSize: files.length,
-            outputSize: shownFiles.length,
-            unit: 'items',
-            recoverable: true,
-          }]
-        : [];
       return outputWithBudget(
         out,
         positiveBudget(args.max_tokens),
@@ -175,11 +182,12 @@ const get_project_overview = defineTool({
     if (summary.top_directories.length > 0) {
       sections.push('', '## Top-level directories', summary.top_directories.map(row => `- ${row.path}: ${row.files} files`).join('\n'));
     }
-    sections.push('', '## Files', files.map(f => `- ${f.path} (${f.language}, ${f.line_count} lines)`).join('\n'));
+    sections.push('', '## Files', files.map(f => `- ${f.path} (${f.language}, ${f.line_count} lines)`).join('\n'), fileTrunc);
     return outputWithBudget(
       sections.join('\n'),
       positiveBudget(args.max_tokens),
       'mcp-project-overview-token-budget',
+      sourceTruncations,
     );
   }),
 });
@@ -221,35 +229,9 @@ const get_project_pulse = defineTool({
 
 // `get_architecture` was retired from the MCP surface. Structural directory,
 // dependency and symbol context is available through overview + repo map.
-const get_repo_map = defineTool({
-  name: 'get_repo_map',
-  tier: 'navigate',
-  ...mcpAccess('read'),
-  description: 'Architecture map for broad or unfamiliar repositories; skip it after search has already localized the relevant files. Shows dependency hubs, entrypoint-like files and symbol-rich files with their top symbols. Returns the complete map by default; pass max_tokens only when an explicit compact budget is required.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      project_name: { type: 'string' },
-      max_tokens: { type: 'number', description: 'Optional approximate token budget. Omit for the complete map.' },
-    },
-    required: ['project_name'],
-  },
-  handler: withProject((args, { db }, project) => {
-    // buildRepoMap historically imposed its own 2k default without exposing
-    // whether anything was omitted. Materialize the complete structural map;
-    // only an explicit caller budget may shorten it, with exact char evidence.
-    const completeMap = buildRepoMap(db, project.id, UNBOUNDED_REPO_MAP_TOKENS);
-    return outputWithBudget(
-      completeMap,
-      positiveBudget(args.max_tokens),
-      'mcp-repo-map-token-budget',
-    );
-  }),
-});
-
 export const projectTools: McpTool[] = [
   index_project,
   get_project_overview,
   get_project_pulse,
-  get_repo_map,
+  getRepoMap,
 ];

@@ -10,15 +10,200 @@ import type {
 } from '@mcp/provider-sdk/adapter.js';
 import type { ChatDelta } from '@mcp/provider-sdk/wire.js';
 import { describe, expect, it, vi } from 'vitest';
+import { boundaryMessageDigest } from '../native/PreparedBoundaryContext.js';
 import {
   ProviderGateway,
   type ProviderGatewayEvent,
 } from '../provider-gateway/index.js';
+import { ProviderGatewayError } from '../provider-gateway/ProviderGatewayError.js';
 
 const NOW = 1_000;
 const DIGEST = new Uint8Array(32).fill(0x22);
 
 describe('ProviderGateway', () => {
+  it('charges shared consumption after durable frontier and before resolver, excluding checkpoints', async () => {
+    let committed = false;
+    const resolve = vi.fn(() => fakeProvider(async function* () { yield { type: 'done' as const }; }));
+    const admitOperation = vi.fn(() => {
+      expect(committed).toBe(true);
+      throw new ProviderGatewayError('provider_run_tree_budget_exhausted', 'shared limit');
+    });
+    const gateway = new ProviderGateway({ runtimeInstanceId: 'runtime/budget', now: () => NOW, resolver: { resolve }, admitOperation });
+    const events: ProviderGatewayEvent[] = [];
+    await gateway.run(start(), DIGEST, { emit: event => { events.push(event); } }, async () => { committed = true; });
+    expect(admitOperation).toHaveBeenCalledOnce(); expect(resolve).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ case: 'providerTerminal', value: { reasonCode: 'provider_run_tree_budget_exhausted' } });
+    await gateway.checkpoint({ ...start(), operationId: 'checkpoint/budget' }, DIGEST, async () => {});
+    expect(admitOperation).toHaveBeenCalledOnce(); expect(gateway.activeOperationCount).toBe(0);
+  });
+  it('commits prepared context before the vendor opens and resets stale response continuation', async () => {
+    const request = start(); request.previousResponseId = 'old'; request.previousResponseMessageCount = 1n;
+    const context = create(agentV1Runtime.ProviderPreparedBoundaryContextV1Schema, {
+      messageIndex: 0, sourceMessageSha256: boundaryMessageDigest(request.messages[0]!), contentUtf8: 'recalled-reference',
+    });
+    let committed = false;
+    const chat = vi.fn(async function* (adapted: ChatRequest) {
+      expect(committed).toBe(true); expect(adapted.previousResponseId).toBeUndefined();
+      expect(JSON.stringify(adapted.messages)).toContain('recalled-reference');
+      yield { type: 'done' as const };
+    });
+    const prepare = vi.fn(async (_request: agentV1Runtime.ProviderStart, _signal: AbortSignal, _checkpoint: boolean) => ({ context, resetContinuation: true }));
+    const gateway = new ProviderGateway({ runtimeInstanceId: 'runtime/prepared', now: () => NOW,
+      resolver: { resolve: () => fakeProvider(chat) }, contextPreparation: { prepare } });
+    await gateway.run(request, DIGEST, { emit: vi.fn() }, async actual => {
+      expect(actual.preparedBoundaryContext?.contentUtf8).toBe(context.contentUtf8);
+      expect(actual.previousResponseId).toBeUndefined(); committed = true;
+    });
+    expect(chat).toHaveBeenCalledOnce(); expect(request.preparedBoundaryContext).toBeUndefined();
+    expect(request.previousResponseId).toBe('old');
+    await gateway.checkpoint({ ...request, operationId: 'checkpoint/prepared' }, DIGEST, async actual => {
+      expect(actual.preparedBoundaryContext?.contentUtf8).toBe(context.contentUtf8);
+    });
+    expect(prepare.mock.calls.at(-1)?.[2]).toBe(true);
+    expect(chat).toHaveBeenCalledOnce();
+  });
+
+  it('commits the frontier before draining without opening a provider', async () => {
+    const committed = deferred<void>();
+    const entered = deferred<void>();
+    const stop = new AbortController();
+    stop.abort();
+    const chat = vi.fn(async function* () { yield { type: 'done' as const }; });
+    const gateway = createGateway(fakeProvider(chat));
+    gateway.drainWhen(stop.signal);
+    const events: ProviderGatewayEvent[] = [];
+    const running = gateway.run(start(), DIGEST, { emit: e => { events.push(e); } }, async (_, signal) => {
+      expect(signal.aborted).toBe(false); entered.resolve(); await committed.promise;
+      expect(signal.aborted).toBe(false);
+    });
+    await entered.promise;
+    expect(events.map(e => e.case)).toEqual(['providerAccepted']);
+    committed.resolve(); await running;
+    expect(chat).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ case: 'providerTerminal', value: {
+      classification: agentV1Runtime.ProviderTerminalClassification.CANCELLED, reasonCode: 'ipc_identity_budget' } });
+    expect(gateway.activeOperationCount).toBe(0);
+  });
+
+  it('settles a stalled provider stream when another channel approaches its bound', async () => {
+    const stop = new AbortController();
+    const first = deferred<void>();
+    const provider = fakeProvider(async function* () {
+      yield { type: 'text_delta', text: 'partial' };
+      await new Promise(() => {});
+    });
+    const gateway = createGateway(provider); gateway.drainWhen(stop.signal);
+    const events: ProviderGatewayEvent[] = [];
+    const running = gateway.run(start(), DIGEST, { emit: e => {
+      events.push(e); if (e.case === 'providerTextDelta') first.resolve();
+    } });
+    await first.promise; stop.abort(); await running;
+    expect(events.map(e => e.case)).toEqual(['providerAccepted', 'providerTextDelta', 'providerTerminal']);
+    expect(events.at(-1)).toMatchObject({ value: { reasonCode: 'ipc_identity_budget', eventSequence: 2n } });
+    expect(gateway.activeOperationCount).toBe(0);
+  });
+
+  it('does not call a failed checkpoint a confirmed budget interruption', async () => {
+    const stop = new AbortController(); stop.abort();
+    const chat = vi.fn(async function* () { yield { type: 'done' as const }; });
+    const gateway = createGateway(fakeProvider(chat)); gateway.drainWhen(stop.signal);
+    const events: ProviderGatewayEvent[] = [];
+    await gateway.run(start(), DIGEST, { emit: e => { events.push(e); } }, async () => { throw new Error('ENOSPC'); });
+    expect(chat).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ value: { classification: agentV1Runtime.ProviderTerminalClassification.FAILED,
+      reasonCode: 'provider_failed' } });
+  });
+
+  it('numbers coalesced output contiguously and preserves usage and tool ordering', async () => {
+    const provider = fakeProvider(async function* () {
+      for (let index = 0; index < 1_000; index++) yield { type: 'text_delta', text: 'x', itemId: 'answer' };
+      yield { type: 'tool_call_start', id: 'read/1', name: 'read_file' };
+      yield { type: 'tool_call_end', id: 'read/1', name: 'read_file', input: { path: 'a' } };
+      yield { type: 'usage', usage: { input_tokens: 3, output_tokens: 1_000 } };
+      yield { type: 'done' };
+    });
+    const events: ProviderGatewayEvent[] = [];
+    await createGateway(provider).run(start(), DIGEST, { emit: event => { events.push(event); } });
+    const sequenced = events.filter(event => event.case !== 'providerAccepted');
+    expect(sequenced.map(event => event.value.eventSequence)).toEqual(sequenced.map((_, index) => BigInt(index + 1)));
+    expect(events.filter(event => event.case === 'providerTextDelta').map(event => event.value.text).join('')).toBe('x'.repeat(1_000));
+    expect(events.length).toBeLessThan(20);
+    expect(events.slice(-3).map(event => event.case)).toEqual(['providerToolCall', 'providerUsage', 'providerTerminal']);
+    expect((events.at(-1)?.value as agentV1Runtime.ProviderTerminal).finalUsage?.outputTokens).toBe(1_000n);
+  });
+
+  it('checkpoints without resolving a provider and waits for durable acknowledgement', async () => {
+    const committed = deferred<void>();
+    const entered = deferred<void>();
+    const resolver = vi.fn(() => { throw new Error('checkpoint must not resolve credentials'); });
+    const gateway = new ProviderGateway({ runtimeInstanceId: 'runtime/checkpoint', resolver: { resolve: resolver }, now: () => NOW });
+    let returned = false;
+    const pending = gateway.checkpoint(start(), DIGEST, async () => { entered.resolve(); await committed.promise; })
+      .then(() => { returned = true; });
+    await entered.promise;
+    expect(returned).toBe(false);
+    expect(gateway.activeOperationCount).toBe(1);
+    committed.resolve(); await pending;
+    expect(returned).toBe(true);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(gateway.activeOperationCount).toBe(0);
+  });
+
+  it.each(['disk full', 'cancelled'])('does not acknowledge a checkpoint after %s', async failure => {
+    const resolver = vi.fn(() => { throw new Error('unexpected provider'); });
+    const gateway = new ProviderGateway({ runtimeInstanceId: 'runtime/checkpoint', resolver: { resolve: resolver }, now: () => NOW });
+    const entered = deferred<void>();
+    const commit = vi.fn(async () => {
+      entered.resolve();
+      if (failure === 'disk full') throw new Error('ENOSPC');
+      await new Promise(() => {});
+    });
+    const pending = gateway.checkpoint(start(), DIGEST, commit);
+    const rejected = expect(pending).rejects.toThrow(failure === 'disk full' ? 'ENOSPC' : 'attempt_fenced');
+    await entered.promise;
+    if (failure === 'cancelled') gateway.fenceAttempt(identity());
+    await rejected;
+    expect(commit).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
+    expect(gateway.activeOperationCount).toBe(0);
+  });
+
+  it('opens the provider only after the durable frontier is confirmed', async () => {
+    const committed = deferred<void>();
+    const entered = deferred<void>();
+    const chat = vi.fn(async function* () { yield { type: 'done' as const, stop_reason: 'end_turn' }; });
+    const gateway = createGateway(fakeProvider(chat));
+    const running = gateway.run(start(), DIGEST, { emit: vi.fn() }, async (_start, signal) => {
+      expect(signal.aborted).toBe(false); entered.resolve(); await committed.promise;
+    });
+    await entered.promise;
+    expect(chat).not.toHaveBeenCalled();
+    committed.resolve(); await running;
+    expect(chat).toHaveBeenCalledOnce();
+  });
+
+  it('does not open the provider after checkpoint disk failure or cancellation', async () => {
+    for (const cancel of [false, true]) {
+      const entered = deferred<void>();
+      const chat = vi.fn(async function* () { yield { type: 'done' as const, stop_reason: 'end_turn' }; });
+      const gateway = createGateway(fakeProvider(chat));
+      const events: ProviderGatewayEvent[] = [];
+      const running = gateway.run(start(), DIGEST, { emit: (event) => { events.push(event); } }, async () => {
+        entered.resolve();
+        if (cancel) await new Promise(() => {});
+        else throw new Error('ENOSPC');
+      });
+      await entered.promise;
+      if (cancel) gateway.cancel(create(agentV1Runtime.ProviderCancelSchema, {
+        identity: identity(), operationId: start().operationId, idempotencyKey: 'cancel/frontier', reasonCode: 'cancelled',
+      }));
+      await running;
+      expect(chat).not.toHaveBeenCalled();
+      expect((events.at(-1)?.value as agentV1Runtime.ProviderTerminal).classification).toBe(cancel
+        ? agentV1Runtime.ProviderTerminalClassification.CANCELLED : agentV1Runtime.ProviderTerminalClassification.FAILED);
+    }
+  });
+
   it('adapts a bounded request and emits accepted, stream, usage, and terminal in order', async () => {
     const provider = fakeProvider(async function* (request) {
       expect(request.system).toBe('system');

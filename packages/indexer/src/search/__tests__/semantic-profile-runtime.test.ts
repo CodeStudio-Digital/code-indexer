@@ -35,6 +35,33 @@ function profile(
 afterEach(() => vi.unstubAllGlobals());
 
 describe('SemanticProfileRuntime session cache', () => {
+  it('coalesces equal query vectors across collections but revalidates generation and policy', async () => {
+    const target: EmbeddingTarget = { kind: 'onnx', model: 'test', pooling: 'mean', normalize: true,
+      queryTemplate: 'query: {text}', documentTemplate: 'passage: {text}' };
+    let active = true;
+    let disabled = false;
+    const embedQuery = vi.fn(async () => ({ vector: [1, 0], tokens: 10 }));
+    const runtime = new SemanticProfileRuntime({
+      getProfile: (purpose) => profile(purpose, disabled ? { kind: 'disabled' } : target),
+      getActiveGeneration: () => active ? ({
+        id: 1, purpose: 'docs', dimension: 2, embedding_target: target,
+        fingerprint: semanticEmbeddingFingerprint(target, EMPTY_PROVIDERS, 'test'),
+      } as SemanticGenerationRow) : null,
+    }, EMPTY_PROVIDERS, () => ({ embed: vi.fn(), embedQuery, fingerprint: () => 'test' }));
+    const service = runtime.queryEmbedding('docs');
+    const [a, b] = await Promise.all([
+      service.embedQueryForNamespace!('docs:c1', 'same'), service.embedQueryForNamespace!('docs:c2', 'same'),
+    ]);
+    expect(embedQuery).toHaveBeenCalledTimes(1);
+    expect(a.vector).toEqual(b.vector);
+    a.vector[0] = 9;
+    expect((await service.embedQueryForNamespace!('docs:c2', 'same')).vector).toEqual([1, 0]);
+    expect(embedQuery).toHaveBeenCalledTimes(1);
+    active = false;
+    await expect(service.embedQueryForNamespace!('docs:c2', 'same')).rejects.toThrow('No active');
+    active = true; disabled = true;
+    await expect(service.embedQueryForNamespace!('docs:c2', 'same')).rejects.toThrow('disabled');
+  });
   it('lets an ONNX host choose a worker proxy without constructing the local fallback', () => {
     const target: EmbeddingTarget = {
       kind: 'onnx', model: 'worker/only', pooling: 'mean', normalize: true,

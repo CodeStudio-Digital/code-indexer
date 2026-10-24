@@ -63,6 +63,30 @@ function authority(options: {
   });
 }
 
+it.each(['enter_worktree', 'exit_worktree'])('seals %s to Git and rejects another executable', toolName => {
+  const bound = authority({ root: process.cwd() }).bindInvocation({
+    toolName, toolUseId: 'workspace-1', effectiveInput: { name: 'isolated' },
+    boundary: 'shell', requiresEffectBoundary: true,
+  });
+  expect(bound.resourceBinding?.canonicalResources).toEqual([{ kind: 'command', executable: 'git' }]);
+  expect(() => bound.assertMutation({ kind: 'shell', resource: 'git', operation: 'exec' })).not.toThrow();
+  expect(() => bound.assertMutation({ kind: 'shell', resource: 'node', operation: 'exec' })).toThrow();
+});
+
+it('seals document publication to its application operation and rejects revoked ownership', () => {
+  let owned = true;
+  const bound = authority({ root: process.cwd(), owned: () => owned }).bindInvocation({
+    toolName: 'mcp__export_docs', toolUseId: 'export-1', effectiveInput: { sections: ['files'] },
+    boundary: 'control', requiresEffectBoundary: true,
+  });
+  expect(bound.resourceBinding?.canonicalResources).toEqual([{ kind: 'application', appId: 'mcp__export_docs', operations: ['export/publish'] }]);
+  expect(() => bound.assertMutation({ kind: 'control', resource: 'mcp__export_docs', operation: 'export/publish' })).not.toThrow();
+  expect(() => bound.assertMutation({ kind: 'control', resource: 'preview_open', operation: 'export/publish' })).toThrow();
+  expect(() => bound.assertMutation({ kind: 'control', resource: 'mcp__export_docs', operation: 'tools/call' })).toThrow();
+  owned = false;
+  expect(() => bound.assertMutation({ kind: 'control', resource: 'mcp__export_docs', operation: 'export/publish' })).toThrow();
+});
+
 class BarrierFilesystem implements IFilesystemPort {
   readonly mutationFenceAttested = true as const;
   readonly writes: Array<{ path: string; data: string }> = [];
@@ -152,7 +176,7 @@ class ManageFilesystem implements IFilesystemPort {
     this.directories.add(path);
   }
   async access(path: string): Promise<void> {
-    if (!this.entries.has(path) && !this.directories.has(path)) throw new Error('not found');
+    if (!this.entries.has(path) && !this.directories.has(path)) throw Object.assign(new Error('not found'), { code: 'ENOENT' });
   }
   async readdir(
     _path: string,
@@ -523,7 +547,7 @@ describe('physical mutation fencing', () => {
     expect(sideEffects).toBe(1);
   });
 
-  it('fails closed before the renderer-mediated diagram export bridge in ENFORCE', async () => {
+  it('requires a current filesystem lease before entering diagram export in ENFORCE', async () => {
     let handlerEntries = 0;
     const registry = new ToolRegistry();
     registry.register({
@@ -535,19 +559,19 @@ describe('physical mutation fencing', () => {
     });
     const root = resolve(process.cwd(), 'mutation-fence-diagram-export');
 
-    expect(diagramExportTool.effectBoundary).toBeUndefined();
+    expect(diagramExportTool.effectBoundary).toBe('filesystem');
     const result = await registry.invoke('diagram_export', {
       name: 'architecture',
       format: 'svg',
     }, {
       cwd: root,
       projectName: 'test',
-      mutationFence: authority({ root }),
+      mutationFence: authority({ root, owned: () => false }),
       currentToolUseId: 'diagram-export',
     });
 
     expect(result.isError).toBe(true);
-    expect(String(result.content)).toContain('no declared physical effect boundary');
+    expect(String(result.content)).toContain('lease lost');
     expect(handlerEntries).toBe(0);
   });
 
@@ -582,6 +606,16 @@ describe('physical mutation fencing', () => {
     })).not.toThrow();
   });
 
+  it.each(['project', 'user'])('binds durable %s memory to its exact database operation', scope => {
+    for (const [toolName, operation] of [['remember', 'remember.save'], ['forget_memory', 'forget_memory.archive']]) {
+      const bound = authority({ root: process.cwd() }).bindInvocation({ toolName, toolUseId: 'memory',
+        effectiveInput: { scope, title: 'Fact', content: 'Confirmed', target: 'Fact' }, boundary: 'database', requiresEffectBoundary: true });
+      expect(() => bound.assertMutation({ kind: 'database', operation, resource: `memory:${scope}` })).not.toThrow();
+      expect(() => bound.assertMutation({ kind: 'database', operation, resource: `memory:${scope === 'user' ? 'project' : 'user'}` })).toThrow();
+      expect(() => bound.assertMutation({ kind: 'database', operation: 'unrelated', resource: `memory:${scope}` })).toThrow();
+    }
+  });
+
   it('derives bounded filesystem targets for diagram and submit_spec families', () => {
     const root = resolve(process.cwd(), 'mutation-fence-derived');
     const diagram = authority({ root }).bindInvocation({
@@ -602,6 +636,11 @@ describe('physical mutation fencing', () => {
       resource: resolve(root, 'diagrams', 'auth-flow.drawio'),
     })).not.toThrow();
 
+    const image = authority({ root }).bindInvocation({ toolName: 'diagram_export', toolUseId: 'export',
+      effectiveInput: { name: 'Auth Flow', output_name: 'Review copy', format: 'png' }, boundary: 'filesystem', requiresEffectBoundary: true });
+    expect(() => image.assertMutation({ kind: 'filesystem', operation: 'createFileBytes', resource: resolve(root, 'diagrams/review-copy.png') })).not.toThrow();
+    expect(() => image.assertMutation({ kind: 'filesystem', operation: 'createFileBytes', resource: resolve(root, 'diagrams/auth-flow.png') })).toThrow();
+
     const spec = authority({ root }).bindInvocation({
       toolName: 'submit_spec',
       toolUseId: 'submit-spec',
@@ -614,11 +653,13 @@ describe('physical mutation fencing', () => {
       operation: 'mkdir',
       resource: resolve(root, '.mcp', 'specs'),
     })).not.toThrow();
-    expect(() => spec.assertMutation({
-      kind: 'filesystem',
-      operation: 'writeFile',
-      resource: resolve(root, '.mcp', 'specs', 'durable-agent-run-1770000000.md'),
-    })).not.toThrow();
+    const draft = resolve(root, '.mcp/specs/durable-agent-run-1770000000-00000000-0000-4000-8000-000000000001.md');
+    expect(() => spec.assertMutation({ kind: 'filesystem', operation: 'createFile', resource: draft })).not.toThrow();
+    expect(() => spec.assertMutation({ kind: 'filesystem', operation: 'writeFile', resource: draft })).toThrow();
+    for (const path of ['other-1770000000-00000000-0000-4000-8000-000000000001.md',
+      'durable-agent-run-1770000000.md', '../outside.md', 'nested/durable-agent-run-1770000000-00000000-0000-4000-8000-000000000001.md']) {
+      expect(() => spec.assertMutation({ kind: 'filesystem', operation: 'createFile', resource: resolve(root, '.mcp/specs', path) })).toThrow();
+    }
   });
 
   it('fails closed when a project-internal symlink or junction escapes the delegated root', () => {

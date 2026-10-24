@@ -8,6 +8,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { invokePreview } from './bridge.js';
+import { previewFailure } from './failure.js';
 
 async function run(
   ctx: ToolContext,
@@ -20,7 +21,7 @@ async function run(
     if (r && typeof r === 'object' && r.error) return err(r.error);
     return ok(`${label}\n${JSON.stringify(r, null, 2) ?? String(r)}`);
   } catch (e) {
-    return err(e instanceof Error ? e.message : String(e));
+    return previewFailure(e);
   }
 }
 
@@ -122,6 +123,7 @@ export const previewPressTool: CoderTool = {
 
 export const previewWaitForTool: CoderTool = {
   name: 'preview_wait_for',
+  effectBoundary: 'control',
   description:
     'Block until an element matching the selector is present and laid out (e.g. wait for the dashboard after login, or a modal to open). Returns {found:true|false}. Default timeout 5000ms.',
   source: 'native',
@@ -135,7 +137,7 @@ export const previewWaitForTool: CoderTool = {
     additionalProperties: false,
   },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   timeoutMs: 40_000,
   repeatable: true,

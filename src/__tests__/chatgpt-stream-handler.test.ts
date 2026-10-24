@@ -11,7 +11,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
 import type { ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 
 async function* events(...evts: Record<string, unknown>[]): AsyncIterable<Record<string, unknown>> {
   for (const e of evts) yield e;

@@ -23,8 +23,8 @@ import {
   type SessionWorkbenchEventRawQuery,
   type SessionWorkbenchResourceRawQuery,
 } from '@mcp/api-bus';
-import { FsSessionWorkbenchBootstrapProjectionReader } from '@mcp/code-agent/sessions/fs-store/session-workbench-bootstrap-projection.js';
-import { FsSessionWorkbenchProjection } from '@mcp/code-agent/sessions/fs-store/session-workbench-projection.js';
+import { FsSessionWorkbenchBootstrapProjectionReader } from '@mcp/session-storage/fs-store/session-workbench-bootstrap-projection.js';
+import { FsSessionWorkbenchProjection } from '@mcp/session-storage/fs-store/session-workbench-projection.js';
 import { getAllKnownToolsMeta } from '@mcp/code-agent/tools/tiers.js';
 import type { ServerDeps } from '../../../deps.js';
 import { getCoderWorkerPool } from '../../../../sse/coderWorkerPoolSingleton.js';

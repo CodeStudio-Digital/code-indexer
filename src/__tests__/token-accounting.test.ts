@@ -5,7 +5,7 @@ import {
   computeSnapshot,
   __internal,
 } from '@mcp/code-agent/core/token-accounting.js';
-import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ContentBlock } from "@mcp/provider-sdk";
 
 const text = (t: string): ContentBlock => ({ type: 'text', text: t });
 const toolUse = (id: string, name: string, input: Record<string, unknown>): ContentBlock =>

@@ -7,7 +7,9 @@ import {
 } from '@mcp/agent-runtime-contracts';
 import { AgentRuntimeHostError } from '../errors.js';
 import { semanticSha256 } from '../ipc/semantic-hash.js';
+import { assertLegacyPreparation } from './legacy-prepared-validation.js';
 import type {
+  ExecutableAgentAttempt,
   PreparedAgentAttempt,
   ResumeAgentCommand,
   StartAgentCommand,
@@ -114,6 +116,8 @@ function assertWireSpec(prepared: PreparedAgentAttempt): void {
     || wireSpec.specVersion !== BigInt(run.specVersion)
     || wireSpec.role !== run.role
     || wireSpec.deadlineAtUnixMs !== authority.deadlineAtUnixMs
+    || (wireSpec.executionDeadlineAtUnixMs !== undefined && (wireSpec.executionDeadlineAtUnixMs <= 0n
+      || wireSpec.executionDeadlineAtUnixMs > wireSpec.deadlineAtUnixMs))
     || wireSpec.workspaceLeaseFencingEpoch <= 0n
   ) {
     reject('wire versions, role, deadline, or workspace fence are inconsistent');
@@ -157,7 +161,7 @@ function assertSpecDigest(prepared: PreparedAgentAttempt): void {
 }
 
 export function assertPreparedAttempt(
-  prepared: PreparedAgentAttempt,
+  prepared: ExecutableAgentAttempt,
   command: StartAgentCommand | ResumeAgentCommand,
   now: Date,
   expectedAgentRunId?: AgentRunId,
@@ -167,6 +171,7 @@ export function assertPreparedAttempt(
   if (
     authority.sessionId !== command.sessionId
     || authority.commandId !== command.commandId
+    || authority.correlationId !== command.correlationId
     || routing.eligibility.surface !== command.payload.surface
     || routing.preference !== command.payload.runtimePreference
   ) {
@@ -175,10 +180,16 @@ export function assertPreparedAttempt(
   if (expectedAgentRunId && run.agentRunId !== expectedAgentRunId) {
     reject('resume returned a different AgentRun');
   }
+  if (command.kind === 'start') {
+    if ('wireSpec' in prepared ? !command.payload.spec
+      : command.payload.admittedPreparationRef !== prepared.admission.preparationRef) {
+      reject('start command does not reference its prepared input');
+    }
+  }
 }
 
 export function assertPreparedAttemptCurrent(
-  prepared: PreparedAgentAttempt,
+  prepared: ExecutableAgentAttempt,
   now: Date,
 ): void {
   const { authority, attempt, routing, run } = prepared;
@@ -216,6 +227,10 @@ export function assertPreparedAttemptCurrent(
   ) {
     reject('routing does not match command, run, or effective provider');
   }
-  assertWireSpec(prepared);
-  assertSpecDigest(prepared);
+  if ('wireSpec' in prepared) {
+    assertWireSpec(prepared);
+    assertSpecDigest(prepared);
+  } else {
+    assertLegacyPreparation(prepared);
+  }
 }

@@ -15,6 +15,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { getGlobalDocSearch, type DocOutline } from './rag-search-docs.js';
+import { docPageArgs } from './doc-page.js';
 
 export const ragDocOutlineTool: CoderTool = {
   name: 'rag_doc_outline',
@@ -29,6 +30,8 @@ export const ragDocOutlineTool: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
+      offset: { type: 'number', description: 'Next page offset returned by this tool (default 0).' },
+      limit: { type: 'number', description: 'Maximum source/chunk rows in this page (default 100, max 500). Headings are grouped within the page.' },
       collection: {
         type: 'string',
         description: 'Collection name — returns its source list. Omit when passing source_id.',
@@ -44,7 +47,8 @@ export const ragDocOutlineTool: CoderTool = {
   mutates: false,
   parallelSafe: true,
   riskLevel: 'read',
-  handler: async (args, _ctx: ToolContext): Promise<ToolResult> => {
+  handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    const page = docPageArgs(args, 100, 500); if ('error' in page) return page.error;
     const backend = getGlobalDocSearch();
     if (!backend) {
       return err('rag_doc_outline is not configured: the doc corpus backend is not wired into this process.');
@@ -53,7 +57,8 @@ export const ragDocOutlineTool: CoderTool = {
       return err('rag_doc_outline is not available in this process. Use rag_search_docs instead.');
     }
     const sourceId = Number(args.source_id);
-    const hasSource = Number.isFinite(sourceId) && sourceId > 0;
+    const hasSource = Number.isSafeInteger(sourceId) && sourceId > 0;
+    if (args.source_id != null && !hasSource) return err('source_id must be a positive integer');
     const collection = typeof args.collection === 'string' ? args.collection.trim() : '';
     if (!hasSource && !collection) {
       return err('Pass a collection name (to list its sources) or a source_id (to see its heading tree).');
@@ -61,7 +66,9 @@ export const ragDocOutlineTool: CoderTool = {
 
     let outline: DocOutline | null;
     try {
-      outline = await backend.outline(hasSource ? { source_id: sourceId } : { collection });
+      ctx.signal?.throwIfAborted();
+      outline = await backend.outline({ ...(hasSource ? { source_id: sourceId } : { collection }), ...page }, ctx.signal);
+      ctx.signal?.throwIfAborted();
     } catch (e) {
       return err(`doc outline failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -73,7 +80,11 @@ export const ragDocOutlineTool: CoderTool = {
       );
     }
 
-    return ok(outline.kind === 'sources' ? renderSources(outline) : renderHeadings(outline));
+    const body = outline.kind === 'sources' ? renderSources(outline) : renderHeadings(outline);
+    const next = outline.next_offset == null ? '' : `\n\nMore rows: rag_doc_outline(${JSON.stringify({ ...(hasSource ? { source_id: sourceId } : { collection }), offset: outline.next_offset, limit: page.limit })}). Counts refer to this page.`;
+    return { content: body + next, ...(outline.next_offset != null ? { sourceTruncations: [{
+      technique: 'rag-outline-page', inputSize: outline.next_offset + 1, inputSizeExact: false,
+      outputSize: page.limit, unit: 'items' as const, recoverable: true }] } : {}) };
   },
 };
 

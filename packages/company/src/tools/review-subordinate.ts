@@ -11,8 +11,10 @@
  * session. The heavy lifting lives in `reviewSessionSnapshots` (shared with the
  * code-agent `self_review` tool); this file is just orchestration glue.
  */
-import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
@@ -21,7 +23,7 @@ import { SnapshotReviewPipeline } from '@mcp/services/services/snapshot-review-p
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import { reviewSessionSnapshots } from '@mcp/services/services/review-session-snapshots.js';
 import { formatFindingsForAgent } from '@mcp/services/services/snapshot-review-format.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 import { asSessionId, isUuid } from '@mcp/session-storage';
 
@@ -69,7 +71,8 @@ export function buildReviewSubordinateTool(
       'Call list_subordinates first to get the agent_run_id.',
     parameters,
     source: 'native',
-    handler: async (args): Promise<ToolResult> => {
+    handler: async (args, ctx): Promise<ToolResult> => {
+      ctx.signal?.throwIfAborted();
       const agentRunId =
         typeof args.agent_run_id === 'string' ? args.agent_run_id : '';
       if (!agentRunId) {
@@ -119,7 +122,7 @@ export function buildReviewSubordinateTool(
         outcome = await reviewSessionSnapshots(
           { snapshotStore, snapshotService, pipeline, reviewStore },
           coderSessionId,
-          { intent },
+          { intent, signal: ctx.signal },
         );
       } catch (e) {
         return err(`review_subordinate_work failed: ${e instanceof Error ? e.message : String(e)}`);

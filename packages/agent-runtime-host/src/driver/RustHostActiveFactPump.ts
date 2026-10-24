@@ -7,6 +7,8 @@ import type {
 
 /** Owns the terminal management-fact receive loop for one Active attempt. */
 export class RustHostActiveFactPump {
+  get remainingIdentityCapacity(): number | undefined { return this.facts.remainingIdentityCapacity; }
+
   readonly #abort = new AbortController();
   readonly #completion: Promise<void>;
 
@@ -27,6 +29,11 @@ export class RustHostActiveFactPump {
 
   abort(cause?: unknown): void {
     if (!this.#abort.signal.aborted) this.#abort.abort(cause);
+  }
+
+  renewAuthority(request: import('./HostLifecycleTypes.js').HostAuthorityRenewalRequest): Promise<void> {
+    if (!this.facts.renewAuthority) return Promise.reject(new Error('Authority renewal is unavailable'));
+    return this.facts.renewAuthority(request);
   }
 
   cancel(request: Parameters<RustHostManagementFactPort['cancel']>[0]): Promise<void> {

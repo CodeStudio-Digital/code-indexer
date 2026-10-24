@@ -62,4 +62,18 @@ describe('create_file', () => {
     expect(res.content).toBe('File exists.md already exists. Use write_file or edit_file to modify it.');
     expect(readFileSync(join(root, 'exists.md'), 'utf8')).toBe('already here'); // untouched
   });
+
+  it('allows exactly one concurrent creator and preserves its complete UTF-8 content', async () => {
+    const contents = Array.from({ length: 16 }, (_, i) => `${i}:😀`.repeat(100));
+    const results = await Promise.all(contents.map(content => createFile.handler({ path: 'race.txt', content }, ctx)));
+    const winners = results.map((r, i) => !r.isError ? i : -1).filter(i => i >= 0);
+    expect(winners).toHaveLength(1);
+    expect(readFileSync(join(root, 'race.txt'), 'utf8')).toBe(contents[winners[0]]);
+    expect(results[winners[0]].content).toContain(`${Buffer.byteLength(contents[winners[0]], 'utf8')} bytes`);
+  });
+
+  it('does not create a parent directory or file after pre-cancellation', async () => {
+    await expect(createFile.handler({ path: 'cancelled/file.txt', content: 'no' }, { ...ctx, signal: AbortSignal.abort(new Error('stopped')) })).rejects.toThrow('stopped');
+    expect(existsSync(join(root, 'cancelled'))).toBe(false);
+  });
 });

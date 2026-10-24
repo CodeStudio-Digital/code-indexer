@@ -57,7 +57,9 @@ export async function acquireAgentDriver(conn: DbConnection): Promise<AcquiredDb
   let spec = specCache.get(key) ?? null;
   if (!driver) {
     spec = await resolveConnConfig(conn, getDbSecretDecryptor());
-    driver = await mgr.acquire(key, spec.config, { invalidatePrefix: key });
+    // This is an exact connection identity, not a versioned prefix. Invalidating
+    // "agent:1:2" as a prefix also closed unrelated connections 20, 21, ... .
+    driver = await mgr.acquire(key, spec.config);
     specCache.set(key, spec);
   }
   lastSeenVersion.set(key, version);

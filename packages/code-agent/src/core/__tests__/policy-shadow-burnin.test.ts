@@ -16,7 +16,7 @@ import {
 import {
   FsPolicyShadowRepository,
   FsSessionStore,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 import { ToolRegistry } from '../registry.js';
 import type { CoderTool } from '../tool.js';
 import { createPolicyShadowPort } from '../policy-shadow-adapter.js';

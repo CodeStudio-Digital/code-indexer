@@ -1,4 +1,4 @@
-import type { CoderTask } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask } from '@mcp/session-storage/session-state-types.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import {
   FULL_ACCESS_FILTER,

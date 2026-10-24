@@ -5,6 +5,7 @@ interface PendingInference<T = unknown> {
   resolve: (value: T) => void;
   reject: (reason: unknown) => void;
   supersessionKey?: string;
+  cleanup?: () => void;
 }
 
 export class SupersededInferenceError extends Error {
@@ -25,17 +26,21 @@ export class SemanticInferenceScheduler {
   private sequence = 0;
   private stopped: Error | null = null;
 
+  constructor(private readonly maxPending = 128) {}
+
   enqueue<T>(
     priority: number,
     run: () => Promise<T>,
-    options: { supersessionKey?: string } = {},
+    options: { supersessionKey?: string; signal?: AbortSignal } = {},
   ): Promise<T> {
     if (this.stopped) return Promise.reject(this.stopped);
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason ?? new Error('Inference aborted'));
     return new Promise<T>((resolve, reject) => {
       if (options.supersessionKey) {
         const retained: PendingInference[] = [];
         for (const entry of this.pending) {
           if (entry.supersessionKey === options.supersessionKey) {
+            entry.cleanup?.();
             entry.reject(new SupersededInferenceError(options.supersessionKey));
           } else {
             retained.push(entry);
@@ -43,14 +48,30 @@ export class SemanticInferenceScheduler {
         }
         this.pending = retained;
       }
-      this.pending.push({
+      if (this.pending.length >= this.maxPending) {
+        reject(new Error('Semantic inference queue is full; retry after current work completes'));
+        return;
+      }
+      const entry: PendingInference = {
         priority,
         sequence: this.sequence++,
         run,
         resolve: resolve as (value: unknown) => void,
         reject,
         supersessionKey: options.supersessionKey,
-      });
+      };
+      if (options.signal) {
+        const abort = () => {
+          const index = this.pending.indexOf(entry);
+          if (index < 0) return; // Native inference already running: caller discards its result.
+          this.pending.splice(index, 1);
+          entry.cleanup?.();
+          reject(options.signal!.reason ?? new Error('Inference aborted'));
+        };
+        entry.cleanup = () => options.signal!.removeEventListener('abort', abort);
+        options.signal.addEventListener('abort', abort, { once: true });
+      }
+      this.pending.push(entry);
       this.pending.sort((left, right) =>
         right.priority - left.priority || left.sequence - right.sequence);
       void this.drain();
@@ -59,7 +80,7 @@ export class SemanticInferenceScheduler {
 
   close(reason = new Error('semantic inference scheduler stopped')): void {
     this.stopped = reason;
-    for (const entry of this.pending.splice(0)) entry.reject(reason);
+    for (const entry of this.pending.splice(0)) { entry.cleanup?.(); entry.reject(reason); }
   }
 
   diagnostics(): { active: boolean; queued: number } {
@@ -72,6 +93,7 @@ export class SemanticInferenceScheduler {
     try {
       while (!this.stopped && this.pending.length > 0) {
         const entry = this.pending.shift()!;
+        entry.cleanup?.();
         try { entry.resolve(await entry.run()); }
         catch (error) { entry.reject(error); }
       }

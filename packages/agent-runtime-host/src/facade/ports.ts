@@ -8,14 +8,14 @@ import type {
   CanonicalAgentEvent,
   EventCursor,
   InteractionResponse,
-  PreparedAgentAttempt,
+  ExecutableAgentAttempt,
   ResumeAgentCommand,
   StartAgentCommand,
 } from './types.js';
 
 export interface AgentControlPlanePort {
-  prepareStart(command: StartAgentCommand): Promise<PreparedAgentAttempt>;
-  prepareResume(command: ResumeAgentCommand): Promise<PreparedAgentAttempt>;
+  prepareStart(command: StartAgentCommand): Promise<ExecutableAgentAttempt>;
+  prepareResume(command: ResumeAgentCommand): Promise<ExecutableAgentAttempt>;
   commitAttemptStartFailure(failure: AttemptStartFailure): Promise<void>;
   commitCancelRequest(authority: AttemptAuthority, reason: CancelReason): Promise<void>;
   resolveInteraction(
@@ -36,6 +36,6 @@ export interface AgentControlPlanePort {
  */
 export interface AgentRuntimeAdapterPort {
   readonly generation: RuntimeRouteRecord['runtimeGeneration'];
-  launch(prepared: PreparedAgentAttempt, route: RuntimeRouteRecord): Promise<void>;
+  launch(prepared: ExecutableAgentAttempt, route: RuntimeRouteRecord): Promise<void>;
   cancel(authority: AttemptAuthority, reason: CancelReason): Promise<void>;
 }

@@ -4,8 +4,8 @@ import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
-import type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/index.js';
 import type { HookBus } from '@mcp/code-agent/core/hook-bus.js';
 import type { SessionId } from '@mcp/session-storage';
 
@@ -47,6 +47,11 @@ export interface PreflightSeed {
 }
 
 export interface RunCoderOptions {
+  agentReads?: import('@mcp/code-agent/ports/agent-read-port.js').AgentReadPort;
+  /** Durable admission barrier after configuration resolves, before provider execution. */
+  admitAttempt?: (
+    preparation: import('@mcp/agent-runtime-contracts').CoderAttemptPreparationV1,
+  ) => Promise<import('@mcp/agent-runtime-contracts').CoderAttemptAdmissionV1>;
   /** Opaque filesystem session UUID (existing), or parameters for a new one. */
   session:
     | { id: SessionId }
@@ -162,6 +167,7 @@ export interface RunCoderOptions {
       projectName: string,
       query: string,
       limit?: number,
+      signal?: AbortSignal,
     ): Promise<Array<{
       id: string;
       title: string;
@@ -177,6 +183,7 @@ export interface RunCoderOptions {
       projectName: string,
       limit?: number,
       type?: string,
+      signal?: AbortSignal,
     ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
     /** Archive a live memory by name/title within the scope (logical delete).
      *  Returns how many rows were archived (0 when no match). */
@@ -389,6 +396,9 @@ export interface RunCoderOptions {
    * tools. Omitted in CLI / test usage (no plugins loaded).
    */
   pluginTools?: import('@mcp/code-agent/core/tool.js').CoderTool[];
+  /** Host integrations registered before policy filtering and snapshot sealing.
+   * onRunnerReady observes the sealed runner; it cannot add capabilities. */
+  hostTools?: import('@mcp/code-agent/core/tool.js').CoderTool[];
   /**
    * Phase 2 hardening: explicit escape hatch the policy module consults when
    * running in strict mode (Phase 5). Today reserved.

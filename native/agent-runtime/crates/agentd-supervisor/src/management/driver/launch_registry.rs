@@ -67,6 +67,15 @@ impl Debug for LaunchRegistry {
 }
 
 impl LaunchRegistry {
+    pub(super) fn authority_ready(&self, key: &OwnershipKey) -> bool {
+        self.by_idempotency_key.values().any(|record| {
+            &record.ownership_key == key
+                && record.host_durable
+                && !record.physical_reaped
+                && matches!(record.outcome, LaunchOutcome::Owned(_))
+        })
+    }
+
     pub(super) const fn new(maximum_entries: usize) -> Self {
         Self {
             maximum_entries,

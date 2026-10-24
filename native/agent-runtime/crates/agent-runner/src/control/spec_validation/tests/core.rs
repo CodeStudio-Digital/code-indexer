@@ -85,6 +85,18 @@ fn launch_identity_is_authoritative() {
 }
 
 #[test]
+fn session_continuation_is_the_first_attempt_of_a_new_run() {
+    let mut spec = valid_spec();
+    spec.trigger = wire::AttemptTrigger::SessionContinuation as i32;
+    assert!(validate(spec.clone()).is_ok());
+    spec.ordinal = 2;
+    assert_eq!(
+        validate(spec).unwrap_err(),
+        SpecValidationError::TriggerOrdinalMismatch
+    );
+}
+
+#[test]
 fn root_and_child_graph_shapes_are_checked() {
     let mut invalid_root = valid_spec();
     invalid_root.spawn_depth = 1;

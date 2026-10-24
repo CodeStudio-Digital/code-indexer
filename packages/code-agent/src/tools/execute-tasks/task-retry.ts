@@ -23,14 +23,14 @@
  * prompt usually recovers.
  */
 import { nonRetryableProviderErrorReason, backoffDelayMs } from '@mcp/code-agent/core/runner/provider-retry.js';
+import { setTimeout as sleepTimer } from 'node:timers/promises';
 
 export type RetryVerdict = 'transient' | 'fatal';
 
 /**
  * Map an arbitrary error message (or thrown Error) onto our 2-way verdict.
- * Conservative defaults — UNKNOWN errors are treated as transient because
- * the retry cap bounds the cost; a fatal error wrongly retried at most
- * adds one or two attempts before failing for good.
+ * Unrecognized error messages use the bounded transient policy. Uncertain
+ * effects are different: they require reconciliation and never authorize replay.
  */
 export function classifyError(errOrMessage: unknown): RetryVerdict {
   const err = errOrMessage instanceof Error ? errOrMessage : new Error(stringifyError(errOrMessage));
@@ -38,6 +38,7 @@ export function classifyError(errOrMessage: unknown): RetryVerdict {
   if (nonRetryableProviderErrorReason(err, err) !== null) return 'fatal';
 
   const msg = stringifyError(errOrMessage).toLowerCase();
+  if (/outcome[_ ]unknown|effect[_ ]unconfirmed|result[_ ]ambiguous/.test(msg)) return 'fatal';
 
   // Quality watchdog abort (PR-C) — transient by design. The retry
   // sequence drops history that the model got stuck on.
@@ -103,12 +104,14 @@ export interface AttemptResult<T> {
   shouldStop: boolean;
   /** Error message used by the classifier; empty if no error. */
   errorMessage?: string;
+  effectOutcome?: 'unknown';
 }
 
 export interface DispatchWithRetryOpts<T> {
+  signal?: AbortSignal;
   config?: TaskRetryConfig;
   /** Override sleep — tests pass a synchronous resolver. */
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Telemetry hook fired before each backoff. */
   onRetry?: (info: { attempt: number; nextAttempt: number; delayMs: number; verdict: RetryVerdict; errorMessage: string }) => void;
   /** Telemetry hook fired when the loop bails (success OR fatal OR cap-exhausted). */
@@ -134,7 +137,13 @@ export async function dispatchWithRetry<T>(
   const maxAttempts = cfg.maxRetries + 1;
 
   for (let i = 0; i < maxAttempts; i++) {
+    opts.signal?.throwIfAborted();
     last = await attempt(i);
+    if (last.effectOutcome === 'unknown') {
+      opts.onFinish?.({ attempts: i + 1, verdict: 'fatal', errorMessage: 'outcome_unknown: reconcile the previous effect before retrying' });
+      return { result: last.result, attempts: i + 1 };
+    }
+    opts.signal?.throwIfAborted();
     if (last.shouldStop) {
       opts.onFinish?.({ attempts: i + 1, verdict: null });
       return { result: last.result, attempts: i + 1 };
@@ -148,12 +157,12 @@ export async function dispatchWithRetry<T>(
     }
     const delayMs = backoffDelayMs(i + 1, { initialMs: cfg.initialMs, maxMs: cfg.maxMs, jitter: cfg.jitter });
     opts.onRetry?.({ attempt: i, nextAttempt: i + 1, delayMs, verdict, errorMessage: errMsg });
-    await sleep(delayMs);
+    await sleep(delayMs, opts.signal);
   }
   // Unreachable — the loop always returns inside, but TS needs the fallback.
   return { result: last!.result, attempts: maxAttempts };
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, Math.max(0, ms)));
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return sleepTimer(Math.max(0, ms), undefined, { signal });
 }

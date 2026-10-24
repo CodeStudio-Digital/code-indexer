@@ -1,7 +1,7 @@
 import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { Hono } from 'hono';
-import type { SessionFilesystemAccess } from '@mcp/code-agent/sessions/types.js';
+import type { SessionFilesystemAccess } from '@mcp/session-storage/session-state-types.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   notFound,

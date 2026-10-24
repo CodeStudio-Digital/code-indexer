@@ -7,13 +7,15 @@
  * actually needs are now listed directly in IMPLEMENT_ALLOWLIST; explore-only
  * tools (web search, deep navigation, project overview) must NOT leak in.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { ToolContext, CoderTool } from '@mcp/code-agent/core/tool.js';
 import {
   READ_ONLY_FILTER,
   READ_WRITE_FILTER,
   EXPLORE_ALLOWLIST,
   IMPLEMENT_ALLOWLIST,
   checkPathScopeForTool,
+  wrapToolForPathScope,
 } from '@mcp/code-agent/tools/implement-subagent.js';
 
 const tool = (name: string, source: 'native' | 'mcp' | 'mcp_external' = 'native', mutates?: boolean) =>
@@ -59,6 +61,38 @@ describe('explore subagent — READ_ONLY_FILTER stays read-only', () => {
 });
 
 describe('subagent path scope', () => {
+  it('rejects an entire mixed patch before the first write and checks rename destinations', async () => {
+    const handler = vi.fn(async () => ({ content: 'written' }));
+    const violations: string[] = [];
+    const scoped = wrapToolForPathScope({ name: 'apply_patch', handler } as unknown as CoderTool,
+      ['src/owned'], violations, 'enforce-writes');
+    const patch = '*** Begin Patch\n*** Add File: src/owned/new.ts\n+safe\n*** Delete File: src/other.ts\n*** End Patch';
+    expect((await scoped.handler({ patch }, {} as ToolContext)).isError).toBe(true);
+    expect(handler).not.toHaveBeenCalled(); expect(violations).toEqual(['apply_patch:src/other.ts']);
+    const move = '*** Begin Patch\n*** Update File: src/owned/a.ts\n*** Move to: src/other.ts\n@@\n-before\n+after\n*** End Patch';
+    expect(checkPathScopeForTool('apply_patch', { input: move }, ['src/owned'], 'enforce-writes').blockedMessage).toContain('src/other.ts');
+    const incoming = move.replace('src/owned/a.ts', 'outside.ts').replace('src/other.ts', 'src/owned/a.ts');
+    expect(checkPathScopeForTool('apply_patch', { patch: incoming }, ['src/owned'], 'enforce-writes').blockedMessage).toContain('outside.ts');
+  });
+
+  it('parses scoped patches including freeform input and never interprets file contents as actions', async () => {
+    const handler = vi.fn(async () => ({ content: 'written' }));
+    const violations: string[] = [];
+    const scoped = wrapToolForPathScope({ name: 'apply_patch', handler } as unknown as CoderTool,
+      ['src/owned'], violations, 'enforce-writes');
+    const patch = '*** Begin Patch\n*** Add File: src/owned/new.ts\n+*** Delete File: outside.ts\n*** End Patch';
+    expect((await scoped.handler({ input: patch }, {} as ToolContext)).content).toBe('written');
+    expect(violations).toEqual([]); expect(handler).toHaveBeenCalledTimes(1);
+    expect((await scoped.handler({ patch: 'malformed' }, {} as ToolContext)).isError).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('records persistent shell cwd and command violations without claiming a shell sandbox', () => {
+    const scoped = checkPathScopeForTool('exec_command', { cmd: 'cd other && node script.js', workdir: 'outside' }, ['src'], 'enforce-writes');
+    expect(scoped.violations).toEqual(['exec_command:outside', 'exec_command:other']);
+    expect(scoped.blockedMessage).toBeUndefined();
+  });
+
   it('records read violations without blocking in warn mode', () => {
     const scoped = checkPathScopeForTool(
       'read_file',

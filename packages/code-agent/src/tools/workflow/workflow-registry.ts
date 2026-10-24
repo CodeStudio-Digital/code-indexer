@@ -88,10 +88,13 @@ function parseRecord(
       || typeof record.id !== 'string'
       || (workflowId !== undefined && record.id !== workflowId)
       || record.sessionId !== sessionId
+      || record.runtimeGeneration !== undefined && !['legacy_ts', 'rust_v1'].includes(record.runtimeGeneration)
       || !Array.isArray(record.steps)
       || !record.steps.every((step) =>
         step && typeof step.id === 'string' && typeof step.prompt === 'string'
-        && typeof step.status === 'string')) {
+        && typeof step.status === 'string'
+        && (step.nativeTranscriptRef === undefined || typeof step.nativeTranscriptRef === 'string'
+          && /^native-child-journal:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}$/i.test(step.nativeTranscriptRef)))) {
       return undefined;
     }
     return record;

@@ -124,7 +124,8 @@ export function buildWorkerDocSearch(docStore: DocStore): WorkerDocSearchBackend
   return {
     flushTelemetry: () => telemetry.flush(),
     dispose: () => telemetry.dispose(),
-    search: async (input) => {
+    search: async (input, signal) => {
+      signal?.throwIfAborted();
       const { scope, project_id, ...rest } = input;
       let scoped: Array<{ id: number; name: string }> = [];
 
@@ -146,6 +147,7 @@ export function buildWorkerDocSearch(docStore: DocStore): WorkerDocSearchBackend
 
       const started = Date.now();
       const out = await lexicalSearch.search(forward);
+      signal?.throwIfAborted();
       out.diag.scope = scoped.length > 0 ? 'project' : 'all';
       if (scoped.length > 0) out.diag.scoped_collections = scoped.map((collection) => collection.name);
 

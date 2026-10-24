@@ -5,7 +5,7 @@
  * in-app "Run all" button and (later) a CLI for CI.
  */
 import type { CookieJar } from '@mcp/shared/utils/http-engine.js';
-import { executeRequest, type ExecRequest, type ExecuteResult } from './execute-request.js';
+import { executeRequest, ApiRequestOutcomeUnknown, type ExecRequest, type ExecuteResult, type ExecuteInput } from './execute-request.js';
 import { UNSET, type ScriptTestResult } from './script-runtime/types.js';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -114,6 +114,8 @@ export async function runCollection(opts: {
   allowAbsoluteFiles?: boolean;
   /** Response read cap — must match the send route so large bodies aren't truncated. */
   maxBytes?: number;
+  send?: ExecuteInput['send'];
+  beforeDispatch?: (request: RunRequestLike) => void;
 }): Promise<RunReport> {
   const results: AssertionResult[] = [];
   let passed = 0, failed = 0, skipped = 0;
@@ -142,6 +144,8 @@ export async function runCollection(opts: {
         blockPrivateHosts: opts.blockPrivateHosts,
         fileRoot: opts.fileRoot, allowAbsoluteFiles: opts.allowAbsoluteFiles,
         maxBytes: opts.maxBytes,
+        send: opts.send, allowMutating: !!opts.includeMutating,
+        beforeDispatch: () => opts.beforeDispatch?.(req),
       });
       // Chain script var updates into the shared scope for the next request.
       for (const [k, v] of Object.entries(exec.variableUpdates)) {
@@ -153,8 +157,10 @@ export async function runCollection(opts: {
       verdict.ok ? passed++ : failed++;
       results.push(r); opts.onProgress?.(r);
     } catch (e) {
+      if (e instanceof ApiRequestOutcomeUnknown) throw e;
       const r = { ...base, ok: false, reason: e instanceof Error ? e.message : String(e) };
       failed++; results.push(r); opts.onProgress?.(r);
+      if (opts.signal?.aborted) { aborted = true; break; }
     }
   }
 

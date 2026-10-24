@@ -21,6 +21,8 @@ import { createDominanceState } from '../guards/dominance.js';
 
 export interface CreateRunContextArgs {
   opts: RunnerOptions;
+  /** Identity already sealed by host admission; standalone trees allocate one. */
+  runId?: string;
   emit: RunContext['emit'];
   /**
    * Initial tier filter — null disables filtering (the BT sees every tool
@@ -100,7 +102,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     summaryPrecompute: null,
     toolsMemo: null,
     estimateCalibration: null,
-    runId: randomUUID(),
+    runId: args.runId ?? randomUUID(),
     aborted: false,
     transition: null,
     stopReason: null,

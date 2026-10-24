@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/code-agent/sessions/run-limits.js';
+import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/session-storage/run-limits.js';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { IndexingOverlay } from './IndexingOverlay.js';
@@ -1425,7 +1425,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // useCallback-stable functions from useAgentStream.
   const handlers: PromptHandlers = useMemo(
     () => ({
-      onAnswer: (answer) => answerQuestion(answer),
+      onAnswer: (answer, interactionId) => answerQuestion(answer, undefined, { interactionId }),
       onPlanResponse: async (verdict) => {
         await respondToPlan(verdict);
         // Iteration 2: after an approved plan, the backend may auto-transition
@@ -1447,9 +1447,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         }
       },
       onTasksResponse: (verdict) => respondToTasks(verdict),
-      onDecide: (answers) => decideGate(answers),
-      onSpecResponse: async (approved, spec_path, requested_changes) => {
-        await respondToSpec(approved, spec_path, requested_changes);
+      onDecide: (answers, interactionId) => decideGate(answers, undefined, { interactionId }),
+      onSpecResponse: async (approved, spec_path, requested_changes, interactionId) => {
+        await respondToSpec(approved, spec_path, requested_changes, undefined, { interactionId });
         // After approval the backend transitions agent 'spec' → 'build'. Refresh
         // the local agent state so the picker reflects the new mode.
         if (approved && selectedId) {

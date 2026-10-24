@@ -232,6 +232,7 @@ fn artifact(artifact_id: &str, body: &[u8]) -> wire::ArtifactRef {
         privacy_class: wire::ArtifactPrivacyClass::Internal.into(),
         redaction_policy_version: "1".to_owned(),
         owner_session_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+        display_name: String::new(),
     }
 }
 

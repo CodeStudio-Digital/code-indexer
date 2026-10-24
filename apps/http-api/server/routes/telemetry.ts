@@ -6,11 +6,11 @@ import {
   getFilesystemFirstTurnPayload,
   getFilesystemSessionTelemetrySummary,
   listFilesystemTurnTelemetry,
-} from '@mcp/code-agent/sessions/fs-store/telemetry-dashboard.js';
+} from '@mcp/session-storage/fs-store/telemetry-dashboard.js';
 import {
   getFilesystemGlobalTelemetrySummary,
   inspectFilesystemCostCoverage,
-} from '@mcp/code-agent/sessions/fs-store/telemetry-global-dashboard.js';
+} from '@mcp/session-storage/fs-store/telemetry-global-dashboard.js';
 import { refreshAllModelPrices } from '@mcp/indexer/indexer/providers/scheduled-pricing-refresh.js';
 import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js';
 

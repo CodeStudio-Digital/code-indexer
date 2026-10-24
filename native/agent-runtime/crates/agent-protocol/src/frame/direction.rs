@@ -69,10 +69,15 @@ pub(super) const fn validate_payload_direction(
                 | Body::HydrationProgress(_)
                 | Body::HydrationCommitted(_)
                 | Body::ProviderStart(_)
+                | Body::ProviderRequestChunk(_)
+                | Body::ProviderRequestCommit(_)
+                | Body::ProviderCheckpoint(_)
                 | Body::ProviderCancel(_)
+                | Body::ProviderEventConsumed(_)
                 | Body::EngineEventProposal(_)
                 | Body::CapabilityPrepare(_)
-                | Body::CapabilityExecute(_),
+                | Body::CapabilityExecute(_)
+                | Body::CapabilityReadBatchExecute(_),
         ) | (
             FrameDirection::HostToRunner,
             wire::TransportChannel::Data,
@@ -81,6 +86,8 @@ pub(super) const fn validate_payload_direction(
                 | Body::HydrationChunk(_)
                 | Body::HydrationComplete(_)
                 | Body::ProviderAccepted(_)
+                | Body::ProviderRequestChunkAccepted(_)
+                | Body::ProviderCheckpointCommitted(_)
                 | Body::ProviderTextDelta(_)
                 | Body::ProviderThinkingDelta(_)
                 | Body::ProviderToolCall(_)
@@ -88,7 +95,9 @@ pub(super) const fn validate_payload_direction(
                 | Body::ProviderTerminal(_)
                 | Body::EngineEventCommitted(_)
                 | Body::CapabilityUpdate(_)
-                | Body::CapabilityExecutionResult(_),
+                | Body::CapabilityExecutionResult(_)
+                | Body::CapabilityReadBatchAccepted(_)
+                | Body::CapabilityReadBatchResult(_),
         )
     );
     if allowed {

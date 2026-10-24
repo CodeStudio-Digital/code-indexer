@@ -8,6 +8,8 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::windows::io::{AsHandle, AsRawHandle};
 
 #[cfg(windows)]
+mod pseudoconsole;
+#[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows;
 
@@ -61,6 +63,8 @@ pub struct ChildHandleAllowlist {
     handles: Vec<PreparedChildHandle>,
     #[cfg(windows)]
     bootstrap_stdio: Option<WindowsBootstrapChildStdio>,
+    #[cfg(windows)]
+    pseudoconsole: Option<crate::windows::pseudoconsole::WindowsPseudoConsoleChild>,
 }
 
 #[cfg(unix)]
@@ -94,6 +98,8 @@ impl ChildHandleAllowlist {
             handles: Vec::new(),
             #[cfg(windows)]
             bootstrap_stdio: None,
+            #[cfg(windows)]
+            pseudoconsole: None,
         }
     }
 
@@ -130,6 +136,9 @@ impl ChildHandleAllowlist {
         T: AsHandle + ?Sized,
     {
         let source = owner.as_handle().as_raw_handle() as usize;
+        if self.pseudoconsole.is_some() {
+            return Err(ChildHandleAllowlistError::Duplicate);
+        }
         if self
             .handles
             .iter()
@@ -158,7 +167,7 @@ impl ChildHandleAllowlist {
         &mut self,
         bootstrap_stdio: WindowsBootstrapChildStdio,
     ) -> Result<(), ChildHandleAllowlistError> {
-        if self.bootstrap_stdio.is_some() {
+        if self.bootstrap_stdio.is_some() || self.pseudoconsole.is_some() {
             return Err(ChildHandleAllowlistError::Duplicate);
         }
         if self

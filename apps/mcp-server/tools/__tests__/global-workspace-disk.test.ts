@@ -95,7 +95,7 @@ describe('global workspace disk fallbacks', () => {
     const ctx = {
       db: {
         getProjectByName: () => project,
-        listFiles: () => [],
+        listAgentDirectoryFiles: () => ({ items: [], total: 0, offset: 0 }),
       },
     } as unknown as ToolContext;
     const listDirectory = fileTools.find((tool) => tool.name === 'list_directory')!;

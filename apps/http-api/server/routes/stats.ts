@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import { generationMatchesEmbeddingFingerprint, NullVectorStore } from '@mcp/store/vectors.js';
 import { embedQueryForNamespace } from '@mcp/indexer/search/embeddings.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
-import { readFsSessionMemoryKpis } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { readFsSessionMemoryKpis } from '@mcp/session-storage/fs-store/index.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
 import { timeSection } from '../perf/breakdown.js';

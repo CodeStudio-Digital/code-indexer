@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { applyStatus, seedStatusById } from '../execute-tasks/task-run-types.js';
-import type { CoderTask, TaskStatus } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TaskStatus } from '@mcp/session-storage/session-state-types.js';
 
 function task(id: string, status: TaskStatus = 'pending'): CoderTask {
   return {

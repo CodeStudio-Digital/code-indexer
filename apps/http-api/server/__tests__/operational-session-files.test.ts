@@ -180,66 +180,12 @@ describe('OperationalSessionFiles', () => {
     expect(readState).toHaveBeenCalledTimes(1);
   });
 
-  it('persists the Sprite project and asset lifecycle under its project session bundle', async () => {
-    const { projectA, files } = await harness();
-    const project = await files.createSpriteProject({
-      project_id: 11,
-      name: 'Sprites',
-      style: { canvas: { width: 32, height: 32 } },
-      settings: { zoom: 4 },
-    });
-    expect(project.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(
-      await readFile(
-        join(
-          projectA,
-          '.mcp-indexer',
-          'session',
-          project.id,
-          'sprite',
-          'project.json',
-        ),
-        'utf8',
-      ),
-    ).toContain('"sprite.project"');
-
-    const asset = await files.createSpriteAsset(11, {
-      name: 'Hero',
-      status: 'draft',
-      slug: 'hero',
-      category: 'character',
-      tags: [],
-    });
-    expect((await files.listSpriteAssets(11)).map((item) => item.id)).toEqual([
-      asset.id,
-    ]);
-    await files.updateSpriteAsset(11, asset.id, {
-      ...asset.data,
-      status: 'approved',
-    });
-    expect((await files.getSpriteAsset(11, asset.id))?.data.status).toBe(
-      'approved',
-    );
-    expect(await files.deleteSpriteAsset(11, asset.id)).toBe(true);
-    expect(await files.getSpriteAsset(11, asset.id)).toBeNull();
-
-    expect(await files.deleteSpriteProject(11)).toBe(true);
-    expect(await files.getSpriteProject(11)).toBeNull();
-  });
-
   it('fails closed when a linked project root is unavailable', async () => {
     const { files } = await harness();
     await expect(
       files.createCompanySession({
         name: 'Missing',
         project_ids: [999],
-      }),
-    ).rejects.toThrow('not registered');
-    await expect(
-      files.createSpriteProject({
-        project_id: 999,
-        name: 'Missing',
-        style: {},
       }),
     ).rejects.toThrow('not registered');
   });

@@ -1,6 +1,6 @@
 /**
  * Tool dispatch with invocation-scoped guards. Walks the assistant's emitted
- * tool_use blocks serially:
+ * tool_use blocks with sequential barriers and bounded independent reads:
  *
  *   1. Resolve repeat/execution policy and normalize the equality key.
  *   2. Run policy + permission gates (denials never enter repeat state).
@@ -10,10 +10,8 @@
  *   5. Build a single tool-role AgentMessage with all the tool_result
  *      blocks so the next turn sees them as one atomic batch.
  *
- * Serial (not parallel) by design: tools may share filesystem state and
- * parallel dispatch was the source of several "two writes raced" bugs in
- * the legacy loop. If we want parallelism later, it goes per-tool via an
- * allowlist (e.g. read-only tools only).
+ * Only explicitly parallel-safe stable reads overlap (at most four). Writes,
+ * commands, interactive/unknown tools and repeated read signatures are barriers.
  */
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -46,6 +44,7 @@ import { resolveToolInvocationMetadata } from '../../policy.js';
 import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';
 import { normalizeSourceTruncations } from '../tool-output-telemetry.js';
 import { asAbortSignal } from '../../abort-signal.js';
+import { independentReadWindow } from './executing-read-window.js';
 import {
   planRetrievalBatch,
   type RetrievalBatchPlanOptions,
@@ -85,6 +84,7 @@ export interface DispatchedToolResult {
   name: string;
   content: string;
   isError: boolean;
+  effectOutcome?: 'unknown';
   durationMs: number;
   /** True when synthesized by the dedup refusal path (no real invocation). */
   wasRefusedByDedup: boolean;
@@ -116,6 +116,10 @@ export interface DispatchedToolResult {
 }
 
 export interface DispatchArgs {
+  /** Presentation observer after the result has been shaped and accounted for.
+   * A slow sibling must not delay this notification. Observer failures never
+   * retry an invocation or change its result. */
+  onToolResult?: (result: DispatchedToolResult) => void;
   toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>;
   /**
    * Deterministic, same-batch retrieval planning. This removes provably
@@ -323,6 +327,7 @@ export interface DispatchArgs {
 
 export interface DispatchResult {
   results: DispatchedToolResult[];
+  outcomeUnknown?: boolean;
   /** True when at least one call was refused — caller routes to Planning. */
   toolLoopDetected: boolean;
   /**
@@ -349,6 +354,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     enabled: args.retrievalBatch !== undefined,
   });
   let toolLoopDetected = false;
+  let outcomeUnknown = false;
   // PR 5 — which guard fired last. Tracked so the Executing node can
   // surface the correct guard kind to the orchestrator.
   let loopGuard: DispatchResult['loopGuard'] | undefined;
@@ -369,7 +375,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   // duplicate suffixes when the same hidden tool is called twice together.
   const activatedHiddenThisBatch = new Set<string>();
 
-  for (const requestedToolUse of args.toolUses) {
+  const dispatchOne = async (requestedToolUse: DispatchArgs['toolUses'][number]): Promise<void> => {
     const retrievalDecision = retrievalPlan.get(requestedToolUse.id);
     const tu = {
       ...requestedToolUse,
@@ -407,9 +413,22 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     const pushResult = async (result: DispatchedToolResult): Promise<void> => {
       results.push(result);
       hookResult = result;
+      try { args.onToolResult?.(result); } catch { /* presentation only */ }
     };
 
     try {
+    if (outcomeUnknown || args.toolContext.toolCallLedger?.outcomeUnknownTool) {
+      outcomeUnknown = true;
+      await pushResult({ toolUseId: tu.id, name: tu.name,
+        content: 'Tool not dispatched because a previous tool outcome is unresolved. Reconcile before retrying.',
+        isError: true, durationMs: 0, wasRefusedByDedup: false, refusalKind: 'gate' });
+      return;
+    }
+    if (asAbortSignal(args.toolContext.signal)?.aborted) {
+      await pushResult({ toolUseId: tu.id, name: tu.name, content: 'Tool execution cancelled before dispatch.',
+        isError: true, durationMs: 0, wasRefusedByDedup: false, refusalKind: 'abort' });
+      return;
+    }
     if (retrievalDecision?.action === 'coalesce') {
       await pushResult({
         toolUseId: tu.id,
@@ -429,7 +448,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         },
         stateEpoch: invocationGuard.stateEpoch,
       });
-      continue;
+      return;
     }
 
     // Hidden-call handling (pin mechanism). A registered tool can be absent
@@ -454,7 +473,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           refusalKind: 'gate',
           stateEpoch: invocationGuard.stateEpoch,
         });
-        continue;
+        return;
       }
     }
     const hiddenFromModel =
@@ -478,7 +497,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         refusalKind: 'gate',
         stateEpoch: invocationGuard.stateEpoch,
       });
-      continue;
+      return;
     }
 
     // Pre-read enforcement (Row 32 from agent-research comparisons).
@@ -531,7 +550,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         guardVerdict,
         stateEpoch: invocationGuard.stateEpoch,
       });
-      continue;
+      return;
     }
 
     // Task-mode gate (execution_mode='all-subagent'). Refuses mutating
@@ -552,7 +571,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         refusalKind: 'task-mode',
         stateEpoch: invocationGuard.stateEpoch,
       });
-      continue;
+      return;
     }
 
     // Telemetry: signal start BEFORE invoking so the dashboard can render
@@ -585,7 +604,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           refusalKind: 'user_denied',
           stateEpoch: invocationGuard.stateEpoch,
         });
-        continue;
+        return;
       }
     }
 
@@ -616,7 +635,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           refusalKind: 'user_denied',
           stateEpoch: invocationGuard.stateEpoch,
         });
-        continue;
+        return;
       }
     }
 
@@ -666,7 +685,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       toolLoopDetected = true;
       loopGuard = 'doom-loop';
       loopDetail = { toolName: tu.name, count: noProgressRefusal.count };
-      continue;
+      return;
     }
 
     if (verdict.action === 'block') {
@@ -684,7 +703,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       toolLoopDetected = verdict.shouldReflect;
       loopGuard = 'tuple-hash';
       loopDetail = { toolName: tu.name, count: verdict.entry.count };
-      continue;
+      return;
     }
 
     const reusable =
@@ -719,7 +738,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       };
       args.onToolCallFinalized?.(tu.id, reused.content.length);
       await pushResult(reused);
-      continue;
+      return;
     }
 
     const reminderPrefix = verdict.kind === 'allow-with-reminder' ? verdict.reminderText : '';
@@ -727,6 +746,8 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     const t0 = Date.now();
     let invocationContent: string;
     let invocationIsError = false;
+    let invocationOutcomeUnknown = false;
+    let invocationStarted = false;
     let invocationContentFormat: 'text' | 'markdown' | 'json' = 'text';
     let invocationStructuredChars: number | null = null;
     let invocationStructuredData: unknown;
@@ -868,6 +889,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       const remainingToolTimeoutMs = toolTimeoutMs > 0
         ? Math.max(1, toolTimeoutMs - (Date.now() - t0))
         : 0;
+      invocationStarted = true;
       const rawInvocation = args.registry.invoke(tu.name, normalizedInput, callContext);
       if (releaseUnsafe) {
         releaseOwnedByInvocation = true;
@@ -883,6 +905,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       );
       invocationContent = typeof result.content === 'string' ? result.content : String(result.content);
       invocationIsError = !!result.isError;
+      if (result.effectOutcome === 'unknown' || args.toolContext.toolCallLedger?.outcomeUnknownTool) {
+        invocationOutcomeUnknown = true;
+        outcomeUnknown = true;
+        args.toolContext.toolCallLedger?.markOutcomeUnknown(tu.name);
+      }
       invocationContentFormat = result.contentFormat ?? 'text';
       invocationStructuredData = result.structuredData;
       if (result.structuredData !== undefined) {
@@ -907,6 +934,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         }
       }
     } catch (e) {
+      if (invocationStarted && tool?.source === 'mcp_external') {
+        invocationOutcomeUnknown = outcomeUnknown = true;
+        args.toolContext.toolCallLedger?.markOutcomeUnknown(tu.name);
+      }
       if (isTimeoutError(e)) {
         if (invocationAbort && !invocationAbort.signal.aborted) {
           try { invocationAbort.abort(e); } catch { /* ignore */ }
@@ -926,6 +957,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         invocationContent = e instanceof Error ? e.message : String(e);
       }
       invocationIsError = true;
+      if (invocationOutcomeUnknown) invocationContent += ' The remote operation may have taken effect; reconcile before retrying.';
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (invocationAbort) args.unregisterInFlightTool?.(tu.id);
@@ -1187,6 +1219,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       contentFormat: invocationContentFormat,
       structuredOutputChars: invocationStructuredChars,
       isError: finalIsError,
+      ...(invocationOutcomeUnknown ? { effectOutcome: 'unknown' as const } : {}),
       durationMs,
       wasRefusedByDedup: false,
       refusalKind,
@@ -1230,7 +1263,18 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         }
       }
     }
+  };
+  for (let offset = 0; offset < args.toolUses.length;) {
+    const count = independentReadWindow(args.toolUses.slice(offset, offset + 4),
+      (name) => lookupTool(args.registry, name), retrievalPlan, args.visibleToolNames);
+    const settled = await Promise.allSettled(args.toolUses.slice(offset, offset + count).map(dispatchOne));
+    // Never abandon a started sibling or repeat it when another member fails.
+    const failure = settled.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+    offset += count;
   }
+  const positions = new Map(args.toolUses.map((call, index) => [call.id, index]));
+  results.sort((left, right) => positions.get(left.toolUseId)! - positions.get(right.toolUseId)!);
 
   // Early gates (disabled/goal/pre-read/task-mode/permission/dedup) converge
   // here so direct and nested calls share one complete accounting contract.
@@ -1258,7 +1302,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     if (entry) result.ledgerEntry = entry;
   }
 
-  return { results, toolLoopDetected, loopGuard, loopDetail };
+  return { results, toolLoopDetected, loopGuard, loopDetail, ...(outcomeUnknown ? { outcomeUnknown: true } : {}) };
 }
 
 /** Compact error-to-string for the guarded bridge-callback warnings. */
@@ -1289,6 +1333,7 @@ export function toToolResultBlock(r: DispatchedToolResult): ContentBlock {
     tool_use_id: r.toolUseId,
     content: r.content,
     is_error: r.isError,
+    ...(r.effectOutcome ? { effect_outcome: r.effectOutcome } : {}),
     ...(r.truncated ? { truncated: true, originalSize: r.originalSize } : {}),
   };
 }

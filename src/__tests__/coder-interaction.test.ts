@@ -6,12 +6,12 @@ import {
   normalizeMessageForCache,
   normalizeMessagesForCache,
 } from '@mcp/code-agent/core/runner.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { planTools } from '@mcp/code-agent/tools/plan.js';
 import { interactionTools } from '@mcp/code-agent/tools/interaction.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 
 class StubProvider implements ChatProvider {
   readonly name = 'stub';

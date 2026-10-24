@@ -95,7 +95,6 @@ export function inventorySource(db: SqliteDatabase, dbPath: string): SourceInven
     coderSessionIds: integerIds(db, 'coder_sessions'),
     companySessionIds: integerIds(db, 'company_sessions'),
     appStudioSessionIds: scalarIds(db, 'app_studio_sessions'),
-    spriteProjectIds: integerIds(db, 'sprite_projects'),
     requiredBytes: Math.ceil(
       dbBytes * 1.35
       + Math.min(sessionPayloadEstimate, dbBytes)

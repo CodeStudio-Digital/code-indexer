@@ -84,6 +84,7 @@ pub(super) fn validate_engine_committed(
     runtime_instance_id: &str,
     local_sequence: u64,
     payload_digest: &[u8],
+    expected_store: (i32, i32),
 ) -> Result<wire::CommitSessionRecordReceipt, ProviderDataError> {
     let wire::frame_payload::Body::EngineEventCommitted(committed) = body else {
         return Err(ProviderDataError::UnexpectedPayload(
@@ -100,7 +101,7 @@ pub(super) fn validate_engine_committed(
         || committed.event_payload_sha256 != payload_digest
         || receipt.session_id != identity.session_id
         || receipt.global_sequence == 0
-        || receipt.kind != wire::SessionRecordKind::LifecycleEvent as i32
+        || (receipt.kind, receipt.durability) != expected_store
         || receipt.payload_sha256 != payload_digest
         || receipt.commit_sha256.len() != 32
         || receipt.previous_commit_sha256.len() != 32
@@ -235,8 +236,7 @@ fn validate_terminal(value: &wire::ProviderTerminal) -> Result<(), ProviderDataE
         || value.reason_code.is_empty()
         || value.completed_at_unix_ms <= 0
         || (value.response_message_count.is_some() && value.response_id.is_none())
-        || (classification == wire::ProviderTerminalClassification::Completed
-            && value.response_id.as_ref().is_none_or(String::is_empty))
+        || value.response_id.as_ref().is_some_and(String::is_empty)
     {
         return Err(ProviderDataError::UnexpectedPayload(
             "provider terminal is incomplete",

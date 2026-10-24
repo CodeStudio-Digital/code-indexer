@@ -2,12 +2,14 @@
  * Redis driver (`ioredis`, pure JS — fetched on demand via resolveDriverEntry).
  * A KEY-VALUE store: no SQL surface, so the relational methods throw and work
  * goes through `runCommand` — scan (keyspace browse), get (type-aware value),
- * set / del / expire. Each op is a pipeline `SELECT <db> + <cmd>` so the logical
- * db is applied atomically (one shared connection, no cross-tab SELECT race).
+ * set / del / expire. Commands sharing this stateful connection are serialized;
+ * SELECT must succeed before dispatch, so a failed switch cannot write to the
+ * previously selected database.
  *
  * NOTE: written against the ioredis v5 API but NOT verified against a live server.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { assertDatabaseDispatch } from './dispatch.js';
 import { resolveDriverEntry } from './driver-registry.js';
 import type { DatabaseDriver, DbCommand, DbConnectConfig, QueryResult, RunQueryOptions } from './types.js';
 
@@ -42,13 +44,16 @@ interface RedisPipeline {
   exec(): Promise<PipeResult>;
 }
 interface RedisClient {
+  readonly status: string;
+  connect(): Promise<void>;
+  disconnect(): void;
+  once(event: 'end', listener: () => void): void;
   pipeline(): RedisPipeline;
   info(section?: string): Promise<string>;
   ping(): Promise<string>;
   /** Run an arbitrary command (the RESP console). select() is issued first on the same client. */
   select(db: number): Promise<unknown>;
   call(command: string, ...args: unknown[]): Promise<unknown>;
-  quit(): Promise<unknown>;
 }
 interface RedisModule {
   default: new (uri: string | Record<string, unknown>, opts?: Record<string, unknown>) => RedisClient;
@@ -83,30 +88,65 @@ export async function createRedisDriver(config: DbConnectConfig): Promise<Databa
     throw new Error('redis driver not installed — download it from the connection dialog');
   }
   const Ctor = mod.default ?? (mod as unknown as RedisModule['default']);
-  const redis = new Ctor(clientOpts(config));
+  // A lost reply must not cause the SDK to resend a write on reconnect.
+  // autoResend=false alone drops the previous queue without rejecting its
+  // promises in ioredis 5.8.1. Ending the connection also settles those callers.
+  const redis = new Ctor(clientOpts(config), { lazyConnect: true, enableOfflineQueue: false,
+    autoResendUnfulfilledCommands: false, retryStrategy: null, maxRetriesPerRequest: 1 });
+  try { await redis.connect(); } catch (error) { redis.disconnect(); throw error; }
+  const defaultDb = config.database ?? ((config.connectionString ? new URL(config.connectionString).pathname.slice(1) : '') || '0');
+  let tail: Promise<unknown> = Promise.resolve();
+  let pending = 0;
+  let closing = false;
+  let closed: Promise<void> | undefined;
 
-  /** The op result from a `pipeline().select(db).<op>()` — index 1 (0 is SELECT). */
-  function opResult(res: PipeResult, i = 1): unknown {
+  function runCommand(command: DbCommand, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    if (closing || pending >= 32) return Promise.reject(new Error('Redis command queue is closed or full'));
+    pending++;
+    const result = tail.catch(() => undefined).then(async () => {
+      if (closing) throw new Error('Redis connection is closing');
+      assertDatabaseDispatch(opts);
+      const payload = (command.payload ?? {}) as Record<string, unknown>;
+      const db = Number(payload.db ?? defaultDb);
+      if (!Number.isSafeInteger(db) || db < 0) throw new Error('Invalid Redis database index');
+      await redis.select(db);
+      assertDatabaseDispatch(opts);
+      return executeCommand(command, opts);
+    }).finally(() => { pending--; });
+    tail = result;
+    void result.catch(() => undefined);
+    return result;
+  }
+
+  function opResult(res: PipeResult, i = 0): unknown {
     const entry = res?.[i];
     if (!entry) return undefined;
     if (entry[0]) throw entry[0];
     return entry[1];
   }
 
-  async function runCommand(command: DbCommand, opts: RunQueryOptions = {}): Promise<QueryResult> {
+  async function executeCommand(command: DbCommand, opts: RunQueryOptions): Promise<QueryResult> {
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     const p = (command.payload ?? {}) as Record<string, unknown>;
-    const db = Number(p.db ?? 0);
+    const pipeline = (): RedisPipeline => {
+      const pipe = redis.pipeline(), exec = pipe.exec.bind(pipe);
+      pipe.exec = async () => {
+        assertDatabaseDispatch(opts);
+        const result = await exec();
+        if (!result) throw new Error('Redis pipeline returned no confirmation');
+        for (const [error] of result) if (error) throw error;
+        return result;
+      };
+      return pipe;
+    };
 
     if (command.op === 'scan') {
-      const res = await redis
-        .pipeline()
-        .select(db)
+      const res = await pipeline()
         .scan(String(p.cursor ?? '0'), 'MATCH', String(p.match || '*'), 'COUNT', Math.min(max, 1000))
         .exec();
       const [nextCursor, keys] = (opResult(res) as [string, string[]]) ?? ['0', []];
       // Fetch each key's type + TTL in one round trip.
-      const metaPipe = redis.pipeline().select(db);
+      const metaPipe = pipeline();
       for (const k of keys) {
         metaPipe.type(k);
         metaPipe.ttl(k);
@@ -114,18 +154,18 @@ export async function createRedisDriver(config: DbConnectConfig): Promise<Databa
       const meta = await metaPipe.exec();
       const rows = keys.map((k, i) => ({
         key: k,
-        type: opResult(meta, 1 + i * 2),
-        ttl: opResult(meta, 2 + i * 2),
+        type: opResult(meta, i * 2),
+        ttl: opResult(meta, 1 + i * 2),
       }));
       return { rows, rowCount: rows.length, fields: [{ name: 'key' }, { name: 'type' }, { name: 'ttl' }], cursor: String(nextCursor) };
     }
 
     const key = String(p.key ?? '');
     if (command.op === 'get') {
-      const head = await redis.pipeline().select(db).type(key).pttl(key).exec();
-      const type = String(opResult(head, 1) ?? 'none');
-      const pttl = Number(opResult(head, 2) ?? -1);
-      const vp = redis.pipeline().select(db);
+      const head = await pipeline().type(key).pttl(key).exec();
+      const type = String(opResult(head, 0) ?? 'none');
+      const pttl = Number(opResult(head, 1) ?? -1);
+      const vp = pipeline();
       if (type === 'string') vp.get(key);
       else if (type === 'hash') vp.hgetall(key);
       else if (type === 'list') vp.lrange(key, 0, -1);
@@ -137,26 +177,26 @@ export async function createRedisDriver(config: DbConnectConfig): Promise<Databa
       return { rows: [{ key, type, ttl, value }], rowCount: 1, fields: [{ name: 'key' }, { name: 'type' }, { name: 'ttl' }, { name: 'value' }] };
     }
     if (command.op === 'set') {
-      const pipe = redis.pipeline().select(db).set(key, String(p.value ?? ''));
+      const pipe = pipeline().set(key, String(p.value ?? ''));
       if (typeof p.ttl === 'number' && p.ttl > 0) pipe.expire(key, Number(p.ttl));
       await pipe.exec();
       return { rows: [], rowCount: 1, fields: [], command: 'OK' };
     }
     if (command.op === 'expire') {
       const ttl = Number(p.ttl ?? -1);
-      const pipe = redis.pipeline().select(db);
+      const pipe = pipeline();
       if (ttl > 0) pipe.expire(key, ttl);
       else pipe.persist(key);
       await pipe.exec();
       return { rows: [], rowCount: 1, fields: [], command: 'OK' };
     }
     if (command.op === 'del') {
-      const res = await redis.pipeline().select(db).del(key).exec();
+      const res = await pipeline().del(key).exec();
       return { rows: [], rowCount: Number(opResult(res) ?? 0), fields: [], command: 'deleted' };
     }
     if (command.op === 'rename') {
       // RENAME throws if the source key is missing — let that surface to the UI.
-      await redis.pipeline().select(db).rename(key, String(p.newKey ?? '')).exec();
+      await pipeline().rename(key, String(p.newKey ?? '')).exec();
       return { rows: [], rowCount: 1, fields: [], command: 'renamed' };
     }
 
@@ -164,60 +204,61 @@ export async function createRedisDriver(config: DbConnectConfig): Promise<Databa
     const ok = (cmd: string): QueryResult => ({ rows: [], rowCount: 1, fields: [], command: cmd });
     const counted = (res: PipeResult, cmd: string): QueryResult => ({ rows: [], rowCount: Number(opResult(res) ?? 0), fields: [], command: cmd });
     if (command.op === 'hset') {
-      await redis.pipeline().select(db).hset(key, String(p.field ?? ''), String(p.value ?? '')).exec();
+      await pipeline().hset(key, String(p.field ?? ''), String(p.value ?? '')).exec();
       return ok('OK');
     }
     if (command.op === 'hdel') {
-      return counted(await redis.pipeline().select(db).hdel(key, String(p.field ?? '')).exec(), 'deleted');
+      return counted(await pipeline().hdel(key, String(p.field ?? '')).exec(), 'deleted');
     }
     if (command.op === 'lset') {
-      await redis.pipeline().select(db).lset(key, Number(p.index ?? 0), String(p.value ?? '')).exec();
+      await pipeline().lset(key, Number(p.index ?? 0), String(p.value ?? '')).exec();
       return ok('OK');
     }
     if (command.op === 'lpush' || command.op === 'rpush') {
-      const pipe = redis.pipeline().select(db);
+      const pipe = pipeline();
       if (command.op === 'lpush') pipe.lpush(key, String(p.value ?? ''));
       else pipe.rpush(key, String(p.value ?? ''));
       await pipe.exec();
       return ok('OK');
     }
     if (command.op === 'lrem') {
-      return counted(await redis.pipeline().select(db).lrem(key, Number(p.count ?? 0), String(p.value ?? '')).exec(), 'deleted');
+      return counted(await pipeline().lrem(key, Number(p.count ?? 0), String(p.value ?? '')).exec(), 'deleted');
     }
     if (command.op === 'ldel') {
       // Delete a list element by INDEX (not value — LREM-by-value removes the wrong
       // entry when the list has duplicates): set the slot to a unique sentinel, then
       // LREM the sentinel. Both run on the one shared connection.
       const sentinel = `__mcp_del__${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      await redis.pipeline().select(db).lset(key, Number(p.index ?? 0), sentinel).lrem(key, 1, sentinel).exec();
+      await pipeline().lset(key, Number(p.index ?? 0), sentinel).lrem(key, 1, sentinel).exec();
       return ok('deleted');
     }
     if (command.op === 'sadd') {
-      return counted(await redis.pipeline().select(db).sadd(key, String(p.member ?? '')).exec(), 'added');
+      return counted(await pipeline().sadd(key, String(p.member ?? '')).exec(), 'added');
     }
     if (command.op === 'srem') {
-      return counted(await redis.pipeline().select(db).srem(key, String(p.member ?? '')).exec(), 'deleted');
+      return counted(await pipeline().srem(key, String(p.member ?? '')).exec(), 'deleted');
     }
     if (command.op === 'zadd') {
-      return counted(await redis.pipeline().select(db).zadd(key, Number(p.score ?? 0), String(p.member ?? '')).exec(), 'added');
+      return counted(await pipeline().zadd(key, Number(p.score ?? 0), String(p.member ?? '')).exec(), 'added');
     }
     if (command.op === 'zrem') {
-      return counted(await redis.pipeline().select(db).zrem(key, String(p.member ?? '')).exec(), 'deleted');
+      return counted(await pipeline().zrem(key, String(p.member ?? '')).exec(), 'deleted');
     }
 
     // ── Raw RESP command console ───────────────────────────────────────────
-    if (command.op === 'raw') {
+    if (command.op === 'raw' || (!command.op && command.args)) {
       const args = (command.args ?? []).map((a) => String(a));
       if (args.length === 0) throw new Error('empty command');
       const [cmd, ...rest] = args;
-      await redis.select(db); // scope to the chosen logical db on this shared client
+      assertDatabaseDispatch(opts);
       const reply = await redis.call(cmd, ...rest);
       const norm = normalizeReply(reply);
       // A multi-bulk reply (array) becomes one row per element; a scalar is one row.
       const rows = Array.isArray(norm)
-        ? norm.map((v, i) => ({ '#': i + 1, value: v }))
+        ? norm.slice(0, max).map((v, i) => ({ '#': i + 1, value: v }))
         : [{ '#': 1, value: norm }];
-      return { rows, rowCount: rows.length, fields: [{ name: '#' }, { name: 'value' }], command: cmd.toUpperCase() };
+      return { rows, rowCount: Array.isArray(norm) ? norm.length : 1, truncated: Array.isArray(norm) && norm.length > max,
+        fields: [{ name: '#' }, { name: 'value' }], command: cmd.toUpperCase() };
     }
     throw new Error(`unsupported redis op: ${command.op}`);
   }
@@ -259,7 +300,14 @@ export async function createRedisDriver(config: DbConnectConfig): Promise<Databa
     query: unsupported,
     runCommand,
     async close() {
-      await redis.quit().catch(() => undefined);
+      if (closed) return closed;
+      closing = true;
+      const ended = new Promise<void>(resolve => {
+        if (redis.status === 'end') resolve(); else redis.once('end', resolve);
+      });
+      redis.disconnect();
+      closed = Promise.allSettled([tail, ended]).then(() => undefined);
+      await closed;
     },
   };
   return driver;

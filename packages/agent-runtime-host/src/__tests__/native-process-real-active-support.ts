@@ -114,6 +114,10 @@ export async function processRealFixture(
   corruptHydration = false,
   productiveEngine = true,
   codex?: ProcessRealCodexOptions,
+  readBatchSize = 1,
+  onFollowup?: () => Promise<void>,
+  nativeScenario?: 'mutating-ack-loss',
+  attemptIdentity?: agentV1Common.AttemptIdentity,
 ): Promise<ProcessRealFixture> {
   const runtimePackage = await installedRuntimePackage();
   const nativeBinding = loadNativeHostBridge(runtimePackage);
@@ -169,6 +173,7 @@ export async function processRealFixture(
   launch.identity!.rootAgentRunId = launch.identity!.agentRunId;
   launch.identity!.ownerAgentRunId = undefined;
   launch.identity!.parentAgentRunId = undefined;
+  if (attemptIdentity) launch.identity = create(agentV1Common.AttemptIdentitySchema, attemptIdentity);
   for (const endpoint of launch.protectedEndpoints) {
     const label = agentV1Supervisor.AttemptEndpointKind[endpoint.kind]
       .toLowerCase().replaceAll('_', '-');
@@ -178,11 +183,13 @@ export async function processRealFixture(
     endpoint.address = String.raw`\\.\pipe\codestudio-agent-v1-${sequence}-${label}`;
   }
 
+  const mutationProbe = nativeScenario === 'mutating-ack-loss' || codex?.scenario === 'mutating-ack-loss';
   const hydration = hydrationFixture(
     sequence,
     corruptHydration,
     codex,
     codex?.scenario ? workspaceRoot : undefined,
+    mutationProbe,
   );
   const prepare = resolvedPrepare(
     launch,
@@ -237,7 +244,6 @@ export async function processRealFixture(
 
   const committedFacts: string[] = [];
   const observed = hydration.observed;
-  const mutationProbe = codex?.scenario === 'mutating-ack-loss';
   const capabilityGatewayFactory = productiveEngine
     ? mutationProbe
       ? createB2MutationCapabilityGatewayFactory({
@@ -348,7 +354,7 @@ export async function processRealFixture(
               resolver: {
                 resolve: () => {
                   observed.providerResolved = true;
-                  return processRealProvider(observed, expectedReadContent!);
+                  return processRealProvider(observed, expectedReadContent!, readBatchSize, onFollowup, mutationProbe);
                 },
               },
               now: () => Number(clock.now()),
@@ -393,6 +399,9 @@ export async function processRealFixture(
 function processRealProvider(
   observed: ProcessRealFixture['observed'],
   expectedReadContent: string,
+  readBatchSize: number,
+  onFollowup?: () => Promise<void>,
+  mutationProbe = false,
 ) {
   return {
     name: 'openai',
@@ -401,7 +410,9 @@ function processRealProvider(
     async *chat(request: ChatRequest) {
       observed.providerRunCount += 1;
       if (observed.providerRunCount === 1) {
-        if (!request.tools?.some((tool) => tool.name === 'read_file')) {
+        const name = mutationProbe ? 'mutation_probe' : 'read_file';
+        const input = mutationProbe ? { path: 'mutation-probe.txt', token: B2_MUTATION_PROBE_TOKEN } : { path: 'sample.txt' };
+        if (!request.tools?.some((tool) => tool.name === name)) {
           throw new Error('native read descriptor did not reach provider');
         }
         yield {
@@ -409,28 +420,34 @@ function processRealProvider(
           id: 'response/process-real/tool',
           messageCount: 1,
         };
+        for (let index = 0; index < readBatchSize; index++) {
         yield {
           type: 'tool_call_start' as const,
-          id: 'tool/process-real/read',
-          name: 'read_file',
+          id: `tool/process-real/read/${index}`,
+          name,
         };
         yield {
           type: 'tool_call_args' as const,
-          id: 'tool/process-real/read',
-          partial_json: '{"path":"sample.txt"}',
+          id: `tool/process-real/read/${index}`,
+          partial_json: JSON.stringify(input),
         };
         yield {
           type: 'tool_call_end' as const,
-          id: 'tool/process-real/read',
-          name: 'read_file',
-          input: { path: 'sample.txt' },
+          id: `tool/process-real/read/${index}`,
+          name,
+          input,
         };
+        }
         yield { type: 'done' as const };
         return;
       }
-      const result = request.messages
-        .flatMap((message) => message.content)
-        .find((block) => block.type === 'tool_result');
+      const results = request.messages.flatMap(message => message.content)
+        .filter(block => block.type === 'tool_result');
+      if (results.length !== readBatchSize || results.some((result, index) =>
+        result.tool_use_id !== `tool/process-real/read/${index}`)) {
+        throw new Error('batch result cardinality or order diverged');
+      }
+      const result = results[0];
       if (!result || result.type !== 'tool_result') {
         throw new Error('native read result did not reach provider follow-up');
       }
@@ -439,6 +456,7 @@ function processRealProvider(
       if (!observed.toolResultObserved) {
         throw new Error('native read result content diverged');
       }
+      await onFollowup?.();
       yield {
         type: 'response_id' as const,
         id: 'response/process-real/final',
@@ -539,13 +557,13 @@ function hydrationFixture(
   corrupt: boolean,
   codex?: ProcessRealCodexOptions,
   codexWorkingDirectory?: string,
+  mutationProbe = codex?.scenario === 'mutating-ack-loss',
 ) {
   const labels = [
     'verifier', 'capabilities', 'environment', 'workspace-lease',
     'policy', 'preset', 'agent-definition',
   ];
   const bodies = labels.map((label) => Buffer.from(`${label}:${sequence}`));
-  const mutationProbe = codex?.scenario === 'mutating-ack-loss';
   const toolSchema = Buffer.from(mutationProbe
     ? '{"type":"object","properties":{"path":{"const":"mutation-probe.txt"},"token":{"const":"b2-fixture-mutation-v1"}},"required":["path","token"],"additionalProperties":false}'
     : '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}');
@@ -566,6 +584,8 @@ function hydrationFixture(
           ? agentV1Capability.CapabilityExecutionClass.HOST_CAPABILITY
           : agentV1Capability.CapabilityExecutionClass.NATIVE_READ,
         mutates: mutationProbe,
+        parallelSafe: !mutationProbe,
+        readOnly: !mutationProbe,
       })],
     }),
   ));
@@ -746,8 +766,9 @@ export async function readProcessRealEngineEvents(
     .trim()
     .split('\n')
     .filter(Boolean);
-  return Promise.all(lines.map(async (line) => {
-    const pointer = JSON.parse(line) as { payloadSha256?: unknown };
+  const pointers = lines.map((line) => JSON.parse(line) as { kind?: string; payloadSha256?: unknown })
+    .filter((pointer) => pointer.kind === 'lifecycle');
+  return Promise.all(pointers.map(async (pointer) => {
     if (typeof pointer.payloadSha256 !== 'string'
       || !/^[a-f0-9]{64}$/.test(pointer.payloadSha256)) {
       throw new Error('process-real journal payload pointer is invalid');

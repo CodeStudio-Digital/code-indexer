@@ -3,6 +3,7 @@ members = [
   "crates/agent-engine",
   "crates/agent-host-bridge",
   "crates/agent-host-bridge-napi",
+  "crates/agent-lifecycle-store",
   "crates/agent-platform",
   "crates/agent-protocol",
   "crates/agent-runner",

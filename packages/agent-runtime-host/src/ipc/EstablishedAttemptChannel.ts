@@ -43,6 +43,11 @@ export type EstablishedReceiveOutcome =
 const HANDOFF = {};
 
 export class EstablishedAttemptChannel {
+  nowUnixMs(): bigint { return this.state.clock.now(); }
+  get remainingInboundIdentities(): number {
+    return this.state.receiver.remainingIdentityCapacity;
+  }
+
   constructor(
     handoff: object,
     private readonly state: EstablishedChannelState,
@@ -85,9 +90,9 @@ export class EstablishedAttemptChannel {
           streamSeq: outcome.replay.streamSeq,
         };
       }
-      this.state.armPending(
-        inspectPending(outcome.pending).deadlineAtUnixMs,
-      );
+      const inbound = inspectPending(outcome.pending);
+      this.state.armPending(inbound.deadlineAtUnixMs,
+        inbound.payloadCase === 'capabilityExecute' || inbound.payloadCase === 'capabilityPrepare');
       return { kind: 'pending' as const, pending: outcome.pending };
     });
   }

@@ -176,6 +176,20 @@ const fn validate_deadline(
     spec: &wire::ResolvedAttemptSpec,
     context: SpecValidationContext<'_>,
 ) -> Result<(), SpecValidationError> {
+    if let Some(execution) = spec.execution_deadline_at_unix_ms {
+        if execution <= context.observed_at_unix_ms {
+            return Err(SpecValidationError::DeadlineExpired {
+                deadline: execution,
+                observed: context.observed_at_unix_ms,
+            });
+        }
+        if execution > spec.deadline_at_unix_ms {
+            return Err(SpecValidationError::DeadlineExceedsLaunch {
+                requested: execution,
+                launch: spec.deadline_at_unix_ms,
+            });
+        }
+    }
     if spec.deadline_at_unix_ms <= 0 {
         return Err(SpecValidationError::InvalidDeadline(
             spec.deadline_at_unix_ms,

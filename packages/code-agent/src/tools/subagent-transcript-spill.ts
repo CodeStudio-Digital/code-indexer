@@ -15,6 +15,7 @@
  * exists.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { SessionId } from '@mcp/session-storage';
 
@@ -74,6 +75,39 @@ export function readSpilledTranscript(spillPath: string): AgentMessage[] | null 
       ? envelope.data.messages
       : null;
   } catch {
+    return null;
+  }
+}
+
+/** Production readers yield during file IO and cap allocation before parsing.
+ * Retained transcripts are observational; an unavailable/oversized entity
+ * falls back to the already retained final report. */
+export async function readSpilledTranscriptAsync(spillPath: string, signal?: AbortSignal): Promise<AgentMessage[] | null> {
+  signal?.throwIfAborted();
+  try {
+    const handle = await open(spillPath, 'r');
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() || before.size > 64 * 1024 * 1024) return null;
+      const bytes = Buffer.alloc(before.size + 1);
+      let offset = 0;
+      while (offset < bytes.length) {
+        signal?.throwIfAborted();
+        const { bytesRead } = await handle.read(bytes, offset, Math.min(128 * 1024, bytes.length - offset), offset);
+        if (!bytesRead) break;
+        offset += bytesRead;
+      }
+      signal?.throwIfAborted();
+      const after = await handle.stat();
+      if (offset !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) return null;
+      const envelope = JSON.parse(bytes.subarray(0, offset).toString('utf8')) as {
+        kind?: string; data?: { messages?: AgentMessage[] };
+      };
+      return envelope.kind === 'subagent_transcript' && Array.isArray(envelope.data?.messages)
+        ? envelope.data.messages : null;
+    } finally { await handle.close(); }
+  } catch (cause) {
+    signal?.throwIfAborted();
     return null;
   }
 }

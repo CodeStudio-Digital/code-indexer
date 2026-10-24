@@ -11,9 +11,8 @@
  * Design:
  *   - Reuses `pickChatFn(binding)` — the same dispatcher the reranker and
  *     synthesizer use — so no new provider plumbing.
- *   - Degrades to `verdict='pass', ran=false` on ANY failure (no response,
- *     unparseable JSON, thrown error). The gate must never block a finished
- *     answer just because the reviewer hiccuped.
+ *   - Degrades to `verdict='pass', ran=false` on reviewer failure. Explicit
+ *     cancellation propagates so the session cannot publish a cancelled answer.
  *   - One call per research run (NOT per turn). Disable via DOCS_REVIEW_GATE=0.
  *
  * No cache: each run produces unique markdown, so a content-keyed cache
@@ -31,6 +30,7 @@ export interface ReviewChunk {
 }
 
 export interface ReviewInput {
+  signal?: AbortSignal;
   query: string;
   markdown: string;
   chunks: ReviewChunk[];
@@ -64,6 +64,7 @@ const PASS: ReviewResult = {
 };
 
 export async function reviewAnswer(input: ReviewInput): Promise<ReviewResult> {
+  input.signal?.throwIfAborted();
   if (!input.markdown.trim() || input.chunks.length === 0) return PASS;
 
   const chat = pickChatFn(input.binding);
@@ -72,8 +73,10 @@ export async function reviewAnswer(input: ReviewInput): Promise<ReviewResult> {
     response = await chat(input.binding, [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: buildPrompt(input) },
-    ]);
+    ], { signal: input.signal });
+    input.signal?.throwIfAborted();
   } catch {
+    input.signal?.throwIfAborted();
     return PASS;
   }
 

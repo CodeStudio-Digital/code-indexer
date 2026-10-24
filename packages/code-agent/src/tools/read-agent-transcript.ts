@@ -13,33 +13,17 @@ import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
-  getGroup,
+  getReadableGroup,
   listReadableGroups,
   type ResumeCheckpointStore,
   type ResumableAgentState,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
-import { readSpilledTranscript } from '@mcp/code-agent/tools/subagent-transcript-spill.js';
+import { readSpilledTranscript, readSpilledTranscriptAsync } from '@mcp/code-agent/tools/subagent-transcript-spill.js';
+import { renderTranscriptDigest, renderTranscriptDigestAsync } from './subagent-transcript-digest.js';
 import type { SessionId } from '@mcp/session-storage';
 
 const DEFAULT_MAX_CHARS = 15_000;
 const HARD_MAX_CHARS = 60_000;
-const TOOL_INPUT_CHARS = 220;
-const TOOL_RESULT_CHARS = 240;
-const TEXT_BLOCK_CHARS = 900;
-
-function clip(text: string, max: number): string {
-  const clean = text.replace(/\s+/g, ' ').trim();
-  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
-}
-
-function describeInput(input: Record<string, unknown>): string {
-  try {
-    return clip(JSON.stringify(input), TOOL_INPUT_CHARS);
-  } catch {
-    return '(unserializable input)';
-  }
-}
-
 /**
  * The renderable transcript for an agent. Resumable agents keep it in RAM;
  * COMPLETED agents have it spilled to a bundle entity (worker RAM stays bounded),
@@ -52,57 +36,19 @@ export function resolveAgentTranscript(agent: ResumableAgentState): AgentMessage
   return [];
 }
 
-/** One line per transcript event — compact, chronological, tool-centric. */
-export function renderAgentTranscript(
-  agent: ResumableAgentState,
-  opts: { maxChars?: number } = {},
-): string {
-  const maxChars = Math.min(HARD_MAX_CHARS, Math.max(2_000, opts.maxChars ?? DEFAULT_MAX_CHARS));
-  const tokens = (agent.usage.input_tokens ?? 0) + (agent.usage.output_tokens ?? 0);
-  const header =
-    `[transcript agent=#${agent.agentIndex + 1} "${agent.label}" profile=${agent.profileId} ` +
-    `status=${agent.reason} tools=${agent.toolCallCount} tokens=${tokens} attempt=${agent.attempt}]\n` +
-    `Task: ${clip(agent.task, 400)}\n`;
-  const lines: string[] = [];
-  const toolNames = new Map<string, string>();
-  for (const message of resolveAgentTranscript(agent)) {
-    for (const block of message.content) {
-      if (block.type === 'text' && message.role === 'user') {
-        lines.push(`[user] ${clip(block.text, TEXT_BLOCK_CHARS)}`);
-      } else if (block.type === 'text' && message.role === 'assistant') {
-        if (block.text.trim()) lines.push(`[assistant] ${clip(block.text, TEXT_BLOCK_CHARS)}`);
-      } else if (block.type === 'tool_use') {
-        toolNames.set(block.id, block.name);
-        lines.push(`  → ${block.name} ${describeInput(block.input)}`);
-      } else if (block.type === 'tool_result') {
-        const name = toolNames.get(block.tool_use_id) ?? 'tool';
-        const flag = block.is_error ? ' [ERROR]' : '';
-        lines.push(`  ← ${name}${flag} (${block.content.length} chars) ${clip(block.content, TOOL_RESULT_CHARS)}`);
-      } else if (block.type === 'thinking' && block.text.trim()) {
-        lines.push(`  ~ thinking (${block.text.length} chars)`);
-      }
-    }
-  }
-  if (agent.failureNote) lines.push(`[failure] ${clip(agent.failureNote, 500)}`);
-  if (agent.finalText?.trim()) lines.push(`[final] ${clip(agent.finalText, 2_000)}`);
-
-  // Char budget: keep the header + protect the TAIL (recent activity + final)
-  // by dropping middle lines first.
-  let body = lines.join('\n');
-  if (header.length + body.length > maxChars) {
-    const kept: string[] = [];
-    let used = 0;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const cost = lines[i].length + 1;
-      if (used + cost > maxChars - header.length - 60) break;
-      kept.unshift(lines[i]);
-      used += cost;
-    }
-    body = `[… ${lines.length - kept.length} earlier event(s) elided — raise max_chars to see more]\n${kept.join('\n')}`;
-  }
-  return `${header}\n${body}`;
+/** Synchronous compatibility renderer for callers that already own messages. */
+export function renderAgentTranscript(agent: ResumableAgentState, opts: { maxChars?: number } = {}): string {
+  return renderTranscriptDigest(agent, resolveAgentTranscript(agent), opts.maxChars);
 }
 
+/** Tool/UI path: asynchronous spill reads and cooperative digest rendering. */
+export async function renderAgentTranscriptAsync(agent: ResumableAgentState,
+  opts: { maxChars?: number; signal?: AbortSignal } = {}): Promise<string> {
+  opts.signal?.throwIfAborted();
+  const messages = agent.transcript?.length ? agent.transcript
+    : agent.spillPath ? await readSpilledTranscriptAsync(agent.spillPath, opts.signal) ?? [] : [];
+  return renderTranscriptDigestAsync(agent, messages, opts.maxChars, opts.signal);
+}
 async function renderInventory(
   sessionId: SessionId,
   store?: ResumeCheckpointStore,
@@ -152,16 +98,17 @@ export function buildReadAgentTranscriptTool(
     source: 'native',
     mutates: false,
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-      const sessionId = ctx.runner?.sessionId;
+      ctx.signal?.throwIfAborted();
+      const sessionId = ctx.sessionId ?? ctx.runner?.sessionId;
       if (sessionId == null) return err('read_agent_transcript: no active session.');
 
       const spawnId = typeof args.spawn_id === 'string' ? args.spawn_id.trim() : '';
       if (!spawnId) return ok(await renderInventory(sessionId, store));
 
-      const group = await getGroup(sessionId, spawnId, store);
+      const group = await getReadableGroup(sessionId, spawnId, store);
       if (!group) {
         return err(
-          `read_agent_transcript: spawn '${spawnId}' not found or its retained checkpoint expired. ` +
+          `read_agent_transcript: spawn '${spawnId}' has no retained group in this session. ` +
           'Call without arguments to list what is readable.',
         );
       }
@@ -175,16 +122,16 @@ export function buildReadAgentTranscriptTool(
         const roster = group.agents.map((a) => `#${a.agentIndex + 1} ${a.label}`).join(', ');
         return err(`read_agent_transcript: pick an agent — group '${spawnId}' has: ${roster}.`);
       }
-      // A completed agent's transcript may be spilled to disk (no in-RAM copy);
-      // renderAgentTranscript falls back to the spill file via agent.spillPath.
-      if ((!agent.transcript || agent.transcript.length === 0) && !agent.spillPath) {
-        return ok(
-          `Agent #${agent.agentIndex + 1} "${agent.label}" [${agent.reason}] has no retained transcript ` +
-          `(retention off or evicted by the byte cap). Final report:\n\n${agent.finalText || '(empty)'}`,
-        );
-      }
+      // Final-report fallback uses the same bound as a full transcript.
       const maxChars = typeof args.max_chars === 'number' ? args.max_chars : undefined;
-      return ok(renderAgentTranscript(agent, { maxChars }));
+      if (agent.nativeTranscriptRef) {
+        const tree = ctx.ports?.agentTree;
+        if (ctx.runtimeGeneration !== 'rust_v1' || !tree?.readTranscript || tree.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId) {
+          return err('read_agent_transcript: the native transcript has no authorized tree reader.');
+        }
+        return ok(await tree.readTranscript(agent.nativeTranscriptRef, { maxChars, signal: ctx.signal }));
+      }
+      return ok(await renderAgentTranscriptAsync(agent, { maxChars, signal: ctx.signal }));
     },
   };
 }
@@ -223,7 +170,7 @@ export async function findRetainedAgent(
   agentRef: string | number | undefined,
   store?: ResumeCheckpointStore,
 ): Promise<ResumableAgentState | undefined> {
-  const group = await getGroup(sessionId, spawnId, store);
+  const group = await getReadableGroup(sessionId, spawnId, store);
   if (!group) return undefined;
   return resolveRetainedAgent(group.agents, agentRef);
 }

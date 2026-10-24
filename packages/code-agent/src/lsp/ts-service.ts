@@ -88,9 +88,8 @@ function isIndexerInternalPath(canonical: string): boolean {
  *
  * This is "LSP Phase 2" from the implementation plan. Instead of spawning a
  * full language server over stdio, we use the TypeScript Compiler API (which
- * is already a dependency) directly. Functionally equivalent for our tools
- * (definitions, references, hover, diagnostics) and ~10x faster because
- * there's no IPC overhead and the project's program is kept warm in-process.
+ * is already a dependency) directly. Agent attempts isolate this engine in
+ * a cancellable worker; editor consumers manage their own service lifecycle.
  *
  * One `TsLanguageService` per project root, lazy-initialised on first use
  * and reused across tool calls in the same session. File contents are read
@@ -143,9 +142,22 @@ export class TsLanguageService {
   private rootFiles: string[] = [];
   private compilerOptions: ts.CompilerOptions;
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, private readonly diskOnly = false) {
     this.projectRoot = tsCanonical(projectRoot);
     this.compilerOptions = this.loadCompilerOptions();
+  }
+
+  /** Agent workers observe committed disk state. Re-enumerate the config graph
+   * (including references/extends) before each explicit query, retaining the
+   * warm program when its roots/options match. Editor buffers remain separate. */
+  refreshDiskProject(): void {
+    if (!this.diskOnly) throw new Error('Disk refresh requires an isolated agent service');
+    const previous = JSON.stringify([this.compilerOptions, this.rootFiles]);
+    this.rootFiles = [];
+    this.compilerOptions = this.loadCompilerOptions();
+    if (JSON.stringify([this.compilerOptions, this.rootFiles]) !== previous) {
+      this.service?.dispose(); this.service = null;
+    }
   }
 
   private loadCompilerOptions(): ts.CompilerOptions {
@@ -189,7 +201,10 @@ export class TsLanguageService {
       seen.add(norm);
 
       const { config, error } = ts.readConfigFile(norm, ts.sys.readFile);
-      if (error || !config) return;
+      if (error || !config) {
+        if (this.diskOnly) throw new Error('Cannot read TypeScript config: ' + ts.flattenDiagnosticMessageText(error?.messageText ?? norm, '\n'));
+        return;
+      }
       const parsed = ts.parseJsonConfigFileContent(
         config,
         ts.sys,
@@ -197,6 +212,8 @@ export class TsLanguageService {
         undefined,
         norm,
       );
+      const invalid = parsed.errors.find(d => d.code !== 18002 && d.code !== 18003);
+      if (this.diskOnly && invalid) throw new Error('Invalid TypeScript config: ' + ts.flattenDiagnosticMessageText(invalid.messageText, '\n'));
       // Normalize so .has()/.includes() against canonical paths matches.
       for (const f of parsed.fileNames) allFiles.add(tsCanonical(f));
       if (
@@ -405,7 +422,8 @@ export class TsLanguageService {
         const cached = this.files.get(fileName);
         if (cached) return cached.version;
         try {
-          return String(statSync(fileName).mtimeMs);
+          const stat = statSync(fileName);
+          return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
         } catch {
           return '0';
         }
@@ -544,6 +562,7 @@ export class TsLanguageService {
   }
 
   private ensureFileTracked(absCanonical: string): void {
+    if (this.diskOnly && (!statSync(absCanonical).isFile() || isIndexerInternalPath(absCanonical))) throw new Error('Agent LSP requires a readable source file');
     if (isIndexerInternalPath(absCanonical)) return;
     if (this.rootFiles.includes(absCanonical)) return;
     if (this.files.has(absCanonical)) return;
@@ -567,7 +586,7 @@ export class TsLanguageService {
     // disk on every call — and shields us from races where the disk
     // copy is mid-write when the program is built.
     this.rootFiles = [...this.rootFiles, absCanonical];
-    this.files.set(absCanonical, {
+    if (!this.diskOnly) this.files.set(absCanonical, {
       version: String(Date.now()),
       content,
     });
@@ -782,6 +801,7 @@ export class TsLanguageService {
     try {
       defs = service.getDefinitionAtPosition(abs, offset) ?? [];
     } catch (e) {
+      if (this.diskOnly) throw e;
       console.warn(
         `[lsp] getDefinition: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
       );
@@ -805,6 +825,7 @@ export class TsLanguageService {
     try {
       refs = service.getReferencesAtPosition(abs, offset) ?? [];
     } catch (e) {
+      if (this.diskOnly) throw e;
       console.warn(
         `[lsp] getReferences: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
       );
@@ -1024,6 +1045,7 @@ export class TsLanguageService {
     try {
       info = service.getQuickInfoAtPosition(abs, offset);
     } catch (e) {
+      if (this.diskOnly) throw e;
       console.warn(
         `[lsp] getHover: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
       );
@@ -1048,6 +1070,7 @@ export class TsLanguageService {
     // Prune it once and return clean. (An unsaved buffer lives in `files`,
     // so we still diagnose those even when absent from disk.)
     if (isIndexerInternalPath(abs) || (!this.files.has(abs) && !existsSync(abs))) {
+      if (this.diskOnly) throw new Error('Agent LSP source disappeared or is an internal scratch file');
       this.untrack(abs);
       return [];
     }
@@ -1064,6 +1087,7 @@ export class TsLanguageService {
       syntactic = service.getSyntacticDiagnostics(abs);
       semantic = service.getSemanticDiagnostics(abs);
     } catch (e) {
+      if (this.diskOnly) throw e;
       console.warn(
         `[lsp] getDiagnostics: ${e instanceof Error ? e.message : String(e)} (file=${abs})`,
       );

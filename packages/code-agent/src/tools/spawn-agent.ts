@@ -102,6 +102,7 @@ import {
   writeGlobalSubAgentResult,
 } from '@mcp/services/sub-agent-cache/index.js';
 import { registerActiveAgent } from '@mcp/code-agent/tools/active-agent-registry.js';
+import { emitSubagentEvent } from './subagent-events.js';
 
 const SPAWN_AGENT_DESC =
   'Spawn one or more agents to run a task in a dedicated context window. ' +
@@ -142,6 +143,7 @@ function spawnOutcomeResult(input: {
   partialCount: number;
   failedCount: number;
   resumableCount: number;
+  effectOutcome?: 'unknown';
 }): ToolResult {
   const stillFailed = input.partialCount + input.failedCount;
   const status: SpawnOutcomeStatus = stillFailed === 0
@@ -171,11 +173,12 @@ function spawnOutcomeResult(input: {
   return {
     content: input.content,
     isError: true,
+    ...(input.effectOutcome === 'unknown' ? { effectOutcome: 'unknown' as const } : {}),
     error: {
       code: status === 'partial' ? 'SPAWN_AGENT_PARTIAL' : 'SPAWN_AGENT_FAILED',
       kind: 'tool_error',
-      retryable,
-      suggestedAction: retryable
+      retryable: input.effectOutcome === 'unknown' ? false : retryable,
+      suggestedAction: input.effectOutcome === 'unknown' ? 'Reconcile the existing child effect before continuing or spawning replacement work.' : retryable
         ? `Call resume_agent with spawn_id '${input.spawnId}' to continue the unfinished agents.`
         : 'No resumable checkpoint is available; narrow or decompose the task before spawning replacement work.',
     },
@@ -298,7 +301,7 @@ async function runSingleEphemeral(
 ): Promise<ToolResult> {
   const activeProvider = await providerForProfile(deps, agent.profile);
   const providerInfo = describeProvider(activeProvider);
-  const parentSessionId = ctx.runner?.sessionId;
+  const parentSessionId = ctx.runner?.sessionId ?? ctx.sessionId;
   const spawnId = randomUUID().slice(0, 8);
   const toolUseId = ctx.currentToolUseId;
   const limits = limitsForAgent(agent, deps);
@@ -313,7 +316,7 @@ async function runSingleEphemeral(
   // and background runs. The dashboard projects these events into both the
   // transcript block and the Subagents side panel; without them a running
   // single spawn only appeared as a generic tool call.
-  ctx.runner?.emit('agents_group_start', {
+  emitSubagentEvent(ctx, 'agents_group_start', {
     groupId: spawnId,
     toolUseId,
     provider: providerInfo.provider,
@@ -337,7 +340,7 @@ async function runSingleEphemeral(
     progress: Omit<ParallelAgentProgress, 'agentIndex' | 'label' | 'provider' | 'model'>,
   ): void => {
     if (typeof progress.toolCallCount === 'number') toolCallCount = progress.toolCallCount;
-    ctx.runner?.emit('agent_progress', {
+    emitSubagentEvent(ctx, 'agent_progress', {
       groupId: spawnId,
       toolUseId,
       agentIndex: 0,
@@ -354,7 +357,7 @@ async function runSingleEphemeral(
     resumableCount = 0,
   ): void => {
     const outcomeCounts = countSubagentOutcomes([{ reason }]);
-    ctx.runner?.emit('agents_group_end', {
+    emitSubagentEvent(ctx, 'agents_group_end', {
       groupId: spawnId,
       totalUsage: usage,
       agentCount: 1,
@@ -546,13 +549,15 @@ async function runSingleEphemeral(
     store: deps.sessionStore,
   });
   emitEnd(result.usage, result.reason, resumableCount);
-  const hint = result.reason !== 'completed' ? renderResumeHint(spawnId, 1) : '';
+  const hint = result.effectOutcome === 'unknown' ? '\nReconcile the uncertain child effect before continuing.'
+    : result.reason !== 'completed' ? renderResumeHint(spawnId, 1) : '';
   const outcomeCounts = countSubagentOutcomes([result]);
   return spawnOutcomeResult({
     content: header + body + trail + hint,
     usage: result.usage,
     spawnId,
     agentCount: 1,
+    effectOutcome: result.effectOutcome,
     ...outcomeCounts,
     resumableCount,
   });
@@ -563,7 +568,7 @@ async function runParallelEphemeral(
   agents: NormalizedAgent[],
   ctx: ToolContext,
 ): Promise<ToolResult> {
-  const parentSessionId = ctx.runner?.sessionId;
+  const parentSessionId = ctx.runner?.sessionId ?? ctx.sessionId;
   const groupId = randomUUID().slice(0, 8);
   const toolUseId = ctx.currentToolUseId;
   // Resolve each agent's provider from its profile (memoized in the resolver,
@@ -587,7 +592,7 @@ async function runParallelEphemeral(
     `providers=[${distinctLabels.join(', ')}] labels=[${agents.map((a) => a.label).join(', ')}] group=${groupId}`,
   );
 
-  ctx.runner?.emit('agents_group_start', {
+  emitSubagentEvent(ctx, 'agents_group_start', {
     groupId,
     toolUseId,
     provider: agentInfos[0]?.provider,
@@ -668,7 +673,7 @@ async function runParallelEphemeral(
       MICRO_AGENT_PROFILES.explore.allowlist,
       (progress) => {
         const info = agentInfos[progress.agentIndex] ?? headInfo;
-        ctx.runner?.emit('agent_progress', {
+        emitSubagentEvent(ctx, 'agent_progress', {
           groupId,
           toolUseId,
           task: agents[progress.agentIndex]?.task,
@@ -715,7 +720,7 @@ async function runParallelEphemeral(
     store: deps.sessionStore,
   });
   const outcomeCounts = countSubagentOutcomes(results);
-  ctx.runner?.emit('agents_group_end', {
+  emitSubagentEvent(ctx, 'agents_group_end', {
     groupId,
     totalUsage,
     agentCount: results.length,
@@ -724,7 +729,8 @@ async function runParallelEphemeral(
     resumableCount,
   });
   const failed = countFailed(results);
-  const hint = failed > 0 ? renderResumeHint(groupId, failed) : '';
+  const hint = results.some(result => result.effectOutcome === 'unknown') ? '\nReconcile the uncertain child effect before continuing.'
+    : failed > 0 ? renderResumeHint(groupId, failed) : '';
   return spawnOutcomeResult({
     content: header + body + hint,
     usage: totalUsage,
@@ -732,6 +738,7 @@ async function runParallelEphemeral(
     agentCount: results.length,
     ...outcomeCounts,
     resumableCount,
+    ...(results.some(result => result.effectOutcome === 'unknown') ? { effectOutcome: 'unknown' as const } : {}),
   });
 }
 
@@ -885,6 +892,17 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
       // Background (fire-and-forget) — returns immediately with a job id.
       // Ephemeral only; results fetched via collect_agents.
       if (args.background === true) {
+        if (ctx.runtimeGeneration === 'rust_v1') {
+          const port = ctx.ports?.agentTree;
+          if (!port?.background || port.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId || !ctx.currentToolUseId) {
+            throw new Error('Native background spawn requires the admitted tree owner and invocation identity');
+          }
+          return port.background({ invocationId: ctx.currentToolUseId, task: args, signal: ctx.signal }, signal => {
+            const backgroundContext = { ...ctx, signal };
+            return agents.length === 1 ? runSingleEphemeral(deps, agents[0]!, backgroundContext)
+              : runParallelEphemeral(deps, agents, backgroundContext);
+          });
+        }
         return runBackgroundEphemeral(deps, agents, ctx);
       }
 

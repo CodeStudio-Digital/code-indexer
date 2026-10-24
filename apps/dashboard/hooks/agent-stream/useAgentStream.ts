@@ -327,6 +327,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
         body: JSON.stringify(body),
       });
       const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
         resumed?: boolean;
         // Apêndice 4 Fase 2 — the answer landed in the DB but the
         // previous worker is gone. We need to spawn a fresh worker
@@ -334,6 +335,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
         // (which would start a conflicting in-process runner).
         resumed_via_worker?: boolean;
       };
+      if (!res.ok) throw new Error(json.error ?? `Interaction response failed: HTTP ${res.status}`);
       if (json.resumed) {
         await runStream(
           sid,
@@ -359,11 +361,11 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
     (
       answer: string,
       onMessageComplete?: () => void,
-      extras?: { agent?: AgentPreset },
+      extras?: { agent?: AgentPreset; interactionId?: string },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/answer`,
-        { answer },
+        { answer, interaction_id: extras?.interactionId },
         extras?.agent ? { agent: extras.agent } : {},
         onMessageComplete,
       ),
@@ -372,7 +374,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
 
   const respondToPlan = useCallback(
     (
-      verdict: { approved: boolean; aborted?: boolean; feedback?: string },
+      verdict: { approved: boolean; aborted?: boolean; feedback?: string; interactionId?: string },
       onMessageComplete?: () => void,
       extras?: { agent?: AgentPreset },
     ) => {
@@ -387,7 +389,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
           : { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) };
       return postAndResume(
         `/api/coder/sessions/${sessionId}/plan-response`,
-        { approved: verdict.approved, feedback: verdict.feedback, aborted: verdict.aborted },
+        { approved: verdict.approved, feedback: verdict.feedback, aborted: verdict.aborted, interaction_id: verdict.interactionId },
         resumeBody,
         onMessageComplete,
       );
@@ -399,11 +401,11 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
     (
       answers: DecisionAnswers,
       onMessageComplete?: () => void,
-      extras?: { agent?: AgentPreset },
+      extras?: { agent?: AgentPreset; interactionId?: string },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/decide`,
-        { answers },
+        { answers, interaction_id: extras?.interactionId },
         { plan_mode: true, ...(extras?.agent ? { agent: extras.agent } : {}) },
         onMessageComplete,
       ),
@@ -414,6 +416,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
     (
       verdict: {
         approved: boolean;
+        interaction_id?: string;
         feedback?: string;
         tasks?: StreamTask[];
         execution_mode?: StreamTaskExecutionMode;
@@ -436,11 +439,11 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
       spec_path: string,
       requested_changes?: string,
       onMessageComplete?: () => void,
-      extras?: { agent?: AgentPreset },
+      extras?: { agent?: AgentPreset; interactionId?: string },
     ) =>
       postAndResume(
         `/api/coder/sessions/${sessionId}/spec-response`,
-        { approved, spec_path, requested_changes },
+        { approved, spec_path, requested_changes, interaction_id: extras?.interactionId },
         { ...(extras?.agent ? { agent: extras.agent } : {}) },
         onMessageComplete,
       ),

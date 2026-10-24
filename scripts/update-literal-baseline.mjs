@@ -28,7 +28,6 @@ const protectedAllowlist = new Map([
   ['apps/dashboard/features/admin/SkillsInstallUrlDialog.tsx', new Set(['https://mcp.directory/skills/<slug>'])],
   ['apps/dashboard/features/agents/tests/history/RunDetailModal.tsx', new Set(['summary.md'])],
   ['apps/dashboard/features/chat/ToolStatsModal.tsx', new Set(['ms'])],
-  ['apps/dashboard/features/design-systems/NewDesignSystemDialog.tsx', new Set(['@acme/ui', 'claude-opus-4-7', 'KB)'])],
   ['apps/dashboard/features/onboarding/OnboardingWizard.tsx', new Set(['my-app'])],
   ['apps/dashboard/features/workspace/jetbrains/tool-windows/GitWindow.tsx', new Set(['Git'])],
 ]);

@@ -11,7 +11,7 @@
  * `createTaskRunPersist({ store: null })` returns a no-op object so
  * the test suite doesn't need to create a real session bundle.
  */
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/session-storage';
 import { type TaskRunPersist, NOOP_PERSIST, taskKind } from './task-run-types.js';
 
@@ -41,6 +41,8 @@ export function createTaskRunPersist(args: CreateTaskRunPersistArgs): TaskRunPer
         started_at: a.startedAt,
         budget_tokens: a.budgetTokens ?? null,
         budget_usd_cents: a.budgetUsdCents ?? null,
+        ...(a.runtimeGeneration === 'rust_v1' ? { runtime_generation: a.runtimeGeneration,
+          task_plan_sha256: a.taskPlanSha256, owner_tool_use_id: a.ownerToolUseId } : {}),
       });
     },
     recordTaskStarted: async (a) => {
@@ -64,6 +66,13 @@ export function createTaskRunPersist(args: CreateTaskRunPersistArgs): TaskRunPer
         error: null,
         summary: null,
       });
+    },
+    recordTaskAdmitted: async (a) => {
+      await store.upsertTaskRunItem({ session_id: sessionId, run_id: a.runId, task_id: a.task.id,
+        attempt: a.attempt ?? 0, wave_idx: a.waveIdx, parallel_group: a.task.parallel_group ?? null,
+        kind: taskKind(a.task), title: a.task.title, started_at: a.startedAt, finished_at: null, status: 'running',
+        tool_call_count: 0, input_tokens: 0, output_tokens: 0, inputs_fingerprint: null, skip_reason: null, error: null, summary: null,
+        native_transcript_ref: a.nativeTranscriptRef });
     },
     recordTaskFinished: async (a) => {
       await store.upsertTaskRunItem({

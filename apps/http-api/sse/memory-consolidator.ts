@@ -20,7 +20,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import {
   sessionEntryIncludesProject,
   type FsSessionStore,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 
 const DEFAULT_INTERVAL_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_INTERVAL_MS ?? 6 * 60 * 60 * 1000);
 const DEFAULT_IDLE_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_IDLE_MS ?? 30 * 60 * 1000);

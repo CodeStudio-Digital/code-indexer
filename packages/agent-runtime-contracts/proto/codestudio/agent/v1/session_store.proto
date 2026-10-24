@@ -3,6 +3,8 @@ syntax = "proto3";
 package codestudio.agent.v1;
 
 import "codestudio/agent/v1/common.proto";
+import "codestudio/agent/v1/artifact.proto";
+import "codestudio/agent/v1/supervisor_bootstrap.proto";
 
 // This IDL is the only cross-language authority for the Rust session store.
 // Filesystem paths and credentials are deliberately absent. A native
@@ -27,6 +29,17 @@ enum SessionRecordKind {
   SESSION_RECORD_KIND_MEMORY = 9;
   SESSION_RECORD_KIND_SUBAGENT = 10;
   SESSION_RECORD_KIND_ARCHIVE = 11;
+  SESSION_RECORD_KIND_ATTACHMENT = 12;
+}
+
+// Append-only attachment data, distinct from engine events. A reference is
+// usable only after the complete contiguous group and full digest validate.
+// Each encoded_chunk is at most 128 KiB; paths never cross this contract.
+message SessionAttachmentChunkV1 {
+  uint32 schema_version = 1;
+  ArtifactRef reference = 2;
+  uint64 chunk_offset = 3;
+  bytes encoded_chunk = 4;
 }
 
 enum SessionDurabilityClass {
@@ -64,12 +77,17 @@ message EngineProviderUsageRecordV1 {
 
 message EngineProviderCompletedRecordV1 {
   string operation_id = 1;
-  string response_id = 2;
+  // Stateless providers complete without a resumable remote response ID.
+  optional string response_id = 2;
 }
 
 message EngineCapabilityBoundaryRecordV1 {
   string operation_id = 1;
   string tool_use_id = 2;
+  string capability_name = 3;
+  string capability_id = 4;
+  reserved 5;
+  bytes input_sha256 = 6;
 }
 
 message EngineCapabilityDispatchStartedRecordV1 {
@@ -78,6 +96,16 @@ message EngineCapabilityDispatchStartedRecordV1 {
   string grant_id = 3;
   bytes effective_input_sha256 = 4;
   int64 started_at_unix_ms = 5;
+}
+
+// A denied invocation never crossed the dispatch/effect boundary.
+message EngineCapabilityRefusedRecordV1 {
+  string operation_id = 1;
+  string tool_use_id = 2;
+  string decision_id = 3;
+  string reason_code = 4;
+  string policy_version = 5;
+  int64 decided_at_unix_ms = 6;
 }
 
 enum EngineCapabilityTerminalClassificationV1 {
@@ -103,6 +131,31 @@ message EngineCapabilityTerminalRecordV1 {
   bool truncated = 12;
   uint64 duration_ms = 13;
   int64 completed_at_unix_ms = 14;
+  reserved 15;
+}
+
+enum EngineContentKindV1 {
+  ENGINE_CONTENT_KIND_V1_UNSPECIFIED = 0;
+  ENGINE_CONTENT_KIND_V1_TRANSCRIPT = 1;
+  ENGINE_CONTENT_KIND_V1_TOOL_INPUT = 2;
+  ENGINE_CONTENT_KIND_V1_TOOL_RESULT = 3;
+}
+
+// Durable content, separate from lifecycle metadata. Each chunk is at most
+// 128 KiB. Consumers publish only a complete group with a verified full hash.
+// Content records use CONVERSATION, INPUT or TOOL_OUTPUT journal kinds.
+message EngineContentRecordV1 {
+  EngineContentKindV1 kind = 1;
+  string content_id = 2;
+  string operation_id = 3;
+  string tool_use_id = 4;
+  string content_schema_id = 5;
+  uint32 content_schema_version = 6;
+  bytes content_sha256 = 7;
+  uint64 total_bytes = 8;
+  uint64 chunk_offset = 9;
+  bytes encoded_chunk = 10;
+  bool thinking = 11;
 }
 
 enum EngineTerminalClassificationV1 {
@@ -133,6 +186,8 @@ message EngineEventRecordV1 {
     EngineTerminalRecordV1 terminal = 15;
     EngineCapabilityDispatchStartedRecordV1 capability_dispatch_started = 16;
     EngineCapabilityTerminalRecordV1 capability_terminal = 17;
+    EngineContentRecordV1 content = 18;
+    EngineCapabilityRefusedRecordV1 capability_refused = 19;
   }
 }
 
@@ -150,6 +205,7 @@ enum SessionStoreFailureCode {
   SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION = 10;
   SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION = 11;
   SESSION_STORE_FAILURE_CODE_INTERNAL = 12;
+  SESSION_STORE_FAILURE_CODE_LOCK_BUSY = 13;
 }
 
 message SessionStoreAuthority {
@@ -193,7 +249,43 @@ message SessionStoreRequest {
     CloseSessionWriter close_session_writer = 16;
     ReadCommittedSessionPayload read_committed_session_payload = 17;
     ListCommittedSessionRecords list_committed_session_records = 18;
+    OpenSessionReader open_session_reader = 19;
+    CloseSessionReader close_session_reader = 20;
+    AcquireStorageRootLock acquire_storage_root_lock = 21;
+    ReleaseStorageRootLock release_storage_root_lock = 22;
+    InspectSupervisorLifecycleEvidence inspect_supervisor_lifecycle_evidence = 23;
   }
+}
+
+// Read-only recovery proof from the fixed outbox namespace of a registered
+// root. The native owner must acquire the dead supervisor's OS lock first.
+message InspectSupervisorLifecycleEvidence {
+  string root_id = 1;
+  string connection_id = 2;
+  string attempt_id = 3;
+}
+
+message SupervisorLifecycleEvidenceInspected {
+  SupervisorLifecycleOutboxEntryV1 entry = 1;
+}
+
+// Resolves only roots registered by the authenticated native owner. The OS
+// releases ownership on process death; the permanent lock file is not removed.
+message AcquireStorageRootLock {
+  string root_id = 1;
+  string lock_name = 2;
+}
+
+message ReleaseStorageRootLock {
+  string lock_handle = 1;
+}
+
+message StorageRootLockAcquired {
+  string lock_handle = 1;
+}
+
+message StorageRootLockReleased {
+  string lock_handle = 1;
 }
 
 message OpenSessionWriter {
@@ -227,6 +319,8 @@ message PublishSessionProjection {
 message QuerySessionState {
   string writer_handle = 1;
   SessionStoreAuthority authority = 2;
+  // Exactly one of writer_handle and reader_handle must be nonempty.
+  string reader_handle = 3;
 }
 
 // Reads bytes only when the exact operation, kind, hash and length were
@@ -239,6 +333,7 @@ message ReadCommittedSessionPayload {
   SessionRecordKind kind = 4;
   bytes expected_payload_sha256 = 5;
   uint64 expected_payload_bytes = 6;
+  string reader_handle = 7;
 }
 
 // Bounded, metadata-only cursor over the already-validated journal. Payloads
@@ -249,6 +344,27 @@ message ListCommittedSessionRecords {
   SessionStoreAuthority authority = 2;
   uint64 after_global_sequence = 3;
   uint32 max_records = 4;
+  // Empty creates a validated immutable snapshot. Subsequent pages must reuse
+  // the returned id. Authorized appends preserve the frozen record set; reopen,
+  // authority loss, a new snapshot or unexpected source changes invalidate it.
+  string snapshot_id = 5;
+  string reader_handle = 6;
+}
+
+// Validates an existing bundle without creating, repairing or leasing it.
+// Source or authority changes invalidate the immutable reader snapshot.
+message OpenSessionReader {
+  string root_id = 1;
+  string session_id = 2;
+  // Omit to discover the current authority from its validated chain. This
+  // grants only a read snapshot; writer acquisition still requires an epoch.
+  SessionStoreAuthority authority = 3;
+  SessionStoreLimits limits = 4;
+}
+
+message CloseSessionReader {
+  string reader_handle = 1;
+  SessionStoreAuthority authority = 2;
 }
 
 message TransferSessionStorageGeneration {
@@ -302,6 +418,11 @@ message SessionStoreResponse {
     SessionStoreFailure failure = 17;
     CommittedSessionPayload committed_session_payload = 18;
     CommittedSessionRecordPage committed_session_record_page = 19;
+    SessionReaderOpened session_reader_opened = 20;
+    SessionReaderClosed session_reader_closed = 21;
+    StorageRootLockAcquired storage_root_lock_acquired = 22;
+    StorageRootLockReleased storage_root_lock_released = 23;
+    SupervisorLifecycleEvidenceInspected supervisor_lifecycle_evidence_inspected = 24;
   }
 }
 
@@ -313,6 +434,17 @@ message SessionWriterOpened {
   bytes last_commit_sha256 = 5;
   bool archived = 6;
   bool replay = 7;
+}
+
+message SessionReaderOpened {
+  string reader_handle = 1;
+  SessionState state = 2;
+  string snapshot_id = 3;
+}
+
+message SessionReaderClosed {
+  string session_id = 1;
+  SessionStoreAuthority authority = 2;
 }
 
 message CommitSessionRecordReceipt {
@@ -358,6 +490,7 @@ message CommittedSessionRecordPage {
   repeated CommitSessionRecordReceipt records = 2;
   uint64 next_global_sequence = 3;
   bool complete = 4;
+  string snapshot_id = 5;
 }
 
 message SessionStorageTransferred {

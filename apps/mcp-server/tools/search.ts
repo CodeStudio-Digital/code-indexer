@@ -150,7 +150,8 @@ const search = defineTool({
     },
     required: ['project_name', 'query'],
   },
-  handler: withProject(async (args, { db, hybridSearch, semanticSearchClient, semanticStore }, project) => {
+  handler: withProject(async (args, { db, hybridSearch, semanticSearchClient, semanticStore, signal }, project) => {
+    signal?.throwIfAborted();
     // 'auto' lets the planner route: identifier-shaped → FTS (~10ms),
     // natural language → hybrid. Forcing 'hybrid' here made every symbol
     // lookup pay HyDE + multi-variant embedding + rerank for nothing.
@@ -173,7 +174,9 @@ const search = defineTool({
           consumer: 'agent',
           sessionId,
           companySessionId,
+          signal,
         });
+    signal?.throwIfAborted();
     const searched = remote?.ok && remote.value
       ? remote.value
       : await hybridSearch.searchWithDiag(project.id, project.name, query, {
@@ -182,7 +185,9 @@ const search = defineTool({
           mode: 'fts',
           type,
           limit,
+          signal,
         });
+    signal?.throwIfAborted();
     const diagnostics = remote && !remote.ok
       ? {
           ...searched.diagnostics,
@@ -197,7 +202,7 @@ const search = defineTool({
         namespace: codeNamespace(project.id),
       })[0];
       return renderZeroResultDiagnostics(requestedMode, diagnostics, () => ({
-        files_total: db.listFiles(project.id).length,
+        files_total: db.countFiles(project.id),
         semantic_expected: generation?.expected_items ?? 0,
         semantic_indexed: generation?.indexed_items ?? 0,
         pending_delta_items: generation?.delta_items ?? 0,

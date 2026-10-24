@@ -19,6 +19,8 @@ export interface McpSourceTruncation {
 
 export interface McpToolOutput {
   text: string;
+  /** An owner lost confirmation after a mutating dispatch. Never infer failure. */
+  effectOutcome?: 'unknown';
   /** Machine-readable result mirrored alongside legacy text content. */
   structuredContent?: Record<string, unknown>;
   /** Structured producer-side omission proof transported in CallToolResult._meta. */
@@ -29,6 +31,17 @@ export type McpToolResult = string | McpToolOutput;
 
 export function normalizeMcpToolResult(result: McpToolResult): McpToolOutput {
   return typeof result === 'string' ? { text: result } : result;
+}
+
+export function mcpToolResultFields(result: McpToolOutput) {
+  return {
+    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+    ...(result.effectOutcome === 'unknown' ? { isError: true } : {}),
+    ...(result.sourceTruncations?.length || result.effectOutcome ? { _meta: {
+      ...(result.sourceTruncations?.length ? { sourceTruncations: result.sourceTruncations } : {}),
+      ...(result.effectOutcome ? { effectOutcome: result.effectOutcome } : {}),
+    } } : {}),
+  };
 }
 
 const MCP_ACCESS = {

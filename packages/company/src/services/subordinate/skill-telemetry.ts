@@ -6,7 +6,7 @@
  * Best-effort: every failure path here is silenced. Observability must
  * never load-bear the completion handler.
  */
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 
 export type SkillOutcome = 'success' | 'failed' | 'aborted';
 

@@ -50,5 +50,6 @@ export const events = {
     collapsedTo: opts.collapsedTo,
   }),
   cleanFinish: (): BehaviorEvent => ({ kind: 'CleanFinish' }),
+  toolOutcomeUnknown: (): BehaviorEvent => ({ kind: 'ToolOutcomeUnknown' }),
   aborted: (): BehaviorEvent => ({ kind: 'Aborted' }),
 } as const;

@@ -20,7 +20,7 @@
  * The complexity multiplier (`small`=0.5x, `medium`=1x, `large`=2x) applies
  * only to positive limits. Zero remains unlimited at every complexity.
  */
-import type { CoderTask, TaskKind } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TaskKind } from '@mcp/session-storage/session-state-types.js';
 import type { TaskLimit } from './task-run-types.js';
 import { taskKind } from './task-run-types.js';
 

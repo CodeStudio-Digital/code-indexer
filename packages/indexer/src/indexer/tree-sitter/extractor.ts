@@ -1,3 +1,4 @@
+import { extendsNames, implementedNames } from './type-heritage.js';
 /**
  * Tree-sitter based symbol extractor.
  *
@@ -28,7 +29,7 @@ import { extractNamespace, extractPhpTraitUses } from '@mcp/indexer/indexer/tree
  * call-extractor, namespace-extractor, or a grammar upgrade in languages.ts /
  * tree-sitter-wasms. Stale rows are ignored and pruned, never migrated.
  */
-export const EXTRACTOR_VERSION = 1;
+export const EXTRACTOR_VERSION = 3;
 
 export interface TreeSitterResult {
   /** Structural analysis (symbols, references and dependencies). */
@@ -204,6 +205,33 @@ const IMPORT_NODES: Record<string, string[]> = {
 
 export class TreeSitterExtractor {
   private parsers = new Map<string, Parser>();
+  private pendingParsers = new Map<string, Promise<Parser>>();
+
+  /** Interactive outlines need only declarations, not imports or a call graph.
+   * Keep parser and traversal budgets separate and reset parser state on exit. */
+  async outline(filePath: string, content: string, signal?: AbortSignal): Promise<TreeSitterResult> {
+    signal?.throwIfAborted();
+    if (Buffer.byteLength(content) > 1024 * 1024) throw new Error('Interactive skeleton exceeds 1 MiB; index the file or read bounded ranges');
+    const ext = extname(filePath).slice(1).toLowerCase(), grammar = getGrammarForExtension(ext);
+    if (!grammar || !isExtractable(grammar.language)) return { supported: false, language: ext, analysis: {} };
+    const parser = await this.getParser(grammar.wasmFile); signal?.throwIfAborted();
+    const previousTimeout = parser.getTimeoutMicros();
+    let tree: Parser.Tree | undefined;
+    try {
+      parser.setTimeoutMicros(100_000);
+      tree = parser.parse(content);
+      if (!tree) throw new Error('Interactive skeleton parse exceeded 100 ms');
+      const deadline = performance.now() + 100; let visited = 0;
+      const check = () => {
+        if ((visited++ & 127) !== 0) return;
+        signal?.throwIfAborted();
+        if (performance.now() > deadline) throw new Error('Interactive skeleton traversal exceeded 100 ms');
+      };
+      const symbols = this.extractSymbols(tree.rootNode, grammar.language, content, check);
+      signal?.throwIfAborted();
+      return { supported: true, language: grammar.language, analysis: { language: grammar.language, symbols } };
+    } finally { tree?.delete(); parser.reset(); parser.setTimeoutMicros(previousTimeout); }
+  }
 
   /**
    * Extract structural information from a source file.
@@ -276,9 +304,12 @@ export class TreeSitterExtractor {
   private async getParser(wasmFile: string): Promise<Parser> {
     const cached = this.parsers.get(wasmFile);
     if (cached) return cached;
-    const parser = await createParser(wasmFile);
-    this.parsers.set(wasmFile, parser);
-    return parser;
+    const pending = this.pendingParsers.get(wasmFile);
+    if (pending) return pending;
+    const creation = createParser(wasmFile).then(parser => { this.parsers.set(wasmFile, parser); return parser; })
+      .finally(() => this.pendingParsers.delete(wasmFile));
+    this.pendingParsers.set(wasmFile, creation);
+    return creation;
   }
 
   /**
@@ -288,7 +319,8 @@ export class TreeSitterExtractor {
   private extractSymbols(
     rootNode: Parser.SyntaxNode,
     language: string,
-    content: string
+    content: string,
+    check?: () => void,
   ): LLMSymbol[] {
     const symbolNodes = getSymbolNodesForLanguage(language);
     const symbols: LLMSymbol[] = [];
@@ -296,6 +328,7 @@ export class TreeSitterExtractor {
 
     // Track nesting depth to skip inline arrow functions and local constants
     const walk = (node: Parser.SyntaxNode, parentName: string | null, depth: number) => {
+      check?.();
       const kind = symbolNodes[node.type];
 
       if (kind) {
@@ -355,8 +388,8 @@ export class TreeSitterExtractor {
     const signature = this.buildSignature(node, kind, name, language);
     const params = this.getParameters(node, language);
     const returnType = this.getReturnType(node, language);
-    const extendsFrom = this.getExtends(node, language);
-    const implementsList = this.getImplements(node, language);
+    const extendsList = extendsNames(node);
+    const implementsList = implementedNames(node);
     const comment = this.getLeadingComment(node, lines);
     const tags = this.inferTags(name, kind, modifiers, node, language);
 
@@ -367,7 +400,8 @@ export class TreeSitterExtractor {
       kind,
       signature,
       parent: parentName,
-      extends_from: extendsFrom || undefined,
+      extends_from: extendsList[0],
+      extends_list: extendsList.length > 1 ? extendsList : undefined,
       implements_list: implementsList.length > 0 ? implementsList : undefined,
       uses_traits: usesTraits.length > 0 ? usesTraits : undefined,
       modifiers,
@@ -625,62 +659,6 @@ export class TreeSitterExtractor {
     if (rustRet) return rustRet.text.replace(/^->\s*/, '').trim();
 
     return null;
-  }
-
-  /** Get extends clause for classes. */
-  private getExtends(node: Parser.SyntaxNode, language: string): string | null {
-    // TS/JS: class_heritage / extends_clause
-    for (const child of node.namedChildren) {
-      if (child.type === 'class_heritage' || child.type === 'extends_clause'
-          || child.type === 'superclass') {
-        // Extract the class name from the clause
-        const typeNode = child.namedChildren.find(c =>
-          c.type === 'identifier' || c.type === 'type_identifier' || c.type === 'generic_type'
-        );
-        return typeNode?.text ?? child.text.replace(/^extends\s+/, '').trim();
-      }
-    }
-
-    // Java/Kotlin: superclass
-    const superNode = node.childForFieldName('superclass');
-    if (superNode) return superNode.text;
-
-    // Rust impl: trait
-    if (node.type === 'impl_item') {
-      const traitNode = node.childForFieldName('trait');
-      if (traitNode) return traitNode.text;
-    }
-
-    return null;
-  }
-
-  /** Get implements clause for classes. */
-  private getImplements(node: Parser.SyntaxNode, language: string): string[] {
-    const impls: string[] = [];
-
-    for (const child of node.namedChildren) {
-      if (child.type === 'implements_clause' || child.type === 'class_heritage') {
-        // Extract interface names
-        for (const typeNode of child.namedChildren) {
-          if (typeNode.type === 'type_identifier' || typeNode.type === 'identifier'
-              || typeNode.type === 'generic_type') {
-            impls.push(typeNode.text);
-          }
-        }
-      }
-    }
-
-    // Java: interfaces field
-    const ifaces = node.childForFieldName('interfaces');
-    if (ifaces) {
-      for (const child of ifaces.namedChildren) {
-        if (child.type === 'type_identifier' || child.type === 'type_list') {
-          impls.push(child.text);
-        }
-      }
-    }
-
-    return impls;
   }
 
   /** Get the comment immediately preceding a node. */
@@ -953,6 +931,7 @@ export class TreeSitterExtractor {
             references.push({
               symbol_name: name,
               kind: 'other' as SymbolKind,
+              reference_kind: 'import',
               line: node.startPosition.row + 1,
               col: node.startPosition.column + 1,
               snippet: node.text.split('\n')[0]?.trim().slice(0, 120),

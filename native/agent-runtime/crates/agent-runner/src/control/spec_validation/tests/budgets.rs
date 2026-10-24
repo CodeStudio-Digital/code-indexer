@@ -118,3 +118,20 @@ fn run_tree_wall_and_cost_pair_are_coherent() {
         Err(SpecValidationError::InvalidRunTreeBudget(_))
     ));
 }
+
+#[test]
+fn execution_deadline_is_within_live_authority() {
+    let mut spec = valid_spec();
+    spec.execution_deadline_at_unix_ms = Some(spec.deadline_at_unix_ms - 100);
+    assert!(validate(spec.clone()).is_ok());
+    spec.execution_deadline_at_unix_ms = Some(spec.deadline_at_unix_ms + 1);
+    assert!(matches!(
+        validate(spec.clone()),
+        Err(SpecValidationError::DeadlineExceedsLaunch { .. })
+    ));
+    spec.execution_deadline_at_unix_ms = Some(1);
+    assert!(matches!(
+        validate(spec),
+        Err(SpecValidationError::DeadlineExpired { .. })
+    ));
+}

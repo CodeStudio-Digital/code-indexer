@@ -46,6 +46,7 @@ export interface RunnerEvents {
   tool_call_result: (id: string, name: string, result: {
     content: string;
     isError?: boolean;
+    effectOutcome?: 'unknown';
     subUsage?: ChatUsage;
     rawChars?: number;
     contentFormat?: 'text' | 'markdown' | 'json';
@@ -205,7 +206,7 @@ export interface RunnerEvents {
   tasks_posted: (payload: {
     tool_use_id: string;
     summary: string;
-    tasks: import('@mcp/code-agent/sessions/types.js').CoderTask[];
+    tasks: import('@mcp/session-storage/session-state-types.js').CoderTask[];
     version: number;
   }) => void;
   /** Emitted when execute_task starts processing a single task. */
@@ -213,8 +214,8 @@ export interface RunnerEvents {
   /** Emitted when a task finishes (done/failed/skipped/interrupted). */
   task_finished: (payload: {
     task_id: string;
-    status: import('@mcp/code-agent/sessions/types.js').TaskStatus;
-    result: import('@mcp/code-agent/sessions/types.js').TaskResult | null;
+    status: import('@mcp/session-storage/session-state-types.js').TaskStatus;
+    result: import('@mcp/session-storage/session-state-types.js').TaskResult | null;
     finished_at: string;
   }) => void;
   /** Emitted by `update_task` when the agent surgically patches one task
@@ -223,7 +224,7 @@ export interface RunnerEvents {
    *  waiting until the turn ends. */
   task_updated: (payload: {
     task_id: string;
-    patch: Partial<import('@mcp/code-agent/sessions/types.js').CoderTask>;
+    patch: Partial<import('@mcp/session-storage/session-state-types.js').CoderTask>;
   }) => void;
   /** Emitted by execute_tasks to render a live task execution timeline. */
   task_run_started: (payload: {
@@ -235,7 +236,7 @@ export interface RunnerEvents {
       tasks: Array<{
         id: string;
         title: string;
-        kind: import('@mcp/code-agent/sessions/types.js').TaskKind;
+        kind: import('@mcp/session-storage/session-state-types.js').TaskKind;
         mode: 'subagent' | 'inline';
       }>;
     }>;
@@ -244,7 +245,7 @@ export interface RunnerEvents {
     run_id: string;
     task_id: string;
     title: string;
-    kind: import('@mcp/code-agent/sessions/types.js').TaskKind;
+    kind: import('@mcp/session-storage/session-state-types.js').TaskKind;
     wave: number;
     mode: 'subagent' | 'inline';
     started_at: string;
@@ -268,7 +269,7 @@ export interface RunnerEvents {
   task_run_task_finished: (payload: {
     run_id: string;
     task_id: string;
-    status: import('@mcp/code-agent/sessions/types.js').TaskStatus;
+    status: import('@mcp/session-storage/session-state-types.js').TaskStatus;
     summary: string;
     error?: string;
     usage?: ChatUsage;

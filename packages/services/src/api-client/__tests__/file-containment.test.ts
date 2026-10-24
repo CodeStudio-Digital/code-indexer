@@ -2,14 +2,15 @@
  * Security: path-traversal containment for OpenAPI spec discovery and file-backed
  * request bodies (binary / form-data). These close an arbitrary-file-read oracle
  * and a read-file-then-POST exfil primitive when the path is attacker/agent/import
- * supplied. No isolated-vm needed.
+ * supplied. Reads are bounded independently of script execution.
  */
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { probeOpenApiOnHost } from '../openapi-probe.js';
 import { encodeBody } from '../body-encode.js';
+import { readProjectFile } from '../read-project-file.js';
 
 let root: string;
 let outside: string;
@@ -20,6 +21,7 @@ beforeAll(async () => {
   await writeFile(join(root, 'openapi.json'), '{"openapi":"3.0.0"}', 'utf8');
   await writeFile(join(root, 'inside.bin'), 'IN', 'utf8');
   await writeFile(join(outside, 'secret.txt'), 'TOPSECRET', 'utf8');
+  await symlink(outside, join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
 });
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });
@@ -39,6 +41,18 @@ describe('probeOpenApiOnHost containment', () => {
 
 describe('encodeBody file containment', () => {
   const binReq = (path: string) => ({ body_kind: 'binary', body_binary_path: path });
+
+  it('refuses a symlink/junction pointing outside the project', async () => {
+    await expect(encodeBody(binReq('escape/secret.txt'), {}, { fileRoot: root })).rejects.toThrow('escapes the project root');
+    expect(await probeOpenApiOnHost(root, 'escape/secret.txt')).toBeNull();
+  });
+
+  it('enforces a byte cap without returning a partial file and checks cancellation', async () => {
+    await expect(readProjectFile('inside.bin', { fileRoot: root }, 1)).rejects.toThrow('byte limit');
+    const controller = new AbortController(); controller.abort(new Error('cancelled read'));
+    await expect(readProjectFile('inside.bin', { fileRoot: root, signal: controller.signal })).rejects.toThrow('cancelled read');
+    await expect(readProjectFile('inside.bin', { fileRoot: root, beforeRead: () => { throw new Error('revoked'); } })).rejects.toThrow('revoked');
+  });
 
   it('reads an in-root file when contained', async () => {
     const r = await encodeBody(binReq(join(root, 'inside.bin')), {}, { fileRoot: root });

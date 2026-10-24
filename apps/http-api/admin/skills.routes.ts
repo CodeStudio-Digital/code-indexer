@@ -13,7 +13,7 @@ import {
 } from '@mcp/code-agent/skills/agent-skills-installer.js';
 import { installFromLocalFolder } from '@mcp/code-agent/skills/local-skills-installer.js';
 import { installFromUrl } from '@mcp/code-agent/skills/url-skills-installer.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { readFilesystemSkillUsageStats } from './skill-usage-filesystem.js';
 
 function getStore() {

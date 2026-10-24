@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { err, ok } from "@mcp/agent-runtime-host/tool-result.js";
 import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
 import { appWorkspaceFingerprint } from '@mcp/app-studio/plan/evidence.js';
 import { APP_PLAN_SCHEMA } from '@mcp/app-studio/plan/schema.js';
@@ -24,7 +25,6 @@ import type {
   AppStudioWorkItem,
   AppStudioWorkItemKind,
 } from '@mcp/store/app-studio-store.js';
-import { resolveHostPath } from '@mcp/company/tools/design-system/ds-publish-version.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
 import { appResult } from './model-output.js';
@@ -32,6 +32,17 @@ import { ensureAppStudioDbConnection, getAppStudioDbClientStore } from './db-cli
 import { dispatchReadyAppWork, type AppCompanyDispatchHost } from './company-dispatch.js';
 
 const EMPTY: JsonSchema = { type: 'object', properties: {}, additionalProperties: false };
+
+function resolveHostPath(_path: '.', ctx: ToolContext):
+  | { kind: 'ok'; path: string }
+  | { kind: 'no-bind-mount'; message: string } {
+  const sandbox = ctx.companyContext?.sandbox;
+  if (!sandbox) return { kind: 'ok', path: ctx.cwd };
+  if (!sandbox.hostWorkdirMount) {
+    return { kind: 'no-bind-mount', message: 'App workspace is not mounted on the host.' };
+  }
+  return { kind: 'ok', path: sandbox.hostWorkdirMount };
+}
 
 function json<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;

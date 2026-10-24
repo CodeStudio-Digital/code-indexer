@@ -12,7 +12,10 @@ describe('isPrivateHost', () => {
     for (const h of ['2130706433', '0x7f000001', '0177.0.0.1']) expect(isPrivateHost(h), h).toBe(true);
   });
   it('allows public hosts', () => {
-    for (const h of ['example.com', 'api.github.com', '8.8.8.8', '1.1.1.1']) expect(isPrivateHost(h), h).toBe(false);
+    for (const h of ['example.com', 'api.github.com', '8.8.8.8', '1.1.1.1', '192.0.3.1', '192.2.0.1']) expect(isPrivateHost(h), h).toBe(false);
+  });
+  it('blocks canonical mapped IPv6 and non-public special ranges', () => {
+    for (const h of ['[::ffff:7f00:1]', '0:0:0:0:0:0:0:1', 'localhost.', '100.64.0.1', '192.0.2.1', '198.51.100.1', '203.0.113.1', '198.18.1.1', '224.0.0.1']) expect(isPrivateHost(h), h).toBe(true);
   });
 });
 

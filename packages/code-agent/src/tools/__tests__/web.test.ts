@@ -7,11 +7,11 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import { isBlockedFetchHost, webFetch } from '@mcp/code-agent/tools/web.js';
+import { isBlockedFetchHost, webFetch, webSearch } from '@mcp/code-agent/tools/web.js';
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllGlobals();
+  vi.unstubAllGlobals(); vi.unstubAllEnvs();
 });
 
 describe('isBlockedFetchHost', () => {
@@ -78,132 +78,87 @@ describe('isBlockedFetchHost', () => {
   });
 });
 
-describe('web_fetch output ownership', () => {
-  it('returns a large page intact so runner-level spill can preserve it', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      `${'x'.repeat(20_000)}TAIL_SENTINEL`,
-      { status: 200, headers: { 'content-type': 'text/plain' } },
-    )));
 
-    const result = await webFetch.handler(
-      { url: 'https://example.com/smart-reducer-large-page' },
-      {} as ToolContext,
-    );
+let nextSession = 0;
+function context(read: (input: import('@mcp/shared/utils/public-web-request.js').PublicWebRequest) => Promise<import('@mcp/shared/utils/public-web-request.js').PublicWebResponse>, signal?: AbortSignal): ToolContext {
+  return { sessionId: 'web-test-' + ++nextSession, signal, ports: { web: { read, assertCurrent() { signal?.throwIfAborted(); } } } } as ToolContext;
+}
+function response(text: string, extra: Partial<import('@mcp/shared/utils/public-web-request.js').PublicWebResponse> = {}) {
+  return { url: 'https://example.com/result', status: 200, statusText: 'OK', text,
+    contentType: 'text/plain', truncated: false, inputBytes: Buffer.byteLength(text), inputSizeExact: true, ...extra };
+}
 
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('TAIL_SENTINEL');
-    expect(result.content.length).toBeGreaterThan(20_000);
+describe('web tools with an owned transport', () => {
+  it('preserves large acquired pages for durable output recovery', async () => {
+    const ctx = context(async () => response('x'.repeat(20000) + 'TAIL_SENTINEL'));
+    const result = await webFetch.handler({ url: 'https://example.com/large' }, ctx);
+    expect(result.isError).toBeFalsy(); expect(result.content).toContain('TAIL_SENTINEL');
+    expect(result.content.length).toBeGreaterThan(20000);
   });
-
-  it('bounds network acquisition explicitly and keeps the acquired prefix', async () => {
-    const fetchMock = vi.fn(async () => new Response(
-      `${'p'.repeat(80_000)}UNREAD_TAIL`,
-      { status: 200, headers: { 'content-type': 'text/plain' } },
-    ));
-    vi.stubGlobal('fetch', fetchMock);
-
-    const result = await webFetch.handler(
-      { url: 'https://example.com/acquisition-boundary', max_bytes: 32_000 },
-      {} as ToolContext,
-    );
-
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('p'.repeat(1000));
-    expect(result.content).toContain('[source truncated: web transfer stopped');
-    expect(result.content).not.toContain('UNREAD_TAIL');
-    expect(result.sourceTruncations).toEqual([
-      expect.objectContaining({
-        technique: 'network-acquisition-cap',
-        unit: 'bytes',
-        inputSizeExact: false,
-        outputSize: 32_000,
-        recoverable: false,
-      }),
-    ]);
-
-    const cached = await webFetch.handler(
-      { url: 'https://example.com/acquisition-boundary', max_bytes: 32_000 },
-      {} as ToolContext,
-    );
-    expect(cached.content).toContain('[cached]');
-    expect(cached.sourceTruncations).toEqual(result.sourceTruncations);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+  it('reports a partial source truthfully and preserves that metadata in the cache', async () => {
+    const read = vi.fn(async (_input: import('@mcp/shared/utils/public-web-request.js').PublicWebRequest) => response('p'.repeat(32000), { truncated: true, inputBytes: 32768, inputSizeExact: false }));
+    const ctx = context(read);
+    const first = await webFetch.handler({ url: 'https://example.com/cap', max_bytes: 32000 }, ctx);
+    expect(read.mock.calls[0][0].maxBytes).toBe(32000);
+    expect(first.sourceTruncations).toEqual([expect.objectContaining({ inputSize: 32768, inputSizeExact: false, outputSize: 32000, recoverable: false })]);
+    const cached = await webFetch.handler({ url: 'https://example.com/cap', max_bytes: 32000 }, ctx);
+    expect(cached.content).toContain('[cached]'); expect(cached.sourceTruncations).toEqual(first.sourceTruncations);
+    expect(read).toHaveBeenCalledTimes(1);
   });
-
-  it('keeps only complete UTF-8 code points when max_bytes cuts through a character', async () => {
-    const maxBytes = 1024;
-    const completePrefix = 'a'.repeat(maxBytes - 2);
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      `${completePrefix}🙂UNREAD_TAIL`,
-      { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } },
-    )));
-
-    const result = await webFetch.handler(
-      { url: 'https://example.com/unicode-acquisition-boundary', max_bytes: maxBytes },
-      {} as ToolContext,
-    );
-
-    expect(result.isError).toBeFalsy();
-    const acquiredBody = result.content
-      .split('\n\n---\n\n')[1]
-      .split('\n\n[source truncated:')[0];
-    expect(acquiredBody).toBe(completePrefix);
-    expect(acquiredBody).not.toContain('\uFFFD');
-    expect(Buffer.byteLength(acquiredBody, 'utf8')).toBeLessThanOrEqual(maxBytes);
-    expect(result.content).not.toContain('UNREAD_TAIL');
+  it('cancellation and revoked authority reject even a warm cache', async () => {
+    const ctrl = new AbortController(); const ctx = context(async () => response('cached page'), ctrl.signal);
+    await webFetch.handler({ url: 'https://example.com/cache-cancel' }, ctx);
+    ctrl.abort(new Error('owner cancelled'));
+    const cancelled = await webFetch.handler({ url: 'https://example.com/cache-cancel' }, ctx);
+    expect(cancelled.isError).toBe(true); expect(cancelled.content).toContain('owner cancelled');
   });
-
-  it('does not mistake compressed wire Content-Length for decoded source size', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      `${'z'.repeat(80_000)}UNREAD_TAIL`,
-      {
-        status: 200,
-        headers: {
-          'content-type': 'text/plain',
-          'content-encoding': 'gzip',
-          'content-length': '90000',
-        },
-      },
-    )));
-
-    const result = await webFetch.handler(
-      { url: 'https://example.com/compressed-acquisition-boundary', max_bytes: 32_000 },
-      {} as ToolContext,
-    );
-
-    expect(result.sourceTruncations).toEqual([
-      expect.objectContaining({
-        technique: 'network-acquisition-cap',
-        inputSizeExact: false,
-        outputSize: 32_000,
-      }),
-    ]);
-    expect(result.sourceTruncations![0]!.inputSize).not.toBe(90_000);
+  it('does not reuse another session cache', async () => {
+    const read = vi.fn(async () => response('page'));
+    await webFetch.handler({ url: 'https://example.com/session-cache' }, context(read));
+    await webFetch.handler({ url: 'https://example.com/session-cache' }, context(read));
+    expect(read).toHaveBeenCalledTimes(2);
   });
-
-  it('keeps the timeout active while a response body is stalled', async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
-      const signal = init?.signal;
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('partial body'));
-          signal?.addEventListener('abort', () => {
-            controller.error(new DOMException('aborted', 'AbortError'));
-          }, { once: true });
-        },
-      });
-      return new Response(stream, { status: 200, headers: { 'content-type': 'text/plain' } });
-    }));
-
-    const pending = webFetch.handler(
-      { url: 'https://example.com/stalled-body' },
-      {} as ToolContext,
-    );
-    await vi.advanceTimersByTimeAsync(20_000);
-    const result = await pending;
-
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/web_fetch failed:.*abort/i);
+  it('rejects URL credentials and private/obfuscated hosts before dispatch', async () => {
+    const read = vi.fn(async () => response('must not run')); const ctx = context(read);
+    for (const url of ['http://localhost./', 'http://[::ffff:7f00:1]/', 'http://user:password@example.com/', 'file:///tmp/a']) {
+      expect((await webFetch.handler({ url }, ctx)).isError, url).toBe(true);
+    }
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('converts HTML tables, code and JSON in real workers, removes scripts', async () => {
+    const ctx = context(async () => response('<html><h1>Heading</h1><script>LEAK_SENTINEL</script><pre><code>const x = 1;</code></pre><table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Value</td></tr></tbody></table></html>', { contentType: 'text/html' }));
+    const html = await webFetch.handler({ url: 'https://example.com/html' }, ctx);
+    expect(html.isError).toBeFalsy(); expect(html.content).toContain('# Heading'); expect(html.content).toContain('| Name |');
+    expect(html.content).not.toContain('LEAK_SENTINEL');
+    const json = await webFetch.handler({ url: 'https://example.com/json' }, context(async () => response('{"ok":true}', { contentType: 'application/json' })));
+    expect(json.content).toContain('"ok": true');
+  });
+  it('bounds search reads and matches hostnames, excluding deceptive URLs and private links', async () => {
+    vi.stubEnv('BRAVE_API_KEY', 'fixture-token');
+    const urls = ['https://docs.python.org/page', 'https://python.org.evil.example/page', 'https://evil.example/?python.org', 'https://localhost/', 'javascript:alert(1)', 'https://old.python.org/page'];
+    const read = vi.fn(async (_input: import('@mcp/shared/utils/public-web-request.js').PublicWebRequest) => response(JSON.stringify({ web: { results: urls.map(url => ({ url, title: url, description: 'Description' })) } }), { contentType: 'application/json' }));
+    const result = await webSearch.handler({ query: 'python docs', allowed_domains: ['python.org'], blocked_domains: ['old.python.org'] }, context(read));
+    expect(result.isError).toBeFalsy(); expect(result.content).toContain('https://docs.python.org/page');
+    expect(result.content).not.toContain('evil.example'); expect(result.content).not.toContain('localhost');
+    expect(result.content).not.toContain('old.python.org'); expect(read.mock.calls[0][0].maxBytes).toBe(2 * 1024 * 1024);
+  });
+  it('never starts fallback after cancellation', async () => {
+    vi.stubEnv('BRAVE_API_KEY', 'fixture-token'); const ctrl = new AbortController();
+    const read = vi.fn(async () => { ctrl.abort(new Error('cancel search')); throw new Error('failed'); });
+    const result = await webSearch.handler({ query: 'cancel docs' }, context(read, ctrl.signal));
+    expect(result.isError).toBe(true); expect(read).toHaveBeenCalledTimes(1);
+  });
+  it('falls back on backend errors and decodes DDG URLs only once', async () => {
+    vi.stubEnv('BRAVE_API_KEY', 'fixture-token');
+    const ddg = '<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F%2520">Title</a><a class="result__snippet">Snippet</a>';
+    const read = vi.fn().mockResolvedValueOnce(response('', { status: 503 })).mockResolvedValueOnce(response(ddg, { contentType: 'text/html' }));
+    const result = await webSearch.handler({ query: 'fallback docs' }, context(read));
+    expect(result.isError).toBeFalsy(); expect(result.content).toContain('duckduckgo (brave failed)');
+    expect(result.content).toContain('https://example.com/%20');
+  });
+  it('does not parse silently truncated search responses', async () => {
+    vi.stubEnv('BRAVE_API_KEY', '');
+    const result = await webSearch.handler({ query: 'large search' }, context(async () => response('partial', { truncated: true })));
+    expect(result.isError).toBe(true); expect(result.content).toContain('acquisition ceiling');
   });
 });

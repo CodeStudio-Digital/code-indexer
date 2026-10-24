@@ -13,8 +13,9 @@
  * the slot stays empty and the wrapper synthesizes a stub result with
  * `confidence='low'` and an error message.
  */
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { ResearchConfidence } from '../types.js';
 import type { DocsEvidenceLedger } from './evidence-ledger.js';
 import type { PlanSlot } from './docs-plan.js';

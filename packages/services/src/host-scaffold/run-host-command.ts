@@ -2,15 +2,14 @@
  * Streamed host child-process runner for the New Project wizard.
  *
  * Unlike `LocalProcessManager` (long-lived dev servers with port +
- * readiness probes) and `design-system/run-npm` (npm-only, buffered, no
- * abort), this runs an arbitrary CLI (`npm`, `npx`, `git`, `pnpm`) to
+ * readiness probes), this runs an arbitrary CLI (`npm`, `npx`, `git`, `pnpm`) to
  * completion while streaming stdout/stderr to a callback, honours an
  * `AbortSignal`, enforces a timeout, and never throws on a non-zero exit —
  * it returns `{ ok: false, … }` so the orchestrator can emit a clean error.
  *
  * Windows quirk: `npm`/`npx`/`pnpm` are `.cmd` shims, so direct spawn
  * without a shell fails with ENOENT — we set `shell` on win32 (same trick
- * as `design-system/run-npm`).
+ * as other host commands).
  */
 import { spawn } from 'node:child_process';
 

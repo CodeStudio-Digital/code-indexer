@@ -1,3 +1,4 @@
+import type { GuardVerdict, ToolResult, ToolOutputPolicy, ToolSourceTruncation } from '@mcp/agent-runtime-host/tool-result.js';
 /**
  * `JsonSchema` (the tool-input schema) now lives in `@mcp/provider-sdk` so the
  * provider adapter contract can reference it without depending back into
@@ -25,6 +26,7 @@ export type ToolEffectBoundaryKind =
   | 'shell'
   | 'network'
   | 'database'
+  | 'external_mcp'
   /** The tool has no direct effect; every nested call is dispatched again through the registry. */
   | 'nested'
   /** In-process control state whose handler entry is the physical mutation boundary. */
@@ -71,31 +73,6 @@ export interface RuntimeToolTierMetadata {
   displayName: string;
 }
 
-/** Structured outcome from an invocation/no-progress guard. */
-export type GuardAction = 'allow' | 'reuse' | 'warn' | 'block' | 'shadow';
-
-export interface GuardVerdict {
-  action: GuardAction;
-  /** Stable, machine-readable reason (for example `mutating-repeat`). */
-  reason: string;
-  /** Refusal classification when the verdict prevented an invocation. */
-  refusalKind?: string;
-  /** Whether the runner should route through an explicit reflection turn. */
-  shouldReflect: boolean;
-  /** Whether this outcome contributes to the ordinary tool failure streak. */
-  affectsFailureStreak: boolean;
-  /** Number of equivalent attempts observed in the current guard scope. */
-  count?: number;
-  /** Tool whose invocation produced this verdict. */
-  sourceTool?: string;
-  /** Tool-use id that caused or originally produced the verdict. */
-  originToolUseId?: string;
-  /** Observe mode: the action that enforcement would have taken. */
-  wouldBlock?: boolean;
-  /** Workspace/state version used when the guard made its decision. */
-  stateEpoch?: number;
-}
-
 export interface CoderTool {
   name: string;
   description: string;
@@ -137,6 +114,8 @@ export interface CoderTool {
    * with no explicit value (conservative posture); `false` for native read
    * tools recognised by the built-in classifier.
    */
+  /** Host-issued transport metadata; never populated from server tool annotations. */
+  externalMcpTransport?: { serverId: string; toolName: string; transport: 'stdio' | 'sse' | 'streamable_http'; catalogueRevision: string; processTreeContained?: boolean };
   mutates?: boolean;
   /**
    * Whether two invocations of this tool (or this tool against another
@@ -378,9 +357,29 @@ export interface NestedCapabilityDispatch {
   preflight?: CapabilityPreflightPort;
   policyShadow?: CapabilityPolicyPort;
   capabilityHooks?: CapabilityLifecycleHooks;
+  /** Native owner restricts both discovery and execution to the sealed attempt. */
+  visibleToolNames?: ReadonlySet<string>;
+  invocableToolNames?: ReadonlySet<string>;
+  /** Includes permission and grant validation; called with the script clock paused. */
+  invoke?: (name: string, args: Record<string, unknown>, context: ToolContext,
+    dispatched: () => void) => Promise<ToolResult>;
+}
+
+export interface ToolSettledEvent {
+  readonly toolName: string;
+  readonly toolArgs: Readonly<Record<string, unknown>>;
+  readonly result: { readonly isError: boolean };
+  readonly durationMs: number;
 }
 
 export interface ToolContext {
+  /** Product-owned admission lifetime, propagated through nested dispatch. */
+  workspaceRuntimeScope?: {
+    invoke(tool: CoderTool, operation: () => Promise<ToolResult>): Promise<ToolResult>;
+  };
+  /** Best-effort post-handler observation, shared by native/legacy/nested calls.
+   * It cannot change policy or tool inputs/results and is not awaited by dispatch. */
+  onToolSettled?: (event: ToolSettledEvent) => void | Promise<void>;
   /** Project root path of the PRIMARY project. Native fs operations default here
    *  and must stay inside SOME known root (primary or a linked `roots` entry). */
   cwd: string;
@@ -449,7 +448,7 @@ export interface ToolContext {
    */
   toolOutputStore?: {
     put(content: string): string | null;
-    get(id: string): string | null;
+    get(id: string, signal?: AbortSignal): string | null | Promise<string | null>;
     hasOutputs(): boolean;
     drain?(): Promise<void>;
   };
@@ -547,9 +546,16 @@ export interface ToolContext {
    * `reportProgress`, this must not reset the operation's no-real-output age.
    */
   reportHeartbeat?: (note?: string) => void;
+  /** Artifact notification for runtimes without a legacy runner. Files are
+   * already persisted; this notification must not perform another write. */
+  onDiagramChanged?: (payload: { path: string; xml: string }) => void;
   /** Back-reference to the runner so interactive tools (submit_plan, ask_user)
    *  can pause execution waiting for user input. Set automatically by CoderRunner. */
   runner?: import('@mcp/code-agent/core/runner.js').CoderRunner;
+  /** Invocation-bound task state, without creating a legacy runner. */
+  taskRuntime?: import('../ports/task-tool-port.js').TaskToolRuntime;
+  /** Selected once before execution; inherited children must keep the tree's runtime. */
+  runtimeGeneration?: 'legacy_ts' | 'rust_v1';
   /** True when the runner was started in plan mode. */
   planMode?: boolean;
   /**
@@ -590,23 +596,27 @@ export interface ToolContext {
    */
   recordTasks?: (
     toolUseId: string,
-    state: import('@mcp/code-agent/sessions/types.js').TasksState,
+    state: import('@mcp/session-storage/session-state-types.js').TasksState,
   ) => void | Promise<void>;
   resolveTasks?: (verdict: {
     approved: boolean;
-    tasks?: import('@mcp/code-agent/sessions/types.js').CoderTask[];
-    execution_mode?: import('@mcp/code-agent/sessions/types.js').TaskExecutionMode | null;
+    tasks?: import('@mcp/session-storage/session-state-types.js').CoderTask[];
+    execution_mode?: import('@mcp/session-storage/session-state-types.js').TaskExecutionMode | null;
   }) => void | Promise<void>;
   updateTaskStatus?: (
     taskId: string,
-    patch: Partial<import('@mcp/code-agent/sessions/types.js').CoderTask>,
+    patch: Partial<import('@mcp/session-storage/session-state-types.js').CoderTask>,
   ) =>
-    | import('@mcp/code-agent/sessions/types.js').TasksState
+    | import('@mcp/session-storage/session-state-types.js').TasksState
     | null
-    | Promise<import('@mcp/code-agent/sessions/types.js').TasksState | null>;
+    | Promise<import('@mcp/session-storage/session-state-types.js').TasksState | null>;
   getTasksState?: () =>
-    | import('@mcp/code-agent/sessions/types.js').TasksState
+    | import('@mcp/session-storage/session-state-types.js').TasksState
     | null;
+  /** Task-run display projection; the task board/journal remains authoritative. */
+  completeInlineTaskRun?: (task: import('@mcp/session-storage/session-state-types.js').CoderTask) => Promise<{
+    run_id: string; status: 'completed' | 'failed'; total_usage: import('./messages.js').ChatUsage; finished_at: string;
+  } | null>;
   clearTasksState?: () => boolean | Promise<boolean>;
   /**
    * Optional persistence sinks for the goal tools (`create_goal`,
@@ -673,14 +683,16 @@ export interface ToolContext {
    * "not available here" message instead of throwing).
    */
   sessionDrive?: {
-    readActivePlan(): Promise<{ text: string; status: string } | null>;
+    assertCurrent?(): void;
+    readActivePlan(signal?: AbortSignal): Promise<{ text: string; status: string } | null>;
     remember(input: {
       title: string;
       body: string;
       kind?: string;
       pinned?: boolean;
-    }): Promise<{ title: string }>;
-    listMemory(opts?: { kind?: string }): Promise<
+      operation_id?: string;
+    }, beforePublish?: () => void): Promise<{ title: string }>;
+    listMemory(opts?: { kind?: string; limit?: number; offset?: number; signal?: AbortSignal }): Promise<
       Array<{
         kind: string;
         title: string;
@@ -689,7 +701,7 @@ export interface ToolContext {
         updated_at: string;
       }>
     >;
-    recallInvestigations(query: string, limit?: number): Promise<Array<{ topic: string; summary: string; source_label: string | null; agent_type: string | null; created_at: string }>>;
+    recallInvestigations(query: string, limit?: number, signal?: AbortSignal): Promise<Array<{ topic: string; summary: string; source_label: string | null; agent_type: string | null; created_at: string }>>;
   };
   /**
    * Append-only conversation history created by automatic/manual compaction.
@@ -698,10 +710,11 @@ export interface ToolContext {
    * historical summaries (or raw transcript) into every prompt.
    */
   conversationHistory?: {
-    list(opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterPage<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterRow>>;
-    search(query: string, opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterPage<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterSearchResult>>;
-    get(chapterId: string): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterRow | null>;
-    source(chapterId: string, opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterSourcePage>;
+    assertCurrent?(): void;
+    list(opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/session-storage/fs-store/history-metrics-types.js').FsConversationChapterPage<import('@mcp/session-storage/fs-store/history-metrics-types.js').FsConversationChapterRow>>;
+    search(query: string, opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/session-storage/fs-store/history-metrics-types.js').FsConversationChapterPage<import('@mcp/session-storage/fs-store/history-metrics-types.js').FsConversationChapterSearchResult>>;
+    get(chapterId: string): Promise<import('@mcp/session-storage/fs-store/history-metrics-types.js').FsConversationChapterRow | null>;
+    source(chapterId: string, opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/session-storage/fs-store/history-metrics-types.js').FsConversationChapterSourcePage>;
   };
   /**
    * Durable PROJECT memory ports (cross-session, snapshots table). Wired by
@@ -711,13 +724,14 @@ export interface ToolContext {
    * `recall_memory` tool. Undefined → tools answer with a clear message
    * instead of throwing (company sessions, subagents, tests).
    */
+  agentReads?: import('@mcp/code-agent/ports/agent-read-port.js').AgentReadPort;
   projectMemory?: {
     save(entry: {
       title: string;
       content: string;
       category: string;
     }): Promise<{ created: number; merged: number; skipped: number } | null>;
-    recall(query: string, limit?: number): Promise<Array<{
+    recall(query: string, limit?: number, signal?: AbortSignal): Promise<Array<{
       id: string;
       title: string;
       content: string;
@@ -727,7 +741,7 @@ export interface ToolContext {
       staleNote?: string;
     }>>;
     /** Project memory index (frontmatter) for `recall_memory(mode:'list')`. */
-    list?(limit?: number, type?: string): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
+    list?(limit?: number, type?: string, signal?: AbortSignal): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
     /** Archive a project memory by name/title (logical delete). Backs `forget_memory`. */
     forget?(target: string): Promise<{ archived: number }>;
   };
@@ -782,6 +796,14 @@ export interface ToolContext {
    * `assertMutation` synchronously as their final action before dispatch.
    */
   mutationFence?: ToolMutationFence;
+  /** Host-owned synchronous check at the external MCP wire dispatch, after reconnect. */
+  assertExternalMcpDispatch?: () => void;
+  /** Opaque product authority carried by the worker; only the owning host validates it. */
+  externalMcpAuthority?: { payload: unknown; outcomeUnknown(): void };
+  /** Original normalized invocation, sealed by the resource binding. */
+  currentToolInvocation?: { name: string; input: Record<string, unknown> };
+  previewAuthority?: { payload: unknown; key: string; runId: number; outcomeUnknown(): void };
+  browserAuthority?: { payload: unknown; key: string; runId: number; outcomeUnknown(): void };
   /**
    * Optional execution ports — when provided, filesystem/shell tools
    * route through these instead of talking to `node:fs` / `child_process`
@@ -792,8 +814,25 @@ export interface ToolContext {
    * same tool code writes into an ephemeral container instead of the host.
    */
   ports?: {
+    docsResearch?: import('../ports/docs-research-port.js').DocsResearchPort;
+    worktree?: import('../ports/worktree-transition-port.js').WorktreeTransitionPort;
+    codeExecution?: import('../ports/code-execution-port.js').CodeExecutionPort;
+    sessionReview?: import('../ports/session-review-port.js').SessionReviewPort;
+    agentTree?: import('../ports/agent-tree-port.js').AgentTreePort;
+    projectIndex?: import('@mcp/code-agent/ports/project-index-port.js').ProjectIndexPort;
+    documentExport?: import('@mcp/code-agent/ports/document-export-port.js').DocumentExportPort;
+    memoryMutations?: import('@mcp/code-agent/ports/memory-mutation-port.js').MemoryMutationPort;
+    discovery?: import('@mcp/code-agent/ports/capability-discovery-port.js').CapabilityDiscoveryPort;
     fs?: import('@mcp/code-agent/ports/filesystem-port.js').IFilesystemPort;
     shell?: import('@mcp/code-agent/ports/shell-port.js').IShellPort;
+    commands?: import('@mcp/code-agent/ports/persistent-command-port.js').IPersistentCommandPort;
+    interactions?: import('@mcp/code-agent/ports/interactive-tool-port.js').InteractiveToolPort;
+    tasks?: import('../ports/task-tool-port.js').TaskToolPort;
+    database?: import('@mcp/code-agent/ports/database-port.js').DatabasePort;
+    http?: import('@mcp/code-agent/ports/http-port.js').HttpPort;
+    web?: import('@mcp/code-agent/ports/web-port.js').WebPort;
+    lsp?: import('@mcp/code-agent/ports/lsp-port.js').AgentLspPort;
+    apiClient?: { readonly projectId: number; readonly http: import('@mcp/code-agent/ports/http-port.js').HttpPort; assertCurrent(): void };
   };
   /**
    * Frente C (PR 3 da reavaliação) — present only inside subagent runs.
@@ -807,120 +846,5 @@ export interface ToolContext {
   subagentCollector?: import('@mcp/code-agent/tools/subagent-collector.js').SubagentCollector;
 }
 
-/** Stable, machine-readable details for an unsuccessful tool result. */
-export type ToolErrorKind =
-  | 'not_found'
-  | 'invalid_input'
-  | 'conflict'
-  | 'permission'
-  | 'timeout'
-  | 'cancelled'
-  | 'network'
-  | 'refusal'
-  | 'tool_error'
-  | 'internal';
-
-export interface ToolErrorInfo {
-  /** Stable code suitable for branching; unlike `content`, it is not prose. */
-  code: string;
-  kind: ToolErrorKind;
-  /** Whether retrying the same operation without changing its inputs may help. */
-  retryable: boolean;
-  /** Concise recovery direction for programmatic consumers such as code_exec. */
-  suggestedAction?: string;
-}
-
-/** What kind of information a tool returns to the model. */
-export type ToolOutputMode =
-  | 'generic'
-  | 'authoritative'
-  | 'page'
-  | 'line_range'
-  | 'rows'
-  | 'logs'
-  | 'diff'
-  | 'search'
-  | 'structured';
-
-/** How content omitted from the inline representation can be recovered. */
-export type ToolOutputRecovery =
-  | 'output_store'
-  | 'cursor'
-  | 'section'
-  | 'rerun'
-  | 'none';
-
-export interface ToolOutputPolicy {
-  mode: ToolOutputMode;
-  /** Skip semantic reducers for already-shaped/authoritative payloads. */
-  reducer?: 'smart' | 'none';
-  /** Preferred recovery contract when the full value does not fit inline. */
-  recovery?: ToolOutputRecovery;
-  /** Optional per-tool target. It is always clamped by context safety. */
-  maxInlineChars?: number;
-  /** Preserve full error evidence in the output store even when it fits. */
-  preserveOnError?: boolean;
-}
-
-/**
- * Machine-readable evidence that a producer intentionally omitted source
- * data before the central reducer saw it. Text markers remain model-facing
- * guidance only and must never be parsed as telemetry truth.
- */
-export interface ToolSourceTruncation {
-  technique: string;
-  inputSize: number;
-  /**
-   * Whether `inputSize` is the exact pre-cap size. False means it is a
-   * truthful lower bound (for example a transfer cancelled as soon as one
-   * socket chunk crossed the acquisition ceiling). Defaults to true for
-   * older producers that only emit exact materialized sizes.
-   */
-  inputSizeExact?: boolean;
-  outputSize: number;
-  unit: 'chars' | 'bytes' | 'lines' | 'rows' | 'items';
-  recoverable: boolean;
-  /** Exact snapshot id, only when it represents the complete source value. */
-  outputId?: string;
-}
-
-export interface ToolResult {
-  content: string;
-  isError?: boolean;
-  /** Optional structured failure metadata. `content` remains the display text. */
-  error?: ToolErrorInfo;
-  /** Model-facing representation. Providers receive only `content`. */
-  contentFormat?: 'text' | 'markdown' | 'json';
-  /**
-   * Optional canonical payload retained for internal consumers such as
-   * `code_exec` and size telemetry. It is never appended to model history.
-   */
-  structuredData?: unknown;
-  /** Explicit producer-side cuts, carried separately from display text. */
-  sourceTruncations?: ToolSourceTruncation[];
-  /** Structured guard metadata, including observe-mode would-block signals. */
-  guardVerdict?: GuardVerdict;
-  /**
-   * Token usage consumed by a sub-runner spawned inside this tool (e.g.
-   * spawn_subagent). The parent runner adds these into its `totalUsage` so
-   * subagent costs are NEVER hidden — they always show up in the parent
-   * session's billing and the dashboard token counters.
-   */
-  subUsage?: import('@mcp/code-agent/core/messages.js').ChatUsage;
-  /**
-   * Optional user-message content blocks the runner should append AFTER the
-   * tool result. Used by tools like `view_image` that need to inject content
-   * (an image, a document) the model can actually perceive on its next turn.
-   * The runner emits a synthetic `{ role: 'user', content: extraUserBlocks }`
-   * message immediately after the tool batch.
-   */
-  extraUserBlocks?: import('@mcp/code-agent/core/messages.js').ContentBlock[];
-}
-
-export function ok(content: string): ToolResult {
-  return { content };
-}
-
-export function err(content: string, error?: ToolErrorInfo): ToolResult {
-  return { content, isError: true, ...(error ? { error } : {}) };
-}
+export type { GuardAction, GuardVerdict, ToolErrorKind, ToolErrorInfo, ToolOutputMode, ToolOutputRecovery, ToolOutputPolicy, ToolSourceTruncation, ToolResult } from '@mcp/agent-runtime-host/tool-result.js';
+export { ok, err, unknownToolOutcome } from '@mcp/agent-runtime-host/tool-result.js';

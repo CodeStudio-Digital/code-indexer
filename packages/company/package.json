@@ -13,8 +13,9 @@
     "@mcp/services": "workspace:*",
     "@mcp/code-agent": "workspace:*",
     "@mcp/session-storage": "workspace:*",
-    "@mcp/design-system": "workspace:*",
     "@mcp/company-contracts": "workspace:*",
-    "@mcp/candidate-pipeline": "workspace:*"
+    "@mcp/candidate-pipeline": "workspace:*",
+    "@mcp/agent-runtime-host": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*"
   }
 }

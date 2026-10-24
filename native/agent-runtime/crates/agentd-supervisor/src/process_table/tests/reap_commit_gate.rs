@@ -31,9 +31,13 @@ fn successful_reap_denied_by_post_gate_quarantines_and_retains_admission() {
     };
 
     assert_eq!(
-        registry.reap_after_cleanup_with_gate(&success, &key, Duration::ZERO, || {
-            Err(GateError::DeadlineElapsed)
-        }),
+        registry.reap_after_cleanup_with_gate(
+            &success,
+            &key,
+            Duration::ZERO,
+            || { Err(GateError::DeadlineElapsed) },
+            |_, _| panic!("clock failure cannot publish evidence")
+        ),
         Err(ReapAfterCleanupError::PostReapGate(
             GateError::DeadlineElapsed
         ))
@@ -56,4 +60,39 @@ fn successful_reap_denied_by_post_gate_quarantines_and_retains_admission() {
             OwnershipError::CapacityExceeded
         ))
     ));
+}
+
+#[test]
+fn evidence_commit_failure_quarantines_without_releasing_admission() {
+    let group_drops = drops();
+    let mut registry = registry(1);
+    let port = FakeContainment::with_group(Rc::clone(&group_drops));
+    let key = spawn_running(&mut registry, &port, metadata("attempt-1", 3, "runtime-1"));
+    registry
+        .terminate(&port, &key, 0xE000_0001)
+        .expect("termination");
+    let success = SuccessfulReaper {
+        group_ids: RefCell::new(Vec::new()),
+        resource_group_id: ResourceGroupId("group-attempt-1".to_owned()),
+        process_id: ProcessId(41),
+    };
+    let result = registry.reap_after_cleanup_with_gate(
+        &success,
+        &key,
+        Duration::ZERO,
+        || Ok(2_000),
+        |reaped, at| {
+            assert_eq!(reaped.process_id(), ProcessId(41));
+            assert_eq!(at, 2_000);
+            Err("outbox unavailable")
+        },
+    );
+    assert_eq!(
+        result,
+        Err(ReapAfterCleanupError::PostReapGate("outbox unavailable"))
+    );
+    assert_eq!(registry.state(&key), Ok(PhysicalState::Quarantined));
+    assert_eq!(registry.reserved_memory_bytes(), 100);
+    assert_eq!(registry.reserved_processes(), 2);
+    assert_eq!(group_drops.get(), 1);
 }

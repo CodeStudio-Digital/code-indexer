@@ -566,7 +566,10 @@ export function listMemoryIndex(
   scored.sort((a, b) => b.score - a.score);
   const diverse: typeof scored = [];
   for (const candidate of scored) {
-    if (diverse.some(({ r }) => nearDuplicateTitle(r.name, candidate.r.name))) continue;
+    // Explicit facts can share title words while describing different decisions.
+    // Only automatic distillation is eligible for lossy title diversification.
+    if (diverse.some(({ r }) => (['session', 'distill'].includes(r.source) || ['session', 'distill'].includes(candidate.r.source))
+      && nearDuplicateTitle(r.name, candidate.r.name))) continue;
     diverse.push(candidate);
     if (diverse.length >= Math.max(1, limit)) break;
   }

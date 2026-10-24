@@ -4,7 +4,7 @@ import {
   type CatalogEntry,
   type SessionId,
 } from '@mcp/session-storage';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { SnapshotService } from '@mcp/services/services/snapshots.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';

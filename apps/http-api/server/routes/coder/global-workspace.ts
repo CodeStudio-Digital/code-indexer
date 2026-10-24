@@ -10,7 +10,7 @@ import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type {
   FsCoderSession,
   FsLinkedProject,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 import type { ServerDeps } from '../../deps.js';
 
 /** A typed failure for the link-mutation helpers — the route maps `.status`. */

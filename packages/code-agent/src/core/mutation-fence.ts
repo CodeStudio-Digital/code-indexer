@@ -9,6 +9,7 @@ import {
   sep,
 } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
+import { diagnosticExecutables } from '../tools/diagnostic-checkers.js';
 import {
   asAgentRunId,
   type AgentRunId,
@@ -56,7 +57,7 @@ export interface MutationFenceAuthorityOptions {
     aliases?: ReadonlyArray<string>;
     access?: 'read' | 'write';
   }>;
-  assertLease: () => void;
+  assertLease: (invocation?: { toolName: string; boundary?: ToolEffectBoundaryKind }) => void;
   snapshot: () => MutationFenceSnapshot;
   bindingTtlMs?: number;
   pollMs?: number;
@@ -123,9 +124,9 @@ function collectPathInputs(
       add(match[1]);
     }
   }
-  if ((toolName === 'diagram_create' || toolName === 'diagram_update')
+  if ((toolName === 'diagram_create' || toolName === 'diagram_update' || toolName === 'diagram_export')
     && typeof input.name === 'string') {
-    const base = input.name
+    const base = (toolName === 'diagram_export' && typeof input.output_name === 'string' ? input.output_name : input.name)
       .trim()
       .replace(/^.*[\\/]/, '')
       .replace(/\.drawio$/i, '');
@@ -136,7 +137,7 @@ function collectPathInputs(
       .replace(/-+/g, '-')
       .replace(/^-+|-+$/g, '')
       .toLowerCase() || 'diagram';
-    add(`diagrams/${slug}.drawio`);
+    add(`diagrams/${slug}.${toolName === 'diagram_export' && input.format === 'png' ? 'png' : toolName === 'diagram_export' ? 'svg' : 'drawio'}`);
   }
   if (toolName === 'submit_spec') add('.mcp/specs');
   return Array.from(paths, (path) => ({
@@ -156,7 +157,9 @@ function resourcesForInvocation(
     case 'filesystem':
       return collectPathInputs(toolName, input);
     case 'shell': {
-      const executable = toolName.startsWith('git_')
+      if (toolName === 'get_diagnostics') return diagnosticExecutables(String(input.file_path ?? ''))
+        .map(executable => ({ kind: 'command' as const, executable }));
+      const executable = toolName.startsWith('git_') || toolName === 'enter_worktree' || toolName === 'exit_worktree'
         ? 'git'
         : commandHead(String(input.command ?? input.cmd ?? ''));
       return executable
@@ -176,7 +179,12 @@ function resourcesForInvocation(
       }
     }
     case 'database': {
-      const operation = toolName === 'db_query'
+      if (toolName === 'mcp__save_memory') return [{ kind: 'database', databaseId: 'memory:project', operations: ['save_memory.save'] }];
+      if (toolName === 'remember' || toolName === 'forget_memory') return [{
+        kind: 'database', databaseId: `memory:${input.scope === 'user' ? 'user' : 'project'}`,
+        operations: [toolName === 'remember' ? 'remember.save' : 'forget_memory.archive'],
+      }];
+      const operation = toolName === 'db_list' ? 'list' : toolName === 'db_schema' ? 'schema' : toolName === 'db_query'
         ? sqlOperation(input.sql)
         : typeof (input.command as { op?: unknown } | undefined)?.op === 'string'
           ? String((input.command as { op: string }).op).toLowerCase()
@@ -189,7 +197,14 @@ function resourcesForInvocation(
         operations: [operation],
       }];
     }
+    case 'external_mcp':
+      return [{ kind: 'application', appId: toolName, operations: ['tools/call'] }];
     case 'control':
+      if (toolName === 'mcp__export_docs') return [{ kind: 'application', appId: toolName, operations: ['export/publish'] }];
+      if (toolName === 'mcp__index_project') return [{ kind: 'application', appId: toolName, operations: ['index/reconcile'] }];
+      if (toolName.startsWith('preview_')) return [{ kind: 'application', appId: toolName, operations: ['preview/dispatch'] }];
+      if (toolName.startsWith('browser_')) return [{ kind: 'application', appId: toolName, operations: ['browser/dispatch'] }];
+      return [];
     case 'nested':
       return [];
   }
@@ -393,10 +408,10 @@ function resourceMatches(
       if (effect.operation === 'mkdir') {
         // write_file commonly creates the already-bound target's parent first.
         return paths.some((resource) =>
-          candidate === normalizedAbsolute(resource.root)
+          samePhysicalPath(candidate, normalizedAbsolute(resource.root))
           || pathInside(normalizedAbsolute(resource.root), candidate));
       }
-      return paths.some((resource) => candidate === normalizedAbsolute(resource.root));
+      return paths.some((resource) => samePhysicalPath(candidate, normalizedAbsolute(resource.root)));
     }
     case 'shell': {
       const executable = commandHead(effect.resource ?? effect.operation);
@@ -424,7 +439,20 @@ function resourceMatches(
         && resource.databaseId === (effect.resource ?? '<default>')
         && resource.operations.map((operation) => operation.toLowerCase())
           .includes(effect.operation.toLowerCase()));
+    case 'external_mcp':
+      return effect.operation === 'tools/call' && binding.canonicalResources.some(resource =>
+        resource.kind === 'application' && resource.appId === effect.resource && resource.operations.includes('tools/call'));
     case 'control':
+      if (binding.canonicalResources.some(resource => resource.kind === 'application' && resource.appId === 'mcp__export_docs')) {
+        // Registry entry and the owned publication port both revalidate the
+        // same binding. Neither check may authorize a different resource.
+        return effect.resource === 'mcp__export_docs'
+          && (effect.operation === 'mcp__export_docs' || effect.operation === 'export/publish');
+      }
+      if (binding.canonicalResources.some(resource => resource.kind === 'application' && resource.appId === 'mcp__index_project')) {
+        return effect.resource === 'mcp__index_project'
+          && (effect.operation === 'mcp__index_project' || effect.operation === 'index/reconcile');
+      }
       return true;
   }
 }
@@ -441,7 +469,7 @@ function derivedFilesystemEffectMatches(
   if (effect.kind === 'filesystem'
     && invocation.toolName === 'submit_spec'
     && effect.resource
-    && (effect.operation === 'mkdir' || effect.operation === 'writeFile')) {
+    && (effect.operation === 'mkdir' || effect.operation === 'createFile')) {
     const candidate = normalizedAbsolute(effect.resource);
     const slug = String(invocation.effectiveInput.name ?? '')
       .toLowerCase()
@@ -456,7 +484,7 @@ function derivedFilesystemEffectMatches(
       if (effect.operation === 'mkdir') return candidate === specsRoot;
       if (!pathInside(candidate, specsRoot)) return false;
       const relativeName = relative(specsRoot, candidate).replace(/\\/g, '/');
-      return new RegExp(`^${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+\\.md$`)
+      return new RegExp(`^${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\\.md$`)
         .test(relativeName);
     });
   }
@@ -506,7 +534,7 @@ class MutationFenceAuthority implements ToolMutationFence {
   }): ToolMutationFence {
     let binding: ResourceBinding | undefined;
     try {
-      this.options.assertLease();
+      this.options.assertLease(input);
       if (input.requiresEffectBoundary && !input.boundary) {
         throw new MutationFenceError(
           'unsupported_capability',
@@ -597,7 +625,7 @@ class MutationFenceAuthority implements ToolMutationFence {
     effect: ToolMutationEffect,
   ): void {
     try {
-      this.options.assertLease();
+      this.options.assertLease(invocation);
       if (!invocation.boundary || !binding) {
         throw new MutationFenceError(
           'resource_binding_required',
@@ -670,7 +698,7 @@ class MutationFenceAuthority implements ToolMutationFence {
       }
       // Final synchronous ownership check. First-party ports perform no await
       // between this return and the physical syscall/spawn/request dispatch.
-      this.options.assertLease();
+      this.options.assertLease(invocation);
     } catch (error) {
       this.violation(error);
     }

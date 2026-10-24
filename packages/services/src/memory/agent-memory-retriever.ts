@@ -114,11 +114,14 @@ export class AgentMemoryRetriever {
     query: string,
     limit = 5,
     type?: AgentMemoryType,
+    signal?: AbortSignal,
   ): Promise<RecalledMemory[]> {
+    signal?.throwIfAborted();
     const q = query.trim();
     if (!q) return [];
     const k = Math.max(1, Math.min(12, Math.floor(limit)));
-    const hits = await this.service.search(scope, projectId, q, Math.max(k * 3, 15), type);
+    const hits = await this.service.search(scope, projectId, q, Math.max(k * 3, 15), type, signal);
+    signal?.throwIfAborted();
     if (hits.length === 0) {
       this.opts.log?.('zero_hits', { query: q.slice(0, 80), recall: true, scope, projectId });
       return [];

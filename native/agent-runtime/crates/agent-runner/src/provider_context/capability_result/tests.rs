@@ -6,6 +6,31 @@ use sha2::{Digest, Sha256};
 use super::host_tool_result::{SCHEMA_ID, SCHEMA_VERSION};
 
 #[test]
+fn continuation_preserves_thinking_separately_from_public_text() {
+    let outcome = CapabilityExecutionOutcome::Failed(CapabilityFailure {
+        reason_code: "fixture".into(),
+        duration_ms: 0,
+    });
+    let encoded = compose_capability_results_context(
+        &initial_context("inspect"),
+        &[tool_call()],
+        "checking",
+        "provider reasoning",
+        &[outcome],
+        64 * 1024,
+    )
+    .expect("context");
+    let context = wire::ProviderTurnContext::decode(encoded.as_slice()).expect("decode");
+    assert!(matches!(&context.messages[1].content[0].body,
+        Some(wire::provider_content_block::Body::Thinking(value))
+        if value.body == Some(wire::provider_text_content::Body::InlineUtf8("provider reasoning".into()))));
+    assert!(matches!(
+        &context.messages[1].content[1].body,
+        Some(wire::provider_content_block::Body::Text(_))
+    ));
+}
+
+#[test]
 fn result_context_preserves_pairing_cursor_and_canonical_bytes() {
     let initial = initial_context("inspect");
     let call = ProviderToolCall {
@@ -16,6 +41,8 @@ fn result_context_preserves_pairing_cursor_and_canonical_bytes() {
         capability_version: "1".into(),
         execution_class: ExecutionClass::NativeRead,
         mutates: false,
+        parallel_safe: false,
+        read_only: false,
         encoded_arguments: br#"{"path":"a.txt"}"#.to_vec(),
         arguments_sha256: Sha256::digest(br#"{"path":"a.txt"}"#).into(),
         provider_response_id: Some("response/1".into()),
@@ -60,6 +87,8 @@ fn outcome_unknown_is_returned_as_an_error_without_claiming_a_result() {
         capability_version: "1".into(),
         execution_class: ExecutionClass::NativeRead,
         mutates: false,
+        parallel_safe: false,
+        read_only: false,
         encoded_arguments: input.to_vec(),
         arguments_sha256: Sha256::digest(input).into(),
         provider_response_id: None,
@@ -150,6 +179,40 @@ fn host_tool_result_rejects_a_conflicting_transport_envelope() {
     ));
 }
 
+#[test]
+fn large_truncated_host_result_keeps_its_recovery_content_between_turns() {
+    let content = format!("{}\noutput_id={}", "z".repeat(131_000), "a".repeat(64));
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "content": content, "isError": false,
+        "transport": { "truncated": true, "originalBytes": 280_107 }
+    }))
+    .unwrap();
+    let outcome = CapabilityExecutionOutcome::Succeeded(CapabilityOutput {
+        schema_id: SCHEMA_ID.into(),
+        schema_version: SCHEMA_VERSION,
+        result_sha256: Sha256::digest(&bytes).into(),
+        bytes_emitted: bytes.len() as u64,
+        encoded_result: bytes,
+        bytes_read: 280_107,
+        truncated: true,
+        duration_ms: 25,
+    });
+    let initial = initial_context(&"catalog-sized-context".repeat(7_000));
+    let encoded =
+        compose_capability_result_context(&initial, &tool_call(), "", &outcome, 16 * 1024 * 1024)
+            .expect("large result composes without discarding the recovery id");
+    assert!(encoded.len() > 256 * 1024);
+    let result = decode_last_result(&encoded);
+    assert_eq!(result.original_bytes, Some(280_107));
+    assert!(result.truncated);
+    assert_eq!(
+        result.content,
+        Some(wire::provider_tool_result_content::Content::InlineUtf8(
+            content
+        ))
+    );
+}
+
 fn initial_context(text: &str) -> Vec<u8> {
     wire::ProviderTurnContext {
         messages: vec![wire::ProviderMessage {
@@ -176,7 +239,7 @@ fn decode_last_result(encoded: &[u8]) -> wire::ProviderToolResultContent {
 }
 
 fn tool_call() -> ProviderToolCall {
-    let input = br#"{}"#;
+    let input = b"{}";
     ProviderToolCall {
         operation_id: OperationId::new("provider/host").expect("operation"),
         tool_use_id: OperationId::new("tool/host").expect("tool"),
@@ -185,6 +248,8 @@ fn tool_call() -> ProviderToolCall {
         capability_version: "1".into(),
         execution_class: ExecutionClass::HostCapability,
         mutates: true,
+        parallel_safe: false,
+        read_only: false,
         encoded_arguments: input.to_vec(),
         arguments_sha256: Sha256::digest(input).into(),
         provider_response_id: None,

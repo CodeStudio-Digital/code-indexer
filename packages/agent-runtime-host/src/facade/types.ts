@@ -4,6 +4,8 @@ import type {
   AgentRunAttemptId,
   AgentRunId,
   AgentRunSpec,
+  CoderAttemptAdmissionV1,
+  CoderAttemptPreparationV1,
   ResolvedAgentRun,
   RuntimeEventEnvelopeV1,
   SessionCommand,
@@ -17,11 +19,11 @@ import type {
   RuntimeRouteRequest,
 } from '../router/types.js';
 
-export interface StartAgentCommandPayload {
-  spec: AgentRunSpec;
+export type StartAgentCommandPayload = ({ spec: AgentRunSpec; admittedPreparationRef?: never }
+  | { admittedPreparationRef: string; spec?: never }) & {
   surface: string;
   runtimePreference: RuntimePreference;
-}
+};
 
 export type StartAgentCommand =
   & Omit<SessionCommand<StartAgentCommandPayload>, 'kind'>
@@ -50,15 +52,20 @@ export interface InteractionResponse {
 
 export interface EventCursor {
   afterGlobalSeq: number;
+  /** Required when continuing a volatile stream whose sequence resets per run. */
+  streamId?: string;
 }
 
-export type CanonicalAgentEvent = RuntimeEventEnvelopeV1;
+export type CanonicalAgentEvent = RuntimeEventEnvelopeV1 & {
+  stream?: { id: string; durability: 'volatile'; sequenceScope: 'stream' };
+};
 
 export interface AgentRunSnapshot {
   run: AgentRun;
   activeAttempt?: AgentRunAttempt;
   runtimeGeneration?: AgentRuntimeGeneration;
   lastGlobalSeq: number;
+  stream?: { id: string; durability: 'volatile'; sequenceScope: 'stream' };
 }
 
 export interface PreparedAgentAttempt {
@@ -70,6 +77,20 @@ export interface PreparedAgentAttempt {
   expectedSpecSha256: Uint8Array;
   routing: RuntimeRouteRequest;
 }
+
+/** An admitted legacy worker has no native workspace/resource lease. Keep its
+ * real preparation distinct so it can never pass as a native wire spec. */
+export interface PreparedLegacyAgentAttempt {
+  run: ResolvedAgentRun;
+  attempt: AgentRunAttempt;
+  authority: AttemptAuthority;
+  preparation: CoderAttemptPreparationV1;
+  admission: CoderAttemptAdmissionV1;
+  expectedSpecSha256: Uint8Array;
+  routing: RuntimeRouteRequest;
+}
+
+export type ExecutableAgentAttempt = PreparedAgentAttempt | PreparedLegacyAgentAttempt;
 
 /**
  * Complete authority carried by every launch, cancel and interaction action.
@@ -94,7 +115,7 @@ export type AttemptStartFailurePhase =
   | 'launch';
 
 export interface AttemptStartFailure {
-  prepared: PreparedAgentAttempt;
+  prepared: ExecutableAgentAttempt;
   phase: AttemptStartFailurePhase;
   code: string;
   message: string;

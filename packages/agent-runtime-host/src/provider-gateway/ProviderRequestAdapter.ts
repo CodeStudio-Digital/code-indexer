@@ -4,7 +4,10 @@ import {
 } from '@mcp/agent-runtime-contracts';
 import type { ChatRequest, ToolSpec } from '@mcp/provider-sdk/adapter.js';
 import type { AgentMessage, ContentBlock } from '@mcp/provider-sdk/wire.js';
+import { applyPreparedUserContext } from '../native/PreparedUserContext.js';
+import { applyPreparedBoundaryContext } from '../native/PreparedBoundaryContext.js';
 import { ProviderGatewayError } from './ProviderGatewayError.js';
+import { RequestByteBudget } from './ProviderRequestBudget.js';
 import type {
   ProviderArtifactReaderPort,
   ProviderGatewayLimits,
@@ -52,6 +55,8 @@ export async function adaptProviderRequest(
   for (const message of start.messages) {
     messages.push(await adaptMessage(message, reader, limits, signal, budget));
   }
+  applyPreparedUserContext(start, messages, contentBlocks, limits.maxContentBlocks, bytes => budget.add(bytes));
+  applyPreparedBoundaryContext(start, messages, contentBlocks, limits.maxContentBlocks, bytes => budget.add(bytes));
   const tools = start.tools.map((tool) => adaptTool(tool, limits, budget));
   return {
     system,
@@ -82,7 +87,9 @@ async function adaptMessage(
   for (const block of message.content) {
     switch (block.body.case) {
       case 'text':
-        content.push({ type: 'text', text: await readText(
+      case 'thinking':
+        if (block.body.case === 'thinking' && role !== 'assistant') throw invalid('thinking requires an assistant message');
+        content.push({ type: block.body.case, text: await readText(
           block.body.value,
           reader,
           limits,
@@ -206,7 +213,7 @@ async function readAttachment(
   if (artifact.mediaType.startsWith('image/')) {
     return { type: 'image', mediaType: artifact.mediaType, base64: Buffer.from(bytes).toString('base64') };
   }
-  const name = artifact.artifactId;
+  const name = artifact.displayName || artifact.artifactId;
   if (isTextMediaType(artifact.mediaType)) {
     return { type: 'document', name, mediaType: artifact.mediaType, text: new TextDecoder().decode(bytes) };
   }
@@ -229,17 +236,6 @@ async function readArtifact(
 
 function optionalSafeNumber(value: bigint | undefined, name: string): number | undefined {
   return value === undefined ? undefined : safeNumber(value, name);
-}
-
-class RequestByteBudget {
-  #used = 0;
-  constructor(readonly maximum: number) {}
-  add(bytes: number): void {
-    this.#used += bytes;
-    if (!Number.isSafeInteger(this.#used) || this.#used > this.maximum) {
-      throw new ProviderGatewayError('provider_request_too_large', 'provider request exceeds byte budget');
-    }
-  }
 }
 
 function invalid(message: string, cause?: unknown): ProviderGatewayError {

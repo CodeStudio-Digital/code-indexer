@@ -3,7 +3,7 @@
  * executor + fake DB, no better-sqlite3, no chokidar watchers started
  * (autoWatch off), so this suite runs regardless of native ABI state.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -768,6 +768,33 @@ describe('ProjectIndexService', () => {
     expect(fileWatcher.resumeCalls).toContain(1); // suppression must not outlive it
     expect(exec.runs).toBe(0);
     await svc.dispose();
+  });
+
+  it('reconciles closed files in skipped projects without an open-document provider', async () => {
+    const exec = new FakeExecutor();
+    const watcher = new FakeFileWatcher() as FakeFileWatcher & { isSkipped(id: number): boolean };
+    watcher.isSkipped = () => true;
+    const svc = new ProjectIndexService(
+      fakeDb({ structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null }),
+      exec, watcher as never, () => ({ ...SETTINGS, autoWatch: true }), new FakeGitMetaWatcher() as never,
+    );
+    try {
+      svc.activate(1, 'view');
+      await vi.waitFor(() => expect(exec.runs).toBe(1));
+      await sleep(15);
+      expect(svc.getStatus(1)).toMatchObject({ watcherActive: false, watcherMode: 'polling' });
+      const poll = () => (svc as unknown as { pollSkippedProjects(): Promise<void> }).pollSkippedProjects();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 61_000);
+      await poll();
+      await vi.waitFor(() => expect(exec.runs).toBe(2));
+      await poll();
+      expect(exec.runs).toBe(2); // never enqueue overlapping scans
+      svc.deactivate(1, 'view');
+      vi.setSystemTime(Date.now() + 61_000);
+      await poll();
+      expect(exec.runs).toBe(2);
+    } finally { vi.useRealTimers(); await svc.dispose(); }
   });
 
   it('over-budget fallback polls open-file mtimes into markDirty (skipped projects only)', async () => {

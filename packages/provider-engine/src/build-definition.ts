@@ -6,7 +6,6 @@ import { buildBedrock } from './wires/bedrock.js';
 import { buildKimi } from './wires/kimi.js';
 import { buildCodex } from './wires/codex.js';
 import { buildTestConnection } from './wire-helpers/test-connection.js';
-import { buildImagesFactory } from './images/index.js';
 
 type WireBuilder = (spec: ProviderSpec) => Pick<
   ProviderDefinition,
@@ -49,9 +48,6 @@ export function buildProviderDefinition(spec: ProviderSpec): ProviderDefinition 
     auth: spec.auth,
     config: spec.config,
     ...built,
-    // Image generation is wire-derived like the parts above, but opt-in via
-    // `capabilities.supportsImageGen` (undefined for shapes without it).
-    createImages: buildImagesFactory(spec),
     // Stream resilience (swallowing Node 24's benign trailing "Premature close")
     // is applied centrally for EVERY coder provider — legacy and engine-built —
     // at `createCoderProvider` in @mcp/services. Kept out of here so there's a

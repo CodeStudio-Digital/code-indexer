@@ -201,6 +201,10 @@ impl OutboundHeaderAuthority {
     pub(in crate::frame) const fn is_poisoned(&self) -> bool {
         self.poisoned
     }
+
+    pub(in crate::frame) const fn committed_stream_seq(&self) -> u64 {
+        self.committed_stream_seq
+    }
 }
 
 fn frame_header(

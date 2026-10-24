@@ -42,6 +42,10 @@ pub fn run_inherited_windows() -> Result<(), SupervisorProcessError> {
         .receive(host_process_id, std::process::id())
         .map_err(SupervisorProcessError::Bootstrap)?;
     let (mut handoff, ready_transport) = received.into_parts();
+    let lifecycle_outbox = open_outbox(
+        handoff.lifecycle_outbox_directory(),
+        handoff.connection_id().as_str(),
+    )?;
 
     let trusted_runner =
         config::trusted_runner(&handoff).map_err(SupervisorProcessError::Configuration)?;
@@ -102,6 +106,9 @@ pub fn run_inherited_windows() -> Result<(), SupervisorProcessError> {
             peer_authority,
         )
         .map_err(SupervisorProcessError::Driver)?;
+        let core = if let Some(outbox) = lifecycle_outbox {
+            core.with_lifecycle_outbox(outbox).map_err(SupervisorProcessError::Driver)?
+        } else { core };
         let clock = SystemSupervisorLifecycleClock::new().map_err(SupervisorProcessError::Clock)?;
         let (_shutdown, service) =
             SupervisorAsyncService::new(actor, core, clock, TokioSupervisorLifecycleTimer);
@@ -120,4 +127,19 @@ pub fn run_inherited_windows() -> Result<(), SupervisorProcessError> {
             }
         }
     })
+}
+
+fn open_outbox(
+    directory: &str,
+    connection: &str,
+) -> Result<Option<crate::lifecycle_outbox::DurableLifecycleOutbox>, SupervisorProcessError> {
+    if directory.is_empty() {
+        return Ok(None);
+    }
+    crate::lifecycle_outbox::DurableLifecycleOutbox::open(
+        std::path::Path::new(directory),
+        connection,
+    )
+    .map(Some)
+    .map_err(SupervisorProcessError::LifecycleOutbox)
 }

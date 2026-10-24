@@ -21,6 +21,11 @@ pub(super) fn from_store(error: &SessionStoreError) -> wire::SessionStoreRespons
             "session_writer_active",
             true,
         ),
+        SessionStoreError::StorageLockBusy => (
+            wire::SessionStoreFailureCode::LockBusy,
+            "storage_root_lock_busy",
+            true,
+        ),
         SessionStoreError::DivergentReplay => (
             wire::SessionStoreFailureCode::DivergentReplay,
             "divergent_operation_replay",

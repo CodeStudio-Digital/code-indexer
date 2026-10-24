@@ -34,25 +34,31 @@ impl<G> OwnershipRegistry<G> {
                 OwnershipError::MissingObservedExit,
             ));
         };
-        match self.finish_reap_gated(backend, owned, timeout, || {
-            Ok::<i64, Infallible>(observed_at)
-        }) {
+        match self.finish_reap_gated(
+            backend,
+            owned,
+            timeout,
+            || Ok::<i64, Infallible>(observed_at),
+            |_, _| Ok(()),
+        ) {
             Ok(reaped) => Ok(reaped),
             Err(ReapAfterCleanupError::Operation(error)) => Err(error),
             Err(ReapAfterCleanupError::PostReapGate(never)) => match never {},
         }
     }
 
-    pub(super) fn finish_reap_gated<B, F, V>(
+    pub(super) fn finish_reap_gated<B, F, C, V>(
         &mut self,
         backend: &B,
         owned: Owned<Reaping<G>>,
         timeout: Duration,
         post_reap_gate: F,
+        commit_evidence: C,
     ) -> Result<ReapedAttempt, ReapAfterCleanupError<B::Error, V>>
     where
         B: ReapBackend<G>,
         F: FnOnce() -> Result<i64, V>,
+        C: FnOnce(&ReapedAttempt, i64) -> Result<(), V>,
     {
         let Owned {
             metadata,
@@ -117,6 +123,21 @@ impl<G> OwnershipRegistry<G> {
             exit_code: evidence.exit_code,
             observed_at_unix_ms: post_reap_at_unix_ms,
         });
+        let candidate = ReapedAttempt::new(
+            metadata.clone(),
+            process_id,
+            evidence.exit_code,
+            evidence.peak_job_memory_bytes,
+            report.clone(),
+            observed,
+        );
+        // The evidence owner must accept the physical result before admission
+        // is released. Failure quarantines this identity and retains capacity.
+        if let Err(error) = commit_evidence(&candidate, post_reap_at_unix_ms) {
+            drop(reservation);
+            self.restore(Entry::Quarantined(Quarantined { metadata }));
+            return Err(ReapAfterCleanupError::PostReapGate(error));
+        }
         self.release_after_reap(
             metadata,
             reservation,

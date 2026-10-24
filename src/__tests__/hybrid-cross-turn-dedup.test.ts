@@ -4,7 +4,7 @@ import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 
 class RepeatingProvider implements ChatProvider {
   readonly name = 'repeater';

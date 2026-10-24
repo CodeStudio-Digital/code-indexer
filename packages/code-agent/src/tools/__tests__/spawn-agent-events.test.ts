@@ -57,6 +57,18 @@ beforeEach(() => {
 });
 
 describe('spawn_agent single-agent live events', () => {
+  it.each([1, 2])('propagates uncertain effects from %s child slots and never recommends replacement work', async count => {
+    const result = { reason: 'error', effectOutcome: 'unknown', finalText: 'unconfirmed effect',
+      usage: { input_tokens: 1, output_tokens: 0 }, sandboxViolations: [], collected: { memos: [], snapshots: [], boardPosts: [] } };
+    runSingle.mockResolvedValue(result);
+    runParallel.mockResolvedValue({ results: Array.from({ length: count }, () => ({ ...result, label: 'child', toolCallCount: 1 })), totalUsage: result.usage });
+    const { ctx, tool } = setup();
+    const output = await tool.handler({ agents: Array.from({ length: count }, () => ({ task: 'Write once', profile: 'implement' })) }, ctx);
+    expect(output).toMatchObject({ isError: true, effectOutcome: 'unknown', error: { retryable: false } });
+    expect(output.error?.suggestedAction).toContain('Reconcile');
+    expect(output.content).not.toContain('resume_agent({');
+  });
+
   it('emits the complete report instead of a 500-character preview', async () => {
     const report = `# Findings\n\n${'Complete evidence. '.repeat(40)}`;
     runSingle.mockResolvedValue({

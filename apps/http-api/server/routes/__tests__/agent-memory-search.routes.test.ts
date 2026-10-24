@@ -28,8 +28,10 @@ describe('agent-memory semantic RPC route', () => {
     const payload = await response.json() as { results: Array<{ name: string }> };
 
     expect(response.status).toBe(200);
-    expect(search).toHaveBeenCalledWith('project', 7, 'focused tests', 3);
+    expect(search).toHaveBeenCalledWith('project', 7, 'focused tests', 3, undefined, expect.any(AbortSignal));
     expect(payload.results).toEqual([expect.objectContaining({ name: 'Build recipe' })]);
+    const bounded = await app.request('/api/projects/7/agent-memory/search?q=focused+tests&projection=ids');
+    expect(await bounded.json()).toEqual({ results: [{ id: 4, score: 0.03 }] });
   });
 
   it('does not invoke retrieval for an empty query', async () => {

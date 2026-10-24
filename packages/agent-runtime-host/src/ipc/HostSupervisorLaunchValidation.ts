@@ -50,13 +50,15 @@ export function validateSupervisorLaunch(
     validateLaunchOptions(options, policy);
     launch = clone(agentV1Supervisor.LaunchAttemptProcessSchema, candidate);
     validateLaunchPayload(launch, policy, observedAtUnixMs);
-    const responseTimeout = BigInt(options.responseTimeoutMs);
+    const responseTimeout = BigInt(options.launchResponseTimeoutMs ?? options.responseTimeoutMs);
     const requestedDeadline = observedAtUnixMs + responseTimeout;
+    const authorityDeadline = launch.authorityLeaseExpiresAtUnixMs < launch.hardDeadlineAtUnixMs
+      ? launch.authorityLeaseExpiresAtUnixMs : launch.hardDeadlineAtUnixMs;
     return {
       launch,
-      deadlineAtUnixMs: requestedDeadline < launch.hardDeadlineAtUnixMs
+      deadlineAtUnixMs: requestedDeadline < authorityDeadline
         ? requestedDeadline
-        : launch.hardDeadlineAtUnixMs,
+        : authorityDeadline,
       handoff: Object.freeze({
         protocolVersion: policy.protocolVersion,
         connectionId: policy.connectionId,
@@ -125,6 +127,9 @@ function validateLaunchOptions(
     !Number.isSafeInteger(options.responseTimeoutMs)
     || options.responseTimeoutMs <= 0
     || options.responseTimeoutMs > maximumWriteTimeout
+    || (options.launchResponseTimeoutMs !== undefined && (
+      !Number.isSafeInteger(options.launchResponseTimeoutMs)
+      || options.launchResponseTimeoutMs <= 0 || options.launchResponseTimeoutMs > 60_000))
     || !Number.isInteger(options.maximumReplayBytes)
     || options.maximumReplayBytes <= 0
     || options.maximumReplayBytes > 16 * MANAGEMENT_FRAME_MAX_BYTES

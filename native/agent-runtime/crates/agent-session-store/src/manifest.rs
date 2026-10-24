@@ -32,6 +32,26 @@ pub fn ensure_manifest(
     }
 }
 
+pub fn validate_manifest(
+    layout: &SessionBundleLayout,
+    session_id: &SessionId,
+) -> Result<(), SessionStoreError> {
+    let path = layout.manifest();
+    validate_regular_file(&path)?;
+    let expected = manifest_bytes(session_id);
+    if fs::metadata(&path)
+        .map_err(|e| SessionStoreError::io("inspect session manifest", e))?
+        .len()
+        != expected.len() as u64
+    {
+        return Err(SessionStoreError::DivergentManifest);
+    }
+    if fs::read(&path).map_err(|e| SessionStoreError::io("read session manifest", e))? != expected {
+        return Err(SessionStoreError::DivergentManifest);
+    }
+    Ok(())
+}
+
 fn manifest_bytes(session_id: &SessionId) -> Vec<u8> {
     format!(
         concat!(

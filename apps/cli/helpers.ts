@@ -8,10 +8,10 @@ export function getDB(): CodeIndexDB {
   return new CodeIndexDB(config.dbPath);
 }
 
-export async function promptStdin(question: string): Promise<string> {
+export async function promptStdin(question: string, signal?: AbortSignal): Promise<string> {
   const rl = createInterface({ input, output });
   try {
-    return await rl.question(question);
+    return await rl.question(question, { signal });
   } finally {
     rl.close();
   }

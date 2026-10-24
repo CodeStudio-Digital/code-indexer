@@ -1,11 +1,14 @@
 import { Hono } from 'hono';
 import v8 from 'node:v8';
+import { existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { createDeps } from './server/deps.js';
+import { createOwnedAgentReads } from './server/owned-agent-reads.js';
+import { createOwnedProjectIndex } from './server/owned-project-index.js';
 import { mountProjectsRoutes } from './server/routes/projects.js';
 import { mountBuilderCheckpointRoutes } from './server/routes/builder-checkpoints.js';
 import { mountProjectScaffoldRoute } from './server/routes/projects-scaffold.js';
@@ -90,22 +93,17 @@ import {
   setQaEndpointEnvStore,
 } from '@mcp/company/tools/qa/index.js';
 import { startQaWatchdog } from '@mcp/services/qa/watchdog.js';
-import { setDesignSystemStore, setDesignSystemSkillStore } from '@mcp/company/tools/design-system/index.js';
 import { setAppStudioDbClientStore, setAppStudioStore } from '@mcp/company/tools/app-studio/index.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { ResearchBrowserService } from '@mcp/services/research-browser/service.js';
 import { setGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/index.js';
-import { VerdaccioService, setVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 import {
   setSandboxServiceEnvStore,
   hasQaPlaywrightSkill,
 } from '@mcp/company/services/SandboxService.js';
 import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
-import { mountDesignSystemRoutes } from './server/routes/design-system/index.js';
 import { mountAppStudioRoutes } from './server/routes/app-studio/index.js';
-import { mountSpriteStudioRoutes } from './server/routes/sprite-studio/index.js';
-import { stopSpriteBusSweep } from './server/routes/sprite-studio/bus-registry.js';
 import { mountConfigRoutes } from './server/routes/config.js';
 import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
@@ -116,8 +114,6 @@ import { setGlobalDocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
 import { buildDocSearchBackend, buildDocsHintProvider } from './server/docs/search-backend.js';
 import { setGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import { createVisionDescriber } from './server/vision-describer-impl.js';
-import { setGlobalSpriteStudioHost } from '@mcp/code-agent/tools/sprite-studio/index.js';
-import { createSpriteStudioHostImpl } from './server/sprite-studio-host-impl.js';
 import {
   DocsResearchBridge,
   setGlobalDocsResearcher,
@@ -257,11 +253,19 @@ export function createApp() {
   // settings table is logged + ignored so the http-api still boots.
   try {
     const { dbPath } = loadConfig();
-    const settings = new AppSettingsStore(dbPath);
-    const { applied } = settings.applyToProcessEnv();
-    settings.close();
-    if (applied > 0) {
-      console.log(`[app-settings] applied ${applied} setting(s) from DB to process.env`);
+    // Opening AppSettingsStore creates a SQLite header. Leave a new database
+    // untouched so createDeps can recognize it and bootstrap its schema.
+    if (existsSync(dbPath) && statSync(dbPath).size > 0) {
+      const settings = new AppSettingsStore(dbPath);
+      let applied: number;
+      try {
+        ({ applied } = settings.applyToProcessEnv());
+      } finally {
+        settings.close();
+      }
+      if (applied > 0) {
+        console.log(`[app-settings] applied ${applied} setting(s) from DB to process.env`);
+      }
     }
   } catch (e) {
     console.warn(
@@ -278,18 +282,20 @@ export function createApp() {
       'In-process coder execution is not supported.',
     );
   }
-  // Resolve the mandatory pool during boot. A missing worker must fail closed
-  // before routes are mounted, never after a user has submitted a message.
-  getCoderWorkerPool();
-
   const deps = createDeps();
+  // createDeps migrates a fresh database before the worker pool reads its
+  // persisted runtime policy. Still fail before mounting any routes.
+  getCoderWorkerPool();
   // The command ledger is always the restart-safe idempotency authority.
-  // AgentRun recovery and the observational journal remain feature-gated, but
-  // the pool must retain the store so any context accepted while those flags
-  // are enabled can still be terminalized after a runtime flag change.
+  // Legacy AgentRun recovery remains feature-gated. Native ownership must be
+  // reconciled after a restart even when its development flag has changed.
   setCoderWorkerControlPlaneStore(deps.controlPlaneStore);
-  if (coderControlPlaneShadowEnabled()) {
-    void deps.controlPlaneStore.recoverInterruptedRuns().then(
+  {
+    // Native sessions retain recovery even when the development route or
+    // legacy shadow flags are disabled. Empty profiles do not load native code.
+    void deps.controlPlaneStore.recoverInterruptedRuns('process-restart', new Date().toISOString(), {
+      nativeOnly: !coderControlPlaneShadowEnabled(),
+    }).then(
       (recovered) => {
         console.log(
           `[control-plane] filesystem recovery completed recovered=${recovered}`,
@@ -374,13 +380,6 @@ export function createApp() {
   // longer a valid runtime or decision path.
   setQaTestRunStore(deps.qaTestRunStore);
   setQaEndpointEnvStore(deps.companySessionEnvStore);
-  // Design System is gated by DESIGN_SYSTEM_ENABLED (default ON). When off,
-  // the store/skill-store stay un-wired AND the /api/design-system/* routes
-  // are skipped below, so the whole module is dormant in one shot.
-  if (deps.config.features.designSystemEnabled) {
-    setDesignSystemStore(deps.designSystemStore);
-    setDesignSystemSkillStore(deps.skillStore);
-  }
   // App Studio store — wired for the app_* agent tools (same gate posture).
   if (deps.config.features.appStudioEnabled) {
     setAppStudioStore(deps.appStudioStore);
@@ -456,13 +455,6 @@ export function createApp() {
   // endpoint instead of spinning up a private browser per request.
   setChromeServiceForDocs(chromeService);
 
-  // Verdaccio singleton — embedded npm registry for the Design System
-  // Creator pipeline. Boot recovery is handled together with chrome's,
-  // both best-effort.
-  const verdaccioService = new VerdaccioService({
-    store: deps.verdaccioStore,
-  });
-  setVerdaccioService(verdaccioService);
 
   // Boot reconciliation for host-process runs. Anything left in a live
   // state by the previous server instance is impossible to re-attach
@@ -774,13 +766,6 @@ export function createApp() {
     console.warn(`[doc-indexer] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // Verdaccio auto-start: same idempotent pattern as chrome-service.
-  void verdaccioService.recoverOnBoot().catch((e) => {
-    console.warn(
-      `[verdaccio] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  });
-
   // Seed builtin skills (e.g. `qa-playwright`) into the DB. Idempotent —
   // re-runs on every boot, but only inserts/updates when the file's
   // `version` is newer than the existing row. User clones (different id
@@ -937,20 +922,6 @@ export function createApp() {
   mountEditorRoutes(app, deps);
   mountProjectGitRoutes(app, deps);
   mountConfigRoutes(app, deps);
-  // Design System Creator routes (sessions / versions / storybook proxy).
-  // Mounted after coder routes so the company sessions referenced by
-  // DS sessions are already wired. Gated by DESIGN_SYSTEM_ENABLED — when
-  // off the routes are unmounted and the menu entry is hidden.
-  if (deps.config.features.designSystemEnabled) {
-    mountDesignSystemRoutes(app, deps);
-  }
-  // Sprite Studio routes (projects / assets / generation jobs / SSE). Gated
-  // by SPRITE_STUDIO_ENABLED — when off the routes are unmounted and the
-  // /sprites menu entry is hidden.
-  if (deps.config.features.spriteStudioEnabled) {
-    mountSpriteStudioRoutes(app, deps);
-    registerShutdownTask('sprite-bus-sweep-stop', stopSpriteBusSweep);
-  }
   // App Studio routes (Code Studio para leigos — scaffold SSE + sessões +
   // pipeline). O gate APP_STUDIO_ENABLED vive dentro do mount.
   mountAppStudioRoutes(app, deps);
@@ -1011,24 +982,16 @@ export function createApp() {
   const visionDescriber = createVisionDescriber({ resolver: deps.pipelineProviderResolver });
   setGlobalVisionDescriber(visionDescriber);
 
-  // Sprite Studio host — worker coders reach it through the
-  // `spriteStudioHost` MessageBridge shim. Gated by the feature flag.
-  const spriteStudioHost = deps.config.features.spriteStudioEnabled
-    ? createSpriteStudioHostImpl(deps)
-    : null;
-  setGlobalSpriteStudioHost(spriteStudioHost);
-
   // Mem C across workers: workers reach the canonical services through the
   // memoryRetrieve/memoryExtract/memoryIsConfigured RPC handlers, preserving
   // per-turn injection and run-end distillation without main-loop execution.
   setCoderWorkerDocDeps({
+    agentReads: createOwnedAgentReads(app, deps),
+    documentExport: deps.exportService,
+    projectIndex: createOwnedProjectIndex(deps),
     docSearch: docSearchBackend,
     docsResearch: docsResearchBridge,
     vision: visionDescriber,
-    // Sprite Studio host — worker coders reach it via the `spriteStudioHost.*`
-    // RPC (shim in coder-worker.ts). Only the coder pool needs it: the sprite
-    // tools register outside company context (mirroring DS Studio).
-    spriteStudioHost,
     memoryRetriever: deps.memoryRetriever,
     memoryQuerySynthesizer: deps.memoryQuerySynthesizer,
     runEndMemory: deps.runEndMemory,
@@ -1153,23 +1116,26 @@ export function createApp() {
       detail: rows.map((r) => `${r.serverId}#${r.projectId}(${r.state})`).join(', ') || 'nenhum server ativo',
     };
   });
-  const resolveLspProjectId = (root: string, projectName: string): number | null =>
-    deps.db.getProjectByPath(root)?.id ?? deps.db.getProjectByName(projectName)?.id ?? null;
+  const resolveLspProjectId = (root: string): number => {
+    const id = deps.db.getProjectByPath(root)?.id;
+    if (id == null) throw new Error('Agent LSP project root is not registered');
+    return id;
+  };
   setGlobalAgentLspBackend({
-    async definition({ root, projectName, file, position }) {
-      const projectId = resolveLspProjectId(root, projectName);
-      if (projectId == null) return null;
-      return agentLsp.definition({ projectId, file, position }, createContext());
+    async definition({ root, file, position }, signal) {
+      signal?.throwIfAborted();
+      const result = await agentLsp.definition({ projectId: resolveLspProjectId(root), file, position }, { ...createContext(), ...(signal ? { signal } : {}) });
+      signal?.throwIfAborted(); return result;
     },
-    async references({ root, projectName, file, position }) {
-      const projectId = resolveLspProjectId(root, projectName);
-      if (projectId == null) return null;
-      return agentLsp.references({ projectId, file, position }, createContext());
+    async references({ root, file, position }, signal) {
+      signal?.throwIfAborted();
+      const result = await agentLsp.references({ projectId: resolveLspProjectId(root), file, position }, { ...createContext(), ...(signal ? { signal } : {}) });
+      signal?.throwIfAborted(); return result;
     },
-    async hover({ root, projectName, file, position }) {
-      const projectId = resolveLspProjectId(root, projectName);
-      if (projectId == null) return null;
-      return (await agentLsp.hover({ projectId, file, position }, createContext())) ?? null;
+    async hover({ root, file, position }, signal) {
+      signal?.throwIfAborted();
+      const result = await agentLsp.hover({ projectId: resolveLspProjectId(root), file, position }, { ...createContext(), ...(signal ? { signal } : {}) });
+      signal?.throwIfAborted(); return result ?? null;
     },
   });
 
@@ -1195,7 +1161,7 @@ export function createApp() {
       );
     });
 
-  return { app, db: deps.db, chromeService, verdaccioService, deps, mcpPool };
+  return { app, db: deps.db, chromeService, deps, mcpPool };
 }
 
 export async function startServer(port: number, host: string) {
@@ -1222,7 +1188,7 @@ export async function startServer(port: number, host: string) {
   } catch (err) {
     console.warn(`[bundled-plugins] seed failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const { app, chromeService, verdaccioService, deps, mcpPool } = createApp();
+  const { app, chromeService, deps, mcpPool } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);
   const coder = describeCoderWorkerStatus();
   const fmtCompany = (s: { enabled: boolean; reason: string | null }): string =>
@@ -1282,7 +1248,7 @@ export async function startServer(port: number, host: string) {
     // Stop accepting new requests before draining workers. Upgraded/SSE
     // connections are force-closed after their owning runtimes are disposed.
     try { server.close(); } catch { /* already closed */ }
-    await shutdownAppRuntime({ deps, mcpPool, chromeService, verdaccioService, reason });
+    await shutdownAppRuntime({ deps, mcpPool, chromeService, reason });
     try { (server as unknown as import('node:http').Server).closeAllConnections?.(); } catch { /* old Node */ }
   };
 }

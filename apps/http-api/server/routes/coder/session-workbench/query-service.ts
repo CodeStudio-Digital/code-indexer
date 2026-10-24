@@ -13,13 +13,13 @@ import {
   FsSessionWorkbenchProjection,
   FsSessionWorkbenchProjectionError,
   type FsSessionWorkbenchPageProjection,
-} from '@mcp/code-agent/sessions/fs-store/session-workbench-projection.js';
+} from '@mcp/session-storage/fs-store/session-workbench-projection.js';
 import {
   FsSessionWorkbenchBootstrapProjectionReader,
   type FsSessionWorkbenchBootstrapProjection,
-} from '@mcp/code-agent/sessions/fs-store/session-workbench-bootstrap-projection.js';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
-import type { TaskStatus } from '@mcp/code-agent/sessions/types.js';
+} from '@mcp/session-storage/fs-store/session-workbench-bootstrap-projection.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
+import type { TaskStatus } from '@mcp/session-storage/session-state-types.js';
 
 interface CursorPayload {
   version: 1;

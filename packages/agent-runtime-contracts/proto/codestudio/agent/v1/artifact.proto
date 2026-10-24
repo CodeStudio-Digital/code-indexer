@@ -29,4 +29,6 @@ message ArtifactRef {
   ArtifactPrivacyClass privacy_class = 7;
   string redaction_policy_version = 8;
   string owner_session_id = 9;
+  // Optional user-facing basename. Never a path or an access credential.
+  string display_name = 10;
 }

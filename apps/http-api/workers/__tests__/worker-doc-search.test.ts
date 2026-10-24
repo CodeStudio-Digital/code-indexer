@@ -107,6 +107,10 @@ describe('worker-local documentation search', () => {
 
     expect(coder).not.toContain("'docSearch',");
     expect(company).not.toContain("'docSearch',");
+    for (const source of [coder, company]) {
+      expect(source).toContain('buildDocNavigation(');
+      for (const rpc of ["'docReadChunk',", "'docReadSection',", "'docOutline',"]) expect(source).not.toContain(rpc);
+    }
   });
 
   it('drains every bounded telemetry batch on worker shutdown', async () => {

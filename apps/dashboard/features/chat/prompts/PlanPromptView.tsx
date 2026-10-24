@@ -14,6 +14,7 @@ import {
   setPromptDraft,
 } from '../../../hooks/agent-stream/prompt-resolution-store.js';
 import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
+import { usePromptSubmission } from '../../../hooks/agent-stream/usePromptSubmission.js';
 
 interface PlanPromptViewProps {
   plan: { id: string; plan: string; resolved?: PlanResolution; kind?: 'informational' | 'mutating' };
@@ -21,7 +22,7 @@ interface PlanPromptViewProps {
    * Three verdicts: Accept (`approved`), Revise (`approved:false` — keep
    * planning with feedback), Reject (`aborted:true` — end the planning run).
    */
-  onResponse: (verdict: { approved: boolean; aborted?: boolean; feedback?: string }) => Promise<void>;
+  onResponse: (verdict: { approved: boolean; aborted?: boolean; feedback?: string; interactionId?: string }) => Promise<void>;
   /** Bridges this card to its persisted twin, which carries a different id. */
   signature?: string;
   sessionId?: string;
@@ -32,6 +33,7 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
   const [feedback, setFeedback] = useState(() => getPromptDraft<string>(plan.id) ?? '');
   const storedResolution = usePromptResolution<PlanResolution>(plan.id, signature, sessionId);
   const resolved = plan.resolved ?? storedResolution;
+  const submission = usePromptSubmission();
   const [expanded, setExpanded] = useState(() => !plan.resolved);
 
   useEffect(() => {
@@ -44,16 +46,16 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
       setTimeout(() => setCopied(false), 1500);
     }
   };
-  const respond = async (
+  const respond = (
     resolution: Exclude<PlanResolution, 'validation_error'>,
     verdict: { approved: boolean; aborted?: boolean; feedback?: string },
-  ) => {
+  ) => submission.submit(async () => {
     // The restart-resume path keeps this promise open while the new agent run
     // streams. Reflect the accepted click immediately; otherwise the old card
     // keeps looking pending (and remains clickable) until that run finishes.
     markPromptResolved({ id: plan.id, signature, sessionId, resolution });
     try {
-      await onResponse(verdict);
+      await onResponse({ ...verdict, interactionId: plan.id });
       setExpanded(false);
     } catch (error) {
       // A transport failure means the verdict was not acknowledged. Restore
@@ -61,7 +63,7 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
       clearPromptResolution(plan.id, signature, sessionId);
       throw error;
     }
-  };
+  });
   return (
     <div className="my-3 overflow-hidden rounded-xl border border-border/70 bg-card/45">
       <div className="flex items-center gap-2 px-3 py-2.5">
@@ -126,6 +128,7 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
           {!resolved ? (
             <>
               <Textarea
+                disabled={submission.submitting}
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
                 placeholder={t('chat:plan.feedbackPlaceholder')}
@@ -136,6 +139,7 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
                 <Button
                   size="sm"
                   variant="success"
+                  disabled={submission.submitting}
                   onClick={async () => {
                     await respond('approved', { approved: true, feedback });
                   }}
@@ -146,6 +150,7 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={submission.submitting}
                   onClick={async () => {
                     await respond('revision_requested', { approved: false, feedback });
                   }}
@@ -156,6 +161,7 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
                 <Button
                   size="sm"
                   variant="destructive"
+                  disabled={submission.submitting}
                   onClick={async () => {
                     await respond('rejected', { approved: false, aborted: true, feedback });
                   }}
@@ -163,6 +169,7 @@ export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanP
                   <X className="h-3.5 w-3.5" /> {t('chat:plan.reject')}
                 </Button>
               </div>
+              {submission.error && <p role="alert" className="mt-2 text-xs text-destructive">{submission.error}</p>}
             </>
           ) : (
             <div

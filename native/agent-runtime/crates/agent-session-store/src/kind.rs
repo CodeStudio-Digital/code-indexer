@@ -13,6 +13,7 @@ pub enum SessionRecordKind {
     Memory,
     Subagent,
     Archive,
+    Attachment,
 }
 
 impl SessionRecordKind {
@@ -29,6 +30,7 @@ impl SessionRecordKind {
             Self::Memory => "memory",
             Self::Subagent => "subagent",
             Self::Archive => "archive",
+            Self::Attachment => "attachment",
         }
     }
 
@@ -43,6 +45,7 @@ impl SessionRecordKind {
             Self::Input => "inputs",
             Self::Memory => "memory",
             Self::Subagent => "subagents",
+            Self::Attachment => "attachments",
         }
     }
 
@@ -59,6 +62,7 @@ impl SessionRecordKind {
             "memory" => Ok(Self::Memory),
             "subagent" => Ok(Self::Subagent),
             "archive" => Ok(Self::Archive),
+            "attachment" => Ok(Self::Attachment),
             _ => Err(SessionStoreError::CorruptJournal),
         }
     }

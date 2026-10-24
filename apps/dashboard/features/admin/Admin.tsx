@@ -16,7 +16,6 @@ import {
   Globe,
   KeyRound,
   Network,
-  Package,
   Plug,
   Plus,
   Settings2,
@@ -63,7 +62,6 @@ import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
 import { ChromeServicePanel } from './ChromeServicePanel.js';
-import { VerdaccioPanel } from './VerdaccioPanel.js';
 import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
 import PerfMonitorPanel from './perf/PerfMonitorPanel.js';
 // Pipeline telemetry moved to `/telemetry`; the Pipelines configuration
@@ -190,8 +188,6 @@ export default function Admin() {
       hint: 'LSP por linguagem (PHP, Python, …) — instalar/gerenciar' },
     { id: 'chrome-service',    label: 'Chrome Service',           icon: AppWindow,     group: 'services',
       hint: 'Browser headless pra docs / web tools' },
-    { id: 'verdaccio',         label: 'Verdaccio',                icon: Package,       group: 'services',
-      hint: 'Registry npm embarcado pra Design System' },
     // Sistema
     { id: 'app-settings',      label: 'Configurações',            icon: Settings2,     group: 'system',
       hint: 'Env vars persistidas: limites, flags, tuning' },
@@ -382,7 +378,6 @@ export default function Admin() {
           {section === 'ai-geral'          && <GeneralAiPanel />}
           {section === 'lsp-servers'       && <LspServersPanel />}
           {section === 'chrome-service'    && <ChromeServicePanel />}
-          {section === 'verdaccio'         && <VerdaccioPanel />}
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
           {section === 'perf'              && <PerfMonitorPanel />}
           {section === 'auth'              && <AuthPanel />}

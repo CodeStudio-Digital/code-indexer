@@ -12,10 +12,11 @@ import {
   setPromptDraft,
 } from '../../../hooks/agent-stream/prompt-resolution-store.js';
 import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
+import { usePromptSubmission } from '../../../hooks/agent-stream/usePromptSubmission.js';
 
 interface SpecPromptViewProps {
   spec: SpecPrompt;
-  onResponse: (approved: boolean, spec_path: string, requested_changes?: string) => Promise<void>;
+  onResponse: (approved: boolean, spec_path: string, requested_changes?: string, interactionId?: string) => Promise<void>;
   /** Bridges this card to its persisted twin, which carries a different id. */
   signature?: string;
   sessionId?: string;
@@ -31,6 +32,7 @@ export function SpecPromptView({ spec, onResponse, signature, sessionId }: SpecP
   const [requested, setRequested] = useState(() => getPromptDraft<string>(spec.id) ?? '');
   const storedResolution = usePromptResolution<string>(spec.id, signature, sessionId);
   const resolved = spec.resolved ?? storedResolution;
+  const submission = usePromptSubmission();
 
   useEffect(() => {
     setPromptDraft(spec.id, requested);
@@ -61,6 +63,7 @@ export function SpecPromptView({ spec, onResponse, signature, sessionId }: SpecP
       {!resolved ? (
         <>
           <Textarea
+            disabled={submission.submitting}
             value={requested}
             onChange={(e) => setRequested(e.target.value)}
             placeholder={t('chat:spec.requestedChangesPlaceholder', {
@@ -69,24 +72,27 @@ export function SpecPromptView({ spec, onResponse, signature, sessionId }: SpecP
             rows={2}
             className="mb-2 text-xs"
           />
+          {submission.error && <p role="alert" className="mb-2 text-xs text-destructive">{submission.error}</p>}
           <div className="flex gap-2">
             <Button
               size="sm"
               variant="success"
-              onClick={async () => {
-                await onResponse(true, spec.spec_path, requested || undefined);
+              disabled={submission.submitting}
+              onClick={() => submission.submit(async () => {
+                await onResponse(true, spec.spec_path, requested || undefined, spec.id);
                 markPromptResolved({ id: spec.id, signature, sessionId, resolution: 'approved' });
-              }}
+              })}
             >
               <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
             </Button>
             <Button
               size="sm"
               variant="destructive"
-              onClick={async () => {
-                await onResponse(false, spec.spec_path, requested || undefined);
+              disabled={submission.submitting}
+              onClick={() => submission.submit(async () => {
+                await onResponse(false, spec.spec_path, requested || undefined, spec.id);
                 markPromptResolved({ id: spec.id, signature, sessionId, resolution: 'rejected' });
-              }}
+              })}
             >
               <X className="h-3.5 w-3.5" />{' '}
               {t('chat:spec.requestChanges', { defaultValue: 'Request changes' })}

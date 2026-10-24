@@ -1,3 +1,4 @@
+import { assertProviderOutboundResponse } from './AttemptProviderResponseValidation.js';
 import type { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import type { PendingSnapshot } from './AttemptFrameTransaction.js';
 import {
@@ -11,7 +12,6 @@ import {
   inboundError,
   outboundError,
   sameDigest,
-  timestampAfterLocalPeerStart,
   timestampWithin,
   timestampWithinLocalPeer,
 } from './AttemptCorrelationPrimitives.js';
@@ -73,6 +73,7 @@ export function assertOutboundEvent(
     case 'providerToolCall':
     case 'providerUsage':
     case 'providerTerminal':
+    case 'capabilityReadBatchResult':
       return;
     default:
       throw outboundError('only Host provider stream events may use event disposition');
@@ -119,27 +120,7 @@ export function assertOutboundResponse(
     }
     return;
   }
-  if (
-    inbound.payloadCase === 'providerStart'
-    && payload.body.case === 'providerAccepted'
-  ) {
-    if (payload.body.value.operationId !== inbound.providerOperationId) {
-      throw outboundError('ProviderAccepted operation contradicts its ProviderStart');
-    }
-    if (!sameDigest(
-      payload.body.value.requestPayloadSha256,
-      inbound.payloadDigest,
-    )) throw outboundError('ProviderAccepted digest contradicts its ProviderStart');
-    if (!timestampAfterLocalPeerStart(
-      payload.body.value.acceptedAtUnixMs,
-      inbound.sentAtUnixMs,
-      responseSentAtUnixMs,
-    )) throw outboundError(
-      `ProviderAccepted timestamp ${payload.body.value.acceptedAtUnixMs}`
-        + ` is outside ${inbound.sentAtUnixMs}..${responseSentAtUnixMs}`,
-    );
-    return;
-  }
+  if (assertProviderOutboundResponse(payload, inbound, responseSentAtUnixMs)) return;
   if (
     inbound.payloadCase === 'engineEventProposal'
     && payload.body.case === 'engineEventCommitted'
@@ -179,9 +160,13 @@ export function assertOutboundResponse(
     ) throw outboundError('CapabilityExecutionResult contradicts its execute request');
     return;
   }
-  throw outboundError(
-    `payload ${payload.body.case ?? 'missing'} cannot respond to ${inbound.payloadCase ?? 'missing'}`,
-  );
+  if (inbound.payloadCase === 'capabilityReadBatchExecute' && payload.body.case === 'capabilityReadBatchAccepted') {
+    if (!inbound.capabilityBatchId || payload.body.value.batchId !== inbound.capabilityBatchId) {
+      throw outboundError('CapabilityReadBatchAccepted contradicts its execute request');
+    }
+    return;
+  }
+  throw outboundError(`payload ${payload.body.case ?? 'missing'} cannot respond to ${inbound.payloadCase ?? 'missing'}`);
 }
 
 export function assertInboundCorrelation(
@@ -191,7 +176,7 @@ export function assertInboundCorrelation(
   request: OutstandingRequest | undefined,
 ): void {
   const body = payload.body;
-  if (body.case === 'heartbeat' || body.case === 'terminalProposal') {
+  if (body.case === 'heartbeat' || body.case === 'terminalProposal' || body.case === 'providerEventConsumed') {
     if (replyToMessageId !== undefined) {
       throw inboundError(`${body.case} must not carry reply_to`);
     }

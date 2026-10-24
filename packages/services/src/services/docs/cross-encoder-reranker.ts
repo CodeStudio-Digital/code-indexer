@@ -34,6 +34,7 @@ export class CrossEncoderReranker implements DocReranker {
     candidates: T[],
     opts: RerankOpts = {},
   ): Promise<RerankResult<T>> {
+    opts.signal?.throwIfAborted();
     const started = Date.now();
     // Trivial input → don't claim a rerank happened, so the search layer marks
     // scores uncalibrated instead of trusting them.
@@ -55,8 +56,11 @@ export class CrossEncoderReranker implements DocReranker {
       // is the same degraded condition as an inference failure.
       serviceName = this.service.name;
       if (serviceName === 'null') return degraded(candidates, started);
-      ranked = await this.service.rerank(query, docs, candidates.length);
+      ranked = await (opts.signal ? this.service.rerank(query, docs, candidates.length, { signal: opts.signal })
+        : this.service.rerank(query, docs, candidates.length));
+      opts.signal?.throwIfAborted();
     } catch {
+      opts.signal?.throwIfAborted();
       return degraded(candidates, started);
     }
 

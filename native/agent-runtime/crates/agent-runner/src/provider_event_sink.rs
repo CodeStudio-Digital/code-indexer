@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 
 use crate::provider_data::{ProviderDataClient, ProviderDataClock, ProviderDataTiming};
 
+mod content;
 mod error;
 mod mapping;
 
@@ -121,6 +122,13 @@ where
     type Error = ProviderEventSinkError;
 
     async fn append(&mut self, event: EngineEvent<'_>) -> Result<(), Self::Error> {
+        if let Some(content) = content::event_content(&event) {
+            let transcript = content.kind == wire::EngineContentKindV1::Transcript;
+            self.commit_content(content).await?;
+            if transcript {
+                return Ok(());
+            }
+        }
         self.commit(event_body(event)?).await
     }
 

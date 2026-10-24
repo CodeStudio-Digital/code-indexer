@@ -6,7 +6,7 @@
  */
 import type { Command } from 'commander';
 import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { asSessionId, isUuid } from '@mcp/session-storage';
 import {

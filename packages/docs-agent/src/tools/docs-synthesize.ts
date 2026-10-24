@@ -11,8 +11,9 @@
  * synthesized markdown as its content; the agent can preview/edit it
  * before emitting docs_finish.
  */
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { DocStore, DocChunk } from '@mcp/store/doc-store.js';
 import type {
   PipelineProviderResolver,
@@ -67,7 +68,8 @@ export function makeDocsSynthesizeTool(deps: DocsSynthesizeToolDeps): CoderTool 
     mutates: false,
     parallelSafe: false,
     riskLevel: 'read',
-    handler: async (args): Promise<ToolResult> => {
+    handler: async (args, ctx): Promise<ToolResult> => {
+      ctx.signal?.throwIfAborted();
       deps.onCall?.();
       const query = String(args.query ?? '').trim();
       if (!query) return err('query cannot be empty');
@@ -106,6 +108,7 @@ export function makeDocsSynthesizeTool(deps: DocsSynthesizeToolDeps): CoderTool 
         'classifier',
         deps.resolveContext ?? {},
       );
+      ctx.signal?.throwIfAborted();
       if (!binding) {
         return err(
           'docs_synthesize is not configured: no provider binding for docs_research/classifier. ' +
@@ -121,8 +124,10 @@ export function makeDocsSynthesizeTool(deps: DocsSynthesizeToolDeps): CoderTool 
         response = await chat(binding, [
           { role: 'system', content: system },
           { role: 'user', content: user },
-        ]);
+        ], { signal: ctx.signal });
+        ctx.signal?.throwIfAborted();
       } catch (e) {
+        ctx.signal?.throwIfAborted();
         return err(`docs_synthesize LLM call failed: ${e instanceof Error ? e.message : String(e)}`);
       }
 

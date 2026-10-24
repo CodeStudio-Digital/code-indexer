@@ -22,10 +22,12 @@
  */
 import type { ResolvedBinding } from '../pipelines/index.js';
 import { bindingProblem } from './binding-chat.js';
-import { withChatRetry, type ChatRetryOptions } from './chat-retry.js';
+import { abortedChatResult, withChatRetry, type ChatRetryOptions } from './chat-retry.js';
 import type { ChatCallResult } from './llm-chat.js';
 
 export interface FailoverOptions {
+  /** Caller cancellation is terminal for the entire chain, including retries. */
+  signal?: AbortSignal;
   /** Per-binding retry policy (passed straight to `withChatRetry`). */
   retry?: ChatRetryOptions;
   /**
@@ -77,6 +79,11 @@ export async function callChatWithFailover(
   runOne: (binding: ResolvedBinding) => Promise<ChatCallResult>,
   opts: FailoverOptions = {},
 ): Promise<FailoverResult> {
+  const signal = opts.signal && opts.retry?.signal && opts.signal !== opts.retry.signal
+    ? AbortSignal.any([opts.signal, opts.retry.signal]) : opts.signal ?? opts.retry?.signal;
+  if (signal?.aborted) {
+    return { result: abortedChatResult(), binding: null, attemptIndex: -1, failedOver: false, providerCalls: 0 };
+  }
   if (chain.length === 0) {
     return {
       result: { content: '', errorBody: '[no_binding] empty failover chain', latencyMs: 0 },
@@ -93,8 +100,11 @@ export async function callChatWithFailover(
   let lastIndex = 0;
   let providerCalls = 0;
   const invalidResultRetries = Math.max(0, Math.floor(opts.invalidResultRetries ?? 0));
+  const cancelled = (): FailoverResult => ({ result: abortedChatResult(last), binding: lastBinding,
+    attemptIndex: lastIndex, failedOver: lastIndex > 0, providerCalls });
 
   for (let i = 0; i < chain.length; i++) {
+    if (signal?.aborted) return cancelled();
     const binding = chain[i];
     lastBinding = binding;
     lastIndex = i;
@@ -111,17 +121,25 @@ export async function callChatWithFailover(
     }
 
     for (let invalidAttempt = 0; ; invalidAttempt++) {
+      if (signal?.aborted) return cancelled();
       let result: ChatCallResult;
       try {
         result = await withChatRetry(() => {
           providerCalls += 1;
           return runOne(binding);
-        }, opts.retry);
+        }, { ...opts.retry, signal });
       } catch (e) {
         // A chat fn that throws (network layer, adapter bug) is a transport
         // failure too — turn it into a result so we fail over instead of
         // exploding, honoring the "never throws" contract.
-        result = { content: '', errorBody: e instanceof Error ? e.message : String(e), latencyMs: 0 };
+        result = e instanceof Error && e.name === 'AbortError' ? abortedChatResult()
+          : { content: '', errorBody: e instanceof Error ? e.message : String(e), latencyMs: 0 };
+      }
+
+      last = result;
+      if (signal?.aborted) return cancelled();
+      if (result.finishReason === 'aborted') {
+        return { result: abortedChatResult(result), binding, attemptIndex: i, failedOver: i > 0, providerCalls };
       }
 
       const nonEmpty = (result.content ?? '').trim().length > 0;
@@ -132,6 +150,7 @@ export async function callChatWithFailover(
         } catch (e) {
           validationError = e instanceof Error ? e.message : String(e);
         }
+        if (signal?.aborted) return cancelled();
         if (validationError) {
           result = { ...result, errorBody: validationError };
           last = result;

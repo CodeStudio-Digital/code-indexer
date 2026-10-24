@@ -8,16 +8,16 @@
  *    we include the master and every subordinate run. Roles are read from
  *    the orchestrator so abort/status/spawn happen via the existing master
  *    tools — `list_agents` is a strict read-only inventory.
- *  - Ephemeral subagents (`spawn_subagent` / `spawn_agents`): NOT shown.
- *    They run inline inside the parent's tool call boundary, so the parent
- *    can never observe them between turns. There is no point listing them.
+ *  - Native children: current-tree admissions, including completed children;
+ *    siblings can observe them while read-only branches execute concurrently.
+ *    Legacy ephemeral subagents remain outside the company inventory.
  *
- * Path format: `/root[/<role>-<agentRunId>]`. Mirrors codex's notation but
- * scoped to one company session at a time.
+ * Native paths preserve ancestry under /root/agent-<id>; company paths use
+ * /root/master/<role>-<id>. Neither snapshot grants execution authority.
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';
-import { ok } from '@mcp/code-agent/core/tool.js';
+import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
@@ -35,7 +35,7 @@ interface AgentLine {
 }
 
 const LIST_AGENTS_DESC =
-  'List every agent reachable from this runner: the caller itself plus, when in a company session, the master and all subordinates. ' +
+  'List every agent reachable from this runner: the current native execution tree, or the caller and its company peers. ' +
   'Read-only inventory — for actions, use the master tools (spawn_subordinate_agent, forward_to_agent, abort_subordinate_agent, ...).\n' +
   "USE: at the start of a master turn to see who is alive and what status they hold.\n" +
   "USE: from a subordinate that wants to know which peers are running before deciding to wait or proceed.\n" +
@@ -108,7 +108,10 @@ export const listAgents: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const all = buildLines(ctx);
+    ctx.signal?.throwIfAborted();
+    const native = ctx.runtimeGeneration === 'rust_v1';
+    if (native && !ctx.ports?.agentTree?.list) return err('Native agent inventory is unavailable for this owned tree.');
+    const all: AgentLine[] = native ? await ctx.ports!.agentTree!.list!({ signal: ctx.signal }) : buildLines(ctx);
     const filter = (args.filter as string | undefined) ?? 'all';
     const asJson = args.format === 'json';
     let lines = all;
@@ -123,7 +126,8 @@ export const listAgents: CoderTool = {
       // 'all' falls through
     }
     if (asJson) {
-      return okStructured({ total: all.length, shown: lines.length, agents: lines });
+      const data = { total: all.length, shown: lines.length, agents: lines };
+      return { ...okStructured(data), content: JSON.stringify(data), contentFormat: 'json' };
     }
     if (lines.length === 0) return ok('(no agents match filter)');
     const rendered = lines.map((l) => {

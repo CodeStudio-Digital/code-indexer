@@ -14,5 +14,8 @@
     "./types": "./src/types.ts",
     "./builder/checkpoints.js": null,
     "./*": "./src/*"
+  },
+  "dependencies": {
+    "@mcp/provider-sdk": "workspace:*"
   }
 }

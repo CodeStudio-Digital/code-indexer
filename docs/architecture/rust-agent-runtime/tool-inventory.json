@@ -1,0 +1,3413 @@
+{
+  "schemaVersion": 2,
+  "checkedAt": "2026-10-23T19:13:57.720Z",
+  "scope": "Static first-party tool definitions, including conditional roles and compatibility aliases. MCP names include the coder bridge prefix. Native enablement is not production certification.",
+  "nativeCatalog": "apps/http-api/workers/native-coder-catalog.ts",
+  "nativeNames": [
+    "read_file",
+    "list_directory",
+    "glob",
+    "view_image",
+    "get_tool_output",
+    "code_exec",
+    "spawn_agent",
+    "resume_agent",
+    "request_review",
+    "read_agent_transcript",
+    "workflow",
+    "execute_tasks",
+    "list_agents",
+    "wait_agents",
+    "docs_deep_research",
+    "collect_agents",
+    "followup_task",
+    "send_input",
+    "send_message",
+    "enter_worktree",
+    "exit_worktree",
+    "self_review",
+    "create_goal",
+    "get_goal",
+    "update_goal",
+    "todo_write",
+    "update_todo",
+    "task_list",
+    "submit_tasks",
+    "list_tasks",
+    "update_task",
+    "cancel_tasks",
+    "delete_tasks",
+    "archive_task_list",
+    "task_complete",
+    "capability_catalog",
+    "find_tools",
+    "expand_toolset",
+    "read_plan",
+    "save_note",
+    "list_notes",
+    "recall_investigations",
+    "recall_conversation",
+    "remember",
+    "forget_memory",
+    "create_skill",
+    "http_request",
+    "web_fetch",
+    "web_search",
+    "get_diagnostics",
+    "lsp_definition",
+    "lsp_references",
+    "lsp_hover",
+    "lsp_diagnostics",
+    "mcp_list_resources",
+    "mcp_read_resource",
+    "api_import_openapi",
+    "api_list_requests",
+    "api_get_request",
+    "api_run_request",
+    "api_update_request",
+    "api_mark_verified",
+    "api_run_collection",
+    "mcp__search",
+    "mcp__grep_code",
+    "mcp__export_docs",
+    "mcp__save_memory",
+    "mcp__index_project",
+    "mcp__list_agents",
+    "mcp__list_agent_runs",
+    "mcp__get_agent_run",
+    "mcp__get_agent_result",
+    "mcp__get_recently_modified_files",
+    "mcp__get_dependencies",
+    "mcp__get_dependents",
+    "mcp__get_project_overview",
+    "mcp__get_project_pulse",
+    "mcp__rag_search_docs",
+    "mcp__rag_read_doc",
+    "mcp__rag_doc_outline",
+    "mcp__get_costs",
+    "mcp__list_models",
+    "mcp__list_directory",
+    "mcp__read_file",
+    "mcp__get_file_skeleton",
+    "mcp__get_hierarchy",
+    "mcp__find_implementations",
+    "mcp__get_symbol_body",
+    "mcp__find_references",
+    "mcp__semantic_neighbors",
+    "mcp__trace_usage",
+    "mcp__prepare_edit",
+    "mcp__get_repo_map",
+    "mcp__search_memory",
+    "list_skill_namespaces",
+    "get_skills_list",
+    "get_skill_content",
+    "invoke_skill",
+    "recall_memory",
+    "rag_search_docs",
+    "rag_read_doc",
+    "rag_doc_outline",
+    "ask_user",
+    "decision_gate",
+    "submit_plan",
+    "submit_spec",
+    "write_file",
+    "create_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+    "manage_path",
+    "diagram_create",
+    "diagram_update",
+    "diagram_read",
+    "diagram_list",
+    "diagram_export",
+    "run_command",
+    "exec_command",
+    "write_stdin",
+    "list_sessions",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_branch",
+    "git_add",
+    "git_commit",
+    "preview_open",
+    "preview_close",
+    "preview_navigate",
+    "preview_viewport",
+    "preview_console",
+    "preview_network",
+    "preview_eval",
+    "preview_screenshot",
+    "preview_inspect_css",
+    "preview_performance",
+    "preview_memory",
+    "preview_storage",
+    "preview_snapshot",
+    "preview_click",
+    "preview_fill",
+    "preview_type",
+    "preview_press",
+    "preview_wait_for",
+    "preview_scroll",
+    "preview_hover",
+    "preview_double_click",
+    "preview_right_click",
+    "browser_open",
+    "browser_snapshot",
+    "browser_extract",
+    "browser_click",
+    "browser_fill",
+    "browser_press",
+    "browser_screenshot",
+    "browser_close",
+    "db_list",
+    "db_schema",
+    "db_query",
+    "db_command"
+  ],
+  "nativeChildNames": [
+    "record_memo"
+  ],
+  "groups": {
+    "coder": {
+      "enabled": [
+        "api_get_request",
+        "api_import_openapi",
+        "api_list_requests",
+        "api_mark_verified",
+        "api_run_collection",
+        "api_run_request",
+        "api_update_request",
+        "apply_patch",
+        "archive_task_list",
+        "ask_user",
+        "browser_click",
+        "browser_close",
+        "browser_extract",
+        "browser_fill",
+        "browser_open",
+        "browser_press",
+        "browser_screenshot",
+        "browser_snapshot",
+        "cancel_tasks",
+        "capability_catalog",
+        "code_exec",
+        "collect_agents",
+        "create_file",
+        "create_goal",
+        "create_skill",
+        "db_command",
+        "db_list",
+        "db_query",
+        "db_schema",
+        "decision_gate",
+        "delete_tasks",
+        "diagram_create",
+        "diagram_export",
+        "diagram_list",
+        "diagram_read",
+        "diagram_update",
+        "docs_deep_research",
+        "edit_file",
+        "enter_worktree",
+        "exec_command",
+        "execute_tasks",
+        "exit_worktree",
+        "expand_toolset",
+        "find_tools",
+        "followup_task",
+        "forget_memory",
+        "get_diagnostics",
+        "get_goal",
+        "get_tool_output",
+        "git_add",
+        "git_branch",
+        "git_commit",
+        "git_diff",
+        "git_log",
+        "git_status",
+        "glob",
+        "http_request",
+        "list_agents",
+        "list_directory",
+        "list_notes",
+        "list_sessions",
+        "list_tasks",
+        "lsp_definition",
+        "lsp_diagnostics",
+        "lsp_hover",
+        "lsp_references",
+        "manage_path",
+        "mcp_list_resources",
+        "mcp_read_resource",
+        "multi_edit",
+        "preview_click",
+        "preview_close",
+        "preview_console",
+        "preview_double_click",
+        "preview_eval",
+        "preview_fill",
+        "preview_hover",
+        "preview_inspect_css",
+        "preview_memory",
+        "preview_navigate",
+        "preview_network",
+        "preview_open",
+        "preview_performance",
+        "preview_press",
+        "preview_right_click",
+        "preview_screenshot",
+        "preview_scroll",
+        "preview_snapshot",
+        "preview_storage",
+        "preview_type",
+        "preview_viewport",
+        "preview_wait_for",
+        "rag_doc_outline",
+        "rag_read_doc",
+        "rag_search_docs",
+        "read_agent_transcript",
+        "read_file",
+        "read_plan",
+        "recall_conversation",
+        "recall_investigations",
+        "recall_memory",
+        "remember",
+        "request_review",
+        "resume_agent",
+        "run_command",
+        "save_note",
+        "self_review",
+        "send_input",
+        "send_message",
+        "spawn_agent",
+        "submit_plan",
+        "submit_spec",
+        "submit_tasks",
+        "task_complete",
+        "task_list",
+        "todo_write",
+        "update_goal",
+        "update_task",
+        "update_todo",
+        "view_image",
+        "wait_agents",
+        "web_fetch",
+        "web_search",
+        "workflow",
+        "write_file",
+        "write_stdin"
+      ],
+      "contextual": [
+        "record_memo"
+      ],
+      "pending": []
+    },
+    "company": {
+      "enabled": [],
+      "contextual": [],
+      "pending": [
+        "abort_subordinate_agent",
+        "answer_subordinate_question",
+        "app_dispatch_ready_work",
+        "app_get_db_state",
+        "app_get_plan",
+        "app_get_state",
+        "app_record_work_evidence",
+        "app_request_decision",
+        "app_request_plan_approval",
+        "app_run_checks",
+        "app_update_database",
+        "app_update_plan",
+        "app_upsert_work_items",
+        "append_shared_file",
+        "approve_subordinate_plan",
+        "approve_subordinate_plans",
+        "approve_subordinate_tasks",
+        "ask_master",
+        "broadcast_to_roles",
+        "check_inbox_answer",
+        "delete_shared_file",
+        "docs_delete",
+        "docs_index_update",
+        "docs_list",
+        "docs_read",
+        "docs_write",
+        "env_delete",
+        "env_list",
+        "env_read",
+        "env_set",
+        "env_validate",
+        "finalize_subordinates",
+        "forward_to_agent",
+        "kanban_add_dependency",
+        "kanban_assign_agent",
+        "kanban_create_card",
+        "kanban_get_card",
+        "kanban_list_cards",
+        "kanban_move_card",
+        "kanban_move_to_review",
+        "kanban_plan_graph",
+        "kanban_post_comment",
+        "kanban_read_my_card",
+        "kanban_remove_dependency",
+        "kanban_update_meta",
+        "kanban_update_objectives",
+        "list_company_projects",
+        "list_containers",
+        "list_services",
+        "list_shared_files",
+        "list_subordinates",
+        "post_to_board",
+        "qa_get_browser_endpoint",
+        "qa_publish_result",
+        "qa_start_run",
+        "read_board",
+        "read_container_logs",
+        "read_my_inbox",
+        "read_sandbox_logs",
+        "read_shared_file",
+        "recommend_role",
+        "respond_to_inbox",
+        "resume_subordinate",
+        "review_subordinate_work",
+        "send_to_agent",
+        "send_to_master",
+        "service_logs",
+        "service_restart",
+        "service_start",
+        "service_stop",
+        "set_agent_status",
+        "spawn_subordinate_agent",
+        "submit_plan_to_master",
+        "submit_specification_to_master",
+        "submit_tasks_to_master",
+        "wait_for_subordinates",
+        "write_shared_file"
+      ]
+    },
+    "docs-agent": {
+      "enabled": [],
+      "contextual": [],
+      "pending": [
+        "docs_finish",
+        "docs_list_sources",
+        "docs_plan",
+        "docs_read_chunk",
+        "docs_search",
+        "docs_synthesize"
+      ]
+    },
+    "mcp-internal": {
+      "enabled": [
+        "mcp__export_docs",
+        "mcp__find_implementations",
+        "mcp__find_references",
+        "mcp__get_agent_result",
+        "mcp__get_agent_run",
+        "mcp__get_costs",
+        "mcp__get_dependencies",
+        "mcp__get_dependents",
+        "mcp__get_file_skeleton",
+        "mcp__get_hierarchy",
+        "mcp__get_project_overview",
+        "mcp__get_project_pulse",
+        "mcp__get_recently_modified_files",
+        "mcp__get_repo_map",
+        "mcp__get_symbol_body",
+        "mcp__grep_code",
+        "mcp__index_project",
+        "mcp__list_agent_runs",
+        "mcp__list_agents",
+        "mcp__list_directory",
+        "mcp__list_models",
+        "mcp__prepare_edit",
+        "mcp__rag_doc_outline",
+        "mcp__rag_read_doc",
+        "mcp__rag_search_docs",
+        "mcp__read_file",
+        "mcp__save_memory",
+        "mcp__search",
+        "mcp__search_memory",
+        "mcp__semantic_neighbors",
+        "mcp__trace_usage"
+      ],
+      "contextual": [],
+      "pending": [
+        "mcp__cancel_agent_run",
+        "mcp__start_agent_run"
+      ]
+    },
+    "skills": {
+      "enabled": [
+        "get_skill_content",
+        "get_skills_list",
+        "invoke_skill",
+        "list_skill_namespaces"
+      ],
+      "contextual": [],
+      "pending": []
+    }
+  },
+  "definitions": [
+    {
+      "name": "api_get_request",
+      "declaredName": "api_get_request",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/api-client/query.ts",
+      "line": 46,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "api_import_openapi",
+      "declaredName": "api_import_openapi",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/api-client/mutate.ts",
+      "line": 13,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "api_list_requests",
+      "declaredName": "api_list_requests",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/api-client/query.ts",
+      "line": 10,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "api_mark_verified",
+      "declaredName": "api_mark_verified",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/api-client/mutate.ts",
+      "line": 92,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "api_run_collection",
+      "declaredName": "api_run_collection",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/api-client/run.ts",
+      "line": 119,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "api_run_request",
+      "declaredName": "api_run_request",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/api-client/run.ts",
+      "line": 18,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "api_update_request",
+      "declaredName": "api_update_request",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/api-client/mutate.ts",
+      "line": 47,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "apply_patch",
+      "declaredName": "apply_patch",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/apply-patch.ts",
+      "line": 525,
+      "metadata": {
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "archive_task_list",
+      "declaredName": "archive_task_list",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 755,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "ask_user",
+      "declaredName": "ask_user",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/interaction.ts",
+      "line": 53,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "interactive": "true"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_click",
+      "declaredName": "browser_click",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 68,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_close",
+      "declaredName": "browser_close",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 125,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_extract",
+      "declaredName": "browser_extract",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 53,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "outputPolicy": "{ mode: 'structured', reducer: 'smart', recovery: 'rerun' }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_fill",
+      "declaredName": "browser_fill",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 78,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_open",
+      "declaredName": "browser_open",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 24,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "45_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_press",
+      "declaredName": "browser_press",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 93,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_screenshot",
+      "declaredName": "browser_screenshot",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 108,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "25_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "browser_snapshot",
+      "declaredName": "browser_snapshot",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/browser/tools.ts",
+      "line": 39,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "cancel_tasks",
+      "declaredName": "cancel_tasks",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 620,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "capability_catalog",
+      "declaredName": "capability_catalog",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/capability-catalog-tool.ts",
+      "line": 104,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "code_exec",
+      "declaredName": "code_exec",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/code-exec.ts",
+      "line": 293,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "effectBoundary": "'nested'",
+        "timeoutMs": "WALL_TIMEOUT_MS + DRAIN_TIMEOUT_MS + 1_000",
+        "repeatPolicy": "'volatile'",
+        "outputPolicy": "{ mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "collect_agents",
+      "declaredName": "collect_agents",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/collect-agents.ts",
+      "line": 101,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "timeoutMs": "Infinity",
+        "repeatPolicy": "'pollable'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "create_file",
+      "declaredName": "create_file",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/fs.ts",
+      "line": 178,
+      "metadata": {
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "create_goal",
+      "declaredName": "create_goal",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/goal.ts",
+      "line": 125,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "repeatPolicy": "'mutating'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "create_skill",
+      "declaredName": "create_skill",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/create-skill.ts",
+      "line": 44,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "db_command",
+      "declaredName": "db_command",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/db/tools.ts",
+      "line": 333,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'database'",
+        "outputPolicy": "{ mode: 'rows', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "db_list",
+      "declaredName": "db_list",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/db/tools.ts",
+      "line": 164,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'database'",
+        "outputPolicy": "{ mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "db_query",
+      "declaredName": "db_query",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/db/tools.ts",
+      "line": 241,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'database'",
+        "outputPolicy": "{ mode: 'rows', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "db_schema",
+      "declaredName": "db_schema",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/db/tools.ts",
+      "line": 193,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'database'",
+        "outputPolicy": "{ mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "decision_gate",
+      "declaredName": "decision_gate",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/interaction.ts",
+      "line": 280,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "interactive": "true"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "delete_tasks",
+      "declaredName": "delete_tasks",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 690,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "diagram_create",
+      "declaredName": "diagram_create",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/diagram/mutate.ts",
+      "line": 18,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "diagram_export",
+      "declaredName": "diagram_export",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/diagram/export.ts",
+      "line": 10,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "diagram_list",
+      "declaredName": "diagram_list",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/diagram/query.ts",
+      "line": 50,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "diagram_read",
+      "declaredName": "diagram_read",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/diagram/query.ts",
+      "line": 15,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "diagram_update",
+      "declaredName": "diagram_update",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/diagram/mutate.ts",
+      "line": 60,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "docs_deep_research",
+      "declaredName": "docs_deep_research",
+      "surface": "coder",
+      "file": "packages/docs-agent/src/bridges/docs-bridge.ts",
+      "line": 96,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'nested'",
+        "timeoutMs": "30 * 60_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "edit_file",
+      "declaredName": "edit_file",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/fs.ts",
+      "line": 392,
+      "metadata": {
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "enter_worktree",
+      "declaredName": "enter_worktree",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/worktree.ts",
+      "line": 30,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'admin'",
+        "effectBoundary": "'shell'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "exec_command",
+      "declaredName": "exec_command",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/exec-command.ts",
+      "line": 540,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'shell'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "execute_tasks",
+      "declaredName": "execute_tasks",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/execute-tasks.ts",
+      "line": 333,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'nested'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "exit_worktree",
+      "declaredName": "exit_worktree",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/worktree.ts",
+      "line": 96,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'admin'",
+        "effectBoundary": "'shell'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "expand_toolset",
+      "declaredName": "expand_toolset",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/expand.ts",
+      "line": 95,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "find_tools",
+      "declaredName": "find_tools",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/find-tools.ts",
+      "line": 57,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "followup_task",
+      "declaredName": "followup_task",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/followup-task.ts",
+      "line": 41,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "forget_memory",
+      "declaredName": "forget_memory",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/project-memory-tools.ts",
+      "line": 226,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'database'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "get_diagnostics",
+      "declaredName": "get_diagnostics",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/diagnostics.ts",
+      "line": 39,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'shell'",
+        "repeatPolicy": "'volatile'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "get_goal",
+      "declaredName": "get_goal",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/goal.ts",
+      "line": 209,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "get_tool_output",
+      "declaredName": "get_tool_output",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tool-output.ts",
+      "line": 26,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'page', reducer: 'none', recovery: 'cursor' }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "git_add",
+      "declaredName": "git_add",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/git.ts",
+      "line": 97,
+      "metadata": {
+        "effectBoundary": "'shell'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "git_branch",
+      "declaredName": "git_branch",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/git.ts",
+      "line": 137,
+      "metadata": {
+        "effectBoundary": "'shell'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "git_commit",
+      "declaredName": "git_commit",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/git.ts",
+      "line": 117,
+      "metadata": {
+        "effectBoundary": "'shell'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "git_diff",
+      "declaredName": "git_diff",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/git.ts",
+      "line": 57,
+      "metadata": {
+        "effectBoundary": "'shell'",
+        "repeatPolicy": "'volatile'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "git_log",
+      "declaredName": "git_log",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/git.ts",
+      "line": 79,
+      "metadata": {
+        "effectBoundary": "'shell'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "git_status",
+      "declaredName": "git_status",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/git.ts",
+      "line": 47,
+      "metadata": {
+        "effectBoundary": "'shell'",
+        "repeatPolicy": "'volatile'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "glob",
+      "declaredName": "glob",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/glob.ts",
+      "line": 55,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "http_request",
+      "declaredName": "http_request",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/http.ts",
+      "line": 43,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'network'",
+        "outputPolicy": "{ mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "list_agents",
+      "declaredName": "list_agents",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/list-agents.ts",
+      "line": 91,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "repeatPolicy": "'volatile'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "list_directory",
+      "declaredName": "list_directory",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/fs.ts",
+      "line": 643,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "list_notes",
+      "declaredName": "list_notes",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/session-drive-tools.ts",
+      "line": 188,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "repeatPolicy": "'volatile'",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "list_sessions",
+      "declaredName": "list_sessions",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/exec-command.ts",
+      "line": 738,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "repeatPolicy": "'volatile'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "list_tasks",
+      "declaredName": "list_tasks",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 521,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "repeatPolicy": "'volatile'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "lsp_definition",
+      "declaredName": "lsp_definition",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/lsp.ts",
+      "line": 76,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "lsp_diagnostics",
+      "declaredName": "lsp_diagnostics",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/lsp.ts",
+      "line": 235,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "lsp_hover",
+      "declaredName": "lsp_hover",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/lsp.ts",
+      "line": 182,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "lsp_references",
+      "declaredName": "lsp_references",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/lsp.ts",
+      "line": 126,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "manage_path",
+      "declaredName": "manage_path",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/manage-path.ts",
+      "line": 202,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp_list_resources",
+      "declaredName": "mcp_list_resources",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/mcp-resources.ts",
+      "line": 34,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp_read_resource",
+      "declaredName": "mcp_read_resource",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/mcp-resources.ts",
+      "line": 84,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "multi_edit",
+      "declaredName": "multi_edit",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/fs.ts",
+      "line": 787,
+      "metadata": {
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_click",
+      "declaredName": "preview_click",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact.ts",
+      "line": 29,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_close",
+      "declaredName": "preview_close",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/control.ts",
+      "line": 170,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_console",
+      "declaredName": "preview_console",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 45,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "40_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_double_click",
+      "declaredName": "preview_double_click",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact-extra.ts",
+      "line": 81,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_eval",
+      "declaredName": "preview_eval",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 107,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "40_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_fill",
+      "declaredName": "preview_fill",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact.ts",
+      "line": 48,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_hover",
+      "declaredName": "preview_hover",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact-extra.ts",
+      "line": 62,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_inspect_css",
+      "declaredName": "preview_inspect_css",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 171,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_memory",
+      "declaredName": "preview_memory",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 202,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_navigate",
+      "declaredName": "preview_navigate",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/control.ts",
+      "line": 92,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "40_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_network",
+      "declaredName": "preview_network",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 71,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "40_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_open",
+      "declaredName": "preview_open",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/control.ts",
+      "line": 23,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "100_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_performance",
+      "declaredName": "preview_performance",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 189,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_press",
+      "declaredName": "preview_press",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact.ts",
+      "line": 91,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_right_click",
+      "declaredName": "preview_right_click",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact-extra.ts",
+      "line": 98,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_screenshot",
+      "declaredName": "preview_screenshot",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 130,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "40_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_scroll",
+      "declaredName": "preview_scroll",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact-extra.ts",
+      "line": 29,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_snapshot",
+      "declaredName": "preview_snapshot",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 232,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_storage",
+      "declaredName": "preview_storage",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/inspect.ts",
+      "line": 215,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_type",
+      "declaredName": "preview_type",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact.ts",
+      "line": 69,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_viewport",
+      "declaredName": "preview_viewport",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/control.ts",
+      "line": 123,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "preview_wait_for",
+      "declaredName": "preview_wait_for",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/preview/interact.ts",
+      "line": 125,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "timeoutMs": "40_000"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "rag_doc_outline",
+      "declaredName": "rag_doc_outline",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/rag-doc-outline.ts",
+      "line": 21,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'structured', reducer: 'smart', recovery: 'output_store' }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "rag_read_doc",
+      "declaredName": "rag_read_doc",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/rag-read-doc.ts",
+      "line": 23,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store' }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "rag_search_docs",
+      "declaredName": "rag_search_docs",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/rag-search-docs.ts",
+      "line": 55,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'search', reducer: 'smart', recovery: 'section' }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "read_agent_transcript",
+      "declaredName": "read_agent_transcript",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/read-agent-transcript.ts",
+      "line": 95,
+      "metadata": {
+        "mutates": "false"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "read_file",
+      "declaredName": "read_file",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/fs.ts",
+      "line": 514,
+      "metadata": {
+        "outputPolicy": "{ mode: 'line_range', reducer: 'none', recovery: 'cursor' }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "read_plan",
+      "declaredName": "read_plan",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/session-drive-tools.ts",
+      "line": 36,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "recall_conversation",
+      "declaredName": "recall_conversation",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/conversation-chapters.ts",
+      "line": 62,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "recall_investigations",
+      "declaredName": "recall_investigations",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/session-drive-tools.ts",
+      "line": 234,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "recall_memory",
+      "declaredName": "recall_memory",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/project-memory-tools.ts",
+      "line": 141,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "record_memo",
+      "declaredName": "record_memo",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/record-memo.ts",
+      "line": 58,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_child_development"
+    },
+    {
+      "name": "remember",
+      "declaredName": "remember",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/project-memory-tools.ts",
+      "line": 48,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'database'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "request_review",
+      "declaredName": "request_review",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/request-review.ts",
+      "line": 34,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'nested'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "resume_agent",
+      "declaredName": "resume_agent",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/resume-agent.ts",
+      "line": 50,
+      "metadata": {
+        "parallelSafe": "false",
+        "riskLevel": "'admin'",
+        "effectBoundary": "'nested'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "run_command",
+      "declaredName": "run_command",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/shell.ts",
+      "line": 147,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'shell'",
+        "timeoutMs": "MAX_TIMEOUT_MS + RUNNER_TIMEOUT_GRACE_MS",
+        "repeatPolicy": "'volatile'",
+        "outputPolicy": "{ mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "save_note",
+      "declaredName": "save_note",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/session-drive-tools.ts",
+      "line": 77,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "self_review",
+      "declaredName": "self_review",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/self-review.ts",
+      "line": 63,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "send_input",
+      "declaredName": "send_input",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/send-input.ts",
+      "line": 48,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "send_message",
+      "declaredName": "send_message",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/send-message.ts",
+      "line": 42,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "spawn_agent",
+      "declaredName": "spawn_agent",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/spawn-agent.ts",
+      "line": 788,
+      "metadata": {
+        "effectBoundary": "'nested'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "submit_plan",
+      "declaredName": "submit_plan",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/plan.ts",
+      "line": 74,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "interactive": "true"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "submit_spec",
+      "declaredName": "submit_spec",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/spec/submit-spec.ts",
+      "line": 22,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'filesystem'",
+        "interactive": "true"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "submit_tasks",
+      "declaredName": "submit_tasks",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 403,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "interactive": "true"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "task_complete",
+      "declaredName": "task_complete",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 807,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "task_list",
+      "declaredName": "task_list",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 1114,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "interactive": "true"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "todo_write",
+      "declaredName": "todo_write",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/todo.ts",
+      "line": 166,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "update_goal",
+      "declaredName": "update_goal",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/goal.ts",
+      "line": 254,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'",
+        "repeatPolicy": "'mutating'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "update_task",
+      "declaredName": "update_task",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/tasks.ts",
+      "line": 944,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "update_todo",
+      "declaredName": "update_todo",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/todo.ts",
+      "line": 318,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "view_image",
+      "declaredName": "view_image",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/view-image.ts",
+      "line": 31,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "wait_agents",
+      "declaredName": "wait_agents",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/wait-agents.ts",
+      "line": 101,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "timeoutMs": "30 * 60_000",
+        "repeatPolicy": "'pollable'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "web_fetch",
+      "declaredName": "web_fetch",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/web.ts",
+      "line": 30,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "web_search",
+      "declaredName": "web_search",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/web.ts",
+      "line": 90,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'search', reducer: 'smart', recovery: 'rerun' }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "workflow",
+      "declaredName": "workflow",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/workflow/workflow-tool.ts",
+      "line": 178,
+      "metadata": {
+        "mutates": "true",
+        "effectBoundary": "'nested'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "write_file",
+      "declaredName": "write_file",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/fs.ts",
+      "line": 138,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'write'",
+        "effectBoundary": "'filesystem'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "write_stdin",
+      "declaredName": "write_stdin",
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/exec-command.ts",
+      "line": 770,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'",
+        "effectBoundary": "'control'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "abort_subordinate_agent",
+      "declaredName": "abort_subordinate_agent",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 534,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "answer_subordinate_question",
+      "declaredName": "answer_subordinate_question",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 446,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_dispatch_ready_work",
+      "declaredName": "app_dispatch_ready_work",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 301,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_get_db_state",
+      "declaredName": "app_get_db_state",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 404,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_get_plan",
+      "declaredName": "app_get_plan",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 125,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_get_state",
+      "declaredName": "app_get_state",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 91,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_record_work_evidence",
+      "declaredName": "app_record_work_evidence",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 324,
+      "metadata": {
+        "mutates": "true"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_request_decision",
+      "declaredName": "app_request_decision",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 244,
+      "metadata": {
+        "mutates": "true"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_request_plan_approval",
+      "declaredName": "app_request_plan_approval",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 283,
+      "metadata": {
+        "mutates": "true"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_run_checks",
+      "declaredName": "app_run_checks",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 489,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_update_database",
+      "declaredName": "app_update_database",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 426,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_update_plan",
+      "declaredName": "app_update_plan",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 152,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "app_upsert_work_items",
+      "declaredName": "app_upsert_work_items",
+      "surface": "company",
+      "file": "packages/company/src/tools/app-studio/app-workflow.ts",
+      "line": 196,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "append_shared_file",
+      "declaredName": "append_shared_file",
+      "surface": "company",
+      "file": "packages/company/src/tools/shared-drive-tools.ts",
+      "line": 99,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "approve_subordinate_plan",
+      "declaredName": "approve_subordinate_plan",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 407,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "approve_subordinate_plans",
+      "declaredName": "approve_subordinate_plans",
+      "surface": "company",
+      "file": "packages/company/src/tools/approve-subordinates-batch.ts",
+      "line": 68,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "approve_subordinate_tasks",
+      "declaredName": "approve_subordinate_tasks",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 492,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "ask_master",
+      "declaredName": "ask_master",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 39,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "broadcast_to_roles",
+      "declaredName": "broadcast_to_roles",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 932,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "check_inbox_answer",
+      "declaredName": "check_inbox_answer",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 605,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "delete_shared_file",
+      "declaredName": "delete_shared_file",
+      "surface": "company",
+      "file": "packages/company/src/tools/shared-drive-tools.ts",
+      "line": 192,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_delete",
+      "declaredName": "docs_delete",
+      "surface": "company",
+      "file": "packages/company/src/tools/docs-tools.ts",
+      "line": 378,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_index_update",
+      "declaredName": "docs_index_update",
+      "surface": "company",
+      "file": "packages/company/src/tools/docs-tools.ts",
+      "line": 306,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_list",
+      "declaredName": "docs_list",
+      "surface": "company",
+      "file": "packages/company/src/tools/docs-tools.ts",
+      "line": 275,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_read",
+      "declaredName": "docs_read",
+      "surface": "company",
+      "file": "packages/company/src/tools/docs-tools.ts",
+      "line": 239,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_write",
+      "declaredName": "docs_write",
+      "surface": "company",
+      "file": "packages/company/src/tools/docs-tools.ts",
+      "line": 188,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "env_delete",
+      "declaredName": "env_delete",
+      "surface": "company",
+      "file": "packages/company/src/tools/env-tools.ts",
+      "line": 244,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "env_list",
+      "declaredName": "env_list",
+      "surface": "company",
+      "file": "packages/company/src/tools/env-tools.ts",
+      "line": 56,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "env_read",
+      "declaredName": "env_read",
+      "surface": "company",
+      "file": "packages/company/src/tools/env-tools.ts",
+      "line": 85,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "env_set",
+      "declaredName": "env_set",
+      "surface": "company",
+      "file": "packages/company/src/tools/env-tools.ts",
+      "line": 113,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "env_validate",
+      "declaredName": "env_validate",
+      "surface": "company",
+      "file": "packages/company/src/tools/env-tools.ts",
+      "line": 188,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "finalize_subordinates",
+      "declaredName": "finalize_subordinates",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 701,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "forward_to_agent",
+      "declaredName": "forward_to_agent",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 640,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_add_dependency",
+      "declaredName": "kanban_add_dependency",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 279,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_assign_agent",
+      "declaredName": "kanban_assign_agent",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 337,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_create_card",
+      "declaredName": "kanban_create_card",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-batch.ts",
+      "line": 111,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_get_card",
+      "declaredName": "kanban_get_card",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 401,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_list_cards",
+      "declaredName": "kanban_list_cards",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 366,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_move_card",
+      "declaredName": "kanban_move_card",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-batch.ts",
+      "line": 148,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_move_to_review",
+      "declaredName": "kanban_move_to_review",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-kanban-tools.ts",
+      "line": 58,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_plan_graph",
+      "declaredName": "kanban_plan_graph",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-plan-graph.ts",
+      "line": 57,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_post_comment",
+      "declaredName": "kanban_post_comment",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 129,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_read_my_card",
+      "declaredName": "kanban_read_my_card",
+      "surface": "company",
+      "file": "packages/company/src/tools/board-tools.ts",
+      "line": 361,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_remove_dependency",
+      "declaredName": "kanban_remove_dependency",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 307,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_update_meta",
+      "declaredName": "kanban_update_meta",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 72,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "kanban_update_objectives",
+      "declaredName": "kanban_update_objectives",
+      "surface": "company",
+      "file": "packages/company/src/tools/kanban-tools.ts",
+      "line": 212,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "list_company_projects",
+      "declaredName": "list_company_projects",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 603,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "list_containers",
+      "declaredName": "list_containers",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 813,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "list_services",
+      "declaredName": "list_services",
+      "surface": "company",
+      "file": "packages/company/src/tools/sandbox-tools.ts",
+      "line": 125,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "list_shared_files",
+      "declaredName": "list_shared_files",
+      "surface": "company",
+      "file": "packages/company/src/tools/shared-drive-tools.ts",
+      "line": 159,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "list_subordinates",
+      "declaredName": "list_subordinates",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 555,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "post_to_board",
+      "declaredName": "post_to_board",
+      "surface": "company",
+      "file": "packages/company/src/tools/board-tools.ts",
+      "line": 97,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "qa_get_browser_endpoint",
+      "declaredName": "qa_get_browser_endpoint",
+      "surface": "company",
+      "file": "packages/company/src/tools/qa/qa-get-browser-endpoint.ts",
+      "line": 230,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "qa_publish_result",
+      "declaredName": "qa_publish_result",
+      "surface": "company",
+      "file": "packages/company/src/tools/qa/qa-publish-result.ts",
+      "line": 64,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "qa_start_run",
+      "declaredName": "qa_start_run",
+      "surface": "company",
+      "file": "packages/company/src/tools/qa/qa-start-run.ts",
+      "line": 205,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "read_board",
+      "declaredName": "read_board",
+      "surface": "company",
+      "file": "packages/company/src/tools/board-tools.ts",
+      "line": 264,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "read_container_logs",
+      "declaredName": "read_container_logs",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 1036,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "read_my_inbox",
+      "declaredName": "read_my_inbox",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 535,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "read_sandbox_logs",
+      "declaredName": "read_sandbox_logs",
+      "surface": "company",
+      "file": "packages/company/src/tools/sandbox-tools.ts",
+      "line": 60,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "read_shared_file",
+      "declaredName": "read_shared_file",
+      "surface": "company",
+      "file": "packages/company/src/tools/shared-drive-tools.ts",
+      "line": 129,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "recommend_role",
+      "declaredName": "recommend_role",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 882,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "respond_to_inbox",
+      "declaredName": "respond_to_inbox",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 997,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "respond_to_inbox",
+      "declaredName": "respond_to_inbox",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 505,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "resume_subordinate",
+      "declaredName": "resume_subordinate",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 790,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "review_subordinate_work",
+      "declaredName": "review_subordinate_work",
+      "surface": "company",
+      "file": "packages/company/src/tools/review-subordinate.ts",
+      "line": 64,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "send_to_agent",
+      "declaredName": "send_to_agent",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 342,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "send_to_master",
+      "declaredName": "send_to_master",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 434,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "service_logs",
+      "declaredName": "service_logs",
+      "surface": "company",
+      "file": "packages/company/src/tools/service-tools.ts",
+      "line": 136,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "service_restart",
+      "declaredName": "service_restart",
+      "surface": "company",
+      "file": "packages/company/src/tools/service-tools.ts",
+      "line": 78,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "service_start",
+      "declaredName": "service_start",
+      "surface": "company",
+      "file": "packages/company/src/tools/service-tools.ts",
+      "line": 78,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "service_stop",
+      "declaredName": "service_stop",
+      "surface": "company",
+      "file": "packages/company/src/tools/service-tools.ts",
+      "line": 78,
+      "metadata": {
+        "mutates": "true",
+        "parallelSafe": "false",
+        "riskLevel": "'execute'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "set_agent_status",
+      "declaredName": "set_agent_status",
+      "surface": "company",
+      "file": "packages/company/src/tools/board-tools.ts",
+      "line": 329,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "spawn_subordinate_agent",
+      "declaredName": "spawn_subordinate_agent",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 105,
+      "metadata": {
+        "timeoutMs": "Infinity"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "submit_plan_to_master",
+      "declaredName": "submit_plan_to_master",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 115,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "submit_specification_to_master",
+      "declaredName": "submit_specification_to_master",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate/submit-specification.ts",
+      "line": 29,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "submit_tasks_to_master",
+      "declaredName": "submit_tasks_to_master",
+      "surface": "company",
+      "file": "packages/company/src/tools/subordinate-tools.ts",
+      "line": 255,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "wait_for_subordinates",
+      "declaredName": "wait_for_subordinates",
+      "surface": "company",
+      "file": "packages/company/src/tools/master-tools.ts",
+      "line": 300,
+      "metadata": {
+        "timeoutMs": "Infinity"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "write_shared_file",
+      "declaredName": "write_shared_file",
+      "surface": "company",
+      "file": "packages/company/src/tools/shared-drive-tools.ts",
+      "line": 69,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_finish",
+      "declaredName": "docs_finish",
+      "surface": "docs-agent",
+      "file": "packages/docs-agent/src/tools/docs-finish.ts",
+      "line": 45,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "interactive": "true"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_list_sources",
+      "declaredName": "docs_list_sources",
+      "surface": "docs-agent",
+      "file": "packages/docs-agent/src/tools/docs-list-sources.ts",
+      "line": 20,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_plan",
+      "declaredName": "docs_plan",
+      "surface": "docs-agent",
+      "file": "packages/docs-agent/src/tools/docs-plan.ts",
+      "line": 33,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_read_chunk",
+      "declaredName": "docs_read_chunk",
+      "surface": "docs-agent",
+      "file": "packages/docs-agent/src/tools/docs-read-chunk.ts",
+      "line": 30,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_search",
+      "declaredName": "docs_search",
+      "surface": "docs-agent",
+      "file": "packages/docs-agent/src/tools/docs-search-chunks.ts",
+      "line": 32,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "docs_synthesize",
+      "declaredName": "docs_synthesize",
+      "surface": "docs-agent",
+      "file": "packages/docs-agent/src/tools/docs-synthesize.ts",
+      "line": 40,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "mcp__cancel_agent_run",
+      "declaredName": "cancel_agent_run",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/agents.ts",
+      "line": 123,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "mcp__export_docs",
+      "declaredName": "export_docs",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/misc.ts",
+      "line": 42,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__find_implementations",
+      "declaredName": "find_implementations",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/type-relations.ts",
+      "line": 30,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__find_references",
+      "declaredName": "find_references",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/symbol-references.ts",
+      "line": 13,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_agent_result",
+      "declaredName": "get_agent_result",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/agents.ts",
+      "line": 101,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_agent_run",
+      "declaredName": "get_agent_run",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/agents.ts",
+      "line": 86,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_costs",
+      "declaredName": "get_costs",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/misc.ts",
+      "line": 7,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_dependencies",
+      "declaredName": "get_dependencies",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/index-navigation.ts",
+      "line": 38,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_dependents",
+      "declaredName": "get_dependents",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/index-navigation.ts",
+      "line": 38,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_file_skeleton",
+      "declaredName": "get_file_skeleton",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/file-skeleton.ts",
+      "line": 11,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_hierarchy",
+      "declaredName": "get_hierarchy",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/type-relations.ts",
+      "line": 46,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_project_overview",
+      "declaredName": "get_project_overview",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/projects.ts",
+      "line": 126,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_project_pulse",
+      "declaredName": "get_project_pulse",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/projects.ts",
+      "line": 196,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_recently_modified_files",
+      "declaredName": "get_recently_modified_files",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/index-navigation.ts",
+      "line": 23,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_repo_map",
+      "declaredName": "get_repo_map",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/repo-map.ts",
+      "line": 7,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__get_symbol_body",
+      "declaredName": "get_symbol_body",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/symbol-body.ts",
+      "line": 23,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__grep_code",
+      "declaredName": "grep_code",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/search.ts",
+      "line": 243,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__index_project",
+      "declaredName": "index_project",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/projects.ts",
+      "line": 45,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__list_agent_runs",
+      "declaredName": "list_agent_runs",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/agents.ts",
+      "line": 71,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__list_agents",
+      "declaredName": "list_agents",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/agents.ts",
+      "line": 16,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__list_directory",
+      "declaredName": "list_directory",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/list-directory.ts",
+      "line": 7,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__list_models",
+      "declaredName": "list_models",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/misc.ts",
+      "line": 70,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__prepare_edit",
+      "declaredName": "prepare_edit",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/prepare-edit.ts",
+      "line": 14,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__rag_doc_outline",
+      "declaredName": "rag_doc_outline",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/docs.ts",
+      "line": 107,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__rag_read_doc",
+      "declaredName": "rag_read_doc",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/docs.ts",
+      "line": 76,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__rag_search_docs",
+      "declaredName": "rag_search_docs",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/docs.ts",
+      "line": 49,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__read_file",
+      "declaredName": "read_file",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/read-file.ts",
+      "line": 19,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__save_memory",
+      "declaredName": "save_memory",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/snapshots.ts",
+      "line": 18,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__search",
+      "declaredName": "search",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/search.ts",
+      "line": 134,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__search_memory",
+      "declaredName": "search_memory",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/search-memory.ts",
+      "line": 10,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__semantic_neighbors",
+      "declaredName": "semantic_neighbors",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/semantic-neighbors.ts",
+      "line": 7,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "mcp__start_agent_run",
+      "declaredName": "start_agent_run",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/agents.ts",
+      "line": 26,
+      "metadata": {},
+      "nativeStatus": "pending_integration"
+    },
+    {
+      "name": "mcp__trace_usage",
+      "declaredName": "trace_usage",
+      "surface": "mcp-internal",
+      "file": "apps/mcp-server/tools/usage-trace.ts",
+      "line": 8,
+      "metadata": {},
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "get_skill_content",
+      "declaredName": "get_skill_content",
+      "surface": "skills",
+      "file": "packages/code-agent/src/skills/skill-tool-builder.ts",
+      "line": 164,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "get_skills_list",
+      "declaredName": "get_skills_list",
+      "surface": "skills",
+      "file": "packages/code-agent/src/skills/skill-tool-builder.ts",
+      "line": 93,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "invoke_skill",
+      "declaredName": "invoke_skill",
+      "surface": "skills",
+      "file": "packages/code-agent/src/skills/skill-tool-builder.ts",
+      "line": 243,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "false",
+        "riskLevel": "'read'",
+        "outputPolicy": "{ mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }"
+      },
+      "nativeStatus": "enabled_development"
+    },
+    {
+      "name": "list_skill_namespaces",
+      "declaredName": "list_skill_namespaces",
+      "surface": "skills",
+      "file": "packages/code-agent/src/skills/skill-tool-builder.ts",
+      "line": 52,
+      "metadata": {
+        "mutates": "false",
+        "parallelSafe": "true",
+        "riskLevel": "'read'"
+      },
+      "nativeStatus": "enabled_development"
+    }
+  ],
+  "dynamic": [
+    {
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/mcp-bridge.ts",
+      "line": 227,
+      "expression": "name"
+    },
+    {
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/mcp-bridge.ts",
+      "line": 283,
+      "expression": "`mcp__${t.name}`"
+    },
+    {
+      "surface": "coder",
+      "file": "packages/code-agent/src/tools/mcp-server-manager.ts",
+      "line": 348,
+      "expression": "prefixedName"
+    },
+    {
+      "surface": "plugin",
+      "file": "packages/plugin-host/src/plugin-tool-bridge.ts",
+      "line": 70,
+      "expression": "`plugin__${plugin.namespace}__${decl.name}`"
+    },
+    {
+      "surface": "external-mcp",
+      "file": "apps/http-api/workers/RemoteMcpServerManager.ts",
+      "line": 99,
+      "expression": "t.name"
+    }
+  ],
+  "unresolvedNativeNames": [],
+  "filesScanned": 253,
+  "tierOnlyNames": [],
+  "counts": {
+    "names": 247,
+    "enabled": 162,
+    "rootEnabled": 161,
+    "childOnly": 1,
+    "pending": 85
+  }
+}

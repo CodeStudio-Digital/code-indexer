@@ -15,6 +15,8 @@ use zeroize::{Zeroize, Zeroizing};
 use super::HostSupervisorBridgeError;
 
 pub const HOST_SUPERVISOR_BRIDGE_OPEN_MAX_BYTES: usize = 64 * 1024;
+mod handoff;
+
 const MAX_TEXT_BYTES: usize = 512;
 const MIN_STARTUP_TIMEOUT_MS: u64 = 100;
 const MAX_STARTUP_TIMEOUT_MS: u64 = 30_000;
@@ -31,6 +33,7 @@ pub(super) struct HostSupervisorLaunchPlan {
     pub runner_executable: PathBuf,
     pub package_directory: PathBuf,
     pub startup_timeout: Duration,
+    pub lifecycle_outbox_directory: String,
 }
 
 impl HostSupervisorLaunchPlan {
@@ -48,42 +51,6 @@ impl HostSupervisorLaunchPlan {
         let decoded = wire::HostSupervisorBridgeOpenRequest::decode(encoded.as_slice())
             .map_err(HostSupervisorBridgeError::MalformedRequest)?;
         validate(ScrubbedRequest(decoded))
-    }
-
-    pub(super) fn mint_handoff(
-        &mut self,
-        supervisor_process_id: u32,
-        management_endpoint_address: &str,
-        containment: wire::ContainmentCapabilities,
-    ) -> wire::SupervisorProcessHandoff {
-        let protocol = self.selected_protocol;
-        wire::SupervisorProcessHandoff {
-            schema_version: SUPERVISOR_BOOTSTRAP_SCHEMA_VERSION,
-            host_process_id: std::process::id(),
-            management_connection_id: self.connection_id.as_str().to_owned(),
-            management_endpoint_address: management_endpoint_address.to_owned(),
-            management_session_token: std::mem::take(&mut self.management_session_token),
-            supervisor_launch_nonce: std::mem::take(&mut self.supervisor_launch_nonce),
-            supervisor_provenance: Some(wire::RuntimeProvenance {
-                build_id: self.trusted_supervisor.build_id.clone(),
-                source_commit: self.trusted_supervisor.source_commit.clone(),
-                binary_sha256: self.trusted_supervisor.binary_sha256.clone(),
-                runtime_instance_id: format!("supervisor:{}", self.connection_id.as_str()),
-                pid: supervisor_process_id,
-                operating_system: self.trusted_supervisor.operating_system.clone(),
-                architecture: self.trusted_supervisor.architecture.clone(),
-            }),
-            supported_protocols: Some(wire::ProtocolVersionRange {
-                minimum: Some(protocol),
-                maximum: Some(protocol),
-            }),
-            containment: Some(containment),
-            supported_feature_bits: 0,
-            runner_executable: self.runner_executable.to_string_lossy().into_owned(),
-            runner_working_directory: self.package_directory.to_string_lossy().into_owned(),
-            runner_environment: Vec::new(),
-            trusted_runner_provenance: Some(self.trusted_runner.clone()),
-        }
     }
 }
 
@@ -145,6 +112,13 @@ fn validate(
     let supervisor_executable =
         absolute_path(&value.supervisor_executable, "supervisor_executable")?;
     let runner_executable = absolute_path(&value.runner_executable, "runner_executable")?;
+    if !value.lifecycle_outbox_directory.is_empty() {
+        let directory = absolute_path(
+            &value.lifecycle_outbox_directory,
+            "lifecycle_outbox_directory",
+        )?;
+        valid(directory.is_dir(), "lifecycle_outbox_directory")?;
+    }
     valid(
         supervisor_executable != runner_executable,
         "runtime_executables",
@@ -182,6 +156,7 @@ fn validate(
         runner_executable,
         package_directory,
         startup_timeout: Duration::from_millis(request.0.startup_timeout_ms),
+        lifecycle_outbox_directory: request.0.lifecycle_outbox_directory.clone(),
     })
 }
 

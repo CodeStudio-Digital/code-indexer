@@ -20,7 +20,6 @@ mod error;
 pub use error::AsyncRunnerBootstrapError;
 
 const MAX_CONTROL_REPLAY_ENTRIES: usize = 64;
-const MAX_CONTROL_TRACKED_IDS: usize = 4_096;
 const MAX_CONTROL_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Async, single-use path from a validated launch to an established driver.
@@ -145,10 +144,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerBootstrapDriver<S> 
         let replay_capacity = frame_budget
             .min(MAX_CONTROL_REPLAY_ENTRIES)
             .min(MAX_REPLAY_WINDOW_ENTRIES);
-        let total_identity_capacity = frame_budget
-            .saturating_add(1)
-            .min(MAX_CONTROL_TRACKED_IDS)
-            .min(MAX_TRACKED_MESSAGE_IDS);
+        // In-flight credits bound concurrency, not the lifetime of heartbeat ACKs.
+        let total_identity_capacity = MAX_TRACKED_MESSAGE_IDS;
         let max_replay_bytes = usize::try_from(launch.resource_budget().max_ipc_bytes)
             .unwrap_or(usize::MAX)
             .min(MAX_CONTROL_REPLAY_BYTES);

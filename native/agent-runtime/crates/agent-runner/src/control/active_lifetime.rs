@@ -11,13 +11,13 @@ use crate::lifecycle::RunnerState;
 mod classification;
 mod cleanup;
 mod heartbeat;
+mod settlement;
 
 use classification::{
     PostActiveDisposition, classify_hard_deadline, classify_post_active_event, is_control_eof,
 };
 use heartbeat::ActiveHeartbeatSchedule;
-
-const TERMINATION_ACK_DRAIN: std::time::Duration = std::time::Duration::from_millis(50);
+use settlement::{SettlementHook, drain_terminal_response};
 
 #[derive(Debug)]
 pub enum ActiveRunnerExitReason {
@@ -64,19 +64,6 @@ where
     }
 }
 
-impl<R> Debug for ActiveRunnerCleanup<R> {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ActiveRunnerCleanup")
-            .field("reason", &self.reason)
-            .field("final_state", &self.final_state)
-            .field("control_closed", &true)
-            .field("supervisor_reap_required", &true)
-            .field("resources", &"[OWNED; REDACTED]")
-            .finish()
-    }
-}
-
 impl<S, R> ActiveRunnerLifetime<S, R>
 where
     S: AsyncRead + AsyncWrite + Unpin + 'static,
@@ -119,18 +106,41 @@ where
     pub(crate) async fn advance(
         self,
         cancellation: &mut EndpointCancellation,
-    ) -> ActiveRunnerLifetimeAdvance<S, R> {
+    ) -> ActiveRunnerLifetimeAdvance<S, R>
+    where
+        S: Send + Sync,
+        R: Send,
+    {
         self.advance_with_resource_sample(cancellation, || Ok(wire::ResourceSample::default()))
             .await
     }
 
     pub(crate) async fn advance_with_resource_sample<F>(
-        mut self,
+        self,
         cancellation: &mut EndpointCancellation,
         resource_sample: F,
     ) -> ActiveRunnerLifetimeAdvance<S, R>
     where
-        F: FnOnce() -> Result<wire::ResourceSample, AsyncControlDriverError>,
+        F: FnOnce() -> Result<wire::ResourceSample, AsyncControlDriverError> + Send,
+        S: Send + Sync,
+        R: Send,
+    {
+        self.advance_with_settlement(cancellation, resource_sample, None)
+            .await
+    }
+
+    /// The Control ACK and effect revocation precede this optional drain.
+    /// It only lets already-started Data work confirm its terminal receipt.
+    pub(crate) async fn advance_with_settlement<F>(
+        mut self,
+        cancellation: &mut EndpointCancellation,
+        resource_sample: F,
+        settlement: Option<SettlementHook<R>>,
+    ) -> ActiveRunnerLifetimeAdvance<S, R>
+    where
+        F: FnOnce() -> Result<wire::ResourceSample, AsyncControlDriverError> + Send,
+        S: Send + Sync,
+        R: Send,
     {
         let hard_deadline = match self.driver.hard_deadline() {
             Ok(deadline) => deadline,
@@ -186,17 +196,14 @@ where
                             ActiveRunnerLifetimeAdvance::Continue(self)
                         }
                         PostActiveDisposition::Cleanup(reason) => {
-                            // V1 has no ACK-of-ACK. Keep the verified Control
-                            // owner alive briefly after the physically flushed
-                            // terminal response so the Host framing loop can
-                            // commit it before Windows reports peer EOF.
-                            if matches!(
-                                reason,
-                                ActiveRunnerExitReason::RemoteCancelled(_)
-                                    | ActiveRunnerExitReason::Fenced(_)
-                            ) {
-                                tokio::time::sleep(TERMINATION_ACK_DRAIN).await;
-                            }
+                            drain_terminal_response(
+                                &mut self.resources,
+                                &reason,
+                                hard_deadline,
+                                || self.driver.owner_now_unix_ms(),
+                                settlement,
+                            )
+                            .await;
                             cleanup(self, reason)
                         }
                     },

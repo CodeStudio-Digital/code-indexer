@@ -51,6 +51,8 @@ export interface ToolResultBlock {
   tool_use_id: string;
   content: string;
   is_error?: boolean;
+  /** Host recovery metadata; provider adapters must not use this as retry permission. */
+  effect_outcome?: 'unknown';
   /**
    * True when content was truncated at push-time. `originalSize` is the byte
    * length before truncation. The marker is deterministic so the elided block

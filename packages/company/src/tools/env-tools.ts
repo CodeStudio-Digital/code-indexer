@@ -18,8 +18,9 @@
  * subordinates get the full set.
  */
 
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { isUuid } from '@mcp/session-storage';

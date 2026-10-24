@@ -47,7 +47,7 @@ pub(super) fn invocation(
     deadline_at_unix_ms: i64,
 ) -> CapabilityInvocation {
     CapabilityInvocation {
-        operation_id: format!("capability:{}", call.tool_use_id.as_str()),
+        operation_id: operation_id(call),
         provider_operation_id: call.operation_id.as_str().to_owned(),
         tool_use_id: call.tool_use_id.as_str().to_owned(),
         capability_id: call.capability_id.clone(),
@@ -57,9 +57,20 @@ pub(super) fn invocation(
         encoded_json_input: call.encoded_arguments.clone(),
         input_sha256: call.arguments_sha256,
         capability_set_sha256,
-        idempotency_key: format!("capability-prepare:{}", call.tool_use_id.as_str()),
+        idempotency_key: format!("prepare:{}", operation_id(call)),
         deadline_at_unix_ms,
     }
+}
+
+pub(super) fn operation_id(call: &ProviderToolCall) -> String {
+    // Provider tool IDs may repeat on another turn. Length-prefixing avoids
+    // delimiter collisions while preserving the provider's original tool ID.
+    let provider = call.operation_id.as_str();
+    format!(
+        "capability:{}:{provider}:{}",
+        provider.len(),
+        call.tool_use_id.as_str()
+    )
 }
 
 #[derive(Debug)]

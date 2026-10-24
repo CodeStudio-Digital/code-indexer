@@ -9,18 +9,27 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::Instant;
 
 mod capabilities;
+mod checkpoint;
+mod credit;
 mod engine_events;
+mod engine_record;
 mod error;
 mod event;
+mod lifetime;
 mod operations;
+mod read_batch;
+mod request_chunks;
 mod validation;
 
 pub use error::ProviderDataError;
 pub use event::ProviderWireEvent;
+pub(crate) use lifetime::IDENTITY_BUDGET_REASON;
 use validation::{validate_accepted, validate_start, validate_stream_event};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderDataTiming {
+    /// Envelope authority for recording an effect after its execution deadline.
+    pub settlement_deadline_at_unix_ms: i64,
     pub hard_deadline: Instant,
     pub replay_write_timeout: Duration,
 }
@@ -51,6 +60,8 @@ pub struct ProviderDataClient<S> {
     runtime_instance_id: String,
     active: Option<ActiveProviderOperation>,
     buffered_events: VecDeque<ProviderWireEvent>,
+    consumption_ack_required: bool,
+    read_batch: Option<read_batch::ReadBatch>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
@@ -66,6 +77,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
             runtime_instance_id,
             active: None,
             buffered_events: VecDeque::new(),
+            consumption_ack_required: false,
+            read_batch: None,
         }
     }
 
@@ -96,22 +109,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
         C: ProviderDataClock,
         F: FnOnce() + Send,
     {
-        if self.active.is_some() {
+        if self.active.is_some() || self.read_batch.is_some() {
             return Err(ProviderDataError::OperationAlreadyActive);
         }
         validate_start(&start, &self.identity)?;
+        self.consumption_ack_required = start.consumption_ack_required;
         let operation_id = start.operation_id.clone();
-        let semantic_deadline = start.deadline_at_unix_ms;
-        let payload = wire::FramePayload {
-            body: Some(wire::frame_payload::Body::ProviderStart(start)),
-        };
         let request = self
-            .channel
-            .send_new(&payload, semantic_deadline, timing.hard_deadline, || {
-                clock.now_unix_ms()
-            })
+            .send_provider_request(start, false, timing, clock, on_committed)
             .await?;
-        on_committed();
         let accepted = self
             .receive_accepted(&request, &operation_id, timing, clock)
             .await?;
@@ -134,6 +140,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
         clock: &C,
     ) -> Result<ProviderWireEvent, ProviderDataError> {
         if let Some(event) = self.buffered_events.pop_front() {
+            self.acknowledge_consumed(&event, timing, clock).await?;
             return Ok(event);
         }
         loop {
@@ -175,6 +182,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
                     .checked_add(1)
                     .ok_or(ProviderDataError::EventSequenceExhausted)?;
             }
+            self.acknowledge_consumed(&event, timing, clock).await?;
             return Ok(event);
         }
     }

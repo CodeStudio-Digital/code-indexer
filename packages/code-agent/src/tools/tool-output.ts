@@ -1,5 +1,6 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
 
 function positiveNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
@@ -23,6 +24,7 @@ const FALLBACK_INLINE_CAP = 10_000;
  */
 export const getToolOutput: CoderTool = {
   name: 'get_tool_output',
+  mutates: false, parallelSafe: true, riskLevel: 'read',
   description:
     'Retrieve the full content of a previously-truncated tool output by its output_id.\n' +
     "USE: when a tool result was truncated (look for `[truncated: ... output_id=XYZ]`) and the elided portion is necessary to proceed.\n" +
@@ -65,10 +67,13 @@ export const getToolOutput: CoderTool = {
     if (!store) {
       return err('Tool output store is not available in this session (likely a subagent or test run).');
     }
-    const content = store.get(id);
+    const signal = asAbortSignal(ctx.signal);
+    signal?.throwIfAborted();
+    const content = await store.get(id, signal);
+    signal?.throwIfAborted();
     if (content === null) {
       return err(
-        `No tool output found for id '${id}'. It may have been garbage-collected (default TTL 7 days) or the id is wrong — recheck the truncation marker.`,
+        `No tool output found for id '${id}' in this session. It may no longer be available or the id is wrong — recheck the truncation marker.`,
       );
     }
 

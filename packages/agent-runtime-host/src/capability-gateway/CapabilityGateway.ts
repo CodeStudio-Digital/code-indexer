@@ -1,6 +1,10 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { toBinary } from '@bufbuild/protobuf';
-import { agentV1Capability } from '@mcp/agent-runtime-contracts';
+import { agentV1Capability, agentV1SessionStore } from '@mcp/agent-runtime-contracts';
+import { attemptIdentityEqual } from '../ipc/FrameHeaderValidation.js';
+import { isEngineBudgetRefusal, isEngineWorkspaceRefusal } from './EngineBudgetRefusal.js';
+import { validateCapabilityRetirement } from './CapabilityRetirement.js';
+import { validateCapabilityReadBatch } from './CapabilityReadBatchValidation.js';
 import type { HostDataBoundContext } from '../ipc/HostDataAttemptChannelValidation.js';
 import { CapabilityGatewayError } from './CapabilityGatewayError.js';
 import type {
@@ -33,6 +37,7 @@ interface ExecutedEntry {
 export class CapabilityGateway {
   readonly #prepared = new Map<string, PreparedEntry>();
   readonly #executed = new Map<string, ExecutedEntry>();
+  readonly #retired = new Map<string, Uint8Array>();
 
   constructor(
     private readonly context: HostDataBoundContext,
@@ -43,6 +48,8 @@ export class CapabilityGateway {
   ) {
     if (!Number.isSafeInteger(limits.maximumPreparedOperations)
       || limits.maximumPreparedOperations <= 0
+      || !Number.isSafeInteger(limits.maximumRetiredOperations ?? 100_000)
+      || (limits.maximumRetiredOperations ?? 100_000) <= 0
       || !Number.isSafeInteger(limits.maximumInputBytes)
       || limits.maximumInputBytes <= 0
       || !Number.isSafeInteger(limits.maximumOutputBytes)
@@ -64,6 +71,8 @@ export class CapabilityGateway {
       .update(toBinary(agentV1Capability.CapabilityPrepareSchema, value))
       .digest();
     const existing = this.#prepared.get(request.operationId);
+    if (this.#retired.has(request.operationId)) throw new CapabilityGatewayError(
+      'operation_conflict', 'capability operation has a durable terminal; replay cannot authorize execution');
     if (existing) {
       if (!sameDigest(existing.digest, digest)) {
         throw new CapabilityGatewayError(
@@ -73,7 +82,8 @@ export class CapabilityGateway {
       }
       return existing.result;
     }
-    if (this.#prepared.size >= this.limits.maximumPreparedOperations) {
+    if (this.#prepared.size >= this.limits.maximumPreparedOperations
+      || this.#retired.size + this.#prepared.size >= (this.limits.maximumRetiredOperations ?? 100_000)) {
       throw new CapabilityGatewayError('registry_full', 'capability registry is full');
     }
     const result = this.resolver.resolve(request).then((resolution) => (
@@ -125,8 +135,51 @@ export class CapabilityGateway {
     return this.#prepared.size;
   }
 
+  validateReadBatch(value: agentV1Capability.CapabilityReadBatchExecute) {
+    return validateCapabilityReadBatch(value, this.context, this.nowUnixMs,
+      (id) => this.#prepared.get(id), this.executor);
+  }
+
   get executedOperationCount(): number {
     return this.#executed.size;
+  }
+
+  /** Called only by the authenticated Data owner, after the native journal
+   * commit and its ACK. Keep a bounded digest tombstone, never a reusable grant. */
+  async retireCommitted(record: agentV1SessionStore.EngineEventRecordV1): Promise<void> {
+    const body = record.body;
+    if (body.case !== 'capabilityTerminal' && body.case !== 'capabilityRefused') return;
+    if (!record.identity || !attemptIdentityEqual(record.identity, this.context.identity)) {
+      throw new CapabilityGatewayError('operation_conflict', 'foreign capability retirement');
+    }
+    const id = body.value.operationId;
+    const digest = createHash('sha256').update(toBinary(agentV1SessionStore.EngineEventRecordV1Schema, record)).digest();
+    const retired = this.#retired.get(id);
+    if (retired) {
+      if (!sameDigest(retired, digest)) throw new CapabilityGatewayError('operation_conflict', 'capability retirement replay diverged');
+      return;
+    }
+    const prepared = this.#prepared.get(id);
+    if (!prepared) {
+      // The authenticated engine may refuse an unopened invocation using its
+      // sealed budget. This only removes authority: no grant or effect exists.
+      if (this.#executed.has(id) || !(isEngineBudgetRefusal(record, this.nowUnixMs()) || isEngineWorkspaceRefusal(record, this.nowUnixMs()))) {
+        throw new CapabilityGatewayError('operation_conflict', 'capability retirement has no preparation');
+      }
+      if (this.#retired.size + this.#prepared.size >= (this.limits.maximumRetiredOperations ?? 100_000)) {
+        throw new CapabilityGatewayError('registry_full', 'capability registry is full');
+      }
+      this.#retired.set(id, digest);
+      return;
+    }
+    const decision = await prepared.result;
+    const executed = this.#executed.get(id);
+    validateCapabilityRetirement(record, decision, await executed?.result);
+    // Install the tombstone first, including when a cleanup hook throws.
+    this.#retired.set(id, digest);
+    this.#prepared.delete(id);
+    this.#executed.delete(id);
+    this.resolver.retire?.(prepared.request, decision);
   }
 
   async #executePrepared(

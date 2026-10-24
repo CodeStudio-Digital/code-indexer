@@ -61,9 +61,9 @@ export function validateCapabilityPrepare(
     capabilityVersion: value.capabilityVersion,
     executionClass,
     mutates: value.mutates,
-    encodedJsonInput: value.encodedJsonInput.slice(),
-    inputSha256: value.inputSha256.slice(),
-    capabilitySetSha256: value.capabilitySetSha256.slice(),
+    encodedJsonInput: Uint8Array.from(value.encodedJsonInput),
+    inputSha256: Uint8Array.from(value.inputSha256),
+    capabilitySetSha256: Uint8Array.from(value.capabilitySetSha256),
     idempotencyKey: value.idempotencyKey,
     deadlineAtUnixMs: value.deadlineAtUnixMs,
   });

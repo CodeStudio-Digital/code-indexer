@@ -6,7 +6,7 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { ContainmentCapabilities, ProtocolVersion, ProtocolVersionRange, RuntimeProvenance } from "./common_pb.js";
 import { file_codestudio_agent_v1_common } from "./common_pb.js";
-import type { ExpectedRuntimeProvenance } from "./supervisor_pb.js";
+import type { AttemptProcessExited, AttemptProcessReaped, ExpectedRuntimeProvenance } from "./supervisor_pb.js";
 import { file_codestudio_agent_v1_supervisor } from "./supervisor_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file codestudio/agent/v1/supervisor_bootstrap.proto.
  */
 export const file_codestudio_agent_v1_supervisor_bootstrap: GenFile = /*@__PURE__*/
-  fileDesc("Ci5jb2Rlc3R1ZGlvL2FnZW50L3YxL3N1cGVydmlzb3JfYm9vdHN0cmFwLnByb3RvEhNjb2Rlc3R1ZGlvLmFnZW50LnYxIoEECh9Ib3N0U3VwZXJ2aXNvckJyaWRnZU9wZW5SZXF1ZXN0EhYKDnNjaGVtYV92ZXJzaW9uGAEgASgNEiAKGG1hbmFnZW1lbnRfZW5kcG9pbnRfbmFtZRgCIAEoCRIgChhtYW5hZ2VtZW50X2Nvbm5lY3Rpb25faWQYAyABKAkSIAoYbWFuYWdlbWVudF9zZXNzaW9uX3Rva2VuGAQgASgMEh8KF3N1cGVydmlzb3JfbGF1bmNoX25vbmNlGAUgASgMElUKHXRydXN0ZWRfc3VwZXJ2aXNvcl9wcm92ZW5hbmNlGAYgASgLMi4uY29kZXN0dWRpby5hZ2VudC52MS5FeHBlY3RlZFJ1bnRpbWVQcm92ZW5hbmNlElEKGXRydXN0ZWRfcnVubmVyX3Byb3ZlbmFuY2UYByABKAsyLi5jb2Rlc3R1ZGlvLmFnZW50LnYxLkV4cGVjdGVkUnVudGltZVByb3ZlbmFuY2USPwoRc2VsZWN0ZWRfcHJvdG9jb2wYCCABKAsyJC5jb2Rlc3R1ZGlvLmFnZW50LnYxLlByb3RvY29sVmVyc2lvbhIdChVzdXBlcnZpc29yX2V4ZWN1dGFibGUYCSABKAkSGQoRcnVubmVyX2V4ZWN1dGFibGUYCiABKAkSGgoSc3RhcnR1cF90aW1lb3V0X21zGAsgASgEIqsFChhTdXBlcnZpc29yUHJvY2Vzc0hhbmRvZmYSFgoOc2NoZW1hX3ZlcnNpb24YASABKA0SFwoPaG9zdF9wcm9jZXNzX2lkGAIgASgNEiAKGG1hbmFnZW1lbnRfY29ubmVjdGlvbl9pZBgDIAEoCRIjChttYW5hZ2VtZW50X2VuZHBvaW50X2FkZHJlc3MYBCABKAkSIAoYbWFuYWdlbWVudF9zZXNzaW9uX3Rva2VuGAUgASgMEh8KF3N1cGVydmlzb3JfbGF1bmNoX25vbmNlGAYgASgMEkUKFXN1cGVydmlzb3JfcHJvdmVuYW5jZRgHIAEoCzImLmNvZGVzdHVkaW8uYWdlbnQudjEuUnVudGltZVByb3ZlbmFuY2USRgoTc3VwcG9ydGVkX3Byb3RvY29scxgIIAEoCzIpLmNvZGVzdHVkaW8uYWdlbnQudjEuUHJvdG9jb2xWZXJzaW9uUmFuZ2USQQoLY29udGFpbm1lbnQYCSABKAsyLC5jb2Rlc3R1ZGlvLmFnZW50LnYxLkNvbnRhaW5tZW50Q2FwYWJpbGl0aWVzEh4KFnN1cHBvcnRlZF9mZWF0dXJlX2JpdHMYCiABKAQSGQoRcnVubmVyX2V4ZWN1dGFibGUYCyABKAkSIAoYcnVubmVyX3dvcmtpbmdfZGlyZWN0b3J5GAwgASgJElIKEnJ1bm5lcl9lbnZpcm9ubWVudBgNIAMoCzI2LmNvZGVzdHVkaW8uYWdlbnQudjEuU3VwZXJ2aXNvclByb2Nlc3NFbnZpcm9ubWVudEVudHJ5ElEKGXRydXN0ZWRfcnVubmVyX3Byb3ZlbmFuY2UYDiABKAsyLi5jb2Rlc3R1ZGlvLmFnZW50LnYxLkV4cGVjdGVkUnVudGltZVByb3ZlbmFuY2UiPwohU3VwZXJ2aXNvclByb2Nlc3NFbnZpcm9ubWVudEVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCSKWAQoWU3VwZXJ2aXNvclByb2Nlc3NSZWFkeRIWCg5zY2hlbWFfdmVyc2lvbhgBIAEoDRIdChVzdXBlcnZpc29yX3Byb2Nlc3NfaWQYAiABKA0SIAoYbWFuYWdlbWVudF9jb25uZWN0aW9uX2lkGAMgASgJEiMKG21hbmFnZW1lbnRfZW5kcG9pbnRfYWRkcmVzcxgEIAEoCWIGcHJvdG8z", [file_codestudio_agent_v1_common, file_codestudio_agent_v1_supervisor]);
+  fileDesc("Ci5jb2Rlc3R1ZGlvL2FnZW50L3YxL3N1cGVydmlzb3JfYm9vdHN0cmFwLnByb3RvEhNjb2Rlc3R1ZGlvLmFnZW50LnYxIqUECh9Ib3N0U3VwZXJ2aXNvckJyaWRnZU9wZW5SZXF1ZXN0EhYKDnNjaGVtYV92ZXJzaW9uGAEgASgNEiAKGG1hbmFnZW1lbnRfZW5kcG9pbnRfbmFtZRgCIAEoCRIgChhtYW5hZ2VtZW50X2Nvbm5lY3Rpb25faWQYAyABKAkSIAoYbWFuYWdlbWVudF9zZXNzaW9uX3Rva2VuGAQgASgMEh8KF3N1cGVydmlzb3JfbGF1bmNoX25vbmNlGAUgASgMElUKHXRydXN0ZWRfc3VwZXJ2aXNvcl9wcm92ZW5hbmNlGAYgASgLMi4uY29kZXN0dWRpby5hZ2VudC52MS5FeHBlY3RlZFJ1bnRpbWVQcm92ZW5hbmNlElEKGXRydXN0ZWRfcnVubmVyX3Byb3ZlbmFuY2UYByABKAsyLi5jb2Rlc3R1ZGlvLmFnZW50LnYxLkV4cGVjdGVkUnVudGltZVByb3ZlbmFuY2USPwoRc2VsZWN0ZWRfcHJvdG9jb2wYCCABKAsyJC5jb2Rlc3R1ZGlvLmFnZW50LnYxLlByb3RvY29sVmVyc2lvbhIdChVzdXBlcnZpc29yX2V4ZWN1dGFibGUYCSABKAkSGQoRcnVubmVyX2V4ZWN1dGFibGUYCiABKAkSGgoSc3RhcnR1cF90aW1lb3V0X21zGAsgASgEEiIKGmxpZmVjeWNsZV9vdXRib3hfZGlyZWN0b3J5GAwgASgJIs8FChhTdXBlcnZpc29yUHJvY2Vzc0hhbmRvZmYSFgoOc2NoZW1hX3ZlcnNpb24YASABKA0SFwoPaG9zdF9wcm9jZXNzX2lkGAIgASgNEiAKGG1hbmFnZW1lbnRfY29ubmVjdGlvbl9pZBgDIAEoCRIjChttYW5hZ2VtZW50X2VuZHBvaW50X2FkZHJlc3MYBCABKAkSIAoYbWFuYWdlbWVudF9zZXNzaW9uX3Rva2VuGAUgASgMEh8KF3N1cGVydmlzb3JfbGF1bmNoX25vbmNlGAYgASgMEkUKFXN1cGVydmlzb3JfcHJvdmVuYW5jZRgHIAEoCzImLmNvZGVzdHVkaW8uYWdlbnQudjEuUnVudGltZVByb3ZlbmFuY2USRgoTc3VwcG9ydGVkX3Byb3RvY29scxgIIAEoCzIpLmNvZGVzdHVkaW8uYWdlbnQudjEuUHJvdG9jb2xWZXJzaW9uUmFuZ2USQQoLY29udGFpbm1lbnQYCSABKAsyLC5jb2Rlc3R1ZGlvLmFnZW50LnYxLkNvbnRhaW5tZW50Q2FwYWJpbGl0aWVzEh4KFnN1cHBvcnRlZF9mZWF0dXJlX2JpdHMYCiABKAQSGQoRcnVubmVyX2V4ZWN1dGFibGUYCyABKAkSIAoYcnVubmVyX3dvcmtpbmdfZGlyZWN0b3J5GAwgASgJElIKEnJ1bm5lcl9lbnZpcm9ubWVudBgNIAMoCzI2LmNvZGVzdHVkaW8uYWdlbnQudjEuU3VwZXJ2aXNvclByb2Nlc3NFbnZpcm9ubWVudEVudHJ5ElEKGXRydXN0ZWRfcnVubmVyX3Byb3ZlbmFuY2UYDiABKAsyLi5jb2Rlc3R1ZGlvLmFnZW50LnYxLkV4cGVjdGVkUnVudGltZVByb3ZlbmFuY2USIgoabGlmZWN5Y2xlX291dGJveF9kaXJlY3RvcnkYDyABKAki4gEKIFN1cGVydmlzb3JMaWZlY3ljbGVPdXRib3hFbnRyeVYxEhYKDnNjaGVtYV92ZXJzaW9uGAEgASgNEhUKDWNvbm5lY3Rpb25faWQYAiABKAkSOQoGZXhpdGVkGAMgASgLMikuY29kZXN0dWRpby5hZ2VudC52MS5BdHRlbXB0UHJvY2Vzc0V4aXRlZBI5CgZyZWFwZWQYBCABKAsyKS5jb2Rlc3R1ZGlvLmFnZW50LnYxLkF0dGVtcHRQcm9jZXNzUmVhcGVkEhkKEWhvc3RfYWNrbm93bGVkZ2VkGAUgASgIIj8KIVN1cGVydmlzb3JQcm9jZXNzRW52aXJvbm1lbnRFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkilgEKFlN1cGVydmlzb3JQcm9jZXNzUmVhZHkSFgoOc2NoZW1hX3ZlcnNpb24YASABKA0SHQoVc3VwZXJ2aXNvcl9wcm9jZXNzX2lkGAIgASgNEiAKGG1hbmFnZW1lbnRfY29ubmVjdGlvbl9pZBgDIAEoCRIjChttYW5hZ2VtZW50X2VuZHBvaW50X2FkZHJlc3MYBCABKAliBnByb3RvMw", [file_codestudio_agent_v1_common, file_codestudio_agent_v1_supervisor]);
 
 /**
  * Single-use request accepted by the in-process native Host bridge. Endpoint
@@ -78,6 +78,13 @@ export type HostSupervisorBridgeOpenRequest = Message<"codestudio.agent.v1.HostS
    * @generated from field: uint64 startup_timeout_ms = 11;
    */
   startupTimeoutMs: bigint;
+
+  /**
+   * Trusted product data directory. Empty only for isolated protocol fixtures.
+   *
+   * @generated from field: string lifecycle_outbox_directory = 12;
+   */
+  lifecycleOutboxDirectory: string;
 };
 
 /**
@@ -163,6 +170,11 @@ export type SupervisorProcessHandoff = Message<"codestudio.agent.v1.SupervisorPr
    * @generated from field: codestudio.agent.v1.ExpectedRuntimeProvenance trusted_runner_provenance = 14;
    */
   trustedRunnerProvenance?: ExpectedRuntimeProvenance | undefined;
+
+  /**
+   * @generated from field: string lifecycle_outbox_directory = 15;
+   */
+  lifecycleOutboxDirectory: string;
 };
 
 /**
@@ -171,6 +183,47 @@ export type SupervisorProcessHandoff = Message<"codestudio.agent.v1.SupervisorPr
  */
 export const SupervisorProcessHandoffSchema: GenMessage<SupervisorProcessHandoff> = /*@__PURE__*/
   messageDesc(file_codestudio_agent_v1_supervisor_bootstrap, 1);
+
+/**
+ * Physical evidence retained before releasing admission. Recovery must match
+ * the original connection, attempt and durable launch; this is not a new launch
+ * capability and must never be replayed under a different management channel.
+ *
+ * @generated from message codestudio.agent.v1.SupervisorLifecycleOutboxEntryV1
+ */
+export type SupervisorLifecycleOutboxEntryV1 = Message<"codestudio.agent.v1.SupervisorLifecycleOutboxEntryV1"> & {
+  /**
+   * @generated from field: uint32 schema_version = 1;
+   */
+  schemaVersion: number;
+
+  /**
+   * @generated from field: string connection_id = 2;
+   */
+  connectionId: string;
+
+  /**
+   * @generated from field: codestudio.agent.v1.AttemptProcessExited exited = 3;
+   */
+  exited?: AttemptProcessExited | undefined;
+
+  /**
+   * @generated from field: codestudio.agent.v1.AttemptProcessReaped reaped = 4;
+   */
+  reaped?: AttemptProcessReaped | undefined;
+
+  /**
+   * @generated from field: bool host_acknowledged = 5;
+   */
+  hostAcknowledged: boolean;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.SupervisorLifecycleOutboxEntryV1.
+ * Use `create(SupervisorLifecycleOutboxEntryV1Schema)` to create a new message.
+ */
+export const SupervisorLifecycleOutboxEntryV1Schema: GenMessage<SupervisorLifecycleOutboxEntryV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_supervisor_bootstrap, 2);
 
 /**
  * @generated from message codestudio.agent.v1.SupervisorProcessEnvironmentEntry
@@ -192,7 +245,7 @@ export type SupervisorProcessEnvironmentEntry = Message<"codestudio.agent.v1.Sup
  * Use `create(SupervisorProcessEnvironmentEntrySchema)` to create a new message.
  */
 export const SupervisorProcessEnvironmentEntrySchema: GenMessage<SupervisorProcessEnvironmentEntry> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_supervisor_bootstrap, 2);
+  messageDesc(file_codestudio_agent_v1_supervisor_bootstrap, 3);
 
 /**
  * Returned through the inherited response handle only after the supervisor
@@ -227,5 +280,5 @@ export type SupervisorProcessReady = Message<"codestudio.agent.v1.SupervisorProc
  * Use `create(SupervisorProcessReadySchema)` to create a new message.
  */
 export const SupervisorProcessReadySchema: GenMessage<SupervisorProcessReady> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_supervisor_bootstrap, 3);
+  messageDesc(file_codestudio_agent_v1_supervisor_bootstrap, 4);
 

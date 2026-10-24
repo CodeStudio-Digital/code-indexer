@@ -38,6 +38,8 @@ export interface RustHostManagementLaunchPort {
 }
 
 export interface RustHostManagementFactPort {
+  readonly remainingIdentityCapacity?: number;
+  renewAuthority?(request: import('./HostLifecycleTypes.js').HostAuthorityRenewalRequest): Promise<void>;
   processNext(signal?: AbortSignal): Promise<HostSupervisorFactStep>;
   cancel(request: HostCancelAttemptRequest): Promise<void>;
   fence(request: HostFenceAttemptRequest): Promise<void>;

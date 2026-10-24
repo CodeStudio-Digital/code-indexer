@@ -9,7 +9,6 @@ import type { ContextMenuItem } from '../../components/ui/context-menu.js';
 import { hasPin, usePinnedTabs } from '../../state/pinned-tabs.js';
 import { buildRailPin } from '../../state/pinned-tabs-describe.js';
 import { railPinId } from '../../state/pinned-tabs-types.js';
-import { LinkDesignSystemDialog } from './builder/LinkDesignSystemDialog.js';
 import { ProjectSettingsModal } from './settings/ProjectSettingsModal.js';
 import { PROJECT_RAIL_TABS, type TabDef } from './tabs-config.js';
 
@@ -96,7 +95,6 @@ export function ProjectRail({
         {pluginTabs.length > 0 && <RailSeparator />}
         {pluginTabs.map(renderTool)}
         <div className="mt-auto flex flex-col items-center gap-0.5 pb-1">
-          <LinkDesignSystemDialog projectId={projectId} />
           <RailButton
             icon={Settings2}
             label={t('settings.open')}

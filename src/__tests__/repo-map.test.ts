@@ -7,8 +7,8 @@ import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-ma
 
 /**
  * Repo-map: optional system-prompt addendum that lists top-level public
- * symbols of recently-modified files. Gated by CODER_REPOMAP_TOKENS (off
- * when 0). These tests pin the budget contract so we never overshoot the
+ * symbols of recently-modified files. Disabled when the caller budget is
+ * zero. These tests pin the budget contract so we never overshoot the
  * caller's char budget — the map sits at the END of the prompt and only
  * invalidates the trailing cache segment, but it must stay within budget.
  */
@@ -98,87 +98,18 @@ describe('buildRepoMap', () => {
 });
 
 describe('resolveRepoMapBudget', () => {
-  let workDir: string;
-  let db: CodeIndexDB;
   const originalEnv = process.env.CODER_REPOMAP_TOKENS;
-
-  beforeAll(() => {
-    workDir = mkdtempSync(join(tmpdir(), 'rm-budget-'));
-    db = new CodeIndexDB(join(workDir, 'index.sqlite'));
-  });
-
-  afterAll(() => {
-    db.close();
-    rmSync(workDir, { recursive: true, force: true });
+  afterEach(() => {
     if (originalEnv === undefined) delete process.env.CODER_REPOMAP_TOKENS;
     else process.env.CODER_REPOMAP_TOKENS = originalEnv;
   });
-
-  afterEach(() => {
-    delete process.env.CODER_REPOMAP_TOKENS;
+  const unusedDb = {} as CodeIndexDB;
+  it('disables context when the project is not indexed', () => {
+    expect(resolveRepoMapBudget(unusedDb, 1, false)).toBe(0);
   });
-
-  /** Seed `n` minimal files into a fresh project; returns the project id. */
-  function seedProject(name: string, n: number): number {
-    const projectId = db.createProject(name, workDir).id;
-    const fileBase = {
-      language: 'ts', size: 100, lineCount: 50, contentHash: 'h',
-      summary: 's', concepts: [], dependencies: [], internalDeps: [],
-      externalDeps: [], notes: [], complexity: 'low', layer: 'core',
-      isEntryPoint: false, isTest: false, isGenerated: false,
-    };
-    for (let i = 0; i < n; i++) {
-      db.upsertFile(projectId, { ...fileBase, path: `src/f${i}.ts` });
-    }
-    return projectId;
-  }
-
-  it('returns 0 when project is not indexed', () => {
-    const projectId = seedProject('not-indexed', 500);
-    expect(resolveRepoMapBudget(db, projectId, false)).toBe(0);
-  });
-
-  it('returns 0 for small projects (<50 files)', () => {
-    const projectId = seedProject('tiny', 10);
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(0);
-  });
-
-  it('returns 1500 for medium projects (50-499 files)', () => {
-    const projectId = seedProject('medium', 100);
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(1500);
-  });
-
-  it('returns 3000 for large projects (500-1999 files)', () => {
-    const projectId = seedProject('large', 600);
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(3000);
-  });
-
-  it('returns 4500 for huge projects (>=2000 files)', () => {
-    const projectId = seedProject('huge', 2100);
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(4500);
-  });
-
-  it('honors CODER_REPOMAP_TOKENS override with positive integer', () => {
-    process.env.CODER_REPOMAP_TOKENS = '2500';
-    const projectId = seedProject('override-pos', 10); // would auto to 0
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(2500);
-  });
-
-  it('disables when CODER_REPOMAP_TOKENS is "0"', () => {
-    process.env.CODER_REPOMAP_TOKENS = '0';
-    const projectId = seedProject('override-zero', 2500); // would auto to 4500
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(0);
-  });
-
-  it('treats invalid CODER_REPOMAP_TOKENS as disabled', () => {
-    process.env.CODER_REPOMAP_TOKENS = 'banana';
-    const projectId = seedProject('override-bad', 600); // would auto to 3000
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(0);
-  });
-
-  it('treats empty CODER_REPOMAP_TOKENS as unset (uses auto-sizing)', () => {
-    process.env.CODER_REPOMAP_TOKENS = '';
-    const projectId = seedProject('override-empty', 600);
-    expect(resolveRepoMapBudget(db, projectId, true)).toBe(3000);
+  it.each([undefined, '', '0', '2500', 'banana'])('retains the fixed prompt policy with retired environment value %s', value => {
+    if (value === undefined) delete process.env.CODER_REPOMAP_TOKENS;
+    else process.env.CODER_REPOMAP_TOKENS = value;
+    expect(resolveRepoMapBudget(unusedDb, 1, true)).toBe(1024);
   });
 });

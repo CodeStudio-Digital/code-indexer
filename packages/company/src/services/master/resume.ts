@@ -1,3 +1,4 @@
+import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.js';
 /**
  * Cold-start resume of an existing master agent run. Mirror of `start`
  * for the case where the company session was paused / the API server
@@ -279,6 +280,7 @@ export async function resumeMaster(
 
     const handle = await runWithExplicitMasterFallback(
       () => runCoder({
+        hostTools: getReadyDocsResearchTools(),
         session: { id: masterRun.coder_session_id },
         userMessage: opts.userMessage,
         attachments: opts.attachments,

@@ -62,10 +62,53 @@ function setup() {
       promoteTool,
     },
   } as unknown as ToolContext;
-  return { catalog, ctx, promoteTool };
+  return { catalog, ctx, promoteTool, registry };
 }
 
 describe('capability_catalog', () => {
+  it('requires native-visible dependencies before returning a skill instruction', async () => {
+    const { catalog, ctx, promoteTool } = setup();
+    const found = JSON.parse((await catalog.handler({ op: 'search', query: 'unity audit' }, ctx)).content);
+    const skillId = found.items[0].capabilityId as string;
+    const visible = new Set<string>();
+    ctx.ports = { discovery: { capabilitySetDigest: 'a'.repeat(64), visibleToolNames: visible,
+      eligibleCapabilityIds: new Set([skillId, 'cap:native:read_file']), assertCurrent() {} } };
+    const missing = JSON.parse((await catalog.handler({ op: 'activate', capability_ids: [skillId] }, ctx)).content);
+    expect(missing.activated).toEqual([]);
+    expect(missing.rejected[0]).toMatchObject({ reason: 'required_capability_missing', missingRequirements: ['read_file'] });
+    visible.add('read_file');
+    const activated = JSON.parse((await catalog.handler({ op: 'activate', capability_ids: [skillId], input: 'decals' }, ctx)).content);
+    expect(activated.activated[0].instruction).toContain('Inspect Game: decals');
+    expect(promoteTool).not.toHaveBeenCalled();
+  });
+  it('reuses sealed descriptors and preserves native membership during activation', async () => {
+    const { catalog, ctx, promoteTool, registry } = setup();
+    registry.seal();
+    const list = vi.spyOn(registry, 'list');
+    ctx.ports = { discovery: { capabilitySetDigest: 'b'.repeat(64), visibleToolNames: new Set(['read_file']),
+      eligibleCapabilityIds: new Set(['cap:native:read_file']), assertCurrent() {} } };
+    const initial = JSON.parse((await catalog.handler({ op: 'list' }, ctx)).content);
+    expect(initial.items.map((x: { name: string }) => x.name)).toEqual(['read_file']);
+    await catalog.handler({ op: 'search', query: 'read file' }, ctx);
+    const activated = JSON.parse((await catalog.handler({ op: 'activate', capability_ids: ['cap:native:read_file', 'cap:mcp_external:late_tool'] }, ctx)).content);
+    expect(activated).toMatchObject({ capabilitySetDigest: 'b'.repeat(64), projectionState: 'immutable_attempt_snapshot',
+      activated: [{ effective: 'already_visible' }], rejected: [{ reason: 'not_in_attempt_snapshot' }] });
+    expect(promoteTool).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects malformed or excessive discovery input before scanning the registry', async () => {
+    const { catalog, ctx, registry } = setup();
+    const list = vi.spyOn(registry, 'list');
+    for (const args of [{ op: 'list', cursor: '-1' }, { op: 'list', cursor: '1suffix' },
+      { op: 'list', limit: 1.5 }, { op: 'search', query: 'x'.repeat(4001) }]) {
+      expect((await catalog.handler(args, ctx)).isError).toBe(true);
+    }
+    expect(list).not.toHaveBeenCalled();
+    ctx.signal = AbortSignal.abort();
+    await expect(catalog.handler({ op: 'list' }, ctx)).rejects.toThrow();
+    expect(list).not.toHaveBeenCalled();
+  });
   it('searches tools, plugins, and skills through one bounded contract', async () => {
     const { catalog, ctx } = setup();
     const pluginResult = await catalog.handler({ op: 'search', query: 'acme inspect' }, ctx);

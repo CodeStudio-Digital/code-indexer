@@ -48,7 +48,7 @@ const ALL_TOOLS: CoderTool[] = [
   makeTool('Grep', 'Search content'),
   makeTool('TodoWrite', 'Manage todos'),
   makeTool('PowerShell', 'Run PS'),
-  makeTool('DesignSystem', 'DS tooling'),
+  makeTool('ArchitectureMap', 'Project architecture tooling'),
   makeTool('Database', 'DB queries'),
   makeTool('WebFetch', 'Fetch URL'),
   makeTool('GitStatus', 'git status'),

@@ -10,7 +10,7 @@ const PRESET_SCHEMA: &str = "codestudio.agent.v1.ProviderPresetSnapshotV1";
 
 pub(super) struct Material {
     pub snapshots: Vec<(wire::SnapshotRef, Vec<u8>)>,
-    artifacts: Vec<(wire::ArtifactRef, Vec<u8>)>,
+    pub(super) artifacts: Vec<(wire::ArtifactRef, Vec<u8>)>,
 }
 
 pub(super) struct Fixture {
@@ -124,6 +124,8 @@ pub(super) fn tool(name: &str) -> wire::ProviderToolDescriptor {
         capability_version: "1".into(),
         execution_class: wire::CapabilityExecutionClass::NativeRead.into(),
         mutates: false,
+        parallel_safe: false,
+        read_only: false,
     }
 }
 
@@ -171,7 +173,7 @@ fn encoded_snapshot(
     )
 }
 
-fn artifact(id: &str, media_type: &str, bytes: &[u8]) -> wire::ArtifactRef {
+pub(super) fn artifact(id: &str, media_type: &str, bytes: &[u8]) -> wire::ArtifactRef {
     wire::ArtifactRef {
         artifact_id: format!("artifact:{id}"),
         kind: "provider-input".into(),
@@ -182,6 +184,7 @@ fn artifact(id: &str, media_type: &str, bytes: &[u8]) -> wire::ArtifactRef {
         privacy_class: wire::ArtifactPrivacyClass::Internal as i32,
         redaction_policy_version: "v1".into(),
         owner_session_id: "session-1".into(),
+        display_name: String::new(),
     }
 }
 

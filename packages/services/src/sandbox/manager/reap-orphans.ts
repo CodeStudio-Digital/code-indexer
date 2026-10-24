@@ -105,7 +105,7 @@ export async function reapOrphans(deps: ReapOrphansDeps): Promise<void> {
   const orphans = allLabeled.filter((o) => {
     if (keepAlive.has(o.id) || dbContainerIds.has(o.id)) return false;
     // Skip containers whose mcp.sessionId is not a Company UUID (optionally
-    // followed by a service id). Chrome Service and Verdaccio use named ids, so
+    // followed by a service id). Chrome Service uses named ids, so
     // they must be left alone even though they carry mcp.sandbox=1.
     const sessionPart = o.sessionId.split(':')[0] ?? '';
     if (

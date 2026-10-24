@@ -1,0 +1,138 @@
+{
+  "stage": "passed",
+  "errors": [],
+  "checks": {
+    "renderer": {
+      "title": "CodeStudio",
+      "text": "Bem-vindo ao CodeStudio\n\nEntre para usar o CodeStudio. Seu ambiente local é sempre gratuito.\n\nEntrar com e-mail e senha\nou\nContinuar com GoogleContinuar com GitHubContinuar com MicrosoftEntrar com SSO\n\nPrefere e-mail e senha, ou quer gerenciar sua conta?\n\nAbrir o portal web",
+      "bridge": true,
+      "invoke": "function",
+      "rootChildren": 2
+    },
+    "projects": {
+      "status": 200,
+      "body": [
+        {
+          "id": 1,
+          "name": "Recovery validation",
+          "root_path": "D:\\MCP\\.tmp\\recovery-2026-09-24\\final-workspace-profile\\project",
+          "description": null,
+          "provider": null,
+          "model": null,
+          "created_at": "2026-09-25 01:53:05",
+          "updated_at": "2026-09-25 01:53:05",
+          "last_indexed": null,
+          "structural_last_checked_at": null,
+          "file_count": 0,
+          "symbol_count": 0,
+          "index_ignore_patterns": "[]",
+          "git_remote": null,
+          "default_branch": null,
+          "group_name": null,
+          "embeddings_enabled": 1,
+          "search_mode": "hybrid",
+          "embedding_fingerprint": null,
+          "memory_enabled": 1,
+          "node_version": null,
+          "runner_shell": null,
+          "builder_json": null,
+          "structural_indexed_at": null,
+          "is_synthetic": 0,
+          "language_levels": null,
+          "db_path": "D:\\MCP\\.tmp\\recovery-2026-09-24\\final-workspace-profile\\project\\.mcp-indexer\\index.db",
+          "db_split_status": "pending",
+          "db_split_at": null,
+          "db_split_err": null,
+          "db_split_attempts": 0,
+          "vectors_split_status": "pending",
+          "vectors_split_at": null,
+          "vectors_split_err": null,
+          "db_purged_at": null,
+          "runtime_versions": null,
+          "is_loose": 0,
+          "default_response_language": null
+        }
+      ]
+    },
+    "shells": {
+      "ok": true,
+      "value": [
+        {
+          "id": "powershell",
+          "label": "Windows PowerShell",
+          "file": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "args": [
+            "-NoLogo"
+          ]
+        },
+        {
+          "id": "pwsh",
+          "label": "PowerShell 7",
+          "file": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          "args": [
+            "-NoLogo"
+          ]
+        },
+        {
+          "id": "cmd",
+          "label": "Command Prompt",
+          "file": "C:\\WINDOWS\\system32\\cmd.exe"
+        },
+        {
+          "id": "git-bash",
+          "label": "Git Bash",
+          "file": "C:\\Program Files\\Git\\bin\\bash.exe",
+          "args": [
+            "-i",
+            "-l"
+          ]
+        },
+        {
+          "id": "wsl:podman-machine-default",
+          "label": "WSL: podman-machine-default",
+          "file": "wsl.exe",
+          "args": [
+            "-d",
+            "podman-machine-default"
+          ]
+        },
+        {
+          "id": "wsl:Ubuntu",
+          "label": "WSL: Ubuntu",
+          "file": "wsl.exe",
+          "args": [
+            "-d",
+            "Ubuntu"
+          ]
+        },
+        {
+          "id": "wsl:docker-desktop",
+          "label": "WSL: docker-desktop",
+          "file": "wsl.exe",
+          "args": [
+            "-d",
+            "docker-desktop"
+          ]
+        }
+      ]
+    },
+    "workflow": {
+      "projectId": 1,
+      "previousSessionCount": 1,
+      "read": "recovery edit saved",
+      "saved": "recovery edit saved",
+      "sessionId": "f4338fd0-b52d-4c9c-aaa6-1d4f1e889e3f",
+      "sessionListed": true,
+      "streamKeys": [
+        "next",
+        "return"
+      ],
+      "runnerSnapshot": {
+        "value": [],
+        "done": false
+      },
+      "terminalPid": 104072,
+      "terminalOutput": "\u001b[1t\u001b[c\u001b[?1004h\u001b[?9001h\u001b[?7l\u001b[?7hMicrosoft Windows [versão 10.0.26200.9457]\r\n(c) Microsoft Corporation. Todos os direitos reservados.\r\n\r\nD:\\MCP\\.tmp\\recovery-2026-09-24\\final-workspace-profile\\project>\u001b[4;65Hecho RECOVERY_TERMINAL_42\u001b[5;10H\u001b[5;10H\r\n\u001b]0;C:\\WINDOWS\\system32\\cmd.exe - echo  RECOVERY_TERMINAL_42\u001b\\RECOVERY_TERMINAL_42\r\n\u001b]0;C:\\WINDOWS\\system32\\cmd.exe\u001b\\\r\nD:\\MCP\\.tmp\\recovery-2026-09-24\\final-workspace-profile\\project>"
+    }
+  }
+}

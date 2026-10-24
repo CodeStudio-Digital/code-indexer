@@ -414,9 +414,36 @@ function makeHarness(options: {
       return row;
     }),
     getJob: vi.fn((id: number) => jobs.get(id) ?? null),
-    listJobs: vi.fn((filter?: { namespace?: string; status?: string }) => Array.from(jobs.values())
+    getOrCreateBuildJob: vi.fn((input: any) => {
+      const existing = Array.from(jobs.values()).reverse().find((job) =>
+        job.namespace === input.namespace && job.generation_id === input.generation_id
+        && job.kind === input.kind && ['pending', 'paused'].includes(job.status));
+      if (!existing) return store.createJob(input);
+      return store.updateJob(existing.id, {
+        status: 'pending', expected_items: input.expected_items, processed_items: 0, failed_items: 0,
+        error: null, cursor: { ...input.cursor, ...(existing.cursor?.retry ? { retry: existing.cursor.retry } : {}) },
+      })!;
+    }),
+    hasLiveMutationFence: vi.fn((namespace: string) => Array.from(jobs.values()).some((job) =>
+      job.namespace === namespace && job.kind === 'delta' && job.status === 'running'
+      && job.cursor?.reason === 'mutation-fence' && job.cursor?.fence_phase === 'in-flight')),
+    getNamespaceBuildRetry: vi.fn((namespace: string) => Array.from(jobs.values()).reverse()
+      .find((job) => job.namespace === namespace && job.status === 'paused'
+        && ['build', 'backfill'].includes(job.kind) && job.cursor?.retry)?.cursor?.retry ?? null),
+    listProjectRemovalIds: vi.fn(() => Array.from(jobs.values()).filter((job) => job.kind === 'cleanup'
+      && !['failed', 'cancelled'].includes(job.status) && job.cursor?.reason === 'project-removal')
+      .flatMap((job) => /^project-removal:p\d+$/.test(job.namespace) ? [Number(job.namespace.split(':p')[1])] : [])),
+    hasOpenNamespaceMutationJobs: vi.fn((namespace: string) => Array.from(jobs.values()).some((job) =>
+      job.namespace === namespace && ['pending', 'paused', 'running'].includes(job.status)
+      && (job.kind === 'delta' || (job.kind === 'backfill' && job.generation_id === null)))),
+    listJobs: vi.fn((filter?: { namespace?: string; namespacePrefix?: string; generationId?: number | null; limit?: number; status?: string; namespaces?: string[]; statuses?: string[]; kinds?: string[] }) => Array.from(jobs.values())
       .filter((row) => (!filter?.namespace || row.namespace === filter.namespace)
-        && (!filter?.status || row.status === filter.status))),
+          && (!filter?.namespacePrefix || row.namespace.startsWith(filter.namespacePrefix))
+          && (filter?.generationId === undefined || row.generation_id === filter.generationId)
+        && (!filter?.status || row.status === filter.status)
+        && (!filter?.namespaces || filter.namespaces.includes(row.namespace))
+        && (!filter?.statuses || filter.statuses.includes(row.status))
+          && (!filter?.kinds || filter.kinds.includes(row.kind))).slice(0, filter?.limit)),
     listGenerationNamespaces: vi.fn((generationId: number) => [...new Set([
       ...Array.from(jobs.values())
         .filter((row) => row.generation_id === generationId)
@@ -464,6 +491,7 @@ function makeHarness(options: {
     fingerprint: vi.fn(() => 'local:stable-code-model'),
   };
   db = {
+    countFiles: vi.fn((id: number) => fileCounts[id] ?? 0),
     listProjects: vi.fn(() => projectIds.map((id) => ({ id, is_synthetic: false, root_path: roots.get(id)! }))),
     getProject: vi.fn((id: number) => projectIds.includes(id)
       ? { id, name: `p${id}`, is_synthetic: false, root_path: roots.get(id)! }
@@ -613,6 +641,43 @@ beforeEach(() => {
 });
 
 describe('SemanticIndexCoordinator code generations', () => {
+  it('keeps docs backfill scans on the worker and coalesces callers until its query finishes', async () => {
+    const h = makeHarness({ docChunks: [] });
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const query = vi.fn(async () => { await waiting; return []; });
+    Object.assign(h.deps, { listJobsOffThread: query });
+    h.store.listJobs.mockClear();
+    const first = h.coordinator.retryPendingDocsBackfills();
+    const second = h.coordinator.retryPendingDocsBackfills();
+    expect(second).toBe(first);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(h.store.listJobs).not.toHaveBeenCalled();
+    release();
+    await expect(first).resolves.toBe(0);
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({ namespacePrefix: 'docs:c', generationId: null }));
+    expect(h.store.listJobs).not.toHaveBeenCalled();
+    await h.coordinator.dispose();
+  });
+
+  it('does not reopen a docs job completed while the worker query was in flight', async () => {
+    const h = makeHarness({ docChunks: [] });
+    const job = h.store.enqueueNamespaceBackfill({ namespace: 'docs:c2', cursor: { collection_id: 2 } });
+    const stale = structuredClone(job);
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    Object.assign(h.deps, { listJobsOffThread: async () => { await waiting; return [stale]; } });
+    h.store.getProfile.mockImplementation((purpose: 'code' | 'docs' | 'memory') => ({
+      purpose, embedding_target: { kind: 'disabled' }, reranker_target: { kind: 'disabled' },
+    }));
+    const retry = h.coordinator.retryPendingDocsBackfills();
+    h.store.updateJob(job.id, { status: 'completed' });
+    release(); await retry;
+    expect(h.store.getJob(job.id)?.status).toBe('completed');
+    expect(h.docsIndexer.retryEmbeddings).not.toHaveBeenCalled();
+    await h.coordinator.dispose();
+  });
+
   it('automatically starts only the opened project for a local profile', async () => {
     const h = makeHarness({ projects: [1, 2], fileCounts: { 1: 1, 2: 1 } });
     const run = vi.spyOn(h.coordinator, 'reindexCodeProject').mockResolvedValue({
@@ -804,8 +869,30 @@ describe('SemanticIndexCoordinator code generations', () => {
     ]);
   });
 
+  it.each(['resolve', 'reject'] as const)('drains explicit project final job writes before disposal (%s)', async outcome => {
+    const h = makeHarness();
+    const held = deferred<{ purpose: 'code'; generation_id: number; completed_namespaces: string[]; failed_namespaces: never[] }>();
+    const run = vi.spyOn(h.coordinator, 'reindexCodeProject').mockReturnValue(held.promise);
+    const job = h.coordinator.enqueueCodeProjectReindex(1, false);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    let closed = false;
+    const disposal = h.coordinator.dispose().then(() => { closed = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(closed).toBe(false);
+    expect(() => h.coordinator.enqueueCodeProjectReindex(1)).toThrow('shutting down');
+    if (outcome === 'resolve') held.resolve({ purpose: 'code', generation_id: 9, completed_namespaces: ['code:p1'], failed_namespaces: [] });
+    else held.reject(new Error('embedding shutdown'));
+    await disposal;
+    expect(h.jobs.get(job.id)?.status).toBe(outcome === 'resolve' ? 'completed' : 'paused');
+    const final = JSON.stringify(h.jobs.get(job.id));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(JSON.stringify(h.jobs.get(job.id))).toBe(final);
+    await h.coordinator.dispose();
+  });
+
   it('coalesces explicit project markers and dispatches the latest requested force mode', async () => {
     const h = makeHarness();
+    h.db.listFiles.mockImplementation(() => { throw new Error('Queueing must not hydrate indexed file rows'); });
     const run = vi.spyOn(h.coordinator, 'reindexCodeProject').mockResolvedValue({
       purpose: 'code',
       generation_id: 9,
@@ -2384,6 +2471,21 @@ describe('SemanticIndexCoordinator code generations', () => {
     h.store.settleNamespaceMutationFence({ job_id: fence.id, token: `${kind}-live` });
     await h.coordinator.ensureMemoryNamespace(namespace);
     expect(h.jobs.get(fence.id)).toMatchObject({ status: 'completed' });
+  });
+
+  it('reuses a failed memory build, honors its durable cooldown and permits manual recovery', async () => {
+    const h = makeHarness();
+    h.snapshotService.backfillEmbeddings.mockRejectedValue(new Error('429 Retry-After: 120'));
+    await expect(h.coordinator.ensureMemoryNamespace('snapshot:p1')).rejects.toThrow('429');
+    const before = Array.from(h.jobs.values()).filter((job) => ['build', 'backfill'].includes(job.kind));
+    await expect(h.coordinator.catchUpMemoryNamespace('snapshot:p1')).rejects.toThrow('cooling down');
+    expect(h.snapshotService.backfillEmbeddings).toHaveBeenCalledTimes(1);
+    await expect(h.coordinator.ensureMemoryNamespace('snapshot:p1')).rejects.toThrow('429');
+    expect(Array.from(h.jobs.values()).filter((job) => ['build', 'backfill'].includes(job.kind))).toHaveLength(before.length);
+    expect(h.snapshotService.backfillEmbeddings).toHaveBeenCalledTimes(2);
+    h.snapshotService.backfillEmbeddings.mockResolvedValue({ total: 0, failed: 0, embedded: 0, skipped: 0 });
+    await expect(h.coordinator.ensureMemoryNamespace('snapshot:p1')).resolves.toBeUndefined();
+    expect(h.namespaces.get('snapshot:p1')?.active_generation_id).toBeTruthy();
   });
 
   it('does not activate h0 when a snapshot mutates between logical proof and listIds', async () => {

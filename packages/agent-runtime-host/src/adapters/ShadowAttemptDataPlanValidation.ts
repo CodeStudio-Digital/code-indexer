@@ -92,7 +92,7 @@ function validateDeadlines(input: ShadowAttemptDataPlanInput): void {
     || launch.authorityLeaseExpiresAtUnixMs <= 0n
     || launch.authorityLeaseExpiresAtUnixMs > launch.hardDeadlineAtUnixMs
     || input.specDeadlineAtUnixMs <= 0n
-    || input.specDeadlineAtUnixMs > launch.authorityLeaseExpiresAtUnixMs
+    || input.specDeadlineAtUnixMs > launch.hardDeadlineAtUnixMs
   ) throw new RangeError('launch deadline');
 }
 

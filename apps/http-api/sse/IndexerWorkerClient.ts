@@ -1,9 +1,6 @@
 /**
  * Main-thread client for the indexer worker — implements StructuralExecutor
- * over a lazy, idle-evicting WorkerHost. Composes with the in-process
- * executor as a fallback so the structural feature NEVER depends on the
- * worker build existing (dev without bootstrap, packaging gaps, repeated
- * crashes).
+ * over a lazy, idle-evicting WorkerHost. Keeps all structural execution off the Electron main thread.
  */
 import { WorkerHost, type MessageBridge } from '@mcp/orchestrator-host';
 import type {
@@ -23,6 +20,8 @@ export interface IndexerWorkerClientOpts {
   concurrency?: number;
   /** Evict the worker after this long with no in-flight work. Default 2min. */
   idleTtlMs?: number;
+  /** CLI-only escape hatch; desktop must keep structural work off main. */
+  allowInProcessFallback?: boolean;
 }
 
 const RUN_TIMEOUT_MS = 10 * 60_000;   // big repos — the run streams progress anyway
@@ -149,6 +148,13 @@ export class IndexerWorkerClient implements StructuralExecutor {
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
     try {
       return (await host.requireBridge().request(type, payload, { timeoutMs })) as T;
+    } catch (error) {
+      if ((error as { code?: string }).code === 'request_timeout') {
+        // A timed-out worker can still be writing. Stop it before allowing a retry.
+        await host.evict();
+        if (this.host === host) this.host = null;
+      }
+      throw error;
     } finally {
       this.inflight--;
       this.scheduleIdleEvict();
@@ -238,58 +244,27 @@ export const indexerFallbackStats = {
 };
 
 /**
- * Build the production executor: worker-backed when the worker file
- * resolves (and the kill switch is off), with per-call fallback to the
- * given in-process executor on worker errors. Returns the fallback alone
- * when the worker can't exist in this environment.
+ * Build the worker executor. Only standalone CLI hosts may use an in-process
+ * executor when the worker entry is unavailable.
  */
 export function createStructuralIndexerExecutor(
   opts: IndexerWorkerClientOpts,
   fallback: StructuralExecutor,
 ): { executor: StructuralExecutor; client: IndexerWorkerClient | null } {
-  if (process.env.MCP_INDEX_STRUCTURAL_WORKER === '0') {
-    return { executor: fallback, client: null };
-  }
-  const resolved = resolveWorkerFile(import.meta.url, 'indexer-worker');
+  const allowFallback = opts.allowInProcessFallback ?? !process.versions.electron;
+  const resolved = process.env.MCP_INDEX_STRUCTURAL_WORKER === '0'
+    ? null : resolveWorkerFile(import.meta.url, 'indexer-worker');
   if (!resolved) {
-    console.warn('[indexer-worker] worker entry not found — structural indexing runs in-process');
-    return { executor: fallback, client: null };
+    if (allowFallback) return { executor: fallback, client: null };
+    const unavailable = async (): Promise<never> => {
+      throw new Error('Structural indexing worker unavailable; rebuild the worker bundle and enable MCP_INDEX_STRUCTURAL_WORKER');
+    };
+    return { executor: {
+      runStructuralIndex: unavailable, indexFiles: unavailable, removeFiles: unavailable,
+    }, client: null };
   }
   const client = new IndexerWorkerClient(opts, resolved);
-  const withFallback = <A extends unknown[], R>(
-    name: string,
-    workerFn: (...args: A) => Promise<R>,
-    fallbackFn: (...args: A) => Promise<R>,
-  ) => async (...args: A): Promise<R> => {
-    try {
-      return await workerFn(...args);
-    } catch (err) {
-      indexerFallbackStats.count++;
-      indexerFallbackStats.lastOp = name;
-      indexerFallbackStats.lastError = err instanceof Error ? err.message : String(err);
-      indexerFallbackStats.lastAt = Date.now();
-      console.error(
-        `[indexer-worker] FALLBACK → in-process for "${name}" (${indexerFallbackStats.lastError}) — ` +
-        `the Electron main thread now runs the structural pipeline; large projects may stutter ` +
-        `(fallback #${indexerFallbackStats.count}). Investigate why the worker won't spawn.`,
-      );
-      return fallbackFn(...args);
-    }
-  };
-  const executor: StructuralExecutor = {
-    setInteractivePriority(projectId, busy) {
-      // Arm both implementations. If the worker fails mid-run and falls back,
-      // background work still observes the same foreground priority.
-      client.setInteractivePriority(projectId, busy);
-      fallback.setInteractivePriority?.(projectId, busy);
-    },
-    runStructuralIndex: withFallback(
-      'structuralIndex',
-      client.runStructuralIndex.bind(client),
-      fallback.runStructuralIndex.bind(fallback),
-    ),
-    indexFiles: withFallback('indexFiles', client.indexFiles.bind(client), fallback.indexFiles.bind(fallback)),
-    removeFiles: withFallback('removeFiles', client.removeFiles.bind(client), fallback.removeFiles.bind(fallback)),
-  };
-  return { executor, client };
+  // Once submitted, a worker operation may already have committed writes.
+  // Surface errors; never start a second copy on the UI thread.
+  return { executor: client, client };
 }

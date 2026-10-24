@@ -47,7 +47,7 @@ const BUILTIN_CLASSIFICATION: Record<
   read_file:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   list_directory:   { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   glob:             { mutates: false, parallelSafe: true,  riskLevel: 'read' },
-  get_diagnostics:  { mutates: false, parallelSafe: true,  riskLevel: 'read', repeatPolicy: 'volatile' },
+  get_diagnostics:  { mutates: true, parallelSafe: false, riskLevel: 'execute', repeatPolicy: 'volatile' },
   get_tool_output:  { mutates: false, parallelSafe: true,  riskLevel: 'read' },
 
   // ─── Filesystem writes (path-scoped) ──────────────────────────
@@ -197,6 +197,16 @@ export function resolveToolMetadata(tool: CoderTool): ResolvedToolMetadata {
     repeatPolicy,
     executionClass,
   };
+}
+
+/** Scheduling requires an affirmative declaration. Legacy metadata defaults
+ * retain their policy compatibility but cannot authorize concurrent dispatch. */
+export function isExplicitlyParallelSafeRead(tool: CoderTool): boolean {
+  const declared = tool.parallelSafe ?? BUILTIN_CLASSIFICATION[tool.name]?.parallelSafe;
+  const metadata = resolveToolMetadata(tool);
+  return declared === true && metadata.parallelSafe && !metadata.mutates
+    && metadata.executionClass === 'read' && metadata.riskLevel === 'read'
+    && !metadata.interactive && tool.effectBoundary === undefined && tool.riskOf === undefined;
 }
 
 /**

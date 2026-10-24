@@ -41,6 +41,8 @@ export interface ActiveAttemptAuthoritySnapshot
   extends ActiveAttemptAuthorityFacts {
   readonly signal: AbortSignal;
   readonly heartbeat?: HostHeartbeatSnapshot;
+  readonly remainingControlIdentities?: number;
+  readonly remainingManagementIdentities?: number;
 }
 
 export interface HostHeartbeatSnapshot {
@@ -57,6 +59,12 @@ export interface HostCancelAttemptRequest {
   readonly reason: agentV1Runtime.CancelReason;
   readonly reasonCode: string;
   readonly graceDeadlineAtUnixMs: bigint;
+  readonly idempotencyKey: string;
+}
+
+export interface HostAuthorityRenewalRequest {
+  readonly leaseExpiresAtUnixMs: bigint;
+  readonly updatedAtUnixMs: bigint;
   readonly idempotencyKey: string;
 }
 

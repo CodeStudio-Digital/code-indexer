@@ -6,8 +6,9 @@
  * didn't pre-scope collections, so the agent knows which buckets exist
  * before formulating its first docs_search query.
  */
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { DocStore } from '@mcp/store/doc-store.js';
 
 export interface DocsListSourcesToolDeps {

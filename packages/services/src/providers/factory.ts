@@ -129,7 +129,6 @@ export async function createCoderProvider(
 // Existing coder call sites use createChatProviderAsync.
 export const createChatProviderAsync = createCoderProvider;
 
-export { createImagesProvider } from './images-factory.js';
 
 export {
   getDefinition,

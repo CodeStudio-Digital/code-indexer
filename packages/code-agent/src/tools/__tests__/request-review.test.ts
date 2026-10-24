@@ -13,6 +13,26 @@ vi.mock('@mcp/code-agent/tools/review-subagent.js', () => ({
 import { buildRequestReviewTool } from '../request-review.js';
 
 describe('request_review filesystem session integration', () => {
+  it('uses the configured review resolver and does not mark inconclusive reviews complete', async () => {
+    const parent = {} as ChatProvider, configured = {} as ChatProvider, resolveReviewerProvider = vi.fn(async () => configured);
+    const markSessionReviewedNow = vi.fn(async () => undefined);
+    runReviewSubagent.mockResolvedValue({ findings: [], parsed: false, raw: 'interrupted', usage: { input_tokens: 2, output_tokens: 1 } });
+    const tool = buildRequestReviewTool({ provider: parent, parentTools: [], resolveReviewerProvider,
+      sessionId: asSessionId('11111111-1111-4111-8111-111111111111'), sessionStore: { markSessionReviewedNow } as unknown as FsSessionStore });
+    const result = await tool.handler({ spec: 'Review', diff: 'diff --git a/a b/a' }, {} as ToolContext);
+    expect(result.isError).toBe(true); expect(result.structuredData).toMatchObject({ status: 'inconclusive' });
+    expect(markSessionReviewedNow).not.toHaveBeenCalled(); expect(resolveReviewerProvider).toHaveBeenCalledOnce();
+    expect(runReviewSubagent.mock.calls.at(-1)?.[0].provider).toBe(configured);
+  });
+
+  it('does not invoke the reviewer or write a marker after cancellation during provider resolution', async () => {
+    const ctrl = new AbortController(), calls = runReviewSubagent.mock.calls.length, markSessionReviewedNow = vi.fn(async () => undefined);
+    const tool = buildRequestReviewTool({ provider: {} as ChatProvider, parentTools: [],
+      resolveReviewerProvider: async () => { ctrl.abort(new Error('cancel review')); return {} as ChatProvider; },
+      sessionStore: { markSessionReviewedNow } as unknown as FsSessionStore });
+    const result = await tool.handler({ spec: 'Review', diff: 'diff --git a/a b/a' }, { signal: ctrl.signal } as ToolContext);
+    expect(result.isError).toBe(true); expect(runReviewSubagent).toHaveBeenCalledTimes(calls); expect(markSessionReviewedNow).not.toHaveBeenCalled();
+  });
   it('awaits the durable reviewed marker before completing the tool call', async () => {
     let releaseMarker!: () => void;
     const markerCommitted = new Promise<void>((resolve) => {

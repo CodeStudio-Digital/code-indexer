@@ -11,7 +11,9 @@ import type {
   ToolResult,
   ToolSourceTruncation,
 } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
+import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
+import { abortableRead } from '@mcp/shared/utils/abortable.js';
 import {
   assertMutationFence,
   combinedMutationSignal,
@@ -23,6 +25,8 @@ import { engineKind } from './scope.js';
 import { CONNECTION_PARAM, clampMaxRows, pickFromCtx, resolveToolScope } from './shared.js';
 import { scrubDbError } from './resolve-spec.js';
 import { acquireAgentDriver } from './pool.js';
+import { acquireToolDriver, databaseInvocation } from './invocation.js';
+import { cancellableToolRpc } from '../cancellable-rpc.js';
 import { renderQueryResult, renderSchema, renderSchemaCatalog } from './render.js';
 
 export const DEFAULT_SCHEMA_PAGE_SIZE = 40;
@@ -100,9 +104,13 @@ function schemaPageOffset(value: unknown): number {
 export async function inspectRelationalSchemaResult(
   driver: DatabaseDriver,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   const schema = typeof args.schema === 'string' && args.schema.trim() ? args.schema.trim() : undefined;
-  const refs = await driver.listTables(schema);
+  // Drivers without cancellable metadata APIs may finish in the background.
+  // Stop awaiting them, ignore their late result, and never start a second read.
+  const refs = await abortableRead(() => driver.listTables(schema), signal);
+  signal?.throwIfAborted();
   const tableName = typeof args.table === 'string' && args.table.trim() ? args.table.trim() : undefined;
   if (tableName) {
     const ref = refs.find((table) => table.name === tableName)
@@ -110,12 +118,13 @@ export async function inspectRelationalSchemaResult(
     if (!ref) {
       throw new Error(`table '${tableName}' not found in the selected schema; use db_schema search to locate it`);
     }
-    return ok(renderSchema([await driver.describeTable(ref.schema, ref.name)]));
+    return ok(renderSchema([await abortableRead(() => driver.describeTable(ref.schema, ref.name), signal)]));
   }
 
   const search = typeof args.search === 'string' && args.search.trim() ? args.search.trim() : undefined;
-  const filtered: TableRef[] = search
-    ? refs.filter((table) => `${table.schema}.${table.name}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+  const searchLower = search?.toLocaleLowerCase();
+  const filtered: TableRef[] = searchLower
+    ? refs.filter((table) => `${table.schema}.${table.name}`.toLocaleLowerCase().includes(searchLower))
     : refs;
   const offset = schemaPageOffset(args.offset);
   const limit = schemaPageLimit(args.limit);
@@ -153,6 +162,7 @@ export async function inspectRelationalSchema(
 
 const dbList: CoderTool = {
   name: 'db_list',
+  effectBoundary: 'database', mutates: false, parallelSafe: false,
   description:
     'List the database connections registered in the Databases tab: name, engine, host/file, ' +
     'database, read-only flag and kind (relational/document/keyvalue). Never returns ' +
@@ -163,6 +173,7 @@ const dbList: CoderTool = {
   riskLevel: 'read',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   handler: async (_args, ctx): Promise<ToolResult> => {
+    if (ctx.ports?.database) databaseInvocation(ctx, 'list', undefined).assertDispatch();
     const scoped = resolveToolScope(ctx);
     if (!scoped.ok) return err(scoped.error);
     if (scoped.scope.length === 0) {
@@ -180,6 +191,7 @@ const dbList: CoderTool = {
 
 const dbSchema: CoderTool = {
   name: 'db_schema',
+  effectBoundary: 'database', mutates: false, parallelSafe: false,
   description:
     'Progressively inspect a relational database without flooding context. With no `table`, ' +
     'returns a compact paginated catalog of table/view names only (default 40, max 100); use ' +
@@ -203,9 +215,11 @@ const dbSchema: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const picked = pickFromCtx(ctx, args.connection);
     if (!picked.ok) return err(picked.error);
+    const signal = asAbortSignal(ctx.signal);
     let acquired = null as Awaited<ReturnType<typeof acquireAgentDriver>> | null;
     try {
-      acquired = await acquireAgentDriver(picked.value.conn);
+      acquired = await abortableRead(() => acquireToolDriver(picked.value.conn, ctx, 'schema', args.connection), signal);
+      signal?.throwIfAborted();
       if ((acquired.meta.kind ?? 'relational') !== 'relational') {
         return err(`db_schema targets relational engines; use db_command for ${acquired.meta.kind} stores.`);
       }
@@ -213,8 +227,11 @@ const dbSchema: CoderTool = {
       const inspectionArgs = typeof args.schema === 'string' && args.schema.trim()
         ? args
         : { ...args, schema: savedSchema };
-      return await inspectRelationalSchemaResult(acquired.driver, inspectionArgs);
+      return await inspectRelationalSchemaResult(acquired.driver, inspectionArgs, signal);
     } catch (e) {
+      if (signal?.aborted) return err('db_schema cancelled.', {
+        code: 'DB_SCHEMA_CANCELLED', kind: 'cancelled', retryable: false,
+      });
       return err(`db_schema failed: ${scrubDbError(e, acquired?.spec)}`);
     }
   },
@@ -222,6 +239,7 @@ const dbSchema: CoderTool = {
 
 const dbQuery: CoderTool = {
   name: 'db_query',
+  mutates: true, parallelSafe: false, riskLevel: 'write',
   effectBoundary: 'database',
   description:
     'Execute ONE SQL statement against a registered relational connection. Reads AND writes ' +
@@ -254,8 +272,12 @@ const dbQuery: CoderTool = {
     const picked = pickFromCtx(ctx, args.connection);
     if (!picked.ok) return err(picked.error);
     let acquired = null as Awaited<ReturnType<typeof acquireAgentDriver>> | null;
+    const signal = combinedMutationSignal(ctx.signal, ctx.mutationFence);
+    const mutates = !isReadStatement(sql);
+    const operation = sql.trim().match(/^([a-z]+)/i)?.[1]?.toLowerCase() ?? 'unknown';
+    let dispatched = false;
     try {
-      acquired = await acquireAgentDriver(picked.value.conn);
+      acquired = await abortableRead(() => acquireToolDriver(picked.value.conn, ctx, operation, args.connection), signal);
       if ((acquired.meta.kind ?? 'relational') !== 'relational') {
         return err(
           `db_query targets relational engines — '${picked.value.name}' is a ` +
@@ -266,21 +288,27 @@ const dbQuery: CoderTool = {
         return err('Connection is read-only — writes are blocked.');
       }
       const params = Array.isArray(args.params) ? (args.params as unknown[]) : undefined;
-      const operation = sql.trim().match(/^([a-z]+)/i)?.[1]?.toLowerCase() ?? 'unknown';
-      if (!isReadStatement(sql)) {
-        assertMutationFence(ctx.mutationFence, {
+      const beforeDispatch = () => {
+        signal?.throwIfAborted();
+        if (mutates) assertMutationFence(ctx.mutationFence, {
           kind: 'database',
           operation,
           resource: String(args.connection ?? '<default>'),
         });
-      }
-      const result = await acquired.driver.runQuery(sql, {
-        params,
-        maxRows: clampMaxRows(args.max_rows),
-        signal: combinedMutationSignal(ctx.signal, ctx.mutationFence),
-      });
+      };
+      beforeDispatch();
+      const driver = acquired.driver;
+      const result = await cancellableToolRpc(() => {
+        dispatched = true;
+        return driver.runQuery(sql, { params, maxRows: clampMaxRows(args.max_rows), signal, beforeDispatch });
+      }, () => { /* Driver cancellation consumes signal; failure after dispatch is uncertain. */ }, signal, 'Database query cancelled.');
       return renderDbResult(result, ctx, isReadStatement(sql));
     } catch (e) {
+      if (dispatched && mutates) {
+        ctx.ports?.database?.outcomeUnknown();
+        return unknownToolOutcome(`db_query completion is unconfirmed: ${scrubDbError(e, acquired?.spec)}. Reconcile before retrying.`);
+      }
+      if (signal?.aborted) return err('db_query cancelled.', { code: 'DB_QUERY_CANCELLED', kind: 'cancelled', retryable: false });
       return err(`db_query failed: ${scrubDbError(e, acquired?.spec)}`);
     }
   },
@@ -290,6 +318,9 @@ const dbQuery: CoderTool = {
 function commandRisk(input: unknown): 'read' | 'write' {
   const c = (input as { command?: unknown } | null)?.command;
   if (!c || typeof c !== 'object') return 'write';
+  // A mixed command can be read-safe for Mongo and mutating for Redis (or
+  // vice versa). The gate cannot choose the eventual connection's engine.
+  if ('op' in c && 'args' in c) return 'write';
   const probe = c as Omit<DbCommand, 'kind'>;
   const asDocument = isWriteCommand({ ...probe, kind: 'document' });
   const asKeyvalue = isWriteCommand({ ...probe, kind: 'keyvalue' });
@@ -300,6 +331,7 @@ function commandRisk(input: unknown): 'read' | 'write' {
 
 const dbCommand: CoderTool = {
   name: 'db_command',
+  mutates: true, parallelSafe: false, riskLevel: 'write',
   effectBoundary: 'database',
   description:
     'Run a document/key-value command on a MongoDB or Redis connection (relational engines ' +
@@ -337,8 +369,14 @@ const dbCommand: CoderTool = {
     const picked = pickFromCtx(ctx, args.connection);
     if (!picked.ok) return err(picked.error);
     let acquired = null as Awaited<ReturnType<typeof acquireAgentDriver>> | null;
+    const signal = combinedMutationSignal(ctx.signal, ctx.mutationFence);
+    let mutates = true;
+    let dispatched = false;
+    const inputCommand = raw as DbCommand;
+    const operation = typeof inputCommand.op === 'string' ? inputCommand.op.toLowerCase()
+      : String(inputCommand.args?.[0] ?? 'unknown').toLowerCase();
     try {
-      acquired = await acquireAgentDriver(picked.value.conn);
+      acquired = await abortableRead(() => acquireToolDriver(picked.value.conn, ctx, operation, args.connection), signal);
       const kind = acquired.meta.kind ?? 'relational';
       if (kind === 'relational') {
         return err(
@@ -353,23 +391,28 @@ const dbCommand: CoderTool = {
       if (!acquired.driver.runCommand) {
         return err(`db_command: the '${picked.value.conn.engine}' driver does not support commands.`);
       }
-      const mutates = isWriteCommand(command);
-      const operation = typeof command.op === 'string'
-        ? command.op.toLowerCase()
-        : String(command.args?.[0] ?? 'unknown').toLowerCase();
-      if (mutates) {
-        assertMutationFence(ctx.mutationFence, {
+      mutates = isWriteCommand(command);
+      const beforeDispatch = () => {
+        signal?.throwIfAborted();
+        if (mutates) assertMutationFence(ctx.mutationFence, {
           kind: 'database',
           operation,
           resource: String(args.connection ?? '<default>'),
         });
-      }
-      const result = await acquired.driver.runCommand(command, {
-        maxRows: clampMaxRows(args.max_rows),
-        signal: combinedMutationSignal(ctx.signal, ctx.mutationFence),
-      });
+      };
+      beforeDispatch();
+      const driver = acquired.driver;
+      const result = await cancellableToolRpc(() => {
+        dispatched = true;
+        return driver.runCommand!(command, { maxRows: clampMaxRows(args.max_rows), signal, beforeDispatch });
+      }, () => { /* Driver cancellation consumes signal; it does not prove rollback. */ }, signal, 'Database command cancelled.');
       return renderDbResult(result, ctx, !mutates);
     } catch (e) {
+      if (dispatched && mutates) {
+        ctx.ports?.database?.outcomeUnknown();
+        return unknownToolOutcome(`db_command completion is unconfirmed: ${scrubDbError(e, acquired?.spec)}. Reconcile before retrying.`);
+      }
+      if (signal?.aborted) return err('db_command cancelled.', { code: 'DB_COMMAND_CANCELLED', kind: 'cancelled', retryable: false });
       return err(`db_command failed: ${scrubDbError(e, acquired?.spec)}`);
     }
   },

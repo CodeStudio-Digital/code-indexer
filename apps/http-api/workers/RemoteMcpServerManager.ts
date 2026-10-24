@@ -35,25 +35,24 @@
  */
 import type { MessageBridge } from '@mcp/orchestrator-host';
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err, unknownToolOutcome } from "@mcp/agent-runtime-host/tool-result.js";
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { IMcpServerManager } from '@mcp/code-agent/tools/mcp-server-manager-interface.js';
 import type { McpExternalSnapshot } from '../sse/McpExternalPool.js';
+import { requestMcpCall } from './mcp-call-request.js';
 
 /**
- * 60s ceiling on bridge RPC calls. The pool's lazy reconnect + retry
- * machinery typically resolves within a few hundred ms, but a stuck
- * remote server or a wedged main-thread event loop would otherwise
- * leave the worker hanging forever. Surfacing the timeout as a normal
- * `err()` result lets the runner's per-tool guard recover the session.
+ * Catalogue requests have a 60s ceiling. Tool calls carry independent
+ * cancellation and unknown-outcome semantics after dispatch.
  */
 const RPC_TIMEOUT_MS = 60_000;
 
 export class RemoteMcpServerManager implements IMcpServerManager {
   private snapshot: McpExternalSnapshot | null = null;
 
-  constructor(private readonly bridge: MessageBridge) {}
+  constructor(private readonly bridge: MessageBridge, private readonly runId?: number) {}
 
   /**
    * runCoder calls this with the list of enabled servers. We don't
@@ -101,7 +100,17 @@ export class RemoteMcpServerManager implements IMcpServerManager {
       description: t.description,
       parameters: t.parameters as CoderTool['parameters'],
       source: 'mcp_external',
-      handler: this.createHandler(t.serverId, t.toolName, t.name),
+      ...(t.transport && t.catalogueRevision ? { externalMcpTransport: { serverId: t.serverId,
+        toolName: t.toolName, transport: t.transport, catalogueRevision: t.catalogueRevision,
+        processTreeContained: t.processTreeContained === true } } : {}),
+      effectBoundary: 'external_mcp',
+      capabilityProvenance: { kind: 'mcp_external', providerId: 'mcp-external', serverId: t.serverId,
+        provenanceRef: `mcp-server:${t.serverId}${t.catalogueRevision ? `:${t.catalogueRevision}` : ''}` },
+      mutates: true,
+      parallelSafe: false,
+      riskLevel: 'write',
+      repeatPolicy: t.repeatable ? 'pollable' : 'stable',
+      handler: this.createHandler(t.serverId, t.toolName, t.name, t.catalogueRevision),
       repeatable: t.repeatable,
     }));
 
@@ -133,28 +142,33 @@ export class RemoteMcpServerManager implements IMcpServerManager {
    * Build the handler that the runner ultimately invokes when the
    * model calls `ext_<server>__<tool>`. Sends the args over the
    * bridge; the pool's `callTool` runs the live transport call with
-   * its retry/oauth/network-recovery machinery and returns the same
+   * its pre-dispatch reconnect machinery and returns the full result plus the
    * `{ ok, text }` shape we'd produce in-process.
    */
   private createHandler(
     serverId: string,
     toolName: string,
     prefixedName: string,
+    catalogueRevision?: string,
   ): CoderTool['handler'] {
-    return async (args: Record<string, unknown>): Promise<ToolResult> => {
+    return async (args, ctx): Promise<ToolResult> => {
+      if (ctx.signal?.aborted) return err('External MCP call cancelled before dispatch.');
+      if (ctx.mutationFence?.mode === 'enforce' && !ctx.externalMcpAuthority) {
+        return err('External MCP has no product authority for an enforced invocation.');
+      }
+      try { ctx.mutationFence?.assertMutation({ kind: 'external_mcp', operation: 'tools/call', resource: prefixedName }); }
+      catch { return err('External MCP authority expired before worker dispatch.'); }
+      const authority = ctx.externalMcpAuthority ? { payload: ctx.externalMcpAuthority.payload,
+        binding: ctx.mutationFence?.resourceBinding, toolUseId: ctx.currentToolUseId } : undefined;
+      const unknown = (result: ToolResult) => { if (result.effectOutcome === 'unknown') ctx.externalMcpAuthority?.outcomeUnknown(); return result; };
       try {
-        const r = await this.bridge.request<{ ok: boolean; text: string }>(
-          'mcpExt.callTool',
-          { serverId, toolName, args },
-          // Tight ceiling here would mask the runner's own per-tool
-          // timeout (tool-timeouts.ts) with an opaque "RPC timed out".
-          // Leave it loose so the tool timeout owns the verdict.
-          { timeoutMs: 10 * 60_000 },
-        );
-        if (!r) return err(`Empty response from pool for ${prefixedName}`);
+        const r = await requestMcpCall(this.bridge, { serverId, toolName, args, catalogueRevision, runId: this.runId, authority }, ctx.signal);
+        if (!r) return unknown(unknownToolOutcome(`Empty response from pool for ${prefixedName}; reconcile before retrying.`));
+        if (r.result) return unknown(r.result);
         return r.ok ? ok(r.text) : err(r.text);
       } catch (e) {
-        return err(
+        ctx.externalMcpAuthority?.outcomeUnknown();
+        return unknownToolOutcome(
           `External MCP RPC failed for ${prefixedName}: ${
             e instanceof Error ? e.message : String(e)
           }`,

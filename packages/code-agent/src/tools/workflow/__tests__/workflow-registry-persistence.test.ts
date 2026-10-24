@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
@@ -139,6 +140,40 @@ afterEach(async () => {
 });
 
 describe('workflow durable checkpoint', () => {
+  it.each(['legacy_ts', 'rust_v1'] as const)('refuses to resume a %s workflow with the other runtime', async runtimeGeneration => {
+    const value = record(); value.runtimeGeneration = runtimeGeneration;
+    await saveWorkflow(sessionId, value, store); await clearWorkflows(sessionId);
+    const reconcile = vi.fn(), run = vi.fn();
+    const ctx = { cwd: projectRoot, projectName: 'fixture', sessionId,
+      runtimeGeneration: runtimeGeneration === 'rust_v1' ? 'legacy_ts' : 'rust_v1', controlPlaneParentAgentRunId: 'owner',
+      ports: { agentTree: { runtimeGeneration: 'rust_v1', ownerAgentRunId: 'owner', run, reconcile, emit() {} } } } as unknown as ToolContext;
+    const tool = buildWorkflowTool({ provider: { name: 'fake', model: 'fake' }, parentTools: [], sessionStore: fsStore } as never);
+    const result = await tool.handler({ resume_workflow_id: value.id, retry_failed: true }, ctx);
+    expect(result.isError).toBe(true); expect(result.content).toContain('original runtime');
+    expect(run).not.toHaveBeenCalled(); expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it.each(['terminal', 'outcome_unknown'] as const)('reconciles native admission from disk as %s without replaying the child', async outcome => {
+    const value = record(); value.runtimeGeneration = 'rust_v1'; value.steps = [value.steps[1]];
+    value.steps[0].dependsOn = []; value.steps[0].status = 'running'; value.steps[0].groupId = 'owned-wave';
+    value.steps[0].nativeTranscriptRef = `native-child-journal:${sessionId}:${randomUUID()}:${randomUUID()}:${randomUUID()}`;
+    await saveWorkflow(sessionId, value, store); await clearWorkflows(sessionId);
+    const reconcile = vi.fn(async () => ({ outcome, stepStatus: 'completed', reason: 'completed', detail: 'durable proof', summary: 'Recovered child summary' }));
+    const run = vi.fn();
+    const ctx = { cwd: projectRoot, projectName: 'fixture', sessionId, runtimeGeneration: 'rust_v1', controlPlaneParentAgentRunId: 'owner',
+      ports: { agentTree: { runtimeGeneration: 'rust_v1', ownerAgentRunId: 'owner', run, reconcile, emit() {} } } } as unknown as ToolContext;
+    const tool = buildWorkflowTool({ provider: { name: 'fake', model: 'fake' }, parentTools: [], sessionStore: fsStore } as never);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await tool.handler({ resume_workflow_id: value.id, retry_failed: true }, ctx);
+      expect(result.effectOutcome).toBe(outcome === 'outcome_unknown' ? 'unknown' : undefined);
+      expect(result.content).toContain(outcome === 'terminal' ? 'Recovered child summary' : 'Uncertain effects');
+      await clearWorkflows(sessionId);
+    }
+    expect(run).not.toHaveBeenCalled();
+    expect(reconcile).toHaveBeenCalledWith(value.steps[0].nativeTranscriptRef, { signal: undefined });
+    expect(reconcile).toHaveBeenCalledTimes(outcome === 'terminal' ? 1 : 3);
+  });
+
   it('restores after executor recreation without planning completed steps again', async () => {
     expect(await saveWorkflow(sessionId, record(), store)).toBe(true);
     const persisted = await store.loadOrchestrationCheckpoint(
@@ -375,6 +410,31 @@ describe('workflow durable checkpoint', () => {
     ).toBe(true);
   });
 
+  it.each(['lost_ack', 'worker_restart'] as const)('keeps real filesystem child evidence uncertain across repeated resumes: %s', async failure => {
+    const orphan = record();
+    orphan.steps = [{ id: 'child', title: 'child', prompt: 'possibly applied write', profileId: 'implement',
+      dependsOn: [], wave: 1, status: 'running', groupId: 'wf_restart-w1' }];
+    const runId = randomUUID();
+    const fence = await fsStore.startSubagentRun({ session_id: sessionId, run_id: runId, profile: 'implement',
+      max_turns: 4, spawn_id: 'wf_restart-w1', label: 'child' });
+    if (failure === 'lost_ack') await fsStore.completeSubagentRun({ run_id: runId, reason: 'outcome_unknown', fence,
+      turns: 1, auto_continues: 0, tool_calls: 1, logical_operations: 1, productive_operations: 0,
+      paginate_calls: 0, duplicate_calls: 0, error_calls: 1, refused_calls: 0, elapsed_ms: 1,
+      input_tokens: 1, output_tokens: 0, has_summary: true });
+    else await fsStore.recoverOrphanedSubagentRuns();
+    expect(await fsStore.reconcileWorkflowStepRun(sessionId, 'wf_restart-w1', 'child')).toMatchObject({ outcome: 'outcome_unknown' });
+    await saveWorkflow(sessionId, orphan, store);
+    const chat = vi.fn(async function* () { throw new Error('must not replay'); });
+    const tool = buildWorkflowTool({ provider: { name: 'fake', model: 'fake', setModel() {}, chat }, parentTools: [], sessionStore: fsStore });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await clearWorkflows(sessionId);
+      expect(await tool.handler({ resume_workflow_id: orphan.id, retry_failed: true }, {
+        cwd: projectRoot, projectName: 'test', runner: { sessionId, agentLoopV2: false, emit: vi.fn() },
+      } as unknown as ToolContext)).toMatchObject({ isError: true, effectOutcome: 'unknown' });
+    }
+    expect(chat).not.toHaveBeenCalled();
+  });
+
   it('adopts an exactly matched terminal child without replaying the workflow step', async () => {
     const orphan = record();
     orphan.steps = [{
@@ -450,7 +510,7 @@ describe('workflow durable checkpoint', () => {
     );
   });
 
-  it('persists outcome_unknown and does not replay it on the same retry_failed recovery call', async () => {
+  it('persists uncertainty across repeated retry flags and resolves only after durable reconciliation', async () => {
     const orphan = record();
     orphan.steps = [{
       id: 'child',
@@ -515,6 +575,29 @@ describe('workflow durable checkpoint', () => {
     expect(persisted!.status).toBe('failed');
     expect(persisted!.steps[0].status).toBe('failed');
     expect(persisted!.steps[0].error).toContain('outcome_unknown');
-    expect(persisted!.steps[0].error).toContain('again');
+    expect(persisted!.steps[0].effectOutcome).toBe('unknown');
+    expect(persisted!.steps[0].error).toContain('does not authorize');
+
+    for (let retry = 0; retry < 2; retry++) {
+      await clearWorkflows(sessionId);
+      const repeated = await tool.handler({ resume_workflow_id: orphan.id, retry_failed: true }, {
+        cwd: process.cwd(), projectName: 'test', runner: { sessionId, agentLoopV2: false, emit: vi.fn() },
+      } as unknown as ToolContext);
+      expect(repeated.isError).toBe(true);
+      expect(providerChat).not.toHaveBeenCalled();
+      expect((await getWorkflow(sessionId, orphan.id, durableStore))!.steps[0].effectOutcome).toBe('unknown');
+    }
+    expect(reconcileWorkflowStepRun).toHaveBeenCalledTimes(3);
+
+    // A durable terminal receipt can settle the old effect; a retry flag cannot.
+    reconcileWorkflowStepRun.mockResolvedValueOnce({ outcome: 'terminal', runId: 'child-run-1',
+      reason: 'completed', stepStatus: 'completed', detail: 'confirmed existing work' } as never);
+    await clearWorkflows(sessionId);
+    const reconciled = await tool.handler({ resume_workflow_id: orphan.id, retry_failed: true }, {
+      cwd: process.cwd(), projectName: 'test', runner: { sessionId, agentLoopV2: false, emit: vi.fn() },
+    } as unknown as ToolContext);
+    expect(reconciled.isError).toBeFalsy();
+    expect(providerChat).not.toHaveBeenCalled();
+    expect((await getWorkflow(sessionId, orphan.id, durableStore))!.steps[0].effectOutcome).toBeUndefined();
   });
 });

@@ -113,9 +113,14 @@ export function doRequest(o: {
   /** Refuse private/loopback/link-local/metadata destinations (SSRF guard). */
   blockPrivateHosts?: boolean;
   signal?: AbortSignal;
+  /** Attempt-owned transport: no shared keep-alive socket; ACK after close. */
+  isolatedConnection?: boolean;
+  beforeDispatch?: () => void;
+  onDispatch?: () => void;
 }): Promise<RawResponse> {
   const cap = o.maxBytes ?? READ_CAP;
   return new Promise((resolve, reject) => {
+    o.signal?.throwIfAborted(); o.beforeDispatch?.();
     const isHttps = o.url.protocol === 'https:';
     // Scheme allowlist — only http/https. Bars file:/gopher:/data: etc. explicitly
     // (node would reject most, but make the boundary intentional, not implicit).
@@ -129,13 +134,22 @@ export function doRequest(o: {
       return;
     }
     const reqFn = isHttps ? httpsRequest : httpRequest;
-    let settled = false;
-    const fail = (e: Error): void => { if (!settled) { settled = true; reject(e); } };
+    let settled = false, closed = false;
+    let outcome: { result: RawResponse } | { error: Error } | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const publish = (): void => {
+      if (!outcome || (o.isolatedConnection && !closed)) return;
+      if ('error' in outcome) reject(outcome.error); else resolve(outcome.result);
+    };
+    const fail = (e: Error): void => {
+      if (!settled) { settled = true; clearTimeout(deadline); outcome = { error: e }; publish(); }
+    };
     const req = reqFn(
       o.url,
       {
         method: o.method,
         headers: o.headers,
+        ...(o.isolatedConnection ? { agent: false } : {}),
         ...(isHttps ? { rejectUnauthorized: !o.insecure } : {}),
         ...(o.signal ? { signal: o.signal } : {}),
       },
@@ -154,13 +168,13 @@ export function doRequest(o: {
           : undefined;
         const finish = (truncated: boolean): void => {
           if (settled) return;
-          settled = true;
+          settled = true; clearTimeout(deadline);
           const bodyBytes = Buffer.concat(chunks);
           // Native node:http yields the wire body (it does not transparently
           // decompress content-encoding), so a valid Content-Length is exact.
           // Without it, an early cancel only proves how many bytes we observed.
           const declaredLengthIsConsistent = declaredLength != null && declaredLength >= total;
-          resolve({
+          outcome = { result: {
             status: res.statusCode ?? 0,
             statusText: res.statusMessage ?? '',
             headers: res.headers,
@@ -168,7 +182,7 @@ export function doRequest(o: {
             size: truncated && declaredLengthIsConsistent ? declaredLength : total,
             sizeExact: !truncated || declaredLengthIsConsistent,
             truncated,
-          });
+          } }; publish();
         };
         res.on('data', (c: Buffer) => {
           const before = total;
@@ -191,10 +205,21 @@ export function doRequest(o: {
         res.on('error', (e: Error) => { if (!settled) fail(e); });
       },
     );
-    req.setTimeout(o.timeoutMs, () => req.destroy(new Error(`request timed out after ${o.timeoutMs}ms`)));
+    const timeoutMs = Number.isFinite(o.timeoutMs) ? Math.min(120000, Math.max(1, o.timeoutMs)) : 30000;
+    // Socket inactivity alone permits a slow trickle to hold an attempt forever.
+    deadline = setTimeout(() => req.destroy(new Error(`request timed out after ${timeoutMs}ms`)), timeoutMs);
+    deadline.unref();
+    req.once('close', () => {
+      closed = true; clearTimeout(deadline);
+      if (!settled) fail(new Error('HTTP connection closed before confirming the response'));
+      else publish();
+    });
     req.on('error', fail);
-    if (o.body != null && o.body.length > 0) req.write(o.body);
-    req.end();
+    try {
+      o.signal?.throwIfAborted(); o.beforeDispatch?.(); o.onDispatch?.();
+      if (o.body != null && o.body.length > 0) req.write(o.body);
+      req.end();
+    } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); req.destroy(); }
   });
 }
 
@@ -217,6 +242,9 @@ export interface SendOptions {
   /** Refuse private/loopback/link-local/metadata destinations (SSRF guard). */
   blockPrivateHosts?: boolean;
   signal?: AbortSignal;
+  isolatedConnection?: boolean;
+  beforeDispatch?: () => void;
+  onDispatch?: () => void;
 }
 
 /**
@@ -225,7 +253,8 @@ export interface SendOptions {
  */
 export async function sendHttp(o: SendOptions): Promise<RawResponse> {
   const method = String(o.method ?? 'GET').toUpperCase();
-  const timeoutMs = Math.min(120_000, Math.max(1_000, Number(o.timeoutMs ?? 30_000)));
+  const requestedTimeout = Number(o.timeoutMs ?? 30_000);
+  const timeoutMs = Number.isFinite(requestedTimeout) ? Math.min(120_000, Math.max(1_000, requestedTimeout)) : 30_000;
   const insecure = o.insecure != null ? !!o.insecure : isLoopbackHost(o.url.hostname);
 
   const headers: Record<string, string> = {};
@@ -249,7 +278,9 @@ export async function sendHttp(o: SendOptions): Promise<RawResponse> {
     }
   }
 
-  const res = await doRequest({ url: o.url, method, headers, body, insecure, timeoutMs, maxBytes: o.maxBytes, blockPrivateHosts: o.blockPrivateHosts, signal: o.signal });
+  const res = await doRequest({ url: o.url, method, headers, body, insecure, timeoutMs, maxBytes: o.maxBytes,
+    blockPrivateHosts: o.blockPrivateHosts, signal: o.signal, isolatedConnection: o.isolatedConnection,
+    beforeDispatch: o.beforeDispatch, onDispatch: o.onDispatch });
   if (o.jar) storeSetCookies(o.jar, o.url.host, res.headers['set-cookie']);
   return res;
 }

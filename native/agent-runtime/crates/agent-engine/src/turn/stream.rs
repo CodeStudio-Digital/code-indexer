@@ -6,6 +6,7 @@ use crate::ports::{
     ProviderUsage, TerminalClassification,
 };
 
+mod batch;
 mod thinking;
 
 pub(super) struct StreamPorts<'a, P, A, E, C> {
@@ -16,6 +17,8 @@ pub(super) struct StreamPorts<'a, P, A, E, C> {
 }
 
 impl TurnEngine {
+    // Keep the exhaustive provider-event transition table together.
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn consume_stream<P, A, E, C>(
         &mut self,
         operation_id: OperationId,
@@ -30,6 +33,7 @@ impl TurnEngine {
         C: ClockPort,
     {
         let mut text = String::new();
+        let mut thinking = String::new();
         let mut usage = None;
         for _ in 0..self.limits.max_provider_events() {
             if self.expired(deadline_at_unix_ms, ports.clock).await? {
@@ -50,6 +54,11 @@ impl TurnEngine {
                     )
                     .await;
             };
+            // A provider may settle its deadline while next() was pending.
+            // Do not admit a final tool call or completion after that boundary.
+            if self.expired(deadline_at_unix_ms, ports.clock).await? {
+                return self.provider_deadline_exceeded(usage, ports.events).await;
+            }
             match event {
                 ProviderEvent::TextDelta(delta) => {
                     if let Some(outcome) = self
@@ -61,7 +70,7 @@ impl TurnEngine {
                 }
                 ProviderEvent::ThinkingDelta(delta) => {
                     if let Some(outcome) = self
-                        .accept_thinking(operation_id.as_str(), delta, usage, ports)
+                        .accept_thinking(operation_id.as_str(), &mut thinking, delta, usage, ports)
                         .await?
                     {
                         return Ok(outcome);
@@ -83,7 +92,26 @@ impl TurnEngine {
                 }
                 ProviderEvent::ToolCall(call) => {
                     return self
-                        .capability_boundary(operation_id.as_str(), call, text, usage, ports.events)
+                        .capability_boundary(
+                            operation_id.as_str(),
+                            call,
+                            text,
+                            thinking,
+                            usage,
+                            ports.events,
+                        )
+                        .await;
+                }
+                ProviderEvent::ToolCalls(calls) => {
+                    return self
+                        .capabilities_boundary(
+                            &operation_id,
+                            calls,
+                            text,
+                            thinking,
+                            usage,
+                            ports.events,
+                        )
                         .await;
                 }
                 ProviderEvent::Completed {
@@ -120,32 +148,6 @@ impl TurnEngine {
             usage,
         )
         .await
-    }
-
-    async fn capability_boundary<P, A, E, C>(
-        &mut self,
-        operation_id: &str,
-        call: crate::ports::ProviderToolCall,
-        assistant_text: String,
-        usage: Option<ProviderUsage>,
-        events: &mut E,
-    ) -> Result<TurnOutcome, TurnEngineError<P, A, E::Error, C>>
-    where
-        E: EventSinkPort,
-    {
-        events
-            .append(EngineEvent::CapabilityBoundary {
-                operation_id,
-                tool_use_id: call.tool_use_id.as_str(),
-            })
-            .await
-            .map_err(TurnEngineError::EventSink)?;
-        self.advance(RunState::CapabilityDispatch)?;
-        Ok(TurnOutcome::CapabilityRequired {
-            call,
-            assistant_text,
-            usage,
-        })
     }
 
     async fn accept_delta<P, A, E, C>(

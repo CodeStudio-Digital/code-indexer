@@ -94,7 +94,7 @@ function mapOutcome(
     || outcome.bytesRead < 0n
     || !validDuration(outcome.durationMs)
   ) throw invalidOutcome();
-  const encodedResult = outcome.encodedResult.slice();
+  const encodedResult = Uint8Array.from(outcome.encodedResult);
   return {
     case: 'succeeded',
     value: create(agentV1Capability.CapabilityExecutionSucceededSchema, {

@@ -8,6 +8,7 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ImageBlock } from '@mcp/code-agent/core/messages.js';
 import { invokePreview } from './bridge.js';
+import { previewFailure } from './failure.js';
 
 function fmt(label: string, result: unknown): ToolResult {
   if (result && typeof result === 'object' && typeof (result as { error?: unknown }).error === 'string') {
@@ -36,12 +37,13 @@ async function run(
   try {
     return fmt(label, await invokePreview(ctx, method, args));
   } catch (e) {
-    return err(e instanceof Error ? e.message : String(e));
+    return previewFailure(e);
   }
 }
 
 export const previewConsoleTool: CoderTool = {
   name: 'preview_console',
+  effectBoundary: 'control',
   description:
     'Read the preview page console — logs, warnings, errors, and uncaught exceptions (real-time). Pass `waitMs` to BLOCK until new output arrives (e.g. after triggering an action), or omit for a snapshot of recent output.',
   source: 'native',
@@ -55,7 +57,7 @@ export const previewConsoleTool: CoderTool = {
     additionalProperties: false,
   },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   timeoutMs: 40_000,
   // Page state evolves between identical calls — re-reading the console after
@@ -67,6 +69,7 @@ export const previewConsoleTool: CoderTool = {
 
 export const previewNetworkTool: CoderTool = {
   name: 'preview_network',
+  effectBoundary: 'control',
   description:
     'Read the preview page network activity — requests/responses with method, URL, status, and timing. Filter by `urlFilter`/`status` to validate endpoint calls (e.g. find 4xx/5xx). `waitForMs` blocks until a matching request completes (active wait). `includeBody` adds response bodies (truncated).',
   source: 'native',
@@ -84,7 +87,7 @@ export const previewNetworkTool: CoderTool = {
     additionalProperties: false,
   },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   timeoutMs: 40_000,
   repeatable: true,
@@ -125,6 +128,7 @@ export const previewEvalTool: CoderTool = {
 
 export const previewScreenshotTool: CoderTool = {
   name: 'preview_screenshot',
+  effectBoundary: 'control',
   description:
     'Capture a screenshot of the preview page — the image becomes visible to you (vision) on the next turn. Use to SEE the rendered UI. ' +
     'If your model can\'t see images, set `lookFor` to what you need (e.g. "any layout/alignment bugs" or "describe the screen to verify it matches the spec") — a vision model translates the screenshot to text for you.',
@@ -142,7 +146,7 @@ export const previewScreenshotTool: CoderTool = {
     additionalProperties: false,
   },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   timeoutMs: 40_000,
   repeatable: true,
@@ -158,13 +162,14 @@ export const previewScreenshotTool: CoderTool = {
         extraUserBlocks: [block],
       };
     } catch (e) {
-      return err(e instanceof Error ? e.message : String(e));
+      return previewFailure(e);
     }
   },
 };
 
 export const previewInspectCssTool: CoderTool = {
   name: 'preview_inspect_css',
+  effectBoundary: 'control',
   description: 'Inspect computed + matched CSS rules for the first element matching a selector (debug layout/styling).',
   source: 'native',
   parameters: {
@@ -174,7 +179,7 @@ export const previewInspectCssTool: CoderTool = {
     additionalProperties: false,
   },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   repeatable: true,
   handler: (args, ctx) => run(ctx, 'inspect_css', { selector: String(args.selector ?? '') }, 'CSS:'),
@@ -182,11 +187,12 @@ export const previewInspectCssTool: CoderTool = {
 
 export const previewPerformanceTool: CoderTool = {
   name: 'preview_performance',
+  effectBoundary: 'control',
   description: 'Read page performance metrics (Performance.getMetrics + navigation timing) — load time, layout, script duration, etc.',
   source: 'native',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   repeatable: true,
   handler: (_args, ctx) => run(ctx, 'performance', {}, 'Performance:'),
@@ -194,11 +200,12 @@ export const previewPerformanceTool: CoderTool = {
 
 export const previewMemoryTool: CoderTool = {
   name: 'preview_memory',
+  effectBoundary: 'control',
   description: 'Read the page JS heap usage (used/total/limit) to spot leaks or bloat.',
   source: 'native',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   repeatable: true,
   handler: (_args, ctx) => run(ctx, 'memory', {}, 'Memory:'),
@@ -206,6 +213,7 @@ export const previewMemoryTool: CoderTool = {
 
 export const previewStorageTool: CoderTool = {
   name: 'preview_storage',
+  effectBoundary: 'control',
   description: 'Read application storage: localStorage, sessionStorage, cookies, or IndexedDB names. Pass `kind`.',
   source: 'native',
   parameters: {
@@ -214,7 +222,7 @@ export const previewStorageTool: CoderTool = {
     additionalProperties: false,
   },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   repeatable: true,
   handler: (args, ctx) => run(ctx, 'storage', { kind: args.kind ?? 'local' }, 'Storage:'),
@@ -222,6 +230,7 @@ export const previewStorageTool: CoderTool = {
 
 export const previewSnapshotTool: CoderTool = {
   name: 'preview_snapshot',
+  effectBoundary: 'control',
   description:
     'Read a compact accessibility snapshot of the current page with stable refs such as `ref=a12`. ' +
     'Use this before interacting: refs target the exact accessible element and are more reliable than invented CSS selectors. ' +
@@ -237,7 +246,7 @@ export const previewSnapshotTool: CoderTool = {
     additionalProperties: false,
   },
   mutates: false,
-  parallelSafe: true,
+  parallelSafe: false,
   riskLevel: 'read',
   repeatable: true,
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
@@ -269,7 +278,7 @@ export const previewSnapshotTool: CoderTool = {
         ...(result.sourceTruncations?.length ? { sourceTruncations: result.sourceTruncations } : {}),
       };
     } catch (error) {
-      return err(error instanceof Error ? error.message : String(error));
+      return previewFailure(error);
     }
   },
 };

@@ -117,6 +117,7 @@ fn launch_supervisor(
         runner_working_directory: working_directory.to_string_lossy().into_owned(),
         runner_environment: Vec::new(),
         trusted_runner_provenance: Some(runner_provenance.clone()),
+        lifecycle_outbox_directory: String::new(),
     };
     codec(SUPERVISOR_PROCESS_HANDOFF_MAX_BYTES)
         .write(&mut handoff_writer, &handoff)

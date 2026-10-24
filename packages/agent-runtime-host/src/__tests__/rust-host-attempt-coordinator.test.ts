@@ -50,6 +50,21 @@ import {
 import { activationAuthoritySeal } from './activation-authority-support.js';
 
 describe('RustHostAttemptCoordinator', () => {
+  it('preserves the originating Data failure when revocation also fails the Control open', async () => {
+    const events: string[] = [];
+    const management = managementFixture([acceptedFact(), spawnedFact(), containmentFact()], events);
+    const original = new Error('provider data contract rejected');
+    let notify!: (cause: unknown) => void;
+    const data = dataPort();
+    data.observeFailure = observer => { notify = observer; return () => {}; };
+    const control = controlPort(async () => {
+      notify(original);
+      throw new Error('control transport closed by cleanup');
+    });
+    const coordinator = coordinatorFor(management.bootstrap, control, events, data);
+    await expect(coordinator.run(runInput())).rejects.toBe(original);
+    expect(coordinator.failureCause).toBe(original);
+  });
   it('opens control only after durable containment and awaits activation ACK', async () => {
     const events: string[] = [];
     const management = managementFixture([

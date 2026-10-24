@@ -83,6 +83,7 @@ describe('subagent resume filesystem checkpoint', () => {
           },
         ],
         reason: 'error',
+        effectOutcome: 'unknown',
         failureNote: 'password=TOP_SECRET_VALUE',
         toolCallCount: 0,
         usage: { input_tokens: 1, output_tokens: 1 },
@@ -116,6 +117,7 @@ describe('subagent resume filesystem checkpoint', () => {
       store,
     );
     expect(restored?.agents[0].reason).toBe('error');
+    expect(restored?.agents[0].effectOutcome).toBe('unknown');
     expect(restored?.agents[0].transcript?.length).toBeGreaterThan(0);
     expect(JSON.stringify(restored)).not.toContain('TOP_SECRET_VALUE');
   });

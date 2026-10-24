@@ -5,8 +5,9 @@
  * These enable structured task management where cards carry full context
  * (description, objectives, comments, agent history) across agent swaps.
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { KanbanColumn } from '@mcp/company/types.js';

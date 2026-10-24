@@ -9,6 +9,8 @@ use super::online_lifecycle::SystemSupervisorLifecycleClock;
 use cleanup::FixedLifecycleClock;
 
 mod ack;
+mod authority;
+mod authority_registry;
 mod cleanup;
 mod completion_cleanup;
 mod config;
@@ -62,6 +64,7 @@ pub use state::{AdmissionClosureReason, CleanupPhase, CleanupStateError, Supervi
 pub enum SupervisorDriverStep {
     Replay,
     ManagementAcknowledged,
+    AuthorityUpdated { reused_existing: bool },
     LaunchAccepted { reused_existing: bool },
     LaunchRejected { reason_code: &'static str },
     CancelScheduled { reused_existing: bool },

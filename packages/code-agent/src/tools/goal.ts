@@ -123,6 +123,8 @@ const UPDATE_GOAL_DESC =
 
 const createGoal: CoderTool = {
   name: 'create_goal',
+  executionClass: 'control',
+  effectBoundary: 'control',
   description: maybeTerse(CREATE_GOAL_DESC),
   source: 'native',
   mutates: false,
@@ -148,8 +150,13 @@ const createGoal: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const text = String(args.goal ?? '').trim();
+    ctx.signal?.throwIfAborted();
+    const text = typeof args.goal === 'string' ? args.goal.trim() : '';
     if (!text) return err('goal cannot be empty');
+    if (text.length > 8_192) return err('goal exceeds 8192 characters');
+    if (args.budget_tokens !== undefined && (!Number.isSafeInteger(args.budget_tokens) || (args.budget_tokens as number) < 1)) {
+      return err('budget_tokens must be a positive safe integer');
+    }
     if (!ctx.upsertGoalState && !readKey(ctx)) {
       return err('create_goal requires runner context');
     }
@@ -157,6 +164,7 @@ const createGoal: CoderTool = {
     let existing: GoalState | null;
     try {
       existing = await readGoal(ctx);
+      ctx.signal?.throwIfAborted();
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`create_goal: failed to read persisted goal state: ${reason}`);
@@ -173,7 +181,10 @@ const createGoal: CoderTool = {
       );
     }
 
-    const now = new Date().toISOString();
+    // createdAt also identifies the inherited objective for explicit pivots.
+    // Two terminal/create transitions in one clock tick need distinct identities.
+    const previousCreatedAt = existing ? Date.parse(existing.createdAt) : 0;
+    const now = new Date(Math.max(Date.now(), Number.isFinite(previousCreatedAt) ? previousCreatedAt + 1 : 0)).toISOString();
     const budget = typeof args.budget_tokens === 'number' && args.budget_tokens > 0 ? args.budget_tokens : null;
     try {
       await writeGoal(ctx, {
@@ -203,12 +214,14 @@ const getGoal: CoderTool = {
   riskLevel: 'read',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
   handler: async (_args, ctx): Promise<ToolResult> => {
+    ctx.signal?.throwIfAborted();
     if (!ctx.getGoalState && !readKey(ctx)) {
       return err('get_goal requires runner context');
     }
     let g: GoalState | null;
     try {
       g = await readGoal(ctx);
+      ctx.signal?.throwIfAborted();
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`get_goal: failed to read persisted goal state: ${reason}`);
@@ -239,6 +252,8 @@ const getGoal: CoderTool = {
 
 const updateGoal: CoderTool = {
   name: 'update_goal',
+  executionClass: 'control',
+  effectBoundary: 'control',
   description: maybeTerse(UPDATE_GOAL_DESC),
   source: 'native',
   mutates: false,
@@ -259,11 +274,14 @@ const updateGoal: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx.signal?.throwIfAborted();
     const requestedStatus = args.status;
     if (requestedStatus !== 'complete' && requestedStatus !== 'superseded') {
       return err('update_goal: status must be "complete" or "superseded"');
     }
     const suppliedNote = typeof args.note === 'string' ? args.note.trim() : '';
+    if (args.note !== undefined && typeof args.note !== 'string') return err('note must be a string');
+    if (suppliedNote.length > 8_192) return err('note exceeds 8192 characters');
     if (requestedStatus === 'superseded') {
       if (ctx.goalLifecycleIntent !== 'required_pivot') {
         return err(
@@ -280,6 +298,7 @@ const updateGoal: CoderTool = {
     let g: GoalState | null;
     try {
       g = await readGoal(ctx);
+      ctx.signal?.throwIfAborted();
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`update_goal: failed to read persisted goal state: ${reason}`);

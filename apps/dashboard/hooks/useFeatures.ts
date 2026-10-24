@@ -3,7 +3,7 @@
  * payload exposed by `/api/config/features`.
  *
  * The dashboard runs in the browser and has no access to `process.env`,
- * so server-side toggles like `DESIGN_SYSTEM_ENABLED` have to be
+ * so server-side toggles have to be
  * surfaced over HTTP. The fetch happens once on mount and the result
  * is cached in module-level state so any further consumers reuse it.
  *
@@ -15,14 +15,10 @@
 import { useEffect, useState } from 'react';
 
 export interface FeatureFlags {
-  designSystemEnabled: boolean;
-  spriteStudioEnabled: boolean;
   appStudioEnabled: boolean;
 }
 
 const DEFAULTS: FeatureFlags = {
-  designSystemEnabled: true,
-  spriteStudioEnabled: true,
   appStudioEnabled: true,
 };
 

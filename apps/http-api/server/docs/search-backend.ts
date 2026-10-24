@@ -13,7 +13,7 @@
  */
 import type { DocHybridSearch, DocSearchInput } from '@mcp/services/services/docs/index.js';
 import { DEFAULT_MIN_RELEVANCE } from '@mcp/services/services/docs/index.js';
-import type { DocChunk, DocStore } from '@mcp/store/doc-store.js';
+import type { DocStore } from '@mcp/store/doc-store.js';
 import type { DocsHintCollection, DocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
 import { buildDocNavVerbs } from './doc-nav-backend.js';
 import { createHash } from 'node:crypto';
@@ -80,7 +80,8 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
   const docsRagRerank = process.env.DOCS_RAG_RERANK !== '0';
 
   return {
-    search: async (input: BackendSearchInput) => {
+    search: async (input: BackendSearchInput, signal?: AbortSignal) => {
+      signal?.throwIfAborted();
       const { scope, project_id, ...rest } = input;
 
       // Resolve the project's linked collections. Defensive try/catch: a
@@ -107,6 +108,7 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
 
       const started = Date.now();
       const out = await docHybridSearch.search(forward);
+      signal?.throwIfAborted();
       const resolvedScope = scoped.length > 0 ? 'project' : 'all';
       out.diag.scope = resolvedScope;
       if (scoped.length > 0) out.diag.scoped_collections = scoped.map((c) => c.name);
@@ -135,47 +137,6 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
       return out;
     },
 
-    /**
-     * Full-content read of one chunk + its `ord` neighbors (same source).
-     * Returns null when the chunk doesn't exist (deleted / bad id) — the
-     * tool turns that into a clear "stale chunk_id, search again" message.
-     */
-    readChunk: async (input: BackendReadChunkInput): Promise<DocChunkRead | null> => {
-      const window = clamp(Math.trunc(input.window ?? 1), 0, 3);
-      const neighbors = docStore.getChunkNeighbors(input.chunk_id, window);
-      const seed = neighbors.find((c) => c.id === input.chunk_id);
-      if (!seed) return null;
-      const collection = docStore.getCollection(seed.collection_id);
-      const toNeighbor = (c: DocChunk): DocChunkNeighbor => ({
-        chunk_id: c.id,
-        ord: c.ord,
-        heading_path: c.heading_path,
-        content: c.content,
-        token_count: c.token_count,
-        source_uri: c.source_uri,
-      });
-      return {
-        chunk: {
-          chunk_id: seed.id,
-          collection: collection?.name ?? '(unknown)',
-          source_id: seed.source_id,
-          source_uri: seed.source_uri,
-          heading_path: seed.heading_path,
-          anchor: seed.anchor,
-          api_symbol: seed.api_symbol,
-          api_signature: seed.api_signature,
-          content: seed.content,
-          token_count: seed.token_count,
-          summary: seed.summary,
-          concepts: seed.concepts,
-        },
-        prev: neighbors.filter((c) => c.ord < seed.ord).map(toNeighbor),
-        next: neighbors.filter((c) => c.ord > seed.ord).map(toNeighbor),
-      };
-    },
-
-    // Structural navigation (rag_read_doc mode:'section' + rag_doc_outline) —
-    // implemented in doc-nav-backend.ts to keep this file under the LOC cap.
     ...buildDocNavVerbs(docStore),
   };
 }

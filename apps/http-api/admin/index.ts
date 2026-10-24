@@ -25,11 +25,10 @@ import { mcpServersRouter } from './mcp-servers.routes.js';
 import { skillsRouter } from './skills.routes.js';
 import { generalAiRouter } from './general-ai.routes.js';
 import { chromeServiceRouter } from './chrome-service.routes.js';
-import { verdaccioRouter } from './verdaccio.routes.js';
 import { bedrockModelAccessRouter } from './bedrock-model-access.routes.js';
 import { capabilitiesRouter } from './capabilities.routes.js';
 import { customAgentsRouter } from './custom-agents.routes.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 
 export function createAdminRouter(
   store: ProviderStore,
@@ -53,7 +52,6 @@ export function createAdminRouter(
   app.route('/', skillsRouter(sessionStore));
   app.route('/', generalAiRouter(store));
   app.route('/', chromeServiceRouter());
-  app.route('/', verdaccioRouter());
   app.route('/', capabilitiesRouter());
   app.route('/', customAgentsRouter(store));
 

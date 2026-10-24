@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TasksState } from '@mcp/session-storage/session-state-types.js';
 import {
   cancelTasks,
   deleteTasks,
   listTasks,
+  updateTask,
   validateTasksInput,
 } from '../tasks.js';
 
@@ -60,6 +61,15 @@ function toolContext(stateRef: { state: TasksState | null }): ToolContext {
 }
 
 describe('task id generation', () => {
+  it.each(['typed', 'legacy'] as const)('does not reset a task whose effect is uncertain (%s)', async kind => {
+    const item = task({ status: 'failed', result: { summary: 'unconfirmed', files_modified: [],
+      ...(kind === 'typed' ? { effectOutcome: 'unknown' as const } : { errors: 'outcome_unknown: ACK lost' }) } });
+    const ref = { state: { summary: '', tasks: [item], approved: true, execution_mode: 'all-subagent' as const, current_task_id: null } };
+    const output = await updateTask.handler({ task_id: item.id, status: 'pending' }, toolContext(ref));
+    expect(output.isError).toBe(true);
+    expect(ref.state.tasks[0].status).toBe('failed');
+  });
+
   it('replaces client aliases with generated ids and rewrites dependencies', () => {
     const result = validateTasksInput({
       summary: 'Split work',

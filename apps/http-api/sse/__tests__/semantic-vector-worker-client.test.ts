@@ -2,6 +2,69 @@ import { describe, expect, it, vi } from 'vitest';
 import { SemanticVectorWorkerClient } from '../SemanticVectorWorkerClient.js';
 
 describe('SemanticVectorWorkerClient generation cleanup RPC', () => {
+  it('uses one bounded RPC for current project jobs and forwards request cancellation', async () => {
+    const client = new SemanticVectorWorkerClient('D:/test/index.db', { file: 'worker.js', execArgv: [], built: true });
+    const request = vi.fn(async () => []); Object.defineProperty(client, 'request', { value: request });
+    const controller = new AbortController();
+    const scopes = [{ projectId: 7, generationIds: [8] }];
+    await client.currentProjectJobs(scopes, controller.signal);
+    expect(request).toHaveBeenCalledExactlyOnceWith('semantic.currentProjectJobs', scopes, controller.signal);
+    request.mockClear();
+    const input = { namespaces: ['code:p7'], limit: 25, beforeId: 100 };
+    await client.projectJobsPage(input, controller.signal);
+    expect(request).toHaveBeenCalledExactlyOnceWith('semantic.projectJobsPage', input, controller.signal);
+  });
+  it('uses one bounded RPC for current project jobs and forwards request cancellation', async () => {
+    const client = new SemanticVectorWorkerClient('D:/test/index.db', { file: 'worker.js', execArgv: [], built: true });
+    const request = vi.fn(async () => []); Object.defineProperty(client, 'request', { value: request });
+    const controller = new AbortController();
+    const scopes = [{ projectId: 7, generationIds: [8] }];
+    await client.currentProjectJobs(scopes, controller.signal);
+    expect(request).toHaveBeenCalledExactlyOnceWith('semantic.currentProjectJobs', scopes, controller.signal);
+    request.mockClear();
+    const input = { namespaces: ['code:p7'], limit: 25, beforeId: 100 };
+    await client.projectJobsPage(input, controller.signal);
+    expect(request).toHaveBeenCalledExactlyOnceWith('semantic.projectJobsPage', input, controller.signal);
+  });
+  it('reads bounded job pages through one high-water mark and restores priority ordering', async () => {
+    const client = new SemanticVectorWorkerClient('D:/test/index.db', { file: 'worker.js', execArgv: [], built: true });
+    const jobs = Array.from({ length: 257 }, (_, index) => ({ id: index + 1, priority: index }));
+    const request = vi.fn(async (_type: string, input: { afterId: number; throughId?: number }) => ({
+      throughId: input.throughId ?? 257,
+      jobs: jobs.filter(job => job.id > input.afterId).slice(0, 256),
+    }));
+    Object.defineProperty(client, 'request', { value: request });
+    const result = await client.listSemanticJobs({ statuses: ['pending'] });
+    expect(result.map(job => job.id)).toEqual(jobs.map(job => job.id).reverse());
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]![1]).toMatchObject({ afterId: 256, throughId: 257 });
+  });
+
+  it('rejects a non-advancing job cursor instead of keeping the UI in an infinite query', async () => {
+    const client = new SemanticVectorWorkerClient('D:/test/index.db', { file: 'worker.js', execArgv: [], built: true });
+    Object.defineProperty(client, 'request', { value: async () => ({ throughId: 2, jobs: [
+      { id: 1, priority: 1 }, { id: 1, priority: 2 },
+    ] }) });
+    await expect(client.listSemanticJobs()).rejects.toThrow('cursor did not advance');
+  });
+  it('cancels queued inference over RPC when the interactive request is aborted', async () => {
+    const client = new SemanticVectorWorkerClient('D:/test/index.db', { file: 'worker.js', execArgv: [], built: true });
+    const request = vi.fn((_type: string, _payload: unknown, _options: unknown) => new Promise(() => {}));
+    const emit = vi.fn();
+    const evict = vi.fn(async () => undefined);
+    const host = { requireBridge: () => ({ request, emit }), evict };
+    Object.defineProperty(client, 'ensureHost', { value: async () => host });
+    const controller = new AbortController();
+    const service = client.embeddingService({ kind: 'onnx', model: 'test', pooling: 'mean', normalize: true,
+      queryTemplate: '{text}', documentTemplate: '{text}' });
+    const pending = service.embedQuery('old query', { signal: controller.signal, supersessionKey: 'search:p1' });
+    await Promise.resolve();
+    controller.abort(new Error('new query'));
+    await expect(pending).rejects.toThrow('new query');
+    const payload = request.mock.calls[0]![1] as { inferenceRequestId: string };
+    expect(emit).toHaveBeenCalledWith('inference.cancel', { inferenceRequestId: payload.inferenceRequestId });
+    await client.dispose();
+  });
   it('does not evict a worker that still reports an active timed-out operation', async () => {
     vi.useFakeTimers();
     try {
@@ -125,7 +188,7 @@ describe('SemanticVectorWorkerClient generation cleanup RPC', () => {
       candidates: [{ id: 'a', text: 'doc', originalScore: 0.5 }],
       topK: 1,
       supersessionKey: 'search-everywhere:p91',
-    }]);
+    }, undefined]);
     await expect(client.rerankerDiagnostics(rerankerTarget)).resolves.toMatchObject({
       resolved_model: 'Xenova/bge-reranker-base',
       dtype: 'q8',

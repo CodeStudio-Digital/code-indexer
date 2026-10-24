@@ -12,6 +12,7 @@ pub use decision::{
 };
 pub use execution::{
     CapabilityExecutionOutcome, CapabilityExecutorPort, CapabilityFailure, CapabilityOutput,
+    CapabilityReadBatchPort,
 };
 pub use invocation::{CapabilityInvocation, ExecutionClass, InvocationValidationError};
 

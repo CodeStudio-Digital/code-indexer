@@ -44,7 +44,7 @@ import {
   activityPatchFromOperation,
   activityPatchFromProviderCall,
   activityPatchFromToolProgress,
-  clearProviderActivities,
+  clearProviderActivities as clearAllProviderActivities,
   finishActivity,
   removeActivity,
   upsertActivity,
@@ -127,7 +127,30 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
   // its first semantic content proof that every earlier interactive card is
   // complete. Sweep those live cards and refetch history, whose tool_result
   // renders the durable read-only state.
+  let cleanupIndexDirty = true;
+  let hasProviderActivities = false;
+  const pendingPromptIds = new Set<string>();
+  const refreshCleanupIndex = (): void => {
+    if (!cleanupIndexDirty) return;
+    cleanupIndexDirty = false;
+    pendingPromptIds.clear();
+    hasProviderActivities = false;
+    for (const block of blocks) {
+      const id = promptBlockId(block);
+      if (id) pendingPromptIds.add(id);
+      if (block.type === 'activity' && block.kind === 'provider'
+        && !['failed', 'timed_out', 'aborted'].includes(block.status)) hasProviderActivities = true;
+    }
+  };
+  const clearProviderActivities = (liveBlocks: StreamBlock[]): boolean => {
+    refreshCleanupIndex();
+    if (!hasProviderActivities) return false;
+    hasProviderActivities = false;
+    return clearAllProviderActivities(liveBlocks);
+  };
   const sweepResolvedInteractiveCards = (): void => {
+    refreshCleanupIndex();
+    if (![...pendingPromptIds].some(isPromptResolved)) return;
     let swept = false;
     for (let i = blocks.length - 1; i >= 0; i--) {
       const id = promptBlockId(blocks[i]);
@@ -137,6 +160,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // the card gone from both sides with nothing to schedule another refetch.
       if (!id || !isPromptResolved(id)) continue;
       blocks.splice(i, 1);
+      pendingPromptIds.delete(id);
       swept = true;
     }
     if (!swept) return;
@@ -144,7 +168,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     onMessageComplete?.();
   };
 
-  return {
+  const handlers: Record<string, EventHandler> = {
     text: (data) => {
       const t = String((data as { text?: string }).text ?? '');
       if (!t) return;
@@ -1102,20 +1126,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       }
     },
 
-    diagram_export_request: (data) => {
-      // diagram_export asked the live editor to render + persist an image.
-      if (typeof window === 'undefined') return;
-      const d = data as { path?: string; format?: string };
-      try {
-        window.dispatchEvent(
-          new CustomEvent('coder:diagram_export', {
-            detail: { sessionId: sid, path: d.path, format: d.format },
-          }),
-        );
-      } catch {
-        /* defensive */
-      }
-    },
+    // Retain historical event compatibility without replaying a filesystem
+    // effect. Current diagram_export is rendered and committed by its executor.
+    diagram_export_request: () => {},
 
     message_complete: (data) => {
       const u = (data as { usage?: Usage }).usage;
@@ -1205,6 +1218,13 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       providerProcessIds.clear();
     },
   };
+  return Object.fromEntries(Object.entries(handlers).map(([event, handler]) => [event,
+    ((data, name) => {
+      try { handler(data, name); }
+      finally { if (event !== 'text' && event !== 'thinking') cleanupIndexDirty = true; }
+    }) as EventHandler,
+  ]));
+
 }
 
 /**

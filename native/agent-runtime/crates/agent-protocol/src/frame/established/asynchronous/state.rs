@@ -37,6 +37,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncEstablishedAttemptChannel
         self.transport.is_poisoned() || self.receiver.is_poisoned() || self.sender.is_poisoned()
     }
 
+    #[must_use]
+    pub const fn maximum_frame_bytes(&self) -> usize {
+        self.receiver.maximum_frame_bytes()
+    }
+
+    /// Remaining unique messages in either direction for native peers, which
+    /// use the protocol identity ceiling. Does not release replay tombstones.
+    #[must_use]
+    pub fn remaining_identity_capacity(&self) -> usize {
+        let sent = usize::try_from(self.sender.committed_stream_seq()).unwrap_or(usize::MAX);
+        self.receiver
+            .remaining_identity_capacity()
+            .min(crate::frame::MAX_TRACKED_MESSAGE_IDS.saturating_sub(sent))
+    }
+
     pub(super) fn poison_all(&mut self) {
         self.receiver.poison();
         self.sender.poison();

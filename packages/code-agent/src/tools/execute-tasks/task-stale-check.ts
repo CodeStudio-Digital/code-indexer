@@ -29,9 +29,9 @@
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/session-storage';
-import type { CoderTask } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask } from '@mcp/session-storage/session-state-types.js';
 import { SYSTEM_PROMPT_VERSION } from '@mcp/code-agent/core/runner/assembly/system-prompt.js';
 import { taskKind } from './task-run-types.js';
 

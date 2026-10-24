@@ -20,8 +20,9 @@
  * env-tools pattern) — keeps `companyContext` free of QA-specific
  * dependencies.
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { IQaTestRunStore } from '@mcp/services/qa/store/interfaces.js';
 import type { QaRunTrigger } from '@mcp/services/qa/types.js';

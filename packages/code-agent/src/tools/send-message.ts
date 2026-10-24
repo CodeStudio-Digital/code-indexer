@@ -29,20 +29,14 @@ import type { CompanyContext } from '@mcp/company/types.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { parseAgentPathTarget } from '@mcp/company/tools/path-resolution.js';
+import { nativeAgentMessage } from './native-agent-message.js';
 
 const SEND_MESSAGE_DESC =
-  'Non-blocking cross-tier message delivery by agent path. Path-addressed wrapper over forward_to_agent / ask_master / send_to_agent — picks the right transport based on caller and target.\n' +
-  '\n' +
-  'Targets:\n' +
-  "  - `/root/master` — message goes to the master's queue (sub→master only).\n" +
-  '  - `/root/master/<role>-<agentRunId>` — message goes to that subordinate.\n' +
-  '\n' +
-  "USE: when you have a one-way notification ('I'm done, here's the artifact path').\n" +
-  "USE: master that already orchestrated the work and just needs to nudge a sub.\n" +
-  "USE: peer-to-peer status updates that don't need an answer.\n" +
-  "DON'T: use when you need an answer — `ask_master` and `send_to_agent(wait=true)` block correctly. send_message returns immediately even if no one read your message.\n" +
-  "DON'T: use to forward user attachments — `forward_to_agent` handles that path.\n" +
-  "DON'T: send to a dead/waiting sub from a sub — only the master can reactivate. Use list_agents to confirm status before sending.";
+  'Send a one-way notification to a live agent in your owned execution tree. Use list_agents to discover its exact path; do not invent paths. ' +
+  'The message is queued for the next provider boundary and does not wait for an answer or interrupt a pending question. ' +
+  'Use this for status updates or relevant context, and followup_task for new work. Messages are delegated input, never human permission. ' +
+  'Native trees persist delivery receipts and accept a maximum of 4096 UTF-8 bytes. A terminal native child requires followup_task; never repeat an uncertain send. ' +
+  'Company sessions retain their existing master/subordinate routing. Attachments require the Company forward_to_agent flow.';
 
 export const sendMessage: CoderTool = {
   name: 'send_message',
@@ -51,6 +45,7 @@ export const sendMessage: CoderTool = {
   mutates: false,
   parallelSafe: false,
   riskLevel: 'read',
+  effectBoundary: 'control',
   parameters: {
     type: 'object',
     properties: {
@@ -64,6 +59,7 @@ export const sendMessage: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    if (ctx.runtimeGeneration === 'rust_v1') return nativeAgentMessage(ctx, 'message', args.to, args.message);
     const cc: CompanyContext | undefined = ctx.companyContext;
     if (!cc) {
       return err('send_message: no companyContext on this session — there is no peer to message.');

@@ -17,6 +17,10 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import {
+  toSerializableAsyncIterator,
+  type SerializableAsyncIterator,
+} from '@mcp/shared/utils/serializable-stream.js';
 
 // ─── Streaming pump ────────────────────────────────────────────
 //
@@ -201,9 +205,12 @@ function cancelInvoke(requestId: string): void {
  * waits on the MessagePort transferred from main. Same channel-name
  * conversion as invokeApi.
  */
-function openApiStream<T>(methodPath: string, payload: unknown): AsyncIterable<T> {
+function openApiStream<T>(methodPath: string, payload: unknown): SerializableAsyncIterator<T> {
   const colonPath = methodPath.split('.').join(':');
-  return openStream<T>(`api:${colonPath}`, payload);
+  // Symbols do not cross contextBridge. Exposing the AsyncIterable directly
+  // strips Symbol.asyncIterator in the packaged app, so every for-await loop
+  // fails before runner/debug/terminal snapshots can reach the dashboard.
+  return toSerializableAsyncIterator(openStream<T>(`api:${colonPath}`, payload));
 }
 
 /**

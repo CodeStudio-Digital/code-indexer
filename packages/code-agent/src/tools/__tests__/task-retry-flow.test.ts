@@ -10,6 +10,48 @@ const fastConfig = { maxRetries: 2, initialMs: 0, maxMs: 0, jitter: 0 };
 const noSleep = () => Promise.resolve();
 
 describe('dispatchWithRetry', () => {
+  it('never repeats an uncertain effect even when the reported transport error is retryable', async () => {
+    const attempt = vi.fn(async () => ({ result: 'unconfirmed', shouldStop: false,
+      errorMessage: 'ETIMEDOUT', effectOutcome: 'unknown' as const }));
+    const sleep = vi.fn(noSleep), onFinish = vi.fn();
+    const out = await dispatchWithRetry(attempt, { config: fastConfig, sleep, onFinish });
+    expect(out).toEqual({ result: 'unconfirmed', attempts: 1 });
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(onFinish).toHaveBeenCalledWith(expect.objectContaining({ verdict: 'fatal' }));
+  });
+
+  it('does not start an attempt after parent cancellation', async () => {
+    const attempt = vi.fn();
+    await expect(dispatchWithRetry(attempt, { signal: AbortSignal.abort(new Error('parent cancelled')) }))
+      .rejects.toThrow('parent cancelled');
+    expect(attempt).not.toHaveBeenCalled();
+  });
+
+  it('cancels the backoff timer without starting another child', async () => {
+    const controller = new AbortController();
+    const attempt = vi.fn(async () => ({ result: 'partial', shouldStop: false, errorMessage: 'ECONNRESET' }));
+    let notifyRetry!: () => void;
+    const retryEntered = new Promise<void>(resolve => { notifyRetry = resolve; });
+    const pending = dispatchWithRetry(attempt, { signal: controller.signal,
+      config: { ...fastConfig, initialMs: 60_000, maxMs: 60_000 }, onRetry: notifyRetry });
+    await retryEntered;
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a child returning after its parent has cancelled', async () => {
+    const controller = new AbortController();
+    const attempt = vi.fn(async () => {
+      controller.abort(new Error('parent cancelled'));
+      return { result: 'partial', shouldStop: false, errorMessage: 'ECONNRESET' };
+    });
+    await expect(dispatchWithRetry(attempt, { signal: controller.signal, config: fastConfig }))
+      .rejects.toThrow('parent cancelled');
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
   it('returns immediately on first attempt success', async () => {
     const attempt = vi.fn(async () => ({ result: 'ok', shouldStop: true }));
     const out = await dispatchWithRetry(attempt, { config: fastConfig, sleep: noSleep });

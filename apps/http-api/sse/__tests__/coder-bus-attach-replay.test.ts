@@ -4,7 +4,7 @@
  * (from the last `message_complete`, inclusive), in strict buffer order.
  * Cursor subscriptions (`since >= 0`) keep the untouched full-replay path.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   attachReplayCap,
   attachReplayTrimEnabled,
@@ -17,10 +17,7 @@ import {
   type BufferedEvent,
 } from '../../coder-bus.js';
 
-afterEach(() => {
-  delete process.env.CODER_ATTACH_REPLAY_MAX_EVENTS;
-  delete process.env.CODER_ATTACH_REPLAY_TRIM;
-});
+afterEach(() => vi.unstubAllEnvs());
 
 function seqs(events: BufferedEvent[]): number[] {
   return events.map((e) => e.seq);
@@ -52,39 +49,35 @@ describe('buildAttachReplay', () => {
   });
 
   it('never applies the prefix cap to a live turn with no message_complete', () => {
-    process.env.CODER_ATTACH_REPLAY_MAX_EVENTS = '3';
     const bus = createBus(new AbortController());
     for (let i = 0; i < 10; i++) publish(bus, 'text', { delta: `d${i}` });
     expect(seqs(buildAttachReplay(bus))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    expect(attachReplayCap()).toBe(3);
+    expect(attachReplayCap()).toBe(DEFAULT_ATTACH_REPLAY_MAX_EVENTS);
   });
 
   it('caps only reconstructible cross-turn state and preserves the complete live tail', () => {
-    process.env.CODER_ATTACH_REPLAY_MAX_EVENTS = '3';
     const bus = createBus(new AbortController());
-    for (let i = 0; i < 6; i++) {
+    const count = DEFAULT_ATTACH_REPLAY_MAX_EVENTS + 3;
+    for (let i = 0; i < count; i++) {
       publish(bus, 'tasks_posted', { version: i });
     }
     publish(bus, 'message_complete', { turn: 1 });
     for (let i = 0; i < 10; i++) publish(bus, 'text', { delta: `live-${i}` });
 
-    expect(seqs(buildAttachReplay(bus))).toEqual([
-      3, 4, 5,
-      6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-    ]);
+    expect(seqs(buildAttachReplay(bus))).toEqual(Array.from({ length: DEFAULT_ATTACH_REPLAY_MAX_EVENTS + 11 }, (_, i) => i + 3));
   });
 
-  it('cap default is DEFAULT_ATTACH_REPLAY_MAX_EVENTS and garbage env falls back', () => {
-    process.env.CODER_ATTACH_REPLAY_MAX_EVENTS = 'banana';
+  it('uses the fixed replay cap and ignores retired environment overrides', () => {
+    vi.stubEnv('CODER_ATTACH_REPLAY_MAX_EVENTS', '3');
     expect(attachReplayCap()).toBe(DEFAULT_ATTACH_REPLAY_MAX_EVENTS);
   });
 
-  it('enables bounded semantic replay by default with an emergency opt-out', () => {
+  it('keeps bounded semantic replay enabled despite retired environment overrides', () => {
     expect(attachReplayTrimEnabled()).toBe(true);
-    process.env.CODER_ATTACH_REPLAY_TRIM = '1';
+    vi.stubEnv('CODER_ATTACH_REPLAY_TRIM', '1');
     expect(attachReplayTrimEnabled()).toBe(true);
-    process.env.CODER_ATTACH_REPLAY_TRIM = '0';
-    expect(attachReplayTrimEnabled()).toBe(false);
+    vi.stubEnv('CODER_ATTACH_REPLAY_TRIM', '0');
+    expect(attachReplayTrimEnabled()).toBe(true);
   });
 });
 

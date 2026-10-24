@@ -44,6 +44,7 @@ export interface DocSearchEnhancements {
 }
 
 export interface DocSearchInput {
+  signal?: AbortSignal;
   /** Natural-language query. */
   query: string;
   /** Optional: restrict to a single collection name. Wins over `collection_ids`. */
@@ -177,6 +178,7 @@ export class DocHybridSearch {
     results: DocSearchResult[];
     diag: DocSearchDiagnostics;
   }> {
+    input.signal?.throwIfAborted();
     const maxResults = positiveEnvInt('MCP_DOC_SEARCH_MAX_RESULTS', DEFAULT_MAX_RESULTS);
     const requestedLimit = Number(input.limit ?? 5);
     const limit = clamp(Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 5, 1, maxResults);
@@ -245,7 +247,9 @@ export class DocHybridSearch {
     if (wantRewrite && rewriter) {
       const rewrite = await rewriter.rewrite(input.query, {
         resolveContext: input.resolveContext,
+        signal: input.signal,
       });
+      input.signal?.throwIfAborted();
       queries = rewrite.variants;
       rewriteUsed = rewrite.llmUsed || rewrite.cacheHit;
       rewriteVariants = rewrite.variants.length;
@@ -260,11 +264,13 @@ export class DocHybridSearch {
       queries.map(async (q) => {
         const [fts, vec] = await Promise.all([
           useFts ? this.runFts(q, collectionIds, ftsBudget) : Promise.resolve([] as RankedHit[]),
-          useVector ? this.runVector(q, collectionIds, vectorBudget, (n) => { staleVectorHits += n; }) : Promise.resolve([] as RankedHit[]),
+          useVector ? this.runVector(q, collectionIds, vectorBudget, (n) => { staleVectorHits += n; }, input.signal) : Promise.resolve([] as RankedHit[]),
         ]);
         return { fts, vec };
       }),
     );
+
+    input.signal?.throwIfAborted();
 
     // Aggregate per-source totals for diagnostics.
     const totalFts = perVariant.reduce((acc, v) => acc + v.fts.length, 0);
@@ -331,14 +337,17 @@ export class DocHybridSearch {
       const candidates: Array<RerankCandidate & { __result: DocSearchResult }> = results.map((r) => ({
         chunk_id: r.chunk_id,
         heading_path: r.heading_path,
-        snippet: r.snippet,
+        // Preview truncation must not hide the relevant part from the model.
+        snippet: byId.get(r.chunk_id)?.content.slice(0, 8_000) ?? r.snippet,
         pre_rerank_score: r.score,
         concepts: r.concepts,
         __result: r,
       }));
       const rerank = await reranker.rerank(input.query, candidates, {
         resolveContext: input.resolveContext,
+        signal: input.signal,
       });
+      input.signal?.throwIfAborted();
       rerankUsed = rerank.reranked;
       rerankDropped = rerank.dropped;
       results = rerank.candidates.map((c) => c.__result);
@@ -414,6 +423,7 @@ export class DocHybridSearch {
     collectionIds: number[] | undefined,
     budget: number,
     onStale: (count: number) => void,
+    signal?: AbortSignal,
   ): Promise<RankedHit[]> {
     if (!this.embeddingService || !this.vectorStore) return [];
 
@@ -426,14 +436,19 @@ export class DocHybridSearch {
     // memory" hack that existed only because code+docs shared one index.
     const ids = collectionIds ?? this.docStore.listCollections().map((c) => c.id);
     const searchCollection = async (id: number): Promise<RankedHit[]> => {
+      signal?.throwIfAborted();
       const namespace = docNamespace(id);
       try {
         // Each collection may still serve a different active generation while
         // an atomic profile migration rolls forward. Encode in that exact
         // namespace's model space; one failed target degrades only its branch.
-        const { vector, generationId } = await embedQueryForNamespace(this.embeddingService!, namespace, query);
-        return await this.searchNamespace(vector, namespace, budget, onStale, generationId);
+        const { vector, generationId } = await embedQueryForNamespace(this.embeddingService!, namespace, query, signal ? { signal } : undefined);
+        signal?.throwIfAborted();
+        const results = await this.searchNamespace(vector, namespace, budget, onStale, generationId);
+        signal?.throwIfAborted();
+        return results;
       } catch {
+        signal?.throwIfAborted();
         return [];
       }
     };
@@ -443,6 +458,7 @@ export class DocHybridSearch {
     let cursor = 0;
     const worker = async (): Promise<void> => {
       while (cursor < ids.length) {
+        signal?.throwIfAborted();
         const index = cursor++;
         perCollection[index] = await searchCollection(ids[index]);
       }

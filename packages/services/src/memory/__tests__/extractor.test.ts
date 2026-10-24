@@ -35,6 +35,13 @@ const fakeDistiller = (out: MemoryCandidate[]): MemoryDistiller => ({
 });
 
 describe('MemoryExtractor', () => {
+  it.each(['user', 'feedback'] as const)('deduplicates stored preferences when the incoming category is %s', async category => {
+    const w = fakeWriter();
+    const ex = new MemoryExtractor(fakeDistiller([{ title: 'User preference', content: 'same fact', category, importance: 0.7 }]),
+      w.writer, fakeSearch([snap(7, 'User preference', 'same fact', category === 'user' ? 'feedback' : 'user')]));
+    expect(await ex.extractAndPersist(0, '', 'agent', {})).toEqual({ created: 0, merged: 1, skipped: 0 });
+    expect(w.creates).toHaveLength(0); expect(w.updates).toHaveLength(1);
+  });
   it('creates new memory with the given source + importance when no duplicate', async () => {
     const w = fakeWriter();
     const ex = new MemoryExtractor(

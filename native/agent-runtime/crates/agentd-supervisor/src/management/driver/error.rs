@@ -8,6 +8,7 @@ pub enum SupervisorDriverCreateError {
     Ownership(OwnershipError),
     InvalidCapacity,
     InvalidClock,
+    OutboxRequiresRecovery,
 }
 
 #[derive(Debug)]
@@ -15,6 +16,8 @@ pub enum SupervisorDriverError<P> {
     Channel(ManagementChannelError),
     InvalidLaunchPlan,
     InvalidTerminationPlan,
+    InvalidAuthorityUpdate,
+    AuthorityUpdateConflict,
     TerminationConflict,
     ShutdownConflict,
     UnknownTerminationTarget,
@@ -25,6 +28,7 @@ pub enum SupervisorDriverError<P> {
     PhysicalReceiptMismatch,
     FactFlowInvariant,
     UntrackedAcknowledgement,
+    OutboxPersistence(std::io::Error),
     UnsupportedInbound(&'static str),
 }
 

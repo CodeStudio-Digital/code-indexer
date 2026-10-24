@@ -45,6 +45,12 @@ const CRATE_RULES: Readonly<Record<string, CrateRule>> = {
     name: 'agent-platform',
     allowedInternalDependencies: [],
   },
+  'crates/agent-lifecycle-store': {
+    name: 'agent-lifecycle-store',
+    // Filesystem-only evidence shared by the supervisor writer and the
+    // authenticated session bridge reader; no process-launch authority.
+    allowedInternalDependencies: ['agent-protocol'],
+  },
   'crates/agent-protocol': {
     name: 'agent-protocol',
     allowedInternalDependencies: [],
@@ -61,7 +67,7 @@ const CRATE_RULES: Readonly<Record<string, CrateRule>> = {
   },
   'crates/agent-session-bridge': {
     name: 'agent-session-bridge',
-    allowedInternalDependencies: ['agent-protocol', 'agent-session-store'],
+    allowedInternalDependencies: ['agent-protocol', 'agent-session-store', 'agent-lifecycle-store'],
   },
   'crates/agent-session-store': {
     name: 'agent-session-store',
@@ -77,7 +83,7 @@ const CRATE_RULES: Readonly<Record<string, CrateRule>> = {
   },
   'crates/agentd-supervisor': {
     name: 'agentd-supervisor',
-    allowedInternalDependencies: ['agent-platform', 'agent-protocol'],
+    allowedInternalDependencies: ['agent-platform', 'agent-protocol', 'agent-lifecycle-store'],
   },
 };
 

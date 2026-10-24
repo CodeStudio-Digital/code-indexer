@@ -6,8 +6,8 @@ import type {
   SessionWorkbenchEvent,
   SessionWorkbenchResource,
 } from '@mcp/api-bus';
-import type { FsSessionEvent } from '@mcp/code-agent/sessions/fs-store/operational-types.js';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
+import type { FsSessionEvent } from '@mcp/session-storage/fs-store/operational-types.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 
 const RECEIPT_TYPE = 'workbench.command.applied';
 const MAX_IN_FLIGHT_COMMANDS = 128;

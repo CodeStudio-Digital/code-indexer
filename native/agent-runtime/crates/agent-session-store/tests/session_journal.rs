@@ -6,11 +6,127 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_session_store::{
     AppendRequest, CommitOutcome, DurabilityClass, LeaseEpoch, ListCommittedRecordsRequest,
-    OperationId, ReadCommittedPayloadRequest, SessionId, SessionJournal, SessionRecordKind,
-    SessionStoreError, SessionStoreLimits, StorageAuthority, StorageGeneration, WriterId,
+    OperationId, ReadCommittedPayloadRequest, SessionId, SessionJournal, SessionReadView,
+    SessionRecordKind, SessionStoreError, SessionStoreLimits, StorageAuthority, StorageGeneration,
+    WriterId,
 };
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
+
+#[test]
+fn read_view_never_acquires_or_replaces_a_live_writer() {
+    let root = TestRoot::new("read-view-live");
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(1, 1), limits(8, 1024)).unwrap();
+    let first = operation_id(1);
+    journal
+        .append(AppendRequest {
+            operation_id: &first,
+            kind: SessionRecordKind::Conversation,
+            durability: DurabilityClass::Authoritative,
+            payload: b"message",
+        })
+        .unwrap();
+    let view = SessionReadView::open(root.path(), session_id(), &authority(1, 1), limits(8, 1024))
+        .unwrap();
+    let page = view
+        .list(
+            ListCommittedRecordsRequest {
+                after_sequence: 0,
+                maximum_records: 1,
+            },
+            "",
+        )
+        .unwrap();
+    assert_eq!(page.records().len(), 1);
+    let receipt = &page.records()[0];
+    let payload = view
+        .read(ReadCommittedPayloadRequest {
+            operation_id: &first,
+            kind: receipt.kind(),
+            expected_payload_sha256: receipt.payload_hash(),
+            expected_payload_bytes: receipt.payload_bytes(),
+            maximum_payload_bytes: 1024,
+        })
+        .unwrap();
+    assert_eq!(payload.encoded_payload(), b"message");
+    assert!(matches!(
+        SessionReadView::open(root.path(), session_id(), &authority(2, 2), limits(8, 1024)),
+        Err(SessionStoreError::StaleAuthority)
+    ));
+    journal
+        .append(AppendRequest {
+            operation_id: &operation_id(2),
+            kind: SessionRecordKind::Conversation,
+            durability: DurabilityClass::Authoritative,
+            payload: b"next",
+        })
+        .unwrap();
+    assert!(matches!(
+        view.list(
+            ListCommittedRecordsRequest {
+                after_sequence: 1,
+                maximum_records: 1
+            },
+            page.snapshot_id()
+        ),
+        Err(SessionStoreError::ConcurrentMutation)
+    ));
+    drop(journal);
+    let reopened =
+        SessionReadView::open(root.path(), session_id(), &authority(1, 1), limits(8, 1024))
+            .unwrap();
+    assert_eq!(reopened.snapshot().unwrap().committed_records(), 2);
+    let writer =
+        SessionJournal::open(root.path(), session_id(), authority(2, 2), limits(8, 1024)).unwrap();
+    assert!(matches!(
+        reopened.snapshot(),
+        Err(SessionStoreError::ConcurrentMutation)
+    ));
+    drop(writer);
+}
+
+#[test]
+fn read_view_does_not_repair_or_create_storage() {
+    let root = TestRoot::new("read-view-tail");
+    assert!(
+        SessionReadView::open(root.path(), session_id(), &authority(1, 1), limits(8, 1024))
+            .is_err()
+    );
+    assert!(!root.path().join(session_id().as_str()).exists());
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(1, 1), limits(8, 1024)).unwrap();
+    journal
+        .append(AppendRequest {
+            operation_id: &operation_id(1),
+            kind: SessionRecordKind::Conversation,
+            durability: DurabilityClass::Authoritative,
+            payload: b"committed",
+        })
+        .unwrap();
+    drop(journal);
+    let path = root
+        .path()
+        .join(session_id().as_str())
+        .join("conversation.jsonl");
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"uncommitted-tail")
+        .unwrap();
+    let before = fs::read(&path).unwrap();
+    let lease_path = root
+        .path()
+        .join(session_id().as_str())
+        .join(".rust-writer.lease");
+    let lease_before = fs::read(&lease_path).unwrap();
+    let view = SessionReadView::open(root.path(), session_id(), &authority(1, 1), limits(8, 1024))
+        .unwrap();
+    assert_eq!(view.snapshot().unwrap().committed_records(), 1);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read(lease_path).unwrap(), lease_before);
+}
 
 struct TestRoot(PathBuf);
 
@@ -226,6 +342,361 @@ fn writer_lease_and_limits_fail_closed() {
         }),
         Err(SessionStoreError::RecordLimitExceeded)
     ));
+}
+
+#[test]
+fn snapshot_pages_preserve_frozen_records_across_authorized_commits() {
+    let root = TestRoot::new("snapshot-pages");
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(1, 1), limits(8, 1024))
+            .expect("writer");
+    for value in 1..=3 {
+        journal
+            .append(AppendRequest {
+                operation_id: &operation_id(value),
+                kind: SessionRecordKind::Conversation,
+                durability: DurabilityClass::Durable,
+                payload: b"hello",
+            })
+            .expect("append");
+    }
+    let first = journal
+        .list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 0,
+                maximum_records: 1,
+            },
+            "",
+        )
+        .expect("snapshot");
+    let second = journal
+        .list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 1,
+                maximum_records: 2,
+            },
+            first.snapshot_id(),
+        )
+        .expect("page");
+    assert_eq!(first.snapshot_id(), second.snapshot_id());
+    assert_eq!(
+        second
+            .records()
+            .iter()
+            .map(agent_session_store::CommitReceipt::sequence)
+            .collect::<Vec<_>>(),
+        [2, 3]
+    );
+    assert!(second.complete());
+    journal
+        .append(AppendRequest {
+            operation_id: &operation_id(4),
+            kind: SessionRecordKind::Conversation,
+            durability: DurabilityClass::Durable,
+            payload: b"next",
+        })
+        .expect("authorized append");
+    let frozen = journal
+        .list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 1,
+                maximum_records: 2,
+            },
+            first.snapshot_id(),
+        )
+        .expect("frozen page survives authorized append");
+    assert_eq!(frozen.records().len(), 2);
+    assert_eq!(frozen.records().last().unwrap().sequence(), 3);
+    assert!(frozen.complete());
+    assert!(matches!(
+        journal.list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 4,
+                maximum_records: 1,
+            },
+            first.snapshot_id()
+        ),
+        Err(SessionStoreError::InvalidLimits)
+    ));
+    let fresh = journal
+        .list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 0,
+                maximum_records: 8,
+            },
+            "",
+        )
+        .expect("new snapshot");
+    assert_ne!(fresh.snapshot_id(), first.snapshot_id());
+    assert_eq!(fresh.records().len(), 4);
+}
+
+#[test]
+fn snapshot_rejects_same_length_external_mutation() {
+    let root = TestRoot::new("snapshot-corruption");
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(1, 1), limits(8, 1024))
+            .expect("writer");
+    journal
+        .append(AppendRequest {
+            operation_id: &operation_id(1),
+            kind: SessionRecordKind::Conversation,
+            durability: DurabilityClass::Durable,
+            payload: b"hello",
+        })
+        .expect("append");
+    let first = journal
+        .list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 0,
+                maximum_records: 1,
+            },
+            "",
+        )
+        .expect("snapshot");
+    let path = root
+        .path()
+        .join(session_id().as_str())
+        .join("conversation.jsonl");
+    let mut bytes = fs::read(&path).expect("read journal");
+    bytes[0] = b'!';
+    fs::write(&path, bytes).expect("same length corruption");
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .expect("file")
+        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+        .expect("distinct timestamp");
+    assert!(matches!(
+        journal.list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 0,
+                maximum_records: 1,
+            },
+            first.snapshot_id()
+        ),
+        Err(SessionStoreError::ConcurrentMutation)
+    ));
+    assert!(
+        journal
+            .list_committed_snapshot(
+                ListCommittedRecordsRequest {
+                    after_sequence: 0,
+                    maximum_records: 1,
+                },
+                ""
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn recovery_snapshot_pages_scale_to_ten_thousand_records() {
+    for count in [100_u64, 1_000, 10_000] {
+        let root = TestRoot::new("snapshot-scale");
+        let mut journal = SessionJournal::open(
+            root.path(),
+            session_id(),
+            authority(1, 1),
+            limits(count, 1024),
+        )
+        .expect("writer");
+        for value in 1..=count {
+            journal
+                .append(AppendRequest {
+                    operation_id: &OperationId::parse(format!(
+                        "30000000-0000-0000-0000-{value:012x}"
+                    ))
+                    .expect("operation"),
+                    kind: SessionRecordKind::Conversation,
+                    durability: DurabilityClass::Durable,
+                    payload: b"synthetic recovery record",
+                })
+                .expect("append");
+        }
+        let started = std::time::Instant::now();
+        let mut cursor = 0;
+        loop {
+            let page = journal
+                .list_committed_records(ListCommittedRecordsRequest {
+                    after_sequence: cursor,
+                    maximum_records: 256,
+                })
+                .expect("revalidated page");
+            cursor = page.next_sequence();
+            if page.complete() {
+                break;
+            }
+        }
+        let fresh_snapshot_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        let started = std::time::Instant::now();
+        let mut cursor = 0;
+        let mut snapshot_id = String::new();
+        let mut received = 0;
+        loop {
+            let page = journal
+                .list_committed_snapshot(
+                    ListCommittedRecordsRequest {
+                        after_sequence: cursor,
+                        maximum_records: 256,
+                    },
+                    &snapshot_id,
+                )
+                .expect("snapshot page");
+            if !snapshot_id.is_empty() {
+                assert_eq!(snapshot_id, page.snapshot_id());
+            }
+            snapshot_id = page.snapshot_id().to_owned();
+            for receipt in page.records() {
+                received += 1;
+                assert_eq!(receipt.sequence(), received);
+            }
+            cursor = page.next_sequence();
+            if page.complete() {
+                break;
+            }
+        }
+        assert_eq!(received, count);
+        println!(
+            "snapshot_records={count} fresh_snapshot_each_page_ms={fresh_snapshot_ms:.3} frozen_snapshot_ms={:.3}",
+            started.elapsed().as_secs_f64() * 1_000.0
+        );
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn warmed_snapshots_and_appends_do_not_reopen_the_journal_for_reading() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let root = TestRoot::new("no-journal-reread");
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(1, 1), limits(64, 1024)).unwrap();
+    for id in 1..=32 {
+        journal
+            .append(AppendRequest {
+                operation_id: &operation_id(id),
+                kind: SessionRecordKind::Conversation,
+                durability: DurabilityClass::Durable,
+                payload: b"committed",
+            })
+            .unwrap();
+    }
+    drop(journal);
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(2, 2), limits(64, 1024)).unwrap();
+    let path = root
+        .path()
+        .join(session_id().as_str())
+        .join("conversation.jsonl");
+    // The kernel now rejects all new data-read handles. Metadata and the
+    // authorized writer's existing append handle remain available.
+    let no_reads = OpenOptions::new()
+        .write(true)
+        .share_mode(2)
+        .open(&path)
+        .unwrap();
+    assert!(std::fs::File::open(&path).is_err());
+    let first = journal
+        .list_committed_records(ListCommittedRecordsRequest {
+            after_sequence: 0,
+            maximum_records: 16,
+        })
+        .unwrap();
+    assert_eq!(first.records().len(), 16);
+    for id in 33..=40 {
+        journal
+            .append(AppendRequest {
+                operation_id: &operation_id(id),
+                kind: SessionRecordKind::Conversation,
+                durability: DurabilityClass::Durable,
+                payload: b"incremental",
+            })
+            .unwrap();
+    }
+    let frozen = journal
+        .list_committed_snapshot(
+            ListCommittedRecordsRequest {
+                after_sequence: 16,
+                maximum_records: 64,
+            },
+            first.snapshot_id(),
+        )
+        .unwrap();
+    assert_eq!(frozen.records().len(), 16);
+    assert!(frozen.complete());
+    for _ in 0..8 {
+        let fresh = journal
+            .list_committed_records(ListCommittedRecordsRequest {
+                after_sequence: 32,
+                maximum_records: 64,
+            })
+            .unwrap();
+        assert_eq!(fresh.records().len(), 8);
+        assert_eq!(fresh.next_sequence(), 40);
+    }
+    drop(no_reads);
+    drop(journal);
+    let mut reopened =
+        SessionJournal::open(root.path(), session_id(), authority(3, 3), limits(64, 1024)).unwrap();
+    assert_eq!(
+        reopened
+            .list_committed_records(ListCommittedRecordsRequest {
+                after_sequence: 0,
+                maximum_records: 64,
+            })
+            .unwrap()
+            .records()
+            .len(),
+        40
+    );
+}
+
+#[test]
+fn mutation_before_first_snapshot_cannot_be_blessed_by_the_cached_index() {
+    let root = TestRoot::new("index-corruption");
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(1, 1), limits(8, 1024)).unwrap();
+    journal
+        .append(AppendRequest {
+            operation_id: &operation_id(1),
+            kind: SessionRecordKind::Conversation,
+            durability: DurabilityClass::Durable,
+            payload: b"committed",
+        })
+        .unwrap();
+    let path = root
+        .path()
+        .join(session_id().as_str())
+        .join("conversation.jsonl");
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[0] = b'!';
+    fs::write(&path, bytes).unwrap();
+    OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+        .unwrap();
+    assert!(matches!(
+        journal.list_committed_records(ListCommittedRecordsRequest {
+            after_sequence: 0,
+            maximum_records: 1,
+        }),
+        Err(SessionStoreError::ConcurrentMutation)
+    ));
+    assert!(matches!(
+        journal.append(AppendRequest {
+            operation_id: &operation_id(2),
+            kind: SessionRecordKind::Conversation,
+            durability: DurabilityClass::Durable,
+            payload: b"must not commit",
+        }),
+        Err(SessionStoreError::Poisoned)
+    ));
+    drop(journal);
+    assert!(
+        SessionJournal::open(root.path(), session_id(), authority(2, 2), limits(8, 1024)).is_err()
+    );
 }
 
 #[test]

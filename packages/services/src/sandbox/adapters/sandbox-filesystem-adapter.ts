@@ -58,8 +58,43 @@ export class SandboxFilesystemAdapter implements IFilesystemPort {
     await this.driver.writeFile(this.containerId, absPath, data, { recursive: true });
   }
 
+  async createFile(absPath: string, data: string): Promise<void> {
+    await this.createExclusive(absPath, data, false);
+  }
+
+  async createFileBytes(absPath: string, data: Uint8Array): Promise<void> {
+    await this.createExclusive(absPath, Buffer.from(data).toString('base64'), true);
+  }
+
+  private async createExclusive(absPath: string, data: string, binary: boolean): Promise<void> {
+    assertMutationFence(this.mutationFenceSource?.(), { kind: 'filesystem', operation: 'createFile', resource: absPath });
+    // Stage beside the target, then publish with a no-replace hard link. -T
+    // prevents ln from treating an existing directory as a destination folder.
+    // Unsupported container utilities fail closed. Paths/content are argv/stdin.
+    const script = 'temporary=$(mktemp "$2/.codestudio-create.XXXXXXXXXX") || exit 1; '
+      + 'trap \'rm -f -- "$temporary"\' EXIT HUP INT TERM; '
+      + (binary ? 'base64 -d' : 'cat') + ' > "$temporary" && ln -T -- "$temporary" "$1"';
+    const parent = absPath.slice(0, absPath.lastIndexOf('/')) || '/';
+    const result = await this.driver.run(this.containerId, 'sh', ['-c', script, 'sh', absPath, parent], {
+      timeoutMs: 30000, stdin: data,
+    });
+    if (result.exitCode !== 0) throw new Error(`Sandbox exclusive creation failed (${result.exitCode}): ${(result.stderr || result.stdout).trim()}`);
+  }
+
   async readFile(absPath: string): Promise<string> {
     return await this.driver.readFile(this.containerId, absPath);
+  }
+
+  async readFileBounded(absPath: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16 * 1024 * 1024) throw new Error('Invalid bounded read size');
+    signal?.throwIfAborted();
+    const result = await this.driver.run(this.containerId, 'sh', [
+      '-c', 'test -f "$1" || exit 2; head -c "$2" -- "$1"', 'sh', absPath, String(maxBytes + 1),
+    ], { timeoutMs: 10000, signal, maxOutputBytes: (maxBytes + 1) * 3 });
+    signal?.throwIfAborted();
+    if (result.timedOut || result.exitCode !== 0) throw new Error(`Sandbox bounded read failed (${result.exitCode}): ${result.stderr}`);
+    if (Buffer.byteLength(result.stdout, 'utf8') > maxBytes) throw new Error(`File exceeds ${maxBytes} bytes`);
+    return result.stdout;
   }
 
   async mkdir(absPath: string, options?: { recursive?: boolean }): Promise<void> {

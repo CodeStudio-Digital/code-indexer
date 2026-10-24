@@ -1,4 +1,5 @@
 import { HostAttemptLifecycleDriver } from '../driver/HostAttemptLifecycleDriver.js';
+import { bindLifecycleDriverClock } from '../driver/HostLifecycleDriverConstruction.js';
 import {
   HostLifecycleLaunchAuthority,
   type HostLifecycleLaunchProvision,
@@ -62,12 +63,14 @@ export function createBoundAttemptLifecycle(
     activationAuthoritySeal: plan.activationAuthoritySeal,
   };
   const launch = HostLifecycleLaunchAuthority.provision(provision);
-  return new HostAttemptLifecycleDriver({
+  const driverOptions = {
     launch,
     hostHello: plan.hostHello,
     durability: plan.durability,
     outboundTimeoutMs: plan.outboundTimeoutMs,
-  });
+  };
+  if (plan.clock) bindLifecycleDriverClock(driverOptions, plan.clock);
+  return new HostAttemptLifecycleDriver(driverOptions);
 }
 
 export function handoffPhysicalAttemptControlTransport(

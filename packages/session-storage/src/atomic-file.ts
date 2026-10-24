@@ -68,6 +68,8 @@ function sameDirectory(left: string, right: string): boolean {
 }
 
 export interface AtomicFileOptions {
+  /** Revalidate the caller immediately before every rename, including Windows retries. */
+  readonly beforePublish?: () => void;
   readonly mode?: number;
   readonly faultInjector?: SessionStorageFaultInjector;
   readonly context?: Omit<SessionStorageFaultContext, 'point' | 'path'>;
@@ -89,7 +91,7 @@ export async function durableRename(
   const sourceParent = dirname(sourcePath);
   const targetParent = dirname(targetPath);
   await injectFault(options, 'atomic:before-rename', targetPath);
-  await retryTransientRename(() => rename(sourcePath, targetPath));
+  await retryTransientRename(() => { options.beforePublish?.(); return rename(sourcePath, targetPath); });
   await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
   await fsyncDirectory(targetParent);
   await injectFault(options, 'atomic:after-target-directory-fsync', targetPath);
@@ -119,7 +121,7 @@ export async function atomicWriteFile(
     await injectFault(options, 'atomic:after-temp-fsync-before-rename', targetPath);
     await handle.close();
     handle = undefined;
-    await retryTransientRename(() => rename(temporaryPath, targetPath));
+    await retryTransientRename(() => { options.beforePublish?.(); return rename(temporaryPath, targetPath); });
     await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
     await fsyncDirectory(parent);
     await injectFault(options, 'atomic:after-directory-fsync', targetPath);
@@ -155,7 +157,7 @@ export async function atomicCopyFile(
     await injectFault(options, 'atomic:after-temp-fsync-before-rename', targetPath);
     await handle.close();
     handle = undefined;
-    await retryTransientRename(() => rename(temporaryPath, targetPath));
+    await retryTransientRename(() => { options.beforePublish?.(); return rename(temporaryPath, targetPath); });
     await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
     await fsyncDirectory(parent);
     await injectFault(options, 'atomic:after-directory-fsync', targetPath);

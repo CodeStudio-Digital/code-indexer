@@ -140,6 +140,7 @@ pub(in crate::control::tests) fn decode_written_raw_frames(
 
 pub(super) fn valid_spec() -> wire::ResolvedAttemptSpec {
     wire::ResolvedAttemptSpec {
+        execution_deadline_at_unix_ms: None,
         schema_version: 1,
         spec_version: 4,
         identity: Some(wire_identity()),
@@ -187,6 +188,7 @@ pub(super) fn valid_spec() -> wire::ResolvedAttemptSpec {
         deadline_at_unix_ms: SPEC_DEADLINE,
         agent_definition_snapshot: Some(snapshot("agent-definition")),
         codex_app_server_process_snapshot: None,
+        initial_conversation_snapshot: None,
     }
 }
 

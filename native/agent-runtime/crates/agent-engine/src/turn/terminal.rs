@@ -32,6 +32,19 @@ impl TurnEngine {
     where
         E: EventSinkPort,
     {
+        // Shared tree consumption can run out before this member reaches its
+        // local turn ceiling. Preserve that control outcome instead of
+        // reporting a vendor failure. Fencing is deliberately not resumable.
+        if provider_reason == "provider_run_tree_budget_exhausted" {
+            return self
+                .terminal(
+                    events,
+                    TerminalClassification::Interrupted,
+                    "max_turns",
+                    usage,
+                )
+                .await;
+        }
         let reason = if valid_text(provider_reason) {
             "provider_failed"
         } else {
@@ -50,7 +63,9 @@ impl TurnEngine {
     where
         E: EventSinkPort,
     {
-        let reason = if valid_text(provider_reason) {
+        let reason = if provider_reason == "ipc_identity_budget" {
+            "ipc_identity_budget"
+        } else if valid_text(provider_reason) {
             "provider_interrupted"
         } else {
             "invalid_provider_terminal"
@@ -62,7 +77,7 @@ impl TurnEngine {
     pub(super) async fn complete<P, A, E, C>(
         &mut self,
         operation_id: &str,
-        response_id: String,
+        response_id: Option<String>,
         text: String,
         usage: Option<ProviderUsage>,
         authority: &mut A,
@@ -72,7 +87,10 @@ impl TurnEngine {
         A: AuthorityPort,
         E: EventSinkPort,
     {
-        if !valid_text(response_id.as_str()) {
+        if response_id
+            .as_deref()
+            .is_some_and(|value| !valid_text(value))
+        {
             return self
                 .terminal(
                     events,
@@ -85,7 +103,7 @@ impl TurnEngine {
         events
             .append(EngineEvent::ProviderCompleted {
                 operation_id,
-                response_id: response_id.as_str(),
+                response_id: response_id.as_deref(),
             })
             .await
             .map_err(TurnEngineError::EventSink)?;

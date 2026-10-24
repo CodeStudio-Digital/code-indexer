@@ -35,7 +35,7 @@ export const chatgptSpec: ProviderSpec = {
     'gpt-5.3-codex-spark': { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
   // Standalone images/generations|edits on the Codex backend (subscription-
-  // billed) — the sprite-studio image role can bind gpt-image-* here.
+  // billed) — image-capable providers can expose gpt-image-* here.
   capabilities: { supportsImageGen: true, supportsVision: true, fileInput: 'native' },
   wire: 'codex',
   discovery: { from: 'chatgpt-models' },

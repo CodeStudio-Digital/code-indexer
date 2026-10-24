@@ -44,14 +44,14 @@ function transcript(): AgentMessage[] {
   ];
 }
 
-async function retain(reason: StopReason, opts: { attempt?: number; failureNote?: string; index?: number } = {}) {
+async function retain(reason: StopReason, opts: { attempt?: number; failureNote?: string; index?: number; effectOutcome?: 'unknown' } = {}) {
   const now = 0;
   await retainGroup(SID, {
     spawnId: 'g1', sessionId: SID, provider: 'stub', model: 'm', createdAt: now, lastTouchedAt: now,
     agents: [{
       agentIndex: opts.index ?? 0, label: 'auth', task: 'orig task', profileId: 'implement',
       maxTurns: 50, limits: { maxToolCalls: 80 }, transcript: transcript(),
-      reason, failureNote: opts.failureNote, toolCallCount: 4, usage,
+      reason, failureNote: opts.failureNote, effectOutcome: opts.effectOutcome, toolCallCount: 4, usage,
       attempt: opts.attempt ?? 1, capturedAt: now, approxBytes: 0,
     }],
   });
@@ -96,6 +96,25 @@ beforeEach(async () => {
 });
 
 describe('resume_agent', () => {
+  it.each(['typed', 'legacy'] as const)('rejects explicit selection of an uncertain child (%s)', async kind => {
+    await retain('error', kind === 'typed' ? { effectOutcome: 'unknown' } : { failureNote: 'outcome_unknown: lost acknowledgement' });
+    const result = await buildResumeAgentTool(deps).handler({ spawn_id: 'g1', agents: [1] }, ctx);
+    expect(result).toMatchObject({ isError: true, effectOutcome: 'unknown', error: { retryable: false } });
+    expect(result.content).toContain('reconcile');
+    expect(runParallelAgents).not.toHaveBeenCalled();
+  });
+
+  it('retains uncertainty from a resumed child and refuses another resume', async () => {
+    await retain('error');
+    vi.mocked(runParallelAgents).mockResolvedValue({ results: [{ reason: 'error', effectOutcome: 'unknown',
+      finalText: 'unconfirmed', usage, sandboxViolations: [], transcript: transcript(), label: 'auth', toolCallCount: 1 }], totalUsage: usage });
+    const tool = buildResumeAgentTool(deps);
+    expect(await tool.handler({ spawn_id: 'g1' }, ctx)).toMatchObject({ isError: true, effectOutcome: 'unknown' });
+    expect((await getGroup(SID, 'g1'))!.agents[0].effectOutcome).toBe('unknown');
+    expect(await tool.handler({ spawn_id: 'g1', agents: [1] }, ctx)).toMatchObject({ effectOutcome: 'unknown' });
+    expect(runParallelAgents).toHaveBeenCalledTimes(1);
+  });
+
   it('errors on an unknown spawn id', async () => {
     const t = buildResumeAgentTool(deps);
     const r = await t.handler({ spawn_id: 'nope' }, ctx);

@@ -20,7 +20,7 @@ const REPO_MAP_URI = /^mcp:\/\/project\/([^/]+)\/repo-map$/;
  */
 function listIndexedProjects(ctx: ToolContext): Array<{ name: string; fileCount: number }> {
   return ctx.db.listProjects()
-    .map((p) => ({ name: p.name, fileCount: ctx.db.listFiles(p.id).length }))
+    .map((p) => ({ name: p.name, fileCount: ctx.db.countFiles(p.id) }))
     .filter((p) => p.fileCount > 0);
 }
 

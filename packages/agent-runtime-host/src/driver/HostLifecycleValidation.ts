@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { clone } from '@bufbuild/protobuf';
+import { detachedMessage } from '../ipc/DetachedMessage.js';
 import {
   agentV1Common,
   agentV1Runtime,
@@ -30,7 +31,7 @@ export function validateDurableActivationGrant(
 ): agentV1Runtime.ActivateAttempt {
   let activate: agentV1Runtime.ActivateAttempt;
   try {
-    activate = clone(agentV1Runtime.ActivateAttemptSchema, value.activate);
+    activate = detachedMessage(agentV1Runtime.ActivateAttemptSchema, value.activate);
   } catch (cause) {
     throw invalidAuthority('durable activation payload is malformed', cause);
   }
@@ -108,7 +109,7 @@ export function snapshotPreparedActivationAuthority(
       agentV1Common.AttemptIdentitySchema,
       facts.prepared.identity,
     ),
-    specSha256: facts.prepared.specSha256.slice(),
+    specSha256: Uint8Array.from(facts.prepared.specSha256),
     readyAtUnixMs: facts.prepared.readyAtUnixMs,
     maximumDeadlineAtUnixMs,
   });
@@ -130,8 +131,8 @@ export function activeAuthorityFacts(
     runtimeInstanceId: prepared.runtimeInstanceId,
     agentRunVersion: activate.agentRunVersion,
     attemptVersion: activate.attemptVersion,
-    specSha256: activate.specSha256.slice(),
-    activationNonce: activate.activationNonce.slice(),
+    specSha256: Uint8Array.from(activate.specSha256),
+    activationNonce: Uint8Array.from(activate.activationNonce),
     deadlineAtUnixMs: activate.deadlineAtUnixMs,
   });
 }

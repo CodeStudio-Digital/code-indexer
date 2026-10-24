@@ -150,6 +150,7 @@ describe('runSubagent context inheritance', () => {
     const overlayByRoot = new Map();
     const ports = { fs: { kind: 'fs-port' }, shell: { kind: 'shell-port' } } as unknown as ToolContext['ports'];
     const runtimeEnv = { env: { PHP_VERSION: '8.3' } } as unknown as ToolContext['runtimeEnv'];
+    const workspaceRuntimeScope = { invoke: vi.fn<NonNullable<ToolContext['workspaceRuntimeScope']>['invoke']>(async (_tool, operation) => operation()) };
     const globalWorkspace: NonNullable<ToolContext['globalWorkspace']> = {
       sessionTitle: 'Global abc',
       primaryRootPath: '/repo/backend',
@@ -180,6 +181,7 @@ describe('runSubagent context inheritance', () => {
       projectId: 11,
       projectIndexed: true,
       runtimeEnv,
+      workspaceRuntimeScope,
       ports,
       sessionId,
     } as ToolContext;
@@ -209,11 +211,13 @@ describe('runSubagent context inheritance', () => {
     expect(seenContext?.projectId).toBe(11);
     expect(seenContext?.projectIndexed).toBe(true);
     expect(seenContext?.runtimeEnv).toBe(runtimeEnv);
+    expect(seenContext?.workspaceRuntimeScope).toBe(workspaceRuntimeScope);
+    expect(workspaceRuntimeScope.invoke).toHaveBeenCalledOnce();
     expect(seenContext?.ports).toBe(ports);
     expect(seenContext?.sessionId).toBe(sessionId);
   });
 
-  it('persists every child turn and correlates parent, spawn, run and profile', async () => {
+  it.each([false, true])('persists child turns and the durable terminal classification, uncertain=%s', async uncertain => {
     const sessionId = newSessionId();
     const turns: Array<Record<string, unknown>> = [];
     const starts: Array<Record<string, unknown>> = [];
@@ -259,7 +263,8 @@ describe('runSubagent context inheritance', () => {
       parameters: { type: 'object', properties: {} },
       source: 'native',
       parallelSafe: true,
-      handler: async () => ({ content: 'new symbol: TelemetryProbe' }),
+      handler: async () => uncertain ? { content: 'ACK lost', isError: true, effectOutcome: 'unknown' as const }
+        : { content: 'new symbol: TelemetryProbe' },
     };
     const parentRunner = { runId: PARENT_RUN_ID, emit() {} };
     const result = await runSubagent({
@@ -282,8 +287,9 @@ describe('runSubagent context inheritance', () => {
       limits: { maxToolCalls: 0, timeoutMs: 5_000, stallMs: 5_000 },
     });
 
-    expect(result.reason).toBe('completed');
-    expect(turns).toHaveLength(2);
+    expect(result.reason).toBe(uncertain ? 'error' : 'completed');
+    expect(result.effectOutcome).toBe(uncertain ? 'unknown' : undefined);
+    expect(turns).toHaveLength(uncertain ? 1 : 2);
     expect(turns.every((turn) => turn.is_subagent === true)).toBe(true);
     expect(turns.every((turn) => turn.parent_run_id === PARENT_RUN_ID)).toBe(true);
     expect(turns.every((turn) => turn.subagent_profile === 'explore')).toBe(true);
@@ -293,6 +299,7 @@ describe('runSubagent context inheritance', () => {
     expect(calls[0].run_id).toBe(starts[0].run_id);
     expect(calls[0].logical_operation_id).toEqual(expect.any(String));
     expect(completions).toHaveLength(1);
-    expect(completions[0]).toMatchObject({ run_id: starts[0].run_id, reason: 'completed', turns: 2, tool_calls: 1 });
+    expect(completions[0]).toMatchObject({ run_id: starts[0].run_id, reason: uncertain ? 'outcome_unknown' : 'completed',
+      turns: uncertain ? 1 : 2, tool_calls: 1 });
   });
 });

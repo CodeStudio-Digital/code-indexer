@@ -2,9 +2,7 @@
  * Source-stamp registry — maps a `SandboxStack` to its `SourceStampPlugin`.
  *
  * Returns `null` for stacks without stamping support yet (Vue lands in a
- * later phase). All host-scaffold consumers (builder projects via
- * `builder-inject.ts`, DS Studio via `ds-studio/react-inject.ts`) resolve
- * through this single function, so they can never diverge.
+ * later phase). Host-scaffold consumers resolve through this function.
  */
 import type { SandboxStack } from '../../types.js';
 import type { SourceStampPlugin } from './types.js';

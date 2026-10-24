@@ -11,7 +11,7 @@
  * tool wrapper and the per-session jar registry.
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import {
   assertMutationFence,
   combinedMutationSignal,
@@ -19,6 +19,7 @@ import {
 import { READ_CAP, type CookieJar, createJar, isLoopbackHost, sendHttp } from '@mcp/shared/utils/http-engine.js';
 
 const MAX_HTTP_READ_BYTES = 5 * 1024 * 1024;
+const readMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 // ─── Per-session cookie jar registry (sessionKey → jar) ────────────────────
 const jars = new Map<string, CookieJar>();
@@ -31,7 +32,7 @@ function sessionKey(ctx: ToolContext): string {
   if (cc?.companySessionId != null) return `company-session-${cc.companySessionId}`;
   return `coder-${ctx.sessionId ?? 'main'}`;
 }
-function jarFor(ctx: ToolContext): CookieJar {
+export function httpSessionCookieJar(ctx: ToolContext): CookieJar {
   const k = sessionKey(ctx);
   let j = jars.get(k);
   if (!j) { j = createJar(); jars.set(k, j); }
@@ -47,9 +48,10 @@ export const httpRequestTool: CoderTool = {
     'Allows localhost and self-signed TLS (auto for loopback). For PUBLIC documentation pages use web_fetch; to call the API as the logged-in frontend (app cookies/origin) use preview_eval.',
   source: 'native',
   outputPolicy: { mode: 'structured', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
+  riskOf: input => readMethods.has(String((input as { method?: unknown } | undefined)?.method ?? 'GET').toUpperCase()) ? 'read' : 'execute',
   parameters: {
     type: 'object',
     properties: {
@@ -76,7 +78,10 @@ export const httpRequestTool: CoderTool = {
     try { url = new URL(raw); } catch { return err(`invalid url '${raw}'`); }
 
     const method = String(args.method ?? 'GET').toUpperCase();
-    const jar = jarFor(ctx);
+    const port = ctx.ports?.http;
+    const jar = port ? undefined : httpSessionCookieJar(ctx);
+    const signal = combinedMutationSignal(ctx.signal, ctx.mutationFence);
+    let dispatched = false;
 
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries((args.headers as Record<string, unknown>) ?? {})) headers[k] = String(v);
@@ -90,13 +95,14 @@ export const httpRequestTool: CoderTool = {
       const maxBytes = Number.isFinite(requestedMaxBytes)
         ? Math.min(MAX_HTTP_READ_BYTES, Math.max(1024, Math.floor(requestedMaxBytes)))
         : READ_CAP;
-      assertMutationFence(ctx.mutationFence, {
-        kind: 'network',
-        operation: method,
-        resource: url.href,
-      });
-      if (args.resetCookies) jar.delete(url.host);
-      res = await sendHttp({
+      const beforeDispatch = () => {
+        signal?.throwIfAborted();
+        assertMutationFence(ctx.mutationFence, { kind: 'network', operation: method, resource: url.href });
+      };
+      beforeDispatch();
+      if (args.resetCookies) jar?.delete(url.host);
+      const send = port ? port.send.bind(port) : sendHttp;
+      res = await send({
         url,
         method,
         headers,
@@ -106,9 +112,14 @@ export const httpRequestTool: CoderTool = {
         timeoutMs: Number(args.timeoutMs ?? 30_000),
         maxBytes,
         jar,
-        signal: combinedMutationSignal(ctx.signal, ctx.mutationFence),
+        signal, resetCookies: !!args.resetCookies, beforeDispatch,
+        onDispatch: () => { dispatched = true; },
       });
     } catch (e) {
+      if (dispatched && !readMethods.has(method)) {
+        port?.outcomeUnknown();
+        return unknownToolOutcome(`http_request completion is unconfirmed: ${e instanceof Error ? e.message : String(e)}. Reconcile before retrying.`);
+      }
       return err(`http_request failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     const ms = Date.now() - t0;

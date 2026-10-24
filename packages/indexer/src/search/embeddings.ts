@@ -1,5 +1,10 @@
 import type { VectorWriteTarget } from '@mcp/store/vectors.js';
 
+export interface QueryEmbeddingOptions {
+  signal?: AbortSignal;
+  supersessionKey?: string;
+}
+
 export interface EmbeddingService {
   embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }>;
   /** Embed documents against the immutable generation currently receiving
@@ -9,7 +14,7 @@ export interface EmbeddingService {
     namespace: string,
     texts: string[],
   ): Promise<NamespaceDocumentEmbedding>;
-  embedQuery(text: string): Promise<{ vector: number[]; tokens: number }>;
+  embedQuery(text: string, options?: QueryEmbeddingOptions): Promise<{ vector: number[]; tokens: number }>;
   /**
    * Synchronous revision used by query-result caches. Namespace-aware
    * runtimes should change it whenever the active generation changes so a
@@ -30,6 +35,7 @@ export interface EmbeddingService {
   embedQueryForNamespace?(
     namespace: string,
     text: string,
+    options?: QueryEmbeddingOptions,
   ): Promise<NamespaceQueryEmbedding>;
   /**
    * Stable id of the model + backend (e.g. `cloudflare:bge-m3`,
@@ -81,8 +87,10 @@ export function embedQueryForNamespace(
   service: EmbeddingService,
   namespace: string,
   text: string,
+  options?: QueryEmbeddingOptions,
 ): Promise<NamespaceQueryEmbedding> {
-  return service.embedQueryForNamespace?.(namespace, text) ?? service.embedQuery(text);
+  if (!options) return service.embedQueryForNamespace?.(namespace, text) ?? service.embedQuery(text);
+  return service.embedQueryForNamespace?.(namespace, text, options) ?? service.embedQuery(text, options);
 }
 
 export class CloudflareEmbeddingService implements EmbeddingService {

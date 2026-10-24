@@ -41,7 +41,7 @@ describe('MCP semantic localhost client', () => {
       headers: expect.objectContaining({ 'x-mcp-session-id': 'session-7' }),
     });
     expect(String(fetchImpl.mock.calls[1]![0])).toBe(
-      'http://127.0.0.1:7333/api/projects/7/agent-memory/search?q=build+recipe&limit=4',
+      'http://127.0.0.1:7333/api/projects/7/agent-memory/search?q=build+recipe&limit=4&projection=ids',
     );
   });
 
@@ -55,4 +55,12 @@ describe('MCP semantic localhost client', () => {
       error: 'semantic server returned an invalid search payload',
     });
   });
+
+  it.each([[null], [{ id: '4', score: 1 }], [{ id: -1, score: 1 }], [{ id: 4 }], Array.from({ length: 51 }, (_, i) => ({ id: i + 1, score: 1 }))].map(results => ({ results })))(
+    'rejects invalid or oversized memory rank pages', async ({ results }) => {
+      const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ results }), { status: 200 }));
+      const client = createMcpSemanticSearchClient(config, fetchImpl as typeof fetch);
+      await expect(client.searchProjectMemory(1, 'query')).resolves.toMatchObject({ ok: false });
+    },
+  );
 });

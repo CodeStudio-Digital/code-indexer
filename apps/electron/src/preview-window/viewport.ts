@@ -3,6 +3,7 @@
  * mode). Kept separate from service.ts to stay under the LOC cap.
  */
 import { screen } from 'electron';
+import { assertPreviewDispatch } from './dispatch-scope.js';
 import type { PreviewWindow, Viewport } from './cdp.js';
 
 /** Named viewport presets (DevTools device-mode style). */
@@ -52,6 +53,7 @@ export function applyViewport(pw: PreviewWindow, v: Viewport): Viewport {
   const requestedHeight = v.height;
   let actual = clampToScreen(v.width, v.height);
   if (!pw.win.isDestroyed()) {
+    assertPreviewDispatch();
     try {
       pw.win.setContentSize(actual.width, actual.height);
       const [width, height] = pw.win.getContentSize();

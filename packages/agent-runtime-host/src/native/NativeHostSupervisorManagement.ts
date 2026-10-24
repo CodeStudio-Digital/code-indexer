@@ -31,6 +31,7 @@ export interface NativeHostSupervisorManagementOptions {
   readonly binding: NativeHostBridgeBinding;
   readonly runtimePackage: VerifiedRuntimePackage;
   readonly provision: HostSupervisorBootstrapProvision;
+  readonly lifecycleOutboxDirectory?: string;
 }
 
 /**
@@ -58,6 +59,7 @@ export async function createNativeHostSupervisorManagementBootstrap(
   const request = encodeNativeHostSupervisorBridgeOpenRequest({
     runtimePackage: options.runtimePackage,
     provision: options.provision,
+    lifecycleOutboxDirectory: options.lifecycleOutboxDirectory,
   });
   let transferred = false;
   try {

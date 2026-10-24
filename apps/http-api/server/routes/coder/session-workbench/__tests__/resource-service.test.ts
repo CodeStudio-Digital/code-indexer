@@ -1,5 +1,5 @@
 import { asSessionId } from '@mcp/session-storage';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 import type { SkillSummaryPage } from '@mcp/store/skill-store.js';
 import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';

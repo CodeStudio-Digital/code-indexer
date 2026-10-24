@@ -11,7 +11,7 @@ agent-platform = { path = "../agent-platform" }
 agent-protocol = { path = "../agent-protocol" }
 prost = { version = "=0.14.1", default-features = false, features = ["derive", "std"] }
 sha2 = { version = "=0.11.0", default-features = false }
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["rt", "time", "sync"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]

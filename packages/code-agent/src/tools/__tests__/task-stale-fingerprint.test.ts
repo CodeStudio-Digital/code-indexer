@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync, writeFileSync, appendFileSync, utimesSync, mkdirSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { computeTaskFingerprint } from '../execute-tasks/task-stale-check.js';
-import type { CoderTask } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask } from '@mcp/session-storage/session-state-types.js';
 
 function task(overrides: Partial<CoderTask> = {}): CoderTask {
   return {

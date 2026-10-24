@@ -1,6 +1,27 @@
 import type { DBFile } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 
+/** Return only the best paths, without hydrating/transferring full DBFile rows.
+ * SQLite does matching and a bounded top-K sort over the project/path index. */
+export function searchPaths(db: DB, projectId: number, query: string, limit = 50, fuzzy = true): Array<{ path: string }> {
+  const q = query.trim().slice(0, 128).toLowerCase();
+  if (!q) return [];
+  const take = Math.max(1, Math.min(300, Number.isFinite(limit) ? Math.floor(limit) : 50));
+  const escape = (text: string) => text.replace(/[\\%_]/g, '\\$&');
+  const pattern = `%${fuzzy ? [...q].map(escape).join('%') : escape(q)}%`;
+  return db.prepare(`
+    WITH matches AS (
+      SELECT path, instr(lower(path), ?) AS pos FROM files
+      WHERE project_id = ? AND path LIKE ? ESCAPE '\\'
+    )
+    SELECT path FROM matches ORDER BY
+      CASE WHEN pos = 0 THEN 100000 + length(path)
+        ELSE (pos - 1) * 2 + length(path)
+          - CASE WHEN pos = 1 OR substr(path, pos - 1, 1) = '/' THEN 1000 ELSE 0 END
+      END, path LIMIT ?
+  `).all(q, projectId, pattern, take) as Array<{ path: string }>;
+}
+
 export interface UpsertFileData {
   path: string;
   language: string;

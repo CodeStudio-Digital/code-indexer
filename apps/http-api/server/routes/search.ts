@@ -3,7 +3,7 @@ import { createSearchHandlers, createContext } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
 import type { SearchConsumer } from '@mcp/api-bus';
-import { resolveSessionProjectAuthority } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { resolveSessionProjectAuthority } from '@mcp/session-storage/fs-store/index.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseIntQuery } from './_helpers.js';
 

@@ -4,13 +4,27 @@
  * results, and repeats until the model stops or `maxSteps` is hit. Pure: takes
  * a provider + tools + system; emits MiniDelta. No god-file dependency.
  */
-import type {
-  AgentMessage,
-  ContentBlock,
-  ToolResultBlock,
-} from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ContentBlock, ToolResultBlock } from "@mcp/provider-sdk";
 import type { ToolSpec } from '@mcp/code-agent/providers/adapter.js';
 import type { MiniDelta, MiniTool, RunMiniAgentOpts } from './types.js';
+
+/** Approval has no tool effect to drain. Stop waiting on cancellation; a late
+ * approval cannot revive this invocation. Always detach the abort listener. */
+async function confirmCall(opts: RunMiniAgentOpts, call: PendingCall): Promise<boolean> {
+  if (opts.signal?.aborted) return false;
+  let onAbort: (() => void) | undefined;
+  const cancelled = new Promise<boolean>(resolve => {
+    onAbort = () => resolve(false);
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([
+      opts.confirm!({ callId: call.id, name: call.name, input: call.input }), cancelled,
+    ]);
+  } finally {
+    if (onAbort) opts.signal?.removeEventListener('abort', onAbort);
+  }
+}
 
 interface PendingCall {
   id: string;
@@ -33,7 +47,9 @@ async function* streamTurn(
     signal: opts.signal,
   })) {
     if (d.type === 'text_delta') {
-      assistant.push({ type: 'text', text: d.text });
+      const previous = assistant.at(-1);
+      if (previous?.type === 'text') previous.text += d.text;
+      else assistant.push({ type: 'text', text: d.text });
       yield { type: 'text', text: d.text };
     } else if (d.type === 'tool_call_end') {
       assistant.push({ type: 'tool_use', id: d.id, name: d.name, input: d.input });
@@ -62,16 +78,27 @@ async function* runCall(
   }
   yield { type: 'tool_use', callId: call.id, name: call.name, input: call.input };
 
-  if (tool.mutates && opts.confirm) {
-    yield { type: 'confirm_request', callId: call.id, name: call.name, input: call.input };
-    const approved = await opts.confirm({ callId: call.id, name: call.name, input: call.input });
-    if (!approved) {
-      yield emitResult('denied by user', true);
+  try {
+    if (opts.signal?.aborted) {
+      yield emitResult('cancelled before tool execution', true);
       return;
     }
-  }
-
-  try {
+    if (tool.mutates && opts.confirm) {
+      yield { type: 'confirm_request', callId: call.id, name: call.name, input: call.input };
+      const approved = await confirmCall(opts, call);
+      if (opts.signal?.aborted) {
+        yield emitResult('cancelled before tool execution', true);
+        return;
+      }
+      if (!approved) {
+        yield emitResult('denied by user', true);
+        return;
+      }
+    }
+    if (opts.signal?.aborted) {
+      yield emitResult('cancelled before tool execution', true);
+      return;
+    }
     const r = await tool.handler(call.input);
     yield emitResult(r.content, r.isError);
   } catch (e) {
@@ -112,8 +139,16 @@ export async function* runMiniAgent(opts: RunMiniAgentOpts): AsyncGenerator<Mini
 
     const results: ToolResultBlock[] = [];
     for (const call of calls) {
+      if (opts.signal?.aborted) {
+        yield { type: 'done', reason: 'stop' };
+        return;
+      }
       // The assistant's tool_use block was already pushed during streaming.
       yield* runCall(call, byName.get(call.name), opts, results);
+    }
+    if (opts.signal?.aborted) {
+      yield { type: 'done', reason: 'stop' };
+      return;
     }
     messages.push({ role: 'tool', content: results });
   }

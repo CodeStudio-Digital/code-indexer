@@ -2,7 +2,7 @@
 /**
  * One-off fix for Phase 3: rewrite relative imports inside
  * packages/services/src/ that point to siblings still living
- * under src/core/ (coder, search, indexer, design-system, apps).
+ * under src/core/ (coder, search, indexer, apps).
  *
  * Strategy: re-anchor each relative import as if the file were
  * still at its OLD location (src/core/<subdir>/...), resolve it
@@ -23,7 +23,6 @@ const subtreeAliases = [
   ['src/core/search/', '@mcp/indexer/search/'],
   ['src/core/workers/', '@mcp/indexer/workers/'],
   ['src/core/bootstrap/', '@mcp/indexer/bootstrap/'],
-  ['src/core/design-system/', '@mcp/design-system/'],
 ];
 
 const files = await glob('packages/services/src/**/*.{ts,tsx}', { cwd: ROOT });

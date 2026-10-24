@@ -5,6 +5,11 @@ const OMITTED_THINKING = '[thinking omitted from durable checkpoint]';
 const SENSITIVE_KEY =
   /^(?:api[-_]?key|token|access[-_]?token|refresh[-_]?token|authorization|password|passwd|secret|cookie|private[-_]?key|credential|client[-_]?secret)$|(?:^|[-_])(?:api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|secret|credential|private[-_]?key|client[-_]?secret)(?:$|[-_])/i;
 const STRUCTURAL_OPAQUE_KEY = /(?:^|_)(?:id|ids|hash|fingerprint)$|(?:Id|Ids|Hash|Fingerprint)$|^dependsOn$/;
+const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
+function nativeJournalIdentity(value: string): boolean {
+  const parts = value.split(':');
+  return parts.length === 5 && parts[0] === 'native-child-journal' && parts.slice(1).every(part => UUID.test(part));
+}
 
 function shannonBitsPerChar(value: string): number {
   const frequencies = new Map<string, number>();
@@ -53,6 +58,9 @@ export function redactCheckpointText(input: string, strictOpaque = true): string
 function sanitizeUnknown(value: unknown, key = '', seen = new WeakSet<object>()): unknown {
   if (SENSITIVE_KEY.test(key)) return REDACTED;
   if (typeof value === 'string') {
+    // This is a structural address, not transcript text or an access token.
+    // Preserve only the exact four-UUID grammar; arbitrary values still redact.
+    if (key === 'nativeTranscriptRef' && nativeJournalIdentity(value)) return value;
     return redactCheckpointText(value, !STRUCTURAL_OPAQUE_KEY.test(key));
   }
   if (value === null || typeof value !== 'object') return value;

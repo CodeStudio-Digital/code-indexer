@@ -30,6 +30,7 @@ import {
 import { captureInvestigation } from '@mcp/code-agent/tools/investigation-capture.js';
 import { buildContinuationNudge } from '@mcp/code-agent/tools/resume-nudges.js';
 import { appendResearchContract } from '@mcp/code-agent/tools/subagent-research-policy.js';
+import { emitSubagentEvent } from './subagent-events.js';
 import {
   assertResumeLease,
   replaceAgentState,
@@ -41,6 +42,7 @@ import {
 export type ResumeRunStatus = 'completed' | 'partial' | 'failed';
 
 export interface ResumeRunOutcome {
+  effectOutcome?: 'unknown';
   text: string;
   usage: ChatUsage;
   status: ResumeRunStatus;
@@ -73,7 +75,7 @@ function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidanc
     isImplement: profile.capability === 'implement',
   });
   const initialMessages: AgentMessage[] = [
-    ...(state.transcript ?? []),
+    ...(state.nativeTranscriptRef ? [] : state.transcript ?? []),
     { role: 'user', content: [{ type: 'text', text: nudge }] },
   ];
   return {
@@ -88,6 +90,7 @@ function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidanc
     pathScopeMode: profile.pathScopeMode,
     limits: state.limits,
     initialMessages,
+    nativeResumeRef: state.nativeTranscriptRef,
   };
 }
 
@@ -125,7 +128,7 @@ async function relaunchResumedAgentsOwned(
     group.spawnId,
     deps.sessionStore,
   );
-  ctx.runner?.emit('agents_group_start', {
+  emitSubagentEvent(ctx, 'agents_group_start', {
     groupId: group.spawnId,
     toolUseId,
     provider: info.provider,
@@ -152,6 +155,7 @@ async function relaunchResumedAgentsOwned(
 
   const specs = targets.map((state, i) => ({
     ...specFor(state, profiles[i], guidance),
+    spawnId: `resume:${group.spawnId}:${state.agentIndex}:${state.attempt + 1}`,
     provider: targetProviders[i],
     reasoningEffort: effortForProfile(deps, profiles[i]),
     signal: controllers[i].signal,
@@ -179,7 +183,7 @@ async function relaunchResumedAgentsOwned(
     (progress) => {
       const original = targets[progress.agentIndex];
       const pinfo = agentInfos[progress.agentIndex] ?? info;
-      ctx.runner?.emit('agent_progress', {
+      emitSubagentEvent(ctx, 'agent_progress', {
         groupId: group.spawnId,
         toolUseId,
         task: original?.task,
@@ -213,9 +217,11 @@ async function relaunchResumedAgentsOwned(
       const persisted = await replaceAgentState(sessionId, group.spawnId, {
         ...state,
         reason: r.reason,
+        effectOutcome: r.effectOutcome,
         failureNote: r.reason !== 'completed' ? (r.failureDetail || r.finalText).slice(0, 500) : undefined,
         finalText: r.finalText ? r.finalText.slice(0, 8_000) : state.finalText,
         transcript: nextTranscript,
+        nativeTranscriptRef: r.nativeTranscriptRef ?? state.nativeTranscriptRef,
         toolCallCount: r.toolCallCount,
         usage: r.usage,
         attempt,
@@ -268,19 +274,20 @@ async function relaunchResumedAgentsOwned(
     group.spawnId,
     deps.sessionStore,
   );
-  ctx.runner?.emit('agents_group_end', {
+  emitSubagentEvent(ctx, 'agents_group_end', {
     groupId: group.spawnId,
     totalUsage,
     agentCount: results.length,
     successCount: outcomeCounts.completedCount,
     ...outcomeCounts,
-    resumableCount: results.filter((r) => r.reason !== 'completed' && (r.transcript?.length ?? 0) > 0).length,
+    resumableCount: results.filter((r) => r.reason !== 'completed' && (!!r.nativeTranscriptRef || (r.transcript?.length ?? 0) > 0)).length,
   });
   return {
     text,
     usage: totalUsage,
     status,
     relaunchedCount: targets.length,
+    ...(results.some(result => result.effectOutcome === 'unknown') ? { effectOutcome: 'unknown' as const } : {}),
     ...outcomeCounts,
     stillFailed,
   };

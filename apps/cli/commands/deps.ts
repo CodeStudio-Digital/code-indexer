@@ -64,6 +64,7 @@ export function register(program: Command): void {
 
       console.log(`Symbol: ${tree.symbol}`);
       console.log(`Defined in: ${tree.defined_in ?? 'not found'}`);
+      if (tree.definition_count > 1) console.log(`Name matches ${tree.definition_count} indexed definitions; graph combines name-based occurrences.`);
 
       if (tree.callers.length === 0) {
         console.log('No usages found.');
@@ -71,6 +72,8 @@ export function register(program: Command): void {
         console.log('\nUsage tree:');
         printUsageTree(tree.callers as Parameters<typeof printUsageTree>[0], '  ');
       }
+      if (tree.truncations.length) console.log('\nBounded name-based graph; omitted branches: ' + JSON.stringify(tree.truncations)
+        + '\nUse references or trace individual caller symbols to continue.');
       db.close();
     });
 }

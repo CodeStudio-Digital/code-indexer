@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { KimiCodeChatProvider, toKimiMessages } from '@mcp/code-agent/providers/kimi-code.js';
 import type { ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 
 async function* chunks(...items: Record<string, unknown>[]): AsyncIterable<Record<string, unknown>> {
   for (const item of items) yield item;

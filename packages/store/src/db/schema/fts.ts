@@ -122,8 +122,8 @@ export function repairCodeFtsIndexes(db: DB): void {
 }
 
 export function createDocChunksFtsIfReady(db: DB): void {
-  try {
-    db.exec(`SELECT 1 FROM doc_chunks LIMIT 1`);
+    if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='doc_chunks'").get()) return;
+    const existed = !!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='doc_chunks_fts'").get();
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5(
         content, summary, heading_path,
@@ -149,17 +149,8 @@ export function createDocChunksFtsIfReady(db: DB): void {
       END;
     `);
 
-    try {
-      const count = (db.prepare('SELECT COUNT(*) as c FROM doc_chunks_fts').get() as { c: number }).c;
-      if (count === 0) {
-        const chunkCount = (db.prepare('SELECT COUNT(*) as c FROM doc_chunks').get() as { c: number }).c;
-        if (chunkCount > 0) {
-          db.exec(
-            `INSERT INTO doc_chunks_fts(rowid, content, summary, heading_path)
-             SELECT id, content, COALESCE(summary,''), COALESCE(heading_path,'') FROM doc_chunks`,
-          );
-        }
-      }
-    } catch { /* ignore */ }
-  } catch { /* doc_chunks table not yet created — migration 086 not yet applied */ }
+    // An external-content FTS COUNT reads doc_chunks, not the indexed rows.
+    // It cannot detect an empty derived index. Rebuild only when creating it;
+    // ordinary connection startup performs no whole-corpus scan.
+    if (!existed) db.exec("INSERT INTO doc_chunks_fts(doc_chunks_fts) VALUES('rebuild')");
 }

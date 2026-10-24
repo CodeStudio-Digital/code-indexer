@@ -36,14 +36,18 @@ pub(super) fn event_body(
             response_id,
         } => Body::ProviderCompleted(wire::EngineProviderCompletedRecordV1 {
             operation_id: operation_id.to_owned(),
-            response_id: response_id.to_owned(),
+            response_id: response_id.map(str::to_owned),
         }),
         EngineEvent::CapabilityBoundary {
             operation_id,
             tool_use_id,
+            call,
         } => Body::CapabilityBoundary(wire::EngineCapabilityBoundaryRecordV1 {
             operation_id: operation_id.to_owned(),
             tool_use_id: tool_use_id.to_owned(),
+            capability_name: call.capability_name.clone(),
+            capability_id: call.capability_id.clone(),
+            input_sha256: call.arguments_sha256.to_vec(),
         }),
         EngineEvent::CapabilityDispatchStarted {
             operation_id,
@@ -57,6 +61,18 @@ pub(super) fn event_body(
             grant_id: grant_id.to_owned(),
             effective_input_sha256: effective_input_sha256.to_vec(),
             started_at_unix_ms,
+        }),
+        EngineEvent::CapabilityRefused {
+            operation_id,
+            tool_use_id,
+            rejection,
+        } => Body::CapabilityRefused(wire::EngineCapabilityRefusedRecordV1 {
+            operation_id: operation_id.to_owned(),
+            tool_use_id: tool_use_id.to_owned(),
+            decision_id: rejection.decision_id.clone(),
+            reason_code: rejection.reason_code.clone(),
+            policy_version: rejection.policy_version.clone(),
+            decided_at_unix_ms: rejection.decided_at_unix_ms,
         }),
         EngineEvent::CapabilityTerminal {
             operation_id,

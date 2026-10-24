@@ -108,6 +108,8 @@ function bundledPluginsRoot(): string | null {
 }
 
 export async function seedBundledPlugins(): Promise<void> {
+  const { initializeDatabaseForStartup } = await import('./database-startup.js');
+  await initializeDatabaseForStartup(loadConfig().dbPath);
   const root = bundledPluginsRoot();
   if (!root) {
     console.warn('[bundled-plugins] no staged bundled-plugins dir found — skipping seed (built-ins remain)');

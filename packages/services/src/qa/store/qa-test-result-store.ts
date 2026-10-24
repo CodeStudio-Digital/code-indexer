@@ -12,7 +12,7 @@ import {
   type CompanyQaResultData,
   type EntityRecord,
 } from '@mcp/session-storage';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type {
   QaTestResult,
   QaTestResultInsert,

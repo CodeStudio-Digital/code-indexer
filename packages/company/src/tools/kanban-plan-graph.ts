@@ -16,8 +16,9 @@
  * Name starts with `kanban_` so the master filter keeps it (see
  * master-filter.test.ts).
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import {
   PLAN_GRAPH_MAX_NODES,

@@ -62,7 +62,7 @@ export interface BackendHandle {
   /** Feed the desktop child registry to the task manager's process inventory. */
   setProcessInventoryProvider(fn: ProcessInventoryProvider): void;
 
-  /** Graceful teardown: pools, MCP, chrome/verdaccio, dev-http. */
+  /** Graceful teardown: pools, MCP, chrome, dev-http. */
   dispose(reason: string): Promise<void>;
 
   /** Non-null only while the backend shares this process. See above. */

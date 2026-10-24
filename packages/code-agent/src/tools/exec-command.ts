@@ -559,6 +559,12 @@ export const execCommand: CoderTool = {
         type: 'boolean',
         description: 'Force a real pty (node-pty). Use only when the command gates on isatty(). Default false (pipe).',
       },
+      yield_time_ms: {
+        type: 'number',
+        description: `Maximum time to collect output before returning the session id. Default ${DEFAULT_EXEC_YIELD_MS}, maximum ${MAX_YIELD_MS}.`,
+      },
+      cols: { type: 'number', description: 'PTY columns. Defaults to 120.' },
+      rows: { type: 'number', description: 'PTY rows. Defaults to 30.' },
     },
     required: ['cmd'],
     additionalProperties: false,
@@ -579,6 +585,13 @@ export const execCommand: CoderTool = {
     const maxChars = clampMaxChars(args.max_output_tokens);
     const cols = typeof args.cols === 'number' && Number.isFinite(args.cols) ? args.cols : 120;
     const rows = typeof args.rows === 'number' && Number.isFinite(args.rows) ? args.rows : 30;
+
+    if (ctx.ports?.commands) {
+      if (ctx.ports.commands.mutationFenceAttested !== true) return err('Persistent command adapter lacks physical ownership');
+      return ctx.ports.commands.start({ command: cmd, cwd, tty: mode === 'pty', yieldMs, columns: cols, rows,
+        maxOutputBytes: Math.min(800_000, maxChars * 4), runtimeEnv: ctx.runtimeEnv, signal: ctx.signal,
+        assertFence: () => assertMutationFence(ctx.mutationFence, { kind: 'shell', operation: 'exec', resource: cmd }) });
+    }
 
     let rec: SessionRecord;
     try {
@@ -734,7 +747,8 @@ export const listSessions: CoderTool = {
     properties: {},
     additionalProperties: false,
   },
-  handler: async (): Promise<ToolResult> => {
+  handler: async (_args, ctx): Promise<ToolResult> => {
+    if (ctx.ports?.commands) return ctx.ports.commands.list();
     reapIdleSessions();
     const snap = snapshotSessions();
     if (snap.length === 0) {
@@ -783,6 +797,11 @@ export const writeStdin: CoderTool = {
     reapIdleSessions();
     const id = String(args.session_id ?? '').trim();
     if (!id) return err('write_stdin: session_id is required');
+    if (ctx.ports?.commands) {
+      return ctx.ports.commands.write({ sessionId: id, chars: typeof args.chars === 'string' ? args.chars : '',
+        yieldMs: clampYield(args.yield_time_ms, DEFAULT_WRITE_YIELD_MS), signal: ctx.signal,
+        assertFence: () => assertMutationFence(ctx.mutationFence, { kind: 'control', operation: 'write_stdin', resource: id }) });
+    }
     const rec = sessions.get(id);
     if (!rec) {
       // PR 5 — rich error payload: list the IDs that ARE active so the

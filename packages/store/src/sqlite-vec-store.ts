@@ -69,7 +69,12 @@ export class SqliteVecDatabase {
   loadExtension(): Promise<void> {
     if (!this.extLoad) {
       this.extLoad = import('sqlite-vec').then((sqliteVec) => {
-        (sqliteVec as { load: (db: DB) => void }).load(this.db);
+        // SQLite loads extensions through the OS loader, which cannot resolve
+        // Electron's virtual ASAR filesystem even when the DLL is unpacked.
+        const location = sqliteVec.getLoadablePath();
+        const physical = process.versions.electron
+          ? location.replace(/([\\/][^\\/]+\.asar)(?=[\\/])/, '$1.unpacked') : location;
+        this.db.loadExtension(physical);
       });
     }
     return this.extLoad;

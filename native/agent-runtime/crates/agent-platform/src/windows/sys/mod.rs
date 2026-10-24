@@ -1,6 +1,7 @@
 mod attributes;
 mod compare;
 mod filesystem;
+mod filesystem_move;
 mod handle;
 mod job;
 mod process;
@@ -13,6 +14,7 @@ mod test_support;
 pub(super) use attributes::ProcessAttributeList;
 pub(super) use compare::compare_ordinal_ignore_case;
 pub(super) use filesystem::{final_file_path, path_is_within};
+pub(super) use filesystem_move::rename_no_replace;
 pub(super) use job::{
     configure_job, create_job, prove_limits, query_accounting, query_peak_memory, terminate_job,
 };

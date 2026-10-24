@@ -33,6 +33,7 @@ export function buildExpandTools(
   options?: {
     beforeExpand?: (tier: string) => Promise<void>;
     isTierAvailable?: (tier: string) => boolean;
+    toolNamesForTier?: (tier: string) => readonly string[];
   },
 ): CoderTool[] {
   // Every built-in functional tier is addressable. Contextual tiers are
@@ -73,8 +74,7 @@ export function buildExpandTools(
     '- "db": operate the databases registered in the Databases tab — db_list, progressive db_schema ' +
     '(paged catalog or one table), db_query (single SQL statement, writes require approval) and db_command ' +
     '(MongoDB/Redis). Unlock when the task needs to inspect or change data in a registered database.\n' +
-    '- Contextual capabilities (`company`, `sandbox`, `qa`, `app`, `design-system-studio`, ' +
-    '`design-system-consumer`, `sprite-studio`) are auto-activated by their owning runtime. ' +
+    '- Contextual capabilities (`company`, `sandbox`, `qa`, `app`) are auto-activated by their owning runtime. ' +
     'Expand them manually only during recovery or an explicitly configured custom-agent flow.';
 
   if (customTiers && customTiers.size > 0) {
@@ -94,6 +94,10 @@ export function buildExpandTools(
   const expandToolset: CoderTool = {
     name: 'expand_toolset',
     effectBoundary: 'control',
+    executionClass: 'control',
+    mutates: false,
+    parallelSafe: false,
+    riskLevel: 'read',
     description,
     source: 'native',
     parameters: {
@@ -117,9 +121,12 @@ export function buildExpandTools(
       additionalProperties: false,
     },
     handler: async (args, ctx): Promise<ToolResult> => {
+      ctx.signal?.throwIfAborted();
+      const native = ctx.ports?.discovery;
+      native?.assertCurrent();
       const tier = String(args.tier ?? '').trim() as ToolTier;
       const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
-      if (!validTiers.has(tier) && options?.beforeExpand) {
+      if (!native && !validTiers.has(tier) && options?.beforeExpand) {
         try {
           await options.beforeExpand(tier);
         } catch (e) {
@@ -133,6 +140,14 @@ export function buildExpandTools(
       }
       if (tier === 'bootstrap') {
         return err("Bootstrap tier is always active — no need to expand to it.");
+      }
+      ctx.signal?.throwIfAborted();
+      if (native) {
+        native.assertCurrent();
+        const names = options?.toolNamesForTier?.(tier) ?? [];
+        if (!names.length) return err(`Tier '${tier}' has no capabilities in this attempt snapshot.`);
+        if (names.some(name => !native.visibleToolNames.has(name))) return err(`Tier '${tier}' contains capabilities outside the provider snapshot. Start a new attempt with the required capability profile.`);
+        return ok(`Tier '${tier}' is already visible in this attempt (${names.length} tools). No permissions or catalog membership changed.`);
       }
       const runner = ctx.runner;
       if (!runner || typeof (runner as unknown as { promoteTier?: unknown }).promoteTier !== 'function') {

@@ -1,0 +1,9 @@
+
+ RUN  v4.1.4 D:/MCP
+
+
+ Test Files  2 passed (2)
+      Tests  3 passed (3)
+   Start at  22:55:32
+   Duration  1.32s (transform 99ms, setup 59ms, import 40ms, tests 87ms, environment 0ms)
+

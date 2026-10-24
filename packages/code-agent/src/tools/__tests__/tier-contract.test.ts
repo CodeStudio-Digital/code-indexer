@@ -19,7 +19,6 @@
  * via `externalToolTiers`.
  */
 import { describe, expect, it } from 'vitest';
-import { asSessionId } from '@mcp/session-storage';
 import {
   getToolTier,
   allTieredToolNames,
@@ -27,14 +26,11 @@ import {
   BOOTSTRAP_TOOLS,
   COMPANY_TOOLS,
   contextualTiersForRuntime,
-  DESIGN_SYSTEM_CONSUMER_TOOLS,
-  DESIGN_SYSTEM_STUDIO_TOOLS,
   getAllKnownToolsMeta,
   NAVIGATE_TOOLS,
   MASTER_TOOLS,
   QA_TOOLS,
   SANDBOX_TOOLS,
-  SPRITE_STUDIO_TOOLS,
   TIER_COUNTS,
 } from '@mcp/code-agent/tools/tiers.js';
 
@@ -69,12 +65,7 @@ import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools } from '@mcp/code-agent/tools/worktree.js';
 import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 import { dbTools } from '@mcp/code-agent/tools/db/index.js';
-import { buildSpriteStudioTools } from '@mcp/code-agent/tools/sprite-studio/index.js';
 import { buildAppStudioTools } from '@mcp/company/tools/app-studio/index.js';
-import {
-  buildDesignSystemConsumerTools,
-  buildDesignSystemStudioTools,
-} from '@mcp/company/tools/design-system/index.js';
 
 // ── Static tool arrays (@mcp/company — builder mode) ───────────────────────
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -112,11 +103,6 @@ const FACTORY_ALWAYS_ON = [
   // (string only: importing @mcp/docs-agent here would create a cycle).
   'docs_deep_research',
   // Contextual factories (their dedicated tiers auto-activate at runtime).
-  'ds_components', 'ds_component', 'ds_docs',
-  'ds_get_session_info', 'ds_record_component', 'ds_list_components',
-  'ds_audit_package', 'ds_set_version_status', 'ds_publish_version',
-  'ds_get_pipeline', 'ds_submit_stage', 'ds_analyze_import',
-  'sprite_get_project', 'sprite_list_assets', 'sprite_generate', 'sprite_process', 'sprite_export',
 ];
 
 const isRuntimeTiered = (name: string) => name.startsWith('mcp__') || name.startsWith('ext_');
@@ -152,12 +138,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
   it('keeps the workhorses + anti-deadlock tools always-on (bootstrap)', () => {
     for (const n of ['code_exec', 'view_image', 'submit_spec', 'create_goal', 'update_goal', 'glob', 'mcp__read_file']) {
       expect(getToolTier(n), n).toBe('bootstrap');
-    }
-  });
-
-  it('keeps DS consumer queries in their contextual capability tier', () => {
-    for (const n of ['ds_components', 'ds_component', 'ds_docs']) {
-      expect(getToolTier(n), n).toBe('design-system-consumer');
     }
   });
 
@@ -211,9 +191,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
     expect(getToolTier('service_restart')).toBe('sandbox');
     expect(getToolTier('qa_start_run')).toBe('qa');
     expect(getToolTier('app_get_state')).toBe('app');
-    expect(getToolTier('ds_record_component')).toBe('design-system-studio');
-    expect(getToolTier('ds_components')).toBe('design-system-consumer');
-    expect(getToolTier('sprite_generate')).toBe('sprite-studio');
   });
 
   it('keeps every functional family out of the global bootstrap tier', () => {
@@ -222,9 +199,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
       ...SANDBOX_TOOLS,
       ...QA_TOOLS,
       ...APP_STUDIO_TOOLS,
-      ...DESIGN_SYSTEM_STUDIO_TOOLS,
-      ...DESIGN_SYSTEM_CONSUMER_TOOLS,
-      ...SPRITE_STUDIO_TOOLS,
       ...MASTER_TOOLS,
     ]);
     expect([...BOOTSTRAP_TOOLS].filter((name) => contextual.has(name))).toEqual([]);
@@ -262,13 +236,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
       audience: 'company-master',
       appSessionId: '11111111-1111-4111-8111-111111111111',
     }))).toEqual([...APP_STUDIO_TOOLS].sort());
-    expect(names(buildDesignSystemStudioTools(1))).toEqual([...DESIGN_SYSTEM_STUDIO_TOOLS].sort());
-    expect(names(buildDesignSystemConsumerTools({
-      sessionId: asSessionId('22222222-2222-4222-8222-222222222222'),
-      packageName: '@test/ui',
-      semver: '1.0.0',
-    }))).toEqual([...DESIGN_SYSTEM_CONSUMER_TOOLS].sort());
-    expect(names(buildSpriteStudioTools(1))).toEqual([...SPRITE_STUDIO_TOOLS].sort());
   });
 
   it('db_* v2 tools live in the dedicated db tier (moved out of BUILDER_TOOLS)', () => {
@@ -302,9 +269,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
       ...SANDBOX_TOOLS,
       ...QA_TOOLS,
       ...APP_STUDIO_TOOLS,
-      ...DESIGN_SYSTEM_STUDIO_TOOLS,
-      ...DESIGN_SYSTEM_CONSUMER_TOOLS,
-      ...SPRITE_STUDIO_TOOLS,
       ...MASTER_TOOLS,
     ]);
     for (const name of functionalTools) {
@@ -315,9 +279,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
       sandbox: SANDBOX_TOOLS.size,
       qa: QA_TOOLS.size,
       app: APP_STUDIO_TOOLS.size,
-      'design-system-studio': DESIGN_SYSTEM_STUDIO_TOOLS.size,
-      'design-system-consumer': DESIGN_SYSTEM_CONSUMER_TOOLS.size,
-      'sprite-studio': SPRITE_STUDIO_TOOLS.size,
     });
   });
 
@@ -334,19 +295,13 @@ describe('contextual tier activation', () => {
       sandbox: true,
       qa: true,
       app: true,
-      designSystemStudio: true,
-      designSystemConsumer: true,
-      spriteStudio: true,
       isMaster: true,
     })].sort()).toEqual([
       'app',
       'company',
-      'design-system-consumer',
-      'design-system-studio',
       'master',
       'qa',
       'sandbox',
-      'sprite-studio',
     ]);
   });
 

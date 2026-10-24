@@ -123,6 +123,40 @@ pub fn prepare_windows_bootstrap() -> io::Result<PreparedWindowsBootstrap> {
     })
 }
 
+/// Standard streams for an ordinary contained Host command. Unlike protocol
+/// bootstrap, stderr is captured separately and stdin is closed after input.
+#[derive(Debug)]
+pub struct WindowsCommandStreams {
+    pub stdin: std::fs::File,
+    pub stdout: std::fs::File,
+    pub stderr: std::fs::File,
+}
+
+/// Creates three anonymous pipes with only child endpoints inheritable.
+/// # Errors
+/// Returns an OS error without leaking any partially created handle.
+pub fn prepare_windows_command_streams()
+-> io::Result<(WindowsCommandStreams, WindowsBootstrapChildStdio)> {
+    let (stdin, writer) = sys::anonymous_pipe()?;
+    let (reader, stdout) = sys::anonymous_pipe()?;
+    let (error_reader, stderr) = sys::anonymous_pipe()?;
+    for handle in [&writer, &reader, &error_reader] {
+        sys::clear_inherit(handle)?;
+    }
+    Ok((
+        WindowsCommandStreams {
+            stdin: writer.into(),
+            stdout: reader.into(),
+            stderr: error_reader.into(),
+        },
+        WindowsBootstrapChildStdio {
+            stdin,
+            stdout,
+            stderr,
+        },
+    ))
+}
+
 /// Opens inherited bootstrap stdin/stdout once in the child process.
 ///
 /// # Errors

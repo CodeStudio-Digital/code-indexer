@@ -69,6 +69,11 @@ where
         if matches!(kind, ManagementPayloadKind::ShutdownSupervisor) {
             return self.dispatch_shutdown(pending, &payload, digest).await;
         }
+        if matches!(kind, ManagementPayloadKind::UpdateAttemptAuthority) {
+            return self
+                .dispatch_authority_update(pending, &payload, digest)
+                .await;
+        }
         drop(payload);
         let rejected = pending.reject();
         if let Err(error) = rejected {

@@ -28,6 +28,7 @@ import { RecoveringNode } from './nodes/recovering.js';
 import { DoneNode } from './nodes/done.js';
 
 export interface OrchestratorArgs {
+  runId?: string;
   opts: RunnerOptions;
   emit: RunContext['emit'];
   /**
@@ -85,6 +86,7 @@ export async function runBehaviorTree(
 ): Promise<RunResult> {
   const ctx = createRunContext({
     opts: args.opts,
+    runId: args.runId,
     emit: args.emit,
     initialTiers: args.initialTiers,
     initialPins: args.initialPins,
@@ -106,7 +108,7 @@ export async function runBehaviorTree(
   const VALID_EVENT_KINDS: ReadonlySet<string> = new Set([
     'TurnSucceeded', 'TokenThresholdHit', 'ToolLoopDetected',
     'MaxTurnsReached', 'ProviderError', 'CompactionDone',
-    'CleanFinish', 'Aborted',
+    'CleanFinish', 'ToolOutcomeUnknown', 'Aborted',
   ]);
 
   let state: NodeState = 'Bootstrap';
@@ -146,7 +148,7 @@ export async function runBehaviorTree(
         // abort() may arrive while a provider/tool node is in flight. Let that
         // awaited operation settle, then prevent every subsequent tree node
         // (and therefore every subsequent provider/tool turn) from running.
-        if (event.kind !== 'Aborted' && ctx.bridge?.isAbortRequested?.()) {
+        if (event.kind !== 'Aborted' && event.kind !== 'ToolOutcomeUnknown' && ctx.bridge?.isAbortRequested?.()) {
           ctx.aborted = true;
           ctx.stopReason = 'aborted';
           event = { kind: 'Aborted' };

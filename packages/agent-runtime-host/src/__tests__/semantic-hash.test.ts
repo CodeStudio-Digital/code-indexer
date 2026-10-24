@@ -27,6 +27,9 @@ describe('semanticSha256', () => {
     });
 
     expect(Buffer.from(actual).toString('hex')).toBe(expectedHash);
+    const independent = actual.slice();
+    independent.fill(0);
+    expect(Buffer.from(actual).toString('hex')).toBe(expectedHash);
 
     const schemaId = Buffer.from('codestudio.agent.fixture.v1', 'utf8');
     const preimage = Buffer.concat([

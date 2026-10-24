@@ -59,6 +59,7 @@ export interface QueryRewriterOptions {
 }
 
 export interface RewriteOpts {
+  signal?: AbortSignal;
   /** Resolved context for binding lookup (session/template/global). */
   resolveContext?: ResolveContext;
   /** Optional cap on variants; clamped to [1, MAX_VARIANTS]. Default 4. */
@@ -112,6 +113,7 @@ export class QueryRewriter {
    * original so the caller can fall back to a single hybrid search.
    */
   async rewrite(query: string, opts: RewriteOpts = {}): Promise<RewriteResult> {
+    opts.signal?.throwIfAborted();
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
       return {
@@ -148,6 +150,7 @@ export class QueryRewriter {
       'rewriter',
       opts.resolveContext ?? {},
     );
+    opts.signal?.throwIfAborted();
     if (!binding) {
       const result: RewriteResult = {
         variants: [normalizedQuery],
@@ -190,7 +193,8 @@ export class QueryRewriter {
 
     // LLM call. null signals a real transport/parse error (vs. a successful
     // call that simply produced no extra variants).
-    const llmVariants = await this.callLlm(binding, normalizedQuery, maxVariants);
+    const llmVariants = await this.callLlm(binding, normalizedQuery, maxVariants, opts.signal);
+    opts.signal?.throwIfAborted();
     const variants = llmVariants ?? [normalizedQuery];
     const llmUsed = variants.length > 1;
 
@@ -226,15 +230,18 @@ export class QueryRewriter {
     binding: ResolvedBinding,
     query: string,
     maxVariants: number,
+    signal?: AbortSignal,
   ): Promise<string[] | null> {
     const chat = pickChatFn(binding);
     try {
       const result = await chat(binding, [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildPrompt(query, maxVariants) },
-      ]);
+      ], { signal });
+      signal?.throwIfAborted();
       return parseLlmResponse(result.content, query, maxVariants);
     } catch {
+      signal?.throwIfAborted();
       // Network/timeout/parse error → signal failure to the caller.
       return null;
     }

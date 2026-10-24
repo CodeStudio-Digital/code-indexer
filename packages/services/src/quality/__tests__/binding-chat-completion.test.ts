@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getEventListeners } from 'node:events';
 import type { ResolvedBinding } from '../../pipelines/provider-resolver.js';
 
 const chat = vi.fn();
@@ -17,6 +18,27 @@ const binding = {
 beforeEach(() => chat.mockReset());
 
 describe('OAuth completion streaming guards', () => {
+  it('removes the caller listener on successful completion', async () => {
+    const controller = new AbortController();
+    chat.mockImplementation(async function* () { yield { type: 'done', stop_reason: 'completed' }; });
+    await coderProviderChat(binding, [], { signal: controller.signal });
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
+  it('never dispatches an already-cancelled request', async () => {
+    const controller = new AbortController(); controller.abort();
+    expect((await coderProviderChat(binding, [], { signal: controller.signal })).finishReason).toBe('aborted');
+    expect(chat).not.toHaveBeenCalled();
+  });
+  it('does not accept a terminal delta delivered after caller cancellation', async () => {
+    const controller = new AbortController();
+    chat.mockImplementation(async function* () {
+      yield { type: 'text_delta', text: 'partial' };
+      controller.abort();
+      yield { type: 'done', stop_reason: 'completed' };
+    });
+    expect(await coderProviderChat(binding, [], { signal: controller.signal })).toMatchObject({ content: 'partial', finishReason: 'aborted' });
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
   it('accepts a stream only after the provider emits a terminal event', async () => {
     chat.mockImplementation(async function* () {
       yield { type: 'text_delta', text: '{"findings":[]}' };

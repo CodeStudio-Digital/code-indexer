@@ -27,13 +27,14 @@ import { Buffer } from 'node:buffer';
 import { runInNewContext, type Context } from 'node:vm';
 import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
 import {
   evaluateToolInvocation,
   findScopeViolations,
   resolveToolInvocationMetadata,
   resolveToolMetadata,
+  isExplicitlyParallelSafeRead,
   type PolicyContext,
 } from '@mcp/code-agent/core/policy.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
@@ -51,6 +52,9 @@ import { stableArgsKey } from '@mcp/code-agent/core/runner/dup-utils.js';
 import { normalizeGuardInput } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
 import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import { nestedToolConcurrencyGate } from './code-exec-concurrency.js';
+import { preserveCodeExecEffectOutcome } from './code-exec-effect-outcome.js';
+import type { CodeExecutionSession } from '../ports/code-execution-port.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
@@ -58,84 +62,11 @@ const WALL_TIMEOUT_MS = 35 * 60_000;
 const DRAIN_TIMEOUT_MS = 5_000;
 const ABORT_DRAIN_GRACE_MS = 250;
 const MAX_TOOL_CALLS = 50;
-const MAX_PARALLEL_TOOL_CALLS = 8;
+const MAX_PARALLEL_TOOL_CALLS = 4;
 const MAX_OUTPUT_BYTES = 50_000;
 const PRIORITY_ERROR_LOG_RATIO = 0.2;
 const MIN_PRIORITY_ERROR_LOG_BYTES = 1_024;
 const MAX_PRIORITY_ERROR_LOG_BYTES = 16_384;
-
-/**
- * Small abort-aware FIFO used per code_exec invocation. Promise.all remains
- * concurrent, but a script cannot fan out dozens of physical MCP/RAG calls at
- * once and amplify downstream pools, native DB writers, or response buffers.
- */
-class NestedToolConcurrencyGate {
-  private active = 0;
-  private readonly waiters: Array<{
-    resolve: (release: () => void) => void;
-    reject: (reason: unknown) => void;
-    signal?: AbortSignal;
-    onAbort?: () => void;
-  }> = [];
-
-  constructor(private readonly limit: number) {}
-
-  reserve(signal?: AbortSignal): Promise<() => void> {
-    if (signal?.aborted) return Promise.reject(this.abortReason(signal));
-    if (this.active < this.limit) {
-      this.active += 1;
-      return Promise.resolve(this.releaseOnce());
-    }
-    return new Promise<() => void>((resolve, reject) => {
-      const waiter: {
-        resolve: (release: () => void) => void;
-        reject: (reason: unknown) => void;
-        signal?: AbortSignal;
-        onAbort?: () => void;
-      } = { resolve, reject, ...(signal ? { signal } : {}) };
-      if (signal) {
-        waiter.onAbort = () => {
-          const index = this.waiters.indexOf(waiter);
-          if (index >= 0) this.waiters.splice(index, 1);
-          reject(this.abortReason(signal));
-        };
-        signal.addEventListener('abort', waiter.onAbort, { once: true });
-      }
-      this.waiters.push(waiter);
-    });
-  }
-
-  private abortReason(signal: AbortSignal): Error {
-    return signal.reason instanceof Error
-      ? signal.reason
-      : new Error('nested tool call cancelled while waiting for concurrency capacity');
-  }
-
-  private releaseOnce(): () => void {
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      this.active = Math.max(0, this.active - 1);
-      this.dispatch();
-    };
-  }
-
-  private dispatch(): void {
-    while (this.active < this.limit && this.waiters.length > 0) {
-      const waiter = this.waiters.shift()!;
-      if (waiter.onAbort && waiter.signal) {
-        waiter.signal.removeEventListener('abort', waiter.onAbort);
-      }
-      if (waiter.signal?.aborted) {
-        waiter.reject(this.abortReason(waiter.signal));
-        continue;
-      }
-      this.active += 1;
-      waiter.resolve(this.releaseOnce());
-    }
-  }
-}
 
 /**
  * Attach a rejection observer directly to every promise created by the
@@ -178,7 +109,7 @@ const CODE_EXEC_DESC =
   'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
   'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and lifecycle tools (create_goal, get_goal, update_goal, task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
-  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, at most ' + MAX_PARALLEL_TOOL_CALLS + ' physical nested calls at once, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
+  'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, at most ' + MAX_PARALLEL_TOOL_CALLS + ' independent read calls at once; writes, commands and unknown classifications form sequential barriers, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
   '\n' +
   'Example — required reads plus one optional symbol probe:\n' +
   '```\n' +
@@ -392,6 +323,9 @@ export function buildCodeExecTool(
       additionalProperties: false,
     },
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+      if (ctx.runtimeGeneration === 'rust_v1' && !ctx.ports?.codeExecution) {
+        return err('Native code_exec requires its owned disposable evaluator process. Rebuild the runtime integration.');
+      }
       const code = String(args.code ?? '');
       if (!code.trim()) {
         // PR 5 — guide the model towards the right tool when `code` is
@@ -401,7 +335,7 @@ export function buildCodeExecTool(
           'code_exec: `code` is required and non-empty. ' +
           'If you wanted to run a shell command, use `exec_command`. ' +
           'If you wanted to call a stored script, use `run_command` with the path. ' +
-          'code_exec runs an in-process JS snippet that can call other tools via the `tools` proxy.',
+          'code_exec runs a JS snippet that can call other tools via the `tools` proxy.',
         );
       }
       const requested = typeof args.timeout_ms === 'number' ? args.timeout_ms : DEFAULT_TIMEOUT_MS;
@@ -419,8 +353,9 @@ export function buildCodeExecTool(
       // Snapshot the registry once per invocation. Execution stays restricted
       // to safe tools, while read-only schema introspection may inspect all of
       // them (including control/lifecycle tools).
-      const allTools = registry.list();
-      const safe = allTools.filter(isSafeTool);
+      const authority = ctx.nestedCapabilityDispatch;
+      const allTools = registry.list().filter(t => !authority?.visibleToolNames || authority.visibleToolNames.has(t.name));
+      const safe = allTools.filter(t => isSafeTool(t) && (!authority?.invocableToolNames || authority.invocableToolNames.has(t.name)));
       const exposedNames = safe.map((t) => t.name).sort();
       const exposedNameSet = new Set(exposedNames);
       const allNames = allTools.map((t) => t.name).sort();
@@ -450,10 +385,11 @@ export function buildCodeExecTool(
       const activeToolPromises = new Set<Promise<unknown>>();
       const activeControllers = new Set<AbortController>();
       const nestedOutcomes: NestedOutcome[] = [];
+      const nestedBlocks = new Map<number, NonNullable<ToolResult['extraUserBlocks']>>();
       // One shared FIFO lane per runner. Lightweight/standalone tests get an
       // invocation-local ledger with the exact same abortable queue contract.
       const unsafeLedger = ctx.toolCallLedger ?? new ToolCallLedger();
-      const concurrencyGate = new NestedToolConcurrencyGate(MAX_PARALLEL_TOOL_CALLS);
+      const concurrencyGate = nestedToolConcurrencyGate(unsafeLedger, MAX_PARALLEL_TOOL_CALLS);
 
       const priorityErrorLimit = Math.max(
         MIN_PRIORITY_ERROR_LOG_BYTES,
@@ -528,8 +464,12 @@ export function buildCodeExecTool(
       // accepts only a complete string, so persisting the retained preview
       // would create a false promise of lossless recovery. Keep this source
       // cap explicitly irreversible until a bounded streaming spool exists.
-      const withLogTruncation = (result: ToolResult): ToolResult => omittedLogLines > 0
-        ? {
+      const withLogTruncation = (rawResult: ToolResult): ToolResult => {
+        const extraUserBlocks = [...nestedBlocks].sort(([a], [b]) => a - b).flatMap(([, blocks]) => blocks);
+        const result = preserveCodeExecEffectOutcome({ ...rawResult,
+          ...(extraUserBlocks.length ? { extraUserBlocks } : {}),
+        }, unsafeLedger);
+        return omittedLogLines > 0 ? {
             ...result,
             sourceTruncations: [{
               technique: 'bounded-console-cap',
@@ -540,6 +480,7 @@ export function buildCodeExecTool(
             }],
           }
         : result;
+      };
 
       // Build the per-call policy context once; it reflects runner state at
       // the moment code_exec was dispatched. plan_approved / task_scope can
@@ -549,6 +490,8 @@ export function buildCodeExecTool(
       const buildPolicyCtx = (): PolicyContext => ({
         planMode: runner ? !!(runner as unknown as { opts?: { planMode?: boolean } }).opts?.planMode : false,
         planApproved: runner ? runner.isPlanApproved() : true,
+        specMode: runner?.specMode ?? false,
+        specApproved: runner?.isSpecApproved?.() ?? false,
         taskScope: runner && runner.currentTaskScopeId()
           ? { id: runner.currentTaskScopeId()!, files: runner.currentTaskScopeFiles() ?? [] }
           : null,
@@ -612,11 +555,18 @@ export function buildCodeExecTool(
             throw new Error(`code_exec: exceeded ${MAX_TOOL_CALLS} tool calls per script`);
           }
           const rawArgObj = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>;
-          const argObj = normalizeGuardInput(t, rawArgObj);
+          // Isolate normalized input before any approval/queue await. The script
+          // must not change the resource after policy has approved it.
+          const argObj = JSON.parse(JSON.stringify(normalizeGuardInput(t, rawArgObj))) as Record<string, unknown>;
+          const invocationIndex = toolCalls;
           const metadata = resolveToolInvocationMetadata(t, argObj);
+          const parallelRead = isExplicitlyParallelSafeRead(t);
           const observer = ctx.nestedToolObserver;
           const repeatable = metadata.repeatPolicy === 'pollable';
           const forceReread = argObj.force_reread === true;
+          // A queued barrier invalidates earlier read promises immediately;
+          // a later read must not coalesce across an intervening mutation.
+          stateEpoch = parallelRead ? Math.max(stateEpoch, concurrencyGate.epoch) : concurrencyGate.invalidate();
           const callEpoch = stateEpoch;
           const attemptOrigin = `${ctx.currentToolUseId ?? ctx.approvalAnchorId ?? 'code_exec'}#${toolCalls}`;
           const nestedToolUseId =
@@ -768,7 +718,7 @@ export function buildCodeExecTool(
           // Standalone code_exec hosts keep the legacy local evaluator. Runner
           // dispatch supplies the unified preflight above, which is the sole
           // authority there so direct and nested decisions cannot diverge.
-          if (!nestedAuthority?.preflight) {
+          if (!nestedAuthority?.preflight && !nestedAuthority?.invoke) {
             const policyCtx = buildPolicyCtx();
             const decision = evaluateToolInvocation(t, argObj, policyCtx);
             if (!decision.allowed) {
@@ -860,7 +810,7 @@ export function buildCodeExecTool(
           inFlight += 1;
           if (inFlight === 1) pauseClock();
           try {
-            if (ctx.permissionGate) {
+            if (ctx.permissionGate && !nestedAuthority?.invoke) {
               const decision = await ctx.permissionGate.check({
                 toolUseId: nestedToolUseId,
                 toolName: t.name,
@@ -967,6 +917,10 @@ export function buildCodeExecTool(
               let releaseLane: (() => void) | undefined;
               let releasesOwnedByInvocation = false;
               let outcomeRecorded = false;
+              let dispatched = false;
+              let resultReceived = false;
+              const mayHaveEffects = metadata.mutates || metadata.executionClass !== 'read'
+                || metadata.riskLevel !== 'read' || t.effectBoundary !== undefined;
               const started = Date.now();
               // The controller and deadline exist BEFORE unsafe-lane
               // acquisition. A queued call can therefore time out/cancel
@@ -1003,7 +957,7 @@ export function buildCodeExecTool(
                   });
               try {
                 releaseCapacity = await Promise.race([
-                  concurrencyGate.reserve(callAbort.signal),
+                  concurrencyGate.reserve(parallelRead, callAbort.signal),
                   cancelled,
                   ...(timedOut ? [timedOut] : []),
                 ]);
@@ -1024,13 +978,17 @@ export function buildCodeExecTool(
                   try { callAbort.abort(error); } catch { /* ignore */ }
                   throw error;
                 }
-                const invocation = registry.invoke(t.name, argObj, {
+                const nestedContext: ToolContext = {
                   ...ctx,
+                  toolCallLedger: unsafeLedger,
                   currentToolUseId: nestedToolUseId,
                   parentToolUseId:
                     ctx.currentToolUseId ?? ctx.parentToolUseId ?? ctx.approvalAnchorId,
                   signal: callAbort.signal,
-                });
+                };
+                const invocation = nestedAuthority?.invoke
+                  ? nestedAuthority.invoke(t.name, argObj, nestedContext, () => { dispatched = true; })
+                  : (() => { dispatched = true; return registry.invoke(t.name, argObj, nestedContext); })();
                 // A timed-out handler may ignore AbortSignal. Keep both its
                 // global-capacity permit and unsafe lane (when any) occupied
                 // until the physical invocation settles, preventing runaway
@@ -1047,6 +1005,8 @@ export function buildCodeExecTool(
                   ...(timedOut ? [timedOut] : []),
                 ]);
                 const result = await guarded;
+                resultReceived = true;
+                if (result.extraUserBlocks?.length) nestedBlocks.set(invocationIndex, result.extraUserBlocks);
                 let nestedContent = result.content;
                 if (result.structuredData !== undefined) {
                   try {
@@ -1081,16 +1041,20 @@ export function buildCodeExecTool(
                   metadata.executionClass === 'write' ||
                   metadata.executionClass === 'execute'
                 ) {
-                  stateEpoch += 1;
+                  stateEpoch = concurrencyGate.invalidate();
                 }
                 return nestedContent;
               } catch (e) {
+                // A timeout/cancellation settles the proxy, not necessarily
+                // its physical mutation. Keep this sticky even if JS catches
+                // the error or the handler eventually returns a late result.
+                if (dispatched && !resultReceived && mayHaveEffects) unsafeLedger.markOutcomeUnknown(t.name);
                 if (isNestedToolExecutionError(e) && outcomeRecorded) throw e;
                 const errorText = e instanceof Error ? e.message : String(e);
                 const refusalKind = (e as { code?: unknown })?.code === 'TOOL_TIMEOUT' || /timed out/i.test(errorText)
                   ? 'timeout'
                   : callAbort.signal.aborted ? 'abort' : undefined;
-                const error = refusalKind === 'abort'
+                const error = unsafeLedger.outcomeUnknownTool ? unknownToolOutcome(errorText).error! : refusalKind === 'abort'
                   ? inferToolErrorInfo(t.name, `tool ${t.name} cancelled`)
                   : inferToolErrorInfo(t.name, errorText);
                 recordNestedOutcome({
@@ -1372,6 +1336,7 @@ export function buildCodeExecTool(
         }
       };
 
+      let isolatedExecution: CodeExecutionSession | undefined;
       const closeAndSettle = async (reason?: unknown, abortActive = false): Promise<boolean> => {
         executionClosing = true;
         pauseClock();
@@ -1380,6 +1345,10 @@ export function buildCodeExecTool(
           clockTimer = null;
         }
         if (abortActive) abortActiveCalls(reason);
+        if (isolatedExecution) {
+          try { await isolatedExecution.close(); }
+          catch { unsafeLedger.markOutcomeUnknown('code_exec'); }
+        }
         // A detached continuation can enqueue one more proxy promise while a
         // sibling settles. Refuse late calls (executionClosing) and drain until
         // the set is genuinely empty, but never let an uncooperative nested
@@ -1480,10 +1449,22 @@ export function buildCodeExecTool(
       armClock();
       let scriptPromise: Promise<unknown>;
       try {
-        scriptPromise = runInNewContext(wrapped, sandbox, {
-          timeout: timeout, // protects against synchronous infinite loops
-          filename: 'code_exec.js',
-        }) as Promise<unknown>;
+        if (ctx.ports?.codeExecution) {
+          isolatedExecution = ctx.ports.codeExecution.start({ code, sandbox, timeoutMs: timeout,
+            wallTimeoutMs: WALL_TIMEOUT_MS, maxOutputBytes: effectiveMaxOutput, priorityErrorBytes: priorityErrorLimit,
+            toolNames: exposedNames, allToolNames: allNames, signal: ctx.signal,
+            onOmittedLogs: (lines, bytes, tail) => {
+              omittedLogLines += lines; omittedLogBytes += bytes; emittedLogBytes += bytes;
+              for (const line of tail) retainPriorityError(line);
+            },
+          });
+          scriptPromise = isolatedExecution.result;
+        } else {
+          scriptPromise = runInNewContext(wrapped, sandbox, {
+            timeout: timeout, // legacy synchronous loop protection
+            filename: 'code_exec.js',
+          }) as Promise<unknown>;
+        }
       } catch (e) {
         await closeAndSettle(e, true);
         if (wallTimer) clearTimeout(wallTimer);

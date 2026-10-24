@@ -27,6 +27,22 @@ pub struct SessionBundleLayout {
 }
 
 impl SessionBundleLayout {
+    pub(crate) fn open_existing(
+        root: &Path,
+        session_id: &SessionId,
+    ) -> Result<Self, SessionStoreError> {
+        if !root.is_absolute() {
+            return Err(SessionStoreError::InvalidRoot);
+        }
+        validate_directory(root)?;
+        let bundle = root.join(session_id.as_str());
+        validate_directory(&bundle)?;
+        for directory in BUNDLE_DIRECTORIES {
+            validate_directory(&bundle.join(directory))?;
+        }
+        Ok(Self { bundle })
+    }
+
     pub(crate) fn create(root: &Path, session_id: &SessionId) -> Result<Self, SessionStoreError> {
         if !root.is_absolute() {
             return Err(SessionStoreError::InvalidRoot);

@@ -5,6 +5,7 @@ import { getRejectedSet, hashSpec } from './hash-ledger.js';
 import { writeSpecToRepo } from './write-spec.js';
 import { mirrorSpecToCompanyDrive } from './mirror-to-drive.js';
 import { formatSpecResult } from './format-result.js';
+import { toolInteractions } from '../../core/tool-interactions.js';
 
 const SUBMIT_SPEC_DESC =
   'Submit a feature/epic specification for human approval. Required in spec mode before any mutating tool. ' +
@@ -26,16 +27,19 @@ export const submitSpec: CoderTool = {
   // reachable while spec mode still blocks ordinary mutators. Its durable
   // artifact is fenced separately by effectBoundary.
   mutates: false,
+  parallelSafe: false, riskLevel: 'read', interactive: true,
   parameters: {
     type: 'object',
     properties: {
       name: {
         type: 'string',
+        maxLength: 256,
         description:
           'Short human-readable feature name (becomes the file slug). Example: "auth-with-stripe-billing".',
       },
       body: {
         type: 'string',
+        maxLength: 1024 * 1024,
         description:
           'Full spec markdown — 5 sections in order: ## Context, ## Requirements, ## Design, ## Acceptance Criteria, ## Implementation Plan. Persisted verbatim.',
       },
@@ -52,10 +56,12 @@ export const submitSpec: CoderTool = {
     const body = String(args.body ?? '').trim();
     if (!name) return err('spec name cannot be empty');
     if (!body) return err('spec body cannot be empty');
+    if (name.length > 256 || Buffer.byteLength(body, 'utf8') > 1024 * 1024) return err('spec name or body exceeds its size limit');
     const parentId = typeof args.parent_id === 'string' ? args.parent_id : undefined;
 
-    const runner = ctx.runner;
-    if (!runner) return err('submit_spec requires runner context');
+    const runner = toolInteractions(ctx);
+    if (!runner) return err('submit_spec requires interaction context');
+    ctx.signal?.throwIfAborted();
 
     const rejected = getRejectedSet(runner);
     const hash = hashSpec(body);
@@ -70,8 +76,10 @@ export const submitSpec: CoderTool = {
     const written = await writeSpecToRepo(ctx, name, body);
     const mirror = await mirrorSpecToCompanyDrive(ctx, written.fileName, body);
 
-    const id = `spec_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    runner.emit('spec_posted', {
+    ctx.signal?.throwIfAborted();
+    const id = ctx.ports?.interactions && ctx.currentToolUseId
+      ? ctx.currentToolUseId : `spec_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const raw = await runner.request({ kind: 'spec', payload: {
       type: 'spec',
       id,
       name,
@@ -79,9 +87,7 @@ export const submitSpec: CoderTool = {
       spec_path: written.relPath,
       parent_id: parentId,
       drive_path: mirror.drivePath,
-    });
-
-    const raw = await runner.waitForUserInput();
+    } }, ctx.signal);
     let parsed: {
       approved?: boolean;
       requested_changes?: string;
@@ -106,12 +112,14 @@ export const submitSpec: CoderTool = {
       return err('Spec review aborted by user.');
     }
     if (parsed.approved) {
-      runner.approveSpec(written.relPath);
-      rejected.clear();
+      ctx.signal?.throwIfAborted();
       const transitioning = runner.agentId === 'spec';
       if (transitioning) {
         await ctx.setSessionAgent?.('build');
       }
+      ctx.signal?.throwIfAborted();
+      runner.approveSpec(written.relPath);
+      rejected.clear();
       const result: ToolResult = { content: formatSpecResult(true, written.relPath, feedback) };
       if (transitioning) {
         result.extraUserBlocks = [
@@ -120,7 +128,9 @@ export const submitSpec: CoderTool = {
             text:
               `<system-reminder>Mode transition: Spec → Build. The spec at ${written.relPath} was approved. ` +
               `Derive tasks from its "## Implementation Plan" section, call submit_tasks with files+complexity per step, ` +
-              `then call execute_tasks once to run them. The spec-mode gate is now released; mutating tools are unlocked.</system-reminder>`,
+              (ctx.ports?.interactions ? 'then implement the approved steps with the tools available in this attempt. '
+                : 'then call execute_tasks once to run them. ') +
+              `The spec-mode gate is now released; mutating tools are unlocked.</system-reminder>`,
           },
         ];
       }

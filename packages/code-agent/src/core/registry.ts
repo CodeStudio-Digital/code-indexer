@@ -1,4 +1,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
+import { unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
+import { isUncertainToolOutcomeError } from './uncertain-tool-outcome.js';
 import { aliasNormalizationEnabled, normalizeToolArgs } from '@mcp/code-agent/core/tool-arg-aliases.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
@@ -8,6 +10,8 @@ import {
 } from '@mcp/code-agent/core/mutation-fence.js';
 import { defaultLocalFilesystemPort } from '@mcp/code-agent/ports/filesystem-port.js';
 import { defaultLocalShellPort } from '@mcp/code-agent/ports/shell-port.js';
+import { toolSettlementNotifier } from './tool-settlement.js';
+import { asAbortSignal } from './abort-signal.js';
 import {
   mutationFencedFilesystemPort,
   mutationFencedShellPort,
@@ -80,6 +84,10 @@ export class ToolRegistry {
   }
 
   async invoke(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    if (ctx.toolCallLedger?.outcomeUnknownTool) {
+      return unknownToolOutcome(`Dispatch blocked: the outcome of ${ctx.toolCallLedger.outcomeUnknownTool} is unresolved.`);
+    }
+    if (asAbortSignal(ctx.signal)?.aborted) return cancelledBeforeDispatch(name);
     const tool = this.tools.get(name);
     if (!tool) {
       // Deterministic recovery breadcrumbs: a close-name suggestion (telemetry
@@ -113,6 +121,7 @@ export class ToolRegistry {
     // see tool-arg-aliases.ts. This is the single chokepoint for ALL tool
     // calls — the runner loop, subagents, and code_exec's nested calls.
     const finalArgs = aliasNormalizationEnabled() ? normalizeToolArgs(tool.parameters, args) : args;
+    let notify: ((result: Pick<ToolResult, 'isError'>) => void) | undefined;
     try {
       let invocationContext = ctx;
       if (ctx.mutationFence) {
@@ -157,12 +166,14 @@ export class ToolRegistry {
         }
         invocationContext = {
           ...ctx,
+          currentToolInvocation: { name, input: finalArgs },
           mutationFence,
           signal: combinedMutationSignal(ctx.signal, mutationFence),
           // Ports are rebound per invocation. The wrappers resolve the bound
           // fence through AsyncLocalStorage, so concurrent A/B calls cannot
           // observe each other's input/resource binding.
           ports: {
+            ...ctx.ports,
             fs: mutationFencedFilesystemPort(
               rawFs,
               () => mutationFence,
@@ -183,13 +194,30 @@ export class ToolRegistry {
           });
         }
       }
-      return invocationContext.mutationFence
-        ? await runWithMutationFence(
+      notify = toolSettlementNotifier(invocationContext, name, finalArgs);
+      const invoke = async () => {
+        // Admission may have waited for another workspace owner. Cancellation
+        // during that wait must not start a new effect when ownership arrives.
+        if (asAbortSignal(invocationContext.signal)?.aborted) return cancelledBeforeDispatch(name);
+        return invocationContext.mutationFence ? await runWithMutationFence(
             invocationContext.mutationFence,
             () => tool.handler(finalArgs, invocationContext),
           )
         : await tool.handler(finalArgs, invocationContext);
+      };
+      const result = ctx.workspaceRuntimeScope ? await ctx.workspaceRuntimeScope.invoke(tool, invoke) : await invoke();
+      notify(result);
+      if (result.effectOutcome === 'unknown') ctx.toolCallLedger?.markOutcomeUnknown(name);
+      if (ctx.toolCallLedger?.outcomeUnknownTool && result.effectOutcome !== 'unknown') {
+        return unknownToolOutcome(`A nested tool outcome is unresolved: ${ctx.toolCallLedger.outcomeUnknownTool}. Reconcile before retrying.`);
+      }
+      return result;
     } catch (e) {
+      notify?.({ isError: true });
+      if (isUncertainToolOutcomeError(e)) {
+        ctx.toolCallLedger?.markOutcomeUnknown(name);
+        return unknownToolOutcome(e.message);
+      }
       const msg = e instanceof Error ? e.message : String(e);
       return {
         content: `Tool '${name}' failed: ${msg}`,
@@ -203,4 +231,15 @@ export class ToolRegistry {
       };
     }
   }
+}
+
+function cancelledBeforeDispatch(name: string): ToolResult {
+  return {
+    content: `Tool '${name}' was cancelled before its handler started.`,
+    isError: true,
+    error: { code: 'TOOL_DISPATCH_CANCELLED', kind: 'cancelled', retryable: false,
+      suggestedAction: 'Wait for an explicit continuation before starting another invocation.' },
+    guardVerdict: { action: 'block', reason: 'tool-dispatch-cancelled', refusalKind: 'abort',
+      shouldReflect: false, affectsFailureStreak: false },
+  };
 }

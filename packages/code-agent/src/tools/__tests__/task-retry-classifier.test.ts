@@ -39,6 +39,9 @@ describe('classifyError — transient errors', () => {
 
 describe('classifyError — fatal errors', () => {
   const fatals = [
+    'outcome_unknown: ETIMEDOUT after applying patch',
+    'effect_unconfirmed: HTTP 503',
+    'result ambiguous after connection timeout',
     'Refused by dedup: tuple-hash detected duplicate call',
     'Tool gate refusal: plan mode active, write tools blocked',
     'HTTP 401 Unauthorized: invalid API key',

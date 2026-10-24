@@ -9,8 +9,10 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { executeRequest } from '@mcp/services/api-client/execute-request.js';
 import { runCollection } from '@mcp/services/api-client/regression-runner.js';
 import { apiClientReadCap } from '@mcp/services/api-client/read-cap.js';
-import { resolveApiCtx, jarForProject, resolveEnvFor } from './shared.js';
+import { resolveApiCtx, jarForProject, resolveEnvFor, projectCollection, projectRequest } from './shared.js';
 import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
+import { apiInvocation, uncertainApiResult } from './invocation.js';
+import { UNSET } from '@mcp/services/api-client/script-runtime/types.js';
 
 export const apiRunRequestTool: CoderTool = {
   name: 'api_run_request',
@@ -18,7 +20,7 @@ export const apiRunRequestTool: CoderTool = {
   description:
     'Send ONE request against the live dev server and return the real status, headers and body. Use this to probe an endpoint: a 400/422 usually means the spec omitted a required param (fix with api_update_request, then re-run); a 2xx that looks right → api_mark_verified. The per-project cookie jar persists logins across calls.',
   source: 'native',
-  mutates: false,
+  mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
   parameters: {
@@ -33,10 +35,13 @@ export const apiRunRequestTool: CoderTool = {
   handler: async (args, ctx) => {
     const r = resolveApiCtx(ctx);
     if ('error' in r) return err(r.error);
-    const req = r.store.getRequest(Number(args.requestId));
+    const req = projectRequest(r, Number(args.requestId));
     if (!req) return err(`request ${args.requestId} not found`);
 
-    const { baseUrl, variables } = resolveEnvFor(r.store, r.projectId, args.envId != null ? Number(args.envId) : undefined);
+    const env = resolveEnvFor(r.store, r.projectId, args.envId != null ? Number(args.envId) : undefined);
+    if ('error' in env) return err(env.error);
+    const { baseUrl, variables } = env;
+    const invocation = apiInvocation(ctx, r, [req], args.envId != null ? Number(args.envId) : undefined);
     let res;
     try {
       // Contain file-backed bodies to the project root — the agent must not be
@@ -47,10 +52,13 @@ export const apiRunRequestTool: CoderTool = {
         resource: String(req.id),
       });
       res = await executeRequest({
-        request: req, baseUrl, variables, jar: jarForProject(r.projectId), signal: ctx.signal,
+        request: req, baseUrl, variables, jar: jarForProject(r.projectId), ...invocation,
+        beforeDispatch: () => invocation.beforeDispatch(req),
         fileRoot: ctx.cwd, allowAbsoluteFiles: false, maxBytes: apiClientReadCap(),
       });
     } catch (e) {
+      const uncertain = uncertainApiResult(ctx, e);
+      if (uncertain) return uncertain;
       const msg = e instanceof Error ? e.message : String(e);
       if (/Invalid URL|resolve/i.test(msg) && !/ECONN|timed out|socket/i.test(msg)) {
         return err(`could not resolve URL from base '${baseUrl}' + path '${req.path_template}'. Create/select an environment with a base_url.`);
@@ -62,7 +70,12 @@ export const apiRunRequestTool: CoderTool = {
       operation: 'api_run_request.write',
       resource: String(req.id),
     });
-    r.store.updateRequest(req.id, { last_status: res.status, last_run_at: new Date().toISOString() });
+    r.store.transaction(() => {
+      r.store.updateRequest(req.id, { last_status: res.status, last_run_at: new Date().toISOString() });
+      if (env.envId != null) r.store.applyEnvVarUpdates(env.envId, Object.fromEntries(
+        Object.entries(res.variableUpdates).map(([key, value]) => [key, value === UNSET ? null : value]),
+      ));
+    });
 
     // Keep the full acquired body for the central model-aware finalizer. The
     // old 4K presentation cut destroyed evidence before exact spill/reduction.
@@ -125,8 +138,12 @@ export const apiRunCollectionTool: CoderTool = {
     const r = resolveApiCtx(ctx);
     if ('error' in r) return err(r.error);
     const cid = Number(args.collectionId);
-    if (!r.store.getCollection(cid)) return err(`collection ${cid} not found`);
-    const { baseUrl, variables, envId } = resolveEnvFor(r.store, r.projectId, args.envId != null ? Number(args.envId) : undefined);
+    if (!projectCollection(r, cid)) return err(`collection ${cid} not found in this project`);
+    const env = resolveEnvFor(r.store, r.projectId, args.envId != null ? Number(args.envId) : undefined);
+    if ('error' in env) return err(env.error);
+    const { baseUrl, variables, envId } = env;
+    const requests = r.store.listRequests(cid);
+    const invocation = apiInvocation(ctx, r, requests, args.envId != null ? Number(args.envId) : undefined);
 
     assertMutationFence(ctx.mutationFence, {
       kind: 'control',
@@ -142,14 +159,15 @@ export const apiRunCollectionTool: CoderTool = {
         resource: String(cid),
       });
       report = await runCollection({
-        requests: r.store.listRequests(cid),
+        requests,
         baseUrl, variables,
         jar: jarForProject(r.projectId),
         includeMutating: !!args.includeMutating,
-        signal: ctx.signal,
+        ...invocation,
         fileRoot: ctx.cwd, allowAbsoluteFiles: false, maxBytes: apiClientReadCap(),
       });
     } catch (e) {
+      const uncertain = uncertainApiResult(ctx, e);
       const message = e instanceof Error ? e.message : String(e);
       assertMutationFence(ctx.mutationFence, {
         kind: 'control',
@@ -157,7 +175,7 @@ export const apiRunCollectionTool: CoderTool = {
         resource: String(runId),
       });
       r.store.finishRun(runId, { status: 'error', total: 0, passed: 0, failed: 0, results_json: JSON.stringify([{ reason: message }]) });
-      return err(`regression run failed: ${message}`);
+      return uncertain ?? err(`regression run failed: ${message}`);
     }
     assertMutationFence(ctx.mutationFence, {
       kind: 'control',

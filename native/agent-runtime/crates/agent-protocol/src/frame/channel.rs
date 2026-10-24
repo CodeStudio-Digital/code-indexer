@@ -33,8 +33,14 @@ pub(super) const fn validate_payload_channel(
             | Body::HydrationComplete(_)
             | Body::HydrationCommitted(_)
             | Body::ProviderStart(_)
+            | Body::ProviderRequestChunk(_)
+            | Body::ProviderRequestChunkAccepted(_)
+            | Body::ProviderRequestCommit(_)
+            | Body::ProviderCheckpoint(_)
+            | Body::ProviderCheckpointCommitted(_)
             | Body::ProviderAccepted(_)
             | Body::ProviderCancel(_)
+            | Body::ProviderEventConsumed(_)
             | Body::ProviderTextDelta(_)
             | Body::ProviderThinkingDelta(_)
             | Body::ProviderToolCall(_)
@@ -45,49 +51,17 @@ pub(super) const fn validate_payload_channel(
             | Body::CapabilityPrepare(_)
             | Body::CapabilityUpdate(_)
             | Body::CapabilityExecute(_)
-            | Body::CapabilityExecutionResult(_),
+            | Body::CapabilityExecutionResult(_)
+            | Body::CapabilityReadBatchExecute(_)
+            | Body::CapabilityReadBatchAccepted(_)
+            | Body::CapabilityReadBatchResult(_),
         ) => Ok(()),
-        (
-            wire::TransportChannel::Control,
-            Body::BindAttemptChannel(_)
-            | Body::AttemptChannelBound(_)
-            | Body::HydrationManifest(_)
-            | Body::HydrationProgress(_)
-            | Body::HydrationChunk(_)
-            | Body::HydrationComplete(_)
-            | Body::HydrationCommitted(_)
-            | Body::ProviderStart(_)
-            | Body::ProviderAccepted(_)
-            | Body::ProviderCancel(_)
-            | Body::ProviderTextDelta(_)
-            | Body::ProviderThinkingDelta(_)
-            | Body::ProviderToolCall(_)
-            | Body::ProviderUsage(_)
-            | Body::ProviderTerminal(_)
-            | Body::EngineEventProposal(_)
-            | Body::EngineEventCommitted(_)
-            | Body::CapabilityPrepare(_)
-            | Body::CapabilityUpdate(_)
-            | Body::CapabilityExecute(_)
-            | Body::CapabilityExecutionResult(_),
-        )
-        | (
-            wire::TransportChannel::Data,
-            Body::AgentHello(_)
-            | Body::HostHello(_)
-            | Body::PrepareAttempt(_)
-            | Body::AttemptPrepared(_)
-            | Body::ActivateAttempt(_)
-            | Body::Heartbeat(_)
-            | Body::CancelAttempt(_)
-            | Body::FenceAttempt(_)
-            | Body::TerminalProposal(_)
-            | Body::TerminalCommitted(_)
-            | Body::Ack(_),
-        ) => Err(FrameValidationError::PayloadNotAllowed {
-            channel,
-            payload: payload_name(body),
-        }),
+        (wire::TransportChannel::Control | wire::TransportChannel::Data, _) => {
+            Err(FrameValidationError::PayloadNotAllowed {
+                channel,
+                payload: payload_name(body),
+            })
+        }
         (wire::TransportChannel::Management | wire::TransportChannel::Pulse, _) => {
             Err(FrameValidationError::DedicatedFrameRequired(channel))
         }
@@ -118,8 +92,14 @@ pub(super) const fn payload_name(body: &wire::frame_payload::Body) -> &'static s
         Body::HydrationComplete(_) => "HydrationComplete",
         Body::HydrationCommitted(_) => "HydrationCommitted",
         Body::ProviderStart(_) => "ProviderStart",
+        Body::ProviderRequestChunk(_) => "ProviderRequestChunk",
+        Body::ProviderRequestChunkAccepted(_) => "ProviderRequestChunkAccepted",
+        Body::ProviderRequestCommit(_) => "ProviderRequestCommit",
+        Body::ProviderCheckpoint(_) => "ProviderCheckpoint",
+        Body::ProviderCheckpointCommitted(_) => "ProviderCheckpointCommitted",
         Body::ProviderAccepted(_) => "ProviderAccepted",
         Body::ProviderCancel(_) => "ProviderCancel",
+        Body::ProviderEventConsumed(_) => "ProviderEventConsumed",
         Body::ProviderTextDelta(_) => "ProviderTextDelta",
         Body::ProviderThinkingDelta(_) => "ProviderThinkingDelta",
         Body::ProviderToolCall(_) => "ProviderToolCall",
@@ -131,5 +111,8 @@ pub(super) const fn payload_name(body: &wire::frame_payload::Body) -> &'static s
         Body::CapabilityUpdate(_) => "CapabilityUpdate",
         Body::CapabilityExecute(_) => "CapabilityExecute",
         Body::CapabilityExecutionResult(_) => "CapabilityExecutionResult",
+        Body::CapabilityReadBatchExecute(_) => "CapabilityReadBatchExecute",
+        Body::CapabilityReadBatchAccepted(_) => "CapabilityReadBatchAccepted",
+        Body::CapabilityReadBatchResult(_) => "CapabilityReadBatchResult",
     }
 }

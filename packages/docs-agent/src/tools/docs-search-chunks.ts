@@ -7,8 +7,9 @@
  *     agent uses these in follow-up `docs_read_chunk` calls).
  *   - Honors the optional `collections[]` scoping set on the run.
  */
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { DocHybridSearch } from '@mcp/services/services/docs/index.js';
 import { classifyConfidence } from '@mcp/services/services/docs/index.js';
 import type { ResolveContext } from '@mcp/services/pipelines/index.js';
@@ -71,7 +72,8 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
     mutates: false,
     parallelSafe: true,
     riskLevel: 'read',
-    handler: async (args): Promise<ToolResult> => {
+    handler: async (args, ctx): Promise<ToolResult> => {
+      ctx.signal?.throwIfAborted();
       if (deps.ledger && !deps.ledger.canSearch()) {
         return err(`search budget exhausted (${deps.ledger.maxSearches}); use the evidence already collected and finish.`);
       }
@@ -106,8 +108,11 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
               ? { rewrite: useRewrite, rerank: useRerank }
               : undefined,
           resolveContext: deps.resolveContext,
+          signal: ctx.signal,
         });
+        ctx.signal?.throwIfAborted();
       } catch (e) {
+        ctx.signal?.throwIfAborted();
         return err(`docs_search failed: ${e instanceof Error ? e.message : String(e)}`);
       }
 

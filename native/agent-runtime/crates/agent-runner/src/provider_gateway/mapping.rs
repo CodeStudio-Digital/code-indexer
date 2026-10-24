@@ -76,6 +76,8 @@ pub(super) fn map_wire_event(
                 capability_version: descriptor.capability_version.clone(),
                 execution_class,
                 mutates: descriptor.mutates,
+                parallel_safe: descriptor.parallel_safe,
+                read_only: descriptor.read_only,
                 encoded_arguments: value.encoded_json_arguments,
                 arguments_sha256,
                 provider_response_id: None,
@@ -117,26 +119,23 @@ fn map_terminal(
 ) -> Result<MappedProviderEvent, ProviderGatewayError> {
     let classification = wire::ProviderTerminalClassification::try_from(value.classification)
         .map_err(|_| ProviderGatewayError::InvalidProviderEvent("terminal classification"))?;
-    let terminal =
-        match classification {
-            wire::ProviderTerminalClassification::Completed => ProviderEvent::Completed {
-                response_id: value.response_id.ok_or(
-                    ProviderGatewayError::InvalidProviderEvent("completed response ID"),
-                )?,
-                response_message_count: value.response_message_count,
-            },
-            wire::ProviderTerminalClassification::Failed => ProviderEvent::Failed {
-                reason_code: value.reason_code,
-            },
-            wire::ProviderTerminalClassification::Cancelled => ProviderEvent::Interrupted {
-                reason_code: value.reason_code,
-            },
-            wire::ProviderTerminalClassification::Unspecified => {
-                return Err(ProviderGatewayError::InvalidProviderEvent(
-                    "unspecified terminal classification",
-                ));
-            }
-        };
+    let terminal = match classification {
+        wire::ProviderTerminalClassification::Completed => ProviderEvent::Completed {
+            response_id: value.response_id,
+            response_message_count: value.response_message_count,
+        },
+        wire::ProviderTerminalClassification::Failed => ProviderEvent::Failed {
+            reason_code: value.reason_code,
+        },
+        wire::ProviderTerminalClassification::Cancelled => ProviderEvent::Interrupted {
+            reason_code: value.reason_code,
+        },
+        wire::ProviderTerminalClassification::Unspecified => {
+            return Err(ProviderGatewayError::InvalidProviderEvent(
+                "unspecified terminal classification",
+            ));
+        }
+    };
     if let Some(usage) = value.final_usage.as_ref() {
         Ok(MappedProviderEvent {
             event: ProviderEvent::Usage(map_usage(usage)),

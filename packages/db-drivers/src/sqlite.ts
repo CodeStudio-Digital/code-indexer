@@ -8,6 +8,7 @@
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { assertDatabaseDispatch } from './dispatch.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
   ColumnInfo,
@@ -43,10 +44,17 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
     try {
       const stmt = db.prepare(sql);
       if (stmt.reader) {
-        const all = stmt.all(...params) as Array<Record<string, unknown>>;
-        const truncated = all.length > max;
+        const rows: Array<Record<string, unknown>> = [];
+        let rowCount = 0;
+        // Read only one extra row to prove truncation. RETURNING statements
+        // must still finish their mutation, but retain only the requested rows.
+        for (const row of stmt.iterate(...params)) {
+          rowCount++;
+          if (rows.length < max) rows.push(row as Record<string, unknown>);
+          if (stmt.readonly && rowCount > max) break;
+        }
         const fields = (stmt.columns() as Array<{ name: string }>).map((c) => ({ name: c.name }));
-        return { rows: truncated ? all.slice(0, max) : all, rowCount: all.length, fields, truncated };
+        return { rows, rowCount, fields, truncated: rowCount > max };
       }
       const info = stmt.run(...params);
       return { rows: [], rowCount: info.changes, fields: [], command: 'OK' };
@@ -64,6 +72,7 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
   function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     try {
+      assertDatabaseDispatch(opts);
       return Promise.resolve(execStatement(sql, (opts.params ?? []) as unknown[], max));
     } catch (err) {
       return Promise.reject(err);
@@ -76,10 +85,12 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
     // transaction so a mid-list failure rolls back instead of leaving a partial apply.
     let inTxn = false;
     try {
+      opts.signal?.throwIfAborted();
       db.exec('BEGIN');
       inTxn = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
       for (let index = 0; index < statements.length; index += 1) {
+        opts.signal?.throwIfAborted();
         const stmt = statements[index];
         last = execStatement(
           typeof stmt === 'string' ? stmt : stmt.sql,
@@ -88,6 +99,7 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
         );
         opts.onResult?.(last, index);
       }
+      opts.signal?.throwIfAborted();
       db.exec('COMMIT');
       inTxn = false;
       return Promise.resolve(last);

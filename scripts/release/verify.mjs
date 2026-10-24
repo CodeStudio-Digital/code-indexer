@@ -12,7 +12,7 @@ import path from 'node:path';
 import { checkAsarClosure } from './asar-closure.mjs';
 
 /** Entry points the packaged app actually boots from. */
-const ENTRY_POINTS = ['dist/apps/electron/main.js', 'dist/apps/http-api/server.js'];
+const ENTRY_POINTS = ['dist/apps/electron/main.js', 'dist/apps/http-api/server.js', 'dist/apps/cli/index.js'];
 
 function electronBinary(root) {
   const require = createRequire(path.join(root, 'package.json'));
@@ -47,7 +47,7 @@ export function runSmokeProbes(root, resourcesDir) {
     !report.harnessError &&
     report.renderer?.ok === true &&
     report.deepLink?.ok === true &&
-    report.indexer?.ok === true;
+    report.indexer?.ok === true && report.apiScripts?.ok === true && report.webContent?.ok === true && report.agentLsp?.ok === true;
   return { ok, report };
 }
 
@@ -96,6 +96,12 @@ export function verifyBuild(root, outputDir) {
       ok: r.indexer?.ok === true,
       detail: r.indexer?.ok ? 'tree-sitter loads wasm from asar in a worker' : (r.indexer?.error ?? 'failed'),
     });
+    checks.push({ name: 'API script execution', ok: r.apiScripts?.ok === true,
+      detail: r.apiScripts?.ok ? 'QuickJS WASM executes pm.* inside a terminated worker' : (r.apiScripts?.error ?? 'failed') });
+    checks.push({ name: 'Web content conversion', ok: r.webContent?.ok === true,
+      detail: r.webContent?.ok ? 'HTML converts to markdown in a terminated worker' : (r.webContent?.error ?? 'failed') });
+    checks.push({ name: 'Agent code navigation', ok: r.agentLsp?.ok === true,
+      detail: r.agentLsp?.ok ? 'Packaged TS detects a type error; native Jobs reap warm close and eight bootstrap cancellation timings' : (r.agentLsp?.error ?? 'failed') });
   }
 
   return { ok: checks.every((c) => c.ok), checks };

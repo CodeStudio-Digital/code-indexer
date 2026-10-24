@@ -1,6 +1,6 @@
 import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import { AttemptCorrelationAuthority } from './AttemptCorrelationAuthority.js';
-import { AttemptFrameReceiver } from './AttemptFrameReceiver.js';
+import { AttemptFrameReceiver, MAX_TRACKED_MESSAGE_IDS } from './AttemptFrameReceiver.js';
 import { mintNegotiatedSeed } from './AttemptFrameSeed.js';
 import type { EstablishedAttemptChannel } from './EstablishedAttemptChannel.js';
 import { handoffEstablishedAttemptChannel } from './EstablishedAttemptChannelHandoff.js';
@@ -40,7 +40,9 @@ export function constructHostDataAttemptChannel(
     bootstrapBinding: {},
   }), {
     replayCapacity,
-    totalIdentityCapacity: provision.maxIpcFrames,
+    // Match the runner Data protocol lifetime quota; maxIpcFrames bounds
+    // outstanding requests, not the number of messages in the connection.
+    totalIdentityCapacity: MAX_TRACKED_MESSAGE_IDS,
     maxReplayBytes: Number(context.limits.maxFrameBytes) * replayCapacity,
   }, correlations);
   const sender = new OutboundHeaderAuthority({

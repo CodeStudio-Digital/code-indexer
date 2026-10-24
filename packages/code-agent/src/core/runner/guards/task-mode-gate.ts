@@ -17,7 +17,7 @@
  * Pure: same inputs → same verdict. Same family as `checkDupCall` and
  * `checkDoomLoop` — fits naturally into the dispatch gate chain.
  */
-import type { TaskExecutionMode } from '@mcp/code-agent/sessions/types.js';
+import type { TaskExecutionMode } from '@mcp/session-storage/session-state-types.js';
 
 export interface TaskGateState {
   approved: boolean;

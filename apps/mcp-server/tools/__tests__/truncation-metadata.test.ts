@@ -47,6 +47,11 @@ describe('MCP producer truncation metadata', () => {
     }));
     const ctx = context(root, {
       getFile: () => undefined,
+      getAgentFileSkeleton: (_id: number, _path: string, page: { offset: number; limit: number }) => ({
+        file: undefined, files: files.length, total: files.length, offset: page.offset, nextOffset: page.offset + page.limit,
+        symbols: files.slice(page.offset, page.offset + page.limit).map(f => ({ file_path: f.path,
+          line: 1, kind: 'function', parent: null, name: `fn_${f.path}`, signature: '()', stable_id: null })),
+      }),
       listFiles: () => files,
       getSymbolsByFile: (_projectId: number, path: string) => [{
         line: 1,
@@ -129,30 +134,28 @@ describe('MCP producer truncation metadata', () => {
 
   it('reports caller and test caps from prepare_edit with exact totals', async () => {
     const root = tempRoot();
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'target.ts'), 'export function target() {}');
     const symbol = {
       id: 1,
       project_id: 7,
       name: 'target',
       kind: 'function',
       file_path: 'src/target.ts',
-      line: null,
+      line: 1,
       stable_id: 'sym:target',
       signature: 'target()',
     };
     const callers = Array.from({ length: 3 }, (_, index) => ({
-      referencing_file_path: `src/caller-${index}.ts`, line: index + 1, context: 'target()',
+      file_path: `src/caller-${index}.ts`, line: index + 1, context: 'target()',
     }));
     const tests = Array.from({ length: 7 }, (_, index) => ({
       source_file_path: `test/target-${index}.test.ts`, import_path: '../src/target',
     }));
     const ctx = context(root, {
-      findSymbolByName: () => symbol,
-      getSymbolCallers: () => callers,
-      getSymbolsByFile: () => [],
-      getFile: (_projectId: number, path: string) => path === 'src/target.ts'
-        ? { id: 1, dependencies: '[]' }
-        : { id: 100, is_test: 1 },
-      getDependents: () => tests,
+      listAgentSymbolDefinitions: () => ({ total: 1, items: [symbol] }),
+      listAgentSymbolReferences: (_id: number, _name: string, page: { offset: number; limit: number }) => ({ total: callers.length, items: callers.slice(page.offset, page.offset + page.limit) }),
+      getAgentEditContext: () => ({ indexed: true, neighbors: [], imports: { total: 0, items: [] }, tests: { total: tests.length, items: tests.slice(0, 5).map(t => t.source_file_path) } }),
     });
     const tool = symbolTools.find((entry) => entry.name === 'prepare_edit')!;
 
@@ -183,8 +186,8 @@ describe('MCP producer truncation metadata', () => {
       Array.from({ length: 60 }, (_, index) => `target(); // ${index}`).join('\n'),
     );
     const ctx = context(root, {
-      findSymbolsByName: () => [],
-      getSymbolCallers: () => [],
+      listAgentSymbolDefinitions: () => ({ items: [], total: 0 }),
+      listAgentSymbolReferences: () => ({ items: [], total: 0 }),
       listFiles: () => [{ path: 'src/callers.ts' }],
     });
     const tool = symbolTools.find((entry) => entry.name === 'find_references')!;
@@ -214,7 +217,8 @@ describe('MCP producer truncation metadata', () => {
       file: `src/caller-${index}.ts`, line: index + 1, symbols_in_file: [], callers: [],
     }));
     const ctx = context(root, {
-      traceSymbolUsage: () => ({ symbol: 'target', defined_in: 'src/target.ts:1', callers }),
+      traceSymbolUsage: () => ({ symbol: 'target', defined_in: 'src/target.ts:1', callers: callers.slice(0, 5),
+        truncations: [{ symbol: 'target', total: 6, shown: 5, reason: 'breadth_limit' }], visited_nodes: 5, max_depth: 3, definition_count: 1 }),
     });
     const tool = symbolTools.find((entry) => entry.name === 'trace_usage')!;
 
@@ -236,7 +240,9 @@ describe('MCP producer truncation metadata', () => {
       line: 1,
       stable_id: `target:${index}`,
     }));
-    const ctx = context(root, { findSymbolsByName: () => candidates });
+    const ctx = context(root, { listAgentSymbolDefinitions: (_id: number, _name: string, _path: string | undefined, page: { offset: number; limit: number }) => ({
+      items: candidates.slice(page.offset, page.offset + page.limit), total: candidates.length,
+    }) });
     const tool = symbolTools.find((entry) => entry.name === 'get_symbol_body')!;
 
     const result = normalized(await tool.handler({

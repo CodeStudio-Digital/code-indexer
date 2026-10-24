@@ -4,7 +4,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{ProviderDataClient, ProviderDataClock, ProviderDataError, ProviderDataTiming};
 
-mod validation;
+#[cfg(test)]
+mod tests;
+pub(super) mod validation;
 
 use validation::{validate_execute, validate_execution_result, validate_prepare, validate_update};
 
@@ -22,7 +24,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
         clock: &C,
     ) -> Result<wire::CapabilityUpdate, ProviderDataError> {
         validate_prepare(&prepare, &self.identity, &self.runtime_instance_id)?;
-        let deadline = prepare.deadline_at_unix_ms;
+        if timing.settlement_deadline_at_unix_ms < prepare.deadline_at_unix_ms {
+            return Err(ProviderDataError::InvalidRequest(
+                "settlement deadline precedes preparation",
+            ));
+        }
+        let deadline = timing.settlement_deadline_at_unix_ms;
         let operation_id = prepare.operation_id.clone();
         let tool_use_id = prepare.tool_use_id.clone();
         let payload = wire::FramePayload {
@@ -73,7 +80,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
                 return Err(ProviderDataError::ForeignCommitReceipt);
             }
             self.advance_provider_event(&event)?;
-            self.buffered_events.push_back(event);
+            self.buffer_event(event)?;
         }
     }
 
@@ -90,7 +97,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
         clock: &C,
     ) -> Result<wire::CapabilityExecutionResult, ProviderDataError> {
         validate_execute(&execute, &self.identity, &self.runtime_instance_id)?;
-        let deadline = execute.deadline_at_unix_ms;
+        if timing.settlement_deadline_at_unix_ms < execute.deadline_at_unix_ms {
+            return Err(ProviderDataError::InvalidRequest(
+                "settlement deadline precedes execution",
+            ));
+        }
+        // The body still fences effects at their original deadline. Only the
+        // request envelope remains live long enough to acknowledge cancellation.
+        let deadline = timing.settlement_deadline_at_unix_ms;
         let operation_id = execute.operation_id.clone();
         let tool_use_id = execute.tool_use_id.clone();
         let grant_id = execute.grant_id.clone();
@@ -145,7 +159,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
                 return Err(ProviderDataError::ForeignCommitReceipt);
             }
             self.advance_provider_event(&event)?;
-            self.buffered_events.push_back(event);
+            self.buffer_event(event)?;
         }
     }
 }

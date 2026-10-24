@@ -29,16 +29,11 @@ import {
   calculateSessionMetricsSummary,
   canonicalJson,
   CompanySessionRepository,
-  DesignSystemSessionRepository,
   EntityFileRepository,
-  SpriteSessionRepository,
   type ArtifactRef,
   type ConversationCommit,
   type SessionMetadata,
 } from './session-storage-adapter.js';
-import {
-  assertProjectDesignSystemLinksUseUuid,
-} from './design-system-links.js';
 
 export interface BundleVerification {
   bundlePath: string;
@@ -445,13 +440,6 @@ export async function smokeOperationalBundleRepositories(
     'deployment',
     'archive',
   ] as const;
-  const spriteKinds = [
-    'asset',
-    'version',
-    'job',
-    'animation',
-    'frame',
-  ] as const;
   for (const plan of plans) {
     const bundlePath = existsSync(plan.finalDir)
       ? plan.finalDir
@@ -480,27 +468,6 @@ export async function smokeOperationalBundleRepositories(
         sessionRoot: bundlePath,
       });
       for (const kind of companyKinds) await repository.list(kind);
-      continue;
-    }
-    if (plan.identity.kind === 'sprite') {
-      const repository = new SpriteSessionRepository({
-        sessionRoot: bundlePath,
-      });
-      const project = await repository.getProject(plan.uuid);
-      if (!project) {
-        throw new Error(`Sprite bundle has no canonical project entity: ${bundlePath}`);
-      }
-      for (const kind of spriteKinds) await repository.list(kind);
-      continue;
-    }
-    if (plan.identity.kind === 'design') {
-      const repository = new DesignSystemSessionRepository({
-        sessionRoot: bundlePath,
-      });
-      const versions = await repository.listVersions();
-      for (const version of versions) {
-        await repository.listComponents(version.id);
-      }
       continue;
     }
     if (plan.identity.kind !== 'coder') continue;
@@ -616,7 +583,6 @@ export function assertCleanDatabase(db: SqliteDatabase): void {
   }));
   const violations = findForbiddenSessionSchema(schema);
   if (violations.length > 0) throw new Error(`clean DB schema violations:\n${violations.join('\n')}`);
-  assertProjectDesignSystemLinksUseUuid(db);
 }
 
 export function assertPostCutWriteGuards(db: SqliteDatabase): void {

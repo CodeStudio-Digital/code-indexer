@@ -50,6 +50,7 @@ pub fn kind_from_wire(value: i32) -> Result<store::SessionRecordKind, store::Ses
         wire::SessionRecordKind::Memory => Ok(store::SessionRecordKind::Memory),
         wire::SessionRecordKind::Subagent => Ok(store::SessionRecordKind::Subagent),
         wire::SessionRecordKind::Archive => Ok(store::SessionRecordKind::Archive),
+        wire::SessionRecordKind::Attachment => Ok(store::SessionRecordKind::Attachment),
         wire::SessionRecordKind::Unspecified => Err(store::SessionStoreError::CorruptJournal),
     }
 }
@@ -67,6 +68,7 @@ pub const fn kind_to_wire(value: store::SessionRecordKind) -> i32 {
         store::SessionRecordKind::Memory => wire::SessionRecordKind::Memory,
         store::SessionRecordKind::Subagent => wire::SessionRecordKind::Subagent,
         store::SessionRecordKind::Archive => wire::SessionRecordKind::Archive,
+        store::SessionRecordKind::Attachment => wire::SessionRecordKind::Attachment,
     };
     value as i32
 }

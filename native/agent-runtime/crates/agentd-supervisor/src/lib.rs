@@ -13,6 +13,7 @@
 )]
 mod admission;
 pub mod management;
+pub use agent_lifecycle_store as lifecycle_outbox;
 #[cfg(windows)]
 pub mod process;
 #[allow(

@@ -4,12 +4,14 @@ import { getTsServiceForFile, isTsFile } from '@mcp/code-agent/lsp/ts-service.js
 import { getGlobalAgentLspBackend, type AgentLspLocation } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
 import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 import { existsSync } from 'node:fs';
+import { ownedLspQuery } from './lsp-owned-query.js';
+import type { AgentLspQuery } from '../ports/lsp-port.js';
 
 /**
  * LSP tools — multi-language.
  *
- * TS/JS run on the in-process TypeScript language service (same engine as
- * tsserver, zero IPC). Every OTHER language routes through the global
+ * TS/JS use TypeScript in an attempt-owned worker when the host supplies an
+ * LSP port; legacy callers retain the existing service. Other languages use the
  * AgentLspBackend (wired by the host): installed LSP servers
  * (PHP/Intelephense, Python/Pyright, …) when available, otherwise the
  * structural-index fallback (tree-sitter symbols with exact line/col).
@@ -25,6 +27,7 @@ function viaBackend(
   file: { rel: string; rootPath: string; projectName: string },
   line: number,
   column: number,
+  signal?: AbortSignal,
 ): Promise<AgentLspLocation[] | { contents: string } | null> | null {
   const backend = getGlobalAgentLspBackend();
   if (!backend) return null;
@@ -34,7 +37,8 @@ function viaBackend(
     file: file.rel,
     position: { line, column },
   };
-  return backend[op](input) as Promise<AgentLspLocation[] | { contents: string } | null>;
+  signal?.throwIfAborted();
+  return backend[op](input, signal) as Promise<AgentLspLocation[] | { contents: string } | null>;
 }
 
 function formatLocations(kind: string, locs: AgentLspLocation[], origin: string): string {
@@ -71,7 +75,7 @@ function formatPosition(p: { file: string; line: number; column: number }): stri
 const lspDefinition: CoderTool = {
   name: 'lsp_definition',
   description:
-    'Go to definition: find where a symbol is declared. TS/JS use the in-process TypeScript service; other languages (PHP, Python, Go, …) route through installed language servers or the structural index.\n' +
+    'Go to definition: find where a symbol is declared. TS/JS use the TypeScript service; other languages (PHP, Python, Go, …) route through installed language servers or the structural index.\n' +
     "USE: to jump from a call site / reference to the actual declaration of a function, class, type, or variable.\n" +
     "USE: as a faster alternative to mcp__get_symbol_body when you have a precise (line, column) already.\n" +
     "DON'T: use without knowing the exact line/column — call mcp__grep_code or mcp__search first.\n" +
@@ -97,7 +101,7 @@ const lspDefinition: CoderTool = {
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
     if (!isTsFile(file)) {
-      const call = viaBackend('definition', resolved, line, column);
+      const call = viaBackend('definition', resolved, line, column, ctx.signal);
       if (!call) return err(`lsp_definition: no multi-language backend wired in this context — use mcp__find_references for ${file}`);
       const locs = (await call) as AgentLspLocation[] | null;
       if (!locs || locs.length === 0) return ok(`No definition found at ${resolved.rel}:${line}:${column}`);
@@ -121,7 +125,7 @@ const lspDefinition: CoderTool = {
 const lspReferences: CoderTool = {
   name: 'lsp_references',
   description:
-    'Find all references to a symbol using the in-process TypeScript language service.\n' +
+    'Find all references to a symbol using the TypeScript language service.\n' +
     "USE: to answer 'where is this used?' across the whole project — semantically, not textually.\n" +
     "USE: before renaming/removing a symbol, to audit impact.\n" +
     "DON'T: use grep/mcp__grep_code for this — grep matches text, LSP matches the actual symbol, so it skips comments, shadowed names, and identically-named symbols in other scopes.\n" +
@@ -148,7 +152,7 @@ const lspReferences: CoderTool = {
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
     if (!isTsFile(file)) {
-      const call = viaBackend('references', resolved, line, column);
+      const call = viaBackend('references', resolved, line, column, ctx.signal);
       if (!call) return err(`lsp_references: no multi-language backend wired in this context — use mcp__find_references for ${file}`);
       const locs = (await call) as AgentLspLocation[] | null;
       if (!locs || locs.length === 0) return ok(`No references found for symbol at ${resolved.rel}:${line}:${column}`);
@@ -204,7 +208,7 @@ const lspHover: CoderTool = {
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
     if (!isTsFile(file)) {
-      const call = viaBackend('hover', resolved, line, column);
+      const call = viaBackend('hover', resolved, line, column, ctx.signal);
       if (!call) return err(`lsp_hover: no multi-language backend wired in this context — use mcp__get_symbol_body for ${file}`);
       const hover = (await call) as { contents: string } | null;
       if (!hover?.contents) return ok(`No symbol info at ${resolved.rel}:${line}:${column}`);
@@ -267,4 +271,18 @@ const lspDiagnostics: CoderTool = {
   },
 };
 
-export const lspTools: CoderTool[] = [lspDefinition, lspReferences, lspHover, lspDiagnostics];
+export const lspTools: CoderTool[] = [lspDefinition, lspReferences, lspHover, lspDiagnostics].map(tool => ({
+  ...tool, mutates: false, parallelSafe: false, riskLevel: 'read',
+  parameters: { ...tool.parameters, properties: { ...tool.parameters.properties,
+    offset: { type: 'number', description: 'Result page offset for the native worker (default 0).' },
+    limit: { type: 'number', description: 'Results per native-worker page (default 200, max 500).' },
+  } },
+  handler: async (args, ctx) => {
+    const op = tool.name.slice(4) as AgentLspQuery['op'];
+    if (ctx.ports?.lsp) return ownedLspQuery(op, args, ctx);
+    if (op !== 'diagnostics' && (!Number.isSafeInteger(Number(args.line)) || Number(args.line) < 1
+      || !Number.isSafeInteger(Number(args.column)) || Number(args.column) < 1)) return err('line and column must be positive integers (1-based)');
+    ctx.signal?.throwIfAborted();
+    const result = await tool.handler(args, ctx); ctx.signal?.throwIfAborted(); return result;
+  },
+}));

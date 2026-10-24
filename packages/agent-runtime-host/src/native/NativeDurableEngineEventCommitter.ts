@@ -1,7 +1,21 @@
+import { nativeSessionRecoveryStore } from './NativeSessionRecoveryStore.js';
+import { commitNativeSessionAttachment } from './NativeSessionAttachments.js';
+import type { ProviderArtifactReaderPort } from '../provider-gateway/ProviderGatewayTypes.js';
+import type { agentV1Artifact } from '@mcp/agent-runtime-contracts';
+import { engineRecordStorage } from '../ipc/EngineContentRecord.js';
+import { NativeCommittedEventStream } from './NativeCommittedEventStream.js';
+import { NativeContentAssembler } from './NativeContentAssembler.js';
+import { replayNativeCommittedEvents } from './NativeCommittedEventReplay.js';
+import { NativeEngineCompletion } from './NativeEngineCompletion.js';
+import { NativeProviderFrontierWriter } from './NativeProviderFrontierWriter.js';
+import { NativeWriterHistoryReads } from './NativeWriterHistoryReads.js';
+import type { EngineEventRecoveryStorePort } from './NativeEngineEventRecovery.js';
+import { inspectProviderFrontier } from './NativeProviderFrontierRecovery.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { clone, create, toBinary } from '@bufbuild/protobuf';
 import {
   agentV1SessionStore,
+  type agentV1Runtime,
 } from '@mcp/agent-runtime-contracts';
 import type {
   DurableEngineEventCommitPort,
@@ -37,12 +51,46 @@ export interface NativeDurableEngineEventCommitterOptions {
 
 export class NativeDurableEngineEventCommitter
 implements DurableEngineEventCommitPort {
+  private readonly frontiers: NativeProviderFrontierWriter;
+  private readonly completion = new NativeEngineCompletion();
+  private readonly events: NativeCommittedEventStream;
+  private readonly content = new NativeContentAssembler();
+  private validatedSequence = 0n;
+  private readonly historyReads = new NativeWriterHistoryReads();
+
+  readCommittedHistory<T>(project: (store: EngineEventRecoveryStorePort) => Promise<T>): Promise<T | undefined> {
+    return this.historyReads.read(() => nativeSessionRecoveryStore(this.client, this.writerHandle,
+      this.sessionId, this.authority), project);
+  }
+
+  waitForTerminal() { return this.completion.settled; }
+  get latestSequence() { return this.events.latestSequence; }
+  subscribeCommittedEvents(afterSequence = 0n, signal?: AbortSignal) {
+    return this.events.subscribe(afterSequence, signal);
+  }
+  replayCommittedEvents(afterSequence = 0n, maximumRecords = 100_000, signal?: AbortSignal) {
+    return replayNativeCommittedEvents(
+      nativeSessionRecoveryStore(this.client, this.writerHandle, this.sessionId, this.authority),
+      this.sessionId, afterSequence, maximumRecords, signal);
+  }
+  afterEngineEventAcknowledged(record: agentV1SessionStore.EngineEventRecordV1,
+    receipt: agentV1SessionStore.CommitSessionRecordReceipt): void {
+    if (receipt.replay && receipt.globalSequence <= this.events.latestSequence) return;
+    this.events.publish(record, receipt);
+    this.completion.acknowledge(record);
+    if (record.body.case === 'terminal') this.events.close();
+  }
+
   private constructor(
     private readonly client: NativeSessionStoreBridgeClient,
     private readonly writerHandle: string,
     private readonly sessionId: string,
     private readonly authority: agentV1SessionStore.SessionStoreAuthority,
-  ) {}
+    committedRecords: bigint,
+  ) {
+    this.frontiers = new NativeProviderFrontierWriter(client, writerHandle, sessionId, authority);
+    this.events = new NativeCommittedEventStream(512, 8 * 1024 * 1024, committedRecords);
+  }
 
   static async open(
     binding: NativeHostBridgeBinding,
@@ -83,6 +131,7 @@ implements DurableEngineEventCommitPort {
         body.value.writerHandle,
         options.sessionId,
         clone(agentV1SessionStore.SessionStoreAuthoritySchema, options.authority),
+        body.value.committedRecords,
       );
     } catch (cause) {
       await client.close().catch(() => undefined);
@@ -109,8 +158,7 @@ implements DurableEngineEventCommitPort {
           request.identity.attemptId,
           request.record.localSequence,
         ),
-        kind: agentV1SessionStore.SessionRecordKind.LIFECYCLE_EVENT,
-        durability: durability(request.record),
+        ...engineRecordStorage(request.record),
         encodedPayload: payload,
         expectedPayloadSha256: payloadSha256,
       }),
@@ -118,52 +166,42 @@ implements DurableEngineEventCommitPort {
     if (body.case !== 'commitSessionRecordReceipt') {
       throw new Error('native session commit receipt is missing');
     }
+    if (body.value.globalSequence > this.validatedSequence) {
+      if (request.record.body.case === 'content') this.content.append(request.record.body.value);
+      else this.content.assertComplete();
+      this.validatedSequence = body.value.globalSequence;
+    }
     return body.value;
   }
 
   async inspectUnresolvedCapabilityDispatches(
     maximumRecords: number,
   ): Promise<readonly UnresolvedCapabilityDispatch[]> {
-    return inspectUnresolvedCapabilityDispatches({
-      list: async (afterGlobalSequence, maximumPageRecords) => {
-        const body = await this.client.request({
-          case: 'listCommittedSessionRecords',
-          value: create(agentV1SessionStore.ListCommittedSessionRecordsSchema, {
-            writerHandle: this.writerHandle,
-            authority: this.authority,
-            afterGlobalSequence,
-            maxRecords: maximumPageRecords,
-          }),
-        });
-        if (body.case !== 'committedSessionRecordPage'
-          || body.value.sessionId !== this.sessionId) {
-          throw new Error('native session record page is missing or foreign');
-        }
-        return body.value;
-      },
-      read: async (receipt) => {
-        const body = await this.client.request({
-          case: 'readCommittedSessionPayload',
-          value: create(agentV1SessionStore.ReadCommittedSessionPayloadSchema, {
-            writerHandle: this.writerHandle,
-            authority: this.authority,
-            operationId: receipt.operationId,
-            kind: receipt.kind,
-            expectedPayloadSha256: receipt.payloadSha256,
-            expectedPayloadBytes: receipt.payloadBytes,
-          }),
-        });
-        if (body.case !== 'committedSessionPayload'
-          || !body.value.commitReceipt
-          || !sameReceipt(body.value.commitReceipt, receipt)) {
-          throw new Error('native committed session payload receipt diverged');
-        }
-        return body.value.encodedPayload;
-      },
-    }, this.sessionId, maximumRecords);
+    return inspectUnresolvedCapabilityDispatches(
+      nativeSessionRecoveryStore(this.client, this.writerHandle, this.sessionId, this.authority),
+      this.sessionId, maximumRecords,
+    );
+  }
+
+  inspectProviderFrontier(agentRunId: string, maximumRecords: number) {
+    return inspectProviderFrontier(
+      nativeSessionRecoveryStore(this.client, this.writerHandle, this.sessionId, this.authority),
+      this.sessionId, agentRunId, maximumRecords,
+    );
+  }
+
+  commitProviderFrontier(start: agentV1Runtime.ProviderStart, signal: AbortSignal): Promise<void> {
+    return this.frontiers.commit(start, signal);
+  }
+
+  commitAttachment(reference: agentV1Artifact.ArtifactRef, reader: ProviderArtifactReaderPort, signal: AbortSignal): Promise<void> {
+    return commitNativeSessionAttachment(this.client, this.writerHandle, this.authority, this.sessionId, reference, reader, signal);
   }
 
   async close(): Promise<void> {
+    await this.historyReads.close();
+    this.events.close();
+    this.completion.close();
     try {
       await this.client.request({
         case: 'closeSessionWriter',
@@ -193,18 +231,6 @@ function eventOperationId(attemptId: string, sequence: bigint): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function durability(record: agentV1SessionStore.EngineEventRecordV1) {
-  if (record.body.case === 'providerDelta') {
-    return agentV1SessionStore.SessionDurabilityClass.COALESCED;
-  }
-  return record.body.case === 'capabilityBoundary'
-    || record.body.case === 'capabilityDispatchStarted'
-    || record.body.case === 'capabilityTerminal'
-    || record.body.case === 'terminal'
-    ? agentV1SessionStore.SessionDurabilityClass.AUTHORITATIVE
-    : agentV1SessionStore.SessionDurabilityClass.DURABLE;
-}
-
 function sameAuthority(
   actual: agentV1SessionStore.SessionStoreAuthority | undefined,
   expected: agentV1SessionStore.SessionStoreAuthority,
@@ -218,18 +244,4 @@ function sameDigest(actual: Uint8Array, expected: Uint8Array): boolean {
   return actual.byteLength === 32
     && expected.byteLength === 32
     && timingSafeEqual(actual, expected);
-}
-
-function sameReceipt(
-  actual: agentV1SessionStore.CommitSessionRecordReceipt,
-  expected: agentV1SessionStore.CommitSessionRecordReceipt,
-): boolean {
-  return actual.sessionId === expected.sessionId
-    && actual.operationId === expected.operationId
-    && actual.globalSequence === expected.globalSequence
-    && actual.kind === expected.kind
-    && actual.durability === expected.durability
-    && actual.payloadBytes === expected.payloadBytes
-    && sameDigest(actual.payloadSha256, expected.payloadSha256)
-    && sameDigest(actual.commitSha256, expected.commitSha256);
 }

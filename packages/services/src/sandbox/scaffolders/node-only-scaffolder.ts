@@ -6,12 +6,6 @@
  * (via the standard `mcp-sandbox-node:20` image), and `tail -f /dev/null`
  * keeping it alive (CliOciDriver default).
  *
- * Used by Design System Creator sessions, which do NOT want the Vite
- * scaffold polluting `/app` (the virtual project root holds the
- * uploaded theme at `/app/design_system/` plus the agent's emitted
- * package at `/app/pkg/` — running `npm create vite` here would
- * sprinkle a competing React app at the root).
- *
  * Just emits a single progress event and resolves so the manager can
  * flip the sandbox status to `ready`.
  */

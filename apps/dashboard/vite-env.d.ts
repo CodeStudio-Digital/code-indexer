@@ -31,7 +31,7 @@ declare global {
      * Returns immediately; iteration waits on a MessagePort transferred
      * from main.
      */
-    openStream: <T = unknown>(methodPath: string, payload: unknown) => AsyncIterable<T>;
+    openStream: <T = unknown>(methodPath: string, payload: unknown) => import('@mcp/shared/utils/serializable-stream.js').SerializableAsyncIterator<T>;
     /** Quick check: is the given dotted path registered as a stream endpoint? */
     isStreamingPath: (methodPath: string) => boolean;
     /** Open a duplex MessagePort against an IPC stream channel. Used by terminal. */

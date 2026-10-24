@@ -407,54 +407,6 @@ const CATALOG_SEED: CatalogSeed[] = [
     introducedInPhase: 'editor-autocomplete',
   },
 
-  // ─── Sprite Studio (2D sprite generation) ────────────────────────────────
-  // Powers the Sprite Studio surface (/sprites) and the sprite_* agent tools.
-  // The image_gen binding picks WHICH image model generates/edits sprites —
-  // image models are the provider rows discovered with mode='image' (families:
-  // gpt-image-*, dall-e-*, gemini *-image / nano banana). Never pin a version
-  // here: bind the best image model your provider currently discovers.
-  {
-    pipelineName: 'sprite-studio',
-    bindingRole: 'image_gen',
-    description:
-      'Image model that generates and edits sprites (txt2img + reference-conditioned edits). ' +
-      'Pick a model row with mode=image — e.g. the newest gpt-image-* on OpenAI (native transparency + mask inpaint) ' +
-      'or the newest Gemini image / nano banana model (best cheap character consistency). ' +
-      'Add more bindings as failover links; the job runner skips links that lack a required capability ' +
-      '(e.g. edit-with-references). Config knobs: size, quality, n.',
-    recommendedDefault: {
-      providerKind: 'openai',
-      modelHint: 'newest gpt-image-* discovered (mode=image)',
-      config: { size: '1024x1024', quality: 'medium' },
-    },
-    introducedInPhase: 'sprite-studio',
-  },
-  {
-    pipelineName: 'sprite-studio',
-    bindingRole: 'prompt_expander',
-    description:
-      'Cheap text LLM that fuses the user intent + the sprite project style profile (palette, perspective, ' +
-      'outline, proportions) into the final image prompt. Unset = deterministic template fallback (intent + style suffix).',
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.1-8b-instruct',
-      config: { temperature: 0.2, max_tokens: 500 },
-    },
-    introducedInPhase: 'sprite-studio',
-  },
-  {
-    pipelineName: 'sprite-studio',
-    bindingRole: 'vision',
-    description:
-      'Vision model for character-consistency audits ("same character? list differences") against the asset\'s ' +
-      'anchor reference. Unset = falls back to the code-agent vision binding.',
-    recommendedDefault: {
-      providerKind: 'openai',
-      modelHint: 'gpt-4o-mini',
-      config: { temperature: 0, max_tokens: 800 },
-    },
-    introducedInPhase: 'sprite-studio',
-  },
 ];
 
 /**

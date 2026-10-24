@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { asSessionId } from '@mcp/session-storage';
 import type { SessionWorkbenchCommand } from '@mcp/api-bus';
-import type { FsSessionEvent } from '@mcp/code-agent/sessions/fs-store/operational-types.js';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
+import type { FsSessionEvent } from '@mcp/session-storage/fs-store/operational-types.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerDeps } from '../../../../deps.js';
 import { SessionWorkbenchCommandService } from '../command-service.js';

@@ -183,9 +183,5 @@ export function buildProviderPluginDefinition(
     createCoder(creds, model, opts) {
       return new PluginChatProvider(ref, spec.kind, creds, model ?? defaultModel, opts, hostDefinition);
     },
-    // Image generation remains a host-owned wire implementation. V2 provider
-    // adapters own credentials/auth/discovery, but must not erase optional host
-    // client surfaces when their declarative spec opts into them.
-    createImages: hostDefinition.createImages,
   };
 }

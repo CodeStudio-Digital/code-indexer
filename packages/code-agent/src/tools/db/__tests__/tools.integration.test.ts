@@ -66,6 +66,20 @@ describe('db_list', () => {
   });
 });
 
+describe('agent database pool isolation', () => {
+  it('does not close another connection whose numeric id shares a prefix', async () => {
+    const { acquireAgentDriver, agentPoolKey } = await import('../pool.js');
+    const { sharedDbConnectionManager } = await import('@mcp/db-drivers/manager.js');
+    const source = store.getConnection(mainConnectionId)!;
+    const neighbor = { ...source, project_id: 999_901, id: 20 };
+    const target = { ...source, project_id: 999_901, id: 2 };
+    const existing = await acquireAgentDriver(neighbor);
+    await acquireAgentDriver(target);
+    expect(sharedDbConnectionManager().get(agentPoolKey(neighbor))).toBe(existing.driver);
+    expect((await existing.driver.runQuery('SELECT 1 AS alive')).rows).toEqual([{ alive: 1 }]);
+  });
+});
+
 describe('db_query', () => {
   const dbQuery = byName('db_query');
 
@@ -110,7 +124,9 @@ describe('db_query', () => {
     expect(r.sourceTruncations).toEqual([
       expect.objectContaining({
         technique: 'db-driver-row-cap',
-        inputSize: 1200,
+        // The bounded SQLite cursor proves one omitted row without scanning
+        // all 1,200. inputSizeExact remains false for this lower bound.
+        inputSize: 1001,
         inputSizeExact: false,
         outputSize: 1000,
         unit: 'rows',

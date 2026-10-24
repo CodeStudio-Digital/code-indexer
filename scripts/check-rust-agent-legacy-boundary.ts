@@ -15,6 +15,7 @@ import {
 } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import ts from 'typescript';
+import { diffLegacyBoundary } from './rust-agent-legacy-boundary-diff.js';
 
 const REPO_ROOT = process.cwd();
 const BASELINE_PATH = join(
@@ -44,6 +45,10 @@ const EXCLUDED_DIRECTORIES = new Set([
 const SELF_PATHS = new Set([
   'scripts/check-rust-agent-legacy-boundary.ts',
   'scripts/rust-agent-legacy-boundary-baseline.json',
+  // Dependency inventories describe existing edges; their path strings do
+  // not add another executable dependency. Keep manifests/assets in scope.
+  'scripts/repository-boundaries.json',
+  'scripts/repository-boundaries-baseline.json',
 ]);
 
 type ReferenceKind = 'import' | 'export' | 'dynamic' | 'require' | 'literal';
@@ -231,10 +236,7 @@ function main(): void {
   }
 
   const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as string[];
-  const allowed = new Set(baseline);
-  const actual = new Set(current);
-  const additions = current.filter((reference) => !allowed.has(reference));
-  const removals = baseline.filter((reference) => !actual.has(reference));
+  const { additions, removals } = diffLegacyBoundary(current, baseline);
 
   if (removals.length > 0) {
     console.log(

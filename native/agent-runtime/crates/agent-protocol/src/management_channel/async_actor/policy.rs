@@ -38,10 +38,9 @@ impl AsyncManagementPolicy {
         let normal_queue_bytes = u32::try_from(frame.max_in_flight_bytes)
             .map_err(|_| ManagementChannelError::InvalidFrameLimits)?;
         let entries = in_flight_frames.min(MAX_MANAGEMENT_REPLAY_ENTRIES);
-        let tracked = entries
-            .saturating_mul(4)
-            .min(MAX_MANAGEMENT_TRACKED_IDS)
-            .max(entries);
+        // Lifetime replay identities are independent of simultaneous commands.
+        // Renewals must not exhaust a small in-flight window after a few minutes.
+        let tracked = MAX_MANAGEMENT_TRACKED_IDS;
         let replay_bytes = usize::try_from(frame.max_in_flight_bytes)
             .map_err(|_| ManagementChannelError::InvalidFrameLimits)?
             .min(MAX_MANAGEMENT_REPLAY_BYTES);

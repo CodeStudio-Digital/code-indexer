@@ -1,4 +1,5 @@
 import { clone } from '@bufbuild/protobuf';
+import { createAuthorityClock, type AuthorityClock } from '../ipc/AttemptClock.js';
 import {
   agentV1Common,
   agentV1Supervisor,
@@ -50,6 +51,7 @@ type PairPhase = 'ready' | 'prepared' | 'opening' | 'opened' | 'failed';
 let nextPairSequence = 1;
 
 export interface NativeHostAttemptEndpointPairOptions {
+  readonly clock?: AuthorityClock;
   readonly binding: NativeHostBridgeBinding;
   readonly launch: agentV1Supervisor.LaunchAttemptProcess;
   readonly openDeadlineAtUnixMs: bigint;
@@ -60,6 +62,7 @@ export interface NativeHostAttemptEndpointPairOptions {
 
 /** Opens both native channels once, then hands each to the existing adapters. */
 export class NativeHostAttemptEndpointPair {
+  readonly #clock;
   readonly #binding;
   readonly #openDeadlineAtUnixMs;
   readonly #requiredContainmentLevel;
@@ -75,6 +78,7 @@ export class NativeHostAttemptEndpointPair {
   #cause?: unknown;
 
   constructor(options: NativeHostAttemptEndpointPairOptions) {
+    this.#clock = options.clock ?? createAuthorityClock();
     this.#binding = options.binding;
     this.#openDeadlineAtUnixMs = options.openDeadlineAtUnixMs;
     this.#requiredContainmentLevel = options.requiredContainmentLevel;
@@ -165,7 +169,7 @@ export class NativeHostAttemptEndpointPair {
         this.#timing,
       );
       this.#connections = connections;
-      assertNativeHostExpectedConnection(connections.control, expectation);
+      assertNativeHostExpectedConnection(connections.control, expectation, this.#clock.now());
       this.#data = connections.data;
       this.#phase = 'opened';
       return ownAuthenticatedAttemptControlConnection(connections.control);
@@ -186,7 +190,7 @@ export class NativeHostAttemptEndpointPair {
       throw invalid('native Data endpoint is unavailable');
     }
     try {
-      assertNativeHostExpectedConnection(data, expectation);
+      assertNativeHostExpectedConnection(data, expectation, this.#clock.now());
       this.#data = undefined;
       return ownAuthenticatedAttemptDataConnection(data);
     } catch (cause) {

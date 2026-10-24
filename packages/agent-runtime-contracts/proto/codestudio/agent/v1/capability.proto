@@ -147,3 +147,28 @@ message CapabilityExecutionResult {
     CapabilityExecutionFailure outcome_unknown = 13;
   }
 }
+
+// A bounded window of independently certified read-only Host operations.
+// Each member has its own durable started record and sealed grant. The Host
+// validates the whole window before acknowledging or starting any member.
+message CapabilityReadBatchExecute {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string batch_id = 3;
+  repeated CapabilityExecute members = 4;
+}
+
+message CapabilityReadBatchAccepted {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string batch_id = 3;
+}
+
+// Unsolicited event after BatchAccepted, one per member in completion order.
+// The runner commits each result before publishing it or advancing the model.
+message CapabilityReadBatchResult {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string batch_id = 3;
+  CapabilityExecutionResult result = 4;
+}

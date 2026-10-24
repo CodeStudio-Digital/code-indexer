@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { SemanticInferenceScheduler } from '../semantic-inference-scheduler.js';
 
 describe('SemanticInferenceScheduler', () => {
+  it('removes cancelled queries before native inference and bounds its waiting queue', async () => {
+    const scheduler = new SemanticInferenceScheduler(1);
+    let release!: () => void;
+    const active = scheduler.enqueue(0, () => new Promise<void>((resolve) => { release = resolve; }));
+    const controller = new AbortController();
+    let ran = false;
+    const cancelled = scheduler.enqueue(100, async () => { ran = true; }, { signal: controller.signal });
+    await expect(scheduler.enqueue(0, async () => undefined)).rejects.toThrow('queue is full');
+    controller.abort(new Error('closed search'));
+    await expect(cancelled).rejects.toThrow('closed search');
+    expect(scheduler.diagnostics().queued).toBe(0);
+    release();
+    await active;
+    expect(ran).toBe(false);
+  });
   it('lets an interactive query take the next slot ahead of queued backfill', async () => {
     const scheduler = new SemanticInferenceScheduler();
     const order: string[] = [];

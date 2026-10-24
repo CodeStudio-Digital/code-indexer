@@ -13,19 +13,23 @@ impl SessionJournal {
         &mut self,
         request: ReadCommittedPayloadRequest<'_>,
     ) -> Result<CommittedPayload, SessionStoreError> {
+        if self.poisoned {
+            return Err(SessionStoreError::Poisoned);
+        }
         self.verify_authority()?;
+        self.verify_snapshot_source()?;
         if request.expected_payload_bytes > request.maximum_payload_bytes
             || request.expected_payload_bytes > self.limits.max_payload_bytes()
         {
             return Err(SessionStoreError::PayloadLimitExceeded);
         }
         let receipt = {
-            let stored = self
+            let receipt = self
                 .state
                 .operations
                 .get(request.operation_id)
+                .and_then(|index| self.state.records.get(*index))
                 .ok_or(SessionStoreError::MissingPayload)?;
-            let receipt = &stored.receipt;
             if receipt.kind() != request.kind
                 || receipt.payload_hash() != request.expected_payload_sha256
                 || receipt.payload_bytes() != request.expected_payload_bytes
@@ -41,6 +45,7 @@ impl SessionJournal {
             request.expected_payload_bytes,
             request.maximum_payload_bytes,
         )?;
+        self.verify_snapshot_source()?;
         Ok(CommittedPayload::new(receipt, encoded_payload))
     }
 }

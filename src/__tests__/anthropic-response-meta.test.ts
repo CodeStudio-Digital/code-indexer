@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AnthropicChatProvider } from '@mcp/code-agent/providers/anthropic.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 
 async function collect(provider: AnthropicChatProvider): Promise<ChatDelta[]> {
   const out: ChatDelta[] = [];

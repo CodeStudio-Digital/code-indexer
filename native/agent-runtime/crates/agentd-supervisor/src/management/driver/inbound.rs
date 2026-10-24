@@ -72,6 +72,9 @@ where
         if payload.management_ack().is_some() {
             return self.handle_management_ack(pending, payload, now_unix_ms);
         }
+        if payload.update_attempt_authority().is_some() {
+            return self.handle_authority_update(pending, payload, digest, now_unix_ms);
+        }
         let kind = payload.kind().name();
         drop(payload);
         let reject_result = self.channel.reject(pending);

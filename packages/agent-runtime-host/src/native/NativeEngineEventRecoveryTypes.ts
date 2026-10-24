@@ -10,4 +10,6 @@ export interface UnresolvedCapabilityDispatch {
   readonly startedAtUnixMs: bigint;
   readonly journalSequence: bigint;
   readonly journalCommitSha256: Uint8Array;
+  /** A durable terminal with unknown effects is still unresolved. */
+  readonly outcomeUnknownReason?: string;
 }

@@ -1,4 +1,4 @@
-import { clone } from '@bufbuild/protobuf';
+import { detachedMessage } from '../ipc/DetachedMessage.js';
 import {
   agentV1Runtime,
   agentV1Supervisor,
@@ -18,8 +18,8 @@ export function snapshotRustHostAttemptInput(
   input: RustHostAttemptRunInput,
 ): RustHostAttemptInputSnapshot {
   return {
-    launch: clone(agentV1Supervisor.LaunchAttemptProcessSchema, input.launch),
-    prepare: clone(agentV1Runtime.PrepareAttemptSchema, input.prepare),
+    launch: detachedMessage(agentV1Supervisor.LaunchAttemptProcessSchema, input.launch),
+    prepare: detachedMessage(agentV1Runtime.PrepareAttemptSchema, input.prepare),
   };
 }
 

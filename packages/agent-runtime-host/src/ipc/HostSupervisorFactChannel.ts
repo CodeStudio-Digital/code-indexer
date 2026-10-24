@@ -6,9 +6,7 @@ import type {
   HostFenceAttemptRequest,
   HostReapAttemptRequest,
 } from '../driver/HostLifecycleTypes.js';
-import type {
-  HostSupervisorFactHandoff,
-} from '../driver/HostSupervisorFactTypes.js';
+import type { HostSupervisorFactHandoff } from '../driver/HostSupervisorFactTypes.js';
 import type { DelimitedByteChannel } from './DelimitedByteChannel.js';
 import { validateManagementFrame } from './ManagementFrame.js';
 import {
@@ -41,6 +39,11 @@ import {
 } from './HostSupervisorFactChannelConstruction.js';
 
 export class HostSupervisorFactChannel {
+  get remainingInboundIdentities(): number {
+    this.#assertHealthy();
+    return this.#history.remainingIdentityCapacity - (this.#pending ? 1 : 0);
+  }
+
   readonly #history: HostSupervisorReplayHistory;
   readonly #handoff;
   readonly #nowUnixMs;
@@ -109,9 +112,7 @@ export class HostSupervisorFactChannel {
         this.#history.canTrackFresh,
       );
       if (disposition.kind === 'replay') {
-        await this.#replayAcknowledgement(
-          disposition.encodedAcknowledgement,
-        );
+        await this.#commands.replay(disposition.encodedAcknowledgement);
         return {
           kind: 'replayed',
           factCase: disposition.acknowledgement.factCase,
@@ -186,6 +187,10 @@ export class HostSupervisorFactChannel {
     }
   }
 
+  renewAuthority(request: import('../driver/HostLifecycleTypes.js').HostAuthorityRenewalRequest, timeoutMs: number): Promise<void> {
+    this.#assertHealthy(); return this.#commands.renewAuthority(request, timeoutMs);
+  }
+
   cancel(request: HostCancelAttemptRequest, timeoutMs: number): Promise<void> {
     this.#assertHealthy(); return this.#commands.cancel(request, timeoutMs);
   }
@@ -216,10 +221,6 @@ export class HostSupervisorFactChannel {
   }
 
   get isPoisoned(): boolean { return !!this.#failure || this.transport.isFailed; }
-
-  #replayAcknowledgement(encoded: Uint8Array): Promise<void> {
-    return this.#commands.replay(encoded);
-  }
 
   #assertHealthy(): void {
     if (this.#failure || this.transport.isFailed) {

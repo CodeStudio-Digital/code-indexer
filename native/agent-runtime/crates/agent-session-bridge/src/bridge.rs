@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 use std::path::PathBuf;
 
-use agent_session_store::{SessionId, SessionJournal, StorageAuthority};
+use agent_session_store::{
+    SessionId, SessionJournal, SessionReadView, StorageAuthority, StorageRootLock,
+};
 
 use crate::config::{BridgeInstanceId, SessionRootId};
 use crate::frame::{decode_request, encode_response};
@@ -20,6 +22,12 @@ struct WriterEntry {
     journal: SessionJournal,
 }
 
+struct ReaderEntry {
+    session_id: SessionId,
+    authority: StorageAuthority,
+    view: SessionReadView,
+}
+
 pub struct AuthenticatedSessionStoreBridge {
     instance_id: BridgeInstanceId,
     bound_process_id: u32,
@@ -28,6 +36,8 @@ pub struct AuthenticatedSessionStoreBridge {
     next_writer_handle: u64,
     roots: HashMap<SessionRootId, PathBuf>,
     writers: HashMap<String, WriterEntry>,
+    readers: HashMap<String, ReaderEntry>,
+    root_locks: HashMap<String, StorageRootLock>,
     extensions: Box<dyn SessionStoreExtensionPort>,
     poisoned: bool,
 }
@@ -47,6 +57,8 @@ impl AuthenticatedSessionStoreBridge {
             next_writer_handle: 1,
             roots,
             writers: HashMap::new(),
+            readers: HashMap::new(),
+            root_locks: HashMap::new(),
             extensions,
             poisoned: false,
         }
@@ -134,6 +146,8 @@ impl Debug for AuthenticatedSessionStoreBridge {
             .field("next_writer_handle", &self.next_writer_handle)
             .field("root_count", &self.roots.len())
             .field("active_writer_count", &self.writers.len())
+            .field("readers", &self.readers.len())
+            .field("root_locks", &self.root_locks.len())
             .field("extensions", &self.extensions)
             .field("poisoned", &self.poisoned)
             .finish()

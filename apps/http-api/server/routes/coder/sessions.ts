@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
-import type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
+import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { JsonValue } from '@mcp/session-storage';
 import { selectRuntimeModelMetadata } from '@mcp/provider-sdk';
@@ -47,7 +47,7 @@ import {
   DEFAULT_SESSION_MAX_AUTO_CONTINUES,
   MAX_SESSION_AUTO_CONTINUES,
   MAX_SESSION_TURNS,
-} from '@mcp/code-agent/sessions/run-limits.js';
+} from '@mcp/session-storage/run-limits.js';
 
 /**
  * Trim heavy inline content (tool_result strings and image/document base64)
@@ -662,6 +662,20 @@ export function mountCoderSessionsRoutes(
       intent: decision.intent,
       requires_explicit_user_intent: decision.requiresExplicitUserIntent,
     });
+  });
+
+  app.get('/api/coder/mcp-runs', async (c) => {
+    const principal = c.req.query('principal');
+    if (!principal || principal.length > 1024) return c.json({ error: 'principal required (up to 1024 characters)' }, 400);
+    const profile = c.req.query('profile_id');
+    if (profile && profile.length > 256) return c.json({ error: 'profile_id is too long' }, 400);
+    const active = c.req.query('mode') === 'active';
+    const activeSessionIds = active ? new Set(workerPool.snapshot().map(entry => entry.sessionId)
+      .filter(id => workerPool.isRunning(id))) : undefined;
+    return c.json(await sessionStore.listMcpRunMetadata({ principal,
+      ...(profile !== undefined ? { profileId: profile || null } : {}), activeSessionIds,
+      limit: active ? 0 : Math.max(1, Math.min(200, parseIntQuery(c, 'limit', 50))),
+    }));
   });
 
   app.get('/api/coder/sessions', async (c) => {

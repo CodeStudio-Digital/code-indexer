@@ -3,6 +3,7 @@ use std::sync::Arc;
 use agent_platform::containment::ContainmentPort;
 use agent_protocol::management_channel::ManagementSessionPolicy;
 
+use super::authority_registry::AuthorityRegistry;
 use super::completion_cleanup::{CompletionCleanupRegistry, ManagedLaunchCleanup};
 use super::fact_flow::FactFlow;
 use super::launch_registry::LaunchRegistry;
@@ -33,9 +34,11 @@ where
     pub(super) fact_flow: FactFlow,
     pub(super) launch_registry: LaunchRegistry,
     pub(super) lifecycle_fact_outbox: LifecycleFactOutbox,
+    pub(super) durable_lifecycle_outbox: Option<crate::lifecycle_outbox::DurableLifecycleOutbox>,
     pub(super) shutdown_registry: ShutdownRegistry,
     pub(super) completion_cleanup: CompletionCleanupRegistry<ManagedLaunchCleanup<V::Cleanup>>,
     pub(super) pulse_registry: PulseRegistry,
+    pub(super) authority_registry: AuthorityRegistry,
     pub(super) last_observed_at_unix_ms: Option<i64>,
 }
 
@@ -101,9 +104,11 @@ where
             fact_flow: FactFlow::new(maximum_facts),
             launch_registry: LaunchRegistry::new(maximum_launches),
             lifecycle_fact_outbox: LifecycleFactOutbox::new(maximum_active),
+            durable_lifecycle_outbox: None,
             shutdown_registry: ShutdownRegistry::default(),
             completion_cleanup: CompletionCleanupRegistry::new(maximum_active),
             pulse_registry: PulseRegistry::new(maximum_active),
+            authority_registry: AuthorityRegistry::default(),
             last_observed_at_unix_ms: None,
         })
     }
@@ -111,6 +116,21 @@ where
     #[must_use]
     pub const fn state(&self) -> &SupervisorDriverState {
         &self.state
+    }
+
+    /// Existing pending evidence must be reconciled by its original Host before
+    /// this supervisor can admit fresh physical ownership.
+    /// # Errors
+    /// Refuses evidence pending reconciliation from a previous management lifetime.
+    pub fn with_lifecycle_outbox(
+        mut self,
+        outbox: crate::lifecycle_outbox::DurableLifecycleOutbox,
+    ) -> Result<Self, SupervisorDriverCreateError> {
+        if !outbox.pending().is_empty() {
+            return Err(SupervisorDriverCreateError::OutboxRequiresRecovery);
+        }
+        self.durable_lifecycle_outbox = Some(outbox);
+        Ok(self)
     }
 
     #[must_use]
@@ -138,13 +158,12 @@ where
     }
 
     pub(in crate::management) fn next_physical_deadline_unix_ms(&self) -> Option<i64> {
-        match (
+        [
             self.state.next_cleanup_deadline_unix_ms(),
             self.pulse_registry.next_deadline_unix_ms(),
-        ) {
-            (Some(left), Some(right)) => Some(left.min(right)),
-            (Some(value), None) | (None, Some(value)) => Some(value),
-            (None, None) => None,
-        }
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 }

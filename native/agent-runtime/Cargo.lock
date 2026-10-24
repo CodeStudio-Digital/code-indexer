@@ -36,6 +36,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-lifecycle-store"
+version = "0.1.0"
+dependencies = [
+ "agent-protocol",
+ "prost",
+ "sha2",
+]
+
+[[package]]
 name = "agent-platform"
 version = "0.1.0"
 dependencies = [
@@ -74,6 +83,7 @@ dependencies = [
 name = "agent-session-bridge"
 version = "0.1.0"
 dependencies = [
+ "agent-lifecycle-store",
  "agent-protocol",
  "agent-session-store",
  "prost",
@@ -99,6 +109,7 @@ version = "0.1.0"
 name = "agentd-supervisor"
 version = "0.1.0"
 dependencies = [
+ "agent-lifecycle-store",
  "agent-platform",
  "agent-protocol",
  "tokio",

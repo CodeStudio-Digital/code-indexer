@@ -13,4 +13,6 @@ program
 
 registerAll(program);
 
-program.parse();
+// This entry point is always a Node-style script, including Electron's Node
+// runtime. Commander otherwise mistakes the script path for a user command.
+await program.parseAsync(process.argv, { from: 'node' });

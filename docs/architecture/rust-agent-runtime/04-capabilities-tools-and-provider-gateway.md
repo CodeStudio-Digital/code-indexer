@@ -471,3 +471,24 @@ ao runner.
 | `code_exec` | nested parity, limits, kill e zero VM state |
 | Output | preview/artifact/truncation e privacy |
 | Remote | partição, stale environment, chunk resume e unknown pós-dispatch |
+## Extensão implementada: conteúdo adicional de ferramentas
+
+No cohort de desenvolvimento de 2026-10-06, `codestudio.tool-result.v1` admite
+o campo opcional `extraUserMessageHex`. Ele contém os bytes canônicos de
+`ProviderMessage` codificados em hexadecimal minúsculo, limitados a 256 KiB.
+Somente role `USER`, phase `UNSPECIFIED`, `is_meta=false` e até 64 blocos de texto
+inline ou `ArtifactRef` são aceitos. Blocos assistant/thinking/tool-use não são
+permitidos nessa extensão. Rust e TypeScript validam a mesma representação.
+
+Imagens e documentos são persistidos pelo writer autorizado, em chunks com
+digest, antes da publicação do resultado. Os bytes não são embutidos nesse
+campo. O orçamento agregado de material adicional é 8 MiB por attempt.
+Conteúdo extra sem receipt de materialização torna o resultado uma falha ou
+efeito incerto, conforme sua classe; nunca é descartado silenciosamente.
+
+O scheduler conserva todos os resultados do lote na ordem original e só então
+acrescenta as mensagens sintéticas. A projeção ao vivo publica a prévia após o
+terminal durável da ferramenta. O histórico reconstrói os anexos pelo journal,
+independentemente do arquivo original. Essa extensão precisa do runner que a
+implementa; sua prova empacotada pertence à certificação do candidato.
+

@@ -196,17 +196,18 @@ const createFile: CoderTool = {
     const { resolved } = target;
     const abs = resolved.abs;
     const fs = fsPort(ctx);
-    try {
-      await fs.access(abs);
-      return err(`File ${path} already exists. Use write_file or edit_file to modify it.`);
-    } catch {
-      // Doesn't exist — proceed
-    }
+    ctx.signal?.throwIfAborted();
+    if (!fs.createFile) return err('Filesystem adapter does not support exclusive file creation.');
     await fs.mkdir(pathFor(resolved.rootPath).dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content);
+    ctx.signal?.throwIfAborted();
+    try { await fs.createFile(abs, content); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return err(`File ${path} already exists. Use write_file or edit_file to modify it.`);
+      throw error;
+    }
     markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
     emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
-    return ok(`Created ${path} (${content.length} bytes)`);
+    return ok(`Created ${path} (${Buffer.byteLength(content, 'utf8')} bytes)`);
   },
 };
 

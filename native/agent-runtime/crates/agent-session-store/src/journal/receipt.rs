@@ -1,6 +1,5 @@
 use crate::hash::ContentHash;
 use crate::record::JournalRecord;
-use crate::recovery::StoredOperation;
 use crate::{
     DurabilityClass, LeaseEpoch, OperationId, SessionId, SessionRecordKind, SessionStoreError,
     StorageGeneration, WriterId,
@@ -125,18 +124,18 @@ impl CommitOutcome {
 }
 
 pub(super) fn replay(
-    stored: &StoredOperation,
+    stored: &CommitReceipt,
     kind: SessionRecordKind,
     durability: DurabilityClass,
     payload_hash: ContentHash,
     payload_bytes: u64,
 ) -> Result<CommitOutcome, SessionStoreError> {
-    if stored.receipt.kind() == kind
-        && stored.receipt.durability() == durability
-        && stored.payload_hash == payload_hash
-        && stored.payload_bytes == payload_bytes
+    if stored.kind() == kind
+        && stored.durability() == durability
+        && stored.payload_hash() == payload_hash
+        && stored.payload_bytes() == payload_bytes
     {
-        return Ok(CommitOutcome::Replay(stored.receipt.clone()));
+        return Ok(CommitOutcome::Replay(stored.clone()));
     }
     Err(SessionStoreError::DivergentReplay)
 }

@@ -1,7 +1,7 @@
 /**
  * Search Everywhere (Shift Shift) — IntelliJ's hub, five tabs:
  *   All | Files | Symbols | Text | Commands      (Tab cycles)
- * Files rank client-side over files.list (cached per open, recents-first
+ * Files use a bounded path-only query (recents-first
  * on empty query); Symbols/Text hit the thin FTS endpoints; Commands come
  * from the registry. Enter opens / runs; symbols reveal line:col.
  */
@@ -11,7 +11,6 @@ import { Dialog, DialogContent } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
 import { Braces, FileCode2, History, Sparkles, SquareTerminal, Text } from 'lucide-react';
 import { apiCall } from '../../lib/api-client.js';
-import { rankPath } from '../../lib/fuzzy.js';
 import { FileIcon } from '../../components/FileIcon.js';
 import { cn } from '../../lib/utils.js';
 import { listCommands, executeCommand } from '../../keymap/commands.js';
@@ -106,7 +105,6 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
   const [items, setItems] = useState<Item[]>([]);
   const [semanticNotice, setSemanticNotice] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
-  const allPaths = useRef<string[] | null>(null);
   const lexicalSeq = useRef(0);
   const semanticSeq = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -129,7 +127,6 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
     wasOpen.current = true;
     setHighlight(0);
     setSemanticNotice(null);
-    allPaths.current = null;
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open, initialQuery, consumeInitialQuery]);
 
@@ -158,17 +155,9 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
       else if (trimmed) out.push(...cmds);
     }
     if (wantFiles && trimmed) {
-      if (!allPaths.current) {
-        const paths = await apiCall<Array<{ path: string }>>('files.list', { projectId }, { signal })
-          .then((rows) => rows.map((r) => r.path))
-          .catch(() => []);
-        if (!signal.aborted) allPaths.current = paths;
-      }
-      const ranked = (allPaths.current ?? [])
-        .map((path) => ({ path, score: rankPath(path, trimmed) }))
-        .filter((x): x is { path: string; score: number } => x.score !== null)
-        .sort((a, b) => a.score - b.score)
-        .slice(0, activeTab === 'files' ? 50 : 10);
+      const ranked = await apiCall<Array<{ path: string }>>('files.searchPaths', {
+        projectId, query: trimmed, limit: activeTab === 'files' ? 50 : 10,
+      }, { signal }).catch(() => []);
       out.push(...ranked.map<Item>((r) => ({ kind: 'file', path: r.path })));
     }
     if (wantSymbols) {
@@ -205,7 +194,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
         // vector/RRF/reranker pipeline only for natural-language queries.
         mode: 'auto',
         type: 'all',
-        limit: 50,
+        limit: 20,
         supersessionKey: searchEverywhereSupersessionKey(projectId),
         consumer: 'search_everywhere',
       }, { signal }).catch(() => ({ results: [], diagnostics: { vectorError: 'unavailable' } }));
@@ -234,7 +223,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
     // Remove semantic rows from the previous query immediately. If the new
     // semantic stage wins the race, the lexical response merges around it.
     setItems((current) => current.filter((item) => item.kind !== 'semantic'));
-    void computeLexical(query, tab, controller.signal).then((next) => {
+    const timer = window.setTimeout(() => void computeLexical(query, tab, controller.signal).then((next) => {
       if (!controller.signal.aborted && lexicalSeq.current === mySeq) {
         setItems((current) => mergeSemantic(
           current.filter((item) => item.kind === 'semantic'),
@@ -242,8 +231,8 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
         ));
         setHighlight(0);
       }
-    });
-    return () => controller.abort();
+    }), query.trim() ? 100 : 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, query, tab, computeLexical]);
 
   // Stage 2: after 400ms idle, explicit Semantic queries and natural-language

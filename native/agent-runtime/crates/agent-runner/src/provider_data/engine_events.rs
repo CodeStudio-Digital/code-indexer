@@ -26,13 +26,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
         clock: &C,
     ) -> Result<wire::CommitSessionRecordReceipt, ProviderDataError> {
         validate_engine_proposal(&proposal, &self.identity, &self.runtime_instance_id)?;
-        let local_sequence = proposal
+        let record = proposal
             .record
             .as_ref()
             .ok_or(ProviderDataError::InvalidRequest(
                 "engine record is missing",
-            ))?
-            .local_sequence;
+            ))?;
+        let local_sequence = record.local_sequence;
+        let expected_store = super::engine_record::storage(record)?;
         let payload_digest = proposal.expected_payload_sha256.clone();
         let payload = wire::FramePayload {
             body: Some(wire::frame_payload::Body::EngineEventProposal(proposal)),
@@ -62,6 +63,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
             let binding = pending.binding();
             let header = pending.header().clone();
             let (body, _) = pending.take_body_and_digest()?;
+            if let wire::frame_payload::Body::CapabilityReadBatchResult(event) = body {
+                self.buffer_read_result(event, &header)?;
+                let committed = self.channel.commit_accepted(*pending)?;
+                if !committed.matches(&binding) {
+                    return Err(ProviderDataError::ForeignCommitReceipt);
+                }
+                continue;
+            }
             if matches!(&body, wire::frame_payload::Body::EngineEventCommitted(_)) {
                 let receipt = validate_engine_committed(
                     body,
@@ -71,6 +80,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
                     &self.runtime_instance_id,
                     local_sequence,
                     payload_digest.as_slice(),
+                    expected_store,
                 )?;
                 let committed = self.channel.commit_accepted(*pending)?;
                 if !committed.matches(&binding) {
@@ -84,7 +94,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> ProviderDataClient<S> {
                 return Err(ProviderDataError::ForeignCommitReceipt);
             }
             self.advance_provider_event(&event)?;
-            self.buffered_events.push_back(event);
+            self.buffer_event(event)?;
         }
     }
 

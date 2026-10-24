@@ -9,7 +9,7 @@
  * orchestrator itself stays in `execute-tasks.ts`.
  */
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
-import type { CoderTask, TaskKind, TaskStatus } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TaskKind, TaskStatus } from '@mcp/session-storage/session-state-types.js';
 import { newSessionId } from '@mcp/session-storage';
 
 // ─── Persistence facade (implementation in task-run-persistence.ts) ──
@@ -21,6 +21,9 @@ import { newSessionId } from '@mcp/session-storage';
  */
 export interface TaskRunPersist {
   recordRunStarted(args: {
+    runtimeGeneration?: 'legacy_ts' | 'rust_v1';
+    taskPlanSha256?: string;
+    ownerToolUseId?: string;
     runId: string;
     mode: ExecuteTasksMode;
     startedAt: string;
@@ -49,6 +52,10 @@ export interface TaskRunPersist {
     inputsFingerprint?: string;
     attempt?: number;
   }): Promise<void>;
+  recordTaskAdmitted?(args: {
+    runId: string; task: CoderTask; waveIdx: number; startedAt: string;
+    attempt?: number; nativeTranscriptRef: string;
+  }): Promise<void>;
   recordRunFinished(args: {
     runId: string;
     status: 'completed' | 'failed' | 'aborted';
@@ -72,6 +79,7 @@ export type ExecuteTasksMode = 'auto' | 'inline-all';
 export type TaskRunTaskMode = 'subagent' | 'inline';
 
 export interface TaskRunContext {
+  executionReceipts?: { dispatched: boolean; pending: Set<string> };
   runId: string;
   mode: ExecuteTasksMode;
   wave: number;
@@ -106,6 +114,7 @@ export interface TaskRunProgressMeta {
 }
 
 export interface TaskRunResult {
+  effectOutcome?: 'unknown';
   task: CoderTask;
   status: TaskStatus;
   /** A skipped task can still satisfy the run when its inputs match a prior
@@ -187,7 +196,7 @@ export function seedStatusById(tasks: ReadonlyArray<CoderTask>): Map<string, Tas
  */
 export function resolveTaskRunMode(
   task: CoderTask,
-  globalMode: import('@mcp/code-agent/sessions/types.js').TaskExecutionMode | null | undefined,
+  globalMode: import('@mcp/session-storage/session-state-types.js').TaskExecutionMode | null | undefined,
   argMode: ExecuteTasksMode,
 ): TaskRunTaskMode {
   if (argMode === 'inline-all') return 'inline';

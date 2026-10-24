@@ -60,6 +60,12 @@ export class SessionCatalog {
     return [...this.#entries.values()].sort(compareEntries);
   }
 
+  /** Stable membership for bounded/cooperative queries that rank their own
+   * result window without synchronously sorting the entire catalog first. */
+  entriesSnapshot(): readonly CatalogEntry[] {
+    return [...this.#entries.values()];
+  }
+
   get(id: SessionId | string): CatalogEntry | null {
     if (!isUuid(id)) return null;
     return this.#entries.get(keyFor(asSessionId(id))) ?? null;
@@ -232,8 +238,8 @@ export class SessionCatalog {
     }
     if (!this.#repository) return;
     try {
-      const session = this.#repository.readSessionSync(event.location);
-      const state = this.#repository.readStateSync(event.location);
+      const session = event.projection?.session ?? this.#repository.readSessionSync(event.location);
+      const state = event.projection?.state ?? this.#repository.readStateSync(event.location);
       this.#entries.set(key, { location: event.location, session, state });
     } catch {
       // A refresh reports detailed root issues. Repository events must not make

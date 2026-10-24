@@ -71,10 +71,7 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'company_board', 'company_drive_files', 'company_local_projects', 'company_fronts', 'company_agent_runs',
   'company_service_transitions', 'company_service_logs',
   'kanban_cards', 'kanban_card_agents', 'kanban_card_dependencies', 'kanban_checklist_items', 'kanban_comments',
-  // Design System runs are filesystem-session state after the big-bang cut.
-  // Older FEATURE splits copied these rows into project DBs, so keep them in
-  // the explicit drop contract even though the current copy manifest no longer
-  // includes them.
+  // Retired feature tables may remain in older project databases.
   'design_system_sessions', 'design_system_versions', 'design_system_components',
   // counterfactual
   'counterfactual_logs',

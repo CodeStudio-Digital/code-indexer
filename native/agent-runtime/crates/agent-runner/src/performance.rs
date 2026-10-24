@@ -1,15 +1,17 @@
-//! Feature-gated release benchmark seam for `GATE-PERF-01`.
+//! Feature-gated release benchmark seams.
 //!
 //! This module is never enabled in packaged builds. It exercises the real
-//! control driver through `AttemptPrepared`, without activation or effects.
+//! control driver through `AttemptPrepared` and isolated native tool fixtures.
 
 use std::env;
 use std::io::{self, BufReader};
 
 mod child;
+mod dispatch;
 mod fixture;
 mod output;
 
+pub use dispatch::probe_native_read_dispatch;
 pub use fixture::prepared_probe_host_input;
 pub use output::{PreparedProbeOutput, read_prepared_probe_output};
 

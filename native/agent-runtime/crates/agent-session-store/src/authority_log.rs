@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 
 use crate::hash::ContentHash;
 use crate::layout::{SessionBundleLayout, validate_regular_file};
@@ -23,6 +23,9 @@ pub struct AuthorityHistory {
 }
 
 impl AuthorityHistory {
+    pub(crate) const fn current(&self) -> Option<&StorageAuthority> {
+        self.current.as_ref()
+    }
     pub fn matches(&self, authority: &StorageAuthority) -> bool {
         self.by_epoch
             .get(&authority.lease_epoch().get())
@@ -88,6 +91,22 @@ fn recover(
     path: &std::path::Path,
     limits: SessionStoreLimits,
 ) -> Result<AuthorityHistory, SessionStoreError> {
+    recover_inner(path, limits, true)
+}
+
+pub fn read_history(
+    path: &std::path::Path,
+    limits: SessionStoreLimits,
+) -> Result<AuthorityHistory, SessionStoreError> {
+    validate_regular_file(path)?;
+    recover_inner(path, limits, false)
+}
+
+fn recover_inner(
+    path: &std::path::Path,
+    limits: SessionStoreLimits,
+    repair: bool,
+) -> Result<AuthorityHistory, SessionStoreError> {
     let mut reader = BufReader::new(
         File::open(path)
             .map_err(|error| SessionStoreError::io("open storage authority log", error))?,
@@ -103,6 +122,8 @@ fn recover(
     loop {
         line.clear();
         let bytes = reader
+            .by_ref()
+            .take((MAX_AUTHORITY_LINE_BYTES + 1) as u64)
             .read_until(b'\n', &mut line)
             .map_err(|error| SessionStoreError::io("read storage authority log", error))?;
         if bytes == 0 {
@@ -112,6 +133,9 @@ fn recover(
             return Err(SessionStoreError::CorruptAuthority);
         }
         if !line.ends_with(b"\n") {
+            if !repair {
+                return Err(SessionStoreError::CorruptAuthority);
+            }
             truncate_tail(path, history.log_bytes)?;
             break;
         }

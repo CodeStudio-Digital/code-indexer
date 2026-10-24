@@ -6,20 +6,15 @@
  */
 import { BrowserWindow, session, type Session } from 'electron';
 import type { IPreviewDevtools, PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
-import { UNIVERSAL_INSPECTOR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-inspector-source.js';
-import { REACT_DETECT_SOURCE } from '@mcp/services/sandbox/builder/inspector/react-detect-source.js';
-import { UNIVERSAL_TOOLBAR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-toolbar-source.js';
-import { REGION_HELPERS_SOURCE } from '@mcp/services/sandbox/builder/inspector/region-runtime.js';
+import { PreviewInspector } from './inspector.js';
+import { dispatchPreviewQuery } from './queries.js';
 import { PreviewWindow, DEFAULT_VIEWPORT, type Viewport } from './cdp.js';
 import { dispatchInteraction } from './interact.js';
-import { resolveViewport, applyViewport, clampToScreen, VIEWPORT_PRESETS } from './viewport.js';
+import { resolveViewport, applyViewport, clampToScreen } from './viewport.js';
 import { resolveAppIconPath } from '../app-icon.js';
 import { resolveDevUrl, type RunnerBridge } from './dev-server-resolver.js';
-
-const PREVIEW_BODY_DEFAULT_CHARS = 20_000;
-const PREVIEW_BODY_MAX_CHARS = 200_000;
-const PREVIEW_BODY_TOTAL_DEFAULT_CHARS = 200_000;
-const PREVIEW_BODY_TOTAL_MAX_CHARS = 2_000_000;
+import type { PreviewDispatchScope } from '@mcp/services/preview/contracts.js';
+import { assertPreviewDispatch, previewDispatchRunner, runPreviewDispatch } from './dispatch-scope.js';
 
 function abortError(): Error {
   const error = new Error('Preview operation aborted.');
@@ -55,49 +50,101 @@ function partitionForKey(key: string): string {
   return `mcp-preview-${key.replace(/[^a-z0-9_-]/gi, '_').slice(0, 120)}`;
 }
 
-function boundedCount(value: unknown, fallback: number, max = 250): number {
-  const parsed = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
-  return Math.max(1, Math.min(parsed, max));
-}
-
-export class PreviewWindowService implements IPreviewDevtools {
+export class PreviewWindowService extends PreviewInspector implements IPreviewDevtools {
+  readonly authorityAttested = true as const;
   private byKey = new Map<string, PreviewWindow>();
-  private inFlight = new Map<string, AbortController>();
+  private inFlight = new Map<string, { key: string; controller: AbortController; done: Promise<unknown> }>();
+  private pending = new Set<{ key: string; controller: AbortController; done: Promise<unknown> }>();
+  private operationTail = new Map<string, Promise<unknown>>();
+  private closingKeys = new Map<string, Promise<void>>();
+  private closing: Promise<void> | null = null;
   private configuredSessions = new WeakSet<Session>();
-  /** Per-key selection subscribers (dashboard "Inspect"). Decoupled from the
-   *  window lifecycle so a stream can subscribe before the window opens. */
-  private inspectListeners = new Map<string, Set<(d: unknown) => void>>();
-  /** Windows whose CDP selection events are already forwarded to the map. */
-  private inspectForwarded = new WeakSet<PreviewWindow>();
   /** Dev servers THIS service started for a preview (key → runner taskId).
    *  Kept SEPARATE from byKey so closing the window (turn end) doesn't drop
    *  ownership — the owned server is stopped only on closeSession (evict). */
   private ownedTaskByKey = new Map<string, string>();
+  private ownedRunnerByKey = new Map<string, RunnerBridge>();
+  private scopeOwners = new Map<string, object>();
 
   /** Injected in main.ts (null in tests / non-runner contexts). Enables
    *  url-less preview_open: reuse the project's running runner or start one. */
-  constructor(private runnerBridge: RunnerBridge | null = null) {}
+  constructor(private runnerBridge: RunnerBridge | null = null) { super(); }
+
+  protected getPreview(key: string) { return this.byKey.get(key); }
 
   setRunnerBridge(bridge: RunnerBridge | null): void {
     this.runnerBridge = bridge;
   }
 
-  async invoke(req: PreviewInvoke): Promise<unknown> {
+  existingRunners() {
+    const bridge = this.runnerBridge;
+    return bridge && { list: () => bridge.list(), readBuffer: (id: string) => bridge.readBuffer(id), pinnedPort: (id: number) => bridge.pinnedPort(id) };
+  }
+
+  async invoke(req: PreviewInvoke, scope?: PreviewDispatchScope): Promise<unknown> {
+    const owner = this.scopeOwners.get(req.key);
+    if ((owner && owner !== scope?.owner) || (req.key.includes('-attempt-') && !scope?.owner)) {
+      throw new Error('Preview scope belongs to a different host owner');
+    }
+    scope?.signal.throwIfAborted();
+    scope?.assertDispatch();
+    if (scope?.owner) this.scopeOwners.set(req.key, scope.owner);
+    if (this.closing) throw new Error('Preview service is closing.');
+    // Lifecycle closes cancel and drain their key outside the operation being
+    // cancelled. Including a close in its own drain would deadlock shutdown.
+    if (req.method === 'closeSession') return this.closeSession(req.key);
+    if (req.method === 'closeSessionPrefix') return this.closeSessionPrefix(req.key);
+    if (req.method === 'close' || req.method === 'closeWindow') {
+      await this.closeOwnedKey(req.key, false);
+      return { ok: true };
+    }
+    if (req.method === 'closeWindowPrefix') {
+      const keys = this.matchingKeys(req.key);
+      if (keys.some(key => this.scopeOwners.has(key))) throw new Error('Cannot close an owned preview through a legacy prefix');
+      await Promise.all(keys.map(key => this.closeOwnedKey(key, false)));
+      return { ok: true };
+    }
     const requestId = req.requestId;
+    if (this.closingKeys.has(req.key)) throw new Error('Preview session is closing.');
+    if (requestId && this.inFlight.has(requestId)) throw new Error('Duplicate preview request ID.');
+    if (this.pending.size >= 256 || [...this.pending].filter(item => item.key === req.key).length >= 32) {
+      throw new Error('Preview request queue is full.');
+    }
     const controller = new AbortController();
-    if (requestId) this.inFlight.set(requestId, controller);
+    const cancel = () => controller.abort(scope?.signal.reason);
+    scope?.signal.addEventListener('abort', cancel, { once: true });
+    if (scope?.signal.aborted) cancel();
+    const previous = this.operationTail.get(req.key) ?? Promise.resolve();
+    const done = previous.catch(() => undefined).then(() => runPreviewDispatch({
+      signal: controller.signal, assertDispatch: () => scope?.assertDispatch(), runner: scope?.runner,
+    }, () => this.invokeInternal(req, controller.signal)));
+    this.operationTail.set(req.key, done);
+    const operation = { key: req.key, controller, done };
+    this.pending.add(operation);
+    if (requestId) this.inFlight.set(requestId, operation);
     try {
-      return await this.invokeInternal(req, controller.signal);
+      return await done;
     } finally {
-      if (requestId && this.inFlight.get(requestId) === controller) this.inFlight.delete(requestId);
+      scope?.signal.removeEventListener('abort', cancel);
+      this.pending.delete(operation);
+      if (this.operationTail.get(req.key) === done) this.operationTail.delete(req.key);
+      if (requestId && this.inFlight.get(requestId) === operation) this.inFlight.delete(requestId);
     }
   }
 
   cancel(requestId: string): void {
-    this.inFlight.get(requestId)?.abort();
+    this.inFlight.get(requestId)?.controller.abort();
+  }
+
+  async closeOwnedScope(key: string, owner: object): Promise<void> {
+    const current = this.scopeOwners.get(key);
+    if (current && current !== owner) throw new Error('Preview cleanup belongs to a different host owner');
+    await this.closeSession(key);
+    this.scopeOwners.delete(key);
   }
 
   private async invokeInternal(req: PreviewInvoke, signal: AbortSignal): Promise<unknown> {
+    assertPreviewDispatch();
     throwIfAborted(signal);
     const { key, method } = req;
     const args = req.args ?? {};
@@ -113,28 +160,6 @@ export class PreviewWindowService implements IPreviewDevtools {
       });
     }
 
-    if (method === 'close') {
-      this.closeKey(key);
-      return { ok: true };
-    }
-    // Backend lifecycle (not agent-facing): closeWindow frees the window but
-    // keeps the owned dev server for reuse; closeSession also stops it.
-    if (method === 'closeWindow') {
-      this.closeKey(key);
-      return { ok: true };
-    }
-    if (method === 'closeSession') {
-      await this.closeSession(key);
-      return { ok: true };
-    }
-    if (method === 'closeWindowPrefix') {
-      this.closePrefix(key);
-      return { ok: true };
-    }
-    if (method === 'closeSessionPrefix') {
-      await this.closeSessionPrefix(key);
-      return { ok: true };
-    }
     const pw = this.byKey.get(key);
     if (!pw || pw.win.isDestroyed()) {
       throw new Error('No preview window open for this agent. Call preview_open first.');
@@ -163,314 +188,8 @@ export class PreviewWindowService implements IPreviewDevtools {
         await this.loadUrl(pw.win, requireAllowedPreviewUrl(String(args.url ?? '')), signal);
         pw.url = pw.win.webContents.getURL();
         return { ok: true, url: pw.url };
-      case 'console':
-        if (args.waitMs) await pw.waitFor('console', () => true, Number(args.waitMs), signal);
-        {
-          const all = pw.getConsole(args.level as string | undefined);
-          const limit = boundedCount(args.limit, 50);
-          return {
-            logs: all.slice(-limit),
-            ...(all.length > limit
-              ? {
-                  sourceTruncations: [{
-                    technique: 'preview-console-window',
-                    inputSize: all.length,
-                    outputSize: limit,
-                    unit: 'items',
-                    recoverable: true,
-                  }],
-                }
-              : {}),
-          };
-        }
-      case 'network': {
-        if (args.waitForMs) {
-          await pw.waitFor('network', (e) => {
-            const n = e as { url: string; completed?: boolean; failed?: boolean };
-            return (!args.urlFilter || n.url.includes(String(args.urlFilter))) && (!!n.completed || !!n.failed);
-          }, Number(args.waitForMs), signal);
-        }
-        const allRequests = pw.getNetwork({ urlFilter: args.urlFilter as string, status: args.status as number });
-        const limit = boundedCount(args.limit, 60);
-        let requests = allRequests.slice(-limit).map((entry) => ({ ...entry }));
-        const sourceTruncations: Array<{
-          technique: string;
-          inputSize: number;
-          outputSize: number;
-          unit: 'chars' | 'items';
-          recoverable: boolean;
-        }> = [];
-        if (allRequests.length > limit) {
-          sourceTruncations.push({
-            technique: 'preview-network-window',
-            inputSize: allRequests.length,
-            outputSize: limit,
-            unit: 'items',
-            recoverable: true,
-          });
-        }
-        if (args.includeBody) {
-          // Best-effort: response bodies are only retained by CDP for a window
-          // and only for finished responses. Keep a configurable safety bound
-          // per body and report every omission structurally to the runner.
-          const bodyMaxChars = boundedCount(
-            args.bodyMaxChars,
-            PREVIEW_BODY_DEFAULT_CHARS,
-            PREVIEW_BODY_MAX_CHARS,
-          );
-          const bodyTotalMaxChars = boundedCount(
-            args.bodyTotalMaxChars,
-            PREVIEW_BODY_TOTAL_DEFAULT_CHARS,
-            PREVIEW_BODY_TOTAL_MAX_CHARS,
-          );
-          let bodyRemaining = bodyTotalMaxChars;
-          let cappedBodyInput = 0;
-          let cappedBodyOutput = 0;
-          let binaryBodyInput = 0;
-          // Query sequentially: it keeps the aggregate budget deterministic
-          // and avoids flooding one debugger session with dozens of parallel
-          // Network.getResponseBody commands.
-          for (const r of requests) {
-            try {
-              if (!r.completed) {
-                r.body = '[body unavailable: request has not finished]';
-                continue;
-              }
-              const b = (await pw.send('Network.getResponseBody', { requestId: r.requestId })) as { body?: string; base64Encoded?: boolean };
-              if (!b?.body) continue;
-              if (b.base64Encoded) {
-                binaryBodyInput += b.body.length;
-                r.body = '[binary body omitted]';
-                continue;
-              }
-              const allowed = Math.max(0, Math.min(bodyMaxChars, bodyRemaining));
-              if (allowed === 0) {
-                cappedBodyInput += b.body.length;
-                r.body = '[body omitted: aggregate response-body budget exhausted]';
-              } else if (b.body.length > allowed) {
-                bodyRemaining -= allowed;
-                cappedBodyInput += b.body.length;
-                cappedBodyOutput += allowed;
-                r.body = `${b.body.slice(0, allowed)}\n[body capped at ${allowed} chars; use a narrower URL filter or a larger aggregate budget]`;
-              } else {
-                bodyRemaining -= b.body.length;
-                r.body = b.body;
-              }
-            } catch (error) {
-              r.body = `[body unavailable: ${error instanceof Error ? error.message : String(error)}]`;
-            }
-          }
-          if (cappedBodyInput > 0) {
-            sourceTruncations.push({
-              technique: 'preview-response-body-cap',
-              inputSize: cappedBodyInput,
-              outputSize: cappedBodyOutput,
-              unit: 'chars',
-              recoverable: true,
-            });
-          }
-          if (binaryBodyInput > 0) {
-            sourceTruncations.push({
-              technique: 'preview-binary-body-omitted',
-              inputSize: binaryBodyInput,
-              outputSize: 0,
-              unit: 'chars',
-              recoverable: false,
-            });
-          }
-        }
-        return {
-          requests,
-          ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),
-        };
-      }
-      case 'eval': {
-        const timeoutMs = Math.min(30_000, Math.max(100, Number(args.timeoutMs) || 10_000));
-        const r = (await pw.send('Runtime.evaluate', {
-          expression: String(args.js ?? ''),
-          returnByValue: true,
-          awaitPromise: true,
-          replMode: true,
-          timeout: timeoutMs,
-        })) as { result?: { value?: unknown; description?: string }; exceptionDetails?: unknown };
-        if (r.exceptionDetails) return { error: JSON.stringify(r.exceptionDetails) };
-        return { value: r.result?.value ?? r.result?.description ?? null };
-      }
-      case 'screenshot': {
-        // Optional `clip` ({x,y,width,height}) crops to a region — used by the
-        // dashboard's region-select to capture exactly the drawn box.
-        const clip = (args.clip as { x: number; y: number; width: number; height: number } | undefined) ?? null;
-        const params: Record<string, unknown> = {
-          format: 'png',
-          captureBeyondViewport: !!args.fullPage,
-        };
-        if (clip && clip.width > 0 && clip.height > 0) {
-          params.clip = {
-            x: Math.round(clip.x),
-            y: Math.round(clip.y),
-            width: Math.round(clip.width),
-            height: Math.round(clip.height),
-            scale: 1,
-          };
-        } else if (args.fullPage) {
-          const metrics = (await pw.send('Page.getLayoutMetrics', {})) as {
-            cssContentSize?: { x?: number; y?: number; width?: number; height?: number };
-          };
-          const content = metrics.cssContentSize;
-          if (content?.width && content?.height) {
-            params.clip = {
-              x: Math.max(0, content.x ?? 0),
-              y: Math.max(0, content.y ?? 0),
-              width: Math.min(16_384, Math.max(1, content.width)),
-              height: Math.min(16_384, Math.max(1, content.height)),
-              scale: 1,
-            };
-          }
-        }
-        const r = (await pw.send('Page.captureScreenshot', params)) as { data?: string };
-        return { base64: r.data };
-      }
-      case 'inspect_css': {
-        const doc = (await pw.send('DOM.getDocument', {})) as { root?: { nodeId?: number } };
-        const q = (await pw.send('DOM.querySelector', { nodeId: doc.root?.nodeId, selector: String(args.selector ?? '') })) as { nodeId?: number };
-        if (!q.nodeId) return { error: 'no element matched the selector' };
-        const computed = await pw.send('CSS.getComputedStyleForNode', { nodeId: q.nodeId }).catch(() => null);
-        const matched = await pw.send('CSS.getMatchedStylesForNode', { nodeId: q.nodeId }).catch(() => null);
-        return { computed, matched };
-      }
-      case 'performance': {
-        const [metrics, navigation] = await Promise.all([
-          pw.send('Performance.getMetrics', {}),
-          pw.send('Runtime.evaluate', {
-            expression: '(()=>{const n=performance.getEntriesByType("navigation")[0];return n&&n.toJSON?n.toJSON():null})()',
-            returnByValue: true,
-          }).catch(() => null),
-        ]);
-        return {
-          metrics,
-          navigation: (navigation as { result?: { value?: unknown } } | null)?.result?.value ?? null,
-        };
-      }
-      case 'memory':
-        return { memory: await pw.send('Runtime.getHeapUsage', {}) };
-      case 'storage': {
-        const kind = String(args.kind ?? 'local');
-        if (kind === 'cookies') {
-          // Network.getCookies includes httpOnly cookies that document.cookie
-          // can't see; fall back to document.cookie if the domain has none.
-          try {
-            const c = (await pw.send('Network.getCookies', {})) as { cookies?: unknown[] };
-            const cookies = (c.cookies ?? []).map((cookie) => {
-              if (!cookie || typeof cookie !== 'object') return cookie;
-              return { ...(cookie as Record<string, unknown>), value: '[redacted]' };
-            });
-            return { kind, data: cookies, valuesRedacted: true };
-          } catch { /* fall through to document.cookie */ }
-        }
-        const expr =
-          kind === 'cookies' ? 'document.cookie'
-          : kind === 'session' ? 'Object.assign({},sessionStorage)'
-          : kind === 'indexeddb' ? '(async()=>((indexedDB.databases?await indexedDB.databases():[]).map(d=>d.name)))()'
-          : 'Object.assign({},localStorage)';
-        const r = (await pw.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })) as { result?: { value?: unknown } };
-        const value = r.result?.value;
-        if ((kind === 'local' || kind === 'session') && value && typeof value === 'object') {
-          const data = Object.fromEntries(
-            Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-              key,
-              /token|secret|password|passcode|auth|cookie|session/i.test(key) ? '[redacted]' : item,
-            ]),
-          );
-          return { kind, data, sensitiveValuesRedacted: true };
-        }
-        return { kind, data: kind === 'cookies' && typeof value === 'string' ? '[redacted]' : value };
-      }
-      case 'snapshot':
-        return this.snapshot(pw, args);
-      default:
-        throw new Error(`unknown preview method: ${method}`);
+      default: return dispatchPreviewQuery(pw, method, args, signal);
     }
-  }
-
-  private async snapshot(pw: PreviewWindow, args: Record<string, unknown>): Promise<unknown> {
-    type AxValue = { value?: unknown };
-    type AxNode = {
-      nodeId: string;
-      ignored?: boolean;
-      role?: AxValue;
-      name?: AxValue;
-      value?: AxValue;
-      properties?: Array<{ name?: string; value?: AxValue }>;
-      childIds?: string[];
-      backendDOMNodeId?: number;
-    };
-    const response = (await pw.send('Accessibility.getFullAXTree', {})) as { nodes?: AxNode[] };
-    const all = response.nodes ?? [];
-    const byId = new Map(all.map((node) => [node.nodeId, node]));
-    const depthById = new Map<string, number>();
-    const visit = (id: string, depth: number): void => {
-      if (depthById.has(id)) return;
-      depthById.set(id, depth);
-      for (const childId of byId.get(id)?.childIds ?? []) visit(childId, depth + 1);
-    };
-    if (all[0]) visit(all[0].nodeId, 0);
-    const maxDepth = boundedCount(args.maxDepth, 12, 40);
-    const limit = boundedCount(args.limit, 200, 500);
-    const interactiveOnly = args.interactiveOnly === true;
-    const usefulRoles = new Set([
-      'alert', 'banner', 'button', 'checkbox', 'combobox', 'complementary', 'contentinfo', 'dialog',
-      'form', 'heading', 'img', 'link', 'listbox', 'main', 'menuitem', 'menuitemcheckbox',
-      'menuitemradio', 'navigation', 'option', 'radio', 'region', 'searchbox', 'slider', 'spinbutton',
-      'status', 'switch', 'tab', 'table', 'textbox', 'treeitem',
-    ]);
-    const interactiveRoles = new Set([
-      'button', 'checkbox', 'combobox', 'link', 'listbox', 'menuitem', 'menuitemcheckbox',
-      'menuitemradio', 'option', 'radio', 'searchbox', 'slider', 'spinbutton', 'switch', 'tab',
-      'textbox', 'treeitem',
-    ]);
-    pw.resetRefs();
-    const eligible = all.filter((node) => {
-      if (node.ignored) return false;
-      const depth = depthById.get(node.nodeId) ?? 0;
-      const role = String(node.role?.value ?? '');
-      if (depth > maxDepth || !node.backendDOMNodeId) return false;
-      return interactiveOnly ? interactiveRoles.has(role) : usefulRoles.has(role);
-    });
-    const nodes = eligible.slice(0, limit).map((node) => {
-      const states = Object.fromEntries(
-        (node.properties ?? [])
-          .filter((property) => ['checked', 'disabled', 'expanded', 'focused', 'pressed', 'required', 'selected'].includes(property.name ?? ''))
-          .map((property) => [property.name!, property.value?.value]),
-      );
-      const role = String(node.role?.value ?? 'generic');
-      const name = String(node.name?.value ?? '').trim();
-      const rawValue = node.value?.value != null ? String(node.value.value) : undefined;
-      const value = rawValue != null && /password|passcode|token|secret|senha/i.test(name) ? '[redacted]' : rawValue;
-      return {
-        ref: pw.bindRef(node.backendDOMNodeId!),
-        depth: depthById.get(node.nodeId) ?? 0,
-        role,
-        name,
-        ...(value != null ? { value } : {}),
-        ...(Object.keys(states).length ? { states } : {}),
-      };
-    });
-    const page = await pw.getPageState();
-    return {
-      page,
-      nodes,
-      ...(eligible.length > limit
-        ? {
-            sourceTruncations: [{
-              technique: 'preview-accessibility-window',
-              inputSize: eligible.length,
-              outputSize: limit,
-              unit: 'items',
-              recoverable: true,
-            }],
-          }
-        : {}),
-    };
   }
 
   private async open(
@@ -487,15 +206,21 @@ export class PreviewWindowService implements IPreviewDevtools {
     let reused = true;
     let startedTaskId: string | undefined;
     let source: 'explicit' | 'reused' | 'started' = url ? 'explicit' : 'reused';
+    const runner = previewDispatchRunner() ?? this.runnerBridge;
     if (!url) {
       const projectId = typeof args.projectId === 'number' ? args.projectId : null;
-      if (projectId == null || !this.runnerBridge) {
+      if (projectId == null || !runner) {
         throw new Error(
           'preview_open needs a `url` (no project dev-server resolver available here). ' +
             'Pass url=http://localhost:PORT.',
         );
       }
-      const resolved = await resolveDevUrl(this.runnerBridge, projectId, { signal });
+      const resolved = await resolveDevUrl(runner, projectId, { signal,
+        onOwnedTask: taskId => { this.ownedTaskByKey.set(key, taskId); this.ownedRunnerByKey.set(key, runner); },
+        onOwnedTaskStopped: taskId => {
+          if (this.ownedTaskByKey.get(key) === taskId) this.ownedTaskByKey.delete(key);
+        },
+      });
       url = resolved.url;
       reused = !resolved.ownedTaskId;
       source = resolved.ownedTaskId ? 'started' : 'reused';
@@ -506,8 +231,10 @@ export class PreviewWindowService implements IPreviewDevtools {
     }
     const stopServerStartedByThisOpen = async (): Promise<void> => {
       if (!startedTaskId || this.ownedTaskByKey.get(key) !== startedTaskId) return;
-      this.ownedTaskByKey.delete(key);
-      if (this.runnerBridge) await this.runnerBridge.stop(startedTaskId).catch(() => undefined);
+      if (runner) {
+        await runner.stop(startedTaskId);
+        if (this.ownedTaskByKey.get(key) === startedTaskId) this.ownedTaskByKey.delete(key);
+      }
     };
     try {
       url = requireAllowedPreviewUrl(url);
@@ -534,6 +261,7 @@ export class PreviewWindowService implements IPreviewDevtools {
     }
     const { width, height } = clampToScreen(initial.width, initial.height);
     const appIconPath = resolveAppIconPath();
+    assertPreviewDispatch();
     const win = new BrowserWindow({
       width,
       height,
@@ -571,100 +299,18 @@ export class PreviewWindowService implements IPreviewDevtools {
     let pw: PreviewWindow | null = null;
     try {
       pw = await PreviewWindow.create(win, url, () => this.loadUrl(win, url, signal));
+      throwIfAborted(signal);
+      assertPreviewDispatch();
       this.byKey.set(key, pw);
       pw.url = win.webContents.getURL();
       const viewport = applyViewport(pw, initial);
       return { windowId: pw.id, url: pw.url, viewport, reused, source };
     } catch (error) {
-      this.byKey.delete(key);
+      if (this.byKey.get(key)?.id === win.id) this.byKey.delete(key);
       if (pw) pw.close();
       else if (!win.isDestroyed()) win.destroy();
       await stopServerStartedByThisOpen();
       throw error;
-    }
-  }
-
-  // ── Dashboard-driven "Inspect" (universal element selection) ──────────
-  // Reuses the agent CDP window machinery: open the app, inject the
-  // framework-agnostic inspector, and stream selections back to the dashboard.
-
-  /** Subscribe to selections for a key. Safe to call before `openInspect`. */
-  onInspectSelect(key: string, cb: (d: unknown) => void): () => void {
-    let set = this.inspectListeners.get(key);
-    if (!set) this.inspectListeners.set(key, (set = new Set()));
-    set.add(cb);
-    return () => { this.inspectListeners.get(key)?.delete(cb); };
-  }
-
-  private fanoutSelect(key: string, d: unknown): void {
-    const set = this.inspectListeners.get(key);
-    if (set) for (const cb of Array.from(set)) { try { cb(d); } catch { /* listener threw */ } }
-  }
-
-  /**
-   * Open (or reuse) the window at `url` and inject the inspector + control bar.
-   * `arm` starts in selection mode; otherwise it opens in navigate mode (the
-   * bar's Inspect toggle / dashboard can arm later). Used by both the dashboard
-   * "Inspect" (arm) and "Open in new window" (navigate) entry points.
-   */
-  async openInspect(
-    key: string,
-    url: string,
-    opts: { arm?: boolean; selectorMode?: string } = {},
-  ): Promise<{ windowId: number; url: string }> {
-    const res = await this.open(key, { url });
-    const pw = this.byKey.get(key);
-    if (pw) {
-      if (!this.inspectForwarded.has(pw)) {
-        pw.onSelect((d) => this.fanoutSelect(key, d));
-        pw.onControl((action) => this.handleControl(key, action));
-        this.inspectForwarded.add(pw);
-      }
-      // detection globals + region helpers FIRST (the inspector's detect()/marquee
-      // handlers call them), then the inspector, then the floating control bar.
-      await pw.armInspect(`${REACT_DETECT_SOURCE}\n${REGION_HELPERS_SOURCE}\n${UNIVERSAL_INSPECTOR_SOURCE}\n${UNIVERSAL_TOOLBAR_SOURCE}`);
-      // Selector mode: 'react' forces a React label on fiberless nodes (RSC),
-      // 'universal' keeps react→vue→angular→css. setSelectorMode registers it as
-      // its own on-new-document script so it survives in-window navigation/reload
-      // (not just the first page), and updates the current doc immediately.
-      const mode =
-        opts.selectorMode === 'react' || opts.selectorMode === 'universal' ? opts.selectorMode : 'auto';
-      await pw.setSelectorMode(mode);
-      await pw.send('Runtime.evaluate', {
-        expression: opts.arm ? 'window.__mcpArm && window.__mcpArm()' : 'window.__mcpDisarm && window.__mcpDisarm()',
-      }).catch(() => undefined);
-    }
-    return { windowId: res.windowId, url: res.url };
-  }
-
-  /** Live-update an open inspect window's selector mode (dashboard toggle while
-   *  the window stays open). No-op if the window isn't open. */
-  async setInspectMode(key: string, mode: string): Promise<void> {
-    const pw = this.byKey.get(key);
-    if (pw && !pw.win.isDestroyed()) {
-      const m = mode === 'react' || mode === 'universal' ? mode : 'auto';
-      await pw.setSelectorMode(m);
-    }
-  }
-
-  async disarmInspect(key: string): Promise<void> {
-    const pw = this.byKey.get(key);
-    if (pw && !pw.win.isDestroyed()) await pw.disarmInspect();
-  }
-
-  /** Bring the inspect window to the front (dashboard "Focus"). */
-  focusInspect(key: string): void {
-    const pw = this.byKey.get(key);
-    if (pw && !pw.win.isDestroyed()) { try { pw.win.focus(); } catch { /* gone */ } }
-  }
-
-  /** Control-bar actions from the injected toolbar (`viewport:<preset>`, `close`). */
-  private handleControl(key: string, action: string): void {
-    if (action === 'close') { this.closeKey(key); return; }
-    if (action.startsWith('viewport:')) {
-      const vp = VIEWPORT_PRESETS[action.slice('viewport:'.length)];
-      const pw = this.byKey.get(key);
-      if (pw && vp) applyViewport(pw, vp);
     }
   }
 
@@ -677,6 +323,7 @@ export class PreviewWindowService implements IPreviewDevtools {
   }
 
   private loadUrl(win: BrowserWindow, url: string, signal: AbortSignal): Promise<void> {
+    assertPreviewDispatch();
     throwIfAborted(signal);
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -709,43 +356,57 @@ export class PreviewWindowService implements IPreviewDevtools {
   }
 
   closeKey(key: string): void {
+    for (const operation of this.pending) if (operation.key === key) operation.controller.abort();
     // Notify the dashboard BEFORE teardown; delete synchronously so a quick
     // re-open never reuses a closing window. The window 'closed' handler then
     // no-ops (byKey already cleared), so the sentinel fires exactly once.
     // NOTE: leaves ownedTaskByKey intact — the owned dev server survives a
     // window close (turn end) for reuse; only closeSession stops it.
-    this.fanoutSelect(key, { type: 'mcp:closed' });
-    this.byKey.get(key)?.close();
+    const preview = this.byKey.get(key);
+    preview?.close();
+    if (this.byKey.get(key) === preview) this.fanoutSelect(key, { type: 'mcp:closed' });
     this.byKey.delete(key);
     this.inspectListeners.delete(key);
   }
 
   private matchingKeys(prefix: string): string[] {
-    const all = new Set([...this.byKey.keys(), ...this.ownedTaskByKey.keys()]);
+    const all = new Set([...this.byKey.keys(), ...this.ownedTaskByKey.keys(), ...[...this.pending].map(item => item.key)]);
     return Array.from(all).filter((key) => key === prefix || key.startsWith(`${prefix}-`));
   }
 
-  private closePrefix(prefix: string): void {
-    for (const key of this.matchingKeys(prefix)) this.closeKey(key);
-  }
-
   private async closeSessionPrefix(prefix: string): Promise<void> {
+    if (this.matchingKeys(prefix).some(key => this.scopeOwners.has(key))) throw new Error('Cannot close an owned preview through a legacy prefix');
     await Promise.all(this.matchingKeys(prefix).map((key) => this.closeSession(key)));
   }
 
   /** Session evict: close the window AND stop the dev server we started for
    *  it (if any). The user's own runner is never owned, so it stays up. */
   async closeSession(key: string): Promise<void> {
+    await this.closeOwnedKey(key, true);
+  }
+
+  private closeOwnedKey(key: string, stopServer: boolean): Promise<void> {
+    const previous = this.closingKeys.get(key);
+    // A session close arriving after a window close must still stop its server.
+    if (previous) return previous.then(() => stopServer ? this.closeOwnedKey(key, true) : undefined);
+    const closed = this.finishCloseKey(key, stopServer).finally(() => {
+      if (this.closingKeys.get(key) === closed) this.closingKeys.delete(key);
+    });
+    this.closingKeys.set(key, closed);
+    return closed;
+  }
+
+  private async finishCloseKey(key: string, stopServer: boolean): Promise<void> {
     this.closeKey(key);
+    await this.drainKey(key);
+    if (!stopServer) return;
     const taskId = this.ownedTaskByKey.get(key);
-    this.ownedTaskByKey.delete(key);
-    if (taskId && this.runnerBridge) {
-      try {
-        await this.runnerBridge.stop(taskId);
-      } catch {
-        /* runner already gone — best-effort */
-      }
+    const runner = this.ownedRunnerByKey.get(key) ?? this.runnerBridge;
+    if (taskId && runner) {
+      await runner.stop(taskId);
+      if (this.ownedTaskByKey.get(key) === taskId) this.ownedTaskByKey.delete(key);
     }
+    this.ownedRunnerByKey.delete(key);
     try {
       await session.fromPartition(partitionForKey(key)).clearStorageData();
     } catch {
@@ -754,17 +415,40 @@ export class PreviewWindowService implements IPreviewDevtools {
   }
 
   async closeAll(): Promise<void> {
-    for (const controller of this.inFlight.values()) controller.abort();
-    this.inFlight.clear();
-    for (const pw of this.byKey.values()) pw.close();
-    this.byKey.clear();
-    this.inspectListeners.clear();
+    if (this.closing) return this.closing;
+    const operations = [...this.pending];
+    for (const operation of operations) operation.controller.abort();
+    const closing = this.finishCloseAll([...operations.map(item => item.done), ...this.closingKeys.values()]);
+    this.closing = closing;
+    try { await closing; }
+    finally { if (this.closing === closing) this.closing = null; }
+  }
+
+  private async drainKey(key: string): Promise<void> {
+    await Promise.allSettled([...this.pending].filter(item => item.key === key).map(item => item.done));
+  }
+
+  private async finishCloseAll(operations: Promise<unknown>[]): Promise<void> {
+    await Promise.allSettled(operations);
+    const failures: unknown[] = [];
+    for (const [key, pw] of [...this.byKey]) {
+      try { pw.close(); this.byKey.delete(key); this.inspectListeners.delete(key); }
+      catch (cause) { failures.push(cause); }
+    }
     // Stop every preview-owned dev server before the runner worker pool goes
     // away. Awaiting this prevents a late stop request from racing app exit.
-    const ownedTasks = [...this.ownedTaskByKey.values()];
-    this.ownedTaskByKey.clear();
-    if (this.runnerBridge) {
-      await Promise.allSettled(ownedTasks.map((taskId) => this.runnerBridge!.stop(taskId)));
+    const ownedTasks = [...this.ownedTaskByKey.entries()];
+    {
+      const results = await Promise.allSettled(ownedTasks.map(async ([key, taskId]) => {
+        const runner = this.ownedRunnerByKey.get(key) ?? this.runnerBridge;
+        if (!runner) throw new Error('Preview server has no cleanup owner');
+        await runner.stop(taskId);
+        if (this.ownedTaskByKey.get(key) === taskId) this.ownedTaskByKey.delete(key);
+        this.ownedRunnerByKey.delete(key);
+      }));
+      for (const result of results) if (result.status === 'rejected') failures.push(result.reason);
     }
+    if (failures.length) throw new AggregateError(failures, 'Preview cleanup is unconfirmed');
+    this.scopeOwners.clear();
   }
 }

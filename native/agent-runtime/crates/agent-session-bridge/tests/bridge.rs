@@ -25,6 +25,71 @@ const REQUEST_HASH_DOMAIN: &[u8] = b"codestudio.agent.session-store-request.v1\0
 const RESPONSE_HASH_DOMAIN: &[u8] = b"codestudio.agent.session-store-response.v1\0";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
 
+#[test]
+fn storage_root_mutex_is_exclusive_across_owners_and_released_on_drop() {
+    use wire::session_store_request::Body as Request;
+    use wire::session_store_response::Body as Response;
+    let root = TestRoot::new("root-mutex");
+    let mut first = bridge(&root);
+    let mut second = bridge(&root);
+    let acquire = || {
+        Request::AcquireStorageRootLock(wire::AcquireStorageRootLock {
+            root_id: ROOT_ID.to_owned(),
+            lock_name: "workspace-leases".to_owned(),
+        })
+    };
+    let Some(Response::StorageRootLockAcquired(held)) = send(&mut first, 1, acquire()).body else {
+        panic!("lock missing");
+    };
+    let Some(Response::Failure(failure)) = send(&mut second, 1, acquire()).body else {
+        panic!("expected contention");
+    };
+    assert_eq!(
+        failure.code,
+        i32::from(wire::SessionStoreFailureCode::LockBusy)
+    );
+    // A handle from another native owner cannot release this owner's lock.
+    assert!(matches!(
+        send(
+            &mut second,
+            2,
+            Request::ReleaseStorageRootLock(wire::ReleaseStorageRootLock {
+                lock_handle: held.lock_handle
+            })
+        )
+        .body,
+        Some(Response::Failure(_))
+    ));
+    drop(first);
+    let Some(Response::StorageRootLockAcquired(acquired)) = send(&mut second, 3, acquire()).body
+    else {
+        panic!("not released on drop");
+    };
+    assert!(matches!(
+        send(
+            &mut second,
+            4,
+            Request::ReleaseStorageRootLock(wire::ReleaseStorageRootLock {
+                lock_handle: acquired.lock_handle
+            })
+        )
+        .body,
+        Some(Response::StorageRootLockReleased(_))
+    ));
+    assert!(matches!(
+        send(
+            &mut second,
+            5,
+            Request::AcquireStorageRootLock(wire::AcquireStorageRootLock {
+                root_id: ROOT_ID.to_owned(),
+                lock_name: "../escape".to_owned()
+            })
+        )
+        .body,
+        Some(Response::Failure(_))
+    ));
+}
+
 struct TestRoot(PathBuf);
 
 impl TestRoot {
@@ -113,6 +178,7 @@ fn open_commit_query_archive_and_replay_stay_fenced() {
         wire::session_store_request::Body::QuerySessionState(wire::QuerySessionState {
             writer_handle: handle.clone(),
             authority: Some(authority()),
+            reader_handle: String::new(),
         }),
     );
     let wire::session_store_response::Body::SessionState(state) =
@@ -164,6 +230,8 @@ fn assert_record_page(
                 authority: Some(authority()),
                 after_global_sequence: 0,
                 max_records: 8,
+                snapshot_id: String::new(),
+                reader_handle: String::new(),
             },
         ),
     );
@@ -208,6 +276,7 @@ fn committed_payload_read_is_path_free_fenced_and_byte_verified() {
         panic!("expected commit receipt");
     };
     let read = wire::ReadCommittedSessionPayload {
+        reader_handle: String::new(),
         writer_handle: opened.writer_handle,
         authority: Some(authority()),
         operation_id: COMMIT_OPERATION_ID.to_owned(),
@@ -517,6 +586,124 @@ fn open(idempotency_key: &str) -> wire::OpenSessionWriter {
         }),
         idempotency_key: idempotency_key.to_owned(),
     }
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one reader/writer lifecycle fixture verifies authority before and after takeover"
+)]
+fn reader_coexists_with_writer_and_cannot_authorize_mutation() {
+    use wire::session_store_request::Body as Request;
+    use wire::session_store_response::Body as Response;
+    let root = TestRoot::new("reader-owner");
+    let mut owner = bridge(&root);
+    let Response::SessionWriterOpened(writer) = send(
+        &mut owner,
+        1,
+        Request::OpenSessionWriter(open("reader-test")),
+    )
+    .body
+    .unwrap() else {
+        panic!("writer");
+    };
+    let Response::CommitSessionRecordReceipt(receipt) = send(
+        &mut owner,
+        2,
+        Request::CommitSessionRecord(commit(&writer.writer_handle, b"content")),
+    )
+    .body
+    .unwrap() else {
+        panic!("receipt");
+    };
+    let Response::SessionReaderOpened(reader) = send(
+        &mut owner,
+        3,
+        Request::OpenSessionReader(wire::OpenSessionReader {
+            root_id: ROOT_ID.to_owned(),
+            session_id: SESSION_ID.to_owned(),
+            authority: None,
+            limits: open("").limits,
+        }),
+    )
+    .body
+    .unwrap() else {
+        panic!("reader");
+    };
+    assert_eq!(owner.active_writer_count(), 1);
+    assert_eq!(
+        reader.state.as_ref().unwrap().authority.as_ref().unwrap(),
+        &authority()
+    );
+    let Response::CommittedSessionRecordPage(page) = send(
+        &mut owner,
+        4,
+        Request::ListCommittedSessionRecords(wire::ListCommittedSessionRecords {
+            reader_handle: reader.reader_handle.clone(),
+            authority: Some(authority()),
+            max_records: 2,
+            snapshot_id: reader.snapshot_id,
+            ..Default::default()
+        }),
+    )
+    .body
+    .unwrap() else {
+        panic!("page");
+    };
+    assert_eq!(page.records[0].commit_sha256, receipt.commit_sha256);
+    let Response::CommittedSessionPayload(payload) = send(
+        &mut owner,
+        5,
+        Request::ReadCommittedSessionPayload(wire::ReadCommittedSessionPayload {
+            reader_handle: reader.reader_handle.clone(),
+            authority: Some(authority()),
+            operation_id: receipt.operation_id,
+            kind: receipt.kind,
+            expected_payload_sha256: receipt.payload_sha256,
+            expected_payload_bytes: receipt.payload_bytes,
+            ..Default::default()
+        }),
+    )
+    .body
+    .unwrap() else {
+        panic!("payload");
+    };
+    assert_eq!(payload.encoded_payload, b"content");
+    assert!(matches!(
+        send(
+            &mut owner,
+            6,
+            Request::CommitSessionRecord(commit(&reader.reader_handle, b"forbidden"))
+        )
+        .body,
+        Some(Response::Failure(_))
+    ));
+    assert!(matches!(
+        send(
+            &mut owner,
+            7,
+            Request::QuerySessionState(wire::QuerySessionState {
+                reader_handle: reader.reader_handle.clone(),
+                writer_handle: writer.writer_handle,
+                authority: Some(authority()),
+            })
+        )
+        .body,
+        Some(Response::Failure(_))
+    ));
+    assert!(matches!(
+        send(
+            &mut owner,
+            8,
+            Request::CloseSessionReader(wire::CloseSessionReader {
+                reader_handle: reader.reader_handle,
+                authority: Some(authority()),
+            })
+        )
+        .body,
+        Some(Response::SessionReaderClosed(_))
+    ));
+    assert_eq!(owner.active_writer_count(), 1);
 }
 
 fn commit(handle: &str, payload: &[u8]) -> wire::CommitSessionRecord {

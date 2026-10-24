@@ -13,6 +13,7 @@ import type { ResolvedBinding } from '../pipelines/index.js';
 import { createChatProviderAsync } from '../providers/factory.js';
 import { pickChatFn } from './chat-dispatcher.js';
 import type { ChatCallOptions, ChatCallResult, ChatMessage } from './llm-chat.js';
+import { abortedChatResult } from './chat-retry.js';
 
 export const DIRECT_CHAT_KINDS = new Set([
   'anthropic',
@@ -80,6 +81,7 @@ export async function coderProviderChat(
   messages: ChatMessage[],
   options: ChatCallOptions,
 ): Promise<ChatCallResult> {
+  if (options.signal?.aborted) return abortedChatResult();
   const startedAt = performance.now();
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 30_000;
@@ -88,14 +90,16 @@ export async function coderProviderChat(
   let ttftMs: number | undefined;
   let tokensIn: number | undefined;
   let tokensOut: number | undefined;
+  const onAbort = () => controller.abort('aborted');
   if (options.signal) {
     if (options.signal.aborted) controller.abort('aborted');
-    else options.signal.addEventListener('abort', () => controller.abort('aborted'), { once: true });
+    else options.signal.addEventListener('abort', onAbort, { once: true });
   }
   try {
     const provider = await createChatProviderAsync(binding.provider.id, binding.modelId, {
       providerId: binding.provider.id,
     });
+    controller.signal.throwIfAborted();
     const system = messages
       .filter((message) => message.role === 'system')
       .map((message) => message.content)
@@ -125,6 +129,7 @@ export async function coderProviderChat(
       signal: controller.signal,
       inference: { temperature: options.temperature },
     })) {
+      controller.signal.throwIfAborted();
       if (delta.type === 'text_delta') {
         if (ttftMs === undefined && delta.text.length > 0) ttftMs = performance.now() - startedAt;
         content += delta.text;
@@ -186,6 +191,7 @@ export async function coderProviderChat(
     };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -195,6 +201,7 @@ export async function callConfiguredChat(
   messages: ChatMessage[],
   options: ChatCallOptions,
 ): Promise<ChatCallResult> {
+  if (options.signal?.aborted) return abortedChatResult();
   if (CODER_CHAT_KINDS.has(binding.provider.kind)) {
     return coderProviderChat(binding, messages, options);
   }

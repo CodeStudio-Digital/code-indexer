@@ -3,7 +3,7 @@
  * collections, environments, requests (verification folded in) and
  * regression-run history. Project-scoped.
  *
- * Dual-mode constructor (path | shared DB handle), same as DesignSystemStore.
+ * Dual-mode constructor (path | shared DB handle).
  */
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
@@ -190,6 +190,16 @@ export class ApiClientStore {
   }
 
   // ─── Requests ────────────────────────────────────────────────────────
+  /** Interactive listing never loads body/script/secret JSON for every row. */
+  listRequestSummaries(collectionId: number, limit = 101, offset = 0): Pick<ApiRequest,
+    'id' | 'name' | 'method' | 'path_template' | 'verified' | 'expected_status' | 'last_status'>[] {
+    const take = Number.isSafeInteger(limit) ? Math.min(501, Math.max(1, limit)) : 101;
+    const skip = Number.isSafeInteger(offset) ? Math.max(0, offset) : 0;
+    return (this.db.prepare(`SELECT id, name, method, path_template, verified, expected_status, last_status
+      FROM api_requests WHERE collection_id = ? ORDER BY sort_order ASC, id ASC LIMIT ? OFFSET ?`)
+      .all(collectionId, take, skip) as Row[]).map(hydrateRequest);
+  }
+
   listRequests(collectionId: number): ApiRequest[] {
     return (this.db.prepare('SELECT * FROM api_requests WHERE collection_id = ? ORDER BY sort_order ASC, id ASC')
       .all(collectionId) as Row[]).map(hydrateRequest);

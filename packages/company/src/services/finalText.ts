@@ -8,7 +8,7 @@
  * back to a generic message rather than failing.
  */
 
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 
 export async function readFinalAssistantText(
   sessionStore: FsSessionStore,

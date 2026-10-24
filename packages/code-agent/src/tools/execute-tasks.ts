@@ -18,10 +18,13 @@
  *   - 'auto' (default) — subagent dispatch per kind, parallel batching.
  *   - 'inline-all'     — every task runs inline in the master (legacy).
  */
+import { createHash } from 'node:crypto';
 import type { CoderTool, ToolResult, ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import type { ChatUsage, AgentMessage } from '@mcp/code-agent/core/messages.js';
-import type { CoderTask, TaskStatus, TasksState } from '@mcp/code-agent/sessions/types.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTask, TaskStatus, TasksState } from '@mcp/session-storage/session-state-types.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
+import { isUncertainToolOutcomeError } from '@mcp/code-agent/core/uncertain-tool-outcome.js';
+import { openNativeTaskCheckpoint } from './execute-tasks/native-task-checkpoint.js';
 import {
   runSubagent,
   runParallelAgents,
@@ -46,7 +49,7 @@ import {
   type SubagentResearchPolicy,
 } from '@mcp/code-agent/tools/subagent-research-policy.js';
 import { applyPlanApproval } from '@mcp/code-agent/tools/plan.js';
-import { effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
+import { effectiveGate, taskNeedsReconciliation } from '@mcp/code-agent/tools/task-list-shared.js';
 import {
   type ExecuteTasksMode,
   type TaskLimit,
@@ -72,6 +75,7 @@ import {
 import { createTaskRunPersist } from './execute-tasks/task-run-persistence.js';
 import { dispatchWithRetry } from './execute-tasks/task-retry.js';
 import { shouldSkipTask } from './execute-tasks/task-stale-check.js';
+import { bindTaskContext } from '../ports/task-tool-port.js';
 
 export const DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS = 30_000;
 
@@ -263,19 +267,21 @@ const executeTasksSchema: JsonSchema = {
  */
 async function handleExecuteTasksInPlanMode(
   ctx: ToolContext,
-  runner: NonNullable<ToolContext['runner']>,
+  runner: ToolContext['runner'],
   state: TasksState | null | undefined,
 ): Promise<ToolResult | null> {
+  const nativeReview = ctx.runtimeGeneration === 'rust_v1' ? ctx.ports?.interactions : undefined;
+  if (!nativeReview && !runner) return err('execute_tasks requires an owned plan review port.');
   const hasApprovedTasks = !!state?.approved && state.tasks.length > 0;
   if (hasApprovedTasks) {
     // submit_tasks already collected the user's approval — unlock + switch to
     // build, then let the waves run. Fixes the pre-existing dead-end where
     // markTasksApproved() left planApproved=false and execute_tasks got gated.
-    await applyPlanApproval(runner, ctx);
+    await applyPlanApproval(nativeReview ?? runner!, ctx);
     return null;
   }
 
-  const id = `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = nativeReview ? ctx.currentToolUseId! : `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const planText =
     state && state.tasks.length > 0
       ? `Execute the proposed task list:\n${state.tasks
@@ -284,9 +290,13 @@ async function handleExecuteTasksInPlanMode(
       : 'The agent called execute_tasks to start working but has not submitted a written ' +
         'plan or task list. Approve leaving plan mode to begin?';
   await ctx.recordPlan?.(id, planText);
-  runner.emit('plan_posted', { type: 'plan', id, plan: planText, kind: 'mutating' });
-
-  const raw = await runner.waitForUserInput();
+  let raw: string;
+  if (nativeReview) raw = await nativeReview.request({ kind: 'plan', payload: { type: 'plan', id, plan: planText, kind: 'mutating' } }, ctx.signal);
+  else {
+    const response = runner!.waitForUserInput();
+    runner!.emit('plan_posted', { type: 'plan', id, plan: planText, kind: 'mutating' });
+    raw = await response;
+  }
   let parsed: { approved?: boolean; feedback?: string; aborted?: boolean; interrupted?: boolean };
   try {
     parsed = JSON.parse(raw);
@@ -308,7 +318,7 @@ async function handleExecuteTasksInPlanMode(
   }
 
   await ctx.resolvePlan?.(id, 'approved', parsed.feedback);
-  const extras = await applyPlanApproval(runner, ctx);
+  const extras = await applyPlanApproval(nativeReview ?? runner!, ctx);
   return {
     content:
       `Plan approved by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
@@ -326,8 +336,13 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
     parameters: executeTasksSchema,
     source: 'native',
     mutates: true,
+    parallelSafe: false,
+    riskLevel: 'write',
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-      const state = ctx.getTasksState?.();
+      if (ctx.runtimeGeneration === 'rust_v1') ctx = bindTaskContext(ctx, 'execute_tasks');
+      let checkpoint: Awaited<ReturnType<typeof openNativeTaskCheckpoint>> | undefined;
+      try {
+      let state = ctx.getTasksState?.();
 
       // Plan/spec mode: execute_tasks is the model's "done planning, execute"
       // signal. The gate now lets it reach here (instead of dead-ending);
@@ -335,7 +350,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       // short-circuit (rejected / no-list cases) or null to fall through and
       // run the waves (an already-approved list — the approval was the gate).
       const planRunner = ctx.runner;
-      if (planRunner && planRunner.planMode && !planRunner.isPlanApproved()) {
+      if (ctx.runtimeGeneration === 'rust_v1' ? ctx.planMode === true : planRunner && planRunner.planMode && !planRunner.isPlanApproved()) {
         const gated = await handleExecuteTasksInPlanMode(ctx, planRunner, state);
         if (gated) return gated;
       }
@@ -351,8 +366,18 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       if (!state.approved) return err('execute_tasks: task list not approved yet.');
       if (state.tasks.length === 0) return err('execute_tasks: empty task list.');
 
+      if (ctx.runtimeGeneration === 'rust_v1' && !(ctx.taskRuntime ?? ctx.runner)?.currentTaskScopeId?.()) {
+        if (!deps.sessionStore || !ctx.sessionId) throw new Error('Native task execution requires its durable session store');
+        checkpoint = await openNativeTaskCheckpoint({ store: deps.sessionStore, sessionId: ctx.sessionId, context: ctx, state });
+        ctx = checkpoint.context;
+        state = ctx.getTasksState!()!;
+      }
+      if (state.tasks.some(taskNeedsReconciliation)) {
+        return err('execute_tasks: a previous task effect is unresolved. Reconcile its durable execution before starting another attempt.');
+      }
+
       const mode: ExecuteTasksMode = resolveExecuteTasksMode(args, state);
-      const parentSessionId = ctx.runner?.sessionId;
+      const parentSessionId = ctx.sessionId ?? ctx.runner?.sessionId;
       console.log(
         `[coder/tasks] execute_tasks start session=${parentSessionId ?? '?'} ` +
         `mode=${mode} total=${state.tasks.length}`,
@@ -369,17 +394,33 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         return ok('execute_tasks: all tasks already terminal (done/skipped). Nothing to run.');
       }
 
+      // Refuse before creating a durable run: an already-active inline task
+      // must not leave a second, permanently "running" orchestration record.
+      const activeScopeId = (ctx.taskRuntime ?? ctx.runner)?.currentTaskScopeId?.();
+      if (activeScopeId) {
+        const activeTask = state.tasks.find((t) => t.id === activeScopeId);
+        return err(
+          `execute_tasks: an inline task scope is already active (${activeScopeId}` +
+            (activeTask ? ` "${activeTask.title}"` : '') +
+            '). Finish it with task_complete(task_id, summary, ...) before calling execute_tasks again.',
+        );
+      }
+
       const runId = makeTaskRunId();
       const startedAt = new Date().toISOString();
       const totalRunnableTasks = waves.reduce((sum, wave) => sum + wave.length, 0);
 
       // PR-B persistence bridge. Inert when there's no real session store
       // (test contexts, inline tools without a session row).
-      const persist = createTaskRunPersist({
+      const basePersist = createTaskRunPersist({
         store: deps.sessionStore,
-        sessionId: ctx.runner?.sessionId,
+        sessionId: parentSessionId,
       });
-      await persist.recordRunStarted({ runId, mode, startedAt });
+      const persist = checkpoint ? checkpoint.wrap(basePersist) : basePersist;
+      await persist.recordRunStarted({ runId, mode, startedAt,
+        ...(ctx.runtimeGeneration === 'rust_v1' ? { runtimeGeneration: 'rust_v1',
+          taskPlanSha256: createHash('sha256').update(JSON.stringify(state)).digest('hex'), ownerToolUseId: ctx.currentToolUseId } : {}),
+      });
 
       // PR-E: token budget tracker. Cap of 0/null means unlimited (gate
       // becomes a no-op). When over, the orchestrator asks the user via
@@ -388,22 +429,26 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       const tokenCap = deps.executeTasksTokenCap ?? loadDefaultTokenCap();
       const budget = new BudgetTracker({ tokensCap: tokenCap });
       const runnerForAsk = ctx.runner;
-      const askUserBudget: BudgetAskCallback | undefined = runnerForAsk
+      const askUserBudget: BudgetAskCallback | undefined = ctx.taskRuntime?.requestBudget
+        ? async req => parseBudgetAnswer(await ctx.taskRuntime!.requestBudget!({ runId, ...req,
+          timeoutMs: deps.executeTasksBudgetResponseTimeoutMs ?? taskBudgetResponseTimeoutMs() }))
+        : runnerForAsk
         ? async (req) => {
             const askId = `budget_${runId}_${Date.now().toString(36)}`;
-            runnerForAsk.emit('budget_request', { ask_id: askId, run_id: runId, ...req });
             // Budget UI is advisory, never an unbounded execution lock. If no
             // compatible surface answers, cancel queued work conservatively.
-            const raw = await waitForBudgetAnswer(
+            const waiting = waitForBudgetAnswer(
               runnerForAsk,
               askId,
               deps.executeTasksBudgetResponseTimeoutMs ?? taskBudgetResponseTimeoutMs(),
             );
+            runnerForAsk.emit('budget_request', { ask_id: askId, run_id: runId, ...req });
+            const raw = await waiting;
             return parseBudgetAnswer(raw);
           }
         : undefined;
 
-      ctx.runner?.emit('task_run_started', {
+      (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_started', {
         run_id: runId,
         mode,
         total_tasks: totalRunnableTasks,
@@ -419,23 +464,11 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       });
       ctx.reportProgress?.(`execute_tasks: ${totalRunnableTasks} task(s) across ${waves.length} wave(s)`);
 
-      // PR-G: smart inline. If a previous execute_tasks call opened an
-      // inline task scope and the agent hasn't called task_complete yet,
-      // refuse with an actionable message instead of opening a second
-      // scope on top.
-      const activeScopeId = ctx.runner?.currentTaskScopeId?.();
-      if (activeScopeId) {
-        const activeTask = state.tasks.find((t) => t.id === activeScopeId);
-        return err(
-          `execute_tasks: an inline task scope is already active (${activeScopeId}` +
-            (activeTask ? ` "${activeTask.title}"` : '') +
-            '). Finish it with task_complete(task_id, summary, ...) before calling execute_tasks again.',
-        );
-      }
-
       const summaries: string[] = [];
       const totalUsage: ChatUsage = { input_tokens: 0, output_tokens: 0 };
       let failedTasks = 0;
+      let uncertainEffect = false;
+      const executionReceipts = { dispatched: false, pending: new Set<string>() };
       const statusById = seedStatusById(state.tasks);
       // PR-G: when we open an inline scope, we return early with a
       // bespoke message. This flag short-circuits the wave loop.
@@ -450,7 +483,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
           );
 
           for (const group of groups) {
-            const run: TaskRunContext = { runId, mode, wave: w + 1, totalWaves: waves.length, persist };
+            const run: TaskRunContext = { runId, mode, wave: w + 1, totalWaves: waves.length, persist, executionReceipts };
             const runnableSubagent: CoderTask[] = [];
             const runnableInline: CoderTask[] = [];
             const fingerprintByTask = new Map<string, string | null>();
@@ -470,7 +503,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
                 task,
                 cwd: ctx.cwd ?? process.cwd(),
                 store: deps.sessionStore,
-                sessionId: ctx.runner?.sessionId,
+                sessionId: ctx.sessionId ?? ctx.runner?.sessionId,
               });
               if (staleVerdict.skip) {
                 const skippedResult = await skipTaskAsStale(ctx, run, task, staleVerdict);
@@ -521,6 +554,10 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
             accumulateUsage(totalUsage, tasksRun.usage);
             // PR-E: feed REAL spend back to the tracker after each group.
             budget.addSpend(tasksRun.usage.input_tokens ?? 0, tasksRun.usage.output_tokens ?? 0);
+            if (tasksRun.results.some(result => result.effectOutcome === 'unknown')) {
+              uncertainEffect = true;
+              break outer;
+            }
 
             // PR-G: now open the first inline scope (one at a time —
             // inline tasks need the parent runner to actually work).
@@ -539,9 +576,19 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
           }
         }
       } catch (e) {
+        uncertainEffect ||= isUncertainToolOutcomeError(e) || executionReceipts.pending.size > 0;
         failedTasks++;
         const message = e instanceof Error ? e.message : String(e);
         summaries.push(`### execute_tasks — orchestrator failure [status=failed]\n${message}`);
+        if (uncertainEffect) {
+          ctx.toolCallLedger?.markOutcomeUnknown('execute_tasks');
+          for (const taskId of executionReceipts.pending) {
+            try {
+              await ctx.updateTaskStatus?.(taskId, { status: 'failed', result: { summary: message, files_modified: [],
+                errors: 'outcome_unknown: task finalization was not confirmed', effectOutcome: 'unknown' } });
+            } catch { /* The typed uncertain tool result still fences the parent. */ }
+          }
+        }
       }
 
       // PR-G: paused-mid-run path — an inline scope was opened, the run
@@ -570,13 +617,14 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
 
       const runFinishedAt = new Date().toISOString();
       const runStatus: 'completed' | 'failed' = failedTasks > 0 ? 'failed' : 'completed';
-      await persist.recordRunFinished({
-        runId,
-        status: runStatus,
-        finishedAt: runFinishedAt,
-        totalUsage,
-      });
-      ctx.runner?.emit('task_run_finished', {
+      try {
+        await persist.recordRunFinished({ runId, status: runStatus, finishedAt: runFinishedAt, totalUsage });
+      } catch (cause) {
+        if (!executionReceipts.dispatched) throw cause;
+        ctx.toolCallLedger?.markOutcomeUnknown('execute_tasks');
+        return { ...unknownToolOutcome('execute_tasks finished child work but could not confirm the run checkpoint. Reconcile its task records before retrying.'), subUsage: totalUsage };
+      }
+      (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_finished', {
         run_id: runId,
         status: runStatus,
         total_usage: totalUsage,
@@ -588,9 +636,10 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         `input=${totalUsage.input_tokens} output=${totalUsage.output_tokens}]\n\n`;
       const content = header + summaries.join('\n\n---\n\n');
       return {
-        ...(failedTasks > 0 ? err(content) : ok(content)),
+        ...(uncertainEffect ? unknownToolOutcome(content) : failedTasks > 0 ? err(content) : ok(content)),
         subUsage: totalUsage,
       };
+      } finally { await checkpoint?.close(); }
     },
   };
 }
@@ -611,6 +660,7 @@ async function runGroupSequential(
     const r = await runOneTask(deps, t, ctx, run, fingerprint);
     results.push(r);
     accumulateUsage(usage, r.usage);
+    if (r.effectOutcome === 'unknown') break;
   }
   return { results, usage };
 }
@@ -628,7 +678,7 @@ async function runGroupParallel(
   for (const t of tasks) {
     await emitTaskRunTaskStarted(ctx, run, t, startedAt, 'subagent');
     await ctx.updateTaskStatus?.(t.id, { status: 'running', started_at: startedAt, mode_used: 'subagent' });
-    ctx.runner?.emit('task_started', { task_id: t.id, mode: 'subagent', started_at: startedAt });
+    (ctx.taskRuntime ?? ctx.runner)?.emit('task_started', { task_id: t.id, mode: 'subagent', started_at: startedAt });
   }
 
   const specs: ParallelAgentSpec[] = await Promise.all(tasks.map(async (t) => {
@@ -647,11 +697,15 @@ async function runGroupParallel(
       pathScope: art.pathScope,
       pathScopeMode: art.pathScopeMode,
       limits: resolveTaskLimit(t, deps.resolveLimitsForProfile?.(profile)),
+      ...(ctx.runtimeGeneration === 'rust_v1' ? { onNativeAdmission: async (nativeTranscriptRef: string) => {
+        if (!run.persist.recordTaskAdmitted) throw new Error('Native task admission requires durable persistence');
+        await run.persist.recordTaskAdmitted({ runId: run.runId, task: t, waveIdx: run.wave, startedAt, nativeTranscriptRef });
+      } } : {}),
     };
   }));
 
   const groupId = `tasks-wave-${Date.now().toString(36)}`;
-  ctx.runner?.emit('agents_group_start', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('agents_group_start', {
     groupId,
     agents: tasks.map((t, i) => ({
       index: i,
@@ -667,12 +721,16 @@ async function runGroupParallel(
 
   let parallelRun: Awaited<ReturnType<typeof runParallelAgents>>;
   try {
+    if (run.executionReceipts) {
+      run.executionReceipts.dispatched = true;
+      for (const task of tasks) run.executionReceipts.pending.add(task.id);
+    }
     parallelRun = await runParallelAgents(
       {
         provider: deps.provider,
         tools: deps.parentTools,
         ctx,
-        sessionId: ctx.runner?.sessionId,
+        sessionId: ctx.sessionId ?? ctx.runner?.sessionId,
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         toolSelectionFilter: deps.toolSelectionFilter,
         externalToolTiers: deps.externalToolTiers,
@@ -682,7 +740,7 @@ async function runGroupParallel(
       MICRO_AGENT_PROFILES.implement.systemPrompt, // global fallback (never used - per-spec wins)
       MICRO_AGENT_PROFILES.implement.allowlist,    // global fallback (never used - per-spec wins)
       (progress) => {
-        ctx.runner?.emit('agent_progress', { groupId, ...progress });
+        (ctx.taskRuntime ?? ctx.runner)?.emit('agent_progress', { groupId, ...progress });
         const task = tasks[progress.agentIndex];
         if (!task) return;
         if (progress.event === 'tool_call' || progress.event === 'heartbeat') {
@@ -706,6 +764,7 @@ async function runGroupParallel(
       results: tasks.map((t) => ({
         label: `${t.kind ?? 'implement'}:${t.id}`,
         reason: 'error',
+        ...(isUncertainToolOutcomeError(e) ? { effectOutcome: 'unknown' as const } : {}),
         finalText: message,
         usage: { input_tokens: 0, output_tokens: 0 },
         sandboxViolations: [],
@@ -718,7 +777,7 @@ async function runGroupParallel(
   const { results, totalUsage } = parallelRun;
 
   const outcomeCounts = countSubagentOutcomes(results);
-  ctx.runner?.emit('agents_group_end', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('agents_group_end', {
     groupId,
     totalUsage,
     agentCount: results.length,
@@ -732,7 +791,7 @@ async function runGroupParallel(
   for (let i = 0; i < tasks.length; i++) {
     const t = tasks[i];
     const r = results[i];
-    const status: TaskStatus = r.reason === 'completed'
+    const status: TaskStatus = r.effectOutcome === 'unknown' ? 'failed' : r.reason === 'completed'
       ? 'done'
       : isPartialSubagentReason(r.reason)
         ? 'interrupted'
@@ -742,13 +801,14 @@ async function runGroupParallel(
       summary,
       files_modified: [],
       errors: status === 'failed' ? summary : undefined,
+      ...(r.effectOutcome === 'unknown' ? { effectOutcome: 'unknown' as const } : {}),
     };
     await ctx.updateTaskStatus?.(t.id, {
       status,
       finished_at: finishedAt,
       result: taskResult,
     });
-    ctx.runner?.emit('task_finished', {
+    (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
       task_id: t.id,
       status,
       result: taskResult,
@@ -762,8 +822,10 @@ async function runGroupParallel(
       toolCallCount: r.toolCallCount,
       finishedAt,
     });
+    run.executionReceipts?.pending.delete(t.id);
     summaries.push({
       task: t,
+      effectOutcome: r.effectOutcome,
       status,
       summary,
       error: taskResult.errors,
@@ -788,7 +850,7 @@ async function runOneTask(
   // Task-level lifecycle (fires ONCE regardless of retry count).
   const taskStartedAt = new Date().toISOString();
   await ctx.updateTaskStatus?.(task.id, { status: 'running', started_at: taskStartedAt, mode_used: 'subagent' });
-  ctx.runner?.emit('task_started', { task_id: task.id, mode: 'subagent', started_at: taskStartedAt });
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_started', { task_id: task.id, mode: 'subagent', started_at: taskStartedAt });
 
   const art = resolveKindArtifacts(task, ctx);
   const taskProfile = task.agent_profile ?? (task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement');
@@ -806,6 +868,7 @@ async function runOneTask(
     usage: ChatUsage;
     toolCallCount: number;
     finishedAt: string;
+    effectOutcome?: 'unknown';
   }>(async (attemptIdx) => {
     const attemptStartedAt = new Date().toISOString();
     if (attemptIdx === 0) {
@@ -838,12 +901,13 @@ async function runOneTask(
     ];
     let raw: Awaited<ReturnType<typeof runSubagent>>;
     try {
+      if (run.executionReceipts) { run.executionReceipts.dispatched = true; run.executionReceipts.pending.add(task.id); }
       raw = await runSubagent(
         {
           provider: deps.provider,
           tools: deps.parentTools,
           ctx,
-          sessionId: ctx.runner?.sessionId,
+          sessionId: ctx.sessionId ?? ctx.runner?.sessionId,
           sessionStore: deps.sessionStore,
           agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
           toolSelectionFilter: deps.toolSelectionFilter,
@@ -862,6 +926,11 @@ async function runOneTask(
           pathScope: art.pathScope,
           pathScopeMode: art.pathScopeMode,
           limits,
+          ...(ctx.runtimeGeneration === 'rust_v1' ? { onNativeAdmission: async (nativeTranscriptRef: string) => {
+            if (!run.persist.recordTaskAdmitted) throw new Error('Native task admission requires durable persistence');
+            await run.persist.recordTaskAdmitted({ runId: run.runId, task, waveIdx: run.wave,
+              startedAt: attemptStartedAt, attempt: attemptIdx, nativeTranscriptRef });
+          } } : {}),
           onProgress: (progress) => {
             toolCallCount = progress.toolCallCount;
             emitTaskRunTaskProgress(
@@ -878,6 +947,7 @@ async function runOneTask(
     } catch (e) {
       raw = {
         reason: 'error',
+        ...(isUncertainToolOutcomeError(e) ? { effectOutcome: 'unknown' as const } : {}),
         finalText: e instanceof Error ? e.message : String(e),
         usage: { input_tokens: 0, output_tokens: 0 },
         sandboxViolations: [],
@@ -886,13 +956,13 @@ async function runOneTask(
     }
 
     const finishedAt = new Date().toISOString();
-    const status: TaskStatus = raw.reason === 'completed'
+    const status: TaskStatus = raw.effectOutcome === 'unknown' ? 'failed' : raw.reason === 'completed'
       ? 'done'
       : isPartialSubagentReason(raw.reason)
         ? 'interrupted'
         : 'failed';
     const summary = raw.finalText || '(no summary)';
-    const error = status === 'failed' ? summary : undefined;
+    const error = status === 'failed' ? (raw.effectOutcome === 'unknown' ? 'outcome_unknown: ' : '') + (raw.failureDetail ?? summary) : undefined;
 
     // Per-attempt persistence — separate immutable record in the session bundle.
     // PR-D: include fingerprint so future runs of the same task can
@@ -913,24 +983,26 @@ async function runOneTask(
     });
 
     return {
-      result: { status, summary, error, usage: raw.usage, toolCallCount, finishedAt },
+      result: { status, summary, error, usage: raw.usage, toolCallCount, finishedAt, effectOutcome: raw.effectOutcome },
       shouldStop: status === 'done' || status === 'interrupted',
       errorMessage: error,
+      effectOutcome: raw.effectOutcome,
     };
-  }, { config: deps.executeTasksRetryConfig });
+  }, { config: deps.executeTasksRetryConfig, signal: ctx.signal });
 
   // Task-level finalization (fires ONCE with the FINAL attempt's outcome).
   const taskResult = {
     summary: attemptResult.summary,
     files_modified: [] as string[],
     errors: attemptResult.error,
+    ...(attemptResult.effectOutcome === 'unknown' ? { effectOutcome: 'unknown' as const } : {}),
   };
   await ctx.updateTaskStatus?.(task.id, {
     status: attemptResult.status,
     finished_at: attemptResult.finishedAt,
     result: taskResult,
   });
-  ctx.runner?.emit('task_finished', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: attemptResult.status,
     result: taskResult,
@@ -949,9 +1021,11 @@ async function runOneTask(
     attempt: attempts - 1,
     skipPersist: true,
   });
+  run.executionReceipts?.pending.delete(task.id);
 
   return {
     task,
+    effectOutcome: attemptResult.effectOutcome,
     status: attemptResult.status,
     summary: attemptResult.summary,
     error: attemptResult.error,
@@ -990,10 +1064,13 @@ async function openInlineScope(
   await ctx.updateTaskStatus?.(task.id, {
     status: 'running',
     mode_used: 'inline',
+    task_run_id: run.runId,
     started_at: startedAt,
   });
-  ctx.runner?.beginTaskScope({ id: task.id, files: task.files });
-  ctx.runner?.emit('task_started', { task_id: task.id, mode: 'inline', started_at: startedAt });
+  const runtime = ctx.taskRuntime ?? ctx.runner;
+  if (ctx.runtimeGeneration === 'rust_v1' && !runtime?.beginTaskScope) throw new Error('Native inline tasks require an owned task scope');
+  runtime?.beginTaskScope?.({ id: task.id, files: task.files });
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_started', { task_id: task.id, mode: 'inline', started_at: startedAt });
   await emitTaskRunTaskStarted(
     ctx,
     run,
@@ -1069,7 +1146,7 @@ async function skipTaskAsStale(
     finished_at: finishedAt,
     result,
   });
-  ctx.runner?.emit('task_finished', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: 'skipped',
     result,
@@ -1089,7 +1166,7 @@ async function skipTaskAsStale(
     skipReason: verdict.reason ?? 'inputs_unchanged',
     ...(verdict.fingerprint ? { inputsFingerprint: verdict.fingerprint } : {}),
   });
-  ctx.runner?.emit('task_run_task_finished', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_finished', {
     run_id: run.runId,
     task_id: task.id,
     status: 'skipped',
@@ -1154,7 +1231,7 @@ async function skipTaskAsBudgetCapped(
     finished_at: finishedAt,
     result,
   });
-  ctx.runner?.emit('task_finished', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: 'skipped',
     result,
@@ -1171,7 +1248,7 @@ async function skipTaskAsBudgetCapped(
     summary,
     skipReason,
   });
-  ctx.runner?.emit('task_run_task_finished', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_finished', {
     run_id: run.runId,
     task_id: task.id,
     status: 'skipped',
@@ -1202,7 +1279,7 @@ async function skipTaskDueToDependency(
     finished_at: finishedAt,
     result,
   });
-  ctx.runner?.emit('task_finished', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: 'skipped',
     result,
@@ -1266,7 +1343,7 @@ async function emitTaskRunTaskStarted(
     startedAt,
     attempt,
   });
-  ctx.runner?.emit('task_run_task_started', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_started', {
     run_id: run.runId,
     task_id: task.id,
     title: task.title,
@@ -1286,7 +1363,7 @@ function emitTaskRunTaskProgress(
   note?: string,
   meta: TaskRunProgressMeta = {},
 ): void {
-  ctx.runner?.emit('task_run_task_progress', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_progress', {
     run_id: run.runId,
     task_id: task.id,
     tool_call_count: toolCallCount,
@@ -1336,7 +1413,7 @@ async function emitTaskRunTaskFinished(
       ...(result.skipReason ? { skipReason: result.skipReason } : {}),
     });
   }
-  ctx.runner?.emit('task_run_task_finished', {
+  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_finished', {
     run_id: run.runId,
     task_id: task.id,
     status: result.status,

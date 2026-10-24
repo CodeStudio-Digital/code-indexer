@@ -67,11 +67,13 @@ export async function disposeSharedExtractor(): Promise<void> {
 export async function treeSitterSymbols(
   relPath: string,
   content: string,
+  interactive?: { signal?: AbortSignal },
 ): Promise<{ symbols: Array<{ name: string; kind: string; signature: string; line: number; end_line?: number; parent: string | null }> } | null> {
   const ext = extname(relPath).replace(/^\./, '').toLowerCase();
   if (!getGrammarForExtension(ext)) return null;
   try {
-    const result = await extractorLease.acquire((ex) => ex.extract(relPath, content));
+    interactive?.signal?.throwIfAborted();
+    const result = await extractorLease.acquire((ex) => interactive ? ex.outline(relPath, content, interactive.signal) : ex.extract(relPath, content));
     if (!result.supported || !result.analysis.symbols) return null;
     return {
       symbols: result.analysis.symbols.map((s) => ({
@@ -83,7 +85,8 @@ export async function treeSitterSymbols(
         parent: s.parent ?? null,
       })),
     };
-  } catch {
+  } catch (error) {
+    if (interactive) throw error;
     return null;
   }
 }

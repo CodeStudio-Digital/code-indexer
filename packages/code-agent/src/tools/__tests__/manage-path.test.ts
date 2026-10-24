@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   existsSync,
   mkdirSync,
@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { extractPathsFromToolArgs } from '@mcp/code-agent/core/runner.js';
 import { managePathTool } from '@mcp/code-agent/tools/manage-path.js';
+import { LocalFilesystemAdapter } from '@mcp/code-agent/ports/filesystem-port.js';
 
 let dir: string;
 
@@ -150,5 +151,48 @@ describe('manage_path scope extraction', () => {
       from_path: 'src/a.ts',
       to_path: 'src/b.ts',
     })).toEqual(expect.arrayContaining(['src/a.ts', 'src/b.ts']));
+  });
+});
+
+describe('manage_path bounded and owned dispatch', () => {
+  it.each([{ recursive: 'false' }, { delete_mode: 'typo' }, { confirm: true }, { path: 'x'.repeat(4097) }])('rejects invalid input before dispatch %#', async extra => {
+    const fs = new LocalFilesystemAdapter(), write = vi.spyOn(fs, 'mkdir');
+    const result = await managePathTool.handler({ operation: 'mkdir', path: 'unused', ...extra }, { ...ctx(), ports: { fs } });
+    expect(result.isError).toBe(true); expect(write).not.toHaveBeenCalled();
+  });
+
+  it('does not treat permission failures as missing entries', async () => {
+    const fs = new LocalFilesystemAdapter(), write = vi.spyOn(fs, 'mkdir');
+    vi.spyOn(fs, 'access').mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    const result = await managePathTool.handler({ operation: 'mkdir', path: 'private' }, { ...ctx(), ports: { fs } });
+    expect(result.content).toContain('denied'); expect(write).not.toHaveBeenCalled();
+  });
+
+  it('stops directory inspection at the first entry and closes the iterator', async () => {
+    mkdirSync(join(dir, 'folder')); const fs = new LocalFilesystemAdapter(); let visited = 0, closed = false;
+    vi.spyOn(fs, 'iterateDirectory').mockImplementation(async function* () {
+      try { for (let n = 0; n < 10000; n++) { visited++; yield { name: String(n), isFile: () => true, isDirectory: () => false }; } }
+      finally { closed = true; }
+    });
+    const readAll = vi.spyOn(fs, 'readdir');
+    const result = await managePathTool.handler({ operation: 'delete', path: 'folder' }, { ...ctx(), ports: { fs } });
+    expect(result.isError).toBe(true); expect(visited).toBe(1); expect(closed).toBe(true); expect(readAll).not.toHaveBeenCalled();
+  });
+
+  it('uses exclusive rename and marks a post-dispatch failure as uncertain', async () => {
+    writeFileSync(join(dir, 'source'), 'data');
+    const exclusive = vi.fn(() => { throw new Error('receipt lost'); }), fs = new LocalFilesystemAdapter(exclusive);
+    const unsafe = vi.spyOn(fs, 'rename');
+    const result = await managePathTool.handler({ operation: 'move', from_path: 'source', to_path: 'target' }, { ...ctx(), ports: { fs } });
+    expect(exclusive).toHaveBeenCalledOnce(); expect(unsafe).not.toHaveBeenCalled();
+    expect(result.effectOutcome).toBe('unknown'); expect(result.content).toContain('before retrying');
+  });
+
+  it('observes cancellation after asynchronous source inspection', async () => {
+    writeFileSync(join(dir, 'source'), 'data'); const controller = new AbortController(), fs = new LocalFilesystemAdapter();
+    const original = fs.stat.bind(fs); vi.spyOn(fs, 'stat').mockImplementation(async p => { const result = await original(p); controller.abort(); return result; });
+    const rename = vi.spyOn(fs, 'rename'), mkdir = vi.spyOn(fs, 'mkdir');
+    const result = await managePathTool.handler({ operation: 'move', from_path: 'source', to_path: 'target' }, { ...ctx(), signal: controller.signal, ports: { fs } });
+    expect(result.isError).toBe(true); expect(result.effectOutcome).not.toBe('unknown'); expect(rename).not.toHaveBeenCalled(); expect(mkdir).not.toHaveBeenCalled();
   });
 });

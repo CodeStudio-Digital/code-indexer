@@ -82,6 +82,67 @@ afterEach(async () => {
 });
 
 describe('filesystem session bundle', () => {
+  it('rebuilds hot metric totals after a lost acknowledgement of the metric rename', async () => {
+    let failRename = false;
+    const { repository } = await fixture({ faultInjector: async (context) => {
+      if (failRename && context.point === 'atomic:after-rename-before-directory-fsync'
+        && context.path?.endsWith('turn-2.json')) {
+        failRename = false;
+        throw new Error('metric acknowledgement lost');
+      }
+    } });
+    const { location } = await repository.createSession({ kind: 'coder', scope: { kind: 'project', project_id: 1 } });
+    const metric = (seq: number) => ({ schema_version: 1, turn_seq: seq, message_seq: seq,
+      turns: 1, tool_calls: 0,
+      usage: { input_tokens: 10, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 },
+      subagent_usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 },
+    });
+    await repository.writeEntity(location, 'metrics/turns', 'turn-1', metric(1));
+    failRename = true;
+    await expect(repository.writeEntity(location, 'metrics/turns', 'turn-2', metric(2)))
+      .rejects.toThrow('metric acknowledgement lost');
+    await repository.writeEntity(location, 'metrics/turns', 'turn-3', metric(3));
+    expect(repository.readMetricsSummarySync(location)).toMatchObject({ turns: 3, tokens: { input: 30 } });
+  });
+
+  it('invalidates hot metric totals after a rollback projection batch', async () => {
+    const { repository } = await fixture();
+    const { location } = await repository.createSession({ kind: 'coder', scope: { kind: 'project', project_id: 1 } });
+    const metric = (seq: number, tokens: number) => ({ schema_version: 1, turn_seq: seq,
+      message_seq: seq, turns: 1, tool_calls: 0,
+      usage: { input_tokens: tokens, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 },
+      subagent_usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 },
+    });
+    await repository.writeEntity(location, 'metrics/turns', 'turn-1', metric(1, 10));
+    await repository.writeEntity(location, 'metrics/turns', 'turn-2', metric(2, 20));
+    expect(repository.readMetricsSummarySync(location).tokens.input).toBe(30);
+    await repository.updateProjectionBatch(location, { entities: [{ directory: 'metrics/turns', id: 'turn-3',
+      value: { ...metric(3, 0), turns: 0, truncate_from_message_seq: 2 },
+    }] });
+    await repository.writeEntity(location, 'metrics/turns', 'turn-4', metric(4, 5));
+    expect(repository.readMetricsSummarySync(location).tokens.input).toBe(15);
+    expect(repository.readMetricsSummarySync(location).turns).toBe(2);
+  });
+
+  it('advances cached writer projections once per commit and rejects external changes', async () => {
+    const { repository } = await fixture();
+    const created = await repository.createSession({ kind: 'coder', scope: { kind: 'project', project_id: 1 } });
+    const projection = {
+      create: vi.fn(() => ({ count: 0 })),
+      apply: vi.fn((state: { count: number }) => { state.count++; }),
+    };
+    await repository.commitTurn(created.location, { operation_id: 'one', payload: { text: 'one' } });
+    expect(await repository.readWriterProjection(created.location, projection)).toEqual({ count: 1 });
+    await repository.readWriterProjection(created.location, projection);
+    await repository.commitTurn(created.location, { operation_id: 'two', payload: { text: 'two' } });
+    expect(await repository.readWriterProjection(created.location, projection)).toEqual({ count: 2 });
+    expect(projection.create).toHaveBeenCalledTimes(1);
+    expect(projection.apply).toHaveBeenCalledTimes(2);
+    await appendFile(join(created.location.bundle_path, 'conversation.jsonl'), 'unexpected\n');
+    await expect(repository.readWriterProjection(created.location, projection)).rejects.toThrow('Journal changed');
+    await expect(repository.commitTurn(created.location, { operation_id: 'three', payload: {} })).rejects.toThrow('Journal changed');
+  });
+
   it('rejects an empty MCP data root instead of resolving it to cwd', () => {
     expect(
       () =>
@@ -1192,6 +1253,8 @@ describe('idempotency and crash recovery', () => {
       mkdir(join(bundle, 'snapshots', 'session_file_edits'), { recursive: true }),
       mkdir(join(bundle, 'snapshots', 'session_file_review_runs'), { recursive: true }),
       mkdir(join(bundle, 'company', 'drive-files'), { recursive: true }),
+      // Historical migrated input; new bundles no longer create this surface.
+      mkdir(join(bundle, 'sprite'), { recursive: true }),
     ]);
     await Promise.all([
       writeFile(

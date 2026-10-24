@@ -13,7 +13,7 @@ pub(super) fn validate_trigger(
     }
 
     let coherent = match trigger {
-        wire::AttemptTrigger::Initial => ordinal == 1,
+        wire::AttemptTrigger::Initial | wire::AttemptTrigger::SessionContinuation => ordinal == 1,
         wire::AttemptTrigger::Resume
         | wire::AttemptTrigger::ProviderFallback
         | wire::AttemptTrigger::WorkerRecovery => ordinal > 1,

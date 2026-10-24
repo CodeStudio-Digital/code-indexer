@@ -779,7 +779,7 @@ export function renderAssistantBlock(
       ? 'approved'
       : 'rejected';
     // The approved-result text embeds the path: "Spec approved by user at <path>."
-    const specPath = /Spec approved by user at (.+?)\./.exec(result.content)?.[1] ?? '';
+    const specPath = /Spec approved by user at (\.mcp\/specs\/[^\s]+\.md)\./.exec(result.content)?.[1] ?? '';
     const tc: ToolCallEvent = {
       id: b.id ?? '',
       name: b.name ?? '',

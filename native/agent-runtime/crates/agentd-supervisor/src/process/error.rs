@@ -16,6 +16,7 @@ use crate::management::{
 pub enum SupervisorProcessError {
     Runtime(io::Error),
     BootstrapOpen(io::Error),
+    LifecycleOutbox(io::Error),
     Bootstrap(SupervisorBootstrapError),
     Endpoint(ProtectedEndpointError),
     Management(AsyncManagementActorError),
@@ -33,6 +34,7 @@ impl Display for SupervisorProcessError {
         let message = match self {
             Self::Runtime(_) => "cannot create supervisor runtime",
             Self::BootstrapOpen(_) => "protected supervisor bootstrap is unavailable",
+            Self::LifecycleOutbox(_) => "durable supervisor evidence is unavailable",
             Self::Bootstrap(_) => "protected supervisor bootstrap failed",
             Self::Endpoint(_) => "protected management endpoint failed",
             Self::Management(_) => "management bootstrap failed",
@@ -51,7 +53,9 @@ impl Display for SupervisorProcessError {
 impl Error for SupervisorProcessError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Runtime(error) | Self::BootstrapOpen(error) => Some(error),
+            Self::Runtime(error) | Self::BootstrapOpen(error) | Self::LifecycleOutbox(error) => {
+                Some(error)
+            }
             Self::Bootstrap(error) => Some(error),
             Self::Endpoint(error) => Some(error),
             Self::Management(error) => Some(error),

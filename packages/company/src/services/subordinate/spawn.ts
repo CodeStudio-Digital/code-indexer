@@ -1,3 +1,4 @@
+import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.js';
 /**
  * Spawn a fresh subordinate agent. Lifecycle:
  *
@@ -405,6 +406,7 @@ export async function spawnSubordinate(
   const memoryPorts = getCompanyMemoryPorts();
 
   const handle = await runCoder({
+        hostTools: getReadyDocsResearchTools(),
     session: { id: subSession.id },
     userMessage: spec.task,
     attachments: spec.attachments,

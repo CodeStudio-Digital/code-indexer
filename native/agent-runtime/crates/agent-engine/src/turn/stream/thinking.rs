@@ -8,6 +8,7 @@ impl TurnEngine {
     pub(super) async fn accept_thinking<P, A, E, C>(
         &mut self,
         operation_id: &str,
+        thinking: &mut String,
         delta: String,
         usage: Option<ProviderUsage>,
         ports: &mut StreamPorts<'_, P, A, E, C>,
@@ -29,6 +30,17 @@ impl TurnEngine {
                 .await
                 .map(Some);
         }
+        if thinking.len().saturating_add(delta.len()) > self.limits.max_response_bytes() {
+            return self
+                .terminal(
+                    ports.events,
+                    TerminalClassification::Interrupted,
+                    "thinking_bytes_exceeded",
+                    usage,
+                )
+                .await
+                .map(Some);
+        }
         ports
             .events
             .append(EngineEvent::ProviderThinkingDelta {
@@ -37,6 +49,7 @@ impl TurnEngine {
             })
             .await
             .map_err(TurnEngineError::EventSink)?;
+        thinking.push_str(&delta);
         Ok(None)
     }
 }

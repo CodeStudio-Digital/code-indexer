@@ -14,6 +14,7 @@ import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-prof
 import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
 import {
   retainCompletedTranscripts,
+  resumeNeedsReconciliation,
   retainGroup,
   type ResumeCheckpointStore,
   type ResumableGroup,
@@ -30,9 +31,11 @@ export interface SpawnRetentionAgent {
   maxTurns: number;
   limits: SubagentLimits;
   reason: StopReason;
+  effectOutcome?: 'unknown';
   usage: ChatUsage;
   toolCallCount: number;
   transcript?: AgentMessage[];
+  nativeTranscriptRef?: string;
   finalText: string;
   /** Raw watchdog/error message — SubagentRunResult.failureDetail. */
   failureDetail?: string;
@@ -70,7 +73,8 @@ export async function retainSpawnGroup(args: {
   store?: ResumeCheckpointStore;
 }): Promise<number> {
   if (args.sessionId == null) return 0;
-  const resumableCount = args.agents.filter((a) => a.reason !== 'completed' && (a.transcript?.length ?? 0) > 0).length;
+  const resumableCount = args.agents.filter((a) => !resumeNeedsReconciliation({ ...a, failureNote: a.failureDetail })
+    && a.reason !== 'completed' && (!!a.nativeTranscriptRef || (a.transcript?.length ?? 0) > 0)).length;
   if (countFailed(args.agents) === 0 && !retainCompletedTranscripts()) return 0;
   const now = Date.now();
   const group: ResumableGroup = {
@@ -90,7 +94,9 @@ export async function retainSpawnGroup(args: {
       maxTurns: a.maxTurns,
       limits: a.limits,
       transcript: a.transcript,
+      nativeTranscriptRef: a.nativeTranscriptRef,
       reason: a.reason,
+      effectOutcome: a.effectOutcome,
       failureNote: a.reason !== 'completed'
         ? (a.failureDetail || a.finalText).slice(0, 500)
         : undefined,

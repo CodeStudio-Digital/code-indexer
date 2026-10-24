@@ -22,6 +22,9 @@ pub struct ArtifactRef {
     pub redaction_policy_version: ::prost::alloc::string::String,
     #[prost(string, tag="9")]
     pub owner_session_id: ::prost::alloc::string::String,
+    /// Optional user-facing basename. Never a path or an access credential.
+    #[prost(string, tag="10")]
+    pub display_name: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -636,6 +639,42 @@ pub mod capability_execution_result {
         #[prost(message, tag="13")]
         OutcomeUnknown(super::CapabilityExecutionFailure),
     }
+}
+/// A bounded window of independently certified read-only Host operations.
+/// Each member has its own durable started record and sealed grant. The Host
+/// validates the whole window before acknowledging or starting any member.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CapabilityReadBatchExecute {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub batch_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub members: ::prost::alloc::vec::Vec<CapabilityExecute>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityReadBatchAccepted {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub batch_id: ::prost::alloc::string::String,
+}
+/// Unsolicited event after BatchAccepted, one per member in completion order.
+/// The runner commits each result before publishing it or advancing the model.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityReadBatchResult {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub batch_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub result: ::core::option::Option<CapabilityExecutionResult>,
 }
 /// Immutable execution route resolved before an attempt becomes active.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -1707,6 +1746,122 @@ impl RunnerExpectedPeerRole {
         }
     }
 }
+/// Single-use request accepted by the in-process native Host bridge. Endpoint
+/// address, Host PID, supervisor PID and runtime instance are minted natively
+/// after package verification and are therefore absent from this request.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HostSupervisorBridgeOpenRequest {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub management_endpoint_name: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub management_connection_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="4")]
+    pub management_session_token: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="5")]
+    pub supervisor_launch_nonce: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="6")]
+    pub trusted_supervisor_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
+    #[prost(message, optional, tag="7")]
+    pub trusted_runner_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
+    #[prost(message, optional, tag="8")]
+    pub selected_protocol: ::core::option::Option<ProtocolVersion>,
+    #[prost(string, tag="9")]
+    pub supervisor_executable: ::prost::alloc::string::String,
+    #[prost(string, tag="10")]
+    pub runner_executable: ::prost::alloc::string::String,
+    #[prost(uint64, tag="11")]
+    pub startup_timeout_ms: u64,
+    /// Trusted product data directory. Empty only for isolated protocol fixtures.
+    #[prost(string, tag="12")]
+    pub lifecycle_outbox_directory: ::prost::alloc::string::String,
+}
+/// Private, single-use handoff delivered through inherited OS handles before
+/// the permanent management channel can accept protocol frames.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SupervisorProcessHandoff {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(uint32, tag="2")]
+    pub host_process_id: u32,
+    #[prost(string, tag="3")]
+    pub management_connection_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub management_endpoint_address: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="5")]
+    pub management_session_token: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="6")]
+    pub supervisor_launch_nonce: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="7")]
+    pub supervisor_provenance: ::core::option::Option<RuntimeProvenance>,
+    #[prost(message, optional, tag="8")]
+    pub supported_protocols: ::core::option::Option<ProtocolVersionRange>,
+    #[prost(message, optional, tag="9")]
+    pub containment: ::core::option::Option<ContainmentCapabilities>,
+    #[prost(uint64, tag="10")]
+    pub supported_feature_bits: u64,
+    #[prost(string, tag="11")]
+    pub runner_executable: ::prost::alloc::string::String,
+    #[prost(string, tag="12")]
+    pub runner_working_directory: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="13")]
+    pub runner_environment: ::prost::alloc::vec::Vec<SupervisorProcessEnvironmentEntry>,
+    #[prost(message, optional, tag="14")]
+    pub trusted_runner_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
+    #[prost(string, tag="15")]
+    pub lifecycle_outbox_directory: ::prost::alloc::string::String,
+}
+/// Physical evidence retained before releasing admission. Recovery must match
+/// the original connection, attempt and durable launch; this is not a new launch
+/// capability and must never be replayed under a different management channel.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SupervisorLifecycleOutboxEntryV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub connection_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub exited: ::core::option::Option<AttemptProcessExited>,
+    #[prost(message, optional, tag="4")]
+    pub reaped: ::core::option::Option<AttemptProcessReaped>,
+    #[prost(bool, tag="5")]
+    pub host_acknowledged: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SupervisorProcessEnvironmentEntry {
+    #[prost(string, tag="1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub value: ::prost::alloc::string::String,
+}
+/// Returned through the inherited response handle only after the supervisor
+/// connected the exact protected management endpoint and verified the Host PID.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SupervisorProcessReady {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(uint32, tag="2")]
+    pub supervisor_process_id: u32,
+    #[prost(string, tag="3")]
+    pub management_connection_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub management_endpoint_address: ::prost::alloc::string::String,
+}
+/// Append-only attachment data, distinct from engine events. A reference is
+/// usable only after the complete contiguous group and full digest validate.
+/// Each encoded_chunk is at most 128 KiB; paths never cross this contract.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionAttachmentChunkV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(message, optional, tag="2")]
+    pub reference: ::core::option::Option<ArtifactRef>,
+    #[prost(uint64, tag="3")]
+    pub chunk_offset: u64,
+    #[prost(bytes="vec", tag="4")]
+    pub encoded_chunk: ::prost::alloc::vec::Vec<u8>,
+}
 /// Canonical, bounded payload written by the Host-side Rust event sink. Raw
 /// transcript text is deliberately represented only by byte length and digest;
 /// transcript/artifact publication remains a separate durable protocol.
@@ -1748,8 +1903,9 @@ pub struct EngineProviderUsageRecordV1 {
 pub struct EngineProviderCompletedRecordV1 {
     #[prost(string, tag="1")]
     pub operation_id: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub response_id: ::prost::alloc::string::String,
+    /// Stateless providers complete without a resumable remote response ID.
+    #[prost(string, optional, tag="2")]
+    pub response_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EngineCapabilityBoundaryRecordV1 {
@@ -1757,6 +1913,12 @@ pub struct EngineCapabilityBoundaryRecordV1 {
     pub operation_id: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub capability_name: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub capability_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="6")]
+    pub input_sha256: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EngineCapabilityDispatchStartedRecordV1 {
@@ -1770,6 +1932,22 @@ pub struct EngineCapabilityDispatchStartedRecordV1 {
     pub effective_input_sha256: ::prost::alloc::vec::Vec<u8>,
     #[prost(int64, tag="5")]
     pub started_at_unix_ms: i64,
+}
+/// A denied invocation never crossed the dispatch/effect boundary.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineCapabilityRefusedRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub decision_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub policy_version: ::prost::alloc::string::String,
+    #[prost(int64, tag="6")]
+    pub decided_at_unix_ms: i64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EngineCapabilityTerminalRecordV1 {
@@ -1802,6 +1980,34 @@ pub struct EngineCapabilityTerminalRecordV1 {
     #[prost(int64, tag="14")]
     pub completed_at_unix_ms: i64,
 }
+/// Durable content, separate from lifecycle metadata. Each chunk is at most
+/// 128 KiB. Consumers publish only a complete group with a verified full hash.
+/// Content records use CONVERSATION, INPUT or TOOL_OUTPUT journal kinds.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineContentRecordV1 {
+    #[prost(enumeration="EngineContentKindV1", tag="1")]
+    pub kind: i32,
+    #[prost(string, tag="2")]
+    pub content_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub content_schema_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag="6")]
+    pub content_schema_version: u32,
+    #[prost(bytes="vec", tag="7")]
+    pub content_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag="8")]
+    pub total_bytes: u64,
+    #[prost(uint64, tag="9")]
+    pub chunk_offset: u64,
+    #[prost(bytes="vec", tag="10")]
+    pub encoded_chunk: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="11")]
+    pub thinking: bool,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EngineTerminalRecordV1 {
     #[prost(enumeration="EngineTerminalClassificationV1", tag="1")]
@@ -1821,7 +2027,7 @@ pub struct EngineEventRecordV1 {
     pub runtime_instance_id: ::prost::alloc::string::String,
     #[prost(uint64, tag="4")]
     pub local_sequence: u64,
-    #[prost(oneof="engine_event_record_v1::Body", tags="10, 11, 12, 13, 14, 15, 16, 17")]
+    #[prost(oneof="engine_event_record_v1::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19")]
     pub body: ::core::option::Option<engine_event_record_v1::Body>,
 }
 /// Nested message and enum types in `EngineEventRecordV1`.
@@ -1844,6 +2050,10 @@ pub mod engine_event_record_v1 {
         CapabilityDispatchStarted(super::EngineCapabilityDispatchStartedRecordV1),
         #[prost(message, tag="17")]
         CapabilityTerminal(super::EngineCapabilityTerminalRecordV1),
+        #[prost(message, tag="18")]
+        Content(super::EngineContentRecordV1),
+        #[prost(message, tag="19")]
+        CapabilityRefused(super::EngineCapabilityRefusedRecordV1),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1893,7 +2103,7 @@ pub struct SessionStoreRequestFrame {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionStoreRequest {
-    #[prost(oneof="session_store_request::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18")]
+    #[prost(oneof="session_store_request::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23")]
     pub body: ::core::option::Option<session_store_request::Body>,
 }
 /// Nested message and enum types in `SessionStoreRequest`.
@@ -1918,7 +2128,57 @@ pub mod session_store_request {
         ReadCommittedSessionPayload(super::ReadCommittedSessionPayload),
         #[prost(message, tag="18")]
         ListCommittedSessionRecords(super::ListCommittedSessionRecords),
+        #[prost(message, tag="19")]
+        OpenSessionReader(super::OpenSessionReader),
+        #[prost(message, tag="20")]
+        CloseSessionReader(super::CloseSessionReader),
+        #[prost(message, tag="21")]
+        AcquireStorageRootLock(super::AcquireStorageRootLock),
+        #[prost(message, tag="22")]
+        ReleaseStorageRootLock(super::ReleaseStorageRootLock),
+        #[prost(message, tag="23")]
+        InspectSupervisorLifecycleEvidence(super::InspectSupervisorLifecycleEvidence),
     }
+}
+/// Read-only recovery proof from the fixed outbox namespace of a registered
+/// root. The native owner must acquire the dead supervisor's OS lock first.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InspectSupervisorLifecycleEvidence {
+    #[prost(string, tag="1")]
+    pub root_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub connection_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub attempt_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SupervisorLifecycleEvidenceInspected {
+    #[prost(message, optional, tag="1")]
+    pub entry: ::core::option::Option<SupervisorLifecycleOutboxEntryV1>,
+}
+/// Resolves only roots registered by the authenticated native owner. The OS
+/// releases ownership on process death; the permanent lock file is not removed.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AcquireStorageRootLock {
+    #[prost(string, tag="1")]
+    pub root_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub lock_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReleaseStorageRootLock {
+    #[prost(string, tag="1")]
+    pub lock_handle: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StorageRootLockAcquired {
+    #[prost(string, tag="1")]
+    pub lock_handle: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StorageRootLockReleased {
+    #[prost(string, tag="1")]
+    pub lock_handle: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpenSessionWriter {
@@ -1973,6 +2233,9 @@ pub struct QuerySessionState {
     pub writer_handle: ::prost::alloc::string::String,
     #[prost(message, optional, tag="2")]
     pub authority: ::core::option::Option<SessionStoreAuthority>,
+    /// Exactly one of writer_handle and reader_handle must be nonempty.
+    #[prost(string, tag="3")]
+    pub reader_handle: ::prost::alloc::string::String,
 }
 /// Reads bytes only when the exact operation, kind, hash and length were
 /// committed by the currently fenced writer. A content hash alone is never a
@@ -1991,6 +2254,8 @@ pub struct ReadCommittedSessionPayload {
     pub expected_payload_sha256: ::prost::alloc::vec::Vec<u8>,
     #[prost(uint64, tag="6")]
     pub expected_payload_bytes: u64,
+    #[prost(string, tag="7")]
+    pub reader_handle: ::prost::alloc::string::String,
 }
 /// Bounded, metadata-only cursor over the already-validated journal. Payloads
 /// remain path-free and require ReadCommittedSessionPayload with the exact
@@ -2005,6 +2270,35 @@ pub struct ListCommittedSessionRecords {
     pub after_global_sequence: u64,
     #[prost(uint32, tag="4")]
     pub max_records: u32,
+    /// Empty creates a validated immutable snapshot. Subsequent pages must reuse
+    /// the returned id. Authorized appends preserve the frozen record set; reopen,
+    /// authority loss, a new snapshot or unexpected source changes invalidate it.
+    #[prost(string, tag="5")]
+    pub snapshot_id: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub reader_handle: ::prost::alloc::string::String,
+}
+/// Validates an existing bundle without creating, repairing or leasing it.
+/// Source or authority changes invalidate the immutable reader snapshot.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpenSessionReader {
+    #[prost(string, tag="1")]
+    pub root_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    /// Omit to discover the current authority from its validated chain. This
+    /// grants only a read snapshot; writer acquisition still requires an epoch.
+    #[prost(message, optional, tag="3")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(message, optional, tag="4")]
+    pub limits: ::core::option::Option<SessionStoreLimits>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionReader {
+    #[prost(string, tag="1")]
+    pub reader_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TransferSessionStorageGeneration {
@@ -2069,7 +2363,7 @@ pub struct SessionStoreResponseFrame {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionStoreResponse {
-    #[prost(oneof="session_store_response::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19")]
+    #[prost(oneof="session_store_response::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24")]
     pub body: ::core::option::Option<session_store_response::Body>,
 }
 /// Nested message and enum types in `SessionStoreResponse`.
@@ -2096,6 +2390,16 @@ pub mod session_store_response {
         CommittedSessionPayload(super::CommittedSessionPayload),
         #[prost(message, tag="19")]
         CommittedSessionRecordPage(super::CommittedSessionRecordPage),
+        #[prost(message, tag="20")]
+        SessionReaderOpened(super::SessionReaderOpened),
+        #[prost(message, tag="21")]
+        SessionReaderClosed(super::SessionReaderClosed),
+        #[prost(message, tag="22")]
+        StorageRootLockAcquired(super::StorageRootLockAcquired),
+        #[prost(message, tag="23")]
+        StorageRootLockReleased(super::StorageRootLockReleased),
+        #[prost(message, tag="24")]
+        SupervisorLifecycleEvidenceInspected(super::SupervisorLifecycleEvidenceInspected),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -2114,6 +2418,22 @@ pub struct SessionWriterOpened {
     pub archived: bool,
     #[prost(bool, tag="7")]
     pub replay: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionReaderOpened {
+    #[prost(string, tag="1")]
+    pub reader_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub state: ::core::option::Option<SessionState>,
+    #[prost(string, tag="3")]
+    pub snapshot_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionReaderClosed {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitSessionRecordReceipt {
@@ -2189,6 +2509,8 @@ pub struct CommittedSessionRecordPage {
     pub next_global_sequence: u64,
     #[prost(bool, tag="4")]
     pub complete: bool,
+    #[prost(string, tag="5")]
+    pub snapshot_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionStorageTransferred {
@@ -2276,6 +2598,7 @@ pub enum SessionRecordKind {
     Memory = 9,
     Subagent = 10,
     Archive = 11,
+    Attachment = 12,
 }
 impl SessionRecordKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2296,6 +2619,7 @@ impl SessionRecordKind {
             Self::Memory => "SESSION_RECORD_KIND_MEMORY",
             Self::Subagent => "SESSION_RECORD_KIND_SUBAGENT",
             Self::Archive => "SESSION_RECORD_KIND_ARCHIVE",
+            Self::Attachment => "SESSION_RECORD_KIND_ATTACHMENT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2313,6 +2637,7 @@ impl SessionRecordKind {
             "SESSION_RECORD_KIND_MEMORY" => Some(Self::Memory),
             "SESSION_RECORD_KIND_SUBAGENT" => Some(Self::Subagent),
             "SESSION_RECORD_KIND_ARCHIVE" => Some(Self::Archive),
+            "SESSION_RECORD_KIND_ATTACHMENT" => Some(Self::Attachment),
             _ => None,
         }
     }
@@ -2386,6 +2711,38 @@ impl EngineCapabilityTerminalClassificationV1 {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
+pub enum EngineContentKindV1 {
+    Unspecified = 0,
+    Transcript = 1,
+    ToolInput = 2,
+    ToolResult = 3,
+}
+impl EngineContentKindV1 {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ENGINE_CONTENT_KIND_V1_UNSPECIFIED",
+            Self::Transcript => "ENGINE_CONTENT_KIND_V1_TRANSCRIPT",
+            Self::ToolInput => "ENGINE_CONTENT_KIND_V1_TOOL_INPUT",
+            Self::ToolResult => "ENGINE_CONTENT_KIND_V1_TOOL_RESULT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ENGINE_CONTENT_KIND_V1_UNSPECIFIED" => Some(Self::Unspecified),
+            "ENGINE_CONTENT_KIND_V1_TRANSCRIPT" => Some(Self::Transcript),
+            "ENGINE_CONTENT_KIND_V1_TOOL_INPUT" => Some(Self::ToolInput),
+            "ENGINE_CONTENT_KIND_V1_TOOL_RESULT" => Some(Self::ToolResult),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
 pub enum EngineTerminalClassificationV1 {
     Unspecified = 0,
     Completed = 1,
@@ -2432,6 +2789,7 @@ pub enum SessionStoreFailureCode {
     ConcurrentMutation = 10,
     UnsupportedOperation = 11,
     Internal = 12,
+    LockBusy = 13,
 }
 impl SessionStoreFailureCode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2453,6 +2811,7 @@ impl SessionStoreFailureCode {
             Self::ConcurrentMutation => "SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION",
             Self::UnsupportedOperation => "SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION",
             Self::Internal => "SESSION_STORE_FAILURE_CODE_INTERNAL",
+            Self::LockBusy => "SESSION_STORE_FAILURE_CODE_LOCK_BUSY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2471,6 +2830,7 @@ impl SessionStoreFailureCode {
             "SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION" => Some(Self::ConcurrentMutation),
             "SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION" => Some(Self::UnsupportedOperation),
             "SESSION_STORE_FAILURE_CODE_INTERNAL" => Some(Self::Internal),
+            "SESSION_STORE_FAILURE_CODE_LOCK_BUSY" => Some(Self::LockBusy),
             _ => None,
         }
     }
@@ -2538,7 +2898,7 @@ pub struct Frame {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FramePayload {
-    #[prost(oneof="frame_payload::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41")]
+    #[prost(oneof="frame_payload::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50")]
     pub body: ::core::option::Option<frame_payload::Body>,
 }
 /// Nested message and enum types in `FramePayload`.
@@ -2609,6 +2969,27 @@ pub mod frame_payload {
         CapabilityExecute(super::CapabilityExecute),
         #[prost(message, tag="41")]
         CapabilityExecutionResult(super::CapabilityExecutionResult),
+        #[prost(message, tag="42")]
+        CapabilityReadBatchExecute(super::CapabilityReadBatchExecute),
+        #[prost(message, tag="43")]
+        CapabilityReadBatchAccepted(super::CapabilityReadBatchAccepted),
+        #[prost(message, tag="44")]
+        CapabilityReadBatchResult(super::CapabilityReadBatchResult),
+        /// Persists a resumable provider frontier without opening a provider stream.
+        /// The receipt is emitted only after the authoritative store commit.
+        #[prost(message, tag="45")]
+        ProviderCheckpoint(super::ProviderStart),
+        #[prost(message, tag="46")]
+        ProviderCheckpointCommitted(super::ProviderAccepted),
+        #[prost(message, tag="47")]
+        ProviderEventConsumed(super::ProviderEventConsumed),
+        #[prost(message, tag="48")]
+        ProviderRequestChunk(super::ProviderRequestChunk),
+        /// A transport receipt only; no provider has opened and no frontier has committed.
+        #[prost(message, tag="49")]
+        ProviderRequestChunkAccepted(super::ProviderAccepted),
+        #[prost(message, tag="50")]
+        ProviderRequestCommit(super::ProviderRequestCommit),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2836,7 +3217,7 @@ pub mod provider_tool_result_content {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProviderContentBlock {
-    #[prost(oneof="provider_content_block::Body", tags="1, 2, 3, 4")]
+    #[prost(oneof="provider_content_block::Body", tags="1, 2, 3, 4, 5")]
     pub body: ::core::option::Option<provider_content_block::Body>,
 }
 /// Nested message and enum types in `ProviderContentBlock`.
@@ -2851,6 +3232,9 @@ pub mod provider_content_block {
         ToolResult(super::ProviderToolResultContent),
         #[prost(message, tag="4")]
         Attachment(super::ArtifactRef),
+        /// Provider reasoning retained for continuation; never converted to public text.
+        #[prost(message, tag="5")]
+        Thinking(super::ProviderTextContent),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2863,6 +3247,28 @@ pub struct ProviderMessage {
     pub phase: i32,
     #[prost(bool, tag="4")]
     pub is_meta: bool,
+    /// Engine-authored extractive summary. The exact replaced messages are in
+    /// this authenticated cold chapter; it never grants tool authority.
+    #[prost(message, optional, tag="5")]
+    pub compacted_chapter: ::core::option::Option<ArtifactRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderContextChapterV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub messages: ::prost::alloc::vec::Vec<ProviderMessage>,
+}
+/// One-shot transfer. Host commits all chunks before acknowledging the frontier.
+/// Checkpoints retain the reference in ProviderMessage, never this transfer buffer.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderContextChapterWriteV1 {
+    #[prost(message, optional, tag="1")]
+    pub reference: ::core::option::Option<ArtifactRef>,
+    #[prost(bytes="vec", tag="2")]
+    pub encoded_chapter: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProviderToolDescriptor {
@@ -2882,6 +3288,51 @@ pub struct ProviderToolDescriptor {
     pub execution_class: i32,
     #[prost(bool, tag="8")]
     pub mutates: bool,
+    /// Trusted catalog assertions. Unspecified tools are sequential barriers.
+    #[prost(bool, tag="9")]
+    pub parallel_safe: bool,
+    #[prost(bool, tag="10")]
+    pub read_only: bool,
+}
+/// Durable provider frontier. A resumed attempt never executes unresolved
+/// capabilities from this payload. The host must reconcile them first.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderResumeContextV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub agent_run_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub source_attempt_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="5")]
+    pub provider_binding: ::core::option::Option<ProviderBinding>,
+    #[prost(message, optional, tag="6")]
+    pub context: ::core::option::Option<ProviderTurnContext>,
+    #[prost(string, repeated, tag="7")]
+    pub unresolved_capability_operation_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+/// Host-owned journal checkpoint, committed before opening the provider. A
+/// delta retains an exact prefix from the previous frontier of this attempt;
+/// both the base and reconstructed frontier are content authenticated. Empty
+/// base_operation_id denotes a full checkpoint (also used after compaction).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderFrontierRecordV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub frontier: ::core::option::Option<ProviderResumeContextV1>,
+    #[prost(string, tag="4")]
+    pub base_operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="5")]
+    pub retained_message_count: u64,
+    #[prost(bytes="vec", tag="6")]
+    pub base_frontier_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="7")]
+    pub frontier_sha256: ::prost::alloc::vec::Vec<u8>,
 }
 /// Canonical payload for ResolvedAttemptSpec.agent_definition_snapshot in the
 /// initial-turn V1 composer. SnapshotRef.schema_id is the fully-qualified
@@ -2894,6 +3345,45 @@ pub struct AgentDefinitionSnapshotV1 {
     pub agent_definition_id: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub system_prompt_utf8: ::prost::alloc::string::String,
+}
+/// Product-prepared conversation for a new attempt. Unlike a recovery frontier,
+/// this contains no unfinished tool dispatch or remote continuation authority.
+/// The sealed task is already present exactly once in messages.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InitialConversationSnapshotV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub messages: ::prost::alloc::vec::Vec<ProviderMessage>,
+    #[prost(message, optional, tag="4")]
+    pub prepared_user_context: ::core::option::Option<ProviderPreparedUserContextV1>,
+}
+/// Immutable instructions selected by the user for this command. Kept apart
+/// from visible transcript text and applied at USER priority by the gateway.
+/// The checkpoint authenticates the resolved content, including on continuation.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderPreparedUserContextV1 {
+    #[prost(uint32, tag="1")]
+    pub message_index: u32,
+    #[prost(string, repeated, tag="2")]
+    pub selected_skill_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="3")]
+    pub content_utf8: ::prost::alloc::string::String,
+}
+/// Read-only Host enrichment pinned to one existing user message. The Host
+/// commits these exact bytes in the provider frontier before opening the vendor
+/// stream. It cannot modify the sealed provider, tools or workspace authority.
+/// Late retrieval is applied only by a later operation, never to an open stream.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderPreparedBoundaryContextV1 {
+    #[prost(uint32, tag="1")]
+    pub message_index: u32,
+    #[prost(bytes="vec", tag="2")]
+    pub source_message_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="3")]
+    pub content_utf8: ::prost::alloc::string::String,
 }
 /// Canonical payload for ResolvedAttemptSpec.capability_set_snapshot. The
 /// runner validates descriptor uniqueness and each JSON schema digest before a
@@ -2967,6 +3457,12 @@ pub struct ProviderTurnContext {
     pub previous_response_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(uint64, optional, tag="8")]
     pub previous_response_message_count: ::core::option::Option<u64>,
+    #[prost(message, optional, tag="9")]
+    pub prepared_user_context: ::core::option::Option<ProviderPreparedUserContextV1>,
+    #[prost(message, optional, tag="10")]
+    pub prepared_boundary_context: ::core::option::Option<ProviderPreparedBoundaryContextV1>,
+    #[prost(message, repeated, tag="11")]
+    pub pending_chapters: ::prost::alloc::vec::Vec<ProviderContextChapterWriteV1>,
 }
 /// Runner -> Host. Starts one logical provider operation. Credentials and
 /// vendor clients never cross this frame; the Host resolves the sealed binding.
@@ -2998,6 +3494,65 @@ pub struct ProviderStart {
     pub deadline_at_unix_ms: i64,
     #[prost(string, tag="13")]
     pub idempotency_key: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub prepared_user_context: ::core::option::Option<ProviderPreparedUserContextV1>,
+    /// When true, Host sends at most one non-terminal stream event until the
+    /// runner consumes it. This is transport credit, never a durable commit ACK.
+    #[prost(bool, tag="15")]
+    pub consumption_ack_required: bool,
+    #[prost(message, optional, tag="16")]
+    pub prepared_boundary_context: ::core::option::Option<ProviderPreparedBoundaryContextV1>,
+    #[prost(message, repeated, tag="17")]
+    pub pending_chapters: ::prost::alloc::vec::Vec<ProviderContextChapterWriteV1>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderEventConsumed {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub event_sequence: u64,
+}
+/// Bounded transfer of one canonical ProviderStart that exceeds a Data frame.
+/// At most 16 MiB, in contiguous chunks of at most 128 KiB. Exact frame replay
+/// is handled by the authenticated channel, never by appending a chunk twice.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderRequestChunk {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="4")]
+    pub total_bytes: u64,
+    #[prost(bytes="vec", tag="5")]
+    pub request_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag="6")]
+    pub chunk_offset: u64,
+    #[prost(bytes="vec", tag="7")]
+    pub encoded_chunk: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="8")]
+    pub checkpoint_only: bool,
+}
+/// References the complete transfer on this same attempt/channel. The Host
+/// verifies length, digest, canonical encoding and inner authority before
+/// admitting the provider or persisting a checkpoint. No paths cross the wire.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderRequestCommit {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="4")]
+    pub total_bytes: u64,
+    #[prost(bytes="vec", tag="5")]
+    pub request_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="6")]
+    pub checkpoint_only: bool,
 }
 /// Host -> Runner. Commits registry ownership before any provider delta.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -3250,6 +3805,12 @@ pub struct ResolvedAttemptSpec {
     pub agent_definition_snapshot: ::core::option::Option<SnapshotRef>,
     #[prost(message, optional, tag="26")]
     pub codex_app_server_process_snapshot: ::core::option::Option<SnapshotRef>,
+    #[prost(message, optional, tag="27")]
+    pub initial_conversation_snapshot: ::core::option::Option<SnapshotRef>,
+    /// Effects/provider work stop here; deadline_at_unix_ms still bounds durable
+    /// terminal commits and cleanup. Absence preserves the original deadline.
+    #[prost(int64, optional, tag="28")]
+    pub execution_deadline_at_unix_ms: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrepareAttempt {
@@ -3545,6 +4106,9 @@ pub enum AttemptTrigger {
     Resume = 2,
     ProviderFallback = 3,
     WorkerRecovery = 4,
+    /// First attempt of a new command/run continuing a settled session frontier.
+    /// RESUME remains a later attempt of the same run.
+    SessionContinuation = 5,
 }
 impl AttemptTrigger {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3558,6 +4122,7 @@ impl AttemptTrigger {
             Self::Resume => "ATTEMPT_TRIGGER_RESUME",
             Self::ProviderFallback => "ATTEMPT_TRIGGER_PROVIDER_FALLBACK",
             Self::WorkerRecovery => "ATTEMPT_TRIGGER_WORKER_RECOVERY",
+            Self::SessionContinuation => "ATTEMPT_TRIGGER_SESSION_CONTINUATION",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3568,6 +4133,7 @@ impl AttemptTrigger {
             "ATTEMPT_TRIGGER_RESUME" => Some(Self::Resume),
             "ATTEMPT_TRIGGER_PROVIDER_FALLBACK" => Some(Self::ProviderFallback),
             "ATTEMPT_TRIGGER_WORKER_RECOVERY" => Some(Self::WorkerRecovery),
+            "ATTEMPT_TRIGGER_SESSION_CONTINUATION" => Some(Self::SessionContinuation),
             _ => None,
         }
     }
@@ -3726,86 +4292,5 @@ impl TerminalClassification {
             _ => None,
         }
     }
-}
-/// Single-use request accepted by the in-process native Host bridge. Endpoint
-/// address, Host PID, supervisor PID and runtime instance are minted natively
-/// after package verification and are therefore absent from this request.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct HostSupervisorBridgeOpenRequest {
-    #[prost(uint32, tag="1")]
-    pub schema_version: u32,
-    #[prost(string, tag="2")]
-    pub management_endpoint_name: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub management_connection_id: ::prost::alloc::string::String,
-    #[prost(bytes="vec", tag="4")]
-    pub management_session_token: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="5")]
-    pub supervisor_launch_nonce: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, optional, tag="6")]
-    pub trusted_supervisor_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
-    #[prost(message, optional, tag="7")]
-    pub trusted_runner_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
-    #[prost(message, optional, tag="8")]
-    pub selected_protocol: ::core::option::Option<ProtocolVersion>,
-    #[prost(string, tag="9")]
-    pub supervisor_executable: ::prost::alloc::string::String,
-    #[prost(string, tag="10")]
-    pub runner_executable: ::prost::alloc::string::String,
-    #[prost(uint64, tag="11")]
-    pub startup_timeout_ms: u64,
-}
-/// Private, single-use handoff delivered through inherited OS handles before
-/// the permanent management channel can accept protocol frames.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SupervisorProcessHandoff {
-    #[prost(uint32, tag="1")]
-    pub schema_version: u32,
-    #[prost(uint32, tag="2")]
-    pub host_process_id: u32,
-    #[prost(string, tag="3")]
-    pub management_connection_id: ::prost::alloc::string::String,
-    #[prost(string, tag="4")]
-    pub management_endpoint_address: ::prost::alloc::string::String,
-    #[prost(bytes="vec", tag="5")]
-    pub management_session_token: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="6")]
-    pub supervisor_launch_nonce: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, optional, tag="7")]
-    pub supervisor_provenance: ::core::option::Option<RuntimeProvenance>,
-    #[prost(message, optional, tag="8")]
-    pub supported_protocols: ::core::option::Option<ProtocolVersionRange>,
-    #[prost(message, optional, tag="9")]
-    pub containment: ::core::option::Option<ContainmentCapabilities>,
-    #[prost(uint64, tag="10")]
-    pub supported_feature_bits: u64,
-    #[prost(string, tag="11")]
-    pub runner_executable: ::prost::alloc::string::String,
-    #[prost(string, tag="12")]
-    pub runner_working_directory: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="13")]
-    pub runner_environment: ::prost::alloc::vec::Vec<SupervisorProcessEnvironmentEntry>,
-    #[prost(message, optional, tag="14")]
-    pub trusted_runner_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SupervisorProcessEnvironmentEntry {
-    #[prost(string, tag="1")]
-    pub key: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub value: ::prost::alloc::string::String,
-}
-/// Returned through the inherited response handle only after the supervisor
-/// connected the exact protected management endpoint and verified the Host PID.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SupervisorProcessReady {
-    #[prost(uint32, tag="1")]
-    pub schema_version: u32,
-    #[prost(uint32, tag="2")]
-    pub supervisor_process_id: u32,
-    #[prost(string, tag="3")]
-    pub management_connection_id: ::prost::alloc::string::String,
-    #[prost(string, tag="4")]
-    pub management_endpoint_address: ::prost::alloc::string::String,
 }
 // @@protoc_insertion_point(module)

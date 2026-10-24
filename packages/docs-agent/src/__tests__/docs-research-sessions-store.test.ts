@@ -12,7 +12,7 @@ import {
   expect,
   it,
 } from 'vitest';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/session-storage';
 import { DocsResearchSessionsStore } from '../session-store/docs-research-sessions-store.js';
 

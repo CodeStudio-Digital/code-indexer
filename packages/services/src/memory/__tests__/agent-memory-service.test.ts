@@ -44,6 +44,27 @@ function memoryRow(id: number): AgentMemoryRow {
 }
 
 describe('AgentMemoryService active-generation queries', () => {
+  it('aborts an explicit query during embedding without starting vector lookup or returning FTS fallback', async () => {
+    const ctrl = new AbortController();
+    const vectorSearch = vi.fn();
+    let received: AbortSignal | undefined;
+    let finish!: (value: { vector: number[]; tokens: number }) => void;
+    const embed = embedding({ embedQuery: (_query, options) => {
+      received = options?.signal;
+      return new Promise(resolve => { finish = resolve; });
+    } });
+    const db = { searchAgentMemoryFts: () => [memoryRow(1)] } as unknown as CodeIndexDB;
+    const service = new AgentMemoryService(db, embed, { search: vectorSearch } as unknown as VectorStore);
+    const pending = service.search('project', 7, 'cancelled query', 5, undefined, ctrl.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(received).toBe(ctrl.signal));
+    ctrl.abort();
+    await rejected;
+    finish({ vector: [1], tokens: 0 });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(vectorSearch).not.toHaveBeenCalled();
+  });
+
   it('collapses automatic paraphrases in favor of an explicit canonical memory', () => {
     const content =
       'On disconnect, roll back pending optimistic mutations in reverse insertion order and preserve authoritative events.';
@@ -178,6 +199,7 @@ describe('AgentMemoryService active-generation queries', () => {
       'preferred',
       expect.arrayContaining([expect.objectContaining({ id: '2', text: expect.stringContaining('preferred result') })]),
       2,
+      undefined,
     );
   });
 
@@ -483,14 +505,15 @@ describe('AgentMemoryService active-generation queries', () => {
     const keep = memoryRow(1);
     const archived = { ...memoryRow(2), archived_at: '2026-07-20 10:00:00' } as AgentMemoryRow;
     const otherScope = { ...memoryRow(3), scope: 'global' } as unknown as AgentMemoryRow;
-    const rows = new Map([[1, keep], [2, archived], [3, otherScope]]);
+    const otherProject = { ...memoryRow(4), project_id: 8 };
+    const rows = new Map([[1, keep], [2, archived], [3, otherScope], [4, otherProject]]);
     const db = {
       searchAgentMemoryFts: vi.fn(() => []),
       getAgentMemoryById: vi.fn((id: number) => rows.get(id)),
       getAgentMemoriesByIds: vi.fn((ids: readonly number[]) => ids.map((id) => rows.get(id)!)),
     } as unknown as CodeIndexDB;
     const vectors = {
-      search: vi.fn(async () => [3, 2, 1].map((id) => ({
+      search: vi.fn(async () => [4, 3, 2, 1].map((id) => ({
         id: `am_${id}`,
         score: 0.9,
         metadata: { type: 'agent_memory', scope: 'project', ref_id: String(id) },
@@ -522,5 +545,16 @@ describe('AgentMemoryService active-generation queries', () => {
     const results = await service.search('project', 7, 'dupes', 5);
 
     expect(results.map((r) => r.id)).toEqual([1]);
+  });
+
+  it('bounds vector hydration and rejects malformed IDs without interpreting numeric prefixes', async () => {
+    const hydrate = vi.fn((ids: readonly number[]) => ids.map(memoryRow));
+    const db = { searchAgentMemoryFts: () => [], getAgentMemoriesByIds: hydrate } as unknown as CodeIndexDB;
+    const vectors = { search: vi.fn(async () => ['1garbage', '-1', '9007199254740992', '1', ...Array.from({ length: 1000 }, (_, i) => String(i + 2))]
+      .map(id => ({ id: 'am_' + id, score: 1, metadata: { ref_id: id } }))) } as unknown as VectorStore;
+    const service = new AgentMemoryService(db, embedding(), vectors, embedding());
+    expect((await service.search('project', 7, 'query', 1)).map(r => r.id)).toEqual([1]);
+    expect(hydrate).toHaveBeenCalledWith([1]);
+    for (const limit of [0, -1, 129, NaN, 1.5]) await expect(service.search('project', 7, 'query', limit)).rejects.toThrow('limit');
   });
 });

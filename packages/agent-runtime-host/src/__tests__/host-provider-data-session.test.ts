@@ -7,7 +7,7 @@ import {
   agentV1SessionStore,
 } from '@mcp/agent-runtime-contracts';
 import type { ChatProvider } from '@mcp/provider-sdk/adapter.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createAuthorityClockForTesting } from '../ipc/AttemptClock.js';
 import {
   encodeAttemptFrame,
@@ -31,6 +31,141 @@ const MAXIMUM = 64 * 1024;
 const TOKEN = new Uint8Array(32).fill(0x31);
 
 describe('Host provider Data session', () => {
+  it.each(['provider', 'checkpoint', 'cancel'] as const)('transfers a large request with replay before %s', async mode => {
+    const chat = vi.fn(async function* (request) {
+      expect(JSON.stringify(request).length).toBeGreaterThan(1024 * 1024);
+      yield { type: 'done' as const };
+    });
+    const setup = await hydratedChannel(fakeProvider(chat));
+    const committed: agentV1Runtime.ProviderStart[] = [];
+    const session = setup.bound.intoProviderSession(setup.gateway, {
+      commit: async () => { throw new Error('unexpected engine record'); },
+      commitProviderFrontier: async start => { committed.push(start); },
+    });
+    const controller = new AbortController(); const serving = session.run(controller.signal);
+    const start = largeProviderStart(); const bytes = toBinary(agentV1Runtime.ProviderStartSchema, start);
+    const coordinates = { identity: identity(), runtimeInstanceId: RUNTIME, operationId: start.operationId,
+      checkpointOnly: mode === 'checkpoint', totalBytes: BigInt(bytes.length),
+      requestSha256: createHash('sha256').update(bytes).digest() };
+    let sequence = 6n;
+    try {
+      for (let offset = 0; offset < bytes.length; offset += 48 * 1024) {
+        const encoded = encodeAttemptFrame(runnerHeader('chunk/' + offset, sequence++), agentV1Runtime.TransportChannel.DATA,
+          create(agentV1Runtime.FramePayloadSchema, { body: { case: 'providerRequestChunk',
+            value: create(agentV1Runtime.ProviderRequestChunkSchema, { ...coordinates, chunkOffset: BigInt(offset),
+              encodedChunk: bytes.slice(offset, offset + 48 * 1024) }) } }), MAXIMUM);
+        await setup.runner.send(encoded);
+        const receipt = await receiveRunnerProviderEvent(setup.runner);
+        expect(receipt.payload.body.case).toBe('providerRequestChunkAccepted');
+        if (offset === 0) {
+          await setup.runner.send(encoded);
+          expect((await receiveRunnerProviderEvent(setup.runner)).frame).toEqual(receipt.frame);
+        }
+        expect(chat).not.toHaveBeenCalled(); expect(committed).toHaveLength(0);
+        if (mode === 'cancel') { controller.abort(); await serving; return; }
+      }
+      await setup.runner.send(encodeAttemptFrame(runnerHeader('request-commit/1', sequence), agentV1Runtime.TransportChannel.DATA,
+        create(agentV1Runtime.FramePayloadSchema, { body: { case: 'providerRequestCommit',
+          value: create(agentV1Runtime.ProviderRequestCommitSchema, coordinates) } }), MAXIMUM));
+      const final = await receiveRunnerProviderEvent(setup.runner);
+      expect(final.frame.header?.replyToMessageId).toBe('request-commit/1');
+      expect(final.payload.body.case).toBe(mode === 'checkpoint' ? 'providerCheckpointCommitted' : 'providerAccepted');
+      if (mode === 'provider') {
+        const terminal = (await receiveRunnerProviderEvent(setup.runner)).payload.body;
+        expect(terminal.case).toBe('providerTerminal');
+        if (terminal.case === 'providerTerminal') expect(terminal.value.classification).toBe(agentV1Runtime.ProviderTerminalClassification.COMPLETED);
+        expect(chat).toHaveBeenCalledTimes(1);
+      } else { expect(chat).not.toHaveBeenCalled(); }
+      expect(committed).toHaveLength(1);
+      expect(toBinary(agentV1Runtime.ProviderStartSchema, committed[0])).toEqual(bytes);
+    } finally { controller.abort(); await serving; }
+  });
+
+  it.each([false, true])('bounds provider read-ahead and handles late consumption after cancel=%s', async cancel => {
+    let produced = 0;
+    const setup = await hydratedChannel(fakeProvider(async function* () {
+      produced++; yield { type: 'text_delta', text: 'first', itemId: 'first' };
+      produced++; yield { type: 'text_delta', text: 'second', itemId: 'second' };
+      produced++; yield { type: 'done' };
+    }));
+    const session = setup.bound.intoProviderSession(setup.gateway);
+    const controller = new AbortController();
+    const serving = session.run(controller.signal);
+    try {
+      await sendRunnerProviderStart(setup.runner, setup.limits, 6n, 'providerStart', 'provider-start/1', true);
+      expect((await receiveRunnerProviderEvent(setup.runner)).payload.body.case).toBe('providerAccepted');
+      expect((await receiveRunnerProviderEvent(setup.runner)).payload.body.case).toBe('providerTextDelta');
+      await new Promise(resolve => setImmediate(resolve));
+      expect(produced).toBe(1);
+      if (cancel) {
+        await sendRunnerProviderCancel(setup.runner, setup.limits, 7n);
+        const terminal = (await receiveRunnerProviderEvent(setup.runner)).payload.body;
+        expect(terminal.case).toBe('providerTerminal');
+        if (terminal.case === 'providerTerminal') expect(terminal.value.classification).toBe(agentV1Runtime.ProviderTerminalClassification.CANCELLED);
+        await sendRunnerConsumption(setup.runner, setup.limits, 8n, 1n);
+        await new Promise(resolve => setImmediate(resolve));
+        expect(produced).toBe(1);
+      } else {
+        await sendRunnerConsumption(setup.runner, setup.limits, 7n, 1n);
+        expect((await receiveRunnerProviderEvent(setup.runner)).payload.body.case).toBe('providerTextDelta');
+        expect(produced).toBe(2);
+        await sendRunnerConsumption(setup.runner, setup.limits, 8n, 2n);
+        expect((await receiveRunnerProviderEvent(setup.runner)).payload.body.case).toBe('providerTerminal');
+        expect(produced).toBe(3);
+      }
+    } finally { controller.abort(); await serving; }
+  });
+
+  it('keeps sequential checkpoints alive beyond the outstanding frame quota', async () => {
+    const chat = vi.fn(async function* () { yield { type: 'done' as const }; });
+    const setup = await hydratedChannel(fakeProvider(chat));
+    let commits = 0;
+    const session = setup.bound.intoProviderSession(setup.gateway, {
+      commit: async () => { throw new Error('unexpected engine event'); },
+      commitProviderFrontier: async () => { commits++; },
+    });
+    const controller = new AbortController();
+    const serving = session.run(controller.signal);
+    try {
+      for (let index = 0; index < 100; index++) {
+        await sendRunnerProviderStart(setup.runner, setup.limits, BigInt(index + 6), 'providerCheckpoint', 'checkpoint/' + index);
+        const response = await receiveRunnerProviderEvent(setup.runner);
+        expect(response.payload.body.case).toBe('providerCheckpointCommitted');
+        expect(response.frame.header?.replyToMessageId).toBe('checkpoint/' + index);
+      }
+      expect(commits).toBe(100);
+      expect(chat).not.toHaveBeenCalled();
+    } finally { controller.abort(); await serving; }
+  });
+
+  it('commits a checkpoint before its correlated receipt without opening the provider', async () => {
+    const chat = vi.fn(async function* () { yield { type: 'done' as const }; });
+    const setup = await hydratedChannel(fakeProvider(chat));
+    let release!: () => void;
+    let entered!: () => void;
+    const committing = new Promise<void>(resolve => { entered = resolve; });
+    const durable = new Promise<void>(resolve => { release = resolve; });
+    const session = setup.bound.intoProviderSession(setup.gateway, {
+      commit: async () => { throw new Error('not an engine lifecycle event'); },
+      commitProviderFrontier: async () => { entered(); await durable; },
+    });
+    const controller = new AbortController();
+    const serving = session.run(controller.signal);
+    try {
+      await sendRunnerProviderStart(setup.runner, setup.limits, 6n, 'providerCheckpoint');
+      await committing;
+      let acknowledged = false;
+      const receiving = receiveRunnerProviderEvent(setup.runner).then(value => { acknowledged = true; return value; });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(acknowledged).toBe(false);
+      release();
+      const response = await receiving;
+      expect(response.payload.body.case).toBe('providerCheckpointCommitted');
+      expect(response.frame.header?.replyToMessageId).toBe('provider-start/1');
+      expect(chat).not.toHaveBeenCalled();
+    } finally { release(); controller.abort(); await serving; }
+  });
+
   it('correlates CapabilityPrepare to a bounded pre-dispatch decision', async () => {
     const setup = await hydratedChannel(fakeProvider(async function* () {
       yield { type: 'done' };
@@ -344,10 +479,13 @@ async function sendRunnerProviderStart(
   runner: Parameters<typeof receiveRunnerProviderEvent>[0],
   limits: agentV1Common.FrameLimits,
   sequence: bigint,
+  payloadCase: 'providerStart' | 'providerCheckpoint' = 'providerStart',
+  messageId = 'provider-start/1',
+  consumptionAckRequired = false,
 ): Promise<void> {
   const payload = create(agentV1Runtime.FramePayloadSchema, {
     body: {
-      case: 'providerStart',
+      case: payloadCase,
       value: create(agentV1Runtime.ProviderStartSchema, {
         identity: identity(),
         operationId: 'provider-operation/1',
@@ -368,15 +506,28 @@ async function sendRunnerProviderStart(
         })],
         deadlineAtUnixMs: 5_000n,
         idempotencyKey: 'provider-start/idempotency/1',
+        consumptionAckRequired,
       }),
     },
   });
   await runner.send(encodeAttemptFrame(
-    runnerHeader('provider-start/1', sequence),
+    runnerHeader(messageId, sequence),
     agentV1Runtime.TransportChannel.DATA,
     payload,
     Number(limits.maxFrameBytes),
   ));
+}
+
+async function sendRunnerConsumption(
+  runner: Parameters<typeof receiveRunnerProviderEvent>[0], limits: agentV1Common.FrameLimits,
+  sequence: bigint, eventSequence: bigint,
+): Promise<void> {
+  await runner.send(encodeAttemptFrame(runnerHeader('consumed/' + eventSequence, sequence),
+    agentV1Runtime.TransportChannel.DATA, create(agentV1Runtime.FramePayloadSchema, {
+      body: { case: 'providerEventConsumed', value: create(agentV1Runtime.ProviderEventConsumedSchema, {
+        identity: identity(), operationId: 'provider-operation/1', eventSequence,
+      }) },
+    }), Number(limits.maxFrameBytes)));
 }
 
 async function sendRunnerProviderCancel(
@@ -536,6 +687,16 @@ function runnerHeader(messageId: string, streamSeq: bigint) {
     streamSeq,
     sentAtUnixMs: 10n,
     deadlineAtUnixMs: 5_000n,
+  });
+}
+
+function largeProviderStart() {
+  return create(agentV1Runtime.ProviderStartSchema, {
+    identity: identity(), operationId: 'large/1', deadlineAtUnixMs: 5000n, idempotencyKey: 'large/idempotent/1',
+    binding: create(agentV1Runtime.ProviderBindingSchema, { effectiveProvider: 'test-provider', effectiveModel: 'test-model' }),
+    messages: [create(agentV1Runtime.ProviderMessageSchema, { role: agentV1Runtime.ProviderMessageRole.USER,
+      content: [create(agentV1Runtime.ProviderContentBlockSchema, { body: { case: 'text',
+        value: create(agentV1Runtime.ProviderTextContentSchema, { body: { case: 'inlineUtf8', value: 'x'.repeat(1200 * 1024) } }) } })] })],
   });
 }
 

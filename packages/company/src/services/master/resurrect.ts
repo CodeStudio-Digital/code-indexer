@@ -1,3 +1,4 @@
+import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.js';
 /**
  * "Resurrect" the master agent after its runner exited but a subordinate
  * notify arrived. Cheaper than `start` — reuses the saved
@@ -120,6 +121,7 @@ export async function resurrectMaster(
     const runtime = deps.state.runtimeSnapshot;
     const handle = await runWithExplicitMasterFallback(
       () => runCoder({
+        hostTools: getReadyDocsResearchTools(),
         session: { id: masterSessionId },
         userMessage: message,
         attachments,

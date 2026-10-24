@@ -13,13 +13,20 @@ pub struct TurnInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnOutcome {
     Completed {
-        response_id: String,
+        response_id: Option<String>,
         text: String,
         usage: Option<ProviderUsage>,
     },
     CapabilityRequired {
         call: ProviderToolCall,
         assistant_text: String,
+        assistant_thinking: String,
+        usage: Option<ProviderUsage>,
+    },
+    CapabilitiesRequired {
+        calls: Vec<ProviderToolCall>,
+        assistant_text: String,
+        assistant_thinking: String,
         usage: Option<ProviderUsage>,
     },
     Failed {

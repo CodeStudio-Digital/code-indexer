@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '@mcp/store/db.js';
+import { SemanticStore } from '@mcp/store/semantic-store.js';
 import type { ToolContext } from '../../apps/mcp-server/context.js';
 import {
   allResources,
@@ -88,7 +89,7 @@ describe('mcp-server resources', () => {
     // Minimal context: only `db` is touched by the three Phase 1 resources.
     // Cast through unknown to acknowledge we're omitting services that
     // none of the resources call.
-    ctx = { db } as unknown as ToolContext;
+    ctx = { db, semanticStore: new SemanticStore(db.raw()) } as unknown as ToolContext;
   });
 
   afterEach(() => {
@@ -108,8 +109,16 @@ describe('mcp-server resources', () => {
   });
 
   describe('resources/list', () => {
+    it('reports backend failure rather than a false empty catalog or missing URI', async () => {
+      vi.spyOn(db, 'countFiles').mockImplementationOnce(() => { throw new Error('index unavailable'); });
+      await expect(collectListedResources(ctx)).rejects.toThrow('index unavailable');
+      vi.spyOn(db, 'getStats').mockImplementationOnce(() => { throw new Error('index unavailable'); });
+      await expect(readResource('mcp://project/demo-proj/overview', ctx)).rejects.toThrow('index unavailable');
+    });
     it('returns overview + repo-map per indexed project, omits snapshot', async () => {
+      const fullFiles = vi.spyOn(db, 'listFiles');
       const listed = await collectListedResources(ctx);
+      expect(fullFiles).not.toHaveBeenCalled();
       const uris = listed.map((r) => r.uri).sort();
       expect(uris).toEqual([
         'mcp://project/demo-proj/overview',
@@ -127,7 +136,7 @@ describe('mcp-server resources', () => {
   });
 
   describe('project_overview resource', () => {
-    it('returns JSON with file_count, top_concepts, vector_coverage', async () => {
+    it('returns current structural and semantic coverage without retired enrichment fields', async () => {
       const result = await readResource('mcp://project/demo-proj/overview', ctx);
       expect(result).not.toBeNull();
       expect(result?.resource.name).toBe('project_overview');
@@ -135,13 +144,10 @@ describe('mcp-server resources', () => {
       const payload = JSON.parse(text);
       expect(payload.project).toBe('demo-proj');
       expect(payload.file_count).toBe(2);
-      expect(payload.top_concepts).toContain('retrieval');
-      expect(payload.entry_points).toContain('src/index.ts');
-      expect(payload.vector_coverage).toMatchObject({
-        files_pct: expect.any(Number),
-        symbols_pct: expect.any(Number),
-        bodies_pct: expect.any(Number),
-      });
+      expect(payload).not.toHaveProperty('top_concepts');
+      expect(payload.key_files).toContain('src/index.ts');
+      expect(payload.structural.state).toBe('ready');
+      expect(payload.semantic).toMatchObject({ coverage_pct: expect.any(Number), pending_delta_items: 0 });
     });
 
     it('returns null for unknown project', async () => {

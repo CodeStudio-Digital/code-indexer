@@ -161,7 +161,8 @@ export class InvestigationSemanticIndex {
     return { embedded, failed, skipped, total: rows.length };
   }
 
-  async search(projectId: number, query: string, limit = 8): Promise<string[]> {
+  async search(projectId: number, query: string, limit = 8, signal?: AbortSignal): Promise<string[]> {
+    signal?.throwIfAborted();
     const text = query.trim();
     const topK = Math.max(1, Math.min(50, Math.floor(limit)));
     if (!text || !this.queryEmbeddingService || !this.vectorStore) return [];
@@ -171,7 +172,9 @@ export class InvestigationSemanticIndex {
         this.queryEmbeddingService,
         namespace,
         text,
+        signal ? { signal } : undefined,
       );
+      signal?.throwIfAborted();
       if (vector.length === 0 || vector.some((value) => !Number.isFinite(value))) return [];
       const matches = await this.vectorStore.search(vector, {
         namespace,
@@ -179,6 +182,7 @@ export class InvestigationSemanticIndex {
         topK: topK * 4,
         filter: { type: 'investigation' },
       });
+      signal?.throwIfAborted();
       const ids: string[] = [];
       const seen = new Set<string>();
       for (const match of matches) {
@@ -196,6 +200,7 @@ export class InvestigationSemanticIndex {
       }
       return ids;
     } catch {
+      signal?.throwIfAborted();
       // Missing generation, disabled/failed provider and worker failure all
       // deliberately degrade to Session Drive's lexical recall.
       return [];

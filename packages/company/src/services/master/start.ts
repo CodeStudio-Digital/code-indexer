@@ -1,3 +1,4 @@
+import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.js';
 /**
  * Boot the master agent for a fresh company session. Steps:
  *
@@ -222,6 +223,7 @@ export async function startMaster(
 
     const handle = await runWithExplicitMasterFallback(
       () => runCoder({
+        hostTools: getReadyDocsResearchTools(),
         session: { id: masterSessionId },
         userMessage: opts.userMessage,
         attachments: opts.attachments,

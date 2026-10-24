@@ -14,8 +14,8 @@ import {
   type SessionWorkbenchSkillReference,
 } from '@mcp/api-bus';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 import type { ToolMeta } from '@mcp/code-agent/tools/tiers.js';
 import type {
   SkillStore,

@@ -14,6 +14,7 @@
     "@mcp/provider-sdk": "workspace:*",
     "@mcp/provider-engine": "workspace:*",
     "@mcp/plugin-sdk": "workspace:*",
-    "@mcp/plugin-market-client": "workspace:*"
+    "@mcp/plugin-market-client": "workspace:*",
+    "@mcp/agent-runtime-host": "workspace:*"
   }
 }

@@ -1,4 +1,8 @@
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
+import { cancellableToolRpc } from '../cancellable-rpc.js';
+import { assertMutationFence } from '../../core/mutation-fence.js';
+import { BrowserOutcomeUnknownError } from './failure.js';
 import type {
   IResearchBrowser,
   ResearchBrowserInvoke,
@@ -25,6 +29,7 @@ export function researchBrowserRpcTimeoutMs(request: ResearchBrowserInvoke): num
 }
 
 export function researchBrowserKey(ctx: ToolContext): string {
+  if (ctx.browserAuthority) return ctx.browserAuthority.key;
   const company = ctx.companyContext as { agentRunId?: string; companySessionId?: string } | undefined;
   if (company?.agentRunId != null && company.companySessionId != null) {
     return `company-session-${company.companySessionId}-agent-${company.agentRunId}`;
@@ -40,24 +45,26 @@ export async function invokeResearchBrowser(
   const browser = getGlobalResearchBrowser();
   if (!browser) throw new Error('Research browser is unavailable in this runtime.');
   const requestId = `browser-${Date.now().toString(36)}-${(++requestSequence).toString(36)}`;
-  if (ctx.signal?.aborted) throw new Error('Research browser operation aborted.');
-  const pending = browser.invoke({ key: researchBrowserKey(ctx), method, args, requestId });
-  if (!ctx.signal) return pending;
-  return new Promise((resolve, reject) => {
-    const abort = (): void => {
-      void Promise.resolve(browser.cancel?.(requestId)).catch(() => undefined);
-      reject(new Error('Research browser operation aborted.'));
-    };
-    ctx.signal!.addEventListener('abort', abort, { once: true });
-    pending.then(
-      (value: unknown) => {
-        ctx.signal!.removeEventListener('abort', abort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        ctx.signal!.removeEventListener('abort', abort);
-        reject(error);
-      },
-    );
-  });
+  const signal = asAbortSignal(ctx.signal), native = ctx.browserAuthority, invocation = ctx.currentToolInvocation;
+  signal?.throwIfAborted();
+  if (native && (!invocation || invocation.name !== `browser_${method}` || !ctx.mutationFence?.resourceBinding || !browser.cancel)) {
+    throw new Error('Native browser has no sealed invocation or cancellation boundary');
+  }
+  const key = researchBrowserKey(ctx);
+  assertMutationFence(ctx.mutationFence, { kind: 'control', operation: `browser.${method}`, resource: key });
+  let dispatched = false;
+  try {
+    return await cancellableToolRpc(() => {
+      dispatched = true;
+      return browser.invoke({ key, method, args, requestId,
+        ...(native && invocation ? { runId: native.runId, authority: { payload: native.payload,
+          binding: ctx.mutationFence?.resourceBinding, toolUseId: ctx.currentToolUseId,
+          toolName: invocation.name, input: invocation.input } } : {}) });
+    }, () => browser.cancel?.(requestId), signal, 'Research browser operation aborted.');
+  } catch (error) {
+    if (dispatched && ['open', 'click', 'fill', 'press', 'close'].includes(method)) {
+      native?.outcomeUnknown(); throw new BrowserOutcomeUnknownError(error);
+    }
+    throw error;
+  }
 }

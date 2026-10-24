@@ -47,6 +47,7 @@ import {
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers } from './worker-memory-handlers.js';
 import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
+import { registerWorkerDiagramRender } from './worker-diagram-render.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
 import type { CompanySessionId, ProjectId } from '@mcp/session-storage';
@@ -527,6 +528,13 @@ export class WorkerOrchestratorPool {
       if (!svc) throw new Error('Preview DevTools unavailable — only in the desktop app with a preview open.');
       return svc.invoke(payload as PreviewInvoke);
     });
+    const offDiagramRender = registerWorkerDiagramRender(bridge, runId => {
+      const assertOwner = () => {
+        if (runId !== sessionId || this.entries.get(sessionId)?.host !== host || bus.ctrl.signal.aborted) throw new Error('Company diagram renderer has no active owner');
+      };
+      assertOwner();
+      return { sessionId, projectId: sessionContext.projectId, signal: bus.ctrl.signal, assertOwner };
+    });
     const offPreviewDevtoolsCancel = bridge.handle('previewDevtoolsCancel', async (payload) => {
       const svc = getGlobalPreviewDevtools();
       const requestId = (payload as { requestId?: unknown })?.requestId;
@@ -658,6 +666,7 @@ export class WorkerOrchestratorPool {
       try { offDocsResearch(); } catch { /* best-effort */ }
       try { offRecommend(); } catch { /* best-effort */ }
       try { offPreviewDevtools(); } catch { /* best-effort */ }
+      try { offDiagramRender(); } catch { /* best-effort */ }
       try { offPreviewDevtoolsCancel(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }
       try { offMemory(); } catch { /* best-effort */ }

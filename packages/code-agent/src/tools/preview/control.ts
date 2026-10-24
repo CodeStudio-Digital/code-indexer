@@ -5,6 +5,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { invokePreview } from './bridge.js';
+import { previewFailure } from './failure.js';
 
 function isLoopbackUrl(raw: string): boolean {
   try {
@@ -82,7 +83,7 @@ export const previewOpenTool: CoderTool = {
             : '';
       return ok(`Preview window ready for ${r.url ?? url} (id ${r.windowId ?? '?'})${vp}${requested}${how}. Call preview_snapshot before interacting; use preview_console / preview_network / preview_screenshot to validate.`);
     } catch (e) {
-      return err(e instanceof Error ? e.message : String(e));
+      return previewFailure(e);
     }
   },
 };
@@ -113,7 +114,7 @@ export const previewNavigateTool: CoderTool = {
       await invokePreview(ctx, 'navigate', { url });
       return ok(`Navigated preview to ${url}.`);
     } catch (e) {
-      return err(e instanceof Error ? e.message : String(e));
+      return previewFailure(e);
     }
   },
 };
@@ -160,7 +161,7 @@ export const previewViewportTool: CoderTool = {
         : '';
       return ok(`Viewport set to ${v.width}×${v.height}.${requested} This is native-window resizing; touch, UA, and DPR are not emulated.`);
     } catch (e) {
-      return err(e instanceof Error ? e.message : String(e));
+      return previewFailure(e);
     }
   },
 };
@@ -179,7 +180,7 @@ export const previewCloseTool: CoderTool = {
       await invokePreview(ctx, 'close');
       return ok('Preview window closed.');
     } catch (e) {
-      return err(e instanceof Error ? e.message : String(e));
+      return previewFailure(e);
     }
   },
 };

@@ -3,6 +3,7 @@ import {
   unpackProtocolVersion,
 } from '@mcp/agent-runtime-contracts';
 import { AttemptFrameBootstrapError } from './AttemptFrameBootstrapError.js';
+import { MAX_TRACKED_MESSAGE_IDS } from './AttemptFrameReceiver.js';
 import type {
   AttemptFrameReceiverLimits,
 } from './AttemptFrameReceiverTypes.js';
@@ -24,7 +25,6 @@ const MAX_CONNECTION_TOKEN_BYTES = 512;
 const MAX_INT64 = (1n << 63n) - 1n;
 const MAX_UINT64 = (1n << 64n) - 1n;
 const MAX_REPLAY_ENTRIES = 64;
-const MAX_TRACKED_IDENTITIES = 4_096;
 const MAX_REPLAY_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_TIMEOUT_MS = 60_000n;
 
@@ -84,10 +84,8 @@ export function deriveLaunchLimits(
   return {
     receiverLimits: Object.freeze({
       replayCapacity: Math.min(budget.maxIpcFrames, MAX_REPLAY_ENTRIES),
-      totalIdentityCapacity: Math.min(
-        budget.maxIpcFrames + 1,
-        MAX_TRACKED_IDENTITIES,
-      ),
+      // In-flight credits do not bound the lifetime of heartbeat messages.
+      totalIdentityCapacity: MAX_TRACKED_MESSAGE_IDS,
       maxReplayBytes,
     }),
     maximumResponseTimeoutMs,

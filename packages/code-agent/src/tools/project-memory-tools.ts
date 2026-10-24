@@ -12,8 +12,9 @@
  * RunCoderOptions) — degrade to a clear message when absent (memory disabled).
  */
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
+import { memoryMutationArguments } from './memory-mutation-arguments.js';
 
 const UNAVAILABLE =
   'Agent memory is not available in this context (no project or memory disabled).';
@@ -78,6 +79,9 @@ export const rememberTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx.signal?.throwIfAborted();
+    try { memoryMutationArguments('remember', args); }
+    catch (error) { return err(error instanceof Error ? error.message : String(error)); }
     const title = typeof args.title === 'string' ? args.title.trim() : '';
     const content = typeof args.content === 'string' ? args.content.trim() : '';
     if (!title) return err('remember: `title` is required and non-empty.');
@@ -86,8 +90,18 @@ export const rememberTool: CoderTool = {
       ? args.type
       : 'note';
     const scope = args.scope === 'user' ? 'user' : 'project';
-
+    let dispatched = false;
     try {
+      if (ctx.ports?.memoryMutations) {
+        if (scope === 'user' ? !ctx.userMemory : !ctx.projectMemory) return err(UNAVAILABLE);
+        assertMutationFence(ctx.mutationFence, { kind: 'database', operation: 'remember.save', resource: `memory:${scope}` });
+        dispatched = true;
+        const result = await ctx.ports.memoryMutations.invoke({ toolName: 'remember', input: ctx.currentToolInvocation?.input ?? args,
+          toolUseId: ctx.currentToolUseId, binding: ctx.mutationFence?.resourceBinding, signal: ctx.signal });
+        if (!result) return err('remember failed: memory persistence is unavailable');
+        if (!('created' in result)) throw new Error('Invalid memory write receipt');
+        return remembered(title, scope, result);
+      }
       if (scope === 'user') {
         const um = ctx.userMemory;
         if (!um) return err(`${UNAVAILABLE} (user scope)`);
@@ -97,23 +111,26 @@ export const rememberTool: CoderTool = {
           operation: 'remember.save',
           resource: 'memory:user',
         });
+        dispatched = true;
         const res = await um.save({ title, content, category: 'feedback' });
+        ctx.signal?.throwIfAborted();
         if (!res) return err('remember failed: user memory persistence is unavailable');
-        const what = res && res.merged > 0 ? 'merged into existing user memory' : 'saved as user memory';
-        return ok(`Remembered "${title}" — ${what}. It will inform you in EVERY project going forward.`);
+        return remembered(title, scope, res);
       }
       const pm = ctx.projectMemory;
       if (!pm) return err(UNAVAILABLE);
       assertMutationFence(ctx.mutationFence, {
         kind: 'database',
         operation: 'remember.save',
-        resource: `memory:project:${ctx.projectName}`,
+        resource: 'memory:project',
       });
+      dispatched = true;
       const res = await pm.save({ title, content, category: TYPE_TO_PROJECT_CATEGORY[type] ?? 'note' });
+      ctx.signal?.throwIfAborted();
       if (!res) return err('remember failed: project memory persistence is unavailable');
-      const what = res && res.merged > 0 ? 'merged into existing memory' : 'saved';
-      return ok(`Remembered "${title}" — project memory ${what}. Future sessions on this codebase will recall it.`);
+      return remembered(title, scope, res);
     } catch (e) {
+      if (dispatched) return unknownToolOutcome(`remember did not confirm its write: ${e instanceof Error ? e.message : String(e)}. Reconcile memory before retrying.`);
       return err(`remember failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   },
@@ -149,15 +166,19 @@ export const recallMemoryTool: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const pm = ctx.projectMemory;
     if (!pm) return err(UNAVAILABLE);
-    const limitRaw = typeof args.limit === 'number' ? Math.floor(args.limit) : DEFAULT_LIMIT;
-    const limit = Math.max(1, Math.min(MAX_LIMIT, limitRaw));
+    if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > MAX_LIMIT)) return err(`recall_memory: limit must be an integer from 1 to ${MAX_LIMIT}.`);
+    if (args.mode !== undefined && args.mode !== 'search' && args.mode !== 'list') return err('recall_memory: mode must be search or list.');
+    if (args.type !== undefined && !MEMORY_TYPES.includes(args.type as typeof MEMORY_TYPES[number])) return err('recall_memory: invalid memory type.');
+    const limit = args.limit === undefined ? DEFAULT_LIMIT : Number(args.limit);
     const mode = args.mode === 'list' ? 'list' : 'search';
 
     if (mode === 'list') {
       if (!pm.list) return err('recall_memory(mode:list) is not available in this context.');
       try {
         const type = typeof args.type === 'string' ? args.type : undefined;
-        const rows = await pm.list(limit, type);
+        ctx.signal?.throwIfAborted();
+        const rows = await pm.list(limit, type, ctx.signal);
+        ctx.signal?.throwIfAborted();
         if (rows.length === 0) {
           return ok('Agent memory is empty for this project. Save durable facts with `remember` as you learn them.');
         }
@@ -172,8 +193,11 @@ export const recallMemoryTool: CoderTool = {
 
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     if (!query) return err('recall_memory: `query` is required for mode "search".');
+    if (query.length > 2000) return err('recall_memory: query exceeds 2000 characters.');
     try {
-      const rows = await pm.recall(query, limit);
+      ctx.signal?.throwIfAborted();
+      const rows = await pm.recall(query, limit, ctx.signal);
+      ctx.signal?.throwIfAborted();
       if (rows.length === 0) {
         return ok(
           `No agent memory matches "${query}". Browse what IS stored with recall_memory({mode:'list'}) — ` +
@@ -219,26 +243,41 @@ export const forgetMemoryTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx.signal?.throwIfAborted();
+    try { memoryMutationArguments('forget_memory', args); }
+    catch (error) { return err(error instanceof Error ? error.message : String(error)); }
     const target = typeof args.target === 'string' ? args.target.trim() : '';
     if (!target) return err('forget_memory: `target` is required and non-empty.');
     const scope = args.scope === 'user' ? 'user' : 'project';
     const forget = scope === 'user' ? ctx.userMemory?.forget : ctx.projectMemory?.forget;
     if (!forget) return err(`forget_memory (${scope}) is not available in this context.`);
+    let dispatched = false;
     try {
       assertMutationFence(ctx.mutationFence, {
         kind: 'database',
         operation: 'forget_memory.archive',
-        resource: scope === 'user' ? 'memory:user' : `memory:project:${ctx.projectName}`,
+        resource: `memory:${scope}`,
       });
-      const res = await forget(target);
+      dispatched = true;
+      const res = ctx.ports?.memoryMutations ? await ctx.ports.memoryMutations.invoke({ toolName: 'forget_memory', input: ctx.currentToolInvocation?.input ?? args,
+        toolUseId: ctx.currentToolUseId, binding: ctx.mutationFence?.resourceBinding, signal: ctx.signal }) : await forget(target);
+      ctx.signal?.throwIfAborted();
+      if (!res || !('archived' in res) || !Number.isSafeInteger(res.archived) || res.archived < 0) throw new Error('Invalid memory archive receipt');
       return res.archived > 0
         ? ok(`Forgot "${target}" — archived from ${scope} memory.`)
         : ok(`No ${scope} memory named "${target}" found to forget. Try recall_memory(mode:"list").`);
     } catch (e) {
+      if (dispatched) return unknownToolOutcome(`forget_memory did not confirm its archive: ${e instanceof Error ? e.message : String(e)}. Reconcile memory before retrying.`);
       return err(`forget_memory failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   },
 };
+
+function remembered(title: string, scope: string, receipt: { created: number; merged: number; skipped: number }): ToolResult {
+  if (![receipt.created, receipt.merged, receipt.skipped].every(value => Number.isSafeInteger(value) && value >= 0)) throw new Error('Invalid memory write receipt');
+  if (!receipt.created && !receipt.merged) return ok(`No new ${scope} memory was written for "${title}" (${receipt.skipped} skipped).`);
+  return ok(`Remembered "${title}" — ${scope} memory ${receipt.merged ? 'merged into existing memory' : 'saved'}. Future sessions will recall it.`);
+}
 
 export function buildProjectMemoryTools(): CoderTool[] {
   return [rememberTool, recallMemoryTool, forgetMemoryTool];

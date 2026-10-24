@@ -170,12 +170,14 @@ export async function openAiCompatibleChat(
   const timeoutMs = options.timeoutMs ?? Math.max(1000, toNumber(cfg.timeout) ?? 30_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
-    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    else options.signal.addEventListener('abort', onAbort, { once: true });
   }
   const fetchImpl = options.fetchFn ?? fetch;
   try {
+    controller.signal.throwIfAborted();
     const res = await fetchImpl(url, {
       method: 'POST',
       headers: {
@@ -188,6 +190,7 @@ export async function openAiCompatibleChat(
     const latencyMs = performance.now() - startedAt;
     if (!res.ok) {
       const errorBody = await res.text().catch(() => '');
+      controller.signal.throwIfAborted();
       return {
         content: '',
         errorBody: errorBody.slice(0, 2000),
@@ -198,6 +201,7 @@ export async function openAiCompatibleChat(
       };
     }
     const parsed = (await res.json()) as OpenAiChatResponse;
+    controller.signal.throwIfAborted();
     return {
       content: parsed.choices?.[0]?.message?.content ?? '',
       tokensIn: parsed.usage?.prompt_tokens,
@@ -215,6 +219,7 @@ export async function openAiCompatibleChat(
     };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
   }
 }
 

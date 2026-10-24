@@ -18,7 +18,7 @@
  */
 import type { HandlerDeps } from './types.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 
 type ProviderCfg =
   | { kind?: string; api_key?: string | null; enabled?: boolean; base_url?: string | null }

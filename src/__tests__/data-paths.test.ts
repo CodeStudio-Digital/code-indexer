@@ -5,9 +5,6 @@ import {
   virtualProjectsBaseDir,
   virtualProjectDir,
   globalWorkspaceDir,
-  designSystemUploadsDir,
-  designSystemMcpDir,
-  verdaccioStorageDir,
 } from '@mcp/shared/utils/data-paths.js';
 
 const SESSION_ID = '00000000-0000-4000-8000-000000000042';
@@ -32,16 +29,12 @@ describe('data-paths', () => {
     expect(virtualProjectsBaseDir()).toBe(join(base, 'virtual-projects'));
     expect(virtualProjectDir(SESSION_ID)).toBe(join(base, 'virtual-projects', SESSION_ID));
     expect(globalWorkspaceDir(SESSION_ID)).toBe(join(base, 'global-workspaces', SESSION_ID));
-    expect(designSystemUploadsDir()).toBe(join(base, 'design-system-uploads'));
-    expect(designSystemMcpDir()).toBe(join(base, 'design-system-mcp'));
-    expect(verdaccioStorageDir()).toBe(join(base, 'packages'));
   });
 
   it('honors MCP_DATA_DIR for all subdirs', () => {
     process.env.MCP_DATA_DIR = process.platform === 'win32' ? 'D:\\d' : '/d';
     delete process.env.MCP_SANDBOX_WORKDIR_HOST_DIR;
     const base = mcpDataDir();
-    expect(verdaccioStorageDir()).toBe(join(base, 'packages'));
     expect(virtualProjectDir(OTHER_SESSION_ID)).toBe(
       join(base, 'virtual-projects', OTHER_SESSION_ID),
     );

@@ -1,5 +1,5 @@
 import { isAbsolute, join, relative } from 'node:path';
-import { statSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { isUnityProjectRoot } from '@mcp/shared/utils/project-ignore.js';
@@ -24,7 +24,7 @@ import {
   type StructuralReadinessResult,
 } from './structural-readiness.js';
 
-export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace';
+export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace' | 'poll';
 
 export interface SemanticCatchupHooks {
   noteDelta(
@@ -109,7 +109,9 @@ export class ProjectIndexService {
   /** Over-budget freshness fallback: one shared mtime-poll timer. */
   private fallbackPollTimer: ReturnType<typeof setInterval> | null = null;
   /** projectId → relPath → last observed mtime (fallback poll baseline). */
-  private fallbackMtimes = new Map<number, Map<string, number>>();
+  private fallbackMtimes = new Map<number, Map<string, number | null>>();
+  private fallbackReconcileAt = new Map<number, number>();
+  private fallbackPollRunning = false;
   /** Nested foreground filesystem operations per project (Git stage/commit). */
   private interactivePriorityDepth = new Map<number, number>();
 
@@ -121,6 +123,7 @@ export class ProjectIndexService {
     private gitMetaWatcher: GitMetaWatcher = new GitMetaWatcher(),
   ) {
     this.status = new ProjectIndexStatusStore(db);
+    this.startFallbackPoll();
   }
 
   /** Late-bound upgrade: in-process fallback → indexer worker client. */
@@ -144,56 +147,88 @@ export class ProjectIndexService {
    */
   setOpenPathsProvider(fn: ((projectId: number) => string[]) | null): void {
     this.openPathsProvider = fn;
-    if (!fn) return;
+  }
+
+  private startFallbackPoll(): void {
     if (this.disposed || this.fallbackPollTimer) return;
     const interval = envDelay('MCP_WATCH_FALLBACK_POLL_MS', 3_000);
     if (interval <= 0) return;
-    const timer = setInterval(() => this.pollSkippedProjects(), interval);
+    const timer = setInterval(() => {
+      void this.pollSkippedProjects().catch((error) =>
+        console.warn(`[project-index] fallback freshness check failed: ${msg(error)}`));
+    }, interval);
     timer.unref?.();
     this.fallbackPollTimer = timer;
   }
 
-  /** One tick of the over-budget fallback: stat open files of skipped projects. */
-  private pollSkippedProjects(): void {
-    if (this.disposed || !this.openPathsProvider) return;
+  /** Bounded open-file checks plus periodic worker reconciliation for skipped trees. */
+  private async pollSkippedProjects(): Promise<void> {
+    if (this.disposed || this.fallbackPollRunning) return;
     const watcher = this.watcher as FileWatcherService & { isSkipped?: (id: number) => boolean };
     if (!watcher.isSkipped) return;
-    for (const projectId of this.activations.keys()) {
-      if (!watcher.isSkipped(projectId)) continue;
-      const project = this.db.getProject(projectId);
-      if (!project?.root_path) continue;
-      let paths: string[];
-      try {
-        paths = this.openPathsProvider(projectId).slice(0, 64);
-      } catch {
-        continue;
-      }
-      let seen = this.fallbackMtimes.get(projectId);
-      if (!seen) {
-        seen = new Map();
-        this.fallbackMtimes.set(projectId, seen);
-      }
-      const dirty: DirtyEvent[] = [];
-      for (const raw of paths) {
-        const rel = raw.replace(/\\/g, '/');
-        const st = statSync(join(project.root_path, rel), { throwIfNoEntry: false });
-        const mtime = st?.isFile() ? Math.trunc(st.mtimeMs) : null;
-        const prev = seen.get(rel);
-        if (prev === undefined) {
-          // First sighting = baseline only — the open buffer is current.
-          if (mtime !== null) seen.set(rel, mtime);
+    this.fallbackPollRunning = true;
+    try {
+      const settings = this.settings();
+      const reconcileMs = Math.max(10_000, envDelay('MCP_WATCH_FALLBACK_RECONCILE_MS', 60_000));
+      let scheduledReconcile = false;
+      for (const projectId of this.activations.keys()) {
+        if (!watcher.isSkipped(projectId)) continue;
+        const project = this.db.getProject(projectId);
+        if (!project?.root_path) continue;
+        // Closed files, creations and deletions also need an authoritative scan.
+        // One worker pass at a time; yield to foreground operations and lifecycle scans.
+        const last = this.fallbackReconcileAt.get(projectId);
+        if (last === undefined) this.fallbackReconcileAt.set(projectId, Date.now());
+        else if (settings.autoIndex && !scheduledReconcile && this.running.size === 0
+          && this.draining.size === 0 && this.interactivePriorityDepth.size === 0
+          && !this.pendingOpen.has(projectId) && !this.pendingActivation.has(projectId)
+          && Date.now() - last >= reconcileMs) {
+          this.fallbackReconcileAt.set(projectId, Date.now());
+          this.startStructuralRun(projectId, settings, false, 'poll');
+          scheduledReconcile = true;
+        }
+        let paths: string[];
+        try {
+          paths = this.openPathsProvider?.(projectId).slice(0, 64) ?? [];
+        } catch {
           continue;
         }
-        if (mtime === null) {
-          seen.delete(rel);
-          dirty.push({ path: rel, kind: 'delete' });
-        } else if (mtime !== prev) {
-          seen.set(rel, mtime);
-          dirty.push({ path: rel, kind: 'upsert' });
+        let seen = this.fallbackMtimes.get(projectId);
+        if (!seen) {
+          seen = new Map();
+          this.fallbackMtimes.set(projectId, seen);
         }
+        const dirty: DirtyEvent[] = [];
+        const currentPaths = new Set(paths.map((raw) => raw.replace(/\\/g, '/')));
+        for (const old of seen.keys()) if (!currentPaths.has(old)) seen.delete(old);
+        for (const raw of paths) {
+          if (this.disposed || !this.activations.has(projectId)) return;
+          const rel = raw.replace(/\\/g, '/');
+          const abs = join(project.root_path, rel);
+          if (!toRelPath(project.root_path, abs)) continue;
+          const st = await stat(abs).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+            return undefined; // A transient access failure is not a deletion.
+          });
+          if (st === undefined) continue;
+          const mtime = st?.isFile() ? Math.trunc(st.mtimeMs) : null;
+          const prev = seen.get(rel);
+          if (prev === undefined) {
+            // First sighting = baseline only — the open buffer is current.
+            seen.set(rel, mtime);
+            continue;
+          }
+          if (mtime === null && prev !== null) {
+            seen.set(rel, null);
+            dirty.push({ path: rel, kind: 'delete' });
+          } else if (mtime !== prev) {
+            seen.set(rel, mtime);
+            dirty.push({ path: rel, kind: 'upsert' });
+          }
+        }
+        if (dirty.length > 0) this.markDirty(projectId, dirty);
       }
-      if (dirty.length > 0) this.markDirty(projectId, dirty);
-    }
+    } finally { this.fallbackPollRunning = false; }
   }
 
   setSemanticCatchup(hooks: SemanticCatchupHooks | null): void {
@@ -284,6 +319,7 @@ export class ProjectIndexService {
     this.reconciledLifecycle.delete(projectId);
     this.queuedReconcile.delete(projectId);
     this.fallbackMtimes.delete(projectId);
+    this.fallbackReconcileAt.delete(projectId);
     if (this.semanticLifecycleActive.delete(projectId)) this.notifyProjectInactive(projectId);
     const timer = this.pendingActivation.get(projectId);
     if (timer) {
@@ -437,6 +473,7 @@ export class ProjectIndexService {
       })
       .catch((err) => this.status.setPhase(projectId, 'error', msg(err)))
       .finally(() => {
+        this.fallbackReconcileAt.set(projectId, Date.now());
         this.running.delete(projectId);
         this.runReason.delete(projectId);
         if (reconciled) this.reconciledLifecycle.add(projectId);
@@ -671,6 +708,7 @@ export class ProjectIndexService {
     this.reconciledLifecycle.delete(projectId);
     this.queuedReconcile.delete(projectId);
     this.fallbackMtimes.delete(projectId);
+    this.fallbackReconcileAt.delete(projectId);
     const pending = this.pendingOpen.get(projectId);
     if (pending) {
       clearTimeout(pending);
@@ -703,12 +741,14 @@ export class ProjectIndexService {
     return {
       ...this.status.get(projectId),
       dirtyPending: this.dirty.size(projectId),
-      watcherActive: this.watcher.isWatching(projectId),
+      watcherActive: this.watcher.isWatching(projectId) && !this.watcher.isSkipped?.(projectId),
+      watcherMode: this.watcher.isSkipped?.(projectId) ? 'polling'
+        : this.watcher.isWatching(projectId) ? 'live' : 'off',
     };
   }
 
   subscribe(projectId: number, fn: (s: ProjectIndexStatus) => void): () => void {
-    return this.status.subscribe(projectId, fn);
+    return this.status.subscribe(projectId, () => fn(this.getStatus(projectId)));
   }
 
   /**
@@ -779,6 +819,7 @@ export class ProjectIndexService {
       this.fallbackPollTimer = null;
     }
     this.fallbackMtimes.clear();
+    this.fallbackReconcileAt.clear();
     for (const t of this.pendingOpen.values()) clearTimeout(t);
     for (const t of this.pendingActivation.values()) clearTimeout(t);
     for (const t of this.fileWatchOpenTimers.values()) clearTimeout(t);

@@ -44,7 +44,7 @@ function makeTool(name: string): CoderTool {
 
 const ALL_TOOLS: CoderTool[] = [
   ...['Read','Write','Edit','Bash','Glob','Grep','TodoWrite','PowerShell'].map(makeTool),
-  ...['DesignSystem','Database','WebFetch','GitStatus','Kanban','Slack','Notion','Jira'].map(makeTool),
+  ...['ArchitectureMap','Database','WebFetch','GitStatus','Kanban','Slack','Notion','Jira'].map(makeTool),
 ];
 
 describe('applyToolSelection', () => {

@@ -5,9 +5,9 @@ import { UNSET } from '../types.js';
 describe('runPreScript', () => {
   const reqSeed = () => ({ method: 'GET', url: '/x', headers: {} as Record<string, string>, body: '' });
 
-  it('sets and unsets environment variables', () => {
+  it('sets and unsets environment variables', async () => {
     const vars: Record<string, string> = { keep: '1' };
-    const r = runPreScript({
+    const r = await runPreScript({
       source: `pm.environment.set('token', 'abc'); pm.environment.unset('keep');`,
       variables: vars, request: reqSeed(),
     });
@@ -17,9 +17,9 @@ describe('runPreScript', () => {
     expect(vars.keep).toBeUndefined();
   });
 
-  it('mutates the request and reports a patch', () => {
+  it('mutates the request and reports a patch', async () => {
     const seed = reqSeed();
-    const r = runPreScript({
+    const r = await runPreScript({
       source: `pm.request.headers.set('X-Trace','1'); pm.request.method.set('POST');`,
       variables: {}, request: seed,
     });
@@ -29,25 +29,25 @@ describe('runPreScript', () => {
     expect(r.requestPatch?.method).toBe('POST');
   });
 
-  it('captures console.log', () => {
-    const r = runPreScript({ source: `console.log('hi', 42)`, variables: {}, request: reqSeed() });
+  it('captures console.log', async () => {
+    const r = await runPreScript({ source: `console.log('hi', 42)`, variables: {}, request: reqSeed() });
     expect(r.consoleLogs).toEqual(['hi 42']);
   });
 
-  it('kills an infinite loop via the timeout', () => {
-    const r = runPreScript({ source: `while(true){}`, variables: {}, request: reqSeed(), timeoutMs: 200 });
+  it('kills an infinite loop via the timeout', async () => {
+    const r = await runPreScript({ source: `while(true){}`, variables: {}, request: reqSeed(), timeoutMs: 200 });
     expect(r.error).toBeTruthy();
   });
 
-  it('blocks async escape — Promise/setTimeout are removed from the sandbox', () => {
-    const r = runPreScript({ source: `Promise.resolve().then(() => {});`, variables: {}, request: reqSeed() });
-    expect(r.error).toMatch(/Promise is not defined/);
-    const t = runPreScript({ source: `setTimeout(() => {}, 0);`, variables: {}, request: reqSeed() });
-    expect(t.error).toMatch(/setTimeout is not defined/);
+  it('blocks async escape — Promise/setTimeout are removed from the sandbox', async () => {
+    const r = await runPreScript({ source: `Promise.resolve().then(() => {});`, variables: {}, request: reqSeed() });
+    expect(r.error).toMatch(/Promise.*(not defined|not defined)|not defined.*Promise/);
+    const t = await runPreScript({ source: `setTimeout(() => {}, 0);`, variables: {}, request: reqSeed() });
+    expect(t.error).toMatch(/setTimeout.*not defined|not defined.*setTimeout/);
   });
 
-  it('empty source is a no-op (no error)', () => {
-    const r = runPreScript({ source: '   ', variables: {}, request: reqSeed() });
+  it('empty source is a no-op (no error)', async () => {
+    const r = await runPreScript({ source: '   ', variables: {}, request: reqSeed() });
     expect(r.error).toBeUndefined();
     expect(r.tests).toEqual([]);
   });
@@ -60,8 +60,8 @@ describe('runTestScript', () => {
   });
   const reqSeed = () => ({ method: 'GET', url: '/x', headers: {}, body: '' });
 
-  it('passes status + property assertions', () => {
-    const r = runTestScript({
+  it('passes status + property assertions', async () => {
+    const r = await runTestScript({
       source: `
         pm.test('status', () => pm.expect(pm.response).to.have.status(200));
         pm.test('has id', () => pm.expect(pm.response.json()).to.have.property('id', 7));
@@ -74,8 +74,8 @@ describe('runTestScript', () => {
     ]);
   });
 
-  it('records a failing assertion with a message', () => {
-    const r = runTestScript({
+  it('records a failing assertion with a message', async () => {
+    const r = await runTestScript({
       source: `pm.test('wrong', () => pm.expect(pm.response.code).to.equal(404));`,
       variables: {}, request: reqSeed(), response: resp(),
     });
@@ -83,16 +83,16 @@ describe('runTestScript', () => {
     expect(r.tests[0].error).toContain('200');
   });
 
-  it('captures a var set from the response', () => {
-    const r = runTestScript({
+  it('captures a var set from the response', async () => {
+    const r = await runTestScript({
       source: `pm.environment.set('id', String(pm.response.json().id));`,
       variables: {}, request: reqSeed(), response: resp(),
     });
     expect(r.variableUpdates.id).toBe('7');
   });
 
-  it('request is read-only in a test script', () => {
-    const r = runTestScript({
+  it('request is read-only in a test script', async () => {
+    const r = await runTestScript({
       source: `pm.test('mutate', () => { pm.request.method.set('POST'); });`,
       variables: {}, request: reqSeed(), response: resp(),
     });
@@ -100,8 +100,8 @@ describe('runTestScript', () => {
     expect(r.tests[0].error).toContain('read-only');
   });
 
-  it('expect.not flips matchers; eql does deep equality; include works', () => {
-    const r = runTestScript({
+  it('expect.not flips matchers; eql does deep equality; include works', async () => {
+    const r = await runTestScript({
       source: `
         pm.test('not', () => pm.expect(1).to.not.equal(2));
         pm.test('eql', () => pm.expect(pm.response.json()).to.eql({id:7,name:'x'}));

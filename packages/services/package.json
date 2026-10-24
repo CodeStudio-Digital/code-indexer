@@ -16,12 +16,12 @@
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "cheerio": "^1.2.0",
-    "isolated-vm": "^7.0.0",
     "magic-string": "^0.30.21",
     "officeparser": "^7.2.1",
     "playwright-core": "1.61.1",
     "turndown": "^7.2.4",
-    "unpdf": "^1.6.2"
+    "unpdf": "^1.6.2",
+    "quickjs-emscripten": "0.32.0"
   },
   "devDependencies": {
     "@babel/types": "^7.29.7"

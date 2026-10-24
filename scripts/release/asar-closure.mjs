@@ -13,6 +13,7 @@
  */
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import ts from 'typescript';
 
 const require = createRequire(import.meta.url);
 
@@ -39,24 +40,24 @@ function loadAsar(root) {
 const TEMPLATE_SOURCES =
   /host-scaffold\/|source-stamp\/|scaffolders\/|reporter-template|skills\/builtin\/|tree-sitter\/extractor\.js/;
 
-const IMPORT_RE =
-  /(?:import|export)\s+(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)|require\(\s*['"]([^'"]+)['"]\s*\)/g;
-
-/**
- * Drop lines that are entirely a comment. Prose explaining imports is common in
- * this codebase (`// ... \`import x from 'y'\` dies here`) and the regex above
- * cannot tell it from code — that one comment alone reported a missing package
- * called `y`. Only whole-line comments are removed, never a trailing `//`,
- * so a `'https://…'` inside real code is left intact.
- */
-function stripCommentLines(source) {
-  return source
-    .split('\n')
-    .filter((l) => {
-      const t = l.trimStart();
-      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
-    })
-    .join('\n');
+/** Parse code so method calls, comments and source examples are not mistaken
+ * for modules. require.resolve includes dependencies passed to isolated workers. */
+export function moduleSpecifiers(source) {
+  const tree = ts.createSourceFile('module.js', source, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS);
+  const found = new Set();
+  const add = node => { if (node && ts.isStringLiteralLike(node)) found.add(node.text); };
+  const visit = node => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) add(node.moduleSpecifier);
+    if (ts.isCallExpression(node)) {
+      const fn = node.expression;
+      if (fn.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(fn) && fn.text === 'require') ||
+        (ts.isPropertyAccessExpression(fn) && ts.isIdentifier(fn.expression) &&
+          ((fn.expression.text === 'require' && fn.name.text === 'resolve') ||
+           (fn.expression.text === 'module' && fn.name.text === 'require')))) add(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree); return [...found];
 }
 
 export function checkAsarClosure(root, asarPath, entries) {
@@ -114,10 +115,7 @@ export function checkAsarClosure(root, asarPath, entries) {
     visited.add(current);
     const raw = read(current);
     if (raw == null) continue;
-    const source = stripCommentLines(raw);
-    let match;
-    while ((match = IMPORT_RE.exec(source)) !== null) {
-      const spec = match[1] || match[2] || match[3];
+    for (const spec of moduleSpecifiers(raw)) {
       if (!spec) continue;
       if (spec.startsWith('.')) {
         const resolved = resolveRelative(current, spec);

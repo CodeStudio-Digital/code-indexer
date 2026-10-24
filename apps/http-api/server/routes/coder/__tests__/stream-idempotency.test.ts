@@ -91,6 +91,7 @@ function setup(
     controlPlaneCommands?: Map<string, Record<string, unknown>>;
     controlPlaneUnavailable?: boolean;
     initialMessageCount?: number;
+    unresolvedToolOutcome?: boolean;
     preflightSeedJson?: string | null;
     taskPreflightRun?: ReturnType<typeof vi.fn>;
   } = {},
@@ -144,7 +145,7 @@ function setup(
     },
     loadSessionWithMessages: (id: SessionId) => ({
       session: { id, project_id: projectId, agent: opts.sessionAgent ?? null },
-      messages: [{ role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1' }] }],
+      messages: [{ role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1', ...(opts.unresolvedToolOutcome ? { effect_outcome: 'unknown' } : {}) }] }],
     }),
   };
   const deps = {
@@ -315,6 +316,21 @@ afterEach(() => {
 });
 
 describe('POST /messages idempotency', () => {
+  it('creates authority for a fresh worker with shadow flags off and retains it for live follow-ups', async () => {
+    vi.stubEnv('CODER_CONTROL_PLANE_SHADOW', '0');
+    vi.stubEnv('CODER_AGENT_RUN_STORE_SHADOW', '0');
+    vi.stubEnv('CODER_AGENT_RUN_STORE_ENFORCE', '0');
+    const h = setup();
+    expect((await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'first', client_msg_id: 'fresh' })).status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledOnce());
+    expect(h.acceptCalls[0]).toMatchObject({ run: {
+      agentRunId: expect.any(String), attemptId: expect.any(String), executorOwnerId: expect.any(String),
+    } });
+    expect((await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'follow-up', client_msg_id: 'follow-up' })).status).toBe(200);
+    expect(h.acceptCalls[1]).toMatchObject({ run: undefined });
+    expect(poolMock.runFresh).toHaveBeenCalledOnce();
+  });
+
   it('upgrades a matching legacy fresh preflight cache before the run starts', async () => {
     vi.stubEnv('CODER_PREFLIGHT', '1');
     const content = 'fix the retry race';
@@ -928,5 +944,45 @@ describe('POST /continue idempotency + live-run hardening', () => {
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
     expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'app_orchestrator', resume: true });
+  });
+});
+
+
+describe('uncertain tool effect admission', () => {
+  it.each(['messages', 'continue'])('keeps the original command live after unconfirmed startup cleanup on %s', async path => {
+    const h = setup();
+    const bus = createBus(new AbortController());
+    poolMock.runFresh.mockImplementationOnce(async () => {
+      workerEntries.set(SESSION_ID, bus);
+      throw Object.assign(new Error('Cleanup unconfirmed'), { code: 'CODER_STARTUP_UNCERTAIN' });
+    });
+    const body = { content: 'continue', client_msg_id: 'uncertain-start' };
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/${path}`, body);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'CODER_STARTUP_UNCERTAIN', retryable: false });
+    expect([...h.controlPlaneCommands.values()].map(command => command.status)).toEqual(['accepted']);
+    const retry = await h.post(`/api/coder/sessions/${SESSION_ID}/${path}`, body);
+    expect(retry.status).toBe(200);
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
+    markEnded(bus, 'error', { reason: 'original-attempt-reconciled' });
+    expect(await retry.text()).toContain('original-attempt-reconciled');
+  });
+
+  it('rejects continue from durable evidence before admitting another run', async () => {
+    const h = setup(new RecentMessageKeys(), { unresolvedToolOutcome: true });
+    const response = await h.post('/api/coder/sessions/' + SESSION_ID + '/continue', {});
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'TOOL_OUTCOME_UNKNOWN', retryable: false });
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+    expect(h.acceptCalls).toHaveLength(0);
+  });
+
+  it.each(['messages', 'continue'])('preserves a typed uncertain-effect worker failure on %s', async path => {
+    const h = setup();
+    poolMock.runFresh.mockRejectedValueOnce(Object.assign(new Error('Uncertain effect'), { code: 'TOOL_OUTCOME_UNKNOWN' }));
+    const response = await h.post('/api/coder/sessions/' + SESSION_ID + '/' + path, { content: 'continue' });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'Uncertain effect', code: 'TOOL_OUTCOME_UNKNOWN', retryable: false });
   });
 });

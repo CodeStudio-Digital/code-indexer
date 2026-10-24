@@ -91,11 +91,13 @@ export default defineConfig(({ command }) => ({
       ...pkgAliases('@mcp/store', 'store'),
       ...pkgAliases('@mcp/services', 'services'),
       ...pkgAliases('@mcp/indexer', 'indexer'),
-      ...pkgAliases('@mcp/design-system', 'design-system'),
       // App Studio: o dashboard importa SÓ os módulos puros (spec/*,
       // blueprint/*) — verification/workspace-checks usa node:fs e quebraria o build.
       ...pkgAliases('@mcp/app-studio', 'app-studio'),
       ...pkgAliases('@mcp/code-agent', 'code-agent'),
+      // Renderer consumers use only pure session contracts (for example run
+      // limits); persistence implementations remain in the host process.
+      ...pkgAliases('@mcp/session-storage', 'session-storage'),
       ...pkgAliases('@mcp/company', 'company'),
       ...pkgAliases('@mcp/company-contracts', 'company-contracts'),
       ...pkgAliases('@mcp/vault-crypto', 'vault-crypto'),

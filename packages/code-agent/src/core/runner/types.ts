@@ -12,8 +12,8 @@ import type {
   PolicyShadowSessionContext,
 } from '@mcp/code-agent/core/policy-shadow-adapter.js';
 import type { SessionId } from '@mcp/session-storage';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
-import type { FsTurnTelemetrySink } from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
+import type { FsTurnTelemetrySink } from '@mcp/session-storage/fs-store/turn-telemetry.js';
 
 /**
  * Recovery transition kinds (PR-4, Row 3 from

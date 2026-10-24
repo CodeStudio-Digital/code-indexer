@@ -18,6 +18,28 @@ import {
 } from './attempt-channel-support.js';
 
 describe('host bootstrap physical owner', () => {
+  it('accepts 1,000 sequential heartbeats without spending in-flight credits for its lifetime', async () => {
+    const heartbeats = Array.from({ length: 1_000 }, (_, index) =>
+      heartbeatFrame(`heartbeat-${index + 2}`, BigInt(index + 2)));
+    const { bootstrap } = hostBootstrap([], { readable: Readable.from(
+      [agentHelloFrame(), ...heartbeats, heartbeats[0]!].map(frame => delimit(frame)),
+    ) });
+    await bootstrap.receiveAgentHello();
+    const channel = await bootstrap.establish(hostHello());
+    for (let index = 0; index < heartbeats.length; index++) {
+      const received = await channel.beginReceive();
+      if (received.kind !== 'pending') throw new Error('fresh heartbeat expected');
+      const binding = received.pending.binding();
+      const receipt = channel.commitAccepted(received.pending);
+      expect(channel.receiptMatches(receipt, binding)).toBe(true);
+    }
+    expect(channel.isPoisoned).toBe(false);
+    // Old identities remain tombstones after their response replay window expires.
+    await expect(channel.beginReceive()).rejects.toBeDefined();
+    expect(channel.isPoisoned).toBe(true);
+    channel.abort();
+  });
+
   it('accepts AgentHello before writing a connection-bound HostHello', async () => {
     const { bootstrap, capture } = hostBootstrap([agentHelloFrame()]);
 

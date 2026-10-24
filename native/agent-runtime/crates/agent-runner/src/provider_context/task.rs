@@ -39,6 +39,7 @@ pub(super) fn initial_user_message(
         content,
         phase: wire::ProviderMessagePhase::Unspecified as i32,
         is_meta: false,
+        compacted_chapter: None,
     })
 }
 

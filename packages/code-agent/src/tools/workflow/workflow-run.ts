@@ -20,6 +20,7 @@ import {
 } from '@mcp/code-agent/tools/spawn-agent-core.js';
 import { retainSpawnGroup } from '@mcp/code-agent/tools/spawn-agent-resume.js';
 import { registerActiveAgent } from '@mcp/code-agent/tools/active-agent-registry.js';
+import { emitSubagentEvent } from '../subagent-events.js';
 import {
   assertWorkflowRunLease,
   saveWorkflow,
@@ -69,7 +70,7 @@ function toNormalizedAgent(step: WorkflowStepState, record: WorkflowRecord): Nor
 }
 
 function emitStepUpdate(ctx: ToolContext, record: WorkflowRecord, step: WorkflowStepState): void {
-  ctx.runner?.emit('workflow_step_update', {
+  emitSubagentEvent(ctx, 'workflow_step_update', {
     workflow_id: record.id,
     step_id: step.id,
     status: step.status,
@@ -86,7 +87,7 @@ async function persist(
   ctx: ToolContext,
   record: WorkflowRecord,
 ): Promise<void> {
-  const sessionId = ctx.runner?.sessionId;
+  const sessionId = ctx.sessionId ?? ctx.runner?.sessionId;
   if (
     sessionId != null &&
     !(await saveWorkflow(sessionId, record, deps.sessionStore))
@@ -119,7 +120,7 @@ export async function executeWorkflow(
   ctx: ToolContext,
   record: WorkflowRecord,
 ): Promise<WorkflowRecord> {
-  const parentSessionId = ctx.runner?.sessionId;
+  const parentSessionId = ctx.sessionId ?? ctx.runner?.sessionId;
   const activeControllers = new Set<AbortController>();
   const stopLeaseKeepalive = parentSessionId == null
     ? () => {}
@@ -144,6 +145,7 @@ export async function executeWorkflow(
     }
 
     for (;;) {
+      if (record.steps.some(step => step.effectOutcome === 'unknown')) break;
       if (ctx.signal?.aborted) { record.status = 'aborted'; break; }
       skipBlockedSteps(ctx, record);
       const ready = record.steps.filter((step) =>
@@ -193,6 +195,13 @@ export async function executeWorkflow(
         pathScopeMode: a.profile.pathScopeMode,
         limits: agentLimits[i],
         signal: controllers[i].signal,
+        ...(ctx.runtimeGeneration === 'rust_v1' ? { onNativeAdmission: async (reference: string) => {
+          if (parentSessionId == null) throw new Error('Native workflow has no session checkpoint owner');
+          await assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+          ready[i].nativeTranscriptRef = reference;
+          await persist(deps, ctx, record);
+          await assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+        } } : {}),
       }));
 
       const unregisters: Array<() => void> = [];
@@ -207,7 +216,7 @@ export async function executeWorkflow(
             registerActiveAgent(parentSessionId, groupId, i, ready[i].id, controllers[i]),
           );
         }
-        ctx.runner?.emit('agents_group_start', {
+        emitSubagentEvent(ctx, 'agents_group_start', {
           groupId,
           provider: agentInfos[0]?.provider,
           model: agentInfos[0]?.model,
@@ -239,7 +248,7 @@ export async function executeWorkflow(
           MICRO_AGENT_PROFILES.explore.allowlist,
           (progress) => {
             const info = agentInfos[progress.agentIndex];
-            ctx.runner?.emit('agent_progress', {
+            emitSubagentEvent(ctx, 'agent_progress', {
               groupId,
               task: agents[progress.agentIndex]?.task,
               provider: info?.provider,
@@ -275,8 +284,13 @@ export async function executeWorkflow(
         step.error = step.status === 'failed'
           ? (result.failureDetail ?? result.finalText ?? 'failed')
           : undefined;
+        step.effectOutcome = result.effectOutcome;
+        if (step.effectOutcome === 'unknown') {
+          step.status = 'failed'; step.error = `outcome_unknown: ${step.error ?? 'child effect has no confirmed acknowledgement'}`;
+        }
         step.toolCallCount = result.toolCallCount;
         step.usage = result.usage;
+        step.nativeTranscriptRef = result.nativeTranscriptRef ?? step.nativeTranscriptRef;
         emitStepUpdate(ctx, record, step);
       }
       await persist(deps, ctx, record);
@@ -293,7 +307,7 @@ export async function executeWorkflow(
         })),
         store: deps.sessionStore,
       });
-      ctx.runner?.emit('agents_group_end', {
+      emitSubagentEvent(ctx, 'agents_group_end', {
         groupId,
         totalUsage,
         agentCount: results.length,

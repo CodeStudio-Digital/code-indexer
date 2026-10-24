@@ -7,7 +7,7 @@ import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { AgentMessage, ChatDelta, ToolResultBlock } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ChatDelta, ToolResultBlock } from "@mcp/provider-sdk";
 
 /**
  * Mock read tool that always succeeds with a tagged body. Counts dispatches

@@ -25,6 +25,16 @@ function harness(initial: GoalSnapshot | null = null) {
 }
 
 describe('advisory goal tools', () => {
+  it('gives a replacement objective a new generation even within the same clock tick', async () => {
+    vi.useFakeTimers();
+    const now = '2026-10-07T00:00:00.000Z';
+    vi.setSystemTime(now);
+    try {
+      const { ctx, getGoal } = harness({ text: 'Old', status: 'complete', createdAt: now, updatedAt: now, budgetTokens: null, completionNote: 'Done' });
+      expect((await createGoal.handler({ goal: 'New' }, ctx)).isError).not.toBe(true);
+      expect(Date.parse(getGoal()!.createdAt)).toBe(Date.parse(now) + 1);
+    } finally { vi.useRealTimers(); }
+  });
   it('treats redundant create_goal as idempotent success without replacing state', async () => {
     const existing: GoalSnapshot = {
       text: 'Original objective',

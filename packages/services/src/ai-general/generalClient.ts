@@ -21,7 +21,7 @@
  */
 import { createCoderProvider } from '../providers/factory.js';
 import { getStore } from '../providers/shared/store.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 
 export class GeneralAiNotConfiguredError extends Error {
   constructor() {

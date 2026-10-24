@@ -118,6 +118,14 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
       additionalProperties: false,
     },
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+      if (ctx.runtimeGeneration === 'rust_v1') {
+        const port = ctx.ports?.agentTree;
+        if (!port?.collect || port.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId) throw new Error('Native collection requires the admitted tree owner');
+        const timeout = args.timeout_s === undefined ? 1800 : args.timeout_s;
+        if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout < 0 || timeout > 1800) return err('Invalid collect_agents timeout');
+        return port.collect({ jobId: typeof args.job_id === 'string' ? args.job_id.trim() || undefined : undefined,
+          timeoutMs: args.wait === false ? 0 : timeout * 1000, signal: ctx.signal });
+      }
       const sessionId = ctx.runner?.sessionId;
       if (sessionId == null) return err('collect_agents: no active session.');
       const manager = getSubagentJobManager();

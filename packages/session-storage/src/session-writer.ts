@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import type { Stats } from 'node:fs';
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -295,6 +296,11 @@ export async function releaseSessionWriterLeaseForOwner(options: {
   }
 }
 
+export interface WriterProjection<T> {
+  create(): T;
+  apply(state: T, commit: ConversationCommit): void;
+}
+
 export class SessionWriter {
   readonly #bundlePath: string;
   readonly #sessionId: SessionId;
@@ -313,6 +319,8 @@ export class SessionWriter {
   #leaseRefreshQueue: Promise<void> = Promise.resolve();
   #queue: Promise<unknown> = Promise.resolve();
   #records: ConversationCommit[] = [];
+  #journalStamp: Stats | null = null;
+  readonly #projections = new Map<WriterProjection<unknown>, { state: unknown }>();
   #operations = new Map<string, ConversationCommit>();
   #closing = false;
   #closed = false;
@@ -351,6 +359,39 @@ export class SessionWriter {
 
   get recordsSnapshot(): readonly ConversationCommit[] {
     return this.#records.slice();
+  }
+
+  /** Projection lifetime is exactly this fenced writer. It is rebuilt once on
+   * recovery and advanced only after a journal commit. Read paths remain free
+   * to use the full validator; no cache crosses a writer/authority boundary. */
+  readProjection<T>(projection: WriterProjection<T>): Promise<T> {
+    return this.#enqueue(async () => {
+      await this.#assertLease();
+      await this.#assertConversationUnchanged();
+      const cached = this.#projections.get(projection);
+      if (cached) return cached.state as T;
+      const state = projection.create();
+      for (const record of this.#records) projection.apply(state, record);
+      // Extra indices are bounded independently of the durable history. Above
+      // these limits rebuild on demand instead of retaining another hot copy.
+      if (this.#records.length <= 100_000 && (this.#journalStamp?.size ?? 0) <= 32 * 1024 * 1024) {
+        if (this.#projections.size >= 4) this.#projections.clear();
+        this.#projections.set(projection, { state });
+      }
+      return state;
+    });
+  }
+
+  async #assertConversationUnchanged(): Promise<void> {
+    const stat = await lstat(this.#conversationPath);
+    const previous = this.#journalStamp;
+    if (!previous || !stat.isFile() || stat.isSymbolicLink()
+      || stat.size !== previous.size || stat.mtimeMs !== previous.mtimeMs
+      || stat.ctimeMs !== previous.ctimeMs || stat.ino !== previous.ino || stat.dev !== previous.dev) {
+      this.#projections.clear();
+      this.#heartbeatFailure = new ConversationCorruptionError('Journal changed outside its authorized writer');
+      throw this.#heartbeatFailure;
+    }
   }
 
   async #initialize(): Promise<void> {
@@ -544,6 +585,8 @@ export class SessionWriter {
     const records = [...(await recoverConversation(this.#conversationPath))];
     this.#records = records;
     this.#operations = new Map(records.map((record) => [record.operation_id, record]));
+    this.#journalStamp = await lstat(this.#conversationPath);
+    this.#projections.clear();
   }
 
   #enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -594,6 +637,8 @@ export class SessionWriter {
   commitTurn(input: WriterCommitInput): Promise<ConversationCommit> {
     validateOperationId(input.operation_id);
     return this.#enqueue(async () => {
+      await this.#assertLease();
+      await this.#assertConversationUnchanged();
       const previous = this.#operations.get(input.operation_id);
       if (previous) {
         if (previous.request_hash !== input.request_hash) {
@@ -652,6 +697,15 @@ export class SessionWriter {
 
       this.#records.push(record);
       this.#operations.set(record.operation_id, record);
+      this.#journalStamp = await lstat(this.#conversationPath);
+      if (this.#records.length > 100_000 || this.#journalStamp.size > 32 * 1024 * 1024) {
+        this.#projections.clear();
+      } else {
+        for (const [projection, cached] of this.#projections) {
+          try { projection.apply(cached.state, record); }
+          catch { this.#projections.delete(projection); }
+        }
+      }
       await this.#faultInjector?.({
         point: 'conversation:after-append',
         session_id: this.#sessionId,

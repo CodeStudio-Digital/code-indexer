@@ -34,18 +34,15 @@ import type { CompanyContext } from '@mcp/company/types.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { parseAgentPathTarget } from '@mcp/company/tools/path-resolution.js';
+import { nativeAgentMessage } from './native-agent-message.js';
 
 const SEND_INPUT_DESC =
-  'Interrupting cross-tier message delivery. Same routing as send_message, but the target releases any pending waitForUserInput so the message lands NOW.\n' +
-  '\n' +
-  'Targets:\n' +
-  "  - `/root/master` — sub→master only. Notifies master AND breaks any pending wait on master's runner.\n" +
-  '  - `/root/master/<role>-<agentRunId>` — master→sub only.\n' +
-  '\n' +
-  "USE: when the target is paused on its own ask_user/submit_plan/submit_tasks and you have urgent context that supersedes that pause.\n" +
-  "USE: when send_message would be 'too quiet' — you've changed the situation and the pending question is now stale.\n" +
-  "DON'T: spam this. Each interrupt produces a structured envelope the target sees BEFORE the human's answer arrives — using it casually wastes their attention.\n" +
-  "DON'T: try sub→peer — that path is intentionally refused (only the master can interrupt subordinates). Use send_message or send_to_agent(wait=true).";
+  'Send urgent context to your parent or an owned descendant, using an exact path from list_agents. ' +
+  'If the target has a pending question, release that question with an interrupted marker and apply the context at its next provider boundary. ' +
+  'This does not abort an executing tool or provider stream. In native trees only question/decision waits may be interrupted: ' +
+  'tool permissions, plan/spec approvals and budget approvals remain with the human. It never supplies an approval. ' +
+  'Peer interruption is refused; use send_message for peer notifications. Native message bodies are limited to 4096 UTF-8 bytes. ' +
+  'Use only when new information supersedes a pending question; never repeat an uncertain send.';
 
 export const sendInput: CoderTool = {
   name: 'send_input',
@@ -54,6 +51,7 @@ export const sendInput: CoderTool = {
   mutates: false,
   parallelSafe: false,
   riskLevel: 'read',
+  effectBoundary: 'control',
   parameters: {
     type: 'object',
     properties: {
@@ -64,6 +62,7 @@ export const sendInput: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
+    if (ctx.runtimeGeneration === 'rust_v1') return nativeAgentMessage(ctx, 'input', args.to, args.message);
     const cc: CompanyContext | undefined = ctx.companyContext;
     if (!cc) {
       return err('send_input: no companyContext on this session — there is no peer to interrupt.');

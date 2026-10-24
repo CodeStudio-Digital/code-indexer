@@ -96,6 +96,13 @@ autoridade viva.
 
 ## 3. Termos
 
+Inventário do checkout em 2026-10-03: Sprite e Design Systems foram retirados
+das superfícies do produto (migração `267_retire_sprite_and_design_system`).
+Não são alvos de paridade nem devem ser recriados pela migração Rust. Leitores,
+fixtures e migrações de bundles históricos podem conservar seus nomes.
+App Studio e seus papéis de design/QA continuam no manifest A15; são distintos
+do módulo Design Systems retirado.
+
 | Termo | Definição |
 |---|---|
 | Superfície | Fluxo de produto que cria, retoma, observa, controla ou recebe resultado de um agente |
@@ -251,7 +258,7 @@ refatoração do runner antigo.
 | Pipeline kernel e tipos de estágio | `candidate-pipeline`/Company | pipelines agendam `AgentRun`, não `runSubagent` |
 | Classificadores de erro/telemetria | `store`/services/observability | indexer e store não dependem do executor |
 | Prompts e assets de prompt | `packages/agent-prompts` | build não copia assets de `packages/code-agent/src/prompts` |
-| Interfaces de preview/browser/vision/sprite | package do ToolHost | Electron e HTTP API não importam tool concreta |
+| Interfaces de preview/browser/vision | package do ToolHost | Electron e HTTP API não importam tool concreta; Sprite retirado do produto |
 
 - **CUT-022 — Manifest de símbolos.** Cada export externo do legado DEVE ser
   classificado como `move`, `replace`, `fixture-only` ou `delete`, com

@@ -85,7 +85,6 @@ export interface SourceInventory {
   coderSessionIds: number[];
   companySessionIds: number[];
   appStudioSessionIds: Array<number | string>;
-  spriteProjectIds: number[];
   requiredBytes: number;
 }
 

@@ -87,6 +87,25 @@ beforeEach(() => {
 });
 
 describe('SnapshotReviewPipeline structured response recovery', () => {
+  it('forwards caller cancellation and never starts fallback or content repair', async () => {
+    const controller = new AbortController();
+    mocks.callConfiguredChat.mockImplementation(async (_binding, _messages, options) => {
+      expect(options.signal).toBe(controller.signal);
+      controller.abort(new Error('review stopped'));
+      return chat('{"findings":[');
+    });
+    const result = await pipeline([binding('primary'), binding('fallback')]).review({ ...input(), signal: controller.signal });
+    expect(result).toMatchObject({ ok: false, errorCode: 'review_pipeline_cancelled' });
+    expect(mocks.callConfiguredChat).toHaveBeenCalledTimes(1);
+  });
+  it('does not resolve providers for an already-cancelled review', async () => {
+    const controller = new AbortController(); controller.abort();
+    const resolveChain = vi.fn();
+    const result = await new SnapshotReviewPipeline({ resolveChain } as never).review({ ...input(), signal: controller.signal });
+    expect(result.errorCode).toBe('review_pipeline_cancelled');
+    expect(resolveChain).not.toHaveBeenCalled();
+    expect(mocks.callConfiguredChat).not.toHaveBeenCalled();
+  });
   it('retries malformed JSON once on the same binding and uses the valid retry', async () => {
     mocks.callConfiguredChat
       .mockResolvedValueOnce(chat('{"findings":[{"severity":"high"}'))

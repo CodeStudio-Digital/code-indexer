@@ -132,8 +132,8 @@ describe('native process-real Rust attempt', () => {
     }
   }, 180_000);
 
-  physicalIt('executes native.read_file and resumes the provider from its Rust journal', async () => {
-    const fixture = await processRealFixture(false, true);
+  physicalIt.each([1, 4])('executes %i native reads and resumes the provider from its Rust journal', async (readBatchSize) => {
+    const fixture = await processRealFixture(false, true, undefined, readBatchSize);
     const runtime = await NativeRustHostAttemptRuntime.create(fixture.options);
     let authority: Parameters<typeof runtime.cancelActive>[0] | undefined;
     try {
@@ -153,15 +153,20 @@ describe('native process-real Rust attempt', () => {
         expect(fixture.observed.providerRunCount).toBe(2);
         expect(fixture.observed.toolResultObserved).toBe(true);
         const lines = (await readFile(journal, 'utf8')).trim().split('\n');
-        expect(lines).toHaveLength(9);
+        const recordCount = 8 + 5 * readBatchSize;
+        expect(fixture.observed.capabilityPrepareCount).toBe(readBatchSize);
+        expect(lines).toHaveLength(recordCount);
         expect(lines.map((line) => JSON.parse(line).seq))
-          .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        expect(lines.map((line) => JSON.parse(line).kind))
-          .toEqual(new Array(9).fill('lifecycle'));
+          .toEqual(Array.from({ length: recordCount }, (_, index) => index + 1));
+        expect(lines.filter((line) => JSON.parse(line).kind === 'checkpoint')).toHaveLength(2);
+        expect(lines.filter((line) => JSON.parse(line).kind === 'input')).toHaveLength(readBatchSize);
+        expect(lines.filter((line) => JSON.parse(line).kind === 'tool_output')).toHaveLength(readBatchSize);
+        expect(lines.filter((line) => JSON.parse(line).kind === 'conversation')).toHaveLength(2);
+        expect(lines.filter((line) => JSON.parse(line).kind === 'lifecycle')).toHaveLength(4 + 3 * readBatchSize);
         expect(lines.map((line) => JSON.parse(line).durability)).toEqual([
+          'authoritative',
           'durable',
-          'authoritative',
-          'authoritative',
+          ...Array(5 * readBatchSize).fill('authoritative'),
           'authoritative',
           'durable',
           'coalesced',
@@ -173,6 +178,8 @@ describe('native process-real Rust attempt', () => {
       }, { timeout: 10_000, interval: 50 });
       await expect(runtime.inspectUnresolvedCapabilityDispatches(64))
         .resolves.toEqual([]);
+      await expect(runtime.inspectProviderFrontier(fixture.options.launch.identity!.agentRunId, 64))
+        .resolves.toEqual({ status: 'blocked', reason: 'run_completed' });
       await runtime.cancelActive(result.authority, {
         reason: agentV1Runtime.CancelReason.USER_REQUEST,
         reasonCode: 'productive_process_real_complete',

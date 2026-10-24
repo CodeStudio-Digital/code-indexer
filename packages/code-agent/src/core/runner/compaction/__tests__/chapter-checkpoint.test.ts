@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { asSessionId } from '@mcp/session-storage';
 import {
   alignedDurablePrefix,

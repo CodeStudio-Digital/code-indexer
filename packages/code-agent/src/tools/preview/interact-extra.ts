@@ -6,6 +6,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { invokePreview } from './bridge.js';
+import { previewFailure } from './failure.js';
 
 async function run(
   ctx: ToolContext,
@@ -18,7 +19,7 @@ async function run(
     if (r && typeof r === 'object' && r.error) return err(r.error);
     return ok(`${label}\n${JSON.stringify(r, null, 2) ?? String(r)}`);
   } catch (e) {
-    return err(e instanceof Error ? e.message : String(e));
+    return previewFailure(e);
   }
 }
 

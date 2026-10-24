@@ -8,7 +8,7 @@
  * across http-api, cli, and company orchestration).
  *
  * Same pattern the codebase already uses for cross-cutting concerns like
- * `setCompanySandboxStore`, `setEnvToolStore`, `setDesignSystemStore`.
+ * `setCompanySandboxStore`, `setEnvToolStore`.
  *
  * When `runCoder()` receives an explicit `opts.toolSelectionFilter`, that
  * wins — the global is only the FALLBACK.

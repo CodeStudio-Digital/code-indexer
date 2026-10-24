@@ -22,6 +22,7 @@ import * as suggestions from './doc/suggestions.js';
 import * as projectLinks from './doc/project-links.js';
 import * as ingestRuns from './doc/ingest-runs.js';
 import * as ragTelemetry from './doc/rag-telemetry.js';
+import { DocAgentReads } from './doc/agent-reads.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
@@ -88,6 +89,7 @@ import type {
 
 export class DocStore {
   constructor(private db: DB) {}
+  agentReads(): DocAgentReads { return new DocAgentReads(this.db); }
 
   /** Scope a synchronous write to a connection-local busy ceiling. Worker
    * telemetry uses zero so a contested best-effort event never stalls the

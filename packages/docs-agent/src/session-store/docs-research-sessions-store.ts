@@ -5,7 +5,7 @@
  * projection lives under state.json.extra.docs. There is deliberately no
  * SQLite fallback or dual-write path.
  */
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import {
   asSessionId,
   isUuid,

@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 import type {
   CompanyRuntimeKind,

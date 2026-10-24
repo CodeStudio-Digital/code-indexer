@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { mountSessionTrashRoutes } from '../session-trash.js';
 
 let root: string;

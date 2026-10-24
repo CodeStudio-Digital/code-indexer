@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +18,128 @@ function harness() {
 }
 
 describe('SemanticStore', () => {
+  it('selects a current job without hydrating completed history or foreign generations', () => {
+    const { db, store } = harness();
+    try {
+      const running = store.createJob({ namespace: 'code:p7', kind: 'build' });
+      store.updateJob(running.id, { status: 'running' });
+      const older = store.createJob({ namespace: 'code:p7', kind: 'backfill' });
+      const generation = store.createGeneration({ purpose: 'code', fingerprint: 'retired-test',
+        embedding_target: { kind: 'disabled' }, dimension: 4 });
+      db.prepare('UPDATE semantic_jobs SET generation_id = ? WHERE id = ?').run(generation.id, older.id);
+      const marker = store.createJob({ namespace: 'semantic:reindex:code:p7', kind: 'backfill' });
+      store.updateJob(marker.id, { status: 'completed' });
+      db.transaction(() => {
+        const insert = db.prepare("INSERT INTO semantic_jobs(namespace,kind,status,priority,cursor) VALUES ('code:p7','build','completed',0,?)");
+        for (let i = 0; i < 1000; i++) insert.run(JSON.stringify({ historical: 'x'.repeat(4096) }));
+      })();
+      const parse = vi.spyOn(JSON, 'parse');
+      try {
+        expect(store.currentProjectJob(7, [])?.id).toBe(running.id);
+        expect(parse.mock.calls.some(([raw]) => String(raw).includes('historical'))).toBe(false);
+      } finally { parse.mockRestore(); }
+      expect(store.currentProjectJob(7, [], true)).toBeNull();
+      store.updateJob(marker.id, { status: 'paused' });
+      expect(store.currentProjectJob(7, [])?.id).toBe(marker.id);
+      expect(store.currentProjectJob(7, [], true)?.id).toBe(marker.id);
+      expect(store.currentProjectJob(8, [])).toBeNull();
+      expect(() => store.currentProjectJob(7, [1, 2, 3])).toThrow('scope');
+    } finally { store.close(); db.close(); }
+  });
+
+  it('pages recent project jobs in descending order without priority or foreign rows changing the cursor', () => {
+    const { db, store } = harness();
+    try {
+      const expected = [];
+      for (let i = 0; i < 7; i++) {
+        expected.push(store.createJob({ namespace: 'code:p1', kind: 'delta', priority: i % 3 }).id);
+        store.createJob({ namespace: 'code:p2', kind: 'delta', priority: 99 });
+      }
+      const first = store.listJobs({ namespaces: ['code:p1'], order: 'newest', limit: 3 });
+      const rest = store.listJobs({ namespaces: ['code:p1'], order: 'newest', beforeId: first.at(-1)!.id, limit: 10 });
+      expect([...first, ...rest].map(row => row.id)).toEqual(expected.reverse());
+      expect(() => store.listJobs({ beforeId: -1 })).toThrow('beforeId');
+    } finally { store.close(); db.close(); }
+  });
+  it('filters docs backfills in SQL and reads removal/mutation state without full cursor rows', () => {
+    const { db, store } = harness();
+    try {
+      const doc = store.createJob({ namespace: 'docs:c1', kind: 'backfill' });
+      store.createJob({ namespace: 'code:p1', kind: 'backfill' });
+      store.createJob({ namespace: 'docs_c1', kind: 'backfill' });
+      expect(store.listJobs({ namespacePrefix: 'docs:c', generationId: null, kinds: ['backfill'] }).map(row => row.id)).toEqual([doc.id]);
+      expect(store.listJobs({ namespacePrefix: 'docs_', generationId: null })).toHaveLength(1);
+      expect(store.hasOpenNamespaceMutationJobs('docs:c1')).toBe(true);
+      store.updateJob(doc.id, { status: 'completed' });
+      expect(store.hasOpenNamespaceMutationJobs('docs:c1')).toBe(false);
+      const removed = store.createJob({ namespace: 'project-removal:p7', kind: 'cleanup', cursor: { reason: 'project-removal' } });
+      store.updateJob(removed.id, { status: 'completed' });
+      const cancelled = store.createJob({ namespace: 'project-removal:p8', kind: 'cleanup', cursor: { reason: 'project-removal' } });
+      store.updateJob(cancelled.id, { status: 'cancelled' });
+      store.createJob({ namespace: 'project-removal:p9', kind: 'cleanup', cursor: { reason: 'other-cleanup' } });
+      expect(store.listProjectRemovalIds()).toEqual([7]);
+      expect(() => store.listJobs({ generationId: -1 })).toThrow('generationId');
+    } finally { store.close(); db.close(); }
+  });
+  it('pages bounded jobs by id without losing rows to priority order or including later inserts', () => {
+    const { db, store } = harness();
+    try {
+      const jobs = Array.from({ length: 7 }, (_, priority) => store.createJob({
+        namespace: 'code:p1', kind: 'delta', priority,
+      }));
+      const throughId = store.getJobHighWaterId();
+      store.createJob({ namespace: 'code:p1', kind: 'delta', priority: 100 });
+      const first = store.listJobs({ namespace: 'code:p1', afterId: 0, throughId, limit: 3 });
+      const second = store.listJobs({ namespace: 'code:p1', afterId: first.at(-1)!.id, throughId, limit: 3 });
+      const last = store.listJobs({ namespace: 'code:p1', afterId: second.at(-1)!.id, throughId, limit: 3 });
+      expect([...first, ...second, ...last].map(job => job.id)).toEqual(jobs.map(job => job.id));
+      expect(() => store.listJobs({ limit: -1 })).toThrow(RangeError);
+      expect(() => store.listJobs({ afterId: NaN })).toThrow(RangeError);
+    } finally { store.close(); db.close(); }
+  });
+  it('reuses paused build jobs without losing durable deltas or retry state', () => {
+    const { db, store } = harness();
+    try {
+      const generation = store.createGeneration({
+        purpose: 'memory', fingerprint: 'retry-space', dimension: 2,
+        embedding_target: { kind: 'local_http', baseUrl: 'http://localhost', model: 'm', protocol: 'openai-embeddings' },
+      });
+      const namespace = 'memory:user';
+      store.beginNamespaceGeneration({ namespace, purpose: 'memory', generation_id: generation.id });
+      const delta = store.noteNamespaceMutation({ namespace, itemKeys: ['agent_memory:1'], operation: 'upsert' });
+      const input = { namespace, generation_id: generation.id, kind: 'build' as const, expected_items: 1 };
+      const build = store.getOrCreateBuildJob(input);
+      const retry = { attempt: 3, not_before_ms: 123456, blocked: true };
+      store.updateJob(build.id, { status: 'paused', cursor: { retry }, error: 'offline' });
+      expect(store.getNamespaceBuildRetry(namespace)).toEqual(retry);
+      const reused = store.getOrCreateBuildJob({ ...input, expected_items: 2 });
+      expect(reused).toMatchObject({ id: build.id, expected_items: 2, status: 'pending', cursor: { retry } });
+      expect(store.getJob(delta.id)).toMatchObject({ status: 'pending', expected_items: 1 });
+      expect(store.listJobs({ namespace })).toHaveLength(2);
+      store.updateJob(build.id, { status: 'completed' });
+      expect(store.getNamespaceBuildRetry(namespace)).toBeNull();
+      expect(store.getOrCreateBuildJob(input).id).not.toBe(build.id);
+    } finally { store.close(); db.close(); }
+  });
+
+  it('queries mutation fences and wildcard deltas without hydrating historical cursors', () => {
+    const { db, store } = harness();
+    try {
+      store.createJob({ namespace: 'code:p1', kind: 'build', cursor: { reason: 'code-delta', events: ['ignored', { path: 'a.ts' }] } });
+      expect(store.requiresExplicitNamespaceReindex('code:p1')).toBe(false);
+      const wildcard = store.createJob({ namespace: 'code:p1', kind: 'delta', cursor: { reason: 'code-delta', events: [{ path: '*' }] } });
+      expect(store.requiresExplicitNamespaceReindex('code:p1')).toBe(true);
+      store.updateJob(wildcard.id, { status: 'completed' });
+      expect(store.requiresExplicitNamespaceReindex('code:p1')).toBe(false);
+      const fence = store.createJob({ namespace: 'docs:c1', kind: 'delta', cursor: { reason: 'mutation-fence', fence_phase: 'in-flight' } });
+      store.updateJob(fence.id, { status: 'running' });
+      expect(store.hasLiveMutationFence('docs:c1')).toBe(true);
+      expect(store.hasLiveMutationFence('docs:c2')).toBe(false);
+      store.updateJob(fence.id, { status: 'pending', cursor: { reason: 'mutation-fence', fence_phase: 'settled' } });
+      expect(store.hasLiveMutationFence('docs:c1')).toBe(false);
+      expect(store.getStatus().jobs).toMatchObject({ pending: 2, completed: 1, running: 0 });
+    } finally { store.close(); db.close(); }
+  });
   // GET /api/projects/semantic/status used to pull EVERY job row and filter in
   // JS — an unbounded SELECT plus a JSON.parse per row, on the main thread.
   it('filters listJobs by a namespace set in SQL, preserving order', () => {

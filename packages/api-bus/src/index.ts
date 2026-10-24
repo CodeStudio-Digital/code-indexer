@@ -28,7 +28,6 @@ import type { SnapshotsApi } from './snapshots.js';
 import type { SearchApi } from './search.js';
 import type { AdminApi } from './admin.js';
 import type { DocsApi } from './docs.js';
-import type { DesignSystemApi } from './designSystem.js';
 import type { CompanyApi } from './company.js';
 import type { WorkspaceApi } from './workspace.js';
 import type { ProjectGitApi } from './projectGit.js';
@@ -73,7 +72,6 @@ export * from './snapshots.js';
 export * from './search.js';
 export * from './admin.js';
 export * from './docs.js';
-export * from './designSystem.js';
 export * from './company.js';
 export * from './workspace.js';
 export * from './projectGit.js';
@@ -109,7 +107,6 @@ export interface Api {
 
   // Pro features
   docs: DocsApi;
-  designSystem: DesignSystemApi;
   company: CompanyApi;
   workspace: WorkspaceApi;
 

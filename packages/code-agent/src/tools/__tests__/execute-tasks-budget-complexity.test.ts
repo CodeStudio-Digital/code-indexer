@@ -16,7 +16,7 @@ import {
   DEFAULT_LIMITS,
   resolveTaskLimit,
 } from '../execute-tasks/task-run-budget.js';
-import type { CoderTask } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask } from '@mcp/session-storage/session-state-types.js';
 
 function task(overrides: Partial<CoderTask> = {}): CoderTask {
   return {

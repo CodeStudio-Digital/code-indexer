@@ -148,5 +148,6 @@ fn artifact(artifact_id: &str, payload: &[u8]) -> wire::ArtifactRef {
         privacy_class: wire::ArtifactPrivacyClass::Internal as i32,
         redaction_policy_version: "v1".to_owned(),
         owner_session_id: SESSION_ID.to_owned(),
+        display_name: String::new(),
     }
 }

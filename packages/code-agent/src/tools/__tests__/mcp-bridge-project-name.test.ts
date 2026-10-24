@@ -11,6 +11,27 @@ import {
 } from '../mcp-bridge.js';
 
 describe('McpToolBridge project_name injection', () => {
+  it('declares only reviewed internal reads parallel-safe and cancels the MCP request', async () => {
+    const controller = new AbortController();
+    const callTool = vi.fn(async (_request, _schema, options) => {
+      expect(options.signal).toBe(controller.signal);
+      return { content: [{ type: 'text', text: 'found' }] };
+    });
+    const fakeClient = {
+      listTools: async () => ({ tools: ['grep_code', 'search', 'unknown'].map(name => ({ name,
+        inputSchema: { type: 'object', properties: {} } })) }), callTool,
+    };
+    const bridge = new McpToolBridge();
+    (bridge as unknown as { client: typeof fakeClient }).client = fakeClient;
+    const tools = await bridge.listTools({ projectName: 'owned' });
+    for (const tool of tools.slice(0, 2)) expect(tool).toMatchObject({ mutates: false, parallelSafe: true, riskLevel: 'read' });
+    expect(tools[2]).toMatchObject({ mutates: true, parallelSafe: false, riskLevel: 'write' });
+    const context = { cwd: '/tmp/owned', signal: controller.signal } as ToolContext;
+    expect((await tools[0]!.handler({ pattern: 'needle' }, context)).content).toBe('found');
+    controller.abort();
+    expect((await tools[0]!.handler({ pattern: 'needle' }, context)).isError).toBe(true);
+    expect(callTool).toHaveBeenCalledOnce();
+  });
   it('hides project_name from the public schema without mutating the server schema', () => {
     const schema: JsonSchema = {
       type: 'object',

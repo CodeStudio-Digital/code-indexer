@@ -77,13 +77,14 @@ export function diagramsDirAbs(ctx: ToolContext): string | null {
   return resolveSafe(DIAGRAMS_DIR, ctx.cwd);
 }
 
-/** True when `absPath` exists, false otherwise. Never throws. */
+/** Absence is distinct from permission, cancellation and IO failures. */
 export async function fileExists(port: IFilesystemPort, absPath: string): Promise<boolean> {
   try {
     await port.access(absPath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }
 
@@ -94,21 +95,10 @@ export async function fileExists(port: IFilesystemPort, absPath: string): Promis
  */
 export function emitDiagramChanged(ctx: ToolContext, path: string, xml: string): void {
   try {
-    ctx.runner?.emit('diagram_changed', { path, xml });
+    if (ctx.onDiagramChanged) ctx.onDiagramChanged({ path, xml });
+    else ctx.runner?.emit('diagram_changed', { path, xml });
   } catch {
     /* best-effort — the file is the durable source of truth */
   }
 }
 
-/** Ask the live editor (if open) to export the named diagram to an image. */
-export function emitDiagramExportRequest(
-  ctx: ToolContext,
-  path: string,
-  format: 'svg' | 'png',
-): void {
-  try {
-    ctx.runner?.emit('diagram_export_request', { path, format });
-  } catch {
-    /* best-effort */
-  }
-}

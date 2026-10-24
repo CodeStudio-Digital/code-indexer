@@ -80,13 +80,12 @@ export interface EntityFileRepositoryOptions {
   sessionRoot: string;
   /**
    * Safe, relative namespace below the session bundle, for example
-   * `company/board-items` or `sprite/assets`.
+   * `company/board-items` or `company/app-studio/decisions`.
    */
   namespace: string;
   kind?: string;
   /**
-   * Optional well-known file name for a singleton repository. Sprite Studio
-   * uses this to keep its project record at `sprite/project.json`.
+   * Optional well-known file name for a singleton repository.
    */
   singletonFileName?: string;
   journal?: boolean;

@@ -97,23 +97,3 @@ export const APP_STUDIO_TOOLS: ReadonlySet<string> = new Set([
   'app_update_database',
   'app_run_checks',
 ]);
-
-/** Design System Studio authoring/publishing workflow. */
-export const DESIGN_SYSTEM_STUDIO_TOOLS: ReadonlySet<string> = new Set([
-  'ds_get_session_info',
-  'ds_record_component',
-  'ds_list_components',
-  'ds_audit_package',
-  'ds_set_version_status',
-  'ds_publish_version',
-  'ds_get_pipeline',
-  'ds_submit_stage',
-  'ds_analyze_import',
-]);
-
-/** Read-only Design System capability linked into a consumer project. */
-export const DESIGN_SYSTEM_CONSUMER_TOOLS: ReadonlySet<string> = new Set([
-  'ds_components',
-  'ds_component',
-  'ds_docs',
-]);

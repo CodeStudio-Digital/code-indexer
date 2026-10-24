@@ -3,6 +3,16 @@ import { getToolOutput, renderOutputPage } from '../tool-output.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 describe('get_tool_output pagination contract', () => {
+  it('awaits durable reads and never returns a page after cancellation', async () => {
+    const controller = new AbortController();
+    let release!: (content: string) => void;
+    const content = new Promise<string>(resolve => { release = resolve; });
+    const result = getToolOutput.handler({ output_id: 'a'.repeat(64) }, {
+      signal: controller.signal, toolOutputStore: { get: () => content },
+    } as unknown as ToolContext);
+    controller.abort(new Error('cancelled')); release('late content');
+    await expect(result).rejects.toThrow('cancelled');
+  });
   it('rejects invented non-hex output ids before consulting the store', async () => {
     let reads = 0;
     const ctx = {

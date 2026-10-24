@@ -25,11 +25,6 @@ import {
 } from './db.js';
 import { copyFileVerified, syncParentDirectory } from './fs-ops.js';
 import { assertCleanDatabase, assertPostCutWriteGuards } from './verify.js';
-import {
-  projectBuilderJsonWithDesignUuid,
-  rewriteProjectDesignSystemLinks,
-  type DesignSessionIdRemap,
-} from './design-system-links.js';
 
 export interface EssentialTableDigest {
   rows: number;
@@ -95,7 +90,6 @@ function digestTable(
 }
 
 export interface EssentialDigestOptions {
-  designSessionIdRemap?: DesignSessionIdRemap;
   /**
    * Central clean clones carry the global layout marker. Per-project SQLite
    * files deliberately do not: their normal project migration lineage creates
@@ -108,22 +102,6 @@ export function captureEssentialDigest(
   db: SqliteDatabase,
   options: EssentialDigestOptions = {},
 ): EssentialDigest {
-  const projectionFor = (
-    table: string,
-  ): ((row: Record<string, unknown>) => Record<string, unknown>) | undefined =>
-    table === 'projects' && options.designSessionIdRemap
-      ? (source): Record<string, unknown> => {
-          if (!Object.hasOwn(source, 'builder_json')) return source;
-          const next = projectBuilderJsonWithDesignUuid(
-            source.builder_json,
-            options.designSessionIdRemap!,
-            `Project ${String(source.id)}`,
-          );
-          return next.changed
-            ? { ...source, builder_json: next.value }
-            : source;
-        }
-      : undefined;
   const excluded = new Set(TABLE_DISPOSITIONS.map((item) => item.table));
   for (const table of REDUNDANT_PROJECTION_TABLES) excluded.add(table);
   const shadowTables = new Set(
@@ -157,7 +135,7 @@ export function captureEssentialDigest(
             ? 'version <> 263'
             : undefined,
         undefined,
-        projectionFor(row.name),
+        undefined,
       ),
     ] as const
   )));
@@ -178,7 +156,7 @@ export function captureEssentialDigest(
         disposition.table,
         undefined,
         columns,
-        projectionFor(disposition.table),
+        undefined,
       );
     } else {
       try {
@@ -187,7 +165,7 @@ export function captureEssentialDigest(
           disposition.table,
           `NOT (${disposition.whereSql})`,
           columns,
-          projectionFor(disposition.table),
+          undefined,
         );
       } catch (error) {
         const removed = disposition.dropColumns?.length
@@ -198,7 +176,7 @@ export function captureEssentialDigest(
           disposition.table,
           undefined,
           columns,
-          projectionFor(disposition.table),
+          undefined,
         );
       }
     }
@@ -346,10 +324,6 @@ export function createCleanClone(
         if (redundant.has(table)) continue;
         db.exec(`DROP TABLE IF EXISTS ${quoteIdentifier(table)}`);
       }
-      rewriteProjectDesignSystemLinks(
-        db,
-        options.designSessionIdRemap ?? new Map(),
-      );
       if (options.writeLayoutMarker !== false) setLayoutMarker(db);
       db.exec('COMMIT');
     } catch (error) {

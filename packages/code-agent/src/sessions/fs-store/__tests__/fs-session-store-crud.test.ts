@@ -109,6 +109,23 @@ describe('FsSessionStore session catalog', () => {
     expect(metricsRead).toHaveBeenCalledTimes(2);
   });
 
+  it('queries MCP metadata and active identities without opening metrics or transcript files', async () => {
+    const sessions = [];
+    for (const [principal, profile, project] of [['a', null, 1], ['b', null, 1], ['a', 'p', 2], ['a', null, 2]] as const) {
+      sessions.push(await store.createSession({ project_id: project, title: 'MCP', provider: 'fixture', model: 'local',
+        metadata: { mcp_agent_run: { schema_version: 1, principal, profile_id: profile, agent_id: 'build', task_preview: 'task' } } }));
+    }
+    const metrics = vi.spyOn(store.repository, 'readMetricsSummarySync').mockImplementation(() => { throw new Error('Unexpected bundle hydration'); });
+    const page = await store.listMcpRunMetadata({ principal: 'a', limit: 1 });
+    expect(page.total_count).toBe(3); expect(page.items).toHaveLength(1);
+    const scoped = await store.listMcpRunMetadata({ principal: 'a', projectId: 1, profileId: null, limit: 1 });
+    expect(scoped.total_count).toBe(1); expect(scoped.items.map(item => item.id)).toEqual([sessions[0]!.id]);
+    const active = await store.listMcpRunMetadata({ principal: 'a', profileId: null, limit: 0,
+      activeSessionIds: new Set([sessions[0]!.id, sessions[1]!.id, sessions[2]!.id]) });
+    expect(active).toEqual({ items: [], total_count: 1, active_ids: [sessions[0]!.id] });
+    expect(metrics).not.toHaveBeenCalled();
+  });
+
   it('publishes creation-time runtime settings in the initial state projection', async () => {
     const session = await store.createSession({
       project_id: 1,

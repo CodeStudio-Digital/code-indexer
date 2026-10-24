@@ -1,49 +1,9 @@
-/**
- * Documentation tools — surface the project's RAG corpus (user-managed
- * "Documentação" page) through the MCP HTTP server so external agents
- * can search it the same way the in-house code-agent does.
- *
- * Backed by the same singleton (`getGlobalDocSearch()`) wired in
- * `apps/http-api/server.ts` during boot. When the MCP server runs as a
- * standalone stdio subprocess outside the http-api process (no wiring
- * happens there), the tool returns a clear error pointing the operator
- * at the right entry point — better than a silent empty result.
- */
-import {
-  defineTool,
-  mcpAccess,
-  type McpSourceTruncation,
-  type McpTool,
-  type McpToolOutput,
-} from '../tool.js';
-import {
-  getGlobalDocSearch,
-  type DocSearchBackend,
-} from '@mcp/code-agent/tools/rag-search-docs.js';
-
-function unavailable(): string {
-  return JSON.stringify(
-    {
-      error: 'doc_search_unavailable',
-      message:
-        'Documentation search backend is not wired into this MCP server instance. ' +
-        'Use the HTTP MCP endpoint mounted by apps/http-api instead — the standalone ' +
-        'stdio binary does not own the doc index.',
-    },
-    null,
-    2,
-  );
-}
-
-function requirePositiveId(value: unknown): number | null {
-  const id = Number(value);
-  return Number.isFinite(id) && id > 0 ? Math.trunc(id) : null;
-}
-
-function completeJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
+/** Shared documentation corpus tools for HTTP and standalone stdio. */
+import { defineTool, mcpAccess, type McpSourceTruncation, type McpTool, type McpToolOutput } from '../tool.js';
+import type { DocSearchBackend } from '@mcp/code-agent/tools/doc-search-types.js';
+import { documentationBackend } from '../doc-backend.js';
+import { resolveProject } from '../utils.js';
+import { docInteger, docPageSchema, chunkOutput, sectionOutput, outlineOutput } from './doc-pages.js';
 function searchOmissions(
   result: Awaited<ReturnType<DocSearchBackend['search']>>,
 ): McpSourceTruncation[] | undefined {
@@ -84,165 +44,84 @@ function searchOmissions(
   return omissions.length > 0 ? omissions : undefined;
 }
 
+
 const rag_search_docs = defineTool({
-  name: 'rag_search_docs',
-  tier: 'bootstrap',
-  ...mcpAccess('read'),
-  description:
-    'Semantic + lexical search over indexed external documentation (Unity, frameworks, libraries, internal handbooks). Returns relevant doc sections with heading path, source URL/PDF, and a snippet.\n' +
-    'USE: when you need authoritative information that is NOT in the project codebase — API references, framework concepts, library usage, third-party tooling.\n' +
-    'USE: as a FIRST step before guessing or recalling. The corpus is fresher than your training cutoff and grounded in attached docs.\n' +
-    "DON'T: use to search the current project's code — that's `search` / `grep_code`.\n" +
-    'Pass `collection` to scope to a known collection name (visible in the dashboard); omit it to search globally.',
-  // Doc search is read-only and runs against the indexed corpus only — no
-  // filesystem or network side effects, so `mcp:read` is the right gate.
-  inputSchema: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description: 'Natural-language search query. Specific is better than broad.',
-      },
-      collection: {
-        type: 'string',
-        description: 'Optional collection name (matches dashboard sidebar). Omit to search globally.',
-      },
-      limit: {
-        type: 'number',
-        description: 'Max results to return. Default 8, capped at 100.',
-      },
-    },
-    required: ['query'],
-  },
-  handler: async (args) => {
-    const backend = getGlobalDocSearch();
-    if (!backend) {
-      // This branch fires when the MCP server is reached out-of-process
-      // (e.g. someone hand-spawned the stdio binary). The HTTP transport
-      // mounted in apps/http-api always has the singleton wired so the
-      // path most external agents take works out of the box.
-      return unavailable();
-    }
-
-    const query = String(args.query ?? '').trim();
-    if (!query) {
-      return JSON.stringify({ error: 'query is required' });
-    }
-    const limitRaw = typeof args.limit === 'number' ? args.limit : 8;
-    const limit = Math.max(1, Math.min(100, Math.floor(limitRaw)));
-    const collection =
-      typeof args.collection === 'string' && args.collection.trim() ? args.collection.trim() : undefined;
-
-    const result = await backend.search({ query, collection, limit });
+  name: 'rag_search_docs', tier: 'bootstrap', ...mcpAccess('read'),
+  description: 'Search indexed documentation. HTTP uses its configured search backend; standalone stdio uses local lexical search (diag.mode). Results are previews: read chunk_id with rag_read_doc to recover full text. Optional project_name prefers linked collections; collection explicitly selects a corpus.',
+  inputSchema: { type: 'object', properties: {
+    query: { type: 'string', maxLength: 4096 }, collection: { type: 'string', maxLength: 512 },
+    project_name: { type: 'string', description: 'Prefer documentation linked to this project.' },
+    scope: { type: 'string', enum: ['project', 'all'] },
+    limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Default 8.' },
+  }, required: ['query'] },
+  handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    if (!query || query.length > 4096) throw new Error('query must contain 1..4096 characters');
+    if (args.scope != null && args.scope !== 'all' && args.scope !== 'project') throw new Error('Invalid scope');
+    const limit = docInteger(args, 'limit', 8, 1, 100);
+    const collection = typeof args.collection === 'string' ? args.collection.trim() || undefined : undefined;
+    if (collection && collection.length > 512) throw new Error('collection exceeds 512 characters');
+    const project = typeof args.project_name === 'string' && args.project_name.trim()
+      ? resolveProject(ctx.db, args.project_name.trim()) : undefined;
+    const result = await documentationBackend(ctx).search({ query, collection, limit,
+      ...(project ? { project_id: project.id } : {}), ...(args.scope ? { scope: args.scope as 'all' | 'project' } : {}) }, ctx.signal);
+    ctx.signal?.throwIfAborted();
     const sourceTruncations = searchOmissions(result);
-    const text = completeJson(result);
+    const text = JSON.stringify(result, null, 2);
     return sourceTruncations ? { text, sourceTruncations } satisfies McpToolOutput : text;
   },
 });
-
 const rag_read_doc = defineTool({
-  name: 'rag_read_doc',
-  tier: 'bootstrap',
-  ...mcpAccess('read'),
-  description:
-    'Read indexed documentation in full by chunk_id from rag_search_docs. ' +
-    "Default mode='chunk' returns the complete chunk and complete neighboring chunks. " +
-    "Use mode='section' to return every size-split chunk in the same heading. No local output cap is applied.",
-  inputSchema: {
-    type: 'object',
-    properties: {
-      chunk_id: {
-        type: 'number',
-        description: 'A chunk_id returned by rag_search_docs or rag_doc_outline.',
-      },
-      mode: {
-        type: 'string',
-        enum: ['chunk', 'section'],
-        description: "Default 'chunk'; use 'section' to reassemble the whole heading.",
-      },
-      window: {
-        type: 'number',
-        description: "Neighbor chunks on each side in mode='chunk'. Default 1; clamped to [0, 3].",
-      },
-    },
-    required: ['chunk_id'],
-  },
-  handler: async (args) => {
-    const backend = getGlobalDocSearch();
-    if (!backend) return unavailable();
-    const chunkId = requirePositiveId(args.chunk_id);
-    if (chunkId == null) return completeJson({ error: 'chunk_id must be a positive number' });
-
+  name: 'rag_read_doc', tier: 'bootstrap', ...mcpAccess('read'),
+  description: 'Read indexed documentation pages by chunk_id. Follow next_char_offset for long text, next_offset for section pages, and recovery for neighbor previews. Character offsets use Unicode code points. Counts/tokens refer to the current page; restart at zero after index changes.',
+  inputSchema: { type: 'object', properties: {
+    chunk_id: { type: 'integer', minimum: 1 }, mode: { type: 'string', enum: ['chunk', 'section'] },
+    window: { type: 'integer', minimum: 0, maximum: 3, description: 'Neighbor previews per side, default 1.' },
+    char_offset: { type: 'integer', minimum: 0 },
+    max_chars: { type: 'integer', minimum: 1, maximum: 200000, description: 'Default 65536.' }, ...docPageSchema,
+  }, required: ['chunk_id'] },
+  handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
+    const chunk_id = docInteger(args, 'chunk_id', 0, 1, Number.MAX_SAFE_INTEGER);
+    if (args.mode != null && args.mode !== 'section' && args.mode !== 'chunk') throw new Error('Invalid mode');
+    const backend = documentationBackend(ctx);
     if (args.mode === 'section') {
-      if (!backend.readSection) {
-        return completeJson({ error: 'doc_section_read_unavailable' });
-      }
-      const section = await backend.readSection({ chunk_id: chunkId });
-      return section
-        ? completeJson(section)
-        : completeJson({
-            error: 'doc_chunk_not_found',
-            chunk_id: chunkId,
-            recovery: 'Run rag_search_docs again for fresh chunk_ids.',
-          });
+      const offset = docInteger(args, 'offset', 0, 0, Number.MAX_SAFE_INTEGER), limit = docInteger(args, 'limit', 32, 1, 64);
+      if (!backend.readSection) throw new Error('doc_section_read_unavailable');
+      const section = await backend.readSection({ chunk_id, offset, limit }, ctx.signal);
+      ctx.signal?.throwIfAborted();
+      if (!section) throw new Error('doc_chunk_not_found: rerun rag_search_docs for fresh chunk_ids');
+      return sectionOutput(section, chunk_id, limit);
     }
-
-    if (!backend.readChunk) return completeJson({ error: 'doc_chunk_read_unavailable' });
-    const rawWindow = Number(args.window);
-    const window = Number.isFinite(rawWindow)
-      ? Math.max(0, Math.min(3, Math.trunc(rawWindow)))
-      : 1;
-    const read = await backend.readChunk({ chunk_id: chunkId, window });
-    return read
-      ? completeJson(read)
-      : completeJson({
-          error: 'doc_chunk_not_found',
-          chunk_id: chunkId,
-          recovery: 'Run rag_search_docs again for fresh chunk_ids.',
-        });
+    const window = docInteger(args, 'window', 1, 0, 3), char_offset = docInteger(args, 'char_offset', 0, 0, Number.MAX_SAFE_INTEGER);
+    const max_chars = docInteger(args, 'max_chars', 65536, 1, 200000);
+    if (!backend.readChunk) throw new Error('doc_chunk_read_unavailable');
+    const read = await backend.readChunk({ chunk_id, window, char_offset, max_chars }, ctx.signal);
+    ctx.signal?.throwIfAborted();
+    if (!read) throw new Error('doc_chunk_not_found: rerun rag_search_docs for fresh chunk_ids');
+    return chunkOutput(read);
   },
 });
-
 const rag_doc_outline = defineTool({
-  name: 'rag_doc_outline',
-  tier: 'bootstrap',
-  ...mcpAccess('read'),
-  description:
-    'Browse indexed documentation structurally. Pass collection to return its complete source list, ' +
-    'or source_id to return the complete heading tree with chunk_ids for rag_read_doc. No local output cap is applied.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      collection: {
-        type: 'string',
-        description: 'Collection name; returns every indexed source in the collection.',
-      },
-      source_id: {
-        type: 'number',
-        description: 'Source id returned by this tool; returns its complete heading tree.',
-      },
-    },
-  },
-  handler: async (args) => {
-    const backend = getGlobalDocSearch();
-    if (!backend) return unavailable();
-    if (!backend.outline) return completeJson({ error: 'doc_outline_unavailable' });
-
-    const sourceId = requirePositiveId(args.source_id);
+  name: 'rag_doc_outline', tier: 'bootstrap', ...mcpAccess('read'),
+  description: 'Browse a collection source list or source heading pages. Follow next_offset/recovery until exhausted. Counts refer to this page; a heading split across pages may appear on both. Restart at zero after index changes.',
+  inputSchema: { type: 'object', properties: {
+    collection: { type: 'string', maxLength: 512 }, source_id: { type: 'integer', minimum: 1 }, ...docPageSchema,
+  } },
+  handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
+    const source_id = args.source_id == null ? undefined : docInteger(args, 'source_id', 0, 1, Number.MAX_SAFE_INTEGER);
     const collection = typeof args.collection === 'string' ? args.collection.trim() : '';
-    if (sourceId == null && !collection) {
-      return completeJson({ error: 'Pass collection or source_id.' });
-    }
-    const outline = await backend.outline(
-      sourceId != null ? { source_id: sourceId } : { collection },
-    );
-    return outline
-      ? completeJson(outline)
-      : completeJson({
-          error: 'doc_outline_not_found',
-          ...(sourceId != null ? { source_id: sourceId } : { collection }),
-        });
+    if (!source_id && (!collection || collection.length > 512)) throw new Error('Pass collection (1..512 characters) or source_id');
+    const offset = docInteger(args, 'offset', 0, 0, Number.MAX_SAFE_INTEGER), limit = docInteger(args, 'limit', source_id ? 500 : 100, 1, 500);
+    const input = { ...(source_id ? { source_id } : { collection }), offset, limit };
+    const backend = documentationBackend(ctx);
+    if (!backend.outline) throw new Error('doc_outline_unavailable');
+    const outline = await backend.outline(input, ctx.signal);
+    ctx.signal?.throwIfAborted();
+    if (!outline) throw new Error('doc_outline_not_found');
+    return outlineOutput(outline, input);
   },
 });
-
 export const docsTools: McpTool[] = [rag_search_docs, rag_read_doc, rag_doc_outline];

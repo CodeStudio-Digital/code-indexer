@@ -70,7 +70,7 @@ export interface MemoryWriter {
   ): Promise<unknown>;
   update(
     id: number,
-    updates: { content?: string; projectId?: number; importance?: number },
+    updates: { content?: string; projectId?: number; importance?: number; referencedFiles?: string[] },
   ): Promise<unknown>;
 }
 
@@ -150,7 +150,8 @@ export class MemoryExtractor {
           .searchSnapshotsHybrid(projectId, projectName, `${c.title}\n${c.content}`.slice(0, 500), 3)
           .catch(() => [] as ContextSnapshot[]);
         const dup = existing.find(
-          (s) => s.category === c.category && titleSimilarity(s.title, c.title) >= DUP_TITLE_THRESHOLD,
+          (s) => (s.category === c.category || (['user', 'feedback'].includes(s.category) && ['user', 'feedback'].includes(c.category)))
+            && titleSimilarity(s.title, c.title) >= DUP_TITLE_THRESHOLD,
         );
 
         if (dup) {
@@ -173,6 +174,7 @@ export class MemoryExtractor {
             ...(merged !== dup.content ? { content: merged } : {}),
             projectId,
             importance: importanceBump,
+            ...(c.referencedFiles ? { referencedFiles: c.referencedFiles } : {}),
           });
           out.merged++;
         } else {

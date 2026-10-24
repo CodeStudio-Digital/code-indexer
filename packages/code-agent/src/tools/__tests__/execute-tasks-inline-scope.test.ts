@@ -20,7 +20,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TasksState } from '@mcp/session-storage/session-state-types.js';
 
 vi.mock('../implement-subagent.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../implement-subagent.js')>();

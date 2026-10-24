@@ -4,8 +4,8 @@
  * handler writes the XML the agent just produced). Editor edits autosave back
  * to the `.drawio` file; the toolbar exports SVG/PNG next to it.
  *
- * The agent's `diagram_export` tool fires a `coder:diagram_export` DOM event;
- * we forward it to the live frame so the export round-trips through the editor.
+ * Toolbar exports are explicit user actions. Agent exports are owned by the
+ * executor; replayed chat events never command this editor to write images.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -31,17 +31,6 @@ export function DiagramPanel({
   useEffect(() => {
     setState(getDiagram(sessionId));
     return subscribeDiagram(sessionId, () => setState(getDiagram(sessionId)));
-  }, [sessionId]);
-
-  // The agent's diagram_export tool → ask the live editor to render + persist.
-  useEffect(() => {
-    function onExportReq(e: Event): void {
-      const d = (e as CustomEvent).detail as { sessionId?: string; format?: string };
-      if (d?.sessionId !== sessionId) return;
-      frameRef.current?.exportDiagram(d.format === 'png' ? 'png' : 'svg');
-    }
-    window.addEventListener('coder:diagram_export', onExportReq);
-    return () => window.removeEventListener('coder:diagram_export', onExportReq);
   }, [sessionId]);
 
   const path = state?.path ?? null;

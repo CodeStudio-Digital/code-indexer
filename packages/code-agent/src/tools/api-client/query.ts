@@ -4,7 +4,7 @@
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { resolveApiCtx } from './shared.js';
+import { resolveApiCtx, projectCollection, projectRequest } from './shared.js';
 
 export const apiListRequestsTool: CoderTool = {
   name: 'api_list_requests',
@@ -16,18 +16,28 @@ export const apiListRequestsTool: CoderTool = {
   riskLevel: 'read',
   parameters: {
     type: 'object',
-    properties: { collectionId: { type: 'number', description: 'Collection id (from api_import_openapi).' } },
+    properties: {
+      collectionId: { type: 'number', description: 'Collection id (from api_import_openapi).' },
+      limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size, default 100.' },
+      offset: { type: 'integer', minimum: 0, description: 'Page offset, default 0.' },
+    },
     required: ['collectionId'],
     additionalProperties: false,
   },
   handler: async (args, ctx) => {
     const r = resolveApiCtx(ctx);
     if ('error' in r) return err(r.error);
-    const reqs = r.store.listRequests(Number(args.collectionId));
+    const collection = projectCollection(r, Number(args.collectionId));
+    if (!collection) return err('Collection not found in this project.');
+    const limit = Number.isSafeInteger(args.limit) ? Math.min(500, Math.max(1, Number(args.limit))) : 100;
+    const offset = Number.isSafeInteger(args.offset) ? Math.max(0, Number(args.offset)) : 0;
+    const page = r.store.listRequestSummaries(collection.id, limit + 1, offset);
+    const reqs = page.slice(0, limit);
     if (reqs.length === 0) return ok('(no requests in this collection)');
     const lines = reqs.map((q) =>
       `#${q.id} ${q.method} ${q.path_template} | ${q.verified ? `✓ expect ${q.expected_status}` : '✗ unverified'}${q.last_status != null ? ` | last ${q.last_status}` : ''} | ${q.name}`,
     );
+    if (page.length > limit) lines.push(`[More requests available: use offset ${offset + limit}, limit ${limit}.]`);
     return ok(lines.join('\n'));
   },
 };
@@ -48,7 +58,7 @@ export const apiGetRequestTool: CoderTool = {
   handler: async (args, ctx) => {
     const r = resolveApiCtx(ctx);
     if ('error' in r) return err(r.error);
-    const q = r.store.getRequest(Number(args.requestId));
+    const q = projectRequest(r, Number(args.requestId));
     if (!q) return err(`request ${args.requestId} not found`);
     return ok(JSON.stringify({
       id: q.id, name: q.name, method: q.method, path_template: q.path_template,

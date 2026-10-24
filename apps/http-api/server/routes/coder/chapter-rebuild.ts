@@ -4,11 +4,11 @@ import {
   renderResumeV3,
   type CompactionResumeV3,
 } from '@mcp/code-agent/core/summarizer.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 import type {
   FsCoderMessageRow,
   FsRebuiltConversationChapterInput,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { RebuildConversationChaptersInput } from './chapters.js';
 import { resolveCompactionProviders, summarizeReliably } from './compaction-summary.js';

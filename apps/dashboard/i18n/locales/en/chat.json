@@ -1,4 +1,5 @@
 {
+  "interaction.responseFailed": "The response could not be sent. Please try again.",
   "notifications.background.collectWith": "Collect with",
   "notifications.background.resumeWith": "Resume {{count}} with",
   "notifications.background.statusDone": "done",

@@ -1,4 +1,4 @@
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import {
   isResumableInteractiveTool,
   type ResumableInteractiveTool,

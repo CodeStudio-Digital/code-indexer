@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { BrowserWindow } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import { PreviewWindow } from '../cdp.js';
+import { runPreviewDispatch } from '../dispatch-scope.js';
 
 class FakeDebugger extends EventEmitter {
   attached = false;
@@ -13,9 +14,12 @@ class FakeDebugger extends EventEmitter {
 
 function fixture(): { debuggerApi: FakeDebugger; win: BrowserWindow } {
   const debuggerApi = new FakeDebugger();
+  let destroyed = false;
   const win = {
     id: 17,
     close: vi.fn(),
+    destroy: vi.fn(() => { destroyed = true; }),
+    isDestroyed: () => destroyed,
     webContents: {
       debugger: debuggerApi,
       getURL: () => 'http://localhost:5173',
@@ -25,6 +29,22 @@ function fixture(): { debuggerApi: FakeDebugger; win: BrowserWindow } {
 }
 
 describe('PreviewWindow CDP capture', () => {
+  it('fences a later CDP effect when authority is lost during an awaited command', async () => {
+    const { debuggerApi, win } = fixture();
+    const preview = await PreviewWindow.create(win, 'http://localhost:5173');
+    debuggerApi.sendCommand.mockClear();
+    let active = true;
+    await expect(runPreviewDispatch({ signal: new AbortController().signal, assertDispatch() {
+      if (!active) throw new Error('authority revoked');
+    } }, async () => {
+      await preview.send('Input.dispatchMouseEvent', { type: 'mousePressed' });
+      active = false;
+      await preview.send('Input.dispatchMouseEvent', { type: 'mouseReleased' });
+    })).rejects.toThrow('authority revoked');
+    expect(debuggerApi.sendCommand).toHaveBeenCalledTimes(1);
+    preview.close();
+  });
+
   it('navigates while document-dependent CDP domains are still initializing', async () => {
     const { debuggerApi, win } = fixture();
     let releaseCss: (() => void) | undefined;
@@ -42,7 +62,7 @@ describe('PreviewWindow CDP capture', () => {
     const preview = await PreviewWindow.create(win, 'http://localhost:5173', navigate);
 
     expect(navigate).toHaveBeenCalledOnce();
-    expect(debuggerApi.sendCommand).toHaveBeenCalledWith('CSS.enable');
+    expect(debuggerApi.sendCommand).toHaveBeenCalledWith('CSS.enable', {});
     preview.close();
   });
 
@@ -54,7 +74,7 @@ describe('PreviewWindow CDP capture', () => {
     });
 
     await expect(PreviewWindow.create(win, 'http://localhost:5173')).rejects.toThrow(/Failed to initialize Preview DevTools/);
-    expect(win.close).toHaveBeenCalledOnce();
+    expect(win.destroy).toHaveBeenCalledOnce();
   });
 
   it('normalizes warnings and only wakes network waiters after completion', async () => {

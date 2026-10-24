@@ -9,8 +9,9 @@
  * `ord-N` through `ord+N` chunks from the same source — useful for
  * code examples that span multiple sections.
  */
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { DocStore, DocChunk } from '@mcp/store/doc-store.js';
 import type { DocsEvidenceLedger } from './evidence-ledger.js';
 

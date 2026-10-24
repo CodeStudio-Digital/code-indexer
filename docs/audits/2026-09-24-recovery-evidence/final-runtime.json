@@ -1,0 +1,96 @@
+{
+  "stage": "passed",
+  "errors": [],
+  "checks": {
+    "renderer": {
+      "title": "CodeStudio",
+      "text": "Bem-vindo ao CodeStudio\n\nEntre para usar o CodeStudio. Seu ambiente local é sempre gratuito.\n\nEntrar com e-mail e senha\nou\nContinuar com GoogleContinuar com GitHubContinuar com MicrosoftEntrar com SSO\n\nPrefere e-mail e senha, ou quer gerenciar sua conta?\n\nAbrir o portal web",
+      "bridge": true,
+      "invoke": "function",
+      "rootChildren": 2
+    },
+    "projects": {
+      "status": 200,
+      "body": []
+    },
+    "shells": {
+      "ok": true,
+      "value": [
+        {
+          "id": "powershell",
+          "label": "Windows PowerShell",
+          "file": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "args": [
+            "-NoLogo"
+          ]
+        },
+        {
+          "id": "pwsh",
+          "label": "PowerShell 7",
+          "file": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          "args": [
+            "-NoLogo"
+          ]
+        },
+        {
+          "id": "cmd",
+          "label": "Command Prompt",
+          "file": "C:\\WINDOWS\\system32\\cmd.exe"
+        },
+        {
+          "id": "git-bash",
+          "label": "Git Bash",
+          "file": "C:\\Program Files\\Git\\bin\\bash.exe",
+          "args": [
+            "-i",
+            "-l"
+          ]
+        },
+        {
+          "id": "wsl:podman-machine-default",
+          "label": "WSL: podman-machine-default",
+          "file": "wsl.exe",
+          "args": [
+            "-d",
+            "podman-machine-default"
+          ]
+        },
+        {
+          "id": "wsl:Ubuntu",
+          "label": "WSL: Ubuntu",
+          "file": "wsl.exe",
+          "args": [
+            "-d",
+            "Ubuntu"
+          ]
+        },
+        {
+          "id": "wsl:docker-desktop",
+          "label": "WSL: docker-desktop",
+          "file": "wsl.exe",
+          "args": [
+            "-d",
+            "docker-desktop"
+          ]
+        }
+      ]
+    },
+    "workflow": {
+      "projectId": 1,
+      "read": "before recovery",
+      "saved": "recovery edit saved",
+      "sessionId": "d5d02697-5cc5-4a47-98da-4e0042018254",
+      "sessionListed": true,
+      "streamKeys": [
+        "next",
+        "return"
+      ],
+      "runnerSnapshot": {
+        "value": [],
+        "done": false
+      },
+      "terminalPid": 79692,
+      "terminalOutput": "\u001b[1t\u001b[c\u001b[?1004h\u001b[?9001h\u001b[?7l\u001b[?7hMicrosoft Windows [versão 10.0.26200.9457]\r\n(c) Microsoft Corporation. Todos os direitos reservados.\r\n\r\nD:\\MCP\\.tmp\\recovery-2026-09-24\\final-workspace-profile\\project>\u001b[4;65Hecho RECOVERY_TERMINAL_42\u001b[5;10H\u001b[5;10H\r\n\u001b]0;C:\\WINDOWS\\system32\\cmd.exe - echo  RECOVERY_TERMINAL_42\u001b\\RECOVERY_TERMINAL_42\r\n\u001b]0;C:\\WINDOWS\\system32\\cmd.exe\u001b\\\r\nD:\\MCP\\.tmp\\recovery-2026-09-24\\final-workspace-profile\\project>"
+    }
+  }
+}

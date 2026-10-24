@@ -26,7 +26,7 @@ import type {
 export function createInProcessBackend(): BackendHandle {
   // The Hono app is built but not served unless MCP_DEV_HTTP=1 — that flag
   // exists so an operator can curl the same backend from outside the window.
-  const { app: honoApp, deps, mcpPool, chromeService, verdaccioService } = createApp();
+  const { app: honoApp, deps, mcpPool, chromeService } = createApp();
   let handlers: LocalBackendAccess['handlers'] | null = null;
   let readyPromise: Promise<void> | null = null;
 
@@ -78,7 +78,7 @@ export function createInProcessBackend(): BackendHandle {
 
     async dispose(reason: string) {
       await stopDevHttp();
-      await shutdownAppRuntime({ deps, mcpPool, chromeService, verdaccioService, reason });
+      await shutdownAppRuntime({ deps, mcpPool, chromeService, reason });
     },
 
     local,

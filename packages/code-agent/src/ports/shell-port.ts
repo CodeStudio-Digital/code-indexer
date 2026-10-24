@@ -161,7 +161,7 @@ function utf8SafeSuffix(source: Buffer, maxBytes: number): Buffer {
  * so the marker remains exact even though the omitted middle was never kept
  * in memory.
  */
-function formatBoundedBuffers(
+export function formatBoundedBuffers(
   head: Buffer,
   tail: Buffer,
   totalBytes: number,
@@ -239,7 +239,7 @@ export function boundUtf8Output(content: string, maxBytes = DEFAULT_MAX_OUTPUT_B
 }
 
 /** A memory-bounded process stream capture with exact omission accounting. */
-class BoundedUtf8Capture {
+export class BoundedUtf8Capture {
   private readonly maxBytes: number;
   private readonly headCapacity: number;
   private readonly tailCapacity: number;
@@ -357,7 +357,7 @@ export interface IShellPort {
  * (flags electron.exe as Node interpreter — only valid for our own
  * subprocesses like the MCP bridge, never for user code).
  */
-function cleanProcessEnv(): NodeJS.ProcessEnv {
+export function cleanProcessEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.NODE_OPTIONS;
   delete env.ELECTRON_RUN_AS_NODE;

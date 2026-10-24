@@ -1,8 +1,7 @@
 /**
  * Validates the in-isolate BOOTSTRAP logic (pm/expect/console/accumulation)
  * using node:vm — which is always available — so the pm.* surface is verified in
- * CI WITHOUT needing the native isolated-vm binary. The isolated-vm wrapper
- * (index.ts) is thin and covered separately (ABI-gated). This test also guards
+ * CI independently of the WASM wrapper, which is covered separately. This test also guards
  * against bundler-helper injection (e.g. esbuild's `__name`) breaking the
  * serialized source.
  */

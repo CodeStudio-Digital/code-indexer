@@ -11,7 +11,7 @@ import {
 import { compactWithLLM } from '@mcp/code-agent/core/runner/compaction/llm-compactor.js';
 import { estimateMessageTokens } from '@mcp/code-agent/core/token-accounting.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 
 function user(text: string): AgentMessage {
   return { role: 'user', content: [{ type: 'text', text }] };

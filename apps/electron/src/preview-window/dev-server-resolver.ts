@@ -16,26 +16,8 @@ import {
   type DevOutputChunk,
 } from '@mcp/shared';
 
-export interface ResolverRunnerTask {
-  taskId: string;
-  terminalId: string;
-  projectId: number;
-  status: 'running' | 'exited' | 'stopped';
-  command: string;
-  label: string;
-}
-
-export interface RunnerBridge {
-  list(): ResolverRunnerTask[] | Promise<ResolverRunnerTask[]>;
-  start(input: { projectId: number; command: string; label: string; manager: string }): Promise<ResolverRunnerTask>;
-  stop(taskId: string): Promise<void>;
-  /** Detected dev command for the project, or null to fall back to `npm run dev`. */
-  detectDevCommand(projectId: number): Promise<{ command: string; label: string; manager: string } | null>;
-  /** Accumulated terminal scrollback for a runner's PTY ([] if gone). */
-  readBuffer(terminalId: string): DevOutputChunk[];
-  /** Pinned dev port from `projects.builder_json` (DS/builder projects), or null. */
-  pinnedPort(projectId: number): number | null;
-}
+import type { PreviewRunnerBridge as RunnerBridge } from '@mcp/services/preview/contracts.js';
+export type { PreviewRunnerBridge as RunnerBridge, PreviewRunnerTask as ResolverRunnerTask } from '@mcp/services/preview/contracts.js';
 
 export interface ResolvedDevUrl {
   url: string;
@@ -73,6 +55,9 @@ export interface ResolveDevUrlOptions {
   bootPollMs?: number;
   pollIntervalMs?: number;
   signal?: AbortSignal;
+  /** Record ownership before polling; a failed stop must remain recoverable. */
+  onOwnedTask?(taskId: string): void;
+  onOwnedTaskStopped?(taskId: string): void;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -155,8 +140,13 @@ export async function resolveDevUrl(
   const cmd = detected ?? { command: 'npm run dev', label: 'dev', manager: 'npm' };
   const task = await bridge.start({ projectId, ...cmd });
   const ownedTaskId = task.taskId;
+  opts.onOwnedTask?.(ownedTaskId);
+  const stopOwned = async () => {
+    await bridge.stop(ownedTaskId);
+    opts.onOwnedTaskStopped?.(ownedTaskId);
+  };
   if (signal?.aborted) {
-    await bridge.stop(ownedTaskId).catch(() => undefined);
+    await stopOwned();
     throw new Error('Preview dev-server resolution aborted.');
   }
 
@@ -167,14 +157,14 @@ export async function resolveDevUrl(
   try {
     detectedUrl = await pollForUrl(bridge, task.terminalId, bootPollMs, !pinned, intervalMs, signal);
   } catch (error) {
-    await bridge.stop(ownedTaskId).catch(() => undefined);
+    await stopOwned();
     throw error;
   }
   if (detectedUrl) return { url: pinned ? localhost(pinned) : detectedUrl, ownedTaskId };
   if (pinned) return { url: localhost(pinned), ownedTaskId };
 
   // Started but never printed a URL — don't leak the process.
-  await bridge.stop(ownedTaskId).catch(() => undefined);
+  await stopOwned();
   throw new Error(
     'Started a dev server but it never printed a URL within 45s. ' +
       'Pass an explicit `url` to preview_open once it is up.',

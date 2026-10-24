@@ -10,6 +10,7 @@ import type {
 export function assertNativeHostExpectedConnection(
   connection: AuthenticatedAttemptConnection,
   expected: ProtectedAttemptEndpointOpenExpectation,
+  nowUnixMs: bigint,
 ): void {
   if (
     expected.signal.aborted
@@ -17,7 +18,7 @@ export function assertNativeHostExpectedConnection(
     || connection.connectionId !== expected.connectionId
     || connection.peerPid !== expected.expectedPeerPid
     || connection.transport.maximumFrameBytes !== expected.maximumFrameBytes
-    || expected.deadlineAtUnixMs <= BigInt(Date.now())
+    || expected.deadlineAtUnixMs <= nowUnixMs
   ) throw new AttemptControlAdapterError(
     'invalid_provision',
     'native endpoint diverges from its bound expectation',

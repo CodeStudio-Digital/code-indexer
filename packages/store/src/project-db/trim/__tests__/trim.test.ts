@@ -184,6 +184,20 @@ describe('trimProjectSchema (C2)', () => {
  * on trimmed project DBs.
  */
 describe('central-table migration on a trimmed project DB (mig 175 regression)', () => {
+  it('reopens a pre-268 project without recreating semantic jobs or blocking chat', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db);
+      expect(userTables(db)).not.toContain('semantic_jobs');
+      db.prepare('DELETE FROM schema_version WHERE version >= ?').run(268);
+      expect(() => initProjectSchema(db)).not.toThrow();
+      expect(() => initProjectSchema(db)).not.toThrow();
+      expect(userTables(db)).not.toContain('semantic_jobs');
+      expect(db.prepare('SELECT version FROM schema_version WHERE version = 268').get()).toBeTruthy();
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+    } finally { db.close(); }
+  });
+
   it('a pending central-table migration after trim is a no-op, not a crash', () => {
     const { db } = buildFullSchema();
     try {

@@ -19,9 +19,8 @@ export const DEFAULT_RESOURCE_SCOPE = 'mcp:read';
 
 /**
  * Helper used by both transports (stdio + HTTP) to satisfy a
- * `resources/list` request. Flatten each resource's `list()` output. Errors
- * from a single resource are isolated — a misbehaving resource shouldn't
- * blank the whole catalog.
+ * `resources/list` request. Flatten each resource's `list()` output. Failures
+ * propagate: a partial/empty catalog must not masquerade as a complete page.
  */
 export async function collectListedResources(
   ctx: ToolContext,
@@ -29,12 +28,8 @@ export async function collectListedResources(
 ): Promise<ListedResource[]> {
   const out: ListedResource[] = [];
   for (const r of allResources) {
-    try {
-      const items = await r.list(ctx, authCtx);
-      out.push(...items);
-    } catch (err) {
-      console.error(`[mcp-resources] list failed for ${r.name}:`, (err as Error).message);
-    }
+    const items = await r.list(ctx, authCtx);
+    out.push(...items);
   }
   return out;
 }
@@ -51,14 +46,10 @@ export async function readResource(
   authCtx?: AuthContext,
 ): Promise<{ resource: McpResource; contents: ResourceContent[] } | null> {
   for (const r of allResources) {
-    try {
-      const contents = await r.read(uri, ctx, authCtx);
-      if (contents !== null) return { resource: r, contents };
-    } catch (err) {
-      console.error(`[mcp-resources] read failed for ${r.name} on ${uri}:`, (err as Error).message);
-      // Continue trying — a thrown error from one matcher shouldn't block
-      // another resource's chance to handle the URI.
-    }
+    // Matchers return null for unrelated URIs. A failure reading a matching
+    // resource must reach the transport as an error, never a false 404.
+    const contents = await r.read(uri, ctx, authCtx);
+    if (contents !== null) return { resource: r, contents };
   }
   return null;
 }

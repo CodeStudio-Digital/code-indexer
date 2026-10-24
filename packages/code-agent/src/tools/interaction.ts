@@ -1,6 +1,7 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { ASK_USER_DESC, DECISION_GATE_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { toolInteractions } from '../core/tool-interactions.js';
 
 /**
  * Format the tool_result content for an ask_user response. Shared between the
@@ -52,6 +53,7 @@ export const askUser: CoderTool = {
   name: 'ask_user',
   description: maybeTerse(ASK_USER_DESC),
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true, effectBoundary: 'control',
   parameters: {
     type: 'object',
     properties: {
@@ -112,8 +114,8 @@ export const askUser: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const question = String(args.question ?? '').trim();
     if (!question) return err('question cannot be empty');
-    const runner = ctx.runner;
-    if (!runner) return err('ask_user tool requires runner context');
+    const interaction = toolInteractions(ctx);
+    if (!interaction) return err('ask_user tool requires interaction context');
 
     const header = typeof args.header === 'string' ? args.header.trim() : '';
     if (header.length > 40) {
@@ -177,8 +179,9 @@ export const askUser: CoderTool = {
       ? `${question}\n\nRequested external directory (${filesystemAccess.access === 'write' ? 'read and write' : 'read-only'}):` +
         `\n\n    ${filesystemAccess.path.replace(/[\r\n]+/g, ' ')}`
       : question;
-    const id = `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    runner.emit('question_posted', {
+    const id = ctx.ports?.interactions && ctx.currentToolUseId
+      ? ctx.currentToolUseId : `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const answer = await interaction.request({ kind: 'question', payload: {
       type: 'question',
       id,
       question: displayedQuestion,
@@ -186,9 +189,7 @@ export const askUser: CoderTool = {
       allowFreeform,
       multiSelect,
       header: header || undefined,
-    });
-
-    const answer = await runner.waitForUserInput();
+    } });
     let parsed: {
       aborted?: boolean;
       interrupted?: boolean;
@@ -279,6 +280,7 @@ export const decisionGate: CoderTool = {
   name: 'decision_gate',
   description: maybeTerse(DECISION_GATE_DESC),
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true, effectBoundary: 'control',
   parameters: {
     type: 'object',
     properties: {
@@ -330,8 +332,8 @@ export const decisionGate: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const runner = ctx.runner;
-    if (!runner) return err('decision_gate tool requires runner context');
+    const interaction = toolInteractions(ctx);
+    if (!interaction) return err('decision_gate tool requires interaction context');
 
     const rawQuestions = Array.isArray(args.questions) ? args.questions : undefined;
     if (!rawQuestions || rawQuestions.length < 1 || rawQuestions.length > 4) {
@@ -389,15 +391,14 @@ export const decisionGate: CoderTool = {
 
     const allowFreeform = Boolean(args.allow_freeform);
 
-    const id = `dg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    runner.emit('decision_posted', {
+    const id = ctx.ports?.interactions && ctx.currentToolUseId
+      ? ctx.currentToolUseId : `dg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const raw = await interaction.request({ kind: 'decision', payload: {
       id,
       header: header || undefined,
       questions,
       allowFreeform,
-    });
-
-    const raw = await runner.waitForUserInput();
+    } });
     let parsed: {
       aborted?: boolean;
       interrupted?: boolean;

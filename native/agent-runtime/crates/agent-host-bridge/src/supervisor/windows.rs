@@ -200,13 +200,13 @@ const fn containment_to_wire(
     }
 }
 
-const fn supervisor_budget() -> ResourceBudget {
+fn supervisor_budget() -> ResourceBudget {
     ResourceBudget {
         soft_memory_bytes: 128 * 1024 * 1024,
-        hard_memory_bytes: 512 * 1024 * 1024,
+        hard_memory_bytes: u64::from(crate::resource_bounds::SUPERVISOR_MEMORY_BYTES),
         cpu_time_ms: 24 * 60 * 60 * 1_000,
         max_wall_ms: 7 * 24 * 60 * 60 * 1_000,
-        max_processes: 1_024,
+        max_processes: crate::resource_bounds::SUPERVISOR_PROCESSES,
         max_threads: 4_096,
         max_open_handles: 65_536,
         max_hot_transcript_bytes: 1,

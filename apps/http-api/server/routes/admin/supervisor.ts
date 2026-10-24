@@ -21,7 +21,7 @@ import {
   type IncidentQueryRow,
   type SupervisorStatus,
 } from '@mcp/company/services/supervisor/index.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import {
   asCompanySessionId,
   asSessionId,

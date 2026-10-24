@@ -30,6 +30,8 @@ export type CapabilityResolution =
 
 export interface CapabilityDecisionResolver {
   resolve(request: ValidatedCapabilityPrepare): Promise<CapabilityResolution>;
+  /** Release a policy seal only after its terminal record is durably acknowledged. */
+  retire?(request: ValidatedCapabilityPrepare, decision: agentV1Capability.CapabilityUpdate): void;
 }
 
 export type HostCapabilityExecutionOutcome =
@@ -49,6 +51,8 @@ export type HostCapabilityExecutionOutcome =
   };
 
 export interface HostCapabilityExecutor {
+  /** Must derive this from the sealed Host registry, never from runner flags. */
+  isParallelSafe?(request: ValidatedCapabilityPrepare, grant: agentV1Capability.SealedExecutionGrant): boolean;
   execute(
     request: ValidatedCapabilityPrepare,
     grant: agentV1Capability.SealedExecutionGrant,
@@ -57,12 +61,14 @@ export interface HostCapabilityExecutor {
 
 export interface CapabilityGatewayLimits {
   readonly maximumPreparedOperations: number;
+  readonly maximumRetiredOperations?: number;
   readonly maximumInputBytes: number;
   readonly maximumOutputBytes: number;
 }
 
 export const DEFAULT_CAPABILITY_GATEWAY_LIMITS: CapabilityGatewayLimits = Object.freeze({
   maximumPreparedOperations: 64,
+  maximumRetiredOperations: 100_000,
   maximumInputBytes: 1024 * 1024,
   maximumOutputBytes: 1024 * 1024,
 });

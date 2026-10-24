@@ -1,0 +1,14 @@
+454 boundary issue(s) were removed; regenerate the baseline to ratchet it down.
+12 new repository-boundary issue(s) are forbidden:
+  forbidden-domain-import::apps/dashboard/lib/api-client.ts::apps/dashboard::@mcp/shared::desktop->core
+  forbidden-domain-import::apps/electron/preload.ts::apps/electron::@mcp/shared::desktop->core
+  forbidden-domain-import::packages/code-agent/src/sessions/__tests__/interactive-tools.test.ts::packages/code-agent::@mcp/provider-sdk::core->plugin-platform
+  forbidden-domain-import::packages/code-agent/src/sessions/interactive-tools.ts::packages/code-agent::@mcp/provider-sdk::core->plugin-platform
+  undeclared-external-dependency::packages/code-agent/src/sessions/__tests__/interactive-tools.test.ts::packages/code-agent::vitest::
+  undeclared-internal-dependency::apps/dashboard/lib/api-client.ts::apps/dashboard::@mcp/shared::
+  undeclared-internal-dependency::apps/electron/preload.ts::apps/electron::@mcp/shared::
+  unresolved-internal-package::apps/http-api/server/routes/ssh/__tests__/hosts.routes.test.ts::apps/http-api::@mcp/codestudio-migrations::
+  unresolved-internal-package::packages/code-agent/src/tools/db/__tests__/tools.integration.test.ts::packages/code-agent::@mcp/codestudio-migrations::
+  unresolved-internal-package::packages/indexer/src/__tests__/lsh-index.test.ts::packages/indexer::@mcp/codestudio-migrations::
+  unresolved-internal-package::src/__tests__/db.test.ts::.::@mcp/codestudio-migrations::
+  unresolved-internal-package::src/__tests__/unrestricted-tool-output.test.ts::.::@mcp/codestudio-migrations::

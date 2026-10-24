@@ -1,3 +1,5 @@
+import type { CompactionSummary, CompactionSummaryV2 } from '@mcp/session-storage/compaction/summary-types.js';
+export type { CompactionSummary, CompactionSummaryV2 } from '@mcp/session-storage/compaction/summary-types.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { loadPrompt } from '@mcp/code-agent/prompts/loader.js';
@@ -34,65 +36,6 @@ export {
   type SummarizeSpanV3Input,
   type SummarizeSpanV3Options,
 } from './summarizer-v3.js';
-
-/**
- * LLM-driven compaction summarizer.
- *
- * Complements the deterministic `compactMessages` in core/compaction.ts: when
- * the accumulated history is large enough to trigger compaction, instead of
- * (only) replacing old tool_result contents with deterministic markers, we
- * can ask a cheap model to produce a structured summary that preserves the
- * salient facts (files touched, decisions, next steps, user preferences).
- *
- * The summary replaces a span of old messages with a single synthetic
- * assistant message of ~500 tokens. The continuing agent sees the summary
- * in place of the pruned turns — much better than just `[compacted: N]`
- * markers when the user asks "what did we do earlier?".
- *
- * This path is OPT-IN via `CODER_SUMMARIZER_ENABLE=1`. When disabled (the
- * default), the caller uses the existing deterministic compaction path.
- * The fallback is critical: any failure here — LLM timeout, invalid JSON,
- * provider error — must NOT break the turn. Return null and let the caller
- * fall back to the deterministic marker.
- */
-
-export interface CompactionSummary {
-  what_done: string;
-  current_work: string;
-  files_touched: string[];
-  decisions: string[];
-  next_steps: string[];
-  user_preferences: string[];
-}
-
-/**
- * 9-section summary used when CODER_NEW_COMPACTION is enabled. Mirrors
- * Claude Code's compact prompt structure (Primary Request, Key Concepts,
- * Files, Errors, Problem Solving, User Messages, Pending Tasks, Current
- * Work, Next Step) — empirically the right level of detail to let the
- * continuing agent resume cleanly without re-reading the pruned span.
- *
- * Backwards compatible: `toLegacy()` projects this onto the older 6-field
- * shape so the existing `renderSummary` keeps working during the rollout.
- */
-export interface CompactionSummaryV2 {
-  primary_request: string;
-  key_concepts: string[];
-  files_and_code: Array<{ path: string; state: string }>;
-  errors_and_fixes: string[];
-  problem_solving: string;
-  all_user_messages: string[];
-  pending_tasks: string[];
-  current_work: string;
-  next_step: string;
-  /**
-   * Live-state overlay populated by the runner AFTER the LLM summarization
-   * step (Agent Loop v2). Keeps the rendered summary anchored to ground truth
-   * even when the LLM-extracted pending_tasks/next_step drift from reality.
-   * Either field may be omitted when there is nothing to record.
-   */
-  active_goal?: string;
-}
 
 /**
  * Replace the LLM-extracted `pending_tasks` with the live todo list and

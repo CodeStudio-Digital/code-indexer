@@ -146,7 +146,7 @@ export function frontmatterToBuiltinUpsert(
 
   // Trigger tags are stored as `trigger:<tag>` markers in the flat tags
   // column so the matcher can reuse a single field. Builtin tags + trigger
-  // tags coexist (e.g. ['builtin','design-system','trigger:design-system']).
+  // tags coexist (e.g. ['builtin','api-docs','trigger:api-docs']).
   const finalTags = triggerTags
     ? [...tags, ...triggerTags.map((t) => `trigger:${t}`)]
     : tags;

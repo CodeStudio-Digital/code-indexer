@@ -21,6 +21,7 @@ import type {
 import {
   groupMessages,
   mergeConsecutiveAssistantGroups,
+  liveBlockPersistedId,
 } from '../utils.js';
 import {
   projectTranscriptHistory,
@@ -116,6 +117,7 @@ type TranscriptRow =
       summary?: TurnSummary;
       sourceChapterId?: string;
     }
+  | { kind: 'live-block'; key: string; index: number }
   | { kind: 'tail'; key: string };
 
 function earliestPersistedSeq(sessionData: SessionData | null): number | null {
@@ -634,6 +636,12 @@ export const MessageList = React.memo(function MessageList({
         sourceChapterId: chapter.id,
       }));
     }
+    projection.live.blocks.forEach((block, index) => {
+      const id = liveBlockPersistedId(block)
+        ?? ('id' in block ? block.id : undefined)
+        ?? `${block.type}:${index}`;
+      result.push({ kind: 'live-block', key: `live:${sessionId}:${block.type}:${id}`, index });
+    });
     result.push({ kind: 'tail', key: `tail:${sessionId ?? 'empty'}` });
     return result;
   }, [
@@ -650,6 +658,7 @@ export const MessageList = React.memo(function MessageList({
     pagination.includeArchived,
     pagination.status,
     projection.toolResultsById,
+    projection.live.blocks,
     sessionId,
     sourceProjections,
     totalMessages,
@@ -898,16 +907,26 @@ export const MessageList = React.memo(function MessageList({
                       />
                     </div>
                   )}
+                  {row.kind === 'live-block' && (
+                    <div className={chapters.length > 0 ? 'pl-8' : undefined}>
+                      <AssistantBubble
+                        streaming={streaming}
+                        continuation={row.index > 0 || projection.live.continuation}
+                      >
+                        {renderStreamBlock(projection.live.blocks[row.index], row.index, handlers)}
+                      </AssistantBubble>
+                    </div>
+                  )}
                   {row.kind === 'tail' && (
                     <div className={chapters.length > 0 ? 'space-y-3 pl-8 pt-1' : 'space-y-3 pt-1'}>
-                      <LiveTurn
+                      {projection.live.blocks.length === 0 && <LiveTurn
                         currentTurn={currentTurn}
                         blocks={projection.live.blocks}
                         streaming={streaming}
                         preflight={preflight}
                         handlers={handlers}
                         continuation={projection.live.continuation}
-                      />
+                      />}
                       {showLiveSummary && (
                         <TurnFilesSummary paths={liveEditRefs} roundMessageId={liveRoundMessageId} />
                       )}

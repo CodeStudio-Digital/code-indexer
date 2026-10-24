@@ -7,6 +7,7 @@ pub enum ProviderContextError {
     MissingValidatedField(&'static str),
     UnsupportedTrigger(i32),
     ResumeInputUnsupported,
+    InvalidResumeInput,
     MissingMaterial(&'static str),
     SnapshotContract(&'static str),
     MalformedSnapshot(&'static str),
@@ -46,6 +47,9 @@ impl Display for ProviderContextError {
             }
             Self::ResumeInputUnsupported => {
                 formatter.write_str("checkpoint or transcript input requires the resume composer")
+            }
+            Self::InvalidResumeInput => {
+                formatter.write_str("resume frontier is missing, foreign, corrupt or unresolved")
             }
             Self::MissingMaterial(field) => {
                 write!(formatter, "hydrated material {field} is missing")

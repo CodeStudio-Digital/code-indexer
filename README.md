@@ -95,7 +95,6 @@ packages/
   code-agent/          CoderRunner + tools + LSP + agent presets
   company/             Multi-agent orchestrator (master + subordinates)
   docs-agent/          Documentation RAG + DocsResearchBridge
-  design-system/       Design System MCP tools
   indexer/             Indexing pipeline + hybrid search
   shared/              Types + utilities shared across packages
   candidate-pipeline/  ML classifiers (quality, tool-selection)

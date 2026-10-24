@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toolOutputRecordFileName } from '@mcp/session-storage';
 import { FsSessionStore } from '../fs-session-store.js';
+import { unresolvedToolOutcome } from '../../../core/uncertain-tool-outcome.js';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -44,6 +45,35 @@ afterEach(async () => {
 });
 
 describe('FsSessionStore conversation journal', () => {
+  it('retains uncertain-effect authority across close and recovery', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Unknown effect', provider: 'test', model: 'test' });
+    await store.persistAssistantTurn({ session_id: session.id, operation_id: 'uncertain-turn', usage: null,
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'uncertain-call', name: 'ext_test__write', input: {} }] },
+      tool_calls: [{ tool_use_id: 'uncertain-call', tool_name: 'ext_test__write', args: {}, result_text: 'lost ACK',
+        is_error: true, effect_outcome: 'unknown', duration_ms: 1 }] });
+    await store.close();
+    store = FsSessionStore.fromRoots({ dataDir, projectRootResolver: {
+      resolveProjectRoot: id => id === 7 ? projectRoot : null,
+      listProjectRoots: () => [{ project_id: 7, root_path: projectRoot }],
+    } });
+    const history = await store.listMessagesAfter(session.id, 0);
+    expect(unresolvedToolOutcome(history.messages)).toBe('uncertain-call');
+  });
+  it('persists warmed turns without rereading the full journal', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Warm turns', provider: 'test', model: 'test' });
+    const syncRead = vi.spyOn(store.repository, 'readConversationSync');
+    const asyncRead = vi.spyOn(store.repository, 'readConversation');
+    for (let turn = 0; turn < 8; turn++) {
+      await store.persistAssistantTurn({ session_id: session.id, operation_id: `warm-${turn}`,
+        message: { role: 'assistant', content: [{ type: 'text', text: `turn ${turn}` }] },
+        tool_calls: [],
+        usage: null,
+      });
+    }
+    expect(syncRead).not.toHaveBeenCalled();
+    expect(asyncRead).not.toHaveBeenCalled();
+  });
+
   it('reads the highest message sequence from the committed JSONL tail without hydrating history', async () => {
     const session = await store.createSession({
       project_id: 7,

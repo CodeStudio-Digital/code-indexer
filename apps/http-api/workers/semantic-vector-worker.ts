@@ -12,6 +12,8 @@ import type {
   VectorWriteTarget,
 } from '../../../packages/store/src/vectors.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
+import { currentProjectJobs, projectJobsPage } from './semantic-job-queries.js';
+import type { ProjectJobScope, ProjectJobsPageInput } from '../sse/semantic-job-query-port.js';
 import { LocalEmbeddingService } from '../../../packages/indexer/src/search/local-embeddings.js';
 import { LocalReranker } from '../../../packages/indexer/src/search/local-reranker.js';
 import { resolveOnnxIdleTtlMs } from '../../../packages/indexer/src/search/onnx-idle.js';
@@ -222,21 +224,44 @@ const bridge = new MessageBridge({
 });
 registerPerfStatsHandler(bridge);
 
+const inferenceRequests = new Map<string, AbortController>();
+bridge.on('inference.cancel', (payload) => {
+  const { inferenceRequestId } = payload as { inferenceRequestId: string };
+  inferenceRequests.get(inferenceRequestId)?.abort(new Error('Inference request cancelled'));
+});
+
+async function inferenceRequest<T>(payload: unknown, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const { inferenceRequestId } = payload as { inferenceRequestId?: string };
+  const controller = new AbortController();
+  if (inferenceRequestId) inferenceRequests.set(inferenceRequestId, controller);
+  try { return await trackOperation(() => run(controller.signal)); }
+  finally { if (inferenceRequestId) inferenceRequests.delete(inferenceRequestId); }
+}
+
 bridge.handle('inference.embed', async (payload) => {
   const { target, texts } = payload as { target: EmbeddingTarget; texts: string[] };
-  return trackOperation(() => inference.enqueue(0, async () => {
-    const managed = embeddingFor(target);
-    managed.inflight++;
-    try { return await managed.service.embed(texts); }
-    finally {
-      managed.inflight--;
-      managed.lastUsedAt = Date.now();
+  return inferenceRequest(payload, async (signal) => {
+    const vectors: number[][] = [];
+    let tokens = 0;
+    // Interactive work gets a scheduling point between small backfill batches.
+    for (let offset = 0; offset < texts.length; offset += 16) {
+      signal.throwIfAborted();
+      const result = await inference.enqueue(0, async () => {
+        const managed = embeddingFor(target);
+        managed.inflight++;
+        try { return await managed.service.embed(texts.slice(offset, offset + 16)); }
+        finally { managed.inflight--; managed.lastUsedAt = Date.now(); }
+      }, { signal });
+      vectors.push(...result.vectors);
+      tokens += result.tokens;
+      if (offset + 16 < texts.length) await new Promise<void>((resolve) => setImmediate(resolve));
     }
-  }));
+    return { vectors, tokens };
+  });
 });
 bridge.handle('inference.embedQuery', async (payload) => {
-  const { target, text } = payload as { target: EmbeddingTarget; text: string };
-  return trackOperation(() => inference.enqueue(100, async () => {
+  const { target, text, supersessionKey } = payload as { target: EmbeddingTarget; text: string; supersessionKey?: string };
+  return inferenceRequest(payload, (signal) => inference.enqueue(100, async () => {
     const managed = embeddingFor(target);
     managed.inflight++;
     try { return await managed.service.embedQuery(text); }
@@ -244,7 +269,7 @@ bridge.handle('inference.embedQuery', async (payload) => {
       managed.inflight--;
       managed.lastUsedAt = Date.now();
     }
-  }));
+  }, { signal, supersessionKey }));
 });
 bridge.handle('inference.rerank', async (payload) => {
   const input = payload as {
@@ -256,7 +281,7 @@ bridge.handle('inference.rerank', async (payload) => {
   };
   if (input.target.kind !== 'onnx') throw new Error('semantic worker only executes ONNX rerankers');
   const target = input.target;
-  return trackOperation(() => inference.enqueue(100, async () => {
+  return inferenceRequest(payload, (signal) => inference.enqueue(100, async () => {
     const { resolved, managed } = resolvedRerankerFor(target);
     const requestedKey = rerankerTargetKey(target);
     const depth = resolvedRerankDepth(resolved, input.topK, input.candidates.length);
@@ -272,7 +297,7 @@ bridge.handle('inference.rerank', async (payload) => {
       lastRerankLatencyMs.set(requestedKey, Date.now() - started);
     });
     return { results, diagnostics: rerankerDiagnosticsPayload(resolved, requestedKey) };
-  }, { supersessionKey: input.supersessionKey }));
+  }, { signal, supersessionKey: input.supersessionKey }));
 });
 bridge.handle('inference.rerankerDiagnostics', async (payload) => {
   const { target } = payload as { target: RerankerTarget };
@@ -285,6 +310,19 @@ bridge.handle('worker.idleState', async () => ({
   activeOperations,
   ...inference.diagnostics(),
 }));
+
+bridge.handle('semantic.jobsPage', async (payload) => {
+  const input = payload as { filter: Parameters<SemanticStore['listJobs']>[0]; afterId: number; throughId?: number };
+  return trackOperation(() => {
+    const throughId = input.throughId ?? semanticStore.getJobHighWaterId();
+    return {
+      throughId,
+      jobs: semanticStore.listJobs({ ...input.filter, order: 'priority', afterId: input.afterId, throughId, limit: 256 }),
+    };
+  });
+});
+bridge.handle('semantic.projectJobsPage', payload => trackOperation(() => projectJobsPage(semanticStore, payload as ProjectJobsPageInput)));
+bridge.handle('semantic.currentProjectJobs', payload => trackOperation(() => currentProjectJobs(semanticStore, payload as ProjectJobScope[])));
 
 bridge.handle('vectors.upsert', async (payload) => {
   const input = payload as {

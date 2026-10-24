@@ -33,7 +33,6 @@ import {
   createCleanClone,
   type EssentialDigest,
 } from './cleaner.js';
-import type { DesignSessionIdRemap } from './design-system-links.js';
 
 export interface ProjectDatabaseCandidate {
   projectId: number;
@@ -127,7 +126,7 @@ function rowsEqual(
 }
 
 /**
- * Project DBs used to receive FEATURE copies, including Design System rows and
+ * Project DBs used to receive FEATURE copies and
  * mixed project/session tables. The central DB remained authoritative, so the
  * offline cut may remove a local row only after proving the exact row also
  * exists in the central source that is being exported.
@@ -300,7 +299,6 @@ function cleanPathFor(
 
 export function prepareCleanProjectDatabases(
   audits: readonly ProjectDatabaseAudit[],
-  designSessionIdRemap: DesignSessionIdRemap,
   sourceFingerprint: string,
 ): PreparedProjectDatabase[] {
   const prepared: PreparedProjectDatabase[] = [];
@@ -310,7 +308,7 @@ export function prepareCleanProjectDatabases(
     let essential: EssentialDigest;
     try {
       assertDatabaseIntegrity(local);
-      essential = captureEssentialDigest(local, { designSessionIdRemap });
+      essential = captureEssentialDigest(local);
     } finally {
       local.close();
     }
@@ -320,7 +318,6 @@ export function prepareCleanProjectDatabases(
       cleanPath,
       essential,
       {
-        designSessionIdRemap,
         writeLayoutMarker: false,
       },
     );

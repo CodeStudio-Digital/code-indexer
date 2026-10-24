@@ -6,7 +6,9 @@ import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import {
   resolveSessionProjectAuthority,
   type FsCoderSession,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
+import { unresolvedToolOutcome, uncertainToolOutcomeError, isUncertainToolOutcomeError } from '@mcp/code-agent/core/uncertain-tool-outcome.js';
+import { isWorkspaceRuntimeConflict } from '@mcp/code-agent/runtime/workspace-runtime-error.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import {
   classifyCoderTerminalOutcome,
@@ -18,10 +20,11 @@ import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import { markGoalLifecycleIntentCache } from '@mcp/code-agent/core/runner/goal-lifecycle-intent.js';
+import { hasResumableNativeToolAttachments } from '../../../native-session-resume-guard.js';
 import {
   normalizeSessionMaxAutoContinues,
   normalizeSessionMaxTurns,
-} from '@mcp/code-agent/sessions/run-limits.js';
+} from '@mcp/session-storage/run-limits.js';
 import {
   emitWorkerLog,
   type CoderRunBus,
@@ -31,6 +34,7 @@ import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
+import { isCoderStartupUncertainError } from '../../../sse/coder-runtime-errors.js';
 import { parseSessionIdParam, notFound } from '../_helpers.js';
 import {
   normalizeDedupeKey,
@@ -63,7 +67,6 @@ import {
 import {
   acceptLocalCoderCommand,
   bindLocalCommandBus,
-  coderControlPlaneShadowEnabled,
   fingerprintLocalCoderMessage,
   terminalizeLocalCoderCommand,
   type LocalCoderShadowAcceptance,
@@ -1057,9 +1060,9 @@ export function mountCoderStreamRoutes(
         selectedSkillIds,
         worktree: body.worktree,
       }),
-      // AgentRun is still a default-off shadow projection. The command ledger,
-      // however, is always authoritative for keyed retries.
-      createRun: coderControlPlaneShadowEnabled() && !(liveAtClaim && !liveAtClaim.ended),
+      // Every new worker execution needs an authority before its prepared
+      // configuration can be admitted. Live follow-ups keep the same attempt.
+      createRun: !(liveAtClaim && !liveAtClaim.ended),
       linkedAgentRunId: liveAtClaim && !liveAtClaim.ended
         ? workerPool.getControlPlaneRunContext?.(id)?.agentRunId
         : undefined,
@@ -1370,7 +1373,13 @@ export function mountCoderStreamRoutes(
     // only mirrors its bus to SSE; there is deliberately no in-process path.
     return pumpBusToSSE(c, decision.bus);
     } catch (error) {
+      if (isCoderStartupUncertainError(error)) {
+        const pendingBus = workerPool.getBus(id);
+        if (dedupeKey && pendingBus) recentMessageKeys.record(id, dedupeKey, pendingBus, -1, claimGuard);
+        return c.json({ error: error.message, code: error.code, retryable: false }, 503);
+      }
       await settleClaimFailure('request-setup-failed', error);
+      if (isUncertainToolOutcomeError(error) || isWorkspaceRuntimeConflict(error)) return c.json({ error: error.message, code: error.code, retryable: false }, 409);
       throw error;
     }
   });
@@ -1393,8 +1402,13 @@ export function mountCoderStreamRoutes(
 
     const data = await sessionStore.loadSessionWithMessages(id);
     if (!data) return notFound(c);
+    const unresolved = unresolvedToolOutcome(data.messages);
+    if (unresolved) {
+      const error = uncertainToolOutcomeError(unresolved);
+      return c.json({ error: error.message, code: 'TOOL_OUTCOME_UNKNOWN', retryable: false }, 409);
+    }
     const last = data.messages[data.messages.length - 1];
-    if (!last || last.role !== 'tool') {
+    if (!last || (last.role !== 'tool' && !hasResumableNativeToolAttachments(data))) {
       return c.json({ error: 'session not in resumable state' }, 409);
     }
     const resolvedAgent = await resolveRunAgent(id, body.agent);
@@ -1427,8 +1441,7 @@ export function mountCoderStreamRoutes(
         planMode: body.plan_mode,
         maxTurns: continueMaxTurns,
       }),
-      createRun: coderControlPlaneShadowEnabled()
-        && !(liveAtContinueClaim && !liveAtContinueClaim.ended),
+      createRun: !(liveAtContinueClaim && !liveAtContinueClaim.ended),
       linkedAgentRunId: liveAtContinueClaim && !liveAtContinueClaim.ended
         ? workerPool.getControlPlaneRunContext?.(id)?.agentRunId
         : undefined,
@@ -1583,7 +1596,13 @@ export function mountCoderStreamRoutes(
         return { kind: 'fresh' as const, bus: newBus };
       });
     } catch (error) {
+      if (isCoderStartupUncertainError(error)) {
+        const pendingBus = workerPool.getBus(id);
+        if (dedupeKey && pendingBus) recentMessageKeys.record(id, dedupeKey, pendingBus, -1, continueClaimGuard);
+        return c.json({ error: error.message, code: error.code, retryable: false }, 503);
+      }
       await settleContinueFailure('continue-setup-failed', error);
+      if (isUncertainToolOutcomeError(error) || isWorkspaceRuntimeConflict(error)) return c.json({ error: error.message, code: error.code, retryable: false }, 409);
       throw error;
     }
 

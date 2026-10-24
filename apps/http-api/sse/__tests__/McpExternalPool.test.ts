@@ -87,6 +87,63 @@ afterEach(async () => {
 });
 
 describe('McpExternalPool readiness reconciliation', () => {
+  it('rechecks catalogue revision after delayed transport preparation', async () => {
+    let config = server(); const fake = fakeManager(() => true);
+    let release!: () => void, effects = 0;
+    const handler = vi.fn(async (_args, ctx) => {
+      await new Promise<void>(r => { release = r; });
+      try { ctx.assertExternalMcpDispatch(); }
+      catch { return { isError: true, content: 'catalogue retired' }; }
+      effects++; return { content: 'ok' };
+    });
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [{ ...unityTool(), handler }], tierMap: new Map() });
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [config] });
+    pools.push(pool); await pool.boot();
+    const pending = pool.callTool('unity', 'get_server_health', {}, undefined, pool.getSnapshot().tools[0].catalogueRevision);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    config = { ...config, url: config.url + '/changed' }; await pool.getReadySnapshot(); release();
+    expect(await pending).toMatchObject({ ok: false });
+    expect(effects).toBe(0);
+  });
+
+  it('binds worker and in-process handlers to the admitted catalogue revision', async () => {
+    let config = server(); const fake = fakeManager(() => true);
+    const handler = vi.fn(async () => ({ content: 'ok' }));
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [{ ...unityTool(), handler }], tierMap: new Map() });
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [config] });
+    pools.push(pool); await pool.boot();
+    const oldRevision = pool.getSnapshot().tools[0].catalogueRevision!;
+    const oldHandler = (await pool.listAllTools()).tools[0].handler;
+    await pool.getReadySnapshot();
+    expect(pool.getSnapshot().tools[0].catalogueRevision).toBe(oldRevision);
+    // Even an edit with an unchanged timestamp must invalidate the admitted configuration.
+    config = { ...config, url: config.url + '/changed' };
+    await pool.getReadySnapshot();
+    const currentRevision = pool.getSnapshot().tools[0].catalogueRevision!;
+    expect(currentRevision).not.toBe(oldRevision);
+    expect((await pool.callTool('unity', 'get_server_health', {}, undefined, oldRevision)).ok).toBe(false);
+    expect(await oldHandler({}, {} as import('@mcp/code-agent/core/tool.js').ToolContext)).toMatchObject({ isError: true });
+    expect(handler).not.toHaveBeenCalled();
+    expect((await pool.callTool('unity', 'get_server_health', {}, undefined, currentRevision)).ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches without catalogue network requests and preserves the complete result', async () => {
+    const fake = fakeManager(() => true);
+    const result = { content: 'frame', structuredData: { revision: 7 },
+      extraUserBlocks: [{ type: 'image' as const, mediaType: 'image/png', base64: 'aW1hZ2U=' }] };
+    const handler = vi.fn(async () => result);
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [{ ...unityTool(), handler }], tierMap: new Map() });
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool);
+    await pool.boot();
+    const lists = vi.mocked(fake.manager.listAllTools).mock.calls.length;
+    for (let i = 0; i < 4; i++) {
+      expect(await pool.callTool('unity', 'get_server_health', {})).toEqual({ ok: true, text: 'frame', result });
+    }
+    expect(handler).toHaveBeenCalledTimes(4);
+    expect(fake.manager.listAllTools).toHaveBeenCalledTimes(lists);
+  });
   it('detects a Unity config created after an empty process boot', async () => {
     let configs: McpServerConfig[] = [];
     const fake = fakeManager(() => true);

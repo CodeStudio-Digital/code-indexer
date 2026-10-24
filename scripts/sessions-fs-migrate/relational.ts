@@ -413,8 +413,14 @@ export function buildRelationalExportIndex(
   const permanentRowGuards = new Set<string>(
     POST_CUT_ROW_GUARDS.map((guard) => guard.table),
   );
+  const retiredFeatureTables = new Set(
+    TABLE_DISPOSITIONS
+      .filter((item) => item.kind === 'drop' && (item.exportOwner === 'sprite' || item.exportOwner === 'design'))
+      .map((item) => item.table),
+  );
   const tables = [...new Set(TABLE_DISPOSITIONS.map((item) => item.table))]
     .filter((table) => tableExists(db, table))
+    .filter((table) => !retiredFeatureTables.has(table))
     .filter((table) => !(REDUNDANT_PROJECTION_TABLES as readonly string[]).includes(table))
     .filter((table) => {
       const mixed = DELETE_ROW_DISPOSITIONS.find((item) => item.table === table);

@@ -18,7 +18,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
+import { extractZipToDir } from '@mcp/shared/utils/extract-zip.js';
 import { parseSkillMarkdown, toSkillDefinition } from '@mcp/code-agent/skills/agent-skills-parser.js';
 import { parseMcpJson } from '@mcp/code-agent/skills/mcp-json-parser.js';
 import { SkillStore } from '@mcp/store/skill-store.js';

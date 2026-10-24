@@ -8,7 +8,7 @@ import {
 } from '@mcp/code-agent/core/permission-gate.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
+import type { ChatDelta } from "@mcp/provider-sdk";
 
 /**
  * Runner-level integration of the PermissionGate (the mechanism that replaced

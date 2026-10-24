@@ -1,35 +1,34 @@
-/**
- * Worker-side agent-LSP shim — forwards lsp_definition/references/hover on
- * non-TS files to the main process (where the LSP router + external servers
- * live) via MessageBridge RPC. Mirror of memory-shims.ts.
- */
-// IMPORTANT: workers import via relative paths only — Node's loader resolves
-// these before tsx/tsconfig `paths`, so `@mcp/*` aliases fail inside workers.
-import {
-  setGlobalAgentLspBackend,
-  type AgentLspLocation,
-} from '../../../packages/code-agent/src/lsp/agent-lsp-backend.js';
+import { randomUUID } from 'node:crypto';
+import { setGlobalAgentLspBackend, type AgentLspLocation } from '../../../packages/code-agent/src/lsp/agent-lsp-backend.js';
 
 interface BridgeLike {
   request(name: string, payload: unknown, opts?: { timeoutMs?: number }): Promise<unknown>;
 }
 
-const RPC_TIMEOUT_MS = 30_000;
-
+/** Cancellation is scoped to this bridge/read id. Never stop a shared server
+ * or hide transport failure as a successful empty symbol lookup. */
 export function installWorkerLspShim(bridge: BridgeLike): void {
-  const call = async (op: 'definition' | 'references' | 'hover', input: unknown): Promise<unknown> => {
+  const call = async (op: 'definition' | 'references' | 'hover', input: unknown, signal?: AbortSignal): Promise<unknown> => {
+    signal?.throwIfAborted();
+    const readId = randomUUID();
+    const bounded = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30_000)]);
+    let cancellation: Promise<unknown> | undefined;
+    const cancel = () => { cancellation ??= bridge.request('lspReadCancel', { readId }, { timeoutMs: 1_000 }).catch(() => undefined); };
+    bounded.addEventListener('abort', cancel, { once: true });
     try {
-      return await bridge.request('lspRequest', { op, ...(input as object) }, { timeoutMs: RPC_TIMEOUT_MS });
-    } catch {
-      return null; // language nav must never break a run
+      const value = await bridge.request('lspRequest', { op, ...(input as object), readId }, { timeoutMs: 31_000 });
+      bounded.throwIfAborted(); return value;
+    } finally {
+      bounded.removeEventListener('abort', cancel);
+      if (bounded.aborted) { cancel(); await cancellation; }
     }
   };
   setGlobalAgentLspBackend({
-    definition: (input) => call('definition', input) as Promise<AgentLspLocation[] | null>,
-    references: (input) => call('references', input) as Promise<AgentLspLocation[] | null>,
-    hover: async (input) => {
-      const r = (await call('hover', input)) as { contents?: string } | null;
-      return r?.contents ? { contents: r.contents } : null;
+    definition: (input, signal) => call('definition', input, signal) as Promise<AgentLspLocation[] | null>,
+    references: (input, signal) => call('references', input, signal) as Promise<AgentLspLocation[] | null>,
+    hover: async (input, signal) => {
+      const value = await call('hover', input, signal) as { contents?: string } | null;
+      return value?.contents ? { contents: value.contents } : null;
     },
   });
 }

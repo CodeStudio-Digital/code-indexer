@@ -11,7 +11,12 @@
  * track-gate ⇄ checklist mapping has a single home.
  */
 import { randomUUID } from 'node:crypto';
-import type { CoderTask, TaskGate, TaskStatus, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TaskGate, TaskStatus, TasksState } from '@mcp/session-storage/session-state-types.js';
+
+/** Recognize legacy persisted uncertainty as well as the explicit outcome field. */
+export function taskNeedsReconciliation(task: Pick<CoderTask, 'result'>): boolean {
+  return task.result?.effectOutcome === 'unknown' || /outcome[_ ]unknown/i.test(task.result?.errors ?? '');
+}
 
 /**
  * A single lightweight checklist item — the track-gate view of a `CoderTask`.

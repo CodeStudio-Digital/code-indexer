@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { asSessionId } from '@mcp/session-storage';
-import type { FsCoderMessageRow } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsCoderMessageRow } from '@mcp/session-storage/fs-store/index.js';
 import { chunkArchivedConversation } from '../chapter-rebuild.js';
 
 const sessionId = asSessionId(randomUUID());

@@ -14,6 +14,43 @@ use crate::management::driver::plan::LaunchPlan;
 use crate::process_table::PendingSpawnReservation;
 
 #[test]
+fn authority_lease_expiry_schedules_reap_before_the_immutable_hard_deadline() {
+    let launch = launch_attempt();
+    let lease = launch.authority_lease_expires_at_unix_ms;
+    assert!(lease < launch.hard_deadline_at_unix_ms);
+    let channel = established(
+        vec![launch_frame(launch, "launch", 2)],
+        TestWriter::default(),
+    );
+    let (containment, state) = FakeContainment::healthy();
+    let mut driver = SupervisorPhysicalDriver::new(
+        channel,
+        containment,
+        FakeProvisioner::successful(),
+        trusted_runner(),
+        peer_authority(),
+    )
+    .expect("driver");
+    driver.process_next_at(1_000).expect("launch");
+    assert_eq!(driver.core.next_physical_deadline_unix_ms(), Some(lease));
+    assert_eq!(
+        driver
+            .drive_cleanup_at(lease - 1, Duration::ZERO)
+            .unwrap()
+            .termination_attempts,
+        0
+    );
+    let due = driver.drive_cleanup_at(lease, Duration::ZERO).unwrap();
+    assert_eq!(due.termination_attempts, 1);
+    assert_eq!(state.terminate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(due.retained_for_reap, 1);
+    assert!(
+        driver.reserved_memory_bytes() > 0,
+        "expiry cannot substitute for physical reap"
+    );
+}
+
+#[test]
 fn eof_closes_admission_then_obeys_grace_before_termination_and_reap() {
     let channel = established(
         vec![launch_frame(launch_attempt(), "launch", 2)],

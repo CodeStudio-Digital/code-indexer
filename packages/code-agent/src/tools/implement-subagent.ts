@@ -18,6 +18,7 @@
  * orchestrator gets the violation list in the TaskResult and can decide.
  */
 import { createHash } from 'node:crypto';
+import { parseApplyPatch } from './apply-patch.js';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
@@ -25,12 +26,12 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
 import { CoderRunner, SUBAGENT_TOOL_RESULT_CAP, extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
-import type { CoderTask, TaskResult, TaskReference } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TaskResult, TaskReference } from '@mcp/session-storage/session-state-types.js';
 import {
   type FsSessionStore,
   type FsSubagentRunFence,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
-import { FsTurnTelemetryRepository } from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
+} from '@mcp/session-storage/fs-store/index.js';
+import { FsTurnTelemetryRepository } from '@mcp/session-storage/fs-store/turn-telemetry.js';
 import type { SessionId } from '@mcp/session-storage';
 import { createSubagentMonitor } from '@mcp/code-agent/tools/subagent-monitor.js';
 import { buildSubagentSalvageSummary } from '@mcp/code-agent/tools/subagent-salvage.js';
@@ -56,6 +57,12 @@ export type SubagentAllowlist =
   | null;
 
 export interface SubagentSpec {
+  /** Persist orchestration identity before an admitted native child can start. */
+  onNativeAdmission?: (reference: string) => Promise<void>;
+  /** Owned native journal reference; never a legacy history seed. */
+  nativeResumeRef?: string;
+  /** Host-only continuation intent; absent for ordinary interrupted resumes. */
+  nativeFollowup?: boolean;
   systemPrompt: string;
   label?: string;
   allowlist: SubagentAllowlist;
@@ -301,6 +308,10 @@ export interface SubagentRunResult {
    * relaunch the child from where it stopped.
    */
   transcript?: AgentMessage[];
+  /** Native children retain their journal under their own durable attempt. */
+  nativeTranscriptRef?: string;
+  /** A missing effect ACK forbids automatic fresh retries, even with a summary. */
+  effectOutcome?: 'unknown';
   /**
    * Raw watchdog/error message on a non-completed stop (e.g. "subagent hard
    * timeout reached", "subagent_quality_watchdog: …", a provider error).
@@ -350,6 +361,18 @@ export interface SubagentParent {
  * `<result>` block, never to the user directly.
  */
 export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): Promise<SubagentRunResult> {
+  if (parent.ctx.runtimeGeneration === 'rust_v1') {
+    parent.ctx.signal?.throwIfAborted(); spec.signal?.throwIfAborted();
+    const executor = parent.ctx.ports?.agentTree;
+    if (!executor || executor.runtimeGeneration !== 'rust_v1'
+      || !parent.ctx.controlPlaneParentAgentRunId
+      || executor.ownerAgentRunId !== parent.ctx.controlPlaneParentAgentRunId) {
+      throw new Error('Native agent tree requires its admitted owner executor; legacy child fallback is forbidden');
+    }
+    const signals = [parent.ctx.signal, spec.signal].filter((signal): signal is AbortSignal => !!signal);
+    return executor.run(parent, { ...spec, signal: signals.length ? AbortSignal.any(signals) : undefined });
+  }
+  if (parent.ctx.ports?.agentTree || spec.nativeResumeRef) throw new Error('A legacy parent cannot invoke a native agent tree');
   const sandboxViolations: string[] = [];
   const limits = withDefaultLimits(spec.limits);
   const startedAt = Date.now();
@@ -497,6 +520,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   }
 
   const subContext: ToolContext = {
+    workspaceRuntimeScope: parent.ctx.workspaceRuntimeScope,
     cwd: parent.ctx.cwd,
     projectName: parent.ctx.projectName,
     globalWorkspace: parent.ctx.globalWorkspace,
@@ -1049,6 +1073,9 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   const finishTelemetry = async (
     out: SubagentRunResult,
   ): Promise<SubagentRunResult> => {
+    if (subContext.toolCallLedger?.outcomeUnknownTool) {
+      out = { ...out, reason: 'error', effectOutcome: 'unknown' };
+    }
     if (
       subagentLifecycleTelemetryEnabled &&
       parent.sessionStore &&
@@ -1069,7 +1096,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         await assertChildRunFence();
         await parent.sessionStore.completeSubagentRun({
           run_id: subRunner.runId,
-          reason: out.reason,
+          reason: out.effectOutcome === 'unknown' ? 'outcome_unknown' : out.reason,
           turns: currentTurn,
           auto_continues: autoContinues,
           tool_calls: subToolCalls,
@@ -1561,8 +1588,19 @@ export function checkPathScopeForTool(
     'multi_edit',
     'create_file',
     'manage_path',
+    'apply_patch',
   ]);
-  const violations = extractPathsFromToolArgs(toolName, args)
+  let paths = extractPathsFromToolArgs(toolName, args);
+  if (toolName === 'apply_patch') {
+    try {
+      const patch = typeof args.patch === 'string' ? args.patch : typeof args.input === 'string' ? args.input : '';
+      paths = parseApplyPatch(patch).actions.flatMap(action => action.kind === 'update' && action.movePath
+        ? [action.path, action.movePath] : [action.path]);
+    } catch (cause) {
+      return { violations: [], blockedMessage: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+  const violations = [...new Set(paths)]
     .filter((p) => !isPathInsideScope(p, pathScope))
     .map((p) => `${toolName}:${p}`);
 
@@ -1583,7 +1621,7 @@ export function checkPathScopeForTool(
  *
  * We don't touch the parent's tool object — return a clone with a new handler.
  */
-function wrapToolForPathScope(
+export function wrapToolForPathScope(
   tool: CoderTool,
   pathScope: string[],
   violations: string[],
@@ -1595,9 +1633,11 @@ function wrapToolForPathScope(
     'multi_edit',
     'create_file',
     'manage_path',
+    'apply_patch',
     'read_file',
     'mcp__read_file',
     'run_command',
+    'exec_command',
   ]);
   if (!fsOrShellTools.has(tool.name)) return tool;
 
@@ -1617,6 +1657,8 @@ function wrapToolForPathScope(
 const DEFAULT_PARALLEL_AGENT_MAX = 4;
 
 export interface ParallelAgentSpec {
+  onNativeAdmission?: SubagentSpec['onNativeAdmission'];
+  nativeResumeRef?: string;
   task: string;
   label: string;
   maxTurns: number;
@@ -1762,12 +1804,14 @@ export async function runParallelAgents(
         label: spec.label,
         allowlist: spec.allowlist ?? allowlist,
         initialMessages: spec.initialMessages ?? [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
+        nativeResumeRef: spec.nativeResumeRef,
+        onNativeAdmission: spec.onNativeAdmission,
         maxTurns: spec.maxTurns,
         profile: spec.profile,
         provider: spec.provider,
         reasoningEffort: spec.reasoningEffort,
         researchPolicy: spec.researchPolicy,
-        spawnId: spec.spawnId,
+        spawnId: parent.ctx.runtimeGeneration === 'rust_v1' && spec.spawnId ? `${spec.spawnId}:slot:${agentIndex}` : spec.spawnId,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,
         pathScopeMode: spec.pathScopeMode,
@@ -1807,7 +1851,9 @@ export async function runParallelAgents(
         sandboxViolations: runResult.sandboxViolations,
         collected: runResult.collected ?? emptyCollected(),
         transcript: runResult.transcript,
+        nativeTranscriptRef: runResult.nativeTranscriptRef,
         failureDetail: runResult.failureDetail,
+        effectOutcome: runResult.effectOutcome,
         label: spec.label,
         toolCallCount,
       };

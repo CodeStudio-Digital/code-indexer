@@ -147,8 +147,8 @@ export class EstablishedChannelState {
     this.#deadlines?.tick();
   }
 
-  armPending(deadlineAtUnixMs: bigint | undefined): void {
-    this.#deadlines!.armPending(deadlineAtUnixMs);
+  armPending(deadlineAtUnixMs: bigint | undefined, waitsForCapability = false): void {
+    this.#deadlines!.armPending(deadlineAtUnixMs, waitsForCapability);
   }
 
   clearPending(): void {

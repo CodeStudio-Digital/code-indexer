@@ -11,3 +11,4 @@ export * from './ultra.js';
 export * from './artifacts.js';
 export * from './events.js';
 export * from './coder-terminal.js';
+export * from './attempt-preparation.js';

@@ -122,6 +122,7 @@ pub enum OwnershipError {
     MissingPhysicalReceipt,
     MissingObservedExit,
     InvalidObservedAt,
+    InvalidAuthorityWindow,
     StaleOwnership,
     InvalidTransition {
         from: PhysicalState,

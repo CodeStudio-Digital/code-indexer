@@ -3,6 +3,8 @@ import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { SUBMIT_PLAN_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
+import { toolInteractions } from '../core/tool-interactions.js';
+import type { InteractiveToolPort } from '../ports/interactive-tool-port.js';
 
 /**
  * Per-runner short-lived ledger of plans the user requested revisions for. Stops
@@ -43,7 +45,7 @@ export function formatPlanResult(approved: boolean, feedback?: string): string {
  * `assistant(tool_use) → tool → user` adjacency strict providers require.
  */
 export async function applyPlanApproval(
-  runner: NonNullable<ToolContext['runner']>,
+  runner: Pick<InteractiveToolPort, 'approvePlan' | 'agentId'>,
   ctx: ToolContext,
 ): Promise<Pick<ToolResult, 'extraUserBlocks'>> {
   runner.approvePlan();
@@ -72,6 +74,7 @@ export const submitPlan: CoderTool = {
   name: 'submit_plan',
   description: maybeTerse(SUBMIT_PLAN_DESC),
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true, effectBoundary: 'control',
   parameters: {
     type: 'object',
     properties: {
@@ -98,8 +101,8 @@ export const submitPlan: CoderTool = {
     const plan = String(args.plan ?? '').trim();
     if (!plan) return err('plan cannot be empty');
     const kind = args.kind === 'informational' ? 'informational' : 'mutating';
-    const runner = ctx.runner;
-    if (!runner) return err('plan tool requires runner context');
+    const runner = toolInteractions(ctx);
+    if (!runner) return err('plan tool requires interaction context');
     if (runner.specMode) {
       return err(
         'submit_plan is unavailable in spec mode. Call submit_spec with the complete specification; ' +
@@ -135,14 +138,13 @@ export const submitPlan: CoderTool = {
     // `kind` field lets the dashboard present a quick-approve hint for
     // informational plans without re-introducing the bypass.
 
-    const id = `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const id = ctx.ports?.interactions && ctx.currentToolUseId
+      ? ctx.currentToolUseId : `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     // Persist the plan up-front so the dashboard's "Plans" tab shows it
     // even while still pending. The status is updated below once the
     // user responds.
     await ctx.recordPlan?.(id, plan);
-    runner.emit('plan_posted', { type: 'plan', id, plan, kind });
-
-    const raw = await runner.waitForUserInput();
+    const raw = await runner.request({ kind: 'plan', payload: { type: 'plan', id, plan, kind } });
     let parsed: {
       approved?: boolean;
       feedback?: string;

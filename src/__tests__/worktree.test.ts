@@ -41,22 +41,22 @@ function makeRunner(cwd = '/fake/project'): MockRunner {
 // ── createProjectWorktree (unit, no git) ────────────────────────────
 
 describe('createProjectWorktree', () => {
-  it('validates worktree name format', () => {
+  it('validates worktree name format', async () => {
     // Only letters, digits, dot, underscore, dash allowed
-    const result = createProjectWorktree('/fake', { name: 'bad name!' });
+    const result = await createProjectWorktree('/fake', { name: 'bad name!' });
     expect(result.ok).toBe(false);
   });
 
-  it('validates worktree name length (max 64)', () => {
+  it('validates worktree name length (max 64)', async () => {
     const longName = 'a'.repeat(65);
-    const result = createProjectWorktree('/fake', { name: longName });
+    const result = await createProjectWorktree('/fake', { name: longName });
     expect(result.ok).toBe(false);
   });
 
-  it('accepts valid names (letters, digits, dot, underscore, dash)', () => {
+  it('accepts valid names (letters, digits, dot, underscore, dash)', async () => {
     // This will fail because /fake is not a real git repo, but validation
     // should pass the name check and fail at git level.
-    const result = createProjectWorktree('/fake', { name: 'experiment-1' });
+    const result = await createProjectWorktree('/fake', { name: 'experiment-1' });
     // The name passes validation, so it will try git and fail — that's fine
     // as long as the error is about git, not about the name format.
     if (!result.ok) {
@@ -157,33 +157,26 @@ describe('exit_worktree', () => {
     expect(result.content).toContain('restored');
   });
 
-  it('action:"remove" with no changes calls exitWorktreeScope + git remove', async () => {
+  it('action:"remove" cannot switch scope when the managed path is missing', async () => {
     const runner = makeRunner();
     runner.worktreePath = '/fake/project/.mcp-indexer/worktrees/test';
     const result = await exitWorktree.handler(
       { action: 'remove' },
       { ...ctx(), runner } as any,
     );
-    // Will succeed at exit scope, fail at git worktree remove (no real repo)
-    // but the cwd is restored first (line 224 pattern)
-    expect(runner.exitWorktreeScope).toHaveBeenCalledTimes(1);
-    // The git remove will fail since /fake/project isn't a real repo
+    expect(runner.exitWorktreeScope).not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('restored');
+    expect(result.content).not.toContain('restored');
   });
 
-  it('action:"remove" refuses to remove when there are uncommitted changes', async () => {
+  it('action:"remove" cannot infer a clean worktree from an unavailable directory', async () => {
     const runner = makeRunner();
     runner.worktreePath = '/fake/project/.mcp-indexer/worktrees/test';
-    // This path requires `git status --porcelain` to return output.
-    // In a test environment without a real repo, the git call will fail,
-    // so statusRes.ok will be false → hasChanges=false → proceeds to remove.
-    // This is acceptable; the real integration test covers the git case.
     const result = await exitWorktree.handler(
       { action: 'remove' },
       { ...ctx(), runner } as any,
     );
-    // Should attempt removal (git will fail, but cwd is restored)
-    expect(runner.exitWorktreeScope).toHaveBeenCalledTimes(1);
+    expect(result.isError).toBe(true);
+    expect(runner.exitWorktreeScope).not.toHaveBeenCalled();
   });
 });

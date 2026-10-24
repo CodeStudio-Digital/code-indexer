@@ -164,6 +164,7 @@ fn handoff() -> wire::SupervisorProcessHandoff {
         runner_executable: r"C:\runtime\agent-runner.exe".into(),
         runner_working_directory: r"C:\runtime".into(),
         runner_environment: Vec::new(),
+        lifecycle_outbox_directory: String::new(),
         trusted_runner_provenance: Some(wire::ExpectedRuntimeProvenance {
             build_id: "runner-build".into(),
             source_commit: "runner-commit".into(),

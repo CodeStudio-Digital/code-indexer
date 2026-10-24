@@ -10,9 +10,8 @@
  *
  * Idempotent: re-running after a partial move only moves what's left and
  * only rewrites rows still pointing at the old base. Folders that hold
- * DB-referenced absolute paths (virtual-projects, design-system-uploads,
- * design-system-mcp) get their rows rewritten. packages/ remains a global
- * catalog; legacy sandboxes/ is moved only as input for sessions:fs-migrate.
+ * DB-referenced absolute paths (virtual-projects) get their rows rewritten.
+ * Legacy sandboxes/ is moved only as input for sessions:fs-migrate.
  *
  * `mcp.db` and `external/` are reported but NOT deleted — they have no
  * code references (stale leftovers); the operator removes them by hand.
@@ -22,12 +21,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
-import {
-  designSystemMcpDir,
-  designSystemUploadsDir,
-  verdaccioStorageDir,
-  virtualProjectsBaseDir,
-} from '@mcp/shared/utils/data-paths.js';
+import { virtualProjectsBaseDir } from '@mcp/shared/utils/data-paths.js';
 import { legacySandboxArchiveDir } from './sessions-fs-migrate/legacy-paths.js';
 
 type DB = Database.Database;
@@ -107,45 +101,6 @@ function rewriteColumn(
   return count;
 }
 
-/** Rewrite path prefixes inside a JSON-array text column (e.g. mcp args). */
-function rewriteJsonArrayColumn(
-  db: DB,
-  table: string,
-  col: string,
-  oldBase: string,
-  newBase: string,
-): number {
-  const rows = db
-    .prepare(`SELECT id AS id, ${col} AS val FROM ${table} WHERE ${col} IS NOT NULL`)
-    .all() as Row[];
-  const upd = db.prepare(`UPDATE ${table} SET ${col} = ? WHERE id = ?`);
-  let count = 0;
-  for (const row of rows) {
-    let arr: unknown;
-    try {
-      arr = JSON.parse(row.val);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(arr)) continue;
-    let changed = false;
-    const next = arr.map((el) => {
-      if (typeof el !== 'string') return el;
-      const r = rewritePrefix(el, oldBase, newBase);
-      if (r !== null && r !== el) {
-        changed = true;
-        return r;
-      }
-      return el;
-    });
-    if (changed) {
-      if (!DRY) upd.run(JSON.stringify(next), row.id);
-      count++;
-    }
-  }
-  return count;
-}
-
 function rewriteDbPaths(dbPath: string): void {
   if (!existsSync(dbPath)) {
     log(`no DB at ${dbPath} — skipping path rewrites`);
@@ -160,17 +115,6 @@ function rewriteDbPaths(dbPath: string): void {
       );
       log(`projects.root_path: ${p} row(s) ${DRY ? 'would be ' : ''}rewritten`);
 
-      const u = rewriteColumn(
-        db, 'design_system_sessions', 'source_zip_path',
-        join(OLD_DATA, 'design-system-uploads'), designSystemUploadsDir(),
-      );
-      log(`design_system_sessions.source_zip_path: ${u} row(s) ${DRY ? 'would be ' : ''}rewritten`);
-
-      const m = rewriteJsonArrayColumn(
-        db, 'mcp_server_configs', 'args',
-        join(OLD_DATA, 'design-system-mcp'), designSystemMcpDir(),
-      );
-      log(`mcp_server_configs.args: ${m} row(s) ${DRY ? 'would be ' : ''}rewritten`);
     };
     if (DRY) run();
     else db.transaction(run)();
@@ -202,10 +146,7 @@ function main(): void {
   backupDb(dbPath);
 
   moveTree(join(OLD_DATA, 'virtual-projects'), virtualProjectsBaseDir());
-  moveTree(join(OLD_DATA, 'packages'), verdaccioStorageDir());
   moveTree(join(OLD_DATA, 'sandboxes'), legacySandboxArchiveDir(mcpDataDir()));
-  moveTree(join(OLD_DATA, 'design-system-uploads'), designSystemUploadsDir());
-  moveTree(join(OLD_DATA, 'design-system-mcp'), designSystemMcpDir());
 
   rewriteDbPaths(dbPath);
   reportLeftovers();

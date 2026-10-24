@@ -87,7 +87,7 @@ describe('agent_memory store (migration 181)', () => {
   });
 
   it('FTS search is scoped and excludes archived rows', () => {
-    db.createAgentMemory({ projectId, name: 'verdaccio gotcha', content: 'registry needs a token refresh' });
+    db.createAgentMemory({ projectId, name: 'registry gotcha', content: 'registry needs a token refresh' });
     const other = db.createProject('q', join(dir, 'q')).id;
     db.createAgentMemory({ projectId: other, name: 'unrelated', content: 'registry token elsewhere' });
 
@@ -157,6 +157,12 @@ describe('agent_memory store (migration 181)', () => {
     expect(related).toHaveLength(1);
     expect(related[0].name).toBe('optimistic-mutation-state-disconnect');
     expect(related[0].source).toBe('agent');
+  });
+  it('preserves distinct explicit memories even when their titles have shared words', () => {
+    db.createAgentMemory({ projectId, name: 'bounded-memory-fixture', content: 'Bound reads', source: 'agent' });
+    db.createAgentMemory({ projectId, name: 'temporary-memory-fixture', content: 'Archive obsolete facts', source: 'agent' });
+    const index = db.listAgentMemoryIndex('project', projectId, 12);
+    expect(index.map(row => row.name).sort()).toEqual(['bounded-memory-fixture', 'temporary-memory-fixture']);
   });
 
   it('preflights deterministic hygiene and returns false again after consolidation', () => {

@@ -1,4 +1,4 @@
-import { clone } from '@bufbuild/protobuf';
+import { detachedMessage } from '../ipc/DetachedMessage.js';
 import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import type { EstablishedAttemptChannel } from '../ipc/EstablishedAttemptChannel.js';
 import type { PreparedAttemptReceipt } from './HostLifecycleReceipts.js';
@@ -27,7 +27,7 @@ export interface HostLifecyclePrepareOptions {
 export async function executeHostLifecyclePrepare(
   options: HostLifecyclePrepareOptions,
 ): Promise<PreparedAttemptReceipt> {
-  const prepare = clone(
+  const prepare = detachedMessage(
     agentV1Runtime.PrepareAttemptSchema,
     options.value,
   );

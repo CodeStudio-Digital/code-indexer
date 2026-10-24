@@ -53,6 +53,8 @@ export interface StreamResult {
 export interface ConsumeStreamArgs {
   stream: AsyncIterable<ChatDelta>;
   signal?: AbortSignal;
+  /** Interrupt transport I/O before asking an async generator to return. */
+  cancelStream?: (reason: unknown) => void;
   onTextDelta?: (
     text: string,
     meta?: { itemId?: string; phase?: AssistantMessagePhase },
@@ -137,6 +139,12 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     args.firstByteTimeoutMs ?? 240_000;
   const thinkingOnlyMs = args.thinkingOnlyTimeoutMs ?? resolveThinkingOnlyTimeoutMs();
   const iterator = args.stream[Symbol.asyncIterator]();
+  const stopStream = (reason: unknown) => {
+    try { args.cancelStream?.(reason); } catch { /* Preserve the original stop reason. */ }
+    // AsyncGenerator.return() queues behind a pending next(). A provider that
+    // ignores cancellation must never hold the user's stop/timeout hostage.
+    try { void Promise.resolve(iterator.return?.()).catch(() => undefined); } catch { /* best-effort */ }
+  };
   let lastNonThinkingAt = Date.now();
   // Until the first delta arrives, use the generous first-byte budget; after
   // that, the tighter inter-delta idle budget governs gaps.
@@ -148,8 +156,9 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
       // A2 — surface abort as exception so callers (Executing node) can
       // route it to the abort path. Previously we just broke and returned
       // a partial result silently.
-      try { await iterator.return?.(); } catch { /* ignore */ }
-      throw new AbortError('consumeStream aborted by signal');
+      const error = new AbortError('consumeStream aborted by signal');
+      stopStream(error);
+      throw error;
     }
     let next: IteratorResult<ChatDelta>;
     try {
@@ -165,13 +174,9 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
             },
       );
     } catch (e) {
-      // Cooperatively cancel the iterator if it supports return().
-      try {
-        await iterator.return?.();
-      } catch {
-        /* ignore */
-      }
-      throw e;
+      const error = args.signal?.aborted ? new AbortError('consumeStream aborted by signal') : e;
+      stopStream(error);
+      throw error;
     }
     if (next.done) break;
     const delta = next.value;
@@ -190,7 +195,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
 
       case 'thinking_delta':
         if (thinkingOnlyMs > 0 && Date.now() - lastNonThinkingAt > thinkingOnlyMs) {
-          try { await iterator.return?.(); } catch { /* ignore */ }
           const err = new TimeoutError(thinkingOnlyMs, 'provider thinking-only stream');
           err.message =
             `provider thinking-only stream exceeded ${thinkingOnlyMs}ms — aborting turn. ` +
@@ -200,6 +204,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
           // and Recovering routes it to its own low-cap bucket instead of
           // sharing `provider-unknown-retry` with connection/mid-stream drops.
           (err as { reason?: string }).reason = 'thinking-only';
+          stopStream(err);
           throw err;
         }
         currentThinking += delta.text;

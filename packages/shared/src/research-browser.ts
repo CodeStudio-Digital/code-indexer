@@ -1,3 +1,5 @@
+import type { HostUiDispatchScope } from './host-ui-dispatch.js';
+
 export type ResearchBrowserMethod =
   | 'open'
   | 'snapshot'
@@ -14,10 +16,15 @@ export interface ResearchBrowserInvoke {
   method: ResearchBrowserMethod;
   args?: Record<string, unknown>;
   requestId?: string;
+  runId?: number;
+  authority?: unknown;
 }
 
 export interface IResearchBrowser {
-  invoke(request: ResearchBrowserInvoke): Promise<unknown>;
+  invoke(request: ResearchBrowserInvoke, scope?: HostUiDispatchScope): Promise<unknown>;
+  readonly authorityAttested?: true;
+  closeOwnedScope?(key: string, owner: object): Promise<void>;
   cancel?(requestId: string): void | Promise<void>;
   closeAll?(): void | Promise<void>;
 }
+

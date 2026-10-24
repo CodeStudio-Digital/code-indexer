@@ -19,7 +19,7 @@ import {
   normalizeMessageForCache,
 } from '@mcp/code-agent/core/runner.js';
 import { sessionUnrestrictedToolOutput078 } from '@mcp/store/migrations/078_session_unrestricted_tool_output.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 
 /**
  * Set up a mini in-memory SQLite with just the columns migration 078 needs to

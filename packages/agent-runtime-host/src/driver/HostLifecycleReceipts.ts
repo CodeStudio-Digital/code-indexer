@@ -155,8 +155,8 @@ function cloneActiveFacts(
   return Object.freeze({
     ...value,
     identity: clone(agentV1Common.AttemptIdentitySchema, value.identity),
-    specSha256: value.specSha256.slice(),
-    activationNonce: value.activationNonce.slice(),
+    specSha256: Uint8Array.from(value.specSha256),
+    activationNonce: Uint8Array.from(value.activationNonce),
   });
 }
 

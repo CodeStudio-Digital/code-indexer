@@ -56,6 +56,11 @@ export type FrameReceiveOutcome =
   | { readonly kind: 'replay'; readonly replay: ReplayedFrame };
 
 export class AttemptFrameReceiver {
+  get remainingIdentityCapacity(): number {
+    this.#assertHealthy();
+    return this.#history.remainingIdentityCapacity - (this.#pending ? 1 : 0);
+  }
+
   readonly #seed;
   readonly #identity;
   readonly #binding = {};

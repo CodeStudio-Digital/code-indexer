@@ -12,6 +12,8 @@ export interface HostSupervisorBootstrapProvision {
 }
 
 export interface HostSupervisorLaunchOptions {
+  /** Physical admission may include executable verification and cold OS startup. */
+  readonly launchResponseTimeoutMs?: number;
   readonly responseTimeoutMs: number;
   readonly maximumReplayBytes: number;
   readonly trackedMessageIdCapacity: number;

@@ -6,6 +6,7 @@
  * `pg_cancel_backend(pid)`. Rows are capped by `maxRows` (streaming is P4).
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { assertDatabaseDispatch } from './dispatch.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
   ColumnInfo,
@@ -80,11 +81,13 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
   const pool = new pg.Pool(buildPoolConfig(config));
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    assertDatabaseDispatch(opts);
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     const client = await pool.connect();
     let pid: number | null = null;
     let onAbort: (() => void) | null = null;
     try {
+      assertDatabaseDispatch(opts);
       const pidRes = (await client.query({ text: 'SELECT pg_backend_pid() AS pid' })) as PgResult;
       pid = Number((pidRes.rows[0] as { pid: number }).pid);
       if (opts.signal) {
@@ -97,8 +100,10 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       }
       // Schema-scoped console: set the search_path on THIS dedicated client only.
       if (opts.schema) {
+        assertDatabaseDispatch(opts);
         await client.query({ text: `SET search_path TO ${qIdent(opts.schema)}, public` });
       }
+      assertDatabaseDispatch(opts);
       const raw = await client.query({ text: sql, values: opts.params });
       return shapePgResult(raw, max);
     } finally {
@@ -106,7 +111,10 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       // Reset the search_path so the pooled client is clean for the next borrower.
       // If RESET fails (e.g. an in-flight cancel landed on it), EVICT the client
       // (release with an error) so a dirty search_path can't leak to the next use.
-      if (opts.schema) {
+      if (opts.signal?.aborted) {
+        // A late pg_cancel_backend must never target the next pool borrower.
+        client.release(true);
+      } else if (opts.schema) {
         try {
           await client.query({ text: 'RESET search_path' });
           client.release();

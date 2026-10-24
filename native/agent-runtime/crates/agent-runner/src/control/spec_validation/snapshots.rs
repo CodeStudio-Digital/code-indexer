@@ -11,7 +11,7 @@ pub(super) fn validate_required_snapshots(
     let snapshots = required_snapshots(spec).ok_or_else(|| first_missing_snapshot(spec))?;
     let mut refs = BTreeSet::new();
 
-    for (field, snapshot) in snapshot_fields(&snapshots) {
+    for (field, snapshot) in snapshot_fields(spec, &snapshots) {
         validate_snapshot(field, snapshot)?;
         if !refs.insert(snapshot.r#ref.as_str()) {
             return Err(SpecValidationError::DuplicateSnapshotRef { field });
@@ -41,13 +41,17 @@ pub(super) fn required_snapshots(
     } else if let Some(snapshot) = spec.codex_app_server_process_snapshot.as_ref() {
         snapshots.push(snapshot);
     }
+    if let Some(snapshot) = spec.initial_conversation_snapshot.as_ref() {
+        snapshots.push(snapshot);
+    }
     Some(snapshots)
 }
 
 fn snapshot_fields<'a>(
+    spec: &wire::ResolvedAttemptSpec,
     snapshots: &'a [&'a wire::SnapshotRef],
 ) -> impl Iterator<Item = (&'static str, &'a wire::SnapshotRef)> {
-    const FIELDS: [&str; 8] = [
+    let mut fields = vec![
         "verifier_policy_snapshot",
         "capability_set_snapshot",
         "environment_snapshot",
@@ -55,9 +59,14 @@ fn snapshot_fields<'a>(
         "policy_snapshot",
         "preset_snapshot",
         "agent_definition_snapshot",
-        "codex_app_server_process_snapshot",
     ];
-    FIELDS.into_iter().zip(snapshots.iter().copied())
+    if spec.codex_app_server_process_snapshot.is_some() {
+        fields.push("codex_app_server_process_snapshot");
+    }
+    if spec.initial_conversation_snapshot.is_some() {
+        fields.push("initial_conversation_snapshot");
+    }
+    fields.into_iter().zip(snapshots.iter().copied())
 }
 
 fn first_missing_snapshot(spec: &wire::ResolvedAttemptSpec) -> SpecValidationError {

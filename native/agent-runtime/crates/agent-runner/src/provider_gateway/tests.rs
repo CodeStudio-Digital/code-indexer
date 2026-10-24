@@ -68,7 +68,7 @@ fn final_usage_is_delivered_before_the_buffered_terminal() {
     assert_eq!(
         mapped.buffered,
         Some(ProviderEvent::Completed {
-            response_id: "response/1".into(),
+            response_id: Some("response/1".into()),
             response_message_count: None,
         })
     );
@@ -134,6 +134,8 @@ fn completed_provider_operation_releases_one_tool_call_with_resume_cursor() {
         capability_version: "1".into(),
         execution_class: agent_tools::capability::ExecutionClass::NativeRead,
         mutates: false,
+        parallel_safe: false,
+        read_only: false,
         encoded_arguments: b"{}".to_vec(),
         arguments_sha256: [8; 32],
         provider_response_id: None,
@@ -148,7 +150,7 @@ fn completed_provider_operation_releases_one_tool_call_with_resume_cursor() {
     let resumed = settle_provider_event(
         &mut provider_operation,
         ProviderEvent::Completed {
-            response_id: "response/1".into(),
+            response_id: Some("response/1".into()),
             response_message_count: Some(4),
         },
     )
@@ -162,6 +164,100 @@ fn completed_provider_operation_releases_one_tool_call_with_resume_cursor() {
     assert!(!provider_operation.has_pending_tool_call());
 }
 
+#[test]
+fn stateless_completion_releases_tools_without_manufacturing_a_resume_cursor() {
+    let mapped = map_wire_event(
+        ProviderWireEvent::Terminal(wire::ProviderTerminal {
+            classification: wire::ProviderTerminalClassification::Completed as i32,
+            ..wire::ProviderTerminal::default()
+        }),
+        &operation(),
+        &BTreeMap::new(),
+    )
+    .expect("stateless terminal");
+    assert!(matches!(
+        mapped.event,
+        ProviderEvent::Completed {
+            response_id: None,
+            ..
+        }
+    ));
+    let mut pending = ProviderDataOperation::new(operation(), BTreeMap::new());
+    pending
+        .pending_tool_calls
+        .push(agent_engine::ports::ProviderToolCall {
+            operation_id: operation(),
+            tool_use_id: OperationId::new("stateless-tool/1").unwrap(),
+            capability_name: "read_file".into(),
+            capability_id: "cap:native:read_file".into(),
+            capability_version: "1".into(),
+            execution_class: agent_tools::capability::ExecutionClass::HostCapability,
+            mutates: false,
+            parallel_safe: true,
+            read_only: true,
+            encoded_arguments: b"{}".to_vec(),
+            arguments_sha256: [8; 32],
+            provider_response_id: None,
+            provider_response_message_count: None,
+        });
+    let Some(ProviderEvent::ToolCall(call)) =
+        settle_provider_event(&mut pending, mapped.event).unwrap()
+    else {
+        panic!("tool not released")
+    };
+    assert_eq!(call.provider_response_id, None);
+    assert_eq!(call.provider_response_message_count, None);
+}
+
+mod checkpoint;
 mod duplex;
 mod duplex_capability;
+mod lifetime;
 use std::collections::BTreeMap;
+
+#[test]
+fn completed_batch_preserves_order_and_cursor_and_rejects_duplicate_ids() {
+    let mut provider_operation = ProviderDataOperation::new(operation(), BTreeMap::new());
+    let call = agent_engine::ports::ProviderToolCall {
+        operation_id: operation(),
+        tool_use_id: OperationId::new("tool-use/1").expect("tool"),
+        capability_name: "read_file".into(),
+        capability_id: "native.read_file".into(),
+        capability_version: "1".into(),
+        execution_class: agent_tools::capability::ExecutionClass::NativeRead,
+        mutates: false,
+        parallel_safe: false,
+        read_only: false,
+        encoded_arguments: b"{}".to_vec(),
+        arguments_sha256: [8; 32],
+        provider_response_id: None,
+        provider_response_message_count: None,
+    };
+    for index in 0..4 {
+        let mut next = call.clone();
+        next.tool_use_id = OperationId::new(format!("tool-use/{index}")).expect("tool");
+        assert!(
+            settle_provider_event(&mut provider_operation, ProviderEvent::ToolCall(next))
+                .expect("collect")
+                .is_none()
+        );
+    }
+    assert!(settle_provider_event(&mut provider_operation, ProviderEvent::ToolCall(call)).is_err());
+    let completed = settle_provider_event(
+        &mut provider_operation,
+        ProviderEvent::Completed {
+            response_id: Some("response/batch".into()),
+            response_message_count: Some(1),
+        },
+    )
+    .expect("completed")
+    .expect("batch");
+    let ProviderEvent::ToolCalls(calls) = completed else {
+        panic!("batch expected")
+    };
+    assert_eq!(calls.len(), 4);
+    for (index, call) in calls.iter().enumerate() {
+        assert_eq!(call.tool_use_id.as_str(), format!("tool-use/{index}"));
+        assert_eq!(call.provider_response_id.as_deref(), Some("response/batch"));
+    }
+}

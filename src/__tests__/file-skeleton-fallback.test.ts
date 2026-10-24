@@ -134,24 +134,24 @@ describe('get_file_skeleton — tree-sitter fallback for non-indexed files', () 
     expect(text).toContain('ReceitaComponent');
   });
 
-  it('read_file errors clearly when path is a directory', () => {
+  it('read_file errors clearly when path is a directory', async () => {
     const ctx = { db } as unknown as Parameters<typeof read_file.handler>[1];
-    expect(() =>
+    await expect(
       read_file.handler(
         { project_name: 'test-proj', file_path: 'src/app/elementos/receita' },
         ctx,
       ),
-    ).toThrow(/is a directory/);
+    ).rejects.toThrow(/is a directory/);
   });
 
-  it('read_file errors clearly when path does not exist on disk', () => {
+  it('read_file errors clearly when path does not exist on disk', async () => {
     const ctx = { db } as unknown as Parameters<typeof read_file.handler>[1];
-    expect(() =>
+    await expect(
       read_file.handler(
         { project_name: 'test-proj', file_path: 'does/not/exist.ts' },
         ctx,
       ),
-    ).toThrow(/not found in index nor on disk/);
+    ).rejects.toThrow(/not found in index nor on disk/);
   });
 
   it('skeleton fallback handles .scss via tree-sitter (CSS grammar reuse)', async () => {

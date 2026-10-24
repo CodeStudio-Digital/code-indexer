@@ -112,7 +112,7 @@ describe('pumpBusToSSE response headers', () => {
     expect(body).toContain('live-tail');
   });
 
-  it('keeps the full legacy replay when the compatibility opt-out is set', async () => {
+  it('keeps bounded replay when the retired compatibility opt-out is set', async () => {
     process.env.CODER_ATTACH_REPLAY_TRIM = '0';
     const app = new Hono();
     const bus = createBus(new AbortController());
@@ -126,7 +126,8 @@ describe('pumpBusToSSE response headers', () => {
     }));
 
     const body = await (await app.request('/sse')).text();
-    expect(body).toContain('id: 0');
-    expect(body).toContain('persisted-old-delta');
+    expect(body).not.toContain('id: 0');
+    expect(body).not.toContain('persisted-old-delta');
+    expect(body).toContain('live-tail');
   });
 });

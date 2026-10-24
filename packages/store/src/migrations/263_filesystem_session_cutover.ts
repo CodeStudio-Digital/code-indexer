@@ -5,6 +5,7 @@ import {
   findForbiddenSessionSchema,
   POST_CUT_ROW_GUARDS,
   REDUNDANT_PROJECTION_TABLES,
+  TABLE_DISPOSITIONS,
   type SchemaTable,
 } from '@mcp/session-storage/sqlite-disposition.js';
 import {
@@ -150,9 +151,14 @@ function postCutGuardIsUsable(
  */
 function assertNoLegacySessionRows(db: DB): void {
   const redundant = new Set<string>(REDUNDANT_PROJECTION_TABLES);
+  const retiredFeatureTables = new Set(
+    TABLE_DISPOSITIONS
+      .filter((item) => item.kind === 'drop' && (item.exportOwner === 'sprite' || item.exportOwner === 'design'))
+      .map((item) => item.table),
+  );
   const populated: string[] = [];
   for (const table of DROP_TABLES) {
-    if (!tableExists(db, table) || redundant.has(table)) continue;
+    if (!tableExists(db, table) || redundant.has(table) || retiredFeatureTables.has(table)) continue;
     if (db.prepare(`SELECT 1 FROM ${quoteIdentifier(table)} LIMIT 1`).get()) {
       populated.push(table);
     }

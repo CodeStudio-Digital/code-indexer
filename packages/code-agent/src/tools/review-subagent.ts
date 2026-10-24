@@ -188,6 +188,7 @@ export interface ReviewFinding {
 }
 
 export interface ReviewResult {
+  nativeTranscriptRef?: string;
   findings: ReviewFinding[];
   /** Raw text the reviewer returned, for debugging. */
   raw: string;
@@ -394,11 +395,12 @@ export async function runReviewSubagent(parent: SubagentParent, input: ReviewInp
     maxTurns: 0,
   });
 
-  const parsed = parseReviewBlock(result.finalText);
+  const parsed = result.reason === 'completed' ? parseReviewBlock(result.finalText) : null;
   return {
     findings: enforceEvidenceGate(parsed?.findings ?? []),
     raw: result.finalText,
     parsed: parsed != null,
     usage: result.usage,
+    nativeTranscriptRef: result.nativeTranscriptRef,
   };
 }

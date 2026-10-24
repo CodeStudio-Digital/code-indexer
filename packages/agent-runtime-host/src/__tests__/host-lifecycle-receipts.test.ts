@@ -32,6 +32,22 @@ function facts() {
 }
 
 describe('host lifecycle receipts', () => {
+  it('retains independent bytes when a Buffer-backed preparation is scrubbed', () => {
+    const owner = new HostLifecycleReceiptOwner();
+    const source = facts();
+    source.prepare.encodedSpec = Buffer.from([1, 2, 3]);
+    source.prepare.expectedSpecSha256 = Buffer.alloc(32, 7);
+    source.prepared.specSha256 = Buffer.alloc(32, 7);
+    const receipt = owner.mintPrepared(source);
+    source.prepare.encodedSpec.fill(0);
+    source.prepare.expectedSpecSha256.fill(0);
+    source.prepared.specSha256.fill(0);
+    const retained = owner.consumePrepared(receipt);
+    expect(retained.prepare.encodedSpec).toEqual(Uint8Array.from([1, 2, 3]));
+    expect(retained.prepare.expectedSpecSha256).toEqual(new Uint8Array(32).fill(7));
+    expect(retained.prepared.specSha256).toEqual(new Uint8Array(32).fill(7));
+  });
+
   it('moves a Prepared snapshot once and rejects transplant or forgery', () => {
     const owner = {};
     const foreign = {};

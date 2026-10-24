@@ -14,6 +14,8 @@
 import type { ChatCallResult } from './llm-chat.js';
 
 export interface ChatRetryOptions {
+  /** Stops backoff and prevents any later physical request. */
+  signal?: AbortSignal;
   /** Max retries AFTER the first attempt. Default 2 → up to 3 attempts. */
   maxRetries?: number;
   /** Exponential base delay (ms) when no `Retry-After` is present. Default 500. */
@@ -25,7 +27,7 @@ export interface ChatRetryOptions {
   /** Injectable RNG (tests). */
   rng?: () => number;
   /** Injectable sleep (tests) — bypass real timers. */
-  sleepFn?: (ms: number) => Promise<void>;
+  sleepFn?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export type ChatErrorKind =
@@ -68,15 +70,24 @@ export async function withChatRetry(
   const sleep = opts.sleepFn ?? defaultSleep;
   let last: ChatCallResult | undefined;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (opts.signal?.aborted) return abortedChatResult(last);
     const result = await call();
     last = result;
+    if (opts.signal?.aborted) return abortedChatResult(result);
+    if (result.finishReason === 'aborted') return result;
     if (!result.errorBody) return result; // success
     if (!isRetryableChatResult(result)) return result; // non-retryable error
     if (attempt >= maxRetries) return result; // exhausted
-    await sleep(backoffDelayMs(attempt + 1, result.retryAfterMs, opts));
+    await sleep(backoffDelayMs(attempt + 1, result.retryAfterMs, opts), opts.signal);
   }
   // Unreachable — the loop always returns — but keeps the type checker happy.
   return last as ChatCallResult;
+}
+
+/** Keep partial output/usage for diagnostics, never present it as success. */
+export function abortedChatResult(last?: ChatCallResult): ChatCallResult {
+  return { ...last, content: last?.content ?? '', latencyMs: last?.latencyMs ?? 0,
+    errorBody: 'Provider call cancelled.', finishReason: 'aborted' };
 }
 
 function hasRateLimitMarker(body: string): boolean {
@@ -109,6 +120,15 @@ function backoffDelayMs(attempt: number, retryAfterMs: number | undefined, opts:
   return Math.max(0, Math.round(baseExp + jit));
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
 }

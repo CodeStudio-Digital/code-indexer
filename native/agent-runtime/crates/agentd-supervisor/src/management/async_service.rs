@@ -18,6 +18,7 @@ use super::{
     SupervisorOnlineLifecycleTimer,
 };
 
+mod authority;
 mod dispatch;
 mod launch;
 mod service_loop;
@@ -52,6 +53,7 @@ pub enum SupervisorAsyncServiceAdvance<P> {
     Replay,
     LaunchResolved(SupervisorDriverStep),
     TerminationScheduled(SupervisorDriverStep),
+    AuthorityUpdated(SupervisorDriverStep),
     ManagementAcknowledged,
     ChannelDraining(AsyncManagementActorError),
     DriverFailure(SupervisorDriverError<P>),

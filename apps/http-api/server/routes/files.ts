@@ -45,6 +45,18 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
+  app.get('/api/projects/:id/file-paths', async (c) => {
+    try {
+      return c.json(await h.searchPaths({
+        projectId: parseIdParam(c), query: c.req.query('query') ?? '',
+        limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+        fuzzy: c.req.query('fuzzy') !== 'false',
+      }, createContext()));
+    } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
   app.get('/api/projects/:id/manifest', async (c) => {
     try {
       return c.json(await h.manifest({ projectId: parseIdParam(c) }, createContext()));

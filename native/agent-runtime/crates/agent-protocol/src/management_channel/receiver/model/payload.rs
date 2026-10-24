@@ -83,6 +83,14 @@ impl ValidatedManagementPayload {
     }
 
     #[must_use]
+    pub const fn update_attempt_authority(&self) -> Option<&wire::UpdateAttemptAuthority> {
+        match &self.body {
+            wire::management_payload::Body::UpdateAttemptAuthority(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub const fn fence_attempt_process(&self) -> Option<&wire::FenceAttemptProcess> {
         match &self.body {
             wire::management_payload::Body::FenceAttemptProcess(value) => Some(value),

@@ -157,10 +157,12 @@ export function peekCoderWorkerPool(): CoderWorkerPool | null {
  */
 export function setCoderWorkerDocDeps(
   deps: {
+    documentExport?: CoderWorkerDocDeps['documentExport'];
+    projectIndex?: CoderWorkerDocDeps['projectIndex'];
+    agentReads?: CoderWorkerDocDeps['agentReads'];
     docSearch?: CoderWorkerDocDeps['docSearch'];
     docsResearch?: CoderWorkerDocDeps['docsResearch'];
     vision?: CoderWorkerDocDeps['vision'];
-    spriteStudioHost?: CoderWorkerDocDeps['spriteStudioHost'];
     memoryRetriever?: CoderWorkerDocDeps['memoryRetriever'];
     memoryQuerySynthesizer?: CoderWorkerDocDeps['memoryQuerySynthesizer'];
     runEndMemory?: CoderWorkerDocDeps['runEndMemory'];
@@ -173,9 +175,11 @@ export function setCoderWorkerDocDeps(
     return;
   }
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
+  if (deps.documentExport !== undefined) docDeps.documentExport = deps.documentExport;
+  if (deps.projectIndex !== undefined) docDeps.projectIndex = deps.projectIndex;
+  if (deps.agentReads !== undefined) docDeps.agentReads = deps.agentReads;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
   if (deps.vision !== undefined) docDeps.vision = deps.vision;
-  if (deps.spriteStudioHost !== undefined) docDeps.spriteStudioHost = deps.spriteStudioHost;
   if (deps.memoryRetriever !== undefined) docDeps.memoryRetriever = deps.memoryRetriever;
   if (deps.memoryQuerySynthesizer !== undefined) docDeps.memoryQuerySynthesizer = deps.memoryQuerySynthesizer;
   if (deps.runEndMemory !== undefined) docDeps.runEndMemory = deps.runEndMemory;

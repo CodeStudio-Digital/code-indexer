@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { sanitizeCheckpointValue } from '../orchestration-checkpoint-redaction.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { FsSessionStore } from '../../sessions/fs-store/fs-session-store.js';
@@ -15,6 +17,9 @@ import {
   peekSessionGroupCountForTests,
   retainCompletedTranscripts,
   retainGroup,
+  reloadGroupUnderLease,
+  tryAcquireResume,
+  releaseResume,
   stopResumeSweepForTests,
   type ResumableAgentState,
   type ResumableGroup,
@@ -112,6 +117,26 @@ afterEach(async () => {
   stopResumeSweepForTests();
   vi.useRealTimers();
   rmSync(temporaryRoot, { recursive: true, force: true });
+});
+
+it('retains native journal identities through the real checkpoint store and locked reload while redacting secrets', async () => {
+  const value = group(sid, ['completed', 'max_turns']);
+  for (const agent of value.agents) {
+    agent.transcript = undefined;
+    agent.nativeTranscriptRef = `native-child-journal:${sid}:${randomUUID()}:${randomUUID()}:${randomUUID()}`;
+    agent.task = 'Never disclose sk-proj-AbCdEf1234567890AbCdEf1234567890';
+  }
+  await retainGroup(sid, value, store);
+  const persisted = await store.loadOrchestrationCheckpoint(sid, 'subagent_resume', value.spawnId);
+  expect(persisted?.payload_json).not.toContain('sk-proj-');
+  for (const agent of value.agents) expect(persisted?.payload_json).toContain(agent.nativeTranscriptRef);
+  expect(await tryAcquireResume(sid, value.spawnId, store)).toBe(true);
+  try {
+    const restored = await reloadGroupUnderLease(sid, value.spawnId, store);
+    expect(restored?.agents.map(agent => agent.nativeTranscriptRef)).toEqual(value.agents.map(agent => agent.nativeTranscriptRef));
+    expect(restored?.agents[1].reason).toBe('max_turns');
+  } finally { await releaseResume(sid, value.spawnId, store); }
+  expect(sanitizeCheckpointValue({ nativeTranscriptRef: 'sk-proj-AbCdEf1234567890AbCdEf1234567890' }).nativeTranscriptRef).toBe('[REDACTED]');
 });
 
 describe('completed-transcript retention (P1)', () => {
@@ -343,6 +368,44 @@ describe('terminal-transcript spill to disk (part b)', () => {
 });
 
 describe('periodic worker-realm sweep (part a)', () => {
+  it.each(['native', 'legacy'] as const)('reads expired %s history without restoring resume authority', async runtime => {
+    const value = group(sid, ['max_turns']);
+    if (runtime === 'native') {
+      value.agents[0].transcript = undefined;
+      value.agents[0].nativeTranscriptRef = `native-child-journal:${sid}:${randomUUID()}:${randomUUID()}:${randomUUID()}`;
+    }
+    await retainGroup(sid, value, store);
+    const checkpoint = (await store.loadOrchestrationCheckpoint(sid, 'subagent_resume', value.spawnId))!;
+    await store.saveOrchestrationCheckpoint({ sessionId: sid, kind: 'subagent_resume', scopeId: value.spawnId,
+      privacyClass: 'session_private_redacted', payloadJson: checkpoint.payload_json, expiresAt: new Date(0).toISOString() });
+    await clearSession(sid);
+    expect(await getGroup(sid, value.spawnId, store)).toBeUndefined();
+    const restored = await findRetainedAgent(sid, value.spawnId, 1, store);
+    expect(restored).toBeDefined();
+    if (runtime === 'native') expect(restored!.nativeTranscriptRef).toBe(value.agents[0].nativeTranscriptRef);
+    else expect(renderAgentTranscript(restored!)).toContain('→ read_file');
+    expect(await listReadableGroups(sid, store)).toHaveLength(1);
+    expect(peekSessionGroupCountForTests(sid)).toBe(0);
+    expect(listResumable(sid)).toEqual([]);
+    expect(await tryAcquireResume(sid, value.spawnId, store)).toBe(false);
+    expect(await store.loadOrchestrationCheckpoint(sid, 'subagent_resume', value.spawnId)).toBeNull();
+  });
+
+  it('keeps exact history addresses after the RAM group limit while bounding the inventory', async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < 10; index++) {
+      const value = group(sid, ['completed']); value.spawnId += `-${index}`; ids.push(value.spawnId);
+      value.agents[0].transcript = undefined;
+      value.agents[0].nativeTranscriptRef = `native-child-journal:${sid}:${randomUUID()}:${randomUUID()}:${randomUUID()}`;
+      await retainGroup(sid, value, store);
+    }
+    expect(peekSessionGroupCountForTests(sid)).toBeLessThanOrEqual(8);
+    await clearSession(sid);
+    expect(await findRetainedAgent(sid, ids[0], 1, store)).toMatchObject({ reason: 'completed' });
+    expect(await listReadableGroups(sid, store)).toHaveLength(8);
+    expect(peekSessionGroupCountForTests(sid)).toBe(0);
+  });
+
   it('reclaims an idle session on the timer without any registry access', async () => {
     configureResumeRegistryForTests({ ttlMs: 1000, sweepIntervalMs: 10_000 });
     vi.useFakeTimers();

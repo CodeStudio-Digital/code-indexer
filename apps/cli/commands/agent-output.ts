@@ -1,6 +1,9 @@
-import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
-
 type OutputWriter = (chunk: string) => void;
+interface AgentToolEventSource {
+  on(event: 'tool_call_result', listener: (id: string, name: string, result: { content: string; isError?: boolean }, durationMs: number) => void): unknown;
+  on(event: 'goal_mutations_persisted', listener: (payload: { toolUseIds: string[] }) => void): unknown;
+  on(event: 'goal_mutations_persistence_failed', listener: (payload: { toolUseIds: string[]; message: string }) => void): unknown;
+}
 
 interface PendingGoalResult {
   name: string;
@@ -26,9 +29,17 @@ function preview(content: string): string {
  * the corresponding persistence acknowledgement.
  */
 export function wireAgentToolOutput(
-  runner: CoderRunner,
+  runner: AgentToolEventSource,
   write: OutputWriter,
 ): void {
+  const output = createAgentToolOutput(write);
+  runner.on('tool_call_result', output.result);
+  runner.on('goal_mutations_persisted', output.persisted);
+  runner.on('goal_mutations_persistence_failed', output.failed);
+}
+
+/** Presentation state accepts neutral events as well as the legacy emitter. */
+export function createAgentToolOutput(write: OutputWriter) {
   const pendingGoals = new Map<string, PendingGoalResult>();
   const earlySettlements = new Map<string, SettledGoalMutation>();
 
@@ -47,7 +58,7 @@ export function wireAgentToolOutput(
     write(`  ✖ ${label} persistence failed: ${message}\n\n`);
   };
 
-  runner.on('tool_call_result', (id, name, result, durationMs) => {
+  const result = (id: string, name: string, result: { content: string; isError?: boolean }, durationMs: number) => {
     if (result.isError || !GOAL_TOOLS.has(name)) {
       const prefix = result.isError ? '  ✖' : '  ✓';
       write(`${prefix} (${durationMs}ms) ${preview(result.content)}\n\n`);
@@ -67,9 +78,9 @@ export function wireAgentToolOutput(
     write(
       `  … ${name} returned (${durationMs}ms); awaiting durable goal commit\n\n`,
     );
-  });
+  };
 
-  runner.on('goal_mutations_persisted', ({ toolUseIds }) => {
+  const persisted = ({ toolUseIds }: { toolUseIds: string[] }) => {
     for (const id of toolUseIds) {
       const goal = pendingGoals.get(id);
       if (!goal) {
@@ -79,9 +90,9 @@ export function wireAgentToolOutput(
       pendingGoals.delete(id);
       renderGoalCommit(goal);
     }
-  });
+  };
 
-  runner.on('goal_mutations_persistence_failed', ({ toolUseIds, message }) => {
+  const failed = ({ toolUseIds, message }: { toolUseIds: string[]; message: string }) => {
     for (const id of toolUseIds) {
       const goal = pendingGoals.get(id);
       if (!goal) {
@@ -91,5 +102,6 @@ export function wireAgentToolOutput(
       pendingGoals.delete(id);
       renderGoalFailure(id, goal, message);
     }
-  });
+  };
+  return { result, persisted, failed };
 }

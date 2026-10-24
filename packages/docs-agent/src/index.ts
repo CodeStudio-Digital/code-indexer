@@ -21,7 +21,7 @@
  */
 import os from 'node:os';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
@@ -102,18 +102,24 @@ export async function runDocsAgent(
   // Build a placeholder for the abort handle so we can wire `handle.abort`
   // before the runner exists.
   let runnerRef: CoderRunner | null = null;
+  const controller = new AbortController();
+  const parentSignal = asAbortSignal(opts.signal);
+  const signal = parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal;
   const abortHandle = (): void => {
+    controller.abort(new Error('Docs research cancelled'));
     runnerRef?.abort();
   };
 
   const done = (async (): Promise<DocsResearchResult> => {
     try {
+      signal.throwIfAborted();
       // 1. Resolve provider binding (scorer_llm).
       const binding = await deps.pipelineResolver.resolveOrNull(
         'docs_research',
         'scorer_llm',
         opts.resolveContext ?? {},
       );
+      signal.throwIfAborted();
       if (!binding) {
         return finalizeFailed(
           sessionsStore,
@@ -130,6 +136,7 @@ export async function runDocsAgent(
       //    `createCoderProvider` which dispatches through the same factory
       //    the coder uses.
       const provider = await createCoderProvider(binding.provider.id, binding.modelId);
+      signal.throwIfAborted();
 
       // 3. Build the toolset.
       const tools = buildDocsToolset({
@@ -163,7 +170,7 @@ export async function runDocsAgent(
         // AbortSignal loses its EventTarget methods when structured-cloned.
         // The worker RPC now rehydrates a local signal, while this guard keeps
         // rolling-restart/third-party callers from poisoning ToolContext.
-        signal: asAbortSignal(opts.signal),
+        signal,
       };
 
       // 7. Construct the runner. Deliberately omit sessionStore — the
@@ -192,6 +199,7 @@ export async function runDocsAgent(
       //    - opts.signal aborted
       //    - the provider returned a stop_sequence
       const runResult = await runner.run();
+      signal.throwIfAborted();
       const turns = Math.max(0, runner.messages.filter((m) => m.role === 'assistant').length);
 
       // 10. Map slot → result.
@@ -206,7 +214,9 @@ export async function runDocsAgent(
           binding,
           deps.docStore,
           counters,
+          signal,
         );
+        signal.throwIfAborted();
         const result: DocsResearchResult = {
           sessionId,
           markdown: reviewed.markdown,
@@ -259,7 +269,7 @@ export async function runDocsAgent(
         sessionId,
         startedAt,
         counters,
-        'failed',
+        signal.aborted ? 'aborted' : 'failed',
         `runDocsAgent crashed: ${message}`,
       );
     }
@@ -292,7 +302,9 @@ async function runFidelityReview(
   binding: ResolvedBinding,
   docStore: DocStore,
   counters: DocsToolsetCounters,
+  signal?: AbortSignal,
 ): Promise<{ markdown: string; confidence: ResearchConfidence }> {
+  signal?.throwIfAborted();
   if (process.env.DOCS_REVIEW_GATE === '0') {
     return { markdown: payload.markdown, confidence: payload.confidence };
   }
@@ -302,6 +314,7 @@ async function runFidelityReview(
     content: c.content,
   }));
   const review = await reviewAnswer({
+    signal,
     query,
     markdown: payload.markdown,
     chunks,

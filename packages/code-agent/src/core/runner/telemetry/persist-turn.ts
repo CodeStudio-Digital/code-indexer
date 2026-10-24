@@ -26,7 +26,7 @@ import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 import type {
   FsTurnTelemetryInput,
   FsTurnTelemetrySink,
-} from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
+} from '@mcp/session-storage/fs-store/turn-telemetry.js';
 import type { SessionId } from '@mcp/session-storage';
 
 export interface PersistTurnTelemetryArgs {

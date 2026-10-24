@@ -24,10 +24,14 @@ import {
   UnsafeSessionPathError,
 } from './path-safety.js';
 import { SessionLocator } from './session-locator.js';
+import { readSessionProjection } from './read-session-projection.js';
 import {
   emptySessionMetricsSummary,
   readSessionMetricsSummarySync,
   rebuildSessionMetricsSummary,
+  calculateSessionMetricsProjection,
+  appendSessionMetric,
+  type SessionMetricsProjection,
 } from './metrics-summary.js';
 import {
   initialSessionMetadata,
@@ -39,6 +43,7 @@ import {
   readConversationSync,
   SessionWriter,
   type SessionWriterOptions,
+  type WriterProjection,
 } from './session-writer.js';
 import {
   newSessionId,
@@ -78,7 +83,6 @@ export const SESSION_BUNDLE_DIRECTORIES = [
   'memory',
   'subagents',
   'company',
-  'sprite',
 ] as const;
 
 /** @deprecated Use SESSION_BUNDLE_DIRECTORIES. */
@@ -95,7 +99,6 @@ export type SessionEntityDirectory =
   | 'memory'
   | 'subagents'
   | 'company'
-  | 'sprite'
   | 'metrics/turns'
   | 'metrics/provider_attempts'
   | 'metrics/pipeline_stages';
@@ -208,6 +211,7 @@ export class FileSessionRepository {
   readonly #writerOwnerId?: string;
   readonly #faultInjector?: SessionStorageFaultInjector;
   readonly #writers = new Map<string, Promise<SessionWriter>>();
+  readonly #metricProjections = new WeakMap<SessionWriter, SessionMetricsProjection>();
   readonly #sessionCache = new Map<string, SessionMetadata>();
   readonly #stateCache = new Map<string, SessionState>();
   readonly #metricsCache = new Map<
@@ -511,6 +515,13 @@ export class FileSessionRepository {
     this.#emit({ type: 'updated', location });
   }
 
+  async refreshSessionProjectionAsync(location: SessionLocation): Promise<void> {
+    const projection = await readSessionProjection(this.#locator, location);
+    this.#sessionCache.set(cacheKey(location), projection.session);
+    this.#stateCache.set(cacheKey(location), projection.state);
+    this.#emit({ type: 'updated', location, projection });
+  }
+
   #writer(
     location: SessionLocation,
     options: { readonly allowMoving?: boolean } = {},
@@ -560,6 +571,11 @@ export class FileSessionRepository {
 
   async primeSession(location: SessionLocation): Promise<void> {
     await this.#writer(location);
+  }
+
+  async readWriterProjection<T>(location: SessionLocation, projection: WriterProjection<T>): Promise<T> {
+    const writer = await this.#writer(location);
+    return writer.readProjection(projection);
   }
 
   async artifactStore(location: SessionLocation): Promise<ArtifactStore> {
@@ -675,6 +691,10 @@ export class FileSessionRepository {
   ): Promise<SessionProjectionBatchResult> {
     const writer = await this.#writer(location);
     const result = await writer.runExclusive(async () => {
+      if (input.metrics_summary || input.entities?.some((entity) =>
+        entity.directory === 'metrics/turns' || entity.directory === 'metrics/provider_attempts')) {
+        this.#metricProjections.delete(writer);
+      }
       const updatedAt = new Date().toISOString();
       let session: SessionMetadata | null = null;
       let state: SessionState | null = null;
@@ -762,7 +782,7 @@ export class FileSessionRepository {
 
   /**
    * Serialize an operational entity mutation behind the session writer lease.
-   * This lets independent Company/App Studio/Sprite entity files retain their
+   * This lets independent Company/App Studio entity files retain their
    * own atomic writes while sharing one fencing boundary for the bundle.
    */
   async runExclusive<T>(
@@ -818,6 +838,7 @@ export class FileSessionRepository {
     directory: SessionEntityDirectory,
     id: string,
     value: JsonValue,
+    beforePublish?: () => void,
   ): Promise<string> {
     assertSafeFileName(id, 'entity id');
     assertSerializable(value);
@@ -827,20 +848,32 @@ export class FileSessionRepository {
       await ensureDirectoryTreeNoLinks(location.bundle_path, entityDirectory);
       const target = join(entityDirectory, `${id}.json`);
       assertContainedPath(entityDirectory, target);
-      await atomicWriteJson(target, value, {
-        faultInjector: this.#faultInjector,
-        context: { session_id: location.session_id },
-      });
-      if (
-        directory === 'metrics/turns'
-        || directory === 'metrics/provider_attempts'
-      ) {
-        await rebuildSessionMetricsSummary(
-          location.bundle_path,
-          location.session_id,
-          this.#faultInjector,
-        );
-        this.#metricsCache.delete(cacheKey(location));
+      const newMetric = !existsSync(target);
+      const metricDirectory = directory === 'metrics/turns' || directory === 'metrics/provider_attempts';
+      try {
+        await atomicWriteJson(target, value, {
+          beforePublish,
+          faultInjector: this.#faultInjector,
+          context: { session_id: location.session_id },
+        });
+        if (metricDirectory) {
+          const previous = this.#metricProjections.get(writer);
+          const projection = (newMetric && previous ? appendSessionMetric(previous, directory, value) : null)
+            ?? calculateSessionMetricsProjection(location.bundle_path);
+          await atomicWriteJson(join(location.bundle_path, 'metrics', 'summary.json'), projection.summary, {
+            faultInjector: this.#faultInjector,
+            context: { session_id: location.session_id },
+          });
+          this.#metricProjections.set(writer, projection);
+        }
+      } catch (error) {
+        // Even an entity write can fail after rename. Its durable outcome is
+        // ambiguous, so the next metric must rebuild instead of incrementing
+        // a projection that may have missed an already-published record.
+        if (metricDirectory) this.#metricProjections.delete(writer);
+        throw error;
+      } finally {
+        if (metricDirectory) this.#metricsCache.delete(cacheKey(location));
       }
       this.#emit({ type: 'updated', location });
       return target;
@@ -852,6 +885,7 @@ export class FileSessionRepository {
   ): Promise<SessionMetricsSummary> {
     const writer = await this.#writer(location);
     return writer.runExclusive(async () => {
+      this.#metricProjections.delete(writer);
       const summary = await rebuildSessionMetricsSummary(
         location.bundle_path,
         location.session_id,

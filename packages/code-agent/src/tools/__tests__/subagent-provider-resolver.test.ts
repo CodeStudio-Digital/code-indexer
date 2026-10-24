@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   createSubagentProviderResolver,
+  providerForProfile,
   resolveSubagentExecutionEffort,
   type ProfileLimitOverride,
   type SubagentTarget,
@@ -13,6 +14,12 @@ function fakeProvider(id: string, model?: string): ChatProvider {
 }
 
 describe('createSubagentProviderResolver', () => {
+  it('honors an explicit parent-provider profile over the legacy default override', async () => {
+    const parent = fakeProvider('parent', 'chosen'), fallback = fakeProvider('legacy-default', 'other');
+    expect(await providerForProfile({ provider: parent, parentTools: [], subagentProvider: fallback,
+      resolveProviderForProfile: async () => undefined }, 'review')).toBe(parent);
+    expect(await providerForProfile({ provider: parent, parentTools: [], subagentProvider: fallback }, 'review')).toBe(fallback);
+  });
   it('builds one provider per distinct target and memoizes by providerId:model', async () => {
     const calls: string[] = [];
     const createProvider = async (providerId: string, model?: string) => {

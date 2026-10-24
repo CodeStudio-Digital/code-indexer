@@ -2,7 +2,7 @@
  * In-process Hono dispatcher — bridges IPC channels to the existing
  * Hono routes WITHOUT opening a TCP listener.
  *
- * Why: extracting every namespace (admin, docs, designSystem, company,
+ * Why: extracting every namespace (admin, docs, company,
  * workspace, …) into pure handlers in `@mcp/api-handlers` would take
  * days; meanwhile, the IPC bridge needs to cover every dashboard call.
  * Hono exposes a `.fetch(Request) → Promise<Response>` API that runs
@@ -133,11 +133,6 @@ export const DISPATCH_TABLE: Record<string, DispatchSpec> = {
   'docs.search':               { method: 'POST',   url: ()  => `/api/docs/search`, body: json },
   'docs.research.stream':      { method: 'POST',   url: ()  => `/api/docs-agent/research/stream`, body: json },
 
-  // ─── designSystem.* ─────────────────────────────────────────
-  'designSystem.list':            { method: 'GET',  url: ()  => `/api/design-system/components` },
-  'designSystem.get':             { method: 'GET',  url: (i) => `/api/design-system/components/${num(i, 'id')}` },
-  'designSystem.tokens':          { method: 'GET',  url: ()  => `/api/design-system/tokens` },
-  'designSystem.generateVariant': { method: 'POST', url: ()  => `/api/design-system/generate`, body: json },
 
   // ─── company.* ──────────────────────────────────────────────
   'company.sessions.list':       { method: 'GET',  url: (i) => `/api/company/sessions${qs(i, ['projectId', 'archived'])}` },

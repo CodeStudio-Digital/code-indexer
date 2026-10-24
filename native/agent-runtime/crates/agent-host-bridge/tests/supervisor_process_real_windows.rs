@@ -93,6 +93,7 @@ fn bridge_request(
         supervisor_executable: supervisor_executable.to_string_lossy().into_owned(),
         runner_executable: runner_executable.to_string_lossy().into_owned(),
         startup_timeout_ms: 10_000,
+        lifecycle_outbox_directory: String::new(),
     }
 }
 

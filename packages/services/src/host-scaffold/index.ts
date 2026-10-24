@@ -19,8 +19,6 @@ export {
 } from './builder-inject.js';
 export { runHostCommand } from './run-host-command.js';
 export type { RunHostCommandResult } from './run-host-command.js';
-export { upsertNpmrcScopedRegistry, removeNpmrcScopedRegistry, packageScope } from './npmrc.js';
-export { installDsPackage, uninstallDsPackage } from './ds-consumer-install.js';
 export { INSTALL_TIMEOUT_MS, NON_INTERACTIVE_ENV } from './templates/types.js';
 export { validateScaffoldInput, ScaffoldValidationError } from './validate.js';
 export type { ScaffoldInput } from './validate.js';
@@ -29,16 +27,5 @@ export type { ResolvedTarget } from './paths.js';
 export { slugify } from './slugify.js';
 export { TEMPLATE_IDS, isTemplateId, getHostTemplate } from './templates/registry.js';
 export type { TemplateId, HostTemplate } from './templates/types.js';
-export {
-  scaffoldDsStudioWorkspace,
-  buildReactWorkspaceFiles,
-  buildVueWorkspaceFiles,
-  renderDsStudioViteConfig,
-} from './ds-studio/index.js';
-export type {
-  DsStudioScaffoldInput,
-  DsStudioScaffoldOutcome,
-  DsStudioStack,
-} from './ds-studio/index.js';
 export { scaffoldAppStudioWorkspace } from './app-studio/index.js';
 export type { AppStudioScaffoldInput, AppStudioScaffoldOutcome } from './app-studio/index.js';

@@ -17,8 +17,9 @@
  * were removed after their grace release — the unknown-tool error lists
  * the valid names, so a stale agent self-corrects to the unified tools.
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { buildUnifiedKanbanTools } from './kanban-tools.js';
 

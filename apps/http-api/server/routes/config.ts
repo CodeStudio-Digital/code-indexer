@@ -3,8 +3,7 @@
  *
  * The dashboard runs in the browser (no `process.env`), so any toggle that
  * the user expects to control via env vars on the server has to be fetched
- * over the wire. Today this serves the Design System master switch; the
- * shape is open-ended so adding more flags is additive.
+ * over the wire.
  */
 import { Hono } from 'hono';
 import type { ServerDeps } from '../deps.js';

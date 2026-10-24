@@ -5,6 +5,19 @@ use super::{
 use crate::process_table::OwnershipKey;
 
 impl SupervisorDriverState {
+    pub(in crate::management::driver) fn can_renew_authority(
+        &self,
+        key: &OwnershipKey,
+        now_unix_ms: i64,
+    ) -> bool {
+        self.cleanup.iter().any(|entry| {
+            &entry.key == key
+                && entry.phase == CleanupPhase::Grace
+                && entry.trigger == CleanupTrigger::AuthorityWatchdog
+                && entry.deadline_at_unix_ms > now_unix_ms
+        })
+    }
+
     #[must_use]
     pub fn next_cleanup_deadline_unix_ms(&self) -> Option<i64> {
         earliest_deadline(

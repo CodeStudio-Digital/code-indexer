@@ -1,0 +1,12 @@
+
+ RUN  v4.1.4 D:/MCP
+
+(node:103516) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+·············
+
+ Test Files  4 passed (4)
+      Tests  13 passed (13)
+   Start at  15:06:12
+   Duration  8.78s (transform 1.59s, setup 1.54s, import 6.38s, tests 1.20s, environment 0ms)
+

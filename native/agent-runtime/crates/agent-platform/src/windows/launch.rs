@@ -49,6 +49,44 @@ impl PreparedLaunch {
 }
 
 fn command_line(launch: &ContainedLaunch) -> Result<Vec<u16>, WindowsContainmentError> {
+    // cmd /S /C uses its own command grammar, not CommandLineToArgvW. CRT
+    // backslash escaping would change embedded quotes and user redirections.
+    if launch
+        .executable
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("cmd.exe"))
+        && launch.arguments.len() == 4
+        && launch.arguments[..3]
+            .iter()
+            .zip(["/d", "/s", "/c"])
+            .all(|(arg, expected)| {
+                arg.to_str()
+                    .is_some_and(|arg| arg.eq_ignore_ascii_case(expected))
+            })
+    {
+        let mut result = Vec::new();
+        // lpApplicationName still selects the absolute executable. cmd scans
+        // slash switches even inside argv[0], so a forward-slash path there
+        // can accidentally be interpreted as /C followed by another command.
+        result.extend("\"cmd.exe\" /d /s /c \"".encode_utf16());
+        for unit in launch.arguments[3].encode_wide() {
+            if unit == 0 {
+                return Err(WindowsContainmentError::InvalidLaunch(
+                    "command contains NUL",
+                ));
+            }
+            if result.len() >= MAX_COMMAND_LINE_UNITS - 2 {
+                return Err(WindowsContainmentError::CommandLineTooLong {
+                    units: result.len() + 3,
+                    maximum: MAX_COMMAND_LINE_UNITS,
+                });
+            }
+            result.push(unit);
+        }
+        result.extend([DOUBLE_QUOTE, 0]);
+        return Ok(result);
+    }
     let mut units = quoted_length(launch.executable.as_os_str())?;
     for argument in &launch.arguments {
         let argument_units = quoted_length(argument)?;

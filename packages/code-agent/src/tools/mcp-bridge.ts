@@ -1,8 +1,10 @@
+import { listMcpResourcePage, readMcpResource } from './mcp-resource-bridge.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   CoderTool,
   ToolContext,
@@ -10,7 +12,14 @@ import type {
   ToolSourceTruncation,
 } from '@mcp/code-agent/core/tool.js';
 import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
+import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
+import { internalMcpContract } from './internal-mcp-contract.js';
+import { INTERNAL_MCP_CATALOG } from './generated/internal-mcp-catalog.js';
+import { invokeOwnedDocumentExport } from './owned-document-export.js';
+import { invokeOwnedProjectIndex } from './owned-project-index.js';
+import { invokeOwnedMemorySave } from './owned-memory-save.js';
+import { AGENT_READ_NAMES, type AgentReadName } from '../ports/agent-read-port.js';
 import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { getOverlayHandler } from '@mcp/code-agent/overlay/overlay-handlers.js';
@@ -161,8 +170,23 @@ export function stripInjectedProjectName(schema: JsonSchema): JsonSchema {
 export class McpToolBridge {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
+  private connecting: Promise<void> | null = null;
+  private closed = false;
+  private readonly lifetime = new AbortController();
 
-  async connect(serverScriptPath?: string): Promise<void> {
+  constructor(private readonly options: { deferConnection?: boolean } = {}) {}
+
+  connect(serverScriptPath?: string): Promise<void> {
+    if (this.closed) return Promise.reject(new Error('MCP bridge is closed'));
+    if (this.connecting) return this.connecting;
+    if (this.client) return Promise.resolve();
+    const pending = this.openConnection(serverScriptPath);
+    this.connecting = pending;
+    void pending.finally(() => { if (this.connecting === pending) this.connecting = null; }).catch(() => undefined);
+    return pending;
+  }
+
+  private async openConnection(serverScriptPath?: string): Promise<void> {
     const scriptPath = serverScriptPath ?? findServerScript();
     // When dev:server runs via `tsx watch`, findServerScript() resolves to
     // src/apps/mcp-server/index.ts. Spawning that with plain `node` fails
@@ -194,7 +218,40 @@ export class McpToolBridge {
       env,
     });
     this.client = new Client({ name: 'coder-agent', version: '0.1.0' }, { capabilities: {} });
-    await this.client.connect(this.transport);
+    const client = this.client;
+    try {
+      await client.connect(this.transport, { signal: this.lifetime.signal, timeout: 10_000 });
+      this.lifetime.signal.throwIfAborted();
+      if (this.options.deferConnection) {
+        const live = await client.listTools(undefined, { signal: this.lifetime.signal, timeout: 10_000 });
+        const metadata = live.tools.map(({ name, description, inputSchema }) => ({ name, description: description ?? '', inputSchema }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        if (!isDeepStrictEqual(metadata, INTERNAL_MCP_CATALOG)) throw new Error('Built-in MCP catalog differs from its prepared snapshot');
+      }
+    } catch (cause) {
+      await client.close().catch(() => undefined);
+      if (this.client === client) { this.client = null; this.transport = null; }
+      throw cause;
+    }
+  }
+
+  private async readyClient(signal?: AbortSignal): Promise<Client> {
+    signal?.throwIfAborted();
+    if (this.closed) throw new Error('MCP bridge is closed');
+    if (this.options.deferConnection) {
+      const pending = this.connect();
+      let aborted: (() => void) | undefined;
+      try {
+        await (signal ? Promise.race([pending, new Promise<never>((_resolve, reject) => {
+          aborted = () => reject(signal.reason ?? new Error('MCP preparation cancelled'));
+          signal.addEventListener('abort', aborted, { once: true });
+          if (signal.aborted) aborted();
+        })]) : pending);
+      } finally { if (aborted) signal?.removeEventListener('abort', aborted); }
+    }
+    signal?.throwIfAborted();
+    if (!this.client || this.closed) throw new Error('MCP client disconnected');
+    return this.client;
   }
 
   async listTools(ctx: {
@@ -202,8 +259,11 @@ export class McpToolBridge {
     projectRoot?: string;
     overlay?: SessionOverlay;
   }): Promise<CoderTool[]> {
-    if (!this.client) throw new Error('McpToolBridge not connected');
-    const res = await this.client.listTools();
+    if (this.closed) throw new Error('MCP bridge is closed');
+    if (!this.options.deferConnection && !this.client) throw new Error('McpToolBridge not connected');
+    const res = this.options.deferConnection
+      ? { tools: structuredClone(INTERNAL_MCP_CATALOG) }
+      : await this.client!.listTools();
 
     // Sort by name so the tools array is bit-stable across sessions — critical
     // for prompt caching (ZAI/GLM auto-cache and Anthropic ephemeral cache both
@@ -217,27 +277,42 @@ export class McpToolBridge {
       const publicSchema = stripInjectedProjectName(schema);
 
       const overlayHandler = getOverlayHandler(t.name);
+      const contract = internalMcpContract(t.name);
 
       return {
         name: `mcp__${t.name}`,
         description: terseDescription(t.description ?? ''),
         parameters: publicSchema,
         source: 'mcp',
+        ...contract,
         capabilityProvenance: {
           kind: 'mcp_internal',
           providerId: 'code-indexer',
           provenanceRef: 'mcp-internal:code-indexer',
         },
         handler: async (args: Record<string, unknown>, toolCtx: ToolContext): Promise<ToolResult> => {
-          if (!this.client) {
-            return err('MCP client disconnected', {
-              code: 'MCP_DISCONNECTED',
-              kind: 'network',
-              retryable: true,
-              suggestedAction: 'Reconnect the MCP server before retrying.',
-            });
+          if (this.closed) return err('MCP bridge is closed', { code: 'MCP_CLOSED', kind: 'cancelled', retryable: false });
+          const signal = asAbortSignal(toolCtx.signal);
+          if (signal?.aborted) return err('MCP call cancelled before dispatch.', {
+            code: 'MCP_CALL_CANCELLED', kind: 'cancelled', retryable: false,
+          });
+          if (AGENT_READ_NAMES.includes(t.name as AgentReadName)) {
+            if (!toolCtx.agentReads) return err('Agent queries require the current application read port.');
+            try {
+              const value = await toolCtx.agentReads.read(t.name as AgentReadName, args, signal);
+              signal?.throwIfAborted();
+              return guardMcpToolResult(ok(JSON.stringify(value)), toolCtx);
+            } catch (error) { return err(`Agent query failed: ${error instanceof Error ? error.message : error}`); }
           }
-
+          if (t.name === 'export_docs' && toolCtx.mutationFence?.mode === 'enforce') {
+            return guardMcpToolResult(await invokeOwnedDocumentExport(args, toolCtx), toolCtx);
+          }
+          if (t.name === 'index_project' && toolCtx.mutationFence?.mode === 'enforce') {
+            return guardMcpToolResult(await invokeOwnedProjectIndex(args, toolCtx), toolCtx);
+          }
+          if (t.name === 'save_memory' && toolCtx.mutationFence?.mode === 'enforce') {
+            return guardMcpToolResult(await invokeOwnedMemorySave(args, toolCtx), toolCtx);
+          }
           const overlay = ctx.overlay ?? toolCtx.overlay;
           const projectRoot = ctx.projectRoot ?? toolCtx.cwd;
           const finalArgs = { ...args };
@@ -292,14 +367,28 @@ export class McpToolBridge {
           }
 
           // 2. Delegate to the real MCP server
+          let client: Client;
+          try { client = await this.readyClient(signal); }
+          catch (error) {
+            return err(`MCP preparation failed before dispatch: ${error instanceof Error ? error.message : error}`, {
+              code: signal?.aborted ? 'MCP_CALL_CANCELLED' : 'MCP_CONNECT_FAILED',
+              kind: signal?.aborted ? 'cancelled' : 'network', retryable: !signal?.aborted,
+            });
+          }
           let mcpText: string;
           let mcpSourceTruncations: ToolSourceTruncation[] = [];
           try {
-            const result = await this.client.callTool({ name: t.name, arguments: finalArgs });
+            const request = { name: t.name, arguments: finalArgs };
+            const result = signal
+              ? await client.callTool(request, undefined, { signal })
+              : await client.callTool(request);
             const text = (result.content as Array<{ type: string; text?: string }> | undefined)
               ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
               .map((c) => c.text!)
               .join('\n') ?? '';
+            if (contract.mutates && (result._meta as { effectOutcome?: unknown } | undefined)?.effectOutcome === 'unknown') {
+              return unknownToolOutcome(text || `MCP tool '${t.name}' lost effect confirmation at its owner.`);
+            }
             if (result.isError) {
               const message = text || 'MCP tool returned error';
               return err(message, inferToolErrorInfo(`mcp__${t.name}`, message));
@@ -309,6 +398,13 @@ export class McpToolBridge {
               (result as { _meta?: { sourceTruncations?: unknown } })._meta?.sourceTruncations,
             ).map(({ outputId: _remoteOutputId, ...source }) => source);
           } catch (e) {
+            if (contract.mutates) return unknownToolOutcome(
+              `MCP tool '${t.name}' lost confirmation after dispatch. Its effect may have completed. `
+              + 'Reconcile the original operation before authorizing another mutation.',
+            );
+            if (signal?.aborted) return err(`MCP read '${t.name}' was cancelled.`, {
+              code: 'MCP_CALL_CANCELLED', kind: 'cancelled', retryable: false,
+            });
             return err(`MCP tool '${t.name}' failed: ${e instanceof Error ? e.message : String(e)}`, {
               code: 'MCP_CALL_FAILED',
               kind: 'network',
@@ -332,61 +428,19 @@ export class McpToolBridge {
     });
   }
 
-  /**
-   * Return the list of static resources exposed by the connected MCP server,
-   * plus any URI templates. Falls through to an empty list when the server
-   * advertises no resources or when the call fails (e.g., older servers
-   * without resource support — the SDK throws "Method not found").
-   */
-  async listResources(): Promise<{
-    resources: Array<{ uri: string; name: string; description?: string; mimeType?: string }>;
-    templates: Array<{ uriTemplate: string; name: string; description?: string; mimeType?: string }>;
-  }> {
-    if (!this.client) throw new Error('McpToolBridge not connected');
-    let resources: Array<{ uri: string; name: string; description?: string; mimeType?: string }> = [];
-    let templates: Array<{ uriTemplate: string; name: string; description?: string; mimeType?: string }> = [];
-    try {
-      const res = await this.client.listResources();
-      resources = (res.resources ?? []).map((r) => ({
-        uri: r.uri, name: r.name, description: r.description, mimeType: r.mimeType,
-      }));
-    } catch {
-      // No resource capability — leave empty.
-    }
-    try {
-      const res = await this.client.listResourceTemplates();
-      templates = (res.resourceTemplates ?? []).map((t) => ({
-        uriTemplate: t.uriTemplate, name: t.name, description: t.description, mimeType: t.mimeType,
-      }));
-    } catch {
-      // No templates — leave empty.
-    }
-    return { resources, templates };
+  /** Request one bounded, cancellable resource page from the connected server. */
+  async listResources(options?: import('./mcp-resource-bridge.js').ResourcePageOptions) {
+    return listMcpResourcePage(await this.readyClient(options?.signal), options);
   }
 
-  /**
-   * Read a resource by URI. Returns the concatenated text contents (binary
-   * `blob` resources are reported as a placeholder line so the agent can see
-   * they exist without us trying to render them as text).
-   */
-  async readResource(uri: string): Promise<{ contents: string; mimeType?: string }> {
-    if (!this.client) throw new Error('McpToolBridge not connected');
-    const res = await this.client.readResource({ uri });
-    const parts: string[] = [];
-    let mimeType: string | undefined;
-    for (const c of res.contents ?? []) {
-      mimeType = mimeType ?? (c as { mimeType?: string }).mimeType;
-      if ('text' in c && typeof c.text === 'string') {
-        parts.push(c.text);
-      } else if ('blob' in c) {
-        const blob = (c as { blob: string }).blob;
-        parts.push(`[binary resource: ${blob.length} base64 chars, mimeType=${mimeType ?? 'unknown'}]`);
-      }
-    }
-    return { contents: parts.join('\n'), mimeType };
+  async readResource(uri: string, signal?: AbortSignal): Promise<{ contents: string; mimeType?: string }> {
+    return readMcpResource(await this.readyClient(signal), uri, signal);
   }
 
   async close(): Promise<void> {
+    this.closed = true;
+    this.lifetime.abort(new Error('MCP bridge closed'));
+    const pending = this.connecting;
     try {
       await this.client?.close();
     } catch {
@@ -394,6 +448,7 @@ export class McpToolBridge {
     }
     this.client = null;
     this.transport = null;
+    await pending?.catch(() => undefined);
   }
 }
 

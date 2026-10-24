@@ -33,7 +33,14 @@ function context(fileCount: number): ToolContext {
         languages: { typescript: fileCount },
       }),
       listFiles: () => files,
+      listAgentRepoMap: (_id: number, { offset = 0, limit = 100 }) => ({ items: files.slice(offset, offset + limit).map(f => ({
+        id: f.id, path: f.path, score: 1, is_entry_point: 0, dependent_count: 0, symbol_count: 1,
+        symbols: [{ name: 'create', kind: 'function', signature: 'create()', signature_characters: 8, line: 1 }],
+      })), total: files.length, offset, ...(offset + limit < files.length ? { nextOffset: offset + limit } : {}) }),
       listSnapshots: () => [],
+      listAgentIndexFiles: (_id: number, { offset = 0, limit = 200 }) => ({ items: files.slice(offset, offset + limit), total: files.length, offset, ...(offset + limit < files.length ? { nextOffset: offset + limit } : {}) }),
+      getAgentProjectShape: () => ({ topDirectories: [{ path: 'src', files: files.length }], keyFiles: files.slice(0, 8).map(f => f.path) }),
+      countSnapshots: () => 0,
       getDependents: () => [],
       getSymbolsByFile: (_projectId: number, path: string) => [{
         name: `create${path.replace(/\W/g, '')}`,
@@ -97,11 +104,11 @@ describe('MCP project output limits', () => {
     expect(limited.sourceTruncations![0].inputSize).toBeGreaterThan(80);
   });
 
-  it('does not impose a hidden 2k repo-map budget and reports an explicit budget exactly', async () => {
+  it('reports repo-map file paging and an explicit token budget independently', async () => {
     const tool = projectTools.find((candidate) => candidate.name === 'get_repo_map')!;
     const ctx = context(300);
 
-    const complete = await tool.handler({ project_name: project.name }, ctx);
+    const complete = await tool.handler({ project_name: project.name, limit: 300 }, ctx);
     const limited = await tool.handler({ project_name: project.name, max_tokens: 100 }, ctx);
 
     expect(typeof complete).toBe('string');
@@ -111,8 +118,10 @@ describe('MCP project output limits', () => {
     expect(typeof limited).toBe('object');
     if (typeof limited === 'string') throw new Error('Expected structured MCP result');
     expect(limited.sourceTruncations).toEqual([{
+      technique: 'mcp-repo-map-file-page', inputSize: 300, outputSize: 100, unit: 'items', recoverable: true,
+    }, {
       technique: 'mcp-repo-map-token-budget',
-      inputSize: complete.length,
+      inputSize: expect.any(Number),
       outputSize: 400,
       unit: 'chars',
       recoverable: true,

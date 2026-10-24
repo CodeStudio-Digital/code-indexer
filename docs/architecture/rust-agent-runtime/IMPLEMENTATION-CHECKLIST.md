@@ -1,10 +1,650 @@
 # Checklist mestre — Rust Agent Runtime
 
-> **Status inicial:** nenhum gate aprovado  
-> **Versão da implementação:** 1.36.0
+> **Entrega Coder Windows — 2026-10-23:** compactação durável e sete ferramentas
+> implementadas, catálogo 162/85; 10.000 turnos, pacote R12 e payload do instalador
+> aprovados. Estado e evidências atualizados no
+> [relatório desta entrega](./11-coder-windows-release-2026-10-23.md).
+> Os marcos abaixo preservam a história; não descrevem o checkout atual.
+> A certificação global, o canário e a retirada do legado continuam separados
+> da validação do Coder Windows em preview.
+
+> **Matriz r8 aprovada; correção posterior de retomada — 2026-10-08:** a matriz
+> do pacote passou com 155 nomes, 100 checkpoints recuperados, zero replay e
+> 621 processos naturais. Compatibilidade e CLI passaram (84 e 56 processos). O novo
+> teste de turnos executados encontrou perda dos metadados de truncamento na
+> projeção, que impedia retomar uma leitura parcial. A fonte foi corrigida;
+> sessões de 100 e 1.000 turnos passaram, incluindo reabertura e zero leituras
+> repetidas; 45 testes de regressão e typecheck passaram. A rodada de 10.000
+> falhou após 1.024 chamadas: o gateway limita a conversa a 2.048 mensagens.
+> O planejador Rust de compactação passou dez testes e a regressão do engine;
+> aplicação do resumo, capítulo durável e retomada ainda não estão conectados.
+> O limite não foi elevado e esse gate permanece aberto. Provider determinístico,
+> sem uso do perfil instalado. A correção ainda não integra o pacote r8.
+
+> **Correção para r8 — 2026-10-08:** a matriz empacotada r7 encontrou
+> `list_agents` ausente na preparação do chat comum. O registro foi corrigido
+> na fonte; r7 reprovado, r6 permanece a referência empacotada aprovada.
+> Cancelamento do DocsAgent, revisão final, busca, reescrita e reranking passou
+> 99 testes em 16 arquivos, com 20 processos encerrados naturalmente. Isso
+> melhora os serviços existentes e não conclui sua migração Rust. Build e
+> nova matriz r8 passaram posteriormente (marco acima). Instalação e padrão legado inalterados.
+
+> **Fonte para r7 — 2026-10-08:** catálogo 155/92, incluindo inventário da
+> árvore e espera por eventos. Passaram 334 testes, typecheck/build, 23 cenários
+> físicos da árvore e dois posteriores de inventário/espera entre irmãos.
+> Orçamento compartilhado validado no novo binário; planos/resultados limitados
+> antes dos efeitos, falhas de admissão injetadas antes/depois do commit.
+> Pacote r7 posteriormente reprovado; r6 segue como referência aprovada. Instalação e
+> padrão legado permanecem; sete ferramentas Coder, Company, DocsAgent,
+> MCP aninhado e gates globais continuam abertos.
+
+> **Fonte posterior ao r6 — 2026-10-08:** catálogo 153/94; execute_tasks passou
+> 319 testes, typecheck/build e Electron com quatro tarefas, três filhos nativos,
+> resultados longos, conclusão inline e restart sem relançar filhos. Sete
+> checkpoints, zero replay; 51 processos naturais. Checkpoint de admissão
+> permanente e leases impedem repetir efeitos incertos. A correção posterior
+> de classificação do orçamento da árvore passou testes Rust/gateway, ainda
+> sem validação física do novo binário. Pacote r6 e instalação não alterados.
+
+> **Pacote r6 confirmado — 2026-10-08:** 152 capacidades, incluindo workflow
+> e avaliador descartável de code_exec; 96 checkpoints, zero replay e 601
+> processos naturais. Compatibilidade e CLI passaram (84 e 56 processos).
+> Esse pacote é anterior à integração de execute_tasks documentada acima.
+> Nenhum instalador aplicado; padrão legado e gates globais permanecem.
+
+> **code_exec isolado — 2026-10-08:** fonte posterior ao r5 exige avaliador
+> descartável contido pelo Job Rust, preservando proxies e recusando fallback
+> para VM no worker nativo. Passaram 102 testes, typecheck/build, oito cenários
+> físicos (18 processos naturais) e chat/restart (sete checkpoints, zero replay,
+> 56 processos naturais). Loop infinito após await não bloqueou o timer Host.
+> Essa fonte ainda não está no pacote r5; gates globais continuam abertos.
+
+> **Workflow e pacote r5 — 2026-10-08:** catálogo atual 152/95. Workflow passou
+> DAG de escrita/verificação, referência durável antes do provider, recuperação
+> sem replay e bloqueio de efeito incerto. Regressão da árvore: 357 testes,
+> 22 cenários físicos, 222 processos naturais. Chat/restart: três attempts,
+> nenhum filho repetido, 47 processos naturais. Pacote r5 anterior ao workflow
+> passou 151 capacidades, 93 checkpoints e zero replay; 577 processos naturais.
+> Compatibilidade e CLI passaram, 84 e 56 processos naturais. Nenhum instalador
+> novo aplicado; padrão legado, certificação global e missão continuam abertos.
+
+> **Correção posterior ao r4 — 2026-10-08:** o r4 falhou no cancelamento de
+> pergunta pendente e não foi aprovado. A correção passou o fluxo Electron
+> completo de interações, revisão, conclusão e restart: 12 checkpoints, zero
+> replay, 82 processos naturais. Perda do stream também mantém o bloqueio de
+> efeitos sem recibo. Passaram 212 testes, typecheck e dois cenários Rust reais
+> de ACK incerto. Recuperação de 10.000 checkpoints sintéticos: 1.050–1.053 ms,
+> 18 payloads lidos; não equivale a 10.000 turnos reais. Evidências no relatório
+> de ferramentas. Catálogo 151/96, padrão e instalação continuam inalterados.
+
+> **Fonte posterior ao r3 — 2026-10-08:** revisão da sessão e conclusão de
+> tarefas passaram pelo chat, cancelamento e restart com dados isolados.
+> Escrita/patch respeitam o escopo da tarefa. Efeitos incertos bloqueiam retries
+> em filhos e workflows, inclusive após reabrir checkpoints: 182 testes e dois
+> cenários Rust reais passaram, com 21 processos físicos encerrados naturalmente.
+> Catálogo 151 (150 de entrada, 1 exclusivo dos filhos), 96 pendentes.
+> Regressão ampla: 3.065 testes em 362 arquivos, 547 processos naturais; build
+> passou com 69 processos naturais. Pacote r3 antecede essas mudanças.
+> Instalação e padrão legado inalterados; missão e certificação global abertas.
+
+> **Pacote árvore r3 confirmado — 2026-10-08:** matriz física passou com 89
+> checkpoints recuperados e zero replay do provider; 552 processos encerrados
+> naturalmente. Smoke/legado/RAG e CLI também passaram, com 84 e 56 processos.
+> Fonte posterior: `self_review` integrado, 173 testes, typecheck e build;
+> validação física posteriormente concluída (ver marco acima). Inventário desse
+> marco: 150 capacidades (149 na entrada, memo exclusivo dos filhos), 97 pendentes.
+> Padrão legado, instalação inalterada, certificação global ainda aberta.
+
+> **Fonte 148 / árvore integrada — 2026-10-08:** criação, retomada, revisão e
+> consulta de subagentes entraram no catálogo de desenvolvimento. Reservas
+> agregadas cobrem os Jobs dos executores e auxiliares do worker; leitura de
+> auditoria sobrevive à expiração sem renovar permissão de retomada. Passaram
+> 339 testes focados (17 cenários físicos), build e 3.031 testes amplos.
+> HTTP/SSE + worker + Electron passaram com cinco attempts Rust, escrita sem
+> replay e histórico após restart; 51 processos encerrados naturalmente.
+> O pacote anterior r2 confirmou a correção da referência sanitizada, mas
+> antecede o catálogo 148. A matriz empacotada posterior r3 passou. Este marco tinha catálogo 148 / 99,
+> padrão legado, instalação inalterada e missão ainda aberta.
+> [Evidências e limitações](./tool-improvements.md).
+
+> **Candidato journal verificado / árvore em implementação — 2026-10-08:**
+> pacote passou matriz com 84 checkpoints e zero replay, smoke, legado,
+> RAG e CLI. Instalador extraído: 4.935 arquivos iguais; não instalado.
+> Runner startup aquecido p95 20,162 ms, executor de leitura 0,234 ms e
+> cancel ACK ocioso 1,023 ms; escopos e limites no relatório de ferramentas.
+> Fonte posterior acrescenta transcrição limitada/cancelável, reserva durável
+> de filhos, isolamento do terminal do pai, validação da ancestralidade,
+> delegação de workspace com bloqueio das escritas do pai e contadores de
+> consumo compartilhados. 104 testes de autoridade e 58 das portas passaram.
+> Build e 3.013 testes amplos do adapter passaram (617 processos encerrados
+> naturalmente). Oito cenários físicos cobrem pai/filho, aprovação/negação,
+> cancelamento isolado, spawn_agent e read_agent_transcript reais. A referência
+> do journal é validada por reserva durável, sessão, ator e árvore; sobrevive
+> à reabertura e pode ser lida por uma nova execução, sem relançar o filho.
+> A fonte seguinte também passou a leitura pela ponte da interface após o pai
+> terminar: 37 testes e typecheck, 73 processos naturais. A retomada dos filhos
+> também passou 76 testes (dez cenários físicos) e typecheck: 101 processos
+> naturais, imagem preservada, escrita confirmada sem replay e reserva exclusiva
+> do checkpoint de origem. Lotes de filhos também passaram: 81 testes, incluindo
+> 12 cenários físicos com leitores simultâneos e escritores sequenciais;
+> 124 processos encerrados naturalmente. A rodada posterior passou 178 testes,
+> incluindo 16 cenários físicos: revisão, memo confirmado, netos com progresso
+> visível, leitura sem executor ativo e patch com escopo. Foram 170 processos
+> naturais; typecheck da leitura fria também passou. Ainda faltam
+> recursos agregados, superfícies restantes e prova empacotada da árvore.
+> Catálogo 144 / 103, padrão legado e gates abertos.
+> [Evidências e pendências](./tool-improvements.md).
+
+> **Pacote e instalador 144 com retomada — 2026-10-08:** matriz com 84 checkpoints
+> e zero replay, smoke, legado com worktree, RAG e cinco cenários CLI passaram.
+> Os 672 processos encerraram naturalmente; 4.935 arquivos extraídos do instalador
+> correspondem ao pacote. Não instalado. Fonte posterior compacta o índice do
+> journal, agrupa bootstrap SQLite e impede criação por junction externa:
+> 100.000 registros físicos, 18 testes SQLite, 33 de Git e clippy passaram;
+> restante da validação em andamento. Catálogo 144 / 103, padrão legado,
+> missão e gates globais abertos. [Evidências](./tool-improvements.md).
+
+> **Fonte posterior ao pacote 144 — 2026-10-08:** preparação de retomada usa
+> somente o último checkpoint completo e seus deltas, preservando a varredura
+> de todos os efeitos. Git de worktree no legado ficou assíncrono/cancelável;
+> falha de preparação não continua na pasta principal. Build, nove cenários
+> físicos Windows e 2.859 testes amplos passaram. Pacote posterior pendente;
+> catálogo permanece 144 / 103. [Medições e limites](./tool-improvements.md).
+
+> **Pacote 144 verificado / instalador 143 — 2026-10-08:** MCP interno abre sob demanda;
+> catálogo local, conexão compartilhada e encerramento físico comprovados.
+> `mcp__index_project` integrado ao projeto proprietário, com aprovação,
+> cancelamento, recibos e resultado incerto sem repetição. 182 testes focados,
+> 2.824 amplos e build passaram. Pacote: 84 checkpoints recuperados sem replay;
+> smoke, legado, RAG e cinco cenários CLI passaram, com 638 processos encerrados.
+> Retomada otimizada é fonte posterior ainda em validação; nada foi instalado.
+> Catálogo 144 habilitados / 103 pendentes. Padrão legado e gates globais abertos.
+> [Evidências e limites](./tool-improvements.md).
+
+> **Pacote e instalador 143 verificados — 2026-10-08:** matriz física passou
+> com 81 checkpoints e zero replay, junto de smoke, legado, RAG e cinco cenários
+> CLI. Os 721 processos dessas execuções encerraram. Os 4.935 arquivos extraídos
+> do instalador correspondem ao pacote testado. Não instalado; padrão legado.
+> Catálogo 143 habilitados / 104 pendentes, missão e gates globais abertos.
+> Preparação MCP sob demanda é fonte posterior, ainda em validação.
+> [Evidências, hashes e limites](./tool-improvements.md).
+
+> **Fonte 143 posterior — 2026-10-08:** rotas de jobs agora consultam o worker,
+> com páginas limitadas e seleção específica do job atual. 58 testes, build e
+> fixture de 10.000 jobs passaram: zero listagens no main, quatro consultas em
+> 28,1 ms nesta amostra. Leituras de agentes isoladas passaram antes/depois de
+> restart, incluindo outro projeto. Pacote anterior passou CLI/smoke/legado/RAG,
+> mas a matriz encontrou erros de fixture, corrigidos. Novo pacote pendente;
+> último instalador verificado continua 138. Missão e gates globais abertos.
+
+> **Fonte 143 / pacote certificado 138 — 2026-10-08:** quatro consultas de
+> agentes usam a aplicação e o projeto da sessão, com limites e cancelamento.
+> 178 testes focados, 2.743 testes amplos, build e fluxo físico passaram:
+> consultas antes/depois de restart, cinco checkpoints, zero replay. Catálogo
+> 143 habilitados / 104 pendentes. Pacote 139 r2 passou a matriz mas falhou em
+> RAG/CLI; correções de admissão fria e drain semântico passaram nos testes
+> focados e aguardam pacote 143. Último instalador certificado: 138, não
+> instalado. Missão e gates globais continuam abertos. [Provas](./tool-improvements.md).
+
+> **Fonte 139 / pacote 138 — 2026-10-08:** pacote de exportação aprovado com
+> 76 checkpoints, zero replay, cinco cenários CLI, smoke, legado e RAG. Instalador
+> conferido nos 4.935 arquivos, não instalado. Fonte posterior corrige relógio
+> compartilhado (514 testes Host + 12 focados, incluindo processos Rust) e integra
+> memória MCP (193 testes, build, fluxo físico com 7 checkpoints/zero replay e
+> 2.616 testes amplos passaram). Primeiro pacote 139 falhou na inicialização
+> nativa; correção separa o prazo de admissão física dos comandos (47 testes
+> focados e 522 Host passaram), ainda aguardando novo pacote. Catálogo
+> 139 habilitados / 108 pendentes. Missão e gates globais continuam abertos.
+> [Evidências e limitações](./tool-improvements.md).
+
+> **Atualização 2026-10-08 — fonte 138 / pacote 137:** exportação nativa integrada;
+> 148 testes focados, build e fluxo físico com 601 símbolos, aprovação dentro de
+> scripts, cancelamento, ACK perdido e restart passaram. Fonte 138 / 109 pendentes;
+> regressão ampla e pacote em preparação. Pacote 137 aprovado: 72 checkpoints,
+> zero replay, cinco cenários CLI, smoke, legado e RAG. Instalador 137 comparado
+> em todos os 4.935 arquivos, não instalado. [Provas](./tool-improvements.md).
+> Missão e gates globais continuam abertos.
+
+
+> **Fonte 137 — 2026-10-08:** code_exec integrado a autoridade nativa, com permissoes por chamada, budget compartilhado, drain fisico e incerteza persistente. 213 testes focados, 2.566 amplos, build e fluxo fisico com retomada passaram. Cancelamento e ACK perdido tambem passaram, com sete checkpoints e zero replay; 59 processos encerrados. Pacote em preparacao. Pacote anterior CLI 136 passou cinco cenarios CLI, matriz de 68 checkpoints, smoke, legado e RAG; nao instalado. [Provas](./tool-improvements.md). Missao e gates globais permanecem abertos.
+
+> **Pacote 136 — 2026-10-08:** especificações e retomada aprovadas na matriz
+> empacotada: 68 checkpoints, zero replay, UI com rejeição/aprovação/retry.
+> 509 processos encerrados; smoke, legado e RAG direto passaram, mais 60 encerrados.
+> Instalador comparado integralmente por SHA-256, não instalado. Fonte posterior
+> corrige resultado incerto em scripts e inclui CLI no ASAR; 77 e 29 testes
+> focados, além do build, passaram. Validação empacotada da CLI em preparação.
+> Catálogo 136 / 111; missão e gates globais continuam abertos.
+
+
+> **Atualização 2026-10-08:** pacote 135 com transferência de contexto em partes
+> aprovado na matriz (66 checkpoints, zero replay), smoke, legado e RAG direto.
+> Instalador conferido por SHA-256 em todos os 4.933 arquivos; não instalado.
+> A fonte posterior integra `submit_spec` (catálogo 136 / 111) e otimiza a retomada
+> pela última cadeia completa. 165 testes de especificação/política/interações e
+> 23 de recovery passaram, além de 2.540 testes amplos. Fluxo físico de
+> especificação, rejeição/aprovação e leitura/escrita após restart aprovado;
+> 69 processos encerrados. Pacote dessa fonte em preparação.
+> A missão e todos os gates globais permanecem abertos. [Provas](./tool-improvements.md).
+
+> **Pacote 135 / 112 — 2026-10-08:** nove ferramentas de tarefas/checklists,
+> aprovação identificada e limpeza preservada no restart. Corrigido também o
+> limite do writer que rejeitava checkpoints acima de 256 KiB. 182 testes focados,
+> 2.446 amplos e build aprovados. Matriz empacotada: 66 checkpoints, zero replay,
+> upgrade existente preservado; 491 processos encerrados sem cleanup forçado.
+> Smoke, legado e RAG direto aprovados, 60 processos encerrados. Instalador com
+> 4.933 arquivos comparados por SHA-256; não instalado. Nenhum gate global promovido.
+> Este registro descreve o pacote anterior de checkpoints; o pacote posterior de
+> contexto em partes foi validado conforme a atualização acima.
+
+> **Fonte posterior ao pacote 126 — 2026-10-07:** cancelamento encaminhado nas
+> revisões próprias/de subordinados, no provider e no failover; backoff cancelável,
+> listeners liberados e busca auxiliar aguardando encerramento real. Build e
+> 2.422 testes/297 arquivos aprovados; 68 processos do build e 386 da regressão
+> encerrados. Alterações incluídas no pacote 135 acima, sem admissão nativa dessas ferramentas.
+
+> **Pacote 126 / 121 — 2026-10-07:** `manage_path` nativo com rename exclusivo,
+> correção do upgrade 268 e fechamento de SQLite em falha de inicialização.
+> Build, 2.336 testes/287 arquivos, quatro testes físicos Rust e Clippy aprovados.
+> Matriz empacotada: 64 checkpoints, zero replay e upgrade de projeto existente
+> com dados preservados. Smoke, chat legado e RAG direto aprovados. Os 476
+> processos da matriz e 60 da compatibilidade encerraram. Instalador corrigido
+> gerado, sem instalação no PC. [Provas e limites](./tool-improvements.md).
+
+> **Regressão reportada pelo usuário — 2026-10-07:** o pacote 125 falha ao abrir
+> certos projetos existentes: migração 268 assume `semantic_jobs`, tabela
+> intencionalmente ausente no banco de projeto. Os testes anteriores cobriam
+> perfis novos e não certificavam esse upgrade. Correção no fonte, 13 testes
+> de banco e upgrade físico pelo chat no pacote 126 aprovados.
+> O pacote 125 não está aprovado para esse cenário de upgrade.
+
+> **Skills empacotadas — 2026-10-07:** pacote **125** aprovado: 63 checkpoints,
+> zero replay, smoke, legado e RAG direto. Os 468 processos da matriz e 60 da
+> compatibilidade encerraram. Essa aprovação histórica cobria perfis novos;
+> a regressão de upgrade acima exige o pacote 126. Fonte, hash e relatórios em
+> [provas](./tool-improvements.md). Instalação preservada.
+
+> **Memória empacotada — 2026-10-07:** pacote **124** aprovado: 60 checkpoints,
+> zero replay, smoke, legado e RAG direto. Os 450 processos da matriz e 60 da
+> compatibilidade encerraram naturalmente. Fonte **125 / 122** acrescenta criação
+> de skills com catálogo de gatilhos limitado e atualização sob autoridade;
+> 2.309 testes em 283 arquivos, build e fluxo físico de reinício aprovados.
+> Pacote de skills em preparação. Instalação do usuário e runtime padrão preservados.
+
+> **Memória e cleanup — 2026-10-07:** pacote **122** aprovado após retomar os
+> testes interrompidos: 59 checkpoints, zero replay, smoke, legado e RAG direto.
+> Job do Windows confirmou zero ativos entre 441 processos da matriz e 60 da
+> compatibilidade. Fonte **124 / 123** integra escrita/arquivo de memória,
+> com **2.291 testes em 281 arquivos**, build e teste físico de reinício aprovados.
+> Os 44 processos físicos, 68 do build e 370 da regressão encerraram. Pacote em curso.
+> Todos os testes novos registram PIDs e contêm a árvore inteira.
+> [Provas](./tool-improvements.md) e [cleanup](./test-process-ownership.md).
+
+> **Descoberta e dados de sessão — 2026-10-07:** pacote de **117 ferramentas**
+> aprovado: 58 checkpoints, zero replay, nenhum Electron de teste restante,
+> smoke, legado e RAG direto. Descoberta respeita o catálogo da attempt e replay
+> de histórico não dispara exportação de diagramas.
+> Fonte **122 / 125** acrescenta notas, planos e histórico: **2.220 testes em
+> 275 arquivos** e build aprovados; sessão legada preservada no fluxo físico,
+> incluindo capítulos, plano, notas e reinício. Novo pacote ainda pendente.
+> Instalação e runtime padrão preservados. [Provas](./tool-improvements.md).
+
+> **Leitores MCP — 2026-10-07:** pacote de 97 ferramentas aprovado na matriz
+> completa, smoke, legado e RAG direto; nenhum Electron de teste restante.
+> Hierarquia, implementações e corpo atual de símbolos levam a fonte a
+> **100 / 147**, em validação. Instalação do PC preservada. [Provas](./tool-improvements.md).
+
+> **Custos e modelos — 2026-10-07:** pacote de 94 ferramentas validado, com 49
+> checkpoints sem replay, nenhum Electron de teste restante, smoke, legado e
+> RAG direto aprovados. Diretórios passaram no produto; leitura e símbolos MCP
+> levam a fonte a **97 / 150**, ainda em validação. [Provas](./tool-improvements.md).
+
+> **LSP corrigido e validado no pacote — 2026-10-07:** o crash fatal do V8 foi
+> reproduzido e o candidato afetado reprovado. Novo pacote de 92 ferramentas usa
+> processo LSP contido: matriz com 47 checkpoints, zero replay, nenhum Electron
+> de teste restante, legado, RAG direto e 45 términos físicos aprovados. Custos
+> e modelos posteriores elevam a fonte a **94 / 153**, em validação. Runtime
+> padrão e instalação continuam legados. [Provas](./tool-improvements.md).
+
+> **Consultas estruturais MCP — 2026-10-07:** pacote com 89 ferramentas aprovado;
+> 47 checkpoints sem replay, nenhum processo Electron de teste restante, smoke
+> do ASAR e fallback legado aprovados. Os aliases de documentação posteriores
+> levam o catálogo fonte a **92 / 155**, com 1.891 testes aprovados; validação
+> física em andamento. [Provas e limites](./tool-improvements.md).
+
+> **Navegação de código — 2026-10-07:** pacote Windows com 84 ferramentas
+> aprovado; 46 checkpoints sem replay, nenhum processo Electron de teste restante.
+> Paginação, alterações em dependências, cancelamento e terminação do worker TS
+> real passaram; fallback legado e smoke do ASAR aprovados. As consultas
+> estruturais posteriores levam o catálogo fonte a **89 / 158**, com 1.880 testes
+> aprovados; a validação empacotada consta no registro acima. [Provas e limites](./tool-improvements.md).
+
+> **Diagnóstico e recursos MCP — 2026-10-07:** pacote Windows com 80 ferramentas
+> aprovado; 44 checkpoints sem replay, checker e descendente encerrados após
+> cancelamento, nenhum processo Electron de teste restante. Fallback legado e
+> smoke do ASAR aprovados. A integração LSP posterior eleva o catálogo fonte
+> a **84 / 163**, ainda em validação. [Provas e limites](./tool-improvements.md).
+
+> **Documentação indexada — continuação de 2026-10-06:** pacote Windows com 77
+> ferramentas validado, 42 checkpoints sem replay, nenhum processo de teste
+> remanescente. Paginação de documentos grandes e busca por projeto passaram
+> no produto; fallback legado e smoke do ASAR aprovados. A etapa posterior de
+> diagnóstico e recursos MCP leva o catálogo fonte a **80 / 167**; 1.857 testes
+> aprovados, validação física em andamento. [Provas e limites](./tool-improvements.md).
+
+> **Web pública — continuação de 2026-10-06:** pacote Windows com 74 ferramentas
+> validado, 41 checkpoints sem replay, nenhum processo de teste remanescente.
+> Sobreposição de leituras HTTPS, publicação individual, cancelamento e fechamento
+> dos sockets passaram; fallback legado e smoke real dos workers no ASAR também.
+> A documentação indexada posterior eleva o catálogo fonte a **77 / 170**;
+> regressão de 1.823 testes aprovada, etapa física em validação. Default legado
+> e instalação preservados. [Provas e limites](./tool-improvements.md).
+
+> **Coleções de API — continuação de 2026-10-06:** pacote Windows com 72
+> ferramentas validado, 39 checkpoints sem replay e nenhum processo de teste
+> remanescente. Importação, execução, login, cancelamento de rede e scripts,
+> ACK perdido e fallback legado passaram. QuickJS executa no ASAR em worker
+> isolado; 1.756 testes na regressão ampla. A integração posterior de web
+> está validada conforme o registro acima. Default legado e
+> instalação do usuário preservados. [Provas e limites](./tool-improvements.md).
+
+> **HTTP nativo — continuação de 2026-10-06:** 65 ferramentas habilitadas no
+> pacote Windows validado, 34 checkpoints recuperados sem replay e sem processos
+> de teste remanescentes. Cookies, cancelamento, perda de ACK e bloqueio de
+> retomada comprovados; fallback legado aprovado. Regressão ampla: 1.599 testes.
+> As sete ferramentas de API posteriores elevam o catálogo fonte a **72 / 175**;
+> ainda estão em validação, incluindo correção do módulo de scripts no Electron.
+> [Provas e limites](./tool-improvements.md).
+
+> **Recuperação nativa de resultados grandes — continuação de 2026-10-06:**
+> `get_tool_output` lê conteúdo confirmado pelo writer Rust, inclusive após
+> restart e alteração da fonte. Falha de persistência não publica um ID como
+> durável. 82 testes focados, 1.585 na regressão ampla e fluxo físico aprovados.
+> Catálogo dessa etapa: **64 habilitadas / 183 pendentes**. Matriz empacotada
+> e fallback legado aprovados: 30 checkpoints sem replay e nenhum processo de
+> teste remanescente. A etapa HTTP posterior está registrada acima.
+
+> **Bancos nativos — continuação de 2026-10-06:** quatro ferramentas integradas
+> com conexões privadas por attempt, revisão do cadastro, segredos no gateway e
+> barreira de resultado incerto. SQLite executa em processo contido pelo Rust;
+> Redis não repete comandos cuja confirmação foi perdida. Fluxo físico do
+> produto passou em conclusão, cancelamento, ACK perdido e restart, preservando
+> conexões emprestadas. Catálogo atual: **63 habilitadas / 184 pendentes**.
+> Matriz empacotada aprovada: 29 checkpoints sem replay, nenhum processo de
+> teste remanescente, fallback legado aprovado no mesmo pacote. Regressão ampla:
+> 1.572 testes. Todos os engines remotos e gates de rollout seguem abertos.
+> [Provas e limites](./tool-improvements.md).
+
+> **Browser nativo — continuação de 2026-10-06:** oito ferramentas integradas
+> com contextos isolados por attempt e fechamento confirmado. Teste físico
+> Rust/Electron/Chrome passou em conclusão, cancelamento, ACK perdido e restart;
+> seis checkpoints recuperados sem replay, nenhum processo de teste restante.
+> Catálogo atual: **59 habilitadas / 188 pendentes**, entre 247 nomes próprios.
+> Regressão ampla: 1.533 testes; build e matriz empacotada aprovados: 25 checkpoints
+> recuperados sem replay. Fallback legado aprovado no mesmo pacote.
+> O runtime padrão e a instalação do usuário permanecem os certificados anteriores.
+> [Provas e limites](./tool-improvements.md).
+
+> **Preview nativo no checkout — continuação de 2026-10-06:** 22 ferramentas
+> integradas à autoridade da attempt, com fencing no CDP, janelas isoladas e
+> servidores em Jobs nativos. 132 testes focados e fluxo físico Rust/Electron
+> das 22 ferramentas passaram, inclusive cancelamento e ausência de órfãos.
+> Catálogo atual: **51 habilitadas / 196 pendentes**, entre 247 nomes próprios.
+> Matriz empacotada, ACK perdido e restart aprovados: 22 checkpoints recuperados,
+> nenhuma repetição do efeito incerto e nenhum órfão. Regressão ampla: 1.497 testes.
+> Há também correções posteriores de bancos, com 213 testes aprovados, ainda fora
+> desse pacote. Os instaladores anteriores continuam preservados.
+> [Provas atuais](./tool-improvements.md).
+
+> **Persistência e ferramentas no pacote em 2026-10-06:** fs-store e contratos
+> puros de compactação foram extraídos para session-storage, preservando APIs e
+> formatos. Passaram 1.444 testes de ferramentas, 268 de persistência/consumidores
+> e 21 cenários Rust físicos. O pacote separado validou os 22 previews em Electron
+> real, a matriz Rust com 19 checkpoints recuperados sem replay e o fallback
+> legado. Catálogo nativo continua com 29 nomes; integração das demais famílias
+> e gates globais permanecem abertos. [Provas e limites](./tool-improvements.md).
+
+> **Instalador de ferramentas separado:**
+> `dist/electron-tools-review-20261006/CodeStudio-Tools-Candidate-2026-10-06.exe`.
+> Seus 4.856 arquivos conferem com o pacote testado. O código desse pacote
+> preservou 30 tabelas de configuração numa nova cópia do banco e leu os 16
+> journals da amostra anterior. Instalador sem Authenticode, não executado;
+> perfil e aplicativo instalados continuam intactos. [Detalhes](./tool-improvements.md#entrega-e-instalação).
+
+> **Todas as ferramentas em 2026-10-06:** inventário reproduzível registra 247
+> nomes próprios, com 29 habilitados no Rust de desenvolvimento e 218 pendentes.
+> Melhorias comuns de cancelamento, MCP, preview/browser, streaming de plugins e
+> pools de banco estão no checkout, posteriores ao instalador congelado.
+> [Inventário completo](./tool-inventory.md) · [Alterações, provas e pendências](./tool-improvements.md).
+
+> **Perfil instalado em 2026-10-06:** migrations do candidato passaram numa
+> copia consistente do banco 0.5.2; valores de 22 tabelas de configuracao
+> permaneceram identicos. Leitor empacotado validou uma amostra de 16 journals.
+> Instalacao do usuario continua aberta e sem atualizacao; confirmacao para
+> encerrar o aplicativo esta pendente. [Evidencias e escopo do backup](./10-harness-performance-2026-10-03.md#compatibilidade-do-perfil-instalado-e-trace-do-candidato--2026-10-06).
+
+> **Writer posterior ao candidato:** projecao privada evita copiar novamente
+> o prefixo dos checkpoints. 21 testes focados e oito fisicos passaram;
+> serializacao ainda linear. Incluído no pacote separado tools-review-20261006,
+> cuja matriz de conversa/restart e fallback passou; não foi instalado no PC.
+> [Evidencias e benchmark](./10-harness-performance-2026-10-03.md#projecao-privada-do-checkpoint-do-provider--2026-10-06).
+
+> **Instalador candidato em 2026-10-06:** gerado localmente, ainda nao instalado
+> no PC. MCP em worktree valida o lease admitido; provisionamento fisico ocorre
+> depois do carregamento dos modulos. 25 testes, pacote/restart e fallback
+> passaram. Payload do instalador confere com o pacote testado. Candidato sem
+> Authenticode; default legado e gates de certificacao permanecem.
+> [Evidencias](./10-harness-performance-2026-10-03.md#mcp-em-worktrees-e-provisionamento-tardio--2026-10-06).
+
+> **Perfis em 2026-10-06:** coordenacao compartilhada preserva o ledger antigo
+> de cada perfil. Leituras nativas coexistem; escritas e geracoes conflitantes
+> sao recusadas entre processos/perfis. MCP confirma ambas as autoridades.
+> Matriz Windows combinada e fallback passaram; 19 checkpoints sem replay.
+> Drain de ativacao e reconciliacao de owners anteriores permanecem gates.
+> [Evidencias](./10-harness-performance-2026-10-03.md#coordenacao-de-workspace-entre-perfis--2026-10-06).
+
+> **MCP em 2026-10-06:** listagem usa metadados limitados e carrega somente
+> a pagina solicitada. Quota inclui ativos antigos e falha fechada quando a
+> consulta de ownership falha. Pacote/restart e fallback passaram; benchmark
+> sintetico de 10.000 sessoes p95 2,71 ms mede apenas o componente de consulta.
+> [Evidencias](./10-harness-performance-2026-10-03.md#consulta-limitada-de-runs-mcp--2026-10-06).
+
+> **Preparacao/ACK em 2026-10-06:** writer e autoridade permanecem retidos ate
+> confirmar preparacao e drain. ACK de inicio perdido nao admite outro executor;
+> sem ACK de limpeza, HTTP preserva o comando e informa estado incerto. Tres
+> cenarios passaram no pacote; matriz combinada recuperou 19 checkpoints sem
+> replay e fallback legado passou.
+> [Evidencias](./10-harness-performance-2026-10-03.md#preparacao-interrompida-e-ack-perdido--2026-10-06).
+
+> **Interacoes em 2026-10-06:** perguntas, decisoes e planos usam a fachada
+> nativa com ID duravel, sem runner legado. Recarga, falha/reenvio da resposta,
+> escrita condicionada ao plano e cancelamento passaram na interface do pacote
+> Windows. A matriz combinada recuperou 16 checkpoints sem replay; fallback
+> legado passou. Crash do owner durante interacao, spec/tasks/goals e paridade
+> das demais superficies continuam pendentes.
+> [Evidencias](./10-harness-performance-2026-10-03.md#interacoes-humanas-na-fachada-nativa--2026-10-06).
+
+> **CLI e MCP publico em 2026-10-06:** a CLI usa o gateway/fachada do produto
+> sem importar o executor legado. Conversa, retomada, escrita aprovada, cancelamento
+> e falha passaram em processos CLI reais. MCP publico preservou resultados e
+> classificacoes depois de restart no pacote Windows, com 11 checkpoints sem replay.
+> ACK de cancelamento, recibo terminal e drain fisico agora possuem barreiras
+> distintas. Distribuicao CLI independente, paridade completa e rollout permanecem
+> pendentes. [Evidencias](./10-harness-performance-2026-10-03.md#cli-e-mcp-publico-pela-fachada--2026-10-06).
+
+> **Historico paginado em 2026-10-06:** janelas e contagens sao resolvidas
+> antes do transporte worker/main, sem copiar toda a conversa. Runner real,
+> pacote com consultas ao vivo/restart e fallback legado passaram.
+> A prova de 10.000 turnos e sintetica no componente de transporte; a sessao
+> nativa completa desse tamanho continua pendente.
+> [Evidencias](./10-harness-performance-2026-10-03.md#historico-com-transporte-limitado-por-consulta--2026-10-06).
+
+> **Contexto proativo em 2026-10-06:** memoria e capitulos entram na fronteira
+> do provider com espera maxima de 300 ms por tarefa. Resultados tardios entram
+> apenas na proxima fronteira, cujo conteudo exato e persistido antes do envio.
+> Runner real, checkpoint/cancelamento, pacote Windows e fallback legado passaram.
+> Compaction e preparacao das demais superficies continuam pendentes.
+> [Evidencias](./10-harness-performance-2026-10-03.md#contexto-proativo-na-fronteira-nativa--2026-10-06).
+
+> **Terminal real em 2026-10-06:** tty=true usa ConPTY nativo com geometria
+> validada e Job Object. O pacote confirmou isTTY, stdin entre turnos,
+> aprovacao por efeito, restart do historico e reap dos processos rastreados.
+> Servidores entre attempts e reconexao de processos vivos continuam pendentes.
+> [Evidencias](./10-harness-performance-2026-10-03.md#terminal-conpty-no-pacote-windows--2026-10-06).
+
+> **Comandos persistentes em 2026-10-06:** exec_command/write_stdin/list_sessions
+> usam sessoes pipe pertencentes a attempt e processos contidos por Job Object.
+> O pacote confirmou stdin entre turnos, stderr ao vivo, aprovacao e historico
+> apos restart. Corrigida corrida no recibo de cancelamento com fila cheia.
+> PTY/ConPTY e servidores que sobrevivem a attempt continuam pendentes.
+> [Evidencias e limites](./10-harness-performance-2026-10-03.md#comandos-persistentes-contidos--2026-10-06).
+
+> **Worktrees em 2026-10-06:** criacao e reabertura entram antes do contexto
+> selado, com Git contido e raiz validada. O pacote confirmou escrita isolada,
+> persistencia, follow-up e restart. Corrigido o catalogo de metadados obsoleto
+> do processo principal. [Evidencias e limites](./10-harness-performance-2026-10-03.md#worktrees-no-fluxo-nativo-e-metadados-atualizados--2026-10-06).
+
+> **Exclusao de geracoes em desenvolvimento:** reserva duravel por perfil no
+> ponto comum Coder/CLI/Company, com retencao de efeitos incertos e heranca por
+> subagentes. Drain de ativacao, multiplos perfis e reconciliacao de processos
+> legados continuam gates; isso nao certifica Company/subagentes em Rust.
+> [Implementacao e provas](./10-harness-performance-2026-10-03.md#exclusao-entre-geracoes-no-cohort-de-desenvolvimento--2026-10-06).
+
+> **Limites de canal em 2026-10-06:** o Coder interrompe o provider antes de
+> esgotar identidades Data/Control/Management, preservando reserva para terminal
+> e reap. Texto parcial confirmado entra na continuacao; recovery continua
+> bloqueado para efeitos incertos. Data + retomada e Management passaram em
+> processos reais. Rotacao autenticada, soak de 24h e canario continuam abertos.
+> [Evidencias](./10-harness-performance-2026-10-03.md#encerramento-antes-do-limite-de-canal--2026-10-06).
+
+> **Autoridade em 2026-10-06:** renovacao confirmada pelo supervisor, sem
+> ampliar hard deadline nem reativar lease vencido. Corrigido o teto acidental
+> de 257 mensagens Control; 1.000 heartbeats e a execucao fisica de 610 segundos
+> passaram. Pacote nativo/legado, recovery e cleanup passaram.
+> [Evidencias e limites](./10-harness-performance-2026-10-03.md#renovacao-da-autoridade-fisica--2026-10-06).
+
+> **Streaming em 2026-10-06:** corrigidos os limites de resposta e de conexao
+> que reutilizavam a cota de IPC. Deltas contiguos sao agrupados com limites
+> de tempo/bytes e primeiro fragmento imediato. Credito autenticado por consumo
+> limita a fila Rust durante persistencia; 58 testes fisicos passaram.
+> [Contrato e evidencias](./10-harness-performance-2026-10-03.md#streaming-nativo-e-limites-independentes--2026-10-06).
+
+
+> **Orcamentos em 2026-10-06:** policy selada limita turnos, ferramentas e
+> tempo no runner. O teto artificial de dois minutos foi removido; deadlines
+> de execucao e confirmacao foram separados, inclusive durante aprovacao.
+> Renovacao da autoridade foi integrada ao Coder Windows e validada em uma
+> attempt fisica de 610 segundos. Cotas sao finitas; encerramento antecipado
+> foi integrado, sem promover duracao ilimitada nem certificar o soak.
+> [Implementacao e evidencias](./10-harness-performance-2026-10-03.md#orcamentos-de-execucao-e-confirmacao-duravel--2026-10-06).
+
+> **Inventario A01–A20 em 2026-10-06:** [manifesto do checkout](./surface-manifest.json)
+> registra entry points existentes, cobertura nativa, pendencias e condicoes
+> de retirada por superficie. O default permanece legacy_ts; nenhuma linha
+> esta marcada como certificada. Disposicao completa de simbolos/dados e
+> grafo resolvido ainda precisam fechar M0.
+
+> **MCP stdio em 2026-10-06:** transporte local contido por Job Object,
+> filas limitadas e encerramento comprovado de descendentes. Runner Rust e
+> pacote Windows passaram por resposta perdida, bloqueio de continuação e
+> restart; sete attempts reconciliadas sem replay.
+> [Evidência e limites](./10-harness-performance-2026-10-03.md#mcp-stdio-contido-e-integrado-ao-produto--2026-10-06).
+
+> **MCP de rede nativo em 2026-10-06:** sete attempts recuperadas no pacote,
+> efeito remoto executado uma vez e continuação bloqueada antes/depois do reinício.
+> [Evidência e limites](./10-harness-performance-2026-10-03.md#mcp-de-rede-no-cohort-rust--2026-10-06).
+
+> **Skills/memória e MCP em 2026-10-06:** o pacote nativo validou seleção de
+> skill no compositor, contexto preservado na continuação, consulta explícita
+> de memória cancelável e reinício com seis attempts sem replay. O transporte
+> MCP compartilhado agora usa o catálogo em cache, preserva resultados completos
+> e não repete chamadas após perda de resposta. Resultado incerto encerra a
+> execução e permanece no histórico; 77 testes focados/físicos passaram.
+> MCP HTTP/SSE foi integrado ao cohort nativo e validado no pacote, incluindo
+> resposta perdida, autoridade no envio e bloqueio após reinício. Stdio foi
+> integrado na atualização acima; plugins fora do MCP, reconciliação operacional e exclusão de workspace entre runtimes seguem pendentes.
+> [Evidências](./10-harness-performance-2026-10-03.md#skills-selecionadas-e-contexto-durável--2026-10-06).
+
+> **Histórico ativo em 2026-10-06:** consultas HTTP agora usam a projeção
+> incremental do writer nativo no worker. Fotografias do writer não releem o
+> journal; snapshots parciais preservam os resultados concorrentes. O pacote
+> passou por três leituras de histórico com provider pendente, continuação por
+> max_turns com imagem e reinício sem replay. Isso amplia M3/M5; scans de
+> abertura/admissão, histórico extenso, transporte paginado e gates globais
+> permanecem abertos. [Evidência](./10-harness-performance-2026-10-03.md#histórico-incremental-no-writer-ativo--2026-10-06).
+
+
+> **Continuação em 2026-10-06:** `/continue` agora inicia um novo comando nativo
+> sobre histórico validado, sem mensagem artificial nem repetição da ferramenta.
+> O contrato distingue `SESSION_CONTINUATION` da recuperação de uma attempt.
+> Resultado incerto permanece bloqueado, e histórico divergente é rejeitado.
+> O pacote Windows passou por continuação, ferramentas, cancelamento e reinício;
+> seis attempts reconciliadas sem provider replay. M3 continua parcial para
+> recovery automático, fronteira posterior a efeitos sem checkpoint e sessões
+> extensas. [Evidência](./10-harness-performance-2026-10-03.md#continuação-entre-comandos-e-resultados-incertos--2026-10-06).
+
+> **Busca e comandos em 2026-10-06:** `mcp__search`/`mcp__grep_code` têm contrato
+> explícito de leitura e cancelamento; `run_command` e ferramentas Git usam
+> Job Objects Windows pela ponte nativa. Aprovação, recusa, cancelamento com
+> descendente vivo, limite de saída e reap passaram em testes físicos. O pacote
+> Windows aprovou comando + Git, busca MCP, imagens e reinício com doze mensagens.
+> A leitura de histórico reabre no máximo três vezes quando uma gravação invalida
+> sua fotografia. Isso amplia M2/M4; não fecha isolamento entre runtimes,
+> PTY/sessões persistentes, MCP externo/plugins, retomada ou canário.
+> [Evidência](./10-harness-performance-2026-10-03.md#busca-comandos-contidos-e-disputa-no-histórico--2026-10-06).
+
+> **Catálogo e conteúdo em 2026-10-06:** escrita aprovada, recusa, cancelamento
+> durante aprovação e `view_image` atravessam a composição nativa. O pacote
+> Windows exibiu a imagem pela prévia lazy, preservou onze mensagens após novo
+> comando/reinício e reconciliou quatro attempts sem provider replay. Falha de
+> preparação anterior ao launch libera o lease que adquiriu. Isso amplia M2/M3/M4;
+> comandos/Git, catálogo MCP/plugins, retomada interrompida e gates de rollout
+> permanecem pendentes. [Evidência](./10-harness-performance-2026-10-03.md#imagens-de-ferramentas-no-provider-interface-e-replay--2026-10-06).
+
+> **Execução de 2026-10-06:** outbox física agora durável em Rust e reconciliada
+> no startup, inclusive com a flag nativa desligada. Reinício completo do pacote
+> Windows preservou nove mensagens/anexos e reconciliou três attempts sem
+> repetir provider nem deixar PIDs. Anexos idênticos deixam de ser duplicados
+> entre commands. M2 segue parcial: essa prova ainda não cobre rehydration antes
+> do reap ou processos Host sobreviventes. [Evidência atual](./10-harness-performance-2026-10-03.md#outbox-durável-reinício-e-anexos-sem-duplicação--2026-10-06).
+
+> **Execução após aprovação do plano, 2026-10-05:** o worker agora oferece uma
+> rota nativa explícita de desenvolvimento (`CODESTUDIO_NATIVE_CODER_DEV=1`).
+> A conversa digitada no compositor atravessou a fachada, provider TS,
+> quatro leituras Host, segundo turno e cancelamento no pacote Windows.
+> O histórico nativo também sobreviveu ao reload pela API pública, sem abrir
+> outro writer; duas mensagens consecutivas na mesma sessão produziram nove
+> mensagens recuperadas no pacote Windows. Locks de writer/workspace passaram
+> na prova de morte do processo. Essa evidência fecha o cenário funcional de M1 no cohort de
+> leitura; M0 completo, M2–M6, paridade e promoção continuam pendentes.
+> [Registro de implementação](./10-harness-performance-2026-10-03.md#integração-do-produto-e-histórico-em-2026-10-05).
+
+> **Plano executivo vigente: 2026-10-05.** A sequência, os critérios de entrega
+> e as estimativas estão em [Plano de execução atualizado](#plano-de-execução-atualizado--2026-10-05).
+> O fluxo normal do aplicativo ainda usa o legado. O E2E empacotado de outubro
+> não certifica cutover Rust. Os snapshots anteriores abaixo são históricos.
+
+> Atualização de desempenho (2026-10-03): [implementação, medições e lacunas](./10-harness-performance-2026-10-03.md).
+> Projeções incrementais, paginação Rust por fotografia e correções do renderer
+> foram implementadas. Isso não certifica integração da fachada, paridade ou cutover.
+> **Atualização física de 2026-10-05:** admission/ativação nativa pelo ledger do
+> produto, contexto com histórico/anexo, ferramentas Host reais, recusa durável,
+> lotes de quatro leituras Host com resultado imediato e cancelamento/reap foram
+> implementados e testados. [Evidências e lacunas](./10-harness-performance-2026-10-03.md#continuação-de-2026-10-05-preparação-real-conteúdo-durável-e-leituras-host-concorrentes).
+> O worker principal ainda usa `legacy_required`; os gates globais abaixo não
+> são considerados concluídos por essas provas de integração.
+> **Candidato medido em 2026-10-05:** concorrência também no dispatcher do
+> produto; seleção de jobs de documentos no worker; IDs públicos de tool por
+> turno; `message_complete`, usage e thinking preservados no fluxo nativo.
+> 832 testes backend/contratos, 231 renderer, 27 SQL, 652 Rust e 13 cenários
+> físicos passaram. Pacote Windows validado com leitura/retomada/aprovação/cancel.
+> [Medições, hashes e pendências](./10-harness-performance-2026-10-03.md#candidato-validado-em-2026-10-05-produto-interface-e-continuidade-nativa).
+
+> **Status inicial histórico:** nenhum gate aprovado
+> **Versão histórica da implementação:** 1.36.0
 > **Atualização:** este é o único arquivo do corpus em que checkboxes de avanço
 > são alterados.
-> **Snapshot operacional:** 2026-08-05. O pacote Windows candidato e o E2E
+> **Snapshot operacional histórico:** 2026-08-05. O pacote Windows candidato e o E2E
 > process-real atravessam lifecycle, provider TS, policy Host, engine Rust,
 > `native.read_file`, nove commits no session journal filesystem Rust e o
 > segundo provider turn. Uma prova duplex adicional cruza sete receipts.
@@ -21,6 +661,223 @@
 “Spec final” significa texto normativo congelado; não significa implementação
 concluída. Por isso todos os checks começam vazios até owner e evidência serem
 registrados.
+
+## Plano de execução atualizado — 2026-10-05
+
+### Situação verificada e limite desta revisão
+
+**Nota de execução:** os parágrafos desta subseção registram o ponto de partida
+do planejamento. A integração e as provas posteriores constam no registro acima;
+não usar a descrição histórica de “handoff pendente” como estado atual de M1.
+
+Esta revisão conferiu código, entry points, manifestos e relatórios locais. Não
+alterou implementação nem reexecutou as suítes. Os resultados de testes abaixo
+são os relatórios do candidato de 2026-10-05, não uma nova certificação.
+
+O caminho normal ainda termina em `runCoder → CoderRunner.run`; o adapter SSE
+seleciona `legacy_required`. `activateNativeCoderRuntimeFacade` e
+`prepareNativeCoderContext` existem, mas não recebem a conversa iniciada pelo
+worker normal. Esse handoff é a primeira entrega funcional pendente.
+
+| Área | Implementação/evidência existente | Trabalho que falta para uso normal |
+|---|---|---|
+| Entrada e providers | Fachada, preparação nativa, gateway TS e admission pelo ledger real; testes com processos Windows | Ligar preparação/seleção do worker à fachada sem iniciar também o runner legado; conservar provider/modelo e opções da sessão |
+| Ferramentas e desempenho | Leituras concorrentes, resultados individuais duráveis, barreiras de mutação, HostCapability e policy; melhorias também no dispatcher legado | Autoridade real de workspace, catálogo completo no fluxo do produto, imagens/artefatos devolvidos por tools e certificação dos contratos públicos |
+| Persistência | Projeção incremental, paginação por fotografia validada, checkpoint da fronteira do provider e detecção de efeitos incertos | Leitores HTTP/histórico nativos, reabertura real, recuperação autorizada e projeções completas sem criar um segundo writer |
+| Supervisor | Management permanente e fatos físicos confirmados no Host | Outbox Rust sobrevive apenas em memória; faltam recovery/rehydration duráveis e prova de multi-launch pela composição do produto |
+| Interface e Electron | Virtualização do turno ativo, orçamento de eventos, scans pesados de jobs em worker e consultas limitadas | Medir a composição nativa empacotada com projetos/sessões representativos; consultas pontuais síncronas ainda existem |
+| Outras superfícies | MCP já consome HTTP; CLI chama `runCoder`; Company/DocsAgent ainda dependem de runners legados | Adaptar CLI e demais entradas; verificar MCP sobre os leitores nativos; migrar Company/subagentes por árvore inteira |
+
+Foram registrados 832 testes backend/contratos, 231 renderer, 27 SQL, 652 Rust
+e 13 cenários físicos aprovados, com os skips discriminados no
+[relatório do candidato](./10-harness-performance-2026-10-03.md#candidato-validado-em-2026-10-05-produto-interface-e-continuidade-nativa).
+Esses totais não medem percentual de migração.
+
+O E2E empacotado aprovado executou **legacy**, com provider determinístico em
+loopback. O benchmark de dispatch de 0,301 ms não inclui IPC Host, policy ou
+journal; o cancelamento nativo de 1,401 ms foi medido em attempts ociosas.
+O trace novo não reproduziu o congelamento antigo de 8,759 s; isso não identifica
+a causa nem prova que o problema desapareceu em projetos reais.
+
+### Entregas e estimativa de esforço restante
+
+Premissa de capacidade: uma frente dedicada, aproximadamente seis horas de
+engenharia focada por dia útil, sem tarefas concorrentes. Estimativas incluem
+implementação e verificação; são julgamento técnico a partir das lacunas, não
+velocidade histórica medida. Não representam execução automática em segundo
+plano nem compromisso de data sem essa capacidade alocada.
+
+| Entrega | Definição de concluído | Estimativa restante |
+|---|---|---|
+| E1 — programação Windows em piloto interno | Conversa pela interface em Rust, leitura/busca, edição/patch, comandos/Git, imagens, MCP/plugins como tools, interações, cancelamento, histórico e retomada; pacote validado, C0 e rollback | Base de 22–35 dias úteis + cerca de 25% de reserva: planejar **28–44 dias úteis (6–9 semanas)**; inclui o piloto I0 exigido pelo corpus |
+| E2 — migração funcional das demais superfícies Windows | E1 mais CLI, MCP público, DocsAgent/plugin assistant e Company/subagentes/pipelines/AppStudio aplicáveis, com árvores inteiras e paridade por superfície | **12–20 dias úteis adicionais**, incluindo reserva; total acumulado de aproximadamente **8–13 semanas**, antes da certificação global |
+| E3 — promoção completa e retirada global do legado | Plataformas/ambientes restantes certificados, C0–C5, drain comprovado, rollback exercitado e remoção dos imports/flags/workers antigos autorizada pelos gates | **Piso de 35 dias corridos de canário**, contado desde C0, além do volume mínimo e do trabalho restante de plataformas/limpeza; esse trabalho ainda precisa de estimativa em M0 |
+
+A faixa de E1 tem confiança moderada-baixa até M1/M2: a preparação do produto
+ainda está acoplada ao runner, e lease/recovery cruzam várias fronteiras. E2 tem
+confiança menor até o inventário A01–A20 de M0. Não converter essas faixas em
+uma data garantida. Reestimar ao fechar M1 e M2, com esforço real e lista
+restante, sem reiniciar a contagem do que já foi gasto.
+
+O indexador Rust completo `GI/indexd` é um trilho separado. Entretanto, o corpus
+atual exige seu **piloto I0 (walker/hasher)** antes do canário do agente. Não há
+`native/index-runtime` no checkout. O plano conservador inclui 3–5 dias base para
+I0; I1–I4 ficam fora de E1/E2. A retirada dessa dependência exigiria revisão
+explícita da decisão arquitetural, não uma omissão no cronograma. As otimizações
+do serviço semântico/Electron continuam no escopo.
+Providers, credenciais e ferramentas Host podem permanecer em TypeScript,
+conforme o plano solicitado. Não condicionar a entrega a portar todas as tools.
+O adapter OSS permanece versionado e em comparação; nenhum modelo é trocado.
+
+### Sequência obrigatória para E1
+
+| Marco | Trabalho e dependência | Esforço base | Evidência necessária para fechar |
+|---|---|---:|---|
+| M0 — fixar candidato e escopo | Registrar diff e arquivos novos da tarefa, hashes, ambiente, matriz A01–A20 e baseline comparável; separar mudanças alheias | 1 dia | Candidato reproduzível e matriz de superfícies/funcionalidades com destino, estado e owner; comandos e relatórios ligados ao mesmo build |
+| M1 — primeira conversa nativa pela interface | Após M0, extrair preparação necessária de `runCoder`, compor contexto/provider/tools existentes e ligar worker/fachada; autoridade real mínima para leitura; manter gate de desenvolvimento isolado | 3–5 dias | Na interface do build candidato: mensagem → provider TS → leitura Rust/Host → segundo turno → texto/usage; cancelamento. Identidade/telemetria comprovam Rust e ausência de `CoderRunner.run` nessa attempt |
+| M2 — autoridade e lifecycle recuperáveis | Após M1, implementar lease real de workspace e fencing de escrita; persistir/reconciliar outbox do supervisor; certificar múltiplos launches, crash/restart e encerramento de descendentes | 4–6 dias | Duas sessões concorrentes não violam ownership; lease vencido impede efeito; crash/ACK perdido não perde fato nem repete mutação; supervisor recupera/reap sem órfãos |
+| M3 — sessões, retomada e conteúdo completo | Após M2, ligar leitores/projeções nativos às APIs e histórico; reabrir a partir de fronteira validada; transportar e reter anexos/artefatos de tool, incluindo `extraUserBlocks` | 3–5 dias | Fechar/reabrir aplicativo e reconnect preservam histórico, IDs, imagens, resultado de tools e usage; sessão antiga continua legível; efeito incerto exige reconciliação |
+| M4 — paridade do fluxo de programação | Após M3, integrar preparação por turno, compactação, memória, seleção de tools, skills/MCP/plugins, contexto IDE/worktree, permissões e interações/tarefas/metas existentes | 3–5 dias | Mesmas tarefas/modelos/permissões passam no legado e no nativo; leitura, patch, shell, Git, imagem, aprovação/recusa e waiting/resume funcionam no app |
+| M5 — certificar pacote e desempenho | Após M4, rodar matriz funcional/chaos/perf e qualidade/custo no aplicativo empacotado; corrigir regressões desta matriz | 3–5 dias | Gates Windows aplicáveis comprovados por hashes/relatórios, sem skip convertido em aprovação; custo e qualidade comparáveis; streaming/replay responsivos; soak 24 h/1.000 ciclos |
+| M5-I0 — dependência de packaging do corpus | Após M5 e antes de C0, reutilizar a cadeia nativa para o piloto walker/hasher exigido por `GI-03`; não iniciar a reescrita completa do indexador | 3–5 dias | Paridade de arquivos em três repositórios, incluindo Assets/68k; packaging/signing/cohort e CPU de walk fora do main; `IDX-GATE-0` |
+| M6 — canário interno, rollback e entrega E1 | Após M5/I0, habilitar C0 Windows limitado e ensaiar rollback de novas attempts | 2–3 dias ativos + mínimo de 48 h em C0 | Zero stop condition; rollback mantém sessões e efeitos; pacote nativo validado para o piloto interno; demais cohorts continuam fechados |
+
+As 48 h de C0 são tempo decorrido, não horas de programação. Podem
+coincidir com parte do trabalho ativo, mas precisam de execução e observação
+reais. Defeitos de soak consomem a reserva; não abreviar o período para preservar
+uma data. C0 não aprova automaticamente G6, C1–C5 nem a retirada do legado.
+
+**Primeiro resultado visível:** M0+M1, cerca de 4–6 dias úteis de trabalho
+dedicado. É uma demonstração nativa integrada em desenvolvimento, ainda não
+uma liberação geral. Esse é o primeiro ponto de cobrança; se ultrapassar a
+faixa, registrar o impedimento concreto e reestimar, sem substituir a entrega
+por mais testes de componentes isolados.
+
+M1 usa a composição `test|shadow` somente em ambiente de desenvolvimento
+isolado. Não basta mudar `legacy_required`, remover uma asserção ou colocar
+`productionReady: true`. A promoção de modo depende das provas de M2–M6 e dos
+gates aplicáveis. O loop management permanente já existe em Rust: revisar a
+composição/status e certificar o comportamento, sem reescrever o loop por
+causa de um status antigo `multiLaunchManagementLoop: 'absent'`.
+
+O lease de M2 deve vir do serviço de autoridade do produto, com raiz canônica,
+versão/epoch monotônicos, conflito entre workspaces sobrepostos, revogação e
+liberação após término dos efeitos/processos. Os fixtures de lease usados nos
+testes físicos não servem como implementação de produção.
+
+Pontos de partida confirmados para a implementação:
+
+| Marco | Arquivos/contratos existentes a conectar ou completar |
+|---|---|
+| M1 | `apps/http-api/workers/coder-worker.ts`, `sse/coder-runtime-facade.ts`, `sse/native-coder-runtime-facade.ts`; `packages/code-agent/src/index.ts` e `runtime/native-coder-context.ts` |
+| M2 | `packages/agent-runtime-contracts/src/environment.ts`; `HostSupervisorFactIntegrationGate.ts`; `agentd-supervisor/src/management/async_service/service_loop.rs` e `management/driver/lifecycle_fact_outbox.rs` |
+| M3 | `NativeProviderFrontierRecovery.ts`, `NativeRustHostAttemptRuntime.ts`, APIs de sessão/histórico e `tool-registry-host-capability-executor.ts` |
+| E2 | `apps/cli/commands/agent.ts`, `apps/mcp-server/agent-run-manager.ts`, `packages/docs-agent/src/index.ts` e entradas A12–A15/A20 do manifesto |
+
+### Sequência de E2 e retirada posterior
+
+Depois de E1, fechar nesta ordem, reaproveitando seus contratos:
+
+1. **CLI, MCP, DocsAgent e plugin assistant (3–5 dias base):** CLI passa a
+   consumir a fachada/serviço neutro. MCP já é cliente de `/api/coder`; verificar
+   start/list/get/result/cancel e histórico nativo, sem criar outro executor.
+   Retirar os loops próprios das outras entradas conforme o manifesto.
+2. **Company, subagentes e orquestrações atuais (4–8 dias base):** pin de runtime
+   por árvore, authority e orçamento dos filhos, waiting/interações, cancelamento
+   recursivo, resume e persistência. Migrar cada árvore inteira; incluir as
+   superfícies de pipelines/AppStudio que o inventário confirmar.
+3. **Validação por superfície (2–3 dias base):** E2E público e empacotado,
+   falhas de árvore, admissão em canário e rollback. A reserva eleva os 9–16 dias
+   base para a faixa de 12–20 dias adicionais. Reutilizar a matriz, sem refazer
+   a base.
+
+O esforço de E2 não elimina o tempo de observação de cada cohort. Pelo
+[protocolo vigente de rollout](./06-rollout-gates-and-retirement.md#103-escada-de-canário),
+C0 exige 48 h; C1, 48 h e 200 attempts; C2, 72 h e 1.000 attempts; C3 e C4,
+sete dias cada; C5, 14 dias. A soma mínima é **35 dias corridos**, desde C0,
+se houver amostra suficiente e nenhuma regressão. São pelo menos 33 dias após
+o primeiro C0 concluído. Não iniciar a contagem em testes isolados nem usar
+tráfego sintético como substituto silencioso da amostra exigida.
+
+Parte do rollout de uma superfície estável pode ocorrer enquanto outra é
+implementada. Uma superfície adicionada depois precisa de sua própria evidência;
+não herda retroativamente a observação de uma versão sem aquela funcionalidade.
+Por isso não é correto somar todas as durações como se fossem serializadas,
+nem prometer que toda observação caberá dentro do prazo de programação.
+
+Sprite e Design Systems removidos não voltam como alvos de paridade.
+AppStudio/roles de design e QA ainda presentes são inventariados separadamente;
+`candidate-pipeline` existente não é considerado removido por semelhança de nome.
+
+E3 só começa com uma matriz por plataforma/ambiente, incluindo CI e backend
+Unix, e inventário de dependências legadas. O término global exige todos os
+gates correspondentes e drain, sem sessões ativas abandonadas. Enquanto isso,
+plataformas não certificadas continuam no runtime certificado. Preservar leitura
+das sessões antigas; retirar o executor legado não autoriza apagar históricos.
+
+### Validação que decide a entrega
+
+- **Tempo:** medir preparação, provider, ferramenta, commit, transporte e
+  apresentação separadamente, correlacionados por sessão/attempt/turno/tool.
+  Heartbeat não conta como progresso de ferramenta. Medir o dispatch completo
+  e suas parcelas; o benchmark isolado atual é somente parte da evidência.
+- **Metas existentes:** startup aquecido p95 ≤250 ms, overhead nativo de dispatch
+  p95 ≤5 ms, ACK de cancelamento p95 ≤250 ms e zero processos órfãos. Medir cancel
+  também durante provider, tool e processo filho sem cooperação, não apenas idle.
+- **Concorrência:** quatro leituras explicitamente independentes se sobrepõem;
+  resultado rápido aparece antes do lento; ordem para o modelo é preservada;
+  escrita/comando/interação/desconhecida fecha a janela; cancelar impede a próxima
+  barreira. Não habilitar paralelismo pelo nome da ferramenta apenas.
+- **Durabilidade:** históricos nativos de 100/1.000/10.000 turnos, commits quentes
+  sem releitura integral, fotografia invalidada diante de corrupção/mudança,
+  disco cheio, crash antes/depois de `started`, efeito com ACK perdido e restart.
+  Resultado incerto nunca permite retry automático de mutação.
+- **Interface:** streaming longo, replay, reconexão, consumidor lento, digitação
+  e rolagem no Electron empacotado; projeto e perfil representativos além do
+  perfil vazio. Capturar trace quando houver bloqueio; associar causas à thread
+  correta. Os 192 ms do trace atual ainda não são ausência de tarefas longas.
+- **Qualidade/custo:** tarefas, provider/modelo, permissões e cache equivalentes;
+  corpus congelado em M0, resultados por tarefa e dispersão. Shadow de escrita
+  usa replay com executor falso ou execução exclusiva no runtime selecionado,
+  sem duplicar mutações. Não disparar providers faturáveis em duplicidade no shadow.
+  Preservar os gates existentes de TTFT (regressão p95 ≤5%) e eficácia (limite
+  inferior do IC 95% de Rust − legado ≥−2 pontos percentuais), além dos gates de
+  memória, reliability, segurança e isolamento do documento 06.
+- **Compatibilidade:** preservar `start`, `resume`, `cancel`, `resolveInteraction`,
+  `getSnapshot`, `subscribeEvents`, HTTP/SSE, IDs, consumo MCP e CLI. Runtime
+  fixado por attempt/árvore; fallback somente em nova attempt, com recuperação
+  válida. Nunca adicionar writer TypeScript concorrente ao journal Rust.
+
+### Controle de conclusão e evidências
+
+Manter uma entrega crítica em andamento. Testes de componentes modificados
+acompanham cada mudança; suíte ampla e pacote completo são repetidos no fechamento
+do candidato ou por regressão relevante, não a cada edição sem necessidade.
+
+Cada marco registra **implementado → integrado na entrada real → validado no
+pacote → certificado no escopo**. Código e testes unitários não pulam etapas.
+Guardar diff da tarefa, comandos, hashes dos binários, JSON/trace, demonstração
+da jornada, riscos restantes e procedimento de rollback junto ao marco.
+
+O checkout inspecionado contém 849 entradas no `git status` (415 removidas,
+309 modificadas, 125 novas); elas não são todas atribuíveis a esta tarefa.
+O HEAD `2d24020c28785bf181c178c72b9eaea8c1bfcdea` sozinho não identifica o build.
+M0 precisa preservar essas mudanças e registrar um candidato reproduzível;
+não limpar o checkout nem atualizar allowlists para ocultar drift.
+
+Os números e hashes já medidos permanecem no relatório de desempenho citado
+acima. Evidência em `scratch/` deve ser arquivada com o candidato antes de
+certificar uma release. Os checkboxes normativos abaixo continuam sendo a
+autoridade de aprovação; esta revisão não marcou novos gates.
+
+**Sequencia atualizada em 2026-10-06:** a conversa da interface ja usa a
+composicao Rust no cohort de desenvolvimento e passou no pacote Windows,
+incluindo ferramentas, imagens, MCP, worktrees, ConPTY, memoria e retomada.
+O transporte limitado do historico ja passou no pacote. Seguem a paridade
+publica MCP/CLI, preparacao/compaction e tarefas/metas/hooks, paridade
+das outras entradas, coordenacao de producao e os gates de certificacao.
+M0 ainda exige classificacao de simbolos/dados e grafo resolvido; as capturas
+de candidato ja identificam os builds locais. O gerador buf.build esta autorizado.
 
 ## 1. Regra de marcação
 
@@ -45,17 +902,20 @@ corrente.
 
 | Fase | Implementação existente | Checks formais | Bloqueador atual |
 |---|---|---:|---|
-| G0 — spec e baseline | corpus `00..09`, ADRs e gates definidos | 0/13 | baseline reproduzível e aprovação explícita de G0 |
-| G1 — workspace, IDL, Host e packaging | 11 crates/14 arestas; Protobuf TS/Rust; session store; package; bridges Host/Node-API; E2E process-real Windows produtivo | 6/23 | CI candidato, smoke instalado multiplataforma e classificação dos exports legados |
-| G2 — supervisor, lifecycle e isolamento | lifecycle/management, Windows Job, runner single-tenant; pulse/heartbeat/métricas reais; Cancel/Fence Control + management process-real; primitiva Reap Host; outbox/emissão Rust e receiver Host permanente/durável de Exited/Reaped; timeout/reap target-specific | 0/16 | recovery durável da outbox, terminal esperado para Reap público, métricas agregadas, `UpdateAttemptAuthority`, backend Unix e gates de soak/isolamento |
-| G3 — engine e Provider Gateway | primeiro turno e continuação pós-tool process-real; composer/wire/owners bounded; pairing e cursor stateful preservados | 0/18 | resume por checkpoint, adapters completos, memória/TTFT e paridade de projeção |
-| G4 — capabilities e tools | Gateway `allow|ask|deny`, policy Host fail-closed, grant/binding selado, executor `native.read_file`, lifecycle autoritativo, unknown live, scanner de started órfão e E2E process-real até o segundo provider turn | 0/19 | persistência da decisão recovery/probe, demais tools e gates funcionais/security/perf |
-| G5 — durability, waiting e run-tree | filesystem session writer, journal/recovery, cursor metadata-only autenticado, transferência e spool quota foundation | 0/17 | checkpoints completos, decisão recovery, waiting/resume, child runs e subagentes process-real |
-| G6 — shadow, chaos e canário | adapters internos `test|shadow` e validações de routing existem | 0/21 | ainda não há replay comparativo, soak, chaos nem cohort de produto |
-| G7 — default e limpeza | plano de migração/retirada documentado | 0/29 | depende dos gates G0–G6 e do drain do legado |
-| GI — indexador nativo | somente especificação do trilho paralelo | 0/8 | baseline, workspace e implementação I0–I4 não iniciados |
+| G0 — spec e baseline | corpus normativo, ADRs, gates e medições locais de outubro | 0/13 | congelar candidato/corpus comparável, reconciliar manifesto A01–A20 e fronteira de imports, fechar evidências formais |
+| G1 — workspace, IDL, Host e packaging | Protobuf TS/Rust; bridges; pacote nativo Windows; integrações físicas; app empacotado validado com runner legado | 6/23 | CI do candidato, handoff da entrada real para Rust, certificação instalada por plataforma e classificação dos exports legados |
+| G2 — supervisor, lifecycle e isolamento | loop management permanente, Windows Job, runner single-tenant, Cancel/Fence/reap, fatos físicos persistidos no Host | 0/16 | outbox Rust durável/recovery, rehydration e multi-launch certificados na composição; autoridade de workspace, métricas agregadas, Unix e soak/isolamento |
+| G3 — engine e Provider Gateway | múltiplos provider turns, histórico/anexo de entrada, thinking/usage, contexto preparado e checkpoint de fronteira; IDs públicos por turno | 0/18 | entrada do worker ainda legada; paridade da preparação/compactação entre turnos, uso dos checkpoints na retomada do produto e gates de memória/TTFT |
+| G4 — capabilities e tools | leitura nativa, Host tools reais, aprovação/recusa durável, lotes de quatro leituras e resultados individuais; unknown e ACK perdido testados | 0/19 | lease de workspace de produção, catálogo completo no fluxo normal, artefatos devolvidos por tools e gates funcionais/security/perf completos |
+| G5 — durability, waiting e run-tree | journal Rust, fotografias validadas pagináveis, provider-frontier recovery, detecção de efeitos incertos; projeção incremental legada | 0/17 | leitores/projeções HTTP nativos, reabertura real, recovery/waiting integrados, artifacts e árvores de subagentes |
+| G6 — shadow, chaos e canário | composição `test|shadow`, falhas físicas focadas e medições locais; pacote legacy testado | 0/21 | replay comparativo de qualidade/custo, matriz completa de chaos, soak, I0 e cohorts C0–C4 do produto |
+| G7 — default e limpeza | plano de superfícies/retirada; produto permanece `legacy_required` | 0/29 | C5, paridade A01–A20/plataformas, drain, rollback e prova de retirada de cada dependência |
+| GI — indexador nativo | especificação; não há `native/index-runtime` no checkout | 0/8 | I0 é dependência explícita do canário; restante I1–I4 segue em trilho separado |
 
-### 2.1 Marco em execução e sequência real
+### 2.1 Histórico técnico até o candidato 1.36.0
+
+Os termos “concluído” e “próximo” desta seção descrevem a fatia histórica.
+Não são a fila atual; a sequência vigente é M0–M6 do plano de 2026-10-05.
 
 1. **Concluído:** `Host → supervisor → runner → RunnerPulse inicial/periódico →
    hidratação → Prepared → Activate/ACK → Active → Heartbeat semântico →
@@ -142,7 +1002,7 @@ corrente.
     depois ampliar reads (`glob/grep/Git/HTTP`) e avançar transcript/checkpoint.
     Shadow/chaos/canário vêm após essas fatias.
 
-### 2.2 Evidência do candidato 1.36.0
+### 2.2 Evidência histórica do candidato 1.36.0
 
 - pacote:
   `runtime-v1-f6496fb120c29da50913e04eba033f98b67f85468e85035e34fe5aba6ba39930`;
@@ -1072,6 +1932,11 @@ corrente.
 - [ ] `G1-PERF-01` — Spawn até `AttemptPrepared` tem p95 ≤ 250 ms na matriz
   definida.
   - Spec: `GATE-PERF-01`
+  - Reexecução Windows x64 (2026-10-05): 100 amostras após 10 aquecimentos,
+    p95 39,130 ms, máximo 82,876 ms; passou no target local. Relatório em
+    `.tmp/rust-agent-performance/GATE-PERF-01-win32-x64.json` e log em
+    `scratch/harness-20261003/final-native-startup-performance.txt`. A matriz
+    multiplataforma ainda não está certificada.
   - Evidência parcial (2026-07-29): feature `performance-harness` não
     empacotada inicia o binário release real em target directory separado,
     exige flag/token efêmero e percorre o driver
@@ -1247,6 +2112,11 @@ inexistente”.
 - [ ] `G2-LIFE-04` — Cancel ACK p95 ≤ 250 ms e árvore não cooperativa some em
   até 2 s depois da grace.
   - Spec: `GATE-LIFE-02/03`
+  - Reexecução Windows x64 (2026-10-05): 50 amostras após cinco aquecimentos,
+    p95 1,401 ms; supervisor e runner ausentes depois de cada ciclo. O teste
+    mede attempts ociosas com o pacote `runtime-v1-928a81af8153b47c534f5c54790503c52b52ac33a3b5b9fef35e02e7ef0a514f`.
+    `scratch/harness-20261003/final-native-cancel-performance.json`. Não cobre
+    sozinho a árvore de ferramentas não cooperativas do gate completo.
   - Evidência parcial (2026-07-26): o ACK de `CancelAttempt` usa
     `min(grace deadline, hard deadline, write timeout)`, verifica o clock antes
     e depois do write e falha fechado no limite, em regressão ou abandono.
@@ -1708,7 +2578,14 @@ recovery/probe, glob/grep/Git/HTTP, mutation/process, ToolHost e `code_exec`.
   - Evidência:
 - [ ] `G4-PERF-01` — Overhead p95 do dispatch nativo é ≤ 5 ms.
   - Spec: `GATE-PERF-03`
-  - Evidência:
+  - Evidência parcial Windows x64 (2026-10-05): benchmark release da feature
+    `performance-harness`, 1.000 amostras após 100 aquecimentos, p95 0,301 ms.
+    Mede o executor real com leitura de 4 KB, validação, pool bloqueante e
+    encoding; o total é um teto para seu overhead, sem subtrair baseline.
+    Exclui admission de policy, IPC Host e journal. Comando
+    `node scripts/benchmark-rust-agent-dispatch.mjs`; relatório com hash do
+    binário em `scratch/harness-20261003/final-native-dispatch-performance.json`.
+    O gate global permanece aberto para a cadeia de dispatch completa.
 - [ ] `G4-SPEC-01` — Suites por execution class cobrem todos os requisitos
   `CAP-001..052`, sem waiver não registrada.
   - Spec: `CAP-001..052`

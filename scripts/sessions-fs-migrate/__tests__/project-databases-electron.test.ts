@@ -99,7 +99,6 @@ electronDescribe('per-project SQLite cutover', () => {
 
       const prepared = prepareCleanProjectDatabases(
         audits,
-        new Map(),
         'a'.repeat(64),
       );
       expect(prepared).toHaveLength(1);
@@ -163,7 +162,6 @@ electronDescribe('per-project SQLite cutover', () => {
 
       const prepared = prepareCleanProjectDatabases(
         audits,
-        new Map(),
         'b'.repeat(64),
       );
       expect(prepared).toHaveLength(1);

@@ -5,7 +5,7 @@
  * unknown allowed_tools warning, and the trigger eval firing + collision /
  * discovery-only reporting.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -93,7 +93,7 @@ describe('create_skill tool', () => {
     tool = buildCreateSkillTool({ dbPath, registry, projectId: 1 });
   });
 
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }); });
 
   it('rejects an invalid id', async () => {
     const res = await tool.handler({ id: 'Bad Id', name: 'x', description: 'd', prompt_body: 'b' }, CTX);
@@ -152,5 +152,42 @@ describe('create_skill tool', () => {
     const store = new SkillStore(dbPath);
     expect(store.getSkill('proj-skill')?.scope).toBe('1');
     store.close();
+  });
+  it('preserves project scope on update when scope is omitted and cannot overwrite another project', async () => {
+    const store = new SkillStore(dbPath);
+    try {
+      store.upsertSkill({ id: 'owned', name: 'Owned', prompt_body: 'old', scope: '1' });
+      store.upsertSkill({ id: 'foreign', name: 'Foreign', prompt_body: 'keep', scope: '2' });
+      const updated = await tool.handler({ id: 'owned', name: 'Owned', description: 'd', prompt_body: 'new' }, CTX);
+      expect(updated.isError).not.toBe(true); expect(store.getSkill('owned')?.scope).toBe('1');
+      const refused = await tool.handler({ id: 'foreign', name: 'Foreign', description: 'd', prompt_body: 'forged' }, CTX);
+      expect(refused.isError).toBe(true); expect(store.getSkill('foreign')?.prompt_body).toBe('keep');
+    } finally { store.close(); }
+  });
+  it.each([{ prompt_body: 'x'.repeat(64001) }, { trigger_paths: ['*'.repeat(513)] }, { trigger_roles: Array(17).fill('build') },
+    { sort_order: Infinity }, { dry_run: 'yes' }, { scope: 'foreign' }, { context_mode: 'unknown' }, { name: 7 }])(
+    'rejects malformed or excessive input before opening the store', async changes => {
+      const read = vi.spyOn(SkillStore.prototype, 'getSkill');
+      const result = await tool.handler({ id: 'bounded', name: 'Bounded', description: 'd', prompt_body: 'body', ...changes }, CTX);
+      expect(result.isError).toBe(true); expect(read).not.toHaveBeenCalled();
+    });
+  it('does not commit after cancellation during trigger evaluation', async () => {
+    const controller = new AbortController();
+    const original = SkillStore.prototype.listSkillTriggerCatalog;
+    vi.spyOn(SkillStore.prototype, 'listSkillTriggerCatalog').mockImplementationOnce(function (this: SkillStore, ...args) {
+      const result = original.apply(this, args); controller.abort(new Error('cancelled')); return result;
+    });
+    const result = await tool.handler({ id: 'cancelled', name: 'Cancelled', description: 'd', prompt_body: 'body' }, { signal: controller.signal } as ToolContext);
+    expect(result.isError).toBe(true); expect(result.content).toContain('cancelled');
+    const store = new SkillStore(dbPath); try { expect(store.getSkill('cancelled')).toBeNull(); } finally { store.close(); }
+  });
+  it('checks authority inside the transaction and keeps a failed commit uncertain', async () => {
+    let count = 0;
+    const result = await tool.handler({ id: 'revoked', name: 'Revoked', description: 'd', prompt_body: 'body' }, {
+      cwd: dir, projectName: 'fixture',
+      mutationFence: { mode: 'enforce', bindInvocation() { return this; }, assertMutation() { if (++count === 2) throw new Error('revoked'); } },
+    } as ToolContext);
+    expect(result.effectOutcome).toBe('unknown');
+    const store = new SkillStore(dbPath); try { expect(store.getSkill('revoked')).toBeNull(); } finally { store.close(); }
   });
 });

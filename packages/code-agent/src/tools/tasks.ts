@@ -1,3 +1,6 @@
+import { bindTaskContext } from '../ports/task-tool-port.js';
+import { taskNeedsReconciliation } from './task-list-shared.js';
+import { parseNativeTasksState } from '@mcp/session-storage/native-task-projection.js';
 /**
  * Structured task list tools — submit_tasks / task_complete / list_tasks.
  *
@@ -13,14 +16,14 @@
  * parent's full history.
  */
 import { randomUUID } from 'node:crypto';
-import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolResult, JsonSchema, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type {
   CoderTask,
   TaskExecutionMode,
   TaskReference,
   TasksState,
-} from '@mcp/code-agent/sessions/types.js';
+} from '@mcp/session-storage/session-state-types.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import {
   SUBMIT_TASKS_DESC,
@@ -47,11 +50,11 @@ function tasksSignature(summary: string, tasks: ReadonlyArray<{ title: string; d
   return `${summary.trim()}::${logicalItems}`;
 }
 
-function readRunnerKey(ctx: { runner?: unknown }): object | null {
-  return (ctx.runner as unknown as object) ?? null;
+function readRunnerKey(ctx: Pick<ToolContext, 'runner' | 'ports'>): object | null {
+  return ctx.ports?.tasks ?? ctx.runner ?? null;
 }
 
-function bumpSubmitBurst(ctx: { runner?: unknown }, sig: string): { count: number } {
+function bumpSubmitBurst(ctx: Pick<ToolContext, 'runner' | 'ports'>, sig: string): { count: number } {
   const key = readRunnerKey(ctx);
   if (!key) return { count: 0 };
   const now = Date.now();
@@ -185,10 +188,15 @@ function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
   // lifecycle state from previous "task_1" style ids.
   const rawId = typeof o.id === 'string' ? o.id.trim() : '';
   const id = rawId || `task_${idx + 1}`;
-  const title = String(o.title ?? '').trim();
+  const title = typeof o.title === 'string' ? o.title.trim() : '';
   if (!title) return `tasks[${idx}].title required`;
-  const description = String(o.description ?? '').trim();
+  const description = typeof o.description === 'string' ? o.description.trim() : '';
   if (!description) return `tasks[${idx}].description required`;
+  for (const field of ['files', 'depends_on']) {
+    const values = o[field];
+    if (values !== undefined && (!Array.isArray(values) || values.length > 128
+      || values.some(v => typeof v !== 'string' || v.length > 4096))) return `tasks[${idx}].${field} must contain at most 128 bounded strings`;
+  }
   const files = Array.isArray(o.files) ? o.files.filter((f): f is string => typeof f === 'string') : [];
   const referencesRaw = Array.isArray(o.references) ? o.references : [];
   const references: TaskReference[] = [];
@@ -242,9 +250,10 @@ function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
 export function validateTasksInput(raw: unknown): { summary: string; tasks: CoderTask[] } | string {
   if (!raw || typeof raw !== 'object') return 'input must be an object';
   const o = raw as Record<string, unknown>;
-  const summary = String(o.summary ?? '').trim();
+  const summary = typeof o.summary === 'string' ? o.summary.trim() : '';
   if (!summary) return 'summary required';
   if (!Array.isArray(o.tasks) || o.tasks.length === 0) return 'tasks must be a non-empty array';
+  if (o.tasks.length > 128) return 'tasks must contain at most 128 items';
   if (o.tasks.length < 2) {
     return 'submit_tasks requires 2+ independent tasks. For a single linear action, call submit_plan instead — it is lighter and faster to approve.';
   }
@@ -274,6 +283,10 @@ export function validateTasksInput(raw: unknown): { summary: string; tasks: Code
     id: idMap.get(t.id)!,
     depends_on: t.depends_on.map((dep) => idMap.get(dep)!),
   }));
+  try {
+    parseNativeTasksState({ gate: 'approve', summary, tasks: generated, approved: false,
+      execution_mode: null, current_task_id: null });
+  } catch { return 'Task graph is invalid or oversized: check cycles, text bounds and task references.'; }
   return { summary, tasks: generated };
 }
 
@@ -390,12 +403,16 @@ export const submitTasks: CoderTool = {
   name: 'submit_tasks',
   description: maybeTerse(SUBMIT_TASKS_DESC),
   source: 'native',
+  interactive: true,
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: submitTasksSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx = bindTaskContext(ctx, 'submit_tasks');
+    ctx.signal?.throwIfAborted();
     const validated = validateTasksInput(args);
     if (typeof validated === 'string') return err(`submit_tasks validation failed: ${validated}`);
 
-    const runner = ctx.runner;
+    const runner = ctx.taskRuntime ?? ctx.runner;
     if (!runner) return err('submit_tasks requires runner context');
 
     // Burst guard: refuse repeated re-submissions of the same logical list.
@@ -411,7 +428,7 @@ export const submitTasks: CoderTool = {
       );
     }
 
-    const toolUseId = `tasks_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const toolUseId = ctx.taskRuntime ? ctx.currentToolUseId! : `tasks_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const initialState: TasksState = {
       gate: 'approve',
       summary: validated.summary,
@@ -421,14 +438,21 @@ export const submitTasks: CoderTool = {
       current_task_id: null,
     };
     await ctx.recordTasks?.(toolUseId, initialState);
-    runner.emit('tasks_posted', {
+    const proposal = {
       tool_use_id: toolUseId,
       summary: initialState.summary,
       tasks: initialState.tasks,
       version: 1,
-    });
-
-    const raw = await runner.waitForUserInput();
+    };
+    let response: Promise<string>;
+    if (ctx.taskRuntime) response = ctx.taskRuntime.requestTasks(proposal);
+    else {
+      // Register first: a fast UI consumer may answer synchronously on emit.
+      response = ctx.runner!.waitForUserInput();
+      ctx.runner!.emit('tasks_posted', proposal);
+    }
+    const raw = await response;
+    ctx.signal?.throwIfAborted();
     let parsed: {
       approved?: boolean;
       feedback?: string;
@@ -446,8 +470,16 @@ export const submitTasks: CoderTool = {
       await ctx.resolveTasks?.({ approved: false });
       return err('Task list review aborted by user.');
     }
+    if (parsed.approved !== undefined && typeof parsed.approved !== 'boolean'
+      || parsed.feedback !== undefined && (typeof parsed.feedback !== 'string' || parsed.feedback.length > 8192)
+      || parsed.execution_mode !== undefined && !['inline', 'all-subagent', 'smart', 'per-task'].includes(parsed.execution_mode)) {
+      return err('Invalid task review response; no approval was applied.');
+    }
     if (parsed.approved) {
       const resolvedMode = parsed.execution_mode ?? 'inline';
+      try { parseNativeTasksState({ ...initialState, approved: true, execution_mode: resolvedMode,
+        tasks: parsed.tasks ?? initialState.tasks }); }
+      catch { return err('Invalid task review edits; no approval was applied.'); }
       console.log(
         `[coder/tasks] submit_tasks approved — execution_mode=${resolvedMode} ` +
         `(received=${parsed.execution_mode ?? 'undefined'}) tasks=${parsed.tasks?.length ?? '?'}`,
@@ -496,6 +528,8 @@ export const listTasks: CoderTool = {
   riskLevel: 'read',
   parameters: listTasksSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx = bindTaskContext(ctx, 'list_tasks');
+    ctx.signal?.throwIfAborted();
     const state = ctx.getTasksState?.();
     if (!state) return err('list_tasks: no task list found. Call submit_tasks first.');
     const rawStatuses = Array.isArray(args.statuses) ? args.statuses.filter((s): s is string => typeof s === 'string') : [];
@@ -587,9 +621,12 @@ export const cancelTasks: CoderTool = {
   description:
     'Cancel tasks in the current task list. Pending/failed/interrupted/running tasks become skipped with a cancellation result; done tasks are left untouched.',
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: cancelTasksSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
-    const runner = ctx.runner;
+    ctx = bindTaskContext(ctx, 'cancel_tasks');
+    ctx.signal?.throwIfAborted();
+    const runner = ctx.taskRuntime ?? ctx.runner;
     if (!runner) return err('cancel_tasks requires runner context');
     const state = ctx.getTasksState?.();
     if (!state) return err('cancel_tasks: no task list found. Call submit_tasks first.');
@@ -654,9 +691,12 @@ export const deleteTasks: CoderTool = {
   description:
     'Delete tasks from the current task list. This removes them from persisted state and strips dependencies pointing at them; use cancel_tasks when you want an audit trail.',
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: deleteTasksSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
-    const runner = ctx.runner;
+    ctx = bindTaskContext(ctx, 'delete_tasks');
+    ctx.signal?.throwIfAborted();
+    const runner = ctx.taskRuntime ?? ctx.runner;
     if (!runner) return err('delete_tasks requires runner context');
     const state = ctx.getTasksState?.();
     if (!state) return err('delete_tasks: no task list found. Call submit_tasks first.');
@@ -716,9 +756,12 @@ export const archiveTaskList: CoderTool = {
   description:
     'Clear the current task list for this session so the next submit_tasks starts from a clean UI/state surface. Use when abandoning an old round.',
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: archiveTaskListSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
-    const runner = ctx.runner;
+    ctx = bindTaskContext(ctx, 'archive_task_list');
+    ctx.signal?.throwIfAborted();
+    const runner = ctx.taskRuntime ?? ctx.runner;
     if (!runner) return err('archive_task_list requires runner context');
     const state = ctx.getTasksState?.();
     if (!state) return ok('archive_task_list: no active task list.');
@@ -764,8 +807,11 @@ export const taskComplete: CoderTool = {
   name: 'task_complete',
   description: maybeTerse(TASK_COMPLETE_DESC),
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: taskCompleteSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx = bindTaskContext(ctx, 'task_complete');
+    ctx.signal?.throwIfAborted();
     const taskId = String((args as { task_id?: unknown }).task_id ?? '').trim();
     if (!taskId) return err('task_complete: task_id required');
     const summary = String((args as { summary?: unknown }).summary ?? '').trim();
@@ -779,7 +825,7 @@ export const taskComplete: CoderTool = {
       return typeof v === 'string' && v.trim() ? v : undefined;
     })();
 
-    const runner = ctx.runner;
+    const runner = ctx.taskRuntime ?? ctx.runner;
     if (!runner) return err('task_complete requires runner context');
     if (runner.currentTaskScopeId() !== taskId) {
       return err(
@@ -804,6 +850,13 @@ export const taskComplete: CoderTool = {
         sandbox_violations: violations.length > 0 ? violations : undefined,
       },
     });
+    const finishedTask = ctx.getTasksState?.()?.tasks.find(task => task.id === taskId);
+    if (finishedTask?.task_run_id) {
+      if (ctx.runtimeGeneration === 'rust_v1' && !ctx.completeInlineTaskRun) throw new Error('Native inline task-run projection unavailable');
+      const completed = await ctx.completeInlineTaskRun?.({ ...finishedTask, result: { summary,
+        files_modified: filesModified, errors, sandbox_violations: violations.length > 0 ? violations : undefined } });
+      if (completed) runner.emit('task_run_finished', completed);
+    }
     runner.endTaskScope();
     runner.emit('task_finished', {
       task_id: taskId,
@@ -897,12 +950,15 @@ export const updateTask: CoderTool = {
     // (inline scope closer).
     'Status transitions other than skip/retry are owned by `execute_tasks` / `task_complete` — call those instead for running/done/failed.',
   source: 'native',
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: updateTaskSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx = bindTaskContext(ctx, 'update_task');
+    ctx.signal?.throwIfAborted();
     const taskId = String((args as { task_id?: unknown }).task_id ?? '').trim();
     if (!taskId) return err('update_task: task_id required');
 
-    const runner = ctx.runner;
+    const runner = ctx.taskRuntime ?? ctx.runner;
     if (!runner) return err('update_task requires runner context');
 
     const state = ctx.getTasksState?.();
@@ -943,6 +999,9 @@ export const updateTask: CoderTool = {
           'For running/done/failed, use `execute_tasks` / `task_complete`.');
       }
       const allowed = ALLOWED_STATUS_TRANSITIONS[task.status] ?? new Set<string>();
+      if (newStatus === 'pending' && taskNeedsReconciliation(task)) {
+        return err('update_task: the previous effect is unresolved. Reconcile the durable execution before retrying this task.');
+      }
       if (!allowed.has(newStatus)) {
         return err(
           `update_task: cannot move task '${taskId}' from '${task.status}' to '${newStatus}'. ` +
@@ -1055,8 +1114,12 @@ export const taskList: CoderTool = {
   name: 'task_list',
   description: maybeTerse(TASK_LIST_DESC),
   source: 'native',
+  interactive: true,
+  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: taskListSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
+    ctx = bindTaskContext(ctx, 'task_list');
+    ctx.signal?.throwIfAborted();
     // Patch path → track checklist patch (the update_todo flow).
     if (args.updates !== undefined) {
       return updateTodo.handler({ updates: args.updates }, ctx);

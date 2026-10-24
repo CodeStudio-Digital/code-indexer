@@ -31,13 +31,13 @@ describe('scoreSkill', () => {
     const s = skill({
       id: 'ds-extractor',
       triggerRoles: ['extractor'],
-      triggerTags: ['design-system'],
+      triggerTags: ['api-docs'],
       triggerPaths: ['**/manifest.json'],
     });
 
     const result = scoreSkill(s, {
       role: 'extractor',
-      sessionTags: ['design-system'],
+      sessionTags: ['api-docs'],
       recentFiles: ['/work/manifest.json'],
     });
 
@@ -59,10 +59,10 @@ describe('scoreSkill', () => {
   });
 
   it('matches by sessionTag overlap with triggerTags', () => {
-    const s = skill({ id: 'ds-storybook', triggerTags: ['design-system'] });
-    expect(scoreSkill(s, { sessionTags: ['design-system'] })).toEqual({
+    const s = skill({ id: 'api-docs', triggerTags: ['api-docs'] });
+    expect(scoreSkill(s, { sessionTags: ['api-docs'] })).toEqual({
       confidence: 0.7,
-      reason: 'tag:design-system',
+      reason: 'tag:api-docs',
     });
   });
 
@@ -108,12 +108,12 @@ describe('matchSkills', () => {
   it('filters out skills below the threshold', () => {
     const skills = [
       skill({ id: 'role-hit', triggerRoles: ['extractor'] }),       // 1.0
-      skill({ id: 'tag-hit', triggerTags: ['design-system'] }),     // 0.7
+      skill({ id: 'tag-hit', triggerTags: ['api-docs'] }),     // 0.7
       skill({ id: 'path-hit', triggerPaths: ['**/*.spec.ts'] }),    // 0.6
     ];
     const matched = matchSkills(
       skills,
-      { role: 'extractor', sessionTags: ['design-system'], recentFiles: ['x.spec.ts'] },
+      { role: 'extractor', sessionTags: ['api-docs'], recentFiles: ['x.spec.ts'] },
       { threshold: 0.65 },
     );
     expect(matched.map((m) => m.id)).toEqual(['role-hit', 'tag-hit']);

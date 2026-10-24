@@ -74,11 +74,13 @@ export async function handleExec(
     const child = spawn(cmd, args, { cwd: runCwd, env: cleanEnv(env), shell: false });
     let stdout = '';
     let stderr = '';
-    child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString();
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => {
+      stdout += d;
     });
-    child.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString();
+    child.stderr?.on('data', (d: string) => {
+      stderr += d;
     });
     child.on('error', reject);
     child.on('close', (code) => {
@@ -111,25 +113,45 @@ export async function* execStream(opts: ExecStreamOpts): AsyncGenerator<ExecChun
       `permission_denied: exec not allowed: ${opts.cmd} ${opts.args.join(' ')}`.trim(),
     );
   }
+  opts.signal?.throwIfAborted();
   const child = spawn(opts.cmd, opts.args, {
     cwd: resolve(opts.cwd),
     env: cleanEnv(opts.env),
     shell: false,
   });
 
-  const queue: ExecChunk[] = [];
+  // Bound pending output without discarding it. Pausing both pipes propagates
+  // backpressure to the child when the UI/network consumer is slow. The pipe
+  // buffers and one incoming chunk are additional to this queue's high mark.
+  const maxBytes = 1024 * 1024;
+  const maxFrames = 256;
+  const queue: Array<{ chunk: ExecChunk; bytes: number } | undefined> = [];
+  let head = 0;
+  let queuedBytes = 0;
+  let paused = false;
   let wake: (() => void) | null = null;
   let ended = false;
   const push = (c: ExecChunk): void => {
-    queue.push(c);
+    const bytes = c.type === 'data' ? Buffer.byteLength(c.data, 'utf8') : 0;
+    queue.push({ chunk: c, bytes });
+    queuedBytes += bytes;
+    if (!paused && !opts.signal?.aborted
+      && (queuedBytes >= maxBytes || queue.length - head >= maxFrames)) {
+      paused = true;
+      child.stdout?.pause();
+      child.stderr?.pause();
+    }
     if (wake) {
       wake();
       wake = null;
     }
   };
 
-  child.stdout?.on('data', (d: Buffer) => push({ type: 'data', data: d.toString() }));
-  child.stderr?.on('data', (d: Buffer) => push({ type: 'data', data: d.toString() }));
+  // StringDecoder inside setEncoding preserves UTF-8 across pipe boundaries.
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (data: string) => push({ type: 'data', data }));
+  child.stderr?.on('data', (data: string) => push({ type: 'data', data }));
   child.on('error', (e) => push({ type: 'data', data: `${e.message}\n` }));
   child.on('close', (code) => {
     push({ type: 'exit', code });
@@ -146,12 +168,34 @@ export async function* execStream(opts: ExecStreamOpts): AsyncGenerator<ExecChun
     } catch {
       /* already dead */
     }
+    // A paused pipe (or an inherited pipe held by a descendant) can prevent
+    // close from arriving. Retain queued output; stop collecting after abort.
+    paused = false;
+    child.stdout?.destroy();
+    child.stderr?.destroy();
   };
   opts.signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
     while (true) {
-      while (queue.length) yield queue.shift()!;
+      while (head < queue.length) {
+        const frame = queue[head]!;
+        queue[head++] = undefined;
+        queuedBytes -= frame.bytes;
+        if (head === queue.length) {
+          queue.length = 0;
+          head = 0;
+        } else if (head >= maxFrames) {
+          queue.splice(0, head);
+          head = 0;
+        }
+        if (paused && queuedBytes <= maxBytes / 2 && queue.length - head <= maxFrames / 2) {
+          paused = false;
+          child.stdout?.resume();
+          child.stderr?.resume();
+        }
+        yield frame.chunk;
+      }
       if (ended) break;
       await new Promise<void>((r) => {
         wake = r;
@@ -164,5 +208,8 @@ export async function* execStream(opts: ExecStreamOpts): AsyncGenerator<ExecChun
     } catch {
       /* already dead */
     }
+    // No consumer remains to drain paused pipes on generator.return().
+    child.stdout?.destroy();
+    child.stderr?.destroy();
   }
 }

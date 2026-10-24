@@ -18,6 +18,7 @@
 import type { RunEndMemory } from '@mcp/services/memory/run-end.js';
 import type { InvestigationSemanticIndexPort } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { timeCall } from '../server/perf/slow-ipc.js';
+import { WorkerMemoryReads } from './worker-memory-reads.js';
 
 export interface WorkerMemoryDeps {
   /** Structural project-memory retrieval port (agent_memory-backed in deps.ts). */
@@ -40,13 +41,15 @@ export interface WorkerMemoryDeps {
     save(
       projectId: number,
       projectName: string,
-      entry: { title: string; content: string; category: string },
+      entry: import('@mcp/shared/memory-write.js').LiteralMemoryEntry,
+      control?: import('@mcp/services/memory/mutation-control.js').MemoryMutationControl,
     ): Promise<{ created: number; merged: number; skipped: number } | null>;
     recall(
       projectId: number,
       projectName: string,
       query: string,
       limit?: number,
+      signal?: AbortSignal,
     ): Promise<Array<{
       id: string; title: string; content: string;
       category?: string; source?: string; importance?: number; staleNote?: string;
@@ -56,11 +59,13 @@ export interface WorkerMemoryDeps {
       projectName: string,
       limit?: number,
       type?: string,
+      signal?: AbortSignal,
     ): Promise<Array<{ name: string; description: string; type: string; importance: number; created_at: string }>>;
     forget?(
       projectId: number,
       projectName: string,
       target: string,
+      control?: import('@mcp/services/memory/mutation-control.js').MemoryMutationControl,
     ): Promise<{ archived: number }>;
   } | null;
   /** Session Drive calls stay main-side as orchestration; vector I/O is
@@ -217,6 +222,10 @@ export function registerWorkerMemoryHandlers(
   bridge: BridgeLike,
   getDeps: () => WorkerMemoryDeps | undefined,
 ): () => void {
+  const reads = new WorkerMemoryReads();
+  const offReadCancel = bridge.handle('memoryReadCancel', async payload => {
+    reads.cancel((payload as { readId?: unknown })?.readId);
+  });
   const offRetrieve = bridge.handle('memoryRetrieve', async (payload) => {
     const retriever = getDeps()?.memoryRetriever;
     if (!retriever) return [];
@@ -285,20 +294,20 @@ export function registerWorkerMemoryHandlers(
   const offRecall = bridge.handle('memoryRecall', async (payload) => {
     const pm = getDeps()?.projectMemory;
     if (!pm) return [];
-    const { projectId, projectName, query, limit } = payload as {
-      projectId: number; projectName: string; query: string; limit?: number;
+    const { projectId, projectName, query, limit, readId } = payload as {
+      projectId: number; projectName: string; query: string; limit?: number; readId?: string;
     };
-    return timeCall('worker-rpc:memoryRecall', () =>
-      pm.recall(projectId, projectName, query, limit));
+    return reads.run(readId, signal => timeCall('worker-rpc:memoryRecall', () =>
+      pm.recall(projectId, projectName, query, limit, signal)));
   });
 
   const offList = bridge.handle('memoryList', async (payload) => {
     const pm = getDeps()?.projectMemory;
     if (!pm?.list) return [];
-    const { projectId, projectName, limit, type } = payload as {
-      projectId: number; projectName: string; limit?: number; type?: string;
+    const { projectId, projectName, limit, type, readId } = payload as {
+      projectId: number; projectName: string; limit?: number; type?: string; readId?: string;
     };
-    return pm.list(projectId, projectName, limit, type);
+    return reads.run(readId, signal => pm.list!(projectId, projectName, limit, type, signal));
   });
 
   const offForget = bridge.handle('memoryForget', async (payload) => {
@@ -333,7 +342,8 @@ export function registerWorkerMemoryHandlers(
   const offInvestigationSearch = bridge.handle('investigationSearch', async (payload) => {
     const semantic = getDeps()?.investigationSemantic;
     if (!semantic) return [];
-    return semantic.search(payload as Parameters<InvestigationSemanticIndexPort['search']>[0]);
+    const { readId, ...input } = payload as Parameters<InvestigationSemanticIndexPort['search']>[0] & { readId?: string };
+    return reads.run(readId, signal => semantic.search(input, signal));
   });
 
   const offInvestigationWake = bridge.handle('investigationWake', async (payload) => {
@@ -345,6 +355,8 @@ export function registerWorkerMemoryHandlers(
   });
 
   return (): void => {
+    reads.close();
+    offReadCancel();
     try { offRetrieve(); } catch { /* best-effort */ }
     try { offQuerySynth(); } catch { /* best-effort */ }
     try { offExtract(); } catch { /* best-effort */ }

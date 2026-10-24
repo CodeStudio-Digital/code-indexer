@@ -447,7 +447,7 @@ function collectApplicationMetadataRefs(
   // The migrator records every recursively externalized inline payload in a
   // schema-owned, flat ArtifactRef list. Inspect that list only on migrated
   // entity envelopes; never walk arbitrary entity data, state.extra, tool
-  // arguments, Sprite settings, or user JSON.
+  // arguments or user JSON.
   if (
     isObject(value) &&
     isObject(value.data) &&

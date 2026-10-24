@@ -23,6 +23,11 @@ describe.skipIf(!RUN)('local RAG smoke (real e5-small + sqlite-vec)', () => {
     }
     const embed = new LocalEmbeddingService();
     const store = new SqliteVecVectorStore({ path: ':memory:' });
+    const { env } = await import('@huggingface/transformers');
+    const previousRemote = env.allowRemoteModels;
+    if (process.env.MCP_RAG_SMOKE_OFFLINE === '1') env.allowRemoteModels = false;
+
+    try {
 
     const docs = [
       { id: 'd1', text: 'The cache layer uses Redis for fast key/value lookups.' },
@@ -43,5 +48,10 @@ describe.skipIf(!RUN)('local RAG smoke (real e5-small + sqlite-vec)', () => {
 
     expect(res).toHaveLength(3);
     expect(res[0].id).toBe('d1'); // caching query → the Redis cache doc wins
+    } finally {
+      await embed.dispose();
+      store.close();
+      env.allowRemoteModels = previousRemote;
+    }
   }, 180_000);
 });

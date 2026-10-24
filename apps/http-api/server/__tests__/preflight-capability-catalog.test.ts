@@ -168,20 +168,20 @@ describe('buildPreflightSkillCatalog', () => {
     const root = mkdtempSync(join(tmpdir(), 'preflight-skill-dep-'));
     try {
       writeFileSync(join(root, 'package.json'), JSON.stringify({
-        dependencies: { '@corporate/ui': '3.1.0' },
+        dependencies: { '@corporate/charts': '3.1.0' },
       }));
       const store = {
         ...fakeStore([{
-          id: 'ds-ctx-ui',
-          name: 'Design System: @corporate/ui',
-          description: 'Context for @corporate/ui',
+          id: 'charts-context',
+          name: 'Chart library: @corporate/charts',
+          description: 'Context for @corporate/charts',
           scope: 'global',
         }]),
       } as SkillStore;
 
       expect(buildPreflightSkillCatalog(store, 7, undefined, root)[0]).toMatchObject({
-        id: 'ds-ctx-ui',
-        packageNames: ['@corporate/ui'],
+        id: 'charts-context',
+        packageNames: ['@corporate/charts'],
         dependencyMatched: true,
         scope: 'global',
       });

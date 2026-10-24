@@ -7,9 +7,11 @@ import { create } from '@bufbuild/protobuf';
 import {
   agentV1Capability,
   agentV1Common,
+  agentV1Runtime,
   type AgentRunId,
 } from '@mcp/agent-runtime-contracts';
 import type { ValidatedCapabilityPrepare } from '@mcp/agent-runtime-host';
+import { encodeNativeToolUserMessage } from '@mcp/agent-runtime-host';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deriveCapabilityDescriptor,
@@ -17,18 +19,24 @@ import {
   skillAsCatalogCapability,
 } from '../../core/capability-catalog.js';
 import { createMutationFenceAuthority } from '../../core/mutation-fence.js';
+import { HostEffectScope } from '../host-effect-scope.js';
 import { ToolRegistry } from '../../core/registry.js';
 import type { CoderTool, ToolContext, ToolResult } from '../../core/tool.js';
+import { unknownToolOutcome } from '../../core/tool.js';
+import { ToolCallLedger } from '../../core/tool-call-ledger.js';
 import type { ResolvedSkill } from '../../skills/types.js';
 import { buildCapabilityCatalogTool } from '../../tools/capability-catalog-tool.js';
+import { createHostCapabilitySnapshot, type HostCapabilitySnapshot } from '../host-capability-snapshot.js';
 import { fsTools } from '../../tools/fs.js';
 import { httpTools } from '../../tools/http.js';
+import { webFetch, webSearch } from '../../tools/web.js';
 import { shellTools } from '../../tools/shell.js';
 import {
   decodeHostToolExecutionPayload,
   createToolRegistryCapabilityGatewayFactory,
   HOST_TOOL_RESULT_SCHEMA_ID,
   ToolRegistryHostCapabilityExecutor,
+  type ToolRegistryHostCapabilityExecutorOptions,
 } from '../tool-registry-host-capability-executor.js';
 
 const roots: string[] = [];
@@ -38,6 +46,175 @@ afterEach(async () => {
 });
 
 describe('ToolRegistryHostCapabilityExecutor P3 corpus', () => {
+  it.each(['confirmed', 'missing-receipt', 'foreign-session', 'foreign-owner', 'nested-unknown'] as const)(
+    'settles self-review cancellation only with its owned durable receipt: %s', async proof => {
+      const root = await temporaryRoot(), controller = new AbortController(), ledger = new ToolCallLedger();
+      let entered!: () => void, invocationId = '', confirmed = false;
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      const registry = registryWith([tool({ name: 'self_review', source: 'native', mutates: false,
+        parallelSafe: false, effectBoundary: 'control', handler: async (_args, context) => {
+          invocationId = context.currentToolUseId!; entered();
+          await new Promise<void>(resolve => context.signal!.addEventListener('abort', () => resolve(), { once: true }));
+          await new Promise(resolve => setTimeout(resolve, 10));
+          confirmed = proof !== 'missing-receipt';
+          if (proof === 'nested-unknown') ledger.markOutcomeUnknown('reference');
+          context.signal!.throwIfAborted(); return { content: 'unreachable' };
+        } })]);
+      const fixture = executorFor(registry, contextFor(root, { signal: controller.signal, toolCallLedger: ledger,
+        runtimeGeneration: 'rust_v1', sessionId: 'session' as never, controlPlaneParentAgentRunId: 'owned-parent', mutationFence: mutationFence(root),
+        ports: { sessionReview: { runtimeGeneration: 'rust_v1', sessionId: proof === 'foreign-session' ? 'other' : 'session',
+          agentRunId: proof === 'foreign-owner' ? 'other-parent' : 'owned-parent', workspaceRoot: root,
+          assertOwner: () => {}, beginInvocation: () => () => {}, isCancellationSettled: id => confirmed && id === invocationId } } }),
+      { bindNested: () => ({ turn: 1 }) });
+      const pending = fixture.execute('self_review', {}); await ready; controller.abort(new Error('cancel'));
+      expect(await pending).toMatchObject({ case: proof === 'confirmed' ? 'cancelled' : 'outcomeUnknown' });
+    },
+  );
+  it.each(['confirmed', 'unknown', 'foreign-owner'] as const)(
+    'requires owned child settlement before classifying documentation cancellation: %s', async proof => {
+      const root = await temporaryRoot(), controller = new AbortController();
+      let entered!: () => void, invocationId = '', confirmed = false;
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      const registry = registryWith([tool({ name: 'docs_deep_research', source: 'native', mutates: false,
+        parallelSafe: false, effectBoundary: 'nested', handler: async (_args, context) => {
+          invocationId = context.currentToolUseId!; entered();
+          await new Promise<void>(resolve => context.signal!.addEventListener('abort', () => resolve(), { once: true }));
+          await new Promise(resolve => setTimeout(resolve, 10));
+          confirmed = proof === 'confirmed';
+          context.signal!.throwIfAborted();
+          return { content: 'unreachable' };
+        } })]);
+      const fixture = executorFor(registry, contextFor(root, { signal: controller.signal,
+        runtimeGeneration: 'rust_v1', controlPlaneParentAgentRunId: 'owned-parent', mutationFence: mutationFence(root),
+        ports: { docsResearch: { runtimeGeneration: 'rust_v1', ownerAgentRunId: proof === 'foreign-owner' ? 'other-parent' : 'owned-parent',
+          isReadOnlyInvocation: id => confirmed && id === invocationId, research: async () => ({ content: 'unused' }) } } }));
+      const pending = fixture.execute('docs_deep_research', {}); await ready; controller.abort(new Error('cancel'));
+      expect(await pending).toMatchObject({ case: proof === 'confirmed' ? 'cancelled' : 'outcomeUnknown' });
+    },
+  );
+  it('authorizes nested self-review lookups without requiring code_exec in the snapshot', async () => {
+    const root = await temporaryRoot(); const read = vi.fn(async () => ({ content: 'references' }));
+    const registry = registryWith([
+      tool({ name: 'review_reference', source: 'native', handler: read }),
+      tool({ name: 'self_review', source: 'native', mutates: false, parallelSafe: false, effectBoundary: 'control',
+        handler: async (_args, ctx) => {
+          expect(ctx.nestedCapabilityDispatch).toBeDefined();
+          return (await ctx.nestedCapabilityDispatch!.invoke!('review_reference', {}, ctx, () => {}))!;
+        } }),
+    ]);
+    const resolved = resolveCapabilitySet(registry.list(), setOptions());
+    const context = contextFor(root, { mutationFence: mutationFence(root) });
+    const effects = new HostEffectScope(); const validateGrant = vi.fn(async () => {});
+    const authorized: string[] = [];
+    const factory = createToolRegistryCapabilityGatewayFactory({ registry, capabilitySet: resolved.set,
+      toolContext: context, effects, validateGrant, decisionResolverFactory: () => ({
+        resolve: async request => { authorized.push(request.capabilityId); return { case: 'accepted', value: grantFor(request) }; },
+      }) });
+    const request = executorFor(registry, context).request('self_review', {});
+    const gateway = factory({ identity: request.identity, runtimeInstanceId: request.runtimeInstanceId,
+      limits: create(agentV1Common.FrameLimitsSchema, { maxFrameBytes: 1024n * 1024n, maxChunkBytes: 256n * 1024n,
+        maxInFlightFrames: 1n, maxInFlightBytes: 1024n * 1024n, readTimeoutMs: 5000n, writeTimeoutMs: 5000n }), timeoutMs: 5000,
+    }, { now: () => BigInt(Date.now()) });
+    const prepared = await gateway.prepare(create(agentV1Capability.CapabilityPrepareSchema, request));
+    expect(prepared.decision.case).toBe('accepted'); if (prepared.decision.case !== 'accepted') return;
+    const result = await gateway.execute(create(agentV1Capability.CapabilityExecuteSchema, { identity: request.identity,
+      runtimeInstanceId: request.runtimeInstanceId, operationId: request.operationId, toolUseId: request.toolUseId,
+      grantId: prepared.decision.value.grantId, effectiveInputSha256: request.inputSha256, deadlineAtUnixMs: request.deadlineAtUnixMs }));
+    expect(result.outcome.case).toBe('succeeded');
+    if (result.outcome.case === 'succeeded') expect(decodeHostToolExecutionPayload(result.outcome.value.encodedResult)).toMatchObject({ content: 'references', isError: false });
+    expect(read).toHaveBeenCalledOnce();
+    expect(authorized).toEqual(['cap:native:self_review', 'cap:native:review_reference']);
+    expect(validateGrant).toHaveBeenCalledTimes(2);
+  });
+  it('preserves bounded structured results and keeps successful effects successful when optional metadata is excessive', async () => {
+    const root = await temporaryRoot(); let structuredData: unknown = { kind: 'review', findings: [], reference: 'owned-journal' };
+    const handler = vi.fn(async () => ({ content: 'confirmed result', structuredData }));
+    const registry = registryWith([tool({ name: 'structured_write', source: 'native', mutates: true, effectBoundary: 'control', handler })]);
+    const fixture = executorFor(registry, contextFor(root, { mutationFence: mutationFence(root) }));
+    const first = await fixture.execute('structured_write', {});
+    expect(first.case).toBe('succeeded');
+    if (first.case === 'succeeded') expect(decodeHostToolExecutionPayload(first.encodedResult)).toMatchObject({ structuredData });
+    structuredData = { huge: 'x'.repeat(70_000) };
+    const second = await fixture.execute('structured_write', {});
+    expect(second.case).toBe('succeeded');
+    if (second.case === 'succeeded') expect(decodeHostToolExecutionPayload(second.encodedResult)).toMatchObject({
+      content: 'confirmed result', isError: false, transport: { structuredDataOmitted: 'too_large' } });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+  it('does not acknowledge a control mutation when its result accounting fails', async () => {
+    const root = await temporaryRoot();
+    const registry = registryWith([tool({ name: 'create_goal', source: 'native', mutates: false,
+      executionClass: 'control', effectBoundary: 'control', parallelSafe: false,
+      handler: async () => ({ content: 'Goal set' }) })]);
+    const fixture = executorFor(registry, contextFor(root, { mutationFence: mutationFence(root) }), {
+      commitResult: async () => { throw new Error('journal unavailable'); },
+    });
+    expect(fixture.executor.isParallelSafe(fixture.request('create_goal', {}))).toBe(false);
+    expect(await fixture.execute('create_goal', {})).toMatchObject({ case: 'outcomeUnknown', reasonCode: 'host_capability_result_commit_ambiguous' });
+  });
+
+  it('keeps private goal state inside the confirmed result envelope', async () => {
+    const root = await temporaryRoot();
+    const registry = registryWith([tool({ name: 'create_goal', source: 'native', mutates: false,
+      executionClass: 'control', effectBoundary: 'control', parallelSafe: false, handler: async () => ({ content: 'Goal set' }) })]);
+    const next = { text: 'Keep settings', status: 'in_progress' as const, budgetTokens: null, completionNote: null,
+      createdAt: '2026-10-07T00:00:00.000Z', updatedAt: '2026-10-07T00:00:00.000Z' };
+    const fixture = executorFor(registry, contextFor(root, { mutationFence: mutationFence(root) }), {
+      commitResult: () => ({ nativeGoal: { version: 1, toolUseId: 'attributed', toolName: 'create_goal', expected: null, next } }),
+    });
+    const result = await fixture.execute('create_goal', {});
+    expect(result.case).toBe('succeeded');
+    if (result.case !== 'succeeded') return;
+    expect(decodeHostToolExecutionPayload(result.encodedResult)).toMatchObject({ content: 'Goal set', nativeGoal: { next } });
+  });
+  it('admits owned public reads concurrently without granting a mutation fence', async () => {
+    const root = await temporaryRoot();
+    const registry = registryWith([webFetch, webSearch]);
+    const read = vi.fn(async () => ({ url: 'https://example.com/', status: 200, statusText: 'OK', contentType: 'text/plain',
+      text: 'PUBLIC_PAGE', truncated: false, inputBytes: 11, inputSizeExact: true }));
+    const fixture = executorFor(registry, contextFor(root, { ports: { web: { read, assertCurrent() {} } } }));
+    expect(fixture.executor.isParallelSafe(fixture.request('web_fetch', { url: 'https://example.com/' }))).toBe(true);
+    const result = await fixture.execute('web_fetch', { url: 'https://example.com/' });
+    expect(result.case).toBe('succeeded'); expect(read).toHaveBeenCalledTimes(1);
+  });
+  it('preserves an explicit transport unknown instead of committing a normal tool failure', async () => {
+    const root = await temporaryRoot();
+    const commitResult = vi.fn();
+    const registry = registryWith([tool({ name: 'uncertain_write', source: 'native', mutates: true,
+      effectBoundary: 'control', handler: async () => unknownToolOutcome('effect executed, ACK lost') })]);
+    const fixture = executorFor(registry, contextFor(root, { mutationFence: mutationFence(root) }), { commitResult });
+    expect(await fixture.execute('uncertain_write', {})).toMatchObject({
+      case: 'outcomeUnknown', reasonCode: 'host_capability_effect_unconfirmed',
+    });
+    expect(commitResult).not.toHaveBeenCalled();
+  });
+  it('binds execution to the hydrated wire snapshot without accepting its logical catalog hash', async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, 'wire.txt'), 'wire snapshot read', 'utf8');
+    const registry = registryWith(fsTools.filter((tool) => tool.name === 'read_file'));
+    const resolved = resolveCapabilitySet(registry.list(), setOptions());
+    const wireSnapshot = createHostCapabilitySnapshot(registry, resolved.set);
+    const fixture = executorFor(registry, contextFor(root), { wireSnapshot });
+    const input = fixture.request('read_file', { path: 'wire.txt' });
+    expect(await fixture.executor.execute(input, grantFor(input))).toMatchObject({
+      case: 'failed', reasonCode: 'host_capability_not_in_attempt_snapshot',
+    });
+    const nativeInput = { ...input, capabilitySetSha256: wireSnapshot.snapshotSha256 };
+    const outcome = await fixture.executor.execute(nativeInput, grantFor(nativeInput));
+    expect(outcome.case).toBe('succeeded');
+    if (outcome.case === 'succeeded') expect(decodeHostToolExecutionPayload(outcome.encodedResult).content).toContain('wire snapshot read');
+  });
+
+  it('rejects a wire snapshot modified and rehashed outside the sealed registry', async () => {
+    const root = await temporaryRoot();
+    const registry = registryWith(fsTools.filter((tool) => tool.name === 'read_file'));
+    const resolved = resolveCapabilitySet(registry.list(), setOptions());
+    const wireSnapshot = createHostCapabilitySnapshot(registry, resolved.set);
+    wireSnapshot.encodedSnapshot[wireSnapshot.encodedSnapshot.length - 1] ^= 1;
+    const changed = { ...wireSnapshot, snapshotSha256: createHash('sha256').update(wireSnapshot.encodedSnapshot).digest() };
+    expect(() => executorFor(registry, contextFor(root), { wireSnapshot: changed })).toThrow('wire capability snapshot');
+  });
+
   it('executes real native filesystem read and fenced mutation from one attempt snapshot', async () => {
     const root = await temporaryRoot();
     await writeFile(join(root, 'seed.txt'), 'hello from P3', 'utf8');
@@ -323,6 +500,9 @@ describe('ToolRegistryHostCapabilityExecutor P3 corpus', () => {
       {
         commitResult: ({ toolName, result }) => {
           committed.push({ toolName, result });
+          if (result.extraUserBlocks?.length) return { extraUserMessageHex: encodeNativeToolUserMessage(
+            create(agentV1Runtime.ProviderMessageSchema, { role: agentV1Runtime.ProviderMessageRole.USER,
+              content: [{ body: { case: 'text', value: { body: { case: 'inlineUtf8', value: 'durable Company receipt' } } } }] })) };
         },
       },
     );
@@ -508,6 +688,32 @@ describe('ToolRegistryHostCapabilityExecutor P3 corpus', () => {
     expect(outcome.encodedResult.byteLength).toBeLessThanOrEqual(4_096);
   });
 
+  it('withholds the recovery ID until its spill commits and preserves ambiguity on failure', async () => {
+    const root = await temporaryRoot();
+    let finish!: () => void;
+    const durable = new Promise<void>(resolve => { finish = resolve; });
+    const drain = vi.fn(() => durable);
+    const registry = registryWith([tool({ name: 'large_report', source: 'native',
+      handler: async () => ({ content: 'z'.repeat(20000) }) })]);
+    const fixture = executorFor(registry, contextFor(root, { toolOutputStore: {
+      put: () => 'a'.repeat(64), get: () => null, hasOutputs: () => true, drain,
+    } }), { maximumInlineChars: 256 });
+    let returned = false;
+    const pending = fixture.execute('large_report', {}).then(result => { returned = true; return result; });
+    await vi.waitFor(() => expect(drain).toHaveBeenCalled()); expect(returned).toBe(false);
+    finish(); expect((await pending).case).toBe('succeeded');
+    drain.mockRejectedValue(new Error('disk full'));
+    expect((await fixture.execute('large_report', {})).case).toBe('failed');
+    const writeRegistry = registryWith([tool({ name: 'large_write', source: 'native', mutates: true,
+      effectBoundary: 'control', handler: async () => ({ content: 'z'.repeat(20000) }) })]);
+    const writeFixture = executorFor(writeRegistry, contextFor(root, {
+      mutationFence: mutationFence(root), toolOutputStore: {
+        put: () => 'b'.repeat(64), get: () => null, hasOutputs: () => true, drain,
+      },
+    }), { maximumInlineChars: 256 });
+    expect((await writeFixture.execute('large_write', {})).case).toBe('outcomeUnknown');
+  });
+
   it('marks a post-dispatch deadline unknown for effects and cancelled for reads', async () => {
     const root = await temporaryRoot();
     const registry = registryWith([
@@ -577,6 +783,52 @@ describe('ToolRegistryHostCapabilityExecutor P3 corpus', () => {
     });
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it('does not report extra content as delivered without its material receipt', async () => {
+    const root = await temporaryRoot();
+    const registry = registryWith([tool({ name: 'image_probe', source: 'native',
+      handler: async () => ({ content: 'image loaded', extraUserBlocks: [{ type: 'text', text: 'extra content' }] }) })]);
+    const fixture = executorFor(registry, contextFor(root));
+    expect(await fixture.execute('image_probe', {})).toMatchObject({
+      case: 'failed', reasonCode: 'host_capability_extra_content_not_committed',
+    });
+  });
+
+  it('does not release effect ownership when a timed-out handler keeps running', async () => {
+    const root = await temporaryRoot();
+    const effects = new HostEffectScope();
+    let finish!: () => void;
+    const registry = registryWith([tool({ name: 'uncooperative_mutation', source: 'native',
+      mutates: true, effectBoundary: 'control', handler: async () => {
+        await new Promise<void>(resolve => { finish = resolve; });
+        await writeFile(join(root, 'late-effect.txt'), 'settled');
+        return { content: 'late effect' };
+      } })]);
+    const fixture = executorFor(registry, contextFor(root, { mutationFence: mutationFence(root) }), { effects });
+    expect(await fixture.execute('uncooperative_mutation', {}, 30n)).toMatchObject({ case: 'outcomeUnknown' });
+    expect(effects.activeCount).toBe(1);
+    let drained = false;
+    const idle = effects.waitForIdle().then(() => { drained = true; });
+    await Promise.resolve(); expect(drained).toBe(false);
+    finish(); await idle;
+    expect(await readFile(join(root, 'late-effect.txt'), 'utf8')).toBe('settled');
+    expect(effects.activeCount).toBe(0);
+  });
+
+  it.each(['ask_user', 'decision_gate', 'mutating_control'])('uses product cancellation proof only for questions: %s', async name => {
+    const root = await temporaryRoot(), controller = new AbortController();
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const registry = registryWith([tool({ name, source: 'native', mutates: false, effectBoundary: 'control', handler: async (_args, context) => {
+      entered();
+      await new Promise<void>(resolve => context.signal!.addEventListener('abort', () => resolve(), { once: true }));
+      return { content: 'cancelled', isError: true };
+    } })]);
+    const fixture = executorFor(registry, contextFor(root, { mutationFence: mutationFence(root), signal: controller.signal }),
+      { cancelledQuestionWithoutResponse: () => true });
+    const pending = fixture.execute(name, {}); await ready; controller.abort();
+    expect(await pending).toMatchObject({ case: name === 'mutating_control' ? 'outcomeUnknown' : 'cancelled' });
+  });
 });
 
 function registryWith(tools: readonly CoderTool[]): ToolRegistry {
@@ -590,12 +842,13 @@ function executorFor(
   registry: ToolRegistry,
   context: ToolContext,
   limits: {
+    bindNested?: ToolRegistryHostCapabilityExecutorOptions['bindNested'];
+    cancelledQuestionWithoutResponse?: ToolRegistryHostCapabilityExecutorOptions['cancelledQuestionWithoutResponse'];
+    effects?: HostEffectScope;
+    wireSnapshot?: HostCapabilitySnapshot;
     maximumInlineChars?: number;
     maximumEncodedResultBytes?: number;
-    commitResult?: (input: {
-      toolName: string;
-      result: ToolResult;
-    }) => void | Promise<void>;
+    commitResult?: ToolRegistryHostCapabilityExecutorOptions['commitResult'];
   } = {},
   catalogOnly: readonly CoderTool[] = [],
 ) {
@@ -723,6 +976,7 @@ function tool(options: {
   source: CoderTool['source'];
   provenance?: NonNullable<CoderTool['capabilityProvenance']>;
   mutates?: boolean;
+  parallelSafe?: boolean;
   executionClass?: CoderTool['executionClass'];
   effectBoundary?: CoderTool['effectBoundary'];
   handler: CoderTool['handler'];
@@ -734,7 +988,7 @@ function tool(options: {
     source: options.source,
     capabilityProvenance: options.provenance,
     mutates: options.mutates ?? false,
-    parallelSafe: options.mutates ? false : true,
+    parallelSafe: options.parallelSafe ?? !options.mutates,
     executionClass: options.executionClass,
     effectBoundary: options.effectBoundary,
     handler: options.handler,

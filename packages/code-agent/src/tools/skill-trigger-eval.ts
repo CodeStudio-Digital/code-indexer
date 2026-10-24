@@ -17,6 +17,7 @@
 import { minimatch } from 'minimatch';
 import { matchSkills, type SkillMatchContext } from '@mcp/code-agent/skills/skill-matcher.js';
 import type { ResolvedSkill } from '@mcp/code-agent/skills/types.js';
+import type { SkillTriggerDefinition } from '@mcp/store/skill-types.js';
 
 export interface TriggerContextResult {
   /** Human label for the synthetic context, e.g. `path:src/**\/*.ts`. */
@@ -58,7 +59,7 @@ function synthPathForGlob(glob: string): string | null {
 
 export function evalSkillTriggers(
   candidate: ResolvedSkill,
-  existing: ResolvedSkill[],
+  existing: SkillTriggerDefinition[],
 ): TriggerEvalReport {
   // Evaluate against the catalog WITH the candidate included so the matcher
   // ranks them together exactly as it would at runtime.

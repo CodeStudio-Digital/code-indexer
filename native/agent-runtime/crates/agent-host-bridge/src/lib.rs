@@ -5,14 +5,21 @@
 //! peer check on the live connection can produce an authenticated owner.
 
 mod binding;
+#[cfg(windows)]
+pub mod command;
+#[cfg(windows)]
+pub mod duplex_process;
 mod endpoint;
 mod error;
 mod owner;
 mod platform;
 mod request;
 mod request_validation;
+pub mod resource_bounds;
 mod supervisor;
 
+#[cfg(windows)]
+pub use agent_platform::windows::filesystem_move::rename_path_no_replace;
 pub use binding::DurableHostAttemptBinding;
 #[cfg(windows)]
 pub use endpoint::HostVerifiedStream;

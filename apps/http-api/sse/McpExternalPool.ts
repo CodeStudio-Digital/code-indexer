@@ -11,8 +11,8 @@
  * that's ~5-10s of cold-start lag PER new chat session.
  *
  * Design:
- *   - One `McpServerManager` instance. It already retries, refreshes
- *     OAuth, and reconnects lazily on transient network drops, so we
+ *   - One `McpServerManager` instance. It refreshes OAuth and reconnects
+ *     before dispatch, without replaying ambiguous tool calls, so we
  *     don't re-implement any of that here.
  *   - Boot reads the active server list from `McpServerStore`. After
  *     that the pool exposes a `serializeSnapshot()` that workers grab
@@ -24,10 +24,14 @@
  *   - `refresh()` rebuilds connections when the operator enables /
  *     disables / edits a server in the admin UI.
  */
-import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
+import { createNativeMcpStdioTransport } from './native-mcp-stdio-factory.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { McpServerManager, mcpServerConfigurationKey } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { McpServerStore, type McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
-import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { IMcpServerManager } from '@mcp/code-agent/tools/mcp-server-manager-interface.js';
 
@@ -49,6 +53,10 @@ export interface McpExternalSnapshot {
     serverId: string;
     /** The raw tool name (without the `ext_<serverId>__` prefix). */
     toolName: string;
+    /** Opaque binding to this exact configuration and tool definition. */
+    catalogueRevision?: string;
+    transport?: 'stdio' | 'sse' | 'streamable_http';
+    processTreeContained?: boolean;
   }>;
   /** Tier assignment per prefixed tool name. */
   tierMap: Array<[string, ToolTier]>;
@@ -91,6 +99,8 @@ export class McpExternalPool implements IMcpServerManager {
   private readonly bearerResolver: ResolveMcpBearer | null;
   private readonly loadEnabledServers: () => McpServerConfig[];
   private snapshot: McpExternalSnapshot | null = null;
+  private liveTools = new Map<string, CoderTool>();
+  private toolRevisions = new Map<string, { definition: string; revision: string }>();
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   private configFingerprint = '';
   private lifecycleTail: Promise<void> = Promise.resolve();
@@ -107,7 +117,9 @@ export class McpExternalPool implements IMcpServerManager {
   }) {
     this.dbPath = opts.dbPath;
     this.bearerResolver = opts.bearerResolver ?? null;
-    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver);
+    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver,
+      process.platform === 'win32' && process.arch === 'x64' && (process.env.CODESTUDIO_NATIVE_CODER_DEV === '1' || process.env.CODESTUDIO_NATIVE_MCP_STDIO_DEV === '1')
+        ? createNativeMcpStdioTransport : undefined);
     this.loadEnabledServers = opts.loadEnabledServers ?? (() => {
       const store = new McpServerStore(this.dbPath);
       try {
@@ -171,41 +183,27 @@ export class McpExternalPool implements IMcpServerManager {
     });
   }
 
-  /**
-   * Invoke a tool on a specific external server. Routed here by the
-   * `mcpExt.callTool` worker RPC; the pool resolves the cached
-   * handler so the in-process retry/reconnect logic stays in play.
-   */
-  async callTool(
-    serverId: string,
-    toolName: string,
-    args: Record<string, unknown>,
-  ): Promise<{ ok: boolean; text: string }> {
-    // Look up the prefixed tool by reconstructing the name. The
-    // cached snapshot already has handlers attached, but we can't
-    // serialize them across the bridge — so we re-resolve on the
-    // pool's manager which holds the live `Client`.
-    //
-    // We rebuild a fresh per-call handler via `listAllTools()`-style
-    // logic by reaching into the manager. That's slightly indirect
-    // but keeps a single source of truth for the retry/auth machinery.
-    const handler = await this.resolveLiveHandler(serverId, toolName);
-    if (!handler) {
-      return {
-        ok: false,
-        text: `External MCP server "${serverId}" or tool "${toolName}" not found in the live pool.`,
-      };
-    }
-    const result = await handler(args);
-    // CoderTool's handler returns `{ content, isError? }` — translate
-    // back to the worker-friendly `{ ok, text }` envelope. The pool's
-    // contract is "ok=true unless the server itself flagged an error
-    // OR the transport threw" (mcp-server-manager already converts
-    // thrown errors into `err(...)` content).
-    return {
-      ok: !result.isError,
-      text: result.content,
+  /** Dispatch through the cached catalogue; discovery never runs per invocation. */
+  async callTool(serverId: string, toolName: string, args: Record<string, unknown>,
+    signal?: AbortSignal, catalogueRevision?: string, assertDispatch?: () => void): Promise<{ ok: boolean; text: string; result: ToolResult }> {
+    const tool = this.liveTools.get(`ext_${serverId}__${toolName}`);
+    const admittedRevision = catalogueRevision ?? this.toolRevisions.get(tool?.name ?? '')?.revision;
+    const assertWireDispatch = () => {
+      if (this.shuttingDown || !admittedRevision || this.toolRevisions.get(tool?.name ?? '')?.revision !== admittedRevision) {
+        throw new Error('External MCP catalogue retired before wire dispatch');
+      }
+      signal?.throwIfAborted();
+      assertDispatch?.();
     };
+    const stale = catalogueRevision !== undefined
+      && this.toolRevisions.get(`ext_${serverId}__${toolName}`)?.revision !== catalogueRevision;
+    const result = stale ? err('External MCP catalogue changed; start with a refreshed catalogue before dispatch.')
+      : !tool || this.shuttingDown
+      ? err(`External MCP server "${serverId}" or tool "${toolName}" not found in the live pool.`)
+      : signal?.aborted ? err('External MCP call cancelled before dispatch.')
+      : await tool.handler(args, { signal, assertExternalMcpDispatch: assertWireDispatch } as ToolContext);
+    // Keep the legacy envelope while carrying the full result through new workers.
+    return { ok: !result.isError, text: result.content, result };
   }
 
   // ── IMcpServerManager surface ─────────────────────────────────────
@@ -240,13 +238,16 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   /**
-   * Rebuild the catalogue from the manager. Cheap (in-memory) once
-   * the pool is booted; the manager already keeps live `Client`
-   * instances, so this is just a `listTools()` per connected server.
-   * Workers use the cached snapshot via `getSnapshot()` instead.
+   * Return the cached catalogue with revision-bound handlers. In-process
+   * consumers share the same dispatch checks as workers, without rediscovery.
    */
   async listAllTools(): Promise<{ tools: CoderTool[]; tierMap: Map<string, ToolTier> }> {
-    return this.manager.listAllTools();
+    const snapshot = this.getSnapshot();
+    return { tools: snapshot.tools.flatMap(entry => {
+      const live = this.liveTools.get(entry.name);
+      return live ? [{ ...live, handler: async (args, ctx) =>
+        (await this.callTool(entry.serverId, entry.toolName, args, ctx.signal, entry.catalogueRevision)).result }] : [];
+    }), tierMap: new Map(snapshot.tierMap) };
   }
 
   /** Delegates to the inner manager — non-core tiers from connected servers. */
@@ -288,6 +289,8 @@ export class McpExternalPool implements IMcpServerManager {
     await this.runLifecycle(async () => {
       await this.manager.closeAll();
       this.snapshot = null;
+      this.liveTools.clear();
+      this.toolRevisions.clear();
       this.configFingerprint = '';
       this.booted = false;
     });
@@ -305,7 +308,7 @@ export class McpExternalPool implements IMcpServerManager {
 
   private fingerprint(configs: McpServerConfig[]): string {
     return configs
-      .map((config) => `${config.id}:${config.updated_at}`)
+      .map((config) => `${config.id}:${mcpServerConfigurationKey(config)}`)
       .sort()
       .join('|');
   }
@@ -346,6 +349,8 @@ export class McpExternalPool implements IMcpServerManager {
 
   private async rebuild(configs: McpServerConfig[], closeExisting: boolean): Promise<void> {
     if (closeExisting) {
+      this.liveTools.clear();
+      this.toolRevisions.clear();
       this.booted = false;
       await this.manager.closeAll();
     }
@@ -353,6 +358,8 @@ export class McpExternalPool implements IMcpServerManager {
 
     if (configs.length === 0) {
       this.snapshot = this.emptySnapshot();
+      this.liveTools.clear();
+      this.toolRevisions.clear();
       this.configFingerprint = this.fingerprint(configs);
       this.booted = true;
       this.scheduleHealthCheck();
@@ -381,35 +388,22 @@ export class McpExternalPool implements IMcpServerManager {
     );
   }
 
-  /**
-   * Look up the handler for `serverId/toolName` from the cached
-   * snapshot, then reach into the live manager to invoke it. Returns
-   * `null` for unknown server/tool pairs (covers "admin disabled the
-   * server but a worker still has the old snapshot").
-   */
-  private async resolveLiveHandler(
-    serverId: string,
-    toolName: string,
-  ): Promise<((args: Record<string, unknown>) => Promise<{ content: string; isError?: boolean }>) | null> {
-    const prefixedName = `ext_${serverId}__${toolName}`;
-    const cached = this.snapshot?.tools.find((t) => t.name === prefixedName);
-    if (!cached) return null;
-    // The manager rebuilds handlers on every listAllTools() — call it
-    // once to grab the fresh handler bound to the live transport.
-    // This is cheap (in-memory) once the connection is up.
-    const { tools } = await this.manager.listAllTools();
-    const live = tools.find((t) => t.name === prefixedName);
-    if (!live) return null;
-    // `CoderTool.handler` declares `(args, ctx) => Promise<ToolResult>`
-    // but the McpServerManager-built handlers ignore the `ctx` and use
-    // their captured Client. We pass an empty stub so the typesystem
-    // is satisfied without forging a ToolContext that wouldn't be read.
-    const stubCtx = {} as ToolContext;
-    return (args) => live.handler(args, stubCtx);
-  }
-
   private async buildSnapshot(configs: McpServerConfig[]): Promise<McpExternalSnapshot> {
     const { tools, tierMap } = await this.manager.listAllTools();
+    const revisions = new Map<string, { definition: string; revision: string }>();
+    for (const tool of tools) {
+      const config = tool.capabilityProvenance?.serverId
+        ? configs.find(c => c.id === tool.capabilityProvenance!.serverId)
+        : [...configs].sort((a, b) => b.id.length - a.id.length).find(c => tool.name.startsWith('ext_' + c.id + '__'));
+      const definition = createHash('sha256').update(JSON.stringify([
+        config ? mcpServerConfigurationKey(config) : '', tool.name, tool.description, tool.parameters,
+        tool.repeatPolicy, tool.mutates, tool.riskLevel, config ? this.manager.isStdioContained?.(config.id) ?? false : false,
+      ])).digest('hex');
+      const previous = this.toolRevisions.get(tool.name);
+      revisions.set(tool.name, previous?.definition === definition ? previous : { definition, revision: randomUUID() });
+    }
+    this.toolRevisions = revisions;
+    this.liveTools = new Map(tools.map((tool) => [tool.name, tool]));
     const states = [...this.manager.getConnectionStates().entries()] as Array<
       [string, { state: 'connected' | 'disconnected' | 'error'; error?: string }]
     >;
@@ -421,13 +415,16 @@ export class McpExternalPool implements IMcpServerManager {
         // Strip the `ext_<serverId>__` prefix so the worker can route
         // callTool back without re-parsing.
         const m = t.name.match(/^ext_(.+?)__(.+)$/);
-        const serverId = m?.[1] ?? '';
-        const toolName = m?.[2] ?? t.name;
+        const serverId = t.capabilityProvenance?.serverId ?? m?.[1] ?? '';
+        const toolName = t.name.slice(('ext_' + serverId + '__').length);
         return {
           name: t.name,
           description: t.description,
           parameters: t.parameters,
-          repeatable: !!t.repeatable,
+          repeatable: t.repeatPolicy === 'pollable' || !!t.repeatable,
+          catalogueRevision: this.toolRevisions.get(t.name)!.revision,
+          transport: configs.find(config => config.id === serverId)?.transport,
+          processTreeContained: this.manager.isStdioContained?.(serverId) ?? false,
           serverId,
           toolName,
         };

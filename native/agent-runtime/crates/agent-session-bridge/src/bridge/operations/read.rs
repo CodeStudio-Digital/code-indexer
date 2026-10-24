@@ -25,22 +25,35 @@ impl AuthenticatedSessionStoreBridge {
                     .saturating_sub(RESPONSE_ENVELOPE_RESERVE_BYTES),
             )
             .map_err(|_| agent_session_store::SessionStoreError::PayloadLimitExceeded)?;
-            let entry = self
-                .writers
-                .get_mut(&request.writer_handle)
-                .ok_or(agent_session_store::SessionStoreError::StaleAuthority)?;
-            if entry.authority != authority {
-                return Err(agent_session_store::SessionStoreError::StaleAuthority);
-            }
-            let payload = entry
-                .journal
-                .read_committed_payload(ReadCommittedPayloadRequest {
-                    operation_id: &operation_id,
-                    kind,
-                    expected_payload_sha256,
-                    expected_payload_bytes: request.expected_payload_bytes,
-                    maximum_payload_bytes,
-                })?;
+            let payload_request = ReadCommittedPayloadRequest {
+                operation_id: &operation_id,
+                kind,
+                expected_payload_sha256,
+                expected_payload_bytes: request.expected_payload_bytes,
+                maximum_payload_bytes,
+            };
+            let payload = if request.reader_handle.is_empty() {
+                let entry = self
+                    .writers
+                    .get_mut(&request.writer_handle)
+                    .ok_or(agent_session_store::SessionStoreError::StaleAuthority)?;
+                if entry.authority != authority {
+                    return Err(agent_session_store::SessionStoreError::StaleAuthority);
+                }
+                entry.journal.read_committed_payload(payload_request)?
+            } else {
+                if !request.writer_handle.is_empty() {
+                    return Err(agent_session_store::SessionStoreError::InvalidLimits);
+                }
+                let entry = self
+                    .readers
+                    .get(&request.reader_handle)
+                    .ok_or(agent_session_store::SessionStoreError::StaleAuthority)?;
+                if entry.authority != authority {
+                    return Err(agent_session_store::SessionStoreError::StaleAuthority);
+                }
+                entry.view.read(payload_request)?
+            };
             let (receipt, encoded_payload) = payload.into_parts();
             Ok(wire::SessionStoreResponse {
                 body: Some(wire::session_store_response::Body::CommittedSessionPayload(

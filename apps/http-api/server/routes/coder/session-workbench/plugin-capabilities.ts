@@ -1,5 +1,5 @@
 import type { SessionWorkbenchPluginCapability } from '@mcp/api-bus';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 import {
   isActivated,
   listInstalledPlugins,

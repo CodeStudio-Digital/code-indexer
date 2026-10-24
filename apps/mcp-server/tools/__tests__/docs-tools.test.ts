@@ -152,8 +152,8 @@ describe('MCP documentation tools', () => {
     expect(chunk.next[0].content).toBe(neighborContent);
     expect(section.chunks).toHaveLength(14);
     expect(section.chunks.at(-1).content).toContain('section-13-');
-    expect(readChunk).toHaveBeenCalledWith({ chunk_id: 100, window: 1 });
-    expect(readSection).toHaveBeenCalledWith({ chunk_id: 100 });
+    expect(readChunk).toHaveBeenCalledWith({ chunk_id: 100, window: 1, char_offset: 0, max_chars: 65536 }, undefined);
+    expect(readSection).toHaveBeenCalledWith({ chunk_id: 100, offset: 0, limit: 32 }, undefined);
   });
 
   it('passes result limits above the old fixed 30 through to the backend', async () => {
@@ -172,7 +172,7 @@ describe('MCP documentation tools', () => {
 
     await tool.handler({ query: 'q', limit: 35 }, ctx);
 
-    expect(search).toHaveBeenCalledWith(expect.objectContaining({ limit: 35 }));
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ limit: 35 }), undefined);
   });
 
   it('exposes the complete outline under native read-only tool names', async () => {

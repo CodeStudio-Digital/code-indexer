@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta charset="utf-8"><title>IDE search regression fixture</title></head><body><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { SearchEverywhere } from '/features/search-everywhere/SearchEverywhere.tsx';
+import { useSeStore } from '/features/search-everywhere/se-store.ts';
+import { FileTreeView } from '/features/workspace/file-tree/FileTreeView.tsx';
+import '/index.css';
+createRoot(document.getElementById('root')).render(React.createElement(React.Fragment, null,
+  React.createElement('div', { style: {height: 500, width: 360}, 'data-testid': 'tree' },
+    React.createElement(FileTreeView, { projectId: 1, active: true, activePath: null, onOpen: p => document.body.dataset.opened = p })),
+  React.createElement(SearchEverywhere, { projectId: 1, onOpenFile: p => document.body.dataset.opened = p })
+));
+window.openSearch = () => useSeStore.getState().openWith('files');
+</script></body></html>

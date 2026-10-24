@@ -39,6 +39,7 @@ where
 }
 
 mod async_service;
+mod authority;
 mod cleanup;
 mod cleanup_pump;
 mod completion_cleanup;

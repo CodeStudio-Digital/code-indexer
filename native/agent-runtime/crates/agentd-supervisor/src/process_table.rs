@@ -1,3 +1,4 @@
+mod authority;
 mod entries;
 mod model;
 mod operations;

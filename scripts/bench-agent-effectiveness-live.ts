@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import process from 'node:process';
 
-import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage, ChatUsage } from "@mcp/provider-sdk";
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import { closeSharedCentral, runCoder } from '@mcp/code-agent/index.js';

@@ -15,6 +15,10 @@
  */
 
 import type { Api } from '@mcp/api-bus';
+import {
+  fromSerializableAsyncIterator,
+  type SerializableAsyncIterator,
+} from '@mcp/shared/utils/serializable-stream.js';
 import { getCached, dedupe, dedupeInflight, invalidateAll } from './api-cache.js';
 import {
   recordApiCallCacheHit,
@@ -67,6 +71,7 @@ const INFLIGHT_VERBS = new Set<string>([
   'files.read',
   'files.tree',
   'files.list',
+  'files.searchPaths',
   // Project-open surfaces (toolbar, LSP prompt, gutter) mount together and
   // ask the same filesystem-backed questions. Share only the live promise;
   // after it settles, manifest/file changes are observed normally.
@@ -311,7 +316,10 @@ function nextInvokeId(): string {
 function electronOpenStream(): (<T>(methodPath: string, payload: unknown) => AsyncIterable<T>) | null {
   const electron = typeof window !== 'undefined' ? window.electronAPI : undefined;
   if (!electron || typeof electron.openStream !== 'function') return null;
-  return electron.openStream.bind(electron) as <T>(p: string, payload: unknown) => AsyncIterable<T>;
+  return <T>(methodPath: string, payload: unknown): AsyncIterable<T> => {
+    const iterator = electron.openStream<T>(methodPath, payload) as SerializableAsyncIterator<T>;
+    return fromSerializableAsyncIterator(iterator);
+  };
 }
 
 /**
@@ -350,6 +358,8 @@ function dottedToHttp(path: DotPath, input: unknown): { url: string; init: Reque
       return { url: `/api/projects/${ip!.id}/stats`, init: {} };
     case 'files.list':
       return { url: `/api/projects/${ip!.projectId}/files`, init: {} };
+    case 'files.searchPaths':
+      return { url: `/api/projects/${ip!.projectId}/file-paths?query=${encodeURIComponent(String(ip!.query ?? ''))}&limit=${Number(ip!.limit ?? 50)}&fuzzy=${ip!.fuzzy !== false}`, init: {} };
     case 'files.tree': {
       const depth = ip!.maxDepth != null ? `&maxDepth=${Number(ip!.maxDepth)}` : '';
       const stats = (ip as { withStats?: boolean }).withStats ? '&withStats=1' : '';

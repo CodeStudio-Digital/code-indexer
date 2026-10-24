@@ -20,13 +20,105 @@ use agent_tools::capability::{
 };
 
 #[tokio::test]
+async fn shared_turn_limit_is_an_interruption_but_foreign_authority_is_a_failure() {
+    for (reason, classification, code) in [
+        (
+            "provider_run_tree_budget_exhausted",
+            TerminalClassification::Interrupted,
+            "max_turns",
+        ),
+        (
+            "provider_run_tree_fenced",
+            TerminalClassification::Failed,
+            "provider_failed",
+        ),
+        (
+            "provider_failed",
+            TerminalClassification::Failed,
+            "provider_failed",
+        ),
+    ] {
+        let mut provider = FakeProvider::new([ProviderEvent::Failed {
+            reason_code: reason.into(),
+        }]);
+        let mut authority = FakeAuthority::default();
+        let mut events = FakeEvents::default();
+        let mut clock = FixedClock(100);
+        let mut engine = TurnEngine::new(limits());
+        let outcome = engine
+            .run(
+                input(),
+                &mut provider,
+                &mut authority,
+                &mut events,
+                &mut clock,
+            )
+            .await
+            .expect("classified shared control outcome");
+        assert_eq!(events.terminal, Some((classification, code.into())));
+        if code == "max_turns" {
+            assert_eq!(
+                outcome,
+                TurnOutcome::Interrupted {
+                    reason_code: "max_turns"
+                }
+            );
+        } else {
+            assert_eq!(
+                outcome,
+                TurnOutcome::Failed {
+                    reason_code: "provider_failed"
+                }
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn stateless_provider_completion_is_durable_without_a_remote_response_id() {
+    let mut provider = FakeProvider::new([
+        ProviderEvent::TextDelta("stateless".into()),
+        ProviderEvent::Completed {
+            response_id: None,
+            response_message_count: None,
+        },
+    ]);
+    let mut authority = FakeAuthority::default();
+    let mut events = FakeEvents::default();
+    let mut clock = FixedClock(100);
+    let mut engine = TurnEngine::new(limits());
+    let outcome = engine
+        .run(
+            input(),
+            &mut provider,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .expect("stateless completion");
+    assert_eq!(
+        outcome,
+        TurnOutcome::Completed {
+            response_id: None,
+            text: "stateless".into(),
+            usage: None
+        }
+    );
+    assert_eq!(
+        events.terminal,
+        Some((TerminalClassification::Completed, "completed".into()))
+    );
+}
+
+#[tokio::test]
 async fn text_provider_turn_crosses_terminal_commit_before_completed() {
     let mut provider = FakeProvider::new([
         ProviderEvent::TextDelta("hello ".to_owned()),
         ProviderEvent::TextDelta("world".to_owned()),
         ProviderEvent::Usage(usage(12, 2, 3)),
         ProviderEvent::Completed {
-            response_id: "response:test".to_owned(),
+            response_id: Some("response:test".to_owned()),
             response_message_count: None,
         },
     ]);
@@ -50,7 +142,7 @@ async fn text_provider_turn_crosses_terminal_commit_before_completed() {
     assert_eq!(
         result,
         TurnOutcome::Completed {
-            response_id: "response:test".to_owned(),
+            response_id: Some("response:test".to_owned()),
             text: "hello world".to_owned(),
             usage: Some(usage(12, 2, 3)),
         }
@@ -70,6 +162,143 @@ async fn text_provider_turn_crosses_terminal_commit_before_completed() {
     let request = provider.request.expect("provider request");
     assert_eq!(request.encoded_context.as_ref(), b"context");
     assert_eq!(request.deadline_at_unix_ms, 1_000);
+}
+
+#[tokio::test]
+async fn refusal_settles_once_without_started_and_allows_the_next_provider_turn() {
+    let call = tool_call();
+    let mut provider = FakeProvider::new([ProviderEvent::ToolCall(call.clone())]);
+    let mut authority = FakeAuthority::default();
+    let mut events = FakeEvents::default();
+    let mut clock = FixedClock(100);
+    let mut engine = TurnEngine::new(limits());
+    engine
+        .run(
+            input(),
+            &mut provider,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    let batch = engine.capability_batch().unwrap();
+    let rejection = CapabilityRejection {
+        decision_id: "deny:1".into(),
+        reason_code: "user_denied".into(),
+        policy_version: "policy:1".into(),
+        decided_at_unix_ms: 100,
+    };
+    let outcome = batch
+        .refuse(
+            &call,
+            &rejection,
+            1_000,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(outcome, CapabilityExecutionOutcome::Failed(_)));
+    assert_eq!(events.capability_lifecycle, ["refused"]);
+    assert!(
+        batch
+            .refuse(
+                &call,
+                &rejection,
+                1_000,
+                &mut authority,
+                &mut events,
+                &mut clock
+            )
+            .await
+            .is_err()
+    );
+    engine.finish_capability_batch(batch).unwrap();
+    let mut next_call = call;
+    next_call.operation_id = operation("provider:2");
+    let mut provider = FakeProvider::new([ProviderEvent::ToolCall(next_call.clone())]);
+    let mut next = input();
+    next.operation_id = next_call.operation_id.clone();
+    engine
+        .resume_after_capability(next, &mut provider, &mut authority, &mut events, &mut clock)
+        .await
+        .unwrap();
+    let mut gateway = FakeCapabilities::default();
+    engine
+        .prepare_capability(&next_call, [9; 32], 1_000, &mut gateway, &mut authority)
+        .await
+        .unwrap();
+    let request = gateway.request.unwrap();
+    assert_eq!(request.tool_use_id, "tool:1");
+    assert_eq!(request.operation_id, "capability:10:provider:2:tool:1");
+}
+
+#[tokio::test]
+async fn refusal_commit_failure_prevents_continuation_and_duplicate_settlement() {
+    struct FullDisk;
+    impl EventSinkPort for FullDisk {
+        type Error = std::io::Error;
+        async fn append(&mut self, _: EngineEvent<'_>) -> Result<(), Self::Error> {
+            Err(std::io::Error::other("disk full"))
+        }
+        async fn commit_terminal(&mut self, _: TerminalRecord<'_>) -> Result<(), Self::Error> {
+            Err(std::io::Error::other("disk full"))
+        }
+    }
+    let call = tool_call();
+    let mut provider = FakeProvider::new([ProviderEvent::ToolCall(call.clone())]);
+    let mut authority = FakeAuthority::default();
+    let mut events = FakeEvents::default();
+    let mut clock = FixedClock(100);
+    let mut engine = TurnEngine::new(limits());
+    engine
+        .run(
+            input(),
+            &mut provider,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    let batch = engine.capability_batch().unwrap();
+    let rejection = CapabilityRejection {
+        decision_id: "deny:1".into(),
+        reason_code: "user_denied".into(),
+        policy_version: "policy:1".into(),
+        decided_at_unix_ms: 100,
+    };
+    assert!(
+        batch
+            .refuse(
+                &call,
+                &rejection,
+                1_000,
+                &mut authority,
+                &mut FullDisk,
+                &mut clock
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        batch
+            .refuse(
+                &call,
+                &rejection,
+                1_000,
+                &mut authority,
+                &mut events,
+                &mut clock
+            )
+            .await
+            .is_err()
+    );
+    assert!(engine.finish_capability_batch(batch).is_err());
+    assert_eq!(engine.state(), RunState::CapabilityDispatch);
+    assert!(events.capability_lifecycle.is_empty());
 }
 
 #[tokio::test]
@@ -134,6 +363,7 @@ async fn complete_tool_call_stops_at_a_typed_capability_boundary() {
         TurnOutcome::CapabilityRequired {
             call,
             assistant_text: String::new(),
+            assistant_thinking: String::new(),
             usage: None,
         }
     );
@@ -165,6 +395,7 @@ async fn capability_prepare_revalidates_authority_without_dispatching_an_effect(
         TurnOutcome::CapabilityRequired {
             call: call.clone(),
             assistant_text: String::new(),
+            assistant_thinking: String::new(),
             usage: None,
         }
     );
@@ -177,7 +408,7 @@ async fn capability_prepare_revalidates_authority_without_dispatching_an_effect(
 
     assert!(matches!(decision, CapabilityDecision::Rejected(_)));
     let request = capabilities.request.expect("capability invocation");
-    assert_eq!(request.operation_id, "capability:tool:1");
+    assert_eq!(request.operation_id, "capability:10:provider:1:tool:1");
     assert_eq!(request.capability_id, "filesystem.read");
     assert_eq!(request.capability_set_sha256, [9; 32]);
     assert_eq!(
@@ -232,6 +463,107 @@ async fn accepted_capability_commits_started_and_terminal_around_one_effect() {
             AuthorityCheckpoint::CapabilityEffect,
         ]
     );
+}
+
+#[tokio::test]
+async fn batch_members_are_exact_and_single_use_before_effect() {
+    let call = tool_call();
+    let mut provider = FakeProvider::new([ProviderEvent::ToolCall(call.clone())]);
+    let mut authority = FakeAuthority::default();
+    let mut events = FakeEvents::default();
+    let mut clock = FixedClock(100);
+    let mut engine = TurnEngine::new(limits());
+    engine
+        .run(
+            input(),
+            &mut provider,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    let batch = engine.capability_batch().unwrap();
+    assert!(engine.capability_batch().is_err());
+    let mut executor = FakeExecutor::default();
+    let mut altered = call.clone();
+    altered.parallel_safe = !altered.parallel_safe;
+    assert!(
+        batch
+            .execute(
+                &altered,
+                [9; 32],
+                1_000,
+                &grant(),
+                &mut executor,
+                &mut authority,
+                &mut events,
+                &mut clock
+            )
+            .await
+            .is_err()
+    );
+    batch
+        .execute(
+            &call,
+            [9; 32],
+            1_000,
+            &grant(),
+            &mut executor,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    assert!(
+        batch
+            .execute(
+                &call,
+                [9; 32],
+                1_000,
+                &grant(),
+                &mut executor,
+                &mut authority,
+                &mut events,
+                &mut clock
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(executor.calls, 1);
+    assert_eq!(events.capability_lifecycle, ["started", "succeeded"]);
+    engine.finish_capability_batch(batch).unwrap();
+}
+
+#[tokio::test]
+async fn batch_cannot_finish_before_every_result_commits() {
+    let mut provider = FakeProvider::new([ProviderEvent::ToolCall(tool_call())]);
+    let mut authority = FakeAuthority::default();
+    let mut events = FakeEvents::default();
+    let mut clock = FixedClock(100);
+    let mut engine = TurnEngine::new(limits());
+    engine
+        .run(
+            input(),
+            &mut provider,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    let batch = engine.capability_batch().unwrap();
+    assert!(
+        engine
+            .pause_at_turn_limit(&mut authority, &mut events)
+            .await
+            .is_err()
+    );
+    assert!(events.terminal.is_none());
+    assert!(engine.finish_capability_batch(batch).is_err());
+    assert_eq!(engine.state(), RunState::CapabilityDispatch);
+    assert!(engine.capability_batch().is_err());
 }
 
 #[tokio::test]
@@ -322,6 +654,60 @@ async fn executor_failure_after_started_commits_unknown_without_retry() {
 }
 
 #[tokio::test]
+async fn interrupted_batch_commits_terminal_without_starting_remaining_members() {
+    let first = tool_call();
+    let mut second = first.clone();
+    second.tool_use_id = OperationId::new("unstarted-tool").unwrap();
+    let mut provider = FakeProvider::new([
+        ProviderEvent::ToolCall(first.clone()),
+        ProviderEvent::ToolCall(second),
+    ]);
+    let mut authority = FakeAuthority::default();
+    let mut events = FakeEvents::default();
+    let mut clock = FixedClock(100);
+    let mut engine = TurnEngine::new(limits());
+    engine
+        .run(
+            input(),
+            &mut provider,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    let batch = engine.capability_batch().unwrap();
+    let mut executor = AmbiguousExecutor::default();
+    batch
+        .execute(
+            &first,
+            [9; 32],
+            1_000,
+            &grant(),
+            &mut executor,
+            &mut authority,
+            &mut events,
+            &mut clock,
+        )
+        .await
+        .unwrap();
+    engine
+        .interrupt_capability_batch(batch, &mut events)
+        .await
+        .unwrap();
+    assert_eq!(executor.calls, 1);
+    assert_eq!(engine.state(), RunState::Interrupted);
+    assert_eq!(
+        events.terminal,
+        Some((
+            TerminalClassification::Interrupted,
+            "capability_execution_interrupted".into()
+        ))
+    );
+    assert!(engine.capability_batch().is_err());
+}
+
+#[tokio::test]
 async fn capability_result_returns_engine_to_a_second_provider_turn() {
     let call = tool_call();
     let mut provider = FakeProvider::new([ProviderEvent::ToolCall(call.clone())]);
@@ -354,7 +740,7 @@ async fn capability_result_returns_engine_to_a_second_provider_turn() {
         .await
         .expect("capability terminal");
     let mut resumed_provider = FakeProvider::new([ProviderEvent::Completed {
-        response_id: "response:resumed".into(),
+        response_id: Some("response:resumed".into()),
         response_message_count: Some(3),
     }]);
 
@@ -376,7 +762,7 @@ async fn capability_result_returns_engine_to_a_second_provider_turn() {
     assert_eq!(
         outcome,
         TurnOutcome::Completed {
-            response_id: "response:resumed".into(),
+            response_id: Some("response:resumed".into()),
             text: String::new(),
             usage: None,
         }
@@ -438,6 +824,38 @@ async fn thinking_and_provider_cancellation_remain_distinct_from_public_text_and
     assert_eq!(events.thinking, vec!["thinking".to_owned()]);
 }
 
+#[tokio::test]
+async fn thinking_survives_a_tool_boundary_and_has_a_cumulative_byte_limit() {
+    let (outcome, _, events) = run([
+        ProviderEvent::ThinkingDelta("inspect ".into()),
+        ProviderEvent::ThinkingDelta("first".into()),
+        ProviderEvent::ToolCall(tool_call()),
+    ])
+    .await;
+    let TurnOutcome::CapabilityRequired {
+        assistant_text,
+        assistant_thinking,
+        ..
+    } = outcome
+    else {
+        panic!("tool boundary expected");
+    };
+    assert!(assistant_text.is_empty());
+    assert_eq!(assistant_thinking, "inspect first");
+    assert!(events.deltas.is_empty());
+    let (outcome, _, events) = run(std::array::from_fn::<_, 5, _>(|_| {
+        ProviderEvent::ThinkingDelta("x".repeat(16))
+    }))
+    .await;
+    assert_eq!(
+        outcome,
+        TurnOutcome::Interrupted {
+            reason_code: "thinking_bytes_exceeded"
+        }
+    );
+    assert_eq!(events.thinking.len(), 4);
+}
+
 async fn run<const N: usize>(
     provider_events: [ProviderEvent; N],
 ) -> (TurnOutcome, RunState, FakeEvents) {
@@ -484,6 +902,8 @@ fn tool_call() -> ProviderToolCall {
         capability_version: "1".to_owned(),
         execution_class: ExecutionClass::NativeRead,
         mutates: false,
+        parallel_safe: false,
+        read_only: false,
         encoded_arguments: b"{}".to_vec(),
         arguments_sha256: [7; 32],
         provider_response_id: None,
@@ -497,7 +917,7 @@ fn grant() -> SealedExecutionGrant {
         decision_id: "decision/1".into(),
         capability_id: "filesystem.read".into(),
         capability_version: "1".into(),
-        operation_id: "capability:tool:1".into(),
+        operation_id: "capability:10:provider:1:tool:1".into(),
         tool_use_id: "tool:1".into(),
         effective_input_sha256: [7; 32],
         execution_class: ExecutionClass::NativeRead,
@@ -707,6 +1127,7 @@ impl EventSinkPort for FakeEvents {
             EngineEvent::CapabilityDispatchStarted { .. } => {
                 self.capability_lifecycle.push("started");
             }
+            EngineEvent::CapabilityRefused { .. } => self.capability_lifecycle.push("refused"),
             EngineEvent::CapabilityTerminal { outcome, .. } => {
                 self.capability_lifecycle.push(match outcome {
                     CapabilityExecutionOutcome::Succeeded(_) => "succeeded",
@@ -738,5 +1159,52 @@ impl ClockPort for FixedClock {
 
     fn now_unix_ms(&mut self) -> impl Future<Output = Result<i64, Self::Error>> + Send {
         ready(Ok(self.0))
+    }
+}
+
+#[tokio::test]
+async fn events_received_after_execution_deadline_cannot_complete_or_start_tools() {
+    struct DeadlineClock(u8);
+    impl ClockPort for DeadlineClock {
+        type Error = Infallible;
+        fn now_unix_ms(&mut self) -> impl Future<Output = Result<i64, Self::Error>> + Send {
+            self.0 += 1;
+            ready(Ok(if self.0 <= 2 { 100 } else { 1_000 }))
+        }
+    }
+    for event in [
+        ProviderEvent::ToolCall(tool_call()),
+        ProviderEvent::Completed {
+            response_id: None,
+            response_message_count: None,
+        },
+    ] {
+        let mut engine = TurnEngine::new(limits());
+        let mut provider = FakeProvider::new([event]);
+        let mut events = FakeEvents::default();
+        let outcome = engine
+            .run(
+                input(),
+                &mut provider,
+                &mut FakeAuthority::default(),
+                &mut events,
+                &mut DeadlineClock(0),
+            )
+            .await
+            .expect("durable deadline");
+        assert_eq!(
+            outcome,
+            TurnOutcome::Interrupted {
+                reason_code: "deadline_exceeded"
+            }
+        );
+        assert_eq!(engine.state(), RunState::Interrupted);
+        assert_eq!(
+            events.terminal,
+            Some((
+                TerminalClassification::Interrupted,
+                "deadline_exceeded".into()
+            ))
+        );
     }
 }

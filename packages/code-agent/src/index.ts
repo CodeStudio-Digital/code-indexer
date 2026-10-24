@@ -1,15 +1,24 @@
 import { resolve as resolvePath, join as joinPath, relative as relativePath, isAbsolute as isAbsolutePath } from 'node:path';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import { nestedToolCallUseId } from '@mcp/code-agent/core/tool.js';
+import { admitCoderAttempt, prepareCoderAttempt } from './runtime/attempt-preparation.js';
+import { startPreparedCoderExecution, type PreparedCoderExecutor, type PreparedCoderHandle } from './runtime/prepared-coder-execution.js';
+import { prepareSelectedSkillContext } from './runtime/prepared-skill-context.js';
+import { WorkspaceRuntimeScope } from './runtime/workspace-runtime-cohort.js';
+import type { PreparedWorkspaceFactory } from './runtime/prepared-workspace.js';
+import { asAgentRunId } from '@mcp/agent-runtime-contracts';
+import { nestedToolCallUseId, type ToolSettledEvent } from '@mcp/code-agent/core/tool.js';
+import { changedToolPaths } from './runtime/changed-tool-paths.js';
+import { inlineRunProjection } from './tools/execute-tasks/inline-run-projection.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { tunablesFromRuntimePolicy } from '@mcp/code-agent/core/tunables.js';
-import { FsTurnTelemetryRepository } from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
+import { FsTurnTelemetryRepository } from '@mcp/session-storage/fs-store/turn-telemetry.js';
 import { createPolicyShadowPort } from '@mcp/code-agent/core/policy-shadow-adapter.js';
 import { hasStructuredToolTruncation } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import {
@@ -40,7 +49,7 @@ import {
   auditGoalTurnEvidence,
   type PersistedGoalMutation,
   type PersistedGoalSnapshot,
-} from '@mcp/code-agent/sessions/goal-mutations.js';
+} from '@mcp/session-storage/goal-mutations.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import {
   persistChapterCheckpoint,
@@ -117,6 +126,7 @@ import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import {
   createSubagentProviderResolver,
+  providerForProfile,
   resolveSubagentExecutionEffort,
   type ProfileLimitOverride,
   type SubagentTarget,
@@ -127,16 +137,12 @@ import {
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
-import { parseDsConsumer, parseDsWorkspace } from '@mcp/code-agent/core/builder-config.js';
-import { buildDsConsumerBlock } from '@mcp/code-agent/core/ds-consumer-prompt.js';
 import { buildDiagramGuidance } from '@mcp/code-agent/prompts/diagram-guidance.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
 import { buildQaTools, roleHasQaPlaywrightSkill } from '@mcp/company/tools/qa/index.js';
-import { buildDesignSystemStudioTools, buildDesignSystemConsumerTools } from '@mcp/company/tools/design-system/index.js';
 import { buildAppStudioTools } from '@mcp/company/tools/app-studio/index.js';
-import { buildSpriteStudioTools } from '@mcp/code-agent/tools/sprite-studio/index.js';
 import { buildSubordinateTools } from '@mcp/company/tools/subordinate-tools.js';
 import { buildSharedDriveTools } from '@mcp/company/tools/shared-drive-tools.js';
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -226,11 +232,11 @@ import {
   FsSessionStore,
   requireSessionProjectAuthority,
   type FsCoderSession,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
-import type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
+import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 
@@ -469,7 +475,38 @@ export async function resolveAndPersistRunCoderExecutionPolicy(
  * Both the CLI and the SSE handler use this. Listeners should be attached
  * to `handle.runner` BEFORE awaiting `handle.done`.
  */
-export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
+export function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
+  return initializeCoder(opts);
+}
+
+/** Reuses product configuration/provider/tool preparation without constructing
+ * or starting CoderRunner. Native admission and durability belong to executor. */
+export function prepareCoderExecution(opts: RunCoderOptions, executor: PreparedCoderExecutor,
+  workspaceFactory?: PreparedWorkspaceFactory): Promise<PreparedCoderHandle> {
+  return initializeCoder(opts, executor, workspaceFactory);
+}
+
+function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle>;
+function initializeCoder(opts: RunCoderOptions, executor: PreparedCoderExecutor, workspaceFactory?: PreparedWorkspaceFactory): Promise<PreparedCoderHandle>;
+async function initializeCoder(opts: RunCoderOptions, executor?: PreparedCoderExecutor,
+  workspaceFactory?: PreparedWorkspaceFactory): Promise<RunCoderHandle | PreparedCoderHandle> {
+  const workspaceScope = new WorkspaceRuntimeScope(executor ? 'rust_v1' : 'legacy_ts');
+  try {
+    const handle = await initializeCoderOwned(opts, executor, workspaceFactory, workspaceScope);
+    const done = handle.done.then(async outcome => {
+      await workspaceScope.close(true);
+      return outcome;
+    }, async error => { await workspaceScope.close(false); throw error; });
+    void done.catch(() => undefined);
+    return { ...handle, done };
+  } catch (error) {
+    await workspaceScope.close(false);
+    throw error;
+  }
+}
+
+async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCoderExecutor | undefined,
+  workspaceFactory: PreparedWorkspaceFactory | undefined, workspaceScope: WorkspaceRuntimeScope): Promise<RunCoderHandle | PreparedCoderHandle> {
   const config = loadConfig();
   // Shared per-process central handles — see getSharedCentral. One connection
   // for the whole worker instead of one per master/subordinate run.
@@ -569,6 +606,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     throw new Error(
       `Real project ${projectAuthority.primary.project_id} not found`,
     );
+  }
+  if (!opts.sandbox && !opts.companyContext?.sandbox) {
+    const roots = [project.root_path, ...projectAuthority.projects.map(link => link.root_path),
+      ...(opts.companyContext?.allowedProjectIds ?? []).flatMap(id => {
+        const linked = db.getProject(id);
+        return linked && !linked.is_synthetic ? [linked.root_path] : [];
+      }), ...(await store.listSessionFilesystemRoots(session.id)).filter(root => existsSync(root.root_path)).map(root => root.root_path)];
+    await workspaceScope.enter(config.dbPath, session.id, roots);
   }
   if (
     session.worktree_path
@@ -808,24 +853,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (opts.projectMemory) {
     registry.registerAll(buildProjectMemoryTools());
   }
-  // DS Studio — single sessions on a Design System workspace project get
-  // the ds_* tools (record/list/audit/publish) bound to the project. The
-  // workspace is identified by `projects.builder_json.kind === 'ds'`
-  // (written by the studio scaffold). Company sessions keep their own
-  // registration below; the feature flag gates the whole surface.
-  const dsWorkspace = !opts.companyContext ? parseDsWorkspace(project.builder_json) : null;
-  if (dsWorkspace && config.features.designSystemEnabled) {
-    registerCompanyTools(buildDesignSystemStudioTools(project.id));
-  }
-  // DS CONSUMER — a builder project linked to a PUBLISHED design system
-  // (`builder_json.designSystem`, written by the link flow) gets read-only
-  // query tools (ds_components/ds_component/ds_docs) so the agent uses the
-  // library instead of guessing props. Mutually exclusive with the studio
-  // workspace above (parseDsConsumer returns null when kind==='ds').
-  const dsConsumer = !opts.companyContext && !dsWorkspace ? parseDsConsumer(project.builder_json) : null;
-  if (dsConsumer && config.features.designSystemEnabled) {
-    registerCompanyTools(buildDesignSystemConsumerTools(dsConsumer));
-  }
   // App Studio v6 tools exist only inside its persistent Company team.
   if (
     allowAppCompanyTools
@@ -839,25 +866,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       role: opts.companyContext.agentRole,
     }));
   }
-  // Sprite Studio — single sessions on a project that has a `.sprite-studio/`
-  // directory get the sprite_* tools (get_project/list_assets/generate/
-  // process/export) bound to the project. Same posture as DS Studio: outside
-  // company context, gated by the feature flag + the on-disk marker. The tools
-  // reach the real work through `getGlobalSpriteStudioHost()` (main impl +
-  // worker bridge shim).
-  const spriteStudioWorkspace =
-    !opts.companyContext &&
-    config.features.spriteStudioEnabled &&
-    existsSync(joinPath(project.root_path, '.sprite-studio'));
-  if (spriteStudioWorkspace) {
-    registry.registerAll(buildSpriteStudioTools(project.id));
-  }
   // Cross-agent comm tools (list_agents / wait_agents / send_message /
   // send_input / followup_task) were registered here UNCONDITIONALLY, so they
   // fell through getToolTier → bootstrap and shipped on turn 1 of every SOLO
   // session — where each errors or returns just-self (no peer to reach). Moved
   // into the `if (opts.companyContext)` block below (P1) so solo prompts drop
   // them entirely. Master/subordinate sessions are unaffected.
+  // Native attempts have a real owned child tree even without Company. Its
+  // observation tools must be present before the preparation is sealed.
+  if (executor && !opts.companyContext) {
+    registry.registerAll(listAgentsTools);
+    registry.registerAll(waitAgentsTools);
+    registry.registerAll(sendMessageTools);
+    registry.registerAll(sendInputTools);
+    registry.registerAll(followupTaskTools);
+  }
   // code_exec — registered last in the native batch so its tools-proxy
   // closes over a registry that already includes fs/git/web/lsp/glob/etc.
   // The proxy itself is rebuilt per invocation (`registry.list()` at call
@@ -870,7 +893,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // the regular single bridge for its PRIMARY project PLUS one prefixed bridge
   // per linked secondary project (the block after the if/else below). `projectSlug`
   // and `secondaryOverlays` are built in Seam A above.
-  const bridge = new McpToolBridge();
+  const bridge = new McpToolBridge({ deferConnection: true });
   const extraBridges: McpToolBridge[] = [];
   let mcpBridgeOk = false;
 
@@ -878,9 +901,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Master: register prefixed MCP tools for ALL company projects
     const companyProjects = opts.companyContext.orchestrator.listProjects();
     for (const proj of companyProjects) {
-      const projBridge = new McpToolBridge();
+      const projBridge = new McpToolBridge({ deferConnection: true });
       try {
-        await projBridge.connect();
         const slug = projectSlug(proj.name);
         const projOverlay = new SessionOverlay(resolvePath(proj.rootPath));
         const mcpTools = await projBridge.listTools({
@@ -905,7 +927,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   } else {
     // Regular session / subordinate: single bridge
     try {
-      await bridge.connect();
       const mcpTools = await bridge.listTools({
         projectName: project.name,
         projectRoot: project.root_path,
@@ -928,9 +949,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Reuses the exact master prefixing so the model's cross-project tool
   // vocabulary (`mcp__<slug>__read_file`, etc.) is identical in both modes.
   for (const proj of linkedSecondaryProjects) {
-    const projBridge = new McpToolBridge();
+    const projBridge = new McpToolBridge({ deferConnection: true });
     try {
-      await projBridge.connect();
       const slug = projectSlug(proj.name);
       // Reuse the same overlay the write path uses for this root, so a write
       // and a subsequent MCP read in this project see consistent fresh content.
@@ -1037,6 +1057,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // buildPluginTools). Each plugin declares its own opt-in runtime tier, so
   // none of these tools leak through getToolTier's bootstrap fallback.
   let pluginTierSummary = new Map<string, { displayName: string; toolCount: number }>();
+  if (opts.hostTools?.length) registry.registerAll(opts.hostTools);
   if (opts.pluginTools?.length) {
     registry.registerAll(opts.pluginTools);
     const pluginTiers = collectRuntimeToolTiers(opts.pluginTools);
@@ -1056,6 +1077,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(buildExpandTools(
     customTierSummary.size > 0 ? customTierSummary : undefined,
     {
+      toolNamesForTier: tier => registry.list().filter(tool => getToolTier(tool.name, runtimeToolTiers) === tier).map(tool => tool.name),
       isTierAvailable: (tier) => registry.list().some(
         (tool) => runtimeToolTiers.get(tool.name) === tier,
       ),
@@ -1082,9 +1104,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         parentTools: registry.list(),
         sessionId: session.id,
         sessionStore: store,
-        // Reuse the subagent provider plumbing: when an admin has set a
-        // different family for subagents (subagentTarget), use it for review.
-        reviewerProvider: undefined, // wired at run-time via subagentProvider in subagent.ts
+        resolveReviewerProvider: async () => subagentDeps ? providerForProfile(subagentDeps, 'review') : undefined,
       }),
     ]);
   }
@@ -1132,7 +1152,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const parentTools = allDisabled.size > 0
       ? registry.list().filter((t) => !allDisabled.has(t.name))
       : registry.list();
-    let subagentProvider: ChatProvider | undefined;
     let resolveProviderForProfile:
       | ((id?: string) => Promise<ChatProvider | undefined>)
       | undefined;
@@ -1154,18 +1173,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
       ps.close();
 
-      // Default subagent provider (single control) — eager, back-compat.
-      const targetProviderId = defaultTarget?.providerId ?? session.provider;
-      const targetModel = defaultTarget?.modelId ?? undefined;
-      const usesDifferentProvider = targetProviderId !== session.provider;
-      const usesDifferentModel = !!targetModel && targetModel !== session.model;
-      if (usesDifferentProvider || usesDifferentModel) {
-        const sub = await createCoderProvider(targetProviderId, targetModel);
-        subagentProvider = sub;
-        console.log(`[coder] subagent provider override: ${targetProviderId}:${sub.model}`);
-      }
-
-      // Per-profile resolver — lazy + memoized; used by every spawn path.
+      // Default and per-profile providers are lazy + memoized. Sessions that
+      // never delegate do not pay for an unused second provider at startup.
       const resolver = createSubagentProviderResolver({
         sessionProvider: session.provider,
         sessionModel: session.model,
@@ -1188,7 +1197,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       provider,
       parentTools,
       sessionStore: store,
-      subagentProvider,
       resolveProviderForProfile,
       resolveEffortForProfile,
       resolveLimitsForProfile,
@@ -1230,9 +1238,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       if (hasGenericQaCapability) {
         registerCompanyTools(buildQaTools(orchestrator, agentRole, agentRunId));
       }
-      // ds_* tools são exclusivas do DS Studio (sessão single) — o pipeline
-      // company de Design System foi aposentado e sessões legacy são
-      // read-only, então subordinados não recebem mais esse surface.
     }
     if (isMaster) {
       // review_subordinate_work needs in-process DB access to run the review
@@ -1328,7 +1333,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         `certainly a missing binding-propagation in the orchestrator.`,
     );
   }
-  const workspace: WorkspaceContext = workspaceFromProject(project, sandboxBinding);
+  let nativeWorktreeRoot: string | undefined;
+  if (executor && (opts.worktree || session.worktree_path)) {
+    if (!workspaceFactory || sandboxBinding || opts.companyContext) throw new Error('Native worktree requires an owned local preparation service');
+    nativeWorktreeRoot = await workspaceFactory({ projectRoot: resolvePath(project.root_path),
+      existingPath: session.worktree_path, requested: opts.worktree, signal: opts.signal,
+      persist: async path => { await store.setSessionWorktree(session.id, path); } });
+    session = { ...session, worktree_path: nativeWorktreeRoot };
+  }
+  const workspace: WorkspaceContext = workspaceFromProject(
+    nativeWorktreeRoot ? { ...project, root_path: nativeWorktreeRoot } : project, sandboxBinding);
   const effectiveCwd = workspace.rootPath;
   // External host roots are a local-session capability. A container-bound run
   // cannot safely translate host paths into its filesystem namespace. Company
@@ -1374,6 +1388,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         const persisted = await store.listSessionFilesystemRoots(session.id);
         const exact = persisted.find((root) => root.root_path.toLowerCase() === canonical.path.toLowerCase());
         if (!exact && persisted.length >= 16) throw new Error('session filesystem root limit reached (16)');
+        await workspaceScope.extend(canonical.path);
         const row = await store.upsertSessionFilesystemRoot(
           session.id,
           canonical.path,
@@ -1550,6 +1565,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   };
 
   const toolContext: ToolContext = {
+    workspaceRuntimeScope: workspaceScope,
     cwd: effectiveCwd,
     projectName: workspace.displayName,
     globalWorkspace: session.is_global
@@ -1621,6 +1637,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         });
         activePlanCache = { text: planText, status: 'pending' };
       } catch (e) {
+        if (executor) throw e;
         console.warn(`[coder] recordPlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
@@ -1640,6 +1657,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           if (captured) runnerRef?.requestMilestoneCompaction('milestone:plan-approved');
         }
       } catch (e) {
+        if (executor) throw e;
         console.warn(`[coder] resolvePlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
@@ -1647,6 +1665,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try {
         await store.setSessionAgent(session.id, agent);
       } catch (e) {
+        if (executor) throw e;
         console.warn(`[coder] setSessionAgent failed: ${e instanceof Error ? e.message : String(e)}`);
       }
       // Apply the NEW agent's defaults to the LIVE runner so the next
@@ -1759,32 +1778,25 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       goalNoopToolUseIds.add(toolUseId);
     },
     getTasksState: () => tasksStateCache,
+    completeInlineTaskRun: inlineRunProjection(store, session.id),
     // Session Drive sinks (migrations 125/126) — back the read_plan /
-    // remember / list_memory / recall_investigations tools. Reads/writes
-    // are best-effort; failures degrade to null/empty rather than aborting
-    // the tool call.
+    // save_note / list_notes / recall_investigations tools. Preserve storage
+    // errors: an unreadable plan or note is not evidence that it is absent.
     sessionDrive: {
-      readActivePlan: async () => {
-        try {
-          const p = (await store.listPlans(session.id))[0];
-          return p ? { text: p.plan_text, status: p.status } : null;
-        } catch {
-          return null;
-        }
+      readActivePlan: async (signal) => {
+        const p = await store.getLatestPlan(session.id, signal);
+        return p ? { text: p.plan_text, status: p.status } : null;
       },
-      remember: async (input) => {
-        const row = await store.rememberMemory(session.id, input);
-        sessionStateDataCache = await store.getSessionStateData(session.id);
+      remember: async (input, beforePublish) => {
+        const row = await store.rememberMemory(session.id, input, beforePublish);
+        // Reload only the small notes projection, retaining the exact pinned /
+        // automatic-note policy without rebuilding history and investigations.
+        sessionStateDataCache = { ...sessionStateDataCache, notes: await store.listSessionStateNotes(session.id) };
         return { title: row.title };
       },
-      listMemory: async (memOpts) => {
-        try {
-          return await store.listSessionMemory(session.id, memOpts ?? {});
-        } catch {
-          return [];
-        }
-      },
-      recallInvestigations: async (query, limit) => {
+      listMemory: memOpts => store.listSessionMemory(session.id, memOpts ?? {}),
+      recallInvestigations: async (query, limit, signal) => {
+        signal?.throwIfAborted();
         // Semantic first through the host-owned Knowledge index. Missing
         // generation/provider/worker returns no ids and falls through to the
         // always-available relational lexical recall below.
@@ -1792,22 +1804,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           const semantic = getInvestigationSemanticIndex();
           if (semantic) {
             const semanticLimit = limit ?? 8;
-            const ids = await semantic.search({ sessionId: session.id, query, limit: semanticLimit });
+            const ids = await semantic.search({ sessionId: session.id, query, limit: semanticLimit }, signal);
+            signal?.throwIfAborted();
             const hits = await store.recallInvestigationsByIds(
               session.id,
               ids,
               semanticLimit,
+              signal,
             );
             if (hits.length > 0) return hits;
           }
         } catch {
+          signal?.throwIfAborted();
           /* fall through to keyword */
         }
-        try {
-          return await store.recallInvestigations(session.id, query, limit);
-        } catch {
-          return [];
-        }
+        return store.recallInvestigations(session.id, query, limit, signal);
       },
     },
     conversationHistory: {
@@ -1820,26 +1831,29 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Gated on the per-project toggle (any linked member for a global session);
     // absent ports → tools answer clearly. Writes land on the primary real
     // project; recall reads all linked projects, interleaved and labeled.
+    agentReads: opts.agentReads,
     projectMemory:
       opts.projectMemory && anyMemoryEnabled
         ? {
             save: (entry) => opts.projectMemory!.save(project.id, project.name, entry),
-            recall: async (query, limit) => {
+            recall: async (query, limit, signal) => {
+              signal?.throwIfAborted();
               if (memoryReadProjects.length <= 1) {
-                return opts.projectMemory!.recall(project.id, project.name, query, limit);
+                return opts.projectMemory!.recall(project.id, project.name, query, limit, signal);
               }
               const perProject = await mapProjectsConcurrent(
                 memoryReadProjects,
                 (p) =>
                   opts
-                    .projectMemory!.recall(p.id, p.name, query, limit)
+                    .projectMemory!.recall(p.id, p.name, query, limit, signal)
                     .then((rows) => ({ name: p.name, rows }))
-                    .catch(() => ({ name: p.name, rows: [] })),
+                    .catch(() => { signal?.throwIfAborted(); return { name: p.name, rows: [] }; }),
               );
+              signal?.throwIfAborted();
               return interleaveLabeled(perProject, limit);
             },
             ...(opts.projectMemory.list
-              ? { list: (limit, type) => opts.projectMemory!.list!(project.id, project.name, limit, type) }
+              ? { list: (limit, type, signal) => opts.projectMemory!.list!(project.id, project.name, limit, type, signal) }
               : {}),
             ...(opts.projectMemory.forget
               ? { forget: (target) => opts.projectMemory!.forget!(project.id, project.name, target) }
@@ -2322,34 +2336,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     systemPrompt = appendStaticPromptSection(systemPrompt, opts.companyPromptBlock);
   }
 
-  // DS Studio block — appended (not replacing the agent prompt) so the
-  // `builder` agent identity stays intact and the prefix remains
-  // cache-stable: every value comes from builder_json, fixed at scaffold
-  // time, no DB query per turn.
-  if (dsWorkspace) {
-    systemPrompt = appendStaticPromptSection(systemPrompt, interpolate(loadPrompt('ds-studio'), {
-      packageName: dsWorkspace.packageName ?? '(see ds_get_session_info)',
-      stack: dsWorkspace.stack,
-      publishExtra: dsWorkspace.stack === 'angular'
-        ? '4. Angular only: run `ng build pkg` first and publish the BUILT output (`ds_publish_version({ pkg_dir: "dist/pkg" })`).'
-        : '',
-    }));
-    // Mode block (fidelity/creative) — same cache-stability contract:
-    // `mode` is immutable in builder_json. Pre-mode workspaces get none.
-    if (dsWorkspace.mode) {
-      systemPrompt = appendStaticPromptSection(systemPrompt, interpolate(loadPrompt(`ds-studio-${dsWorkspace.mode}`), {
-        stack: dsWorkspace.stack,
-      }));
-    }
-  } else if (dsConsumer && config.features.designSystemEnabled) {
-    // DS consumer block — derives from the pinned published version
-    // (immutable rows), so the prefix stays byte-stable across turns.
-    systemPrompt = appendStaticPromptSection(
-      systemPrompt,
-      await buildDsConsumerBlock(dsConsumer),
-    );
-  }
-
   // Draw.io diagram guidance — appended only when the `diagram` tier will be
   // active (the `diagram` agent, or a session that persisted
   // expand_toolset('diagram')). Static + byte-stable → prompt-cache safe.
@@ -2441,9 +2427,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     sandbox: opts.companyContext?.sandbox != null,
     qa: hasGenericQaCapability,
     app: allowAppCompanyTools,
-    designSystemStudio: dsWorkspace != null && config.features.designSystemEnabled,
-    designSystemConsumer: dsConsumer != null && config.features.designSystemEnabled,
-    spriteStudio: spriteStudioWorkspace,
     isMaster: opts.companyContext?.isMaster === true,
     previewAvailable: opts.previewAvailable,
     browserAvailable: opts.browserAvailable,
@@ -2503,6 +2486,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   // ─── Runtime hooks ─────────────────────────────────────────────
   const hookRegistry = new RuntimeHookRegistry();
+  const toolResultObservers: Array<(event: ToolSettledEvent) => void> = [];
   if (opts.companyContext && !opts.companyContext.isMaster && opts.companyContext.agentRunId != null) {
     registerCompanyHooks(
       hookRegistry,
@@ -2519,14 +2503,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // a burst of edits in a single turn collapses into one reload.
   if (opts.companyContext?.sandbox) {
     const orch = opts.companyContext.orchestrator;
-    const FILE_WRITE_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit', 'manage_path']);
     const pending = new Set<string>();
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    hookRegistry.onToolCall('after', (ctx) => {
-      if (!FILE_WRITE_TOOLS.has(ctx.toolName)) return;
+    toolResultObservers.push((ctx) => {
       if (ctx.result?.isError) return;
-      const rawPaths = [ctx.toolArgs.path ?? ctx.toolArgs.file_path];
-      if (ctx.toolName === 'manage_path') rawPaths.push(ctx.toolArgs.from_path, ctx.toolArgs.to_path);
+      const rawPaths = changedToolPaths(ctx.toolName, ctx.toolArgs);
       for (const raw of rawPaths) {
         if (raw == null) continue;
         const path = typeof raw === 'string' ? raw : String(raw);
@@ -2552,14 +2533,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // first baseline: once the scan settles, later edits in the SAME live run
   // must participate in incremental indexing. Fire and forget.
   if (!sandboxBinding) {
-    const FILE_MUTATING_TOOLS = new Set(['write_file', 'create_file', 'edit_file', 'multi_edit', 'manage_path']);
-    hookRegistry.onToolCall('after', (ctx) => {
-      if (!FILE_MUTATING_TOOLS.has(ctx.toolName)) return;
+    toolResultObservers.push((ctx) => {
       if (ctx.result?.isError) return;
-      const rawPaths = [ctx.toolArgs.path ?? ctx.toolArgs.file_path];
-      if (ctx.toolName === 'manage_path') rawPaths.push(ctx.toolArgs.from_path, ctx.toolArgs.to_path);
+      const rawPaths = changedToolPaths(ctx.toolName, ctx.toolArgs);
       const rawStrs = rawPaths
-        .filter((raw): raw is string | number | boolean => raw != null)
+        .filter((raw): raw is string => raw != null)
         .map((raw) => (typeof raw === 'string' ? raw : String(raw)))
         .filter(Boolean);
       if (rawStrs.length === 0) return;
@@ -2609,6 +2587,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
 
   // ─── Fallback chain ───────────────────────────────────────────
+  toolContext.onToolSettled = event => {
+    for (const observe of toolResultObservers) {
+      try { observe(event); } catch { /* index/preview observations are best-effort */ }
+    }
+  };
   // Always defined so the runner can refresh OAuth credentials (e.g. the
   // Copilot 25-min token) on 401 even when no fallback chain is configured.
   const createProviderForFallback = async (name: string, model: string) => {
@@ -2793,7 +2776,49 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // complete. From this point through terminal cleanup the attempt owns an
   // immutable catalog snapshot; a late MCP/plugin is visible only to the next
   // attempt assembled by the host.
+  // Late session/skill helpers are registered after the legacy allowlist pass.
+  // A prepared runtime must receive exactly the admitted catalog, including
+  // when its development cohort permits only a subset of product tools.
+  if (executor && exactAllowedToolNames !== null) {
+    registry.filterInPlace((tool) => exactAllowedToolNames.has(tool.name));
+  }
   registry.seal();
+
+  if (executor) {
+    return startPreparedCoderExecution({ opts, session, indexStatus, registry, catalogOnlyCapabilities,
+      toolContext, provider, systemPrompt, initialMessages,
+      prepareUserContext: messages => prepareSelectedSkillContext({ messages, template: skillTemplateCtx,
+        getSkill: id => skillStore.getSkill(id) }),
+      boundaryRecall: {
+        memory: opts.memoryRetriever && anyMemoryEnabled ? async (query, signal) => {
+          signal.throwIfAborted();
+          const recalled = await mapProjectsConcurrent(memoryReadProjects, async p => {
+            signal.throwIfAborted();
+            return { name: p.name, rows: [...await opts.memoryRetriever!.retrieve(p.id, p.name, query)] };
+          });
+          signal.throwIfAborted(); return interleaveLabeled(recalled, 8);
+        } : undefined,
+        chapters: async (query, signal) => {
+          signal.throwIfAborted();
+          const chapters = await store.searchConversationChapters(session.id, query, { limit: 2 });
+          signal.throwIfAborted();
+          return chapters.items.slice(0, 2).map(chapter => ({ id: `conversation-chapter:${chapter.id}`,
+            title: chapter.title, content: chapter.chapter_text.slice(0, 400) }));
+        },
+      },
+      reasoningEffort: effectiveReasoningEffort ?? undefined,
+      agentDefinitionId: opts.agentSelectionId ?? effectiveAgentId ?? 'code-agent/default', effectiveAgentId,
+      capabilityProfile: preResolvedProfile, permissionMode: resolvedPermissionMode,
+      thinking: ultraExecutionEnabled && sessionModelCanReason === true ? true : !!opts.thinking,
+      executor, async cleanup() {
+        const outcomes = await Promise.allSettled([
+          toolOutputStore.drain(), mcpServerManager.closeAll(), bridge.close(), ...extraBridges.map((item) => item.close()),
+        ]);
+        const failures = outcomes.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failures.length) throw new AggregateError(failures.map((result) => result.reason), 'Native preparation cleanup failed');
+      },
+    });
+  }
 
   // Fase 2.5 — Policy Engine shadow composition. Returns null when every
   // CODER_* policy flag is off, so the port is absent and dispatch stays
@@ -2955,19 +2980,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // full bodies/source messages stay behind recall_conversation.
     getConversationChapterIndex: async () => {
             try {
-              const [page, total] = await Promise.all([
-                store.listConversationChapters(session.id, { limit: 10 }),
-                store.countConversationChapters(session.id),
-              ]);
-              return {
-                total,
-                entries: page.items.map((chapter) => ({
-                  id: chapter.id,
-                  ordinal: chapter.ordinal,
-                  title: chapter.title,
-                  source: chapter.source,
-                })),
-              };
+              return await store.getConversationChapterIndex(session.id);
             } catch {
               return null;
             }
@@ -3220,19 +3233,25 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // and scope the runner into it before the first turn. This is the primary
   // path — users decide "run in an isolated worktree" once, at creation,
   // instead of having the agent figure it out mid-run via the admin tool.
-  if (opts.worktree && !session.worktree_path) {
-    const created = createProjectWorktree(resolvePath(project.root_path), opts.worktree);
+  let worktreePreparationError: unknown;
+  if (opts.worktree && !session.worktree_path) try {
+    const created = await createProjectWorktree(resolvePath(project.root_path), opts.worktree,
+      { signal: opts.signal, shell: toolContext.ports?.shell, runtimeEnv: toolContext.runtimeEnv });
     if (created.ok) {
       runner.enterWorktreeScope(created.path);
       try {
-        store.setSessionWorktree(session.id, created.path);
+        await store.setSessionWorktree(session.id, created.path);
       } catch (e) {
-        console.warn(`[coder] failed to persist session worktree: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(`Worktree was created at ${created.path}, but its session setting could not be saved. The directory was preserved.`, { cause: e });
       }
       console.log(`[coder] session ${session.id} started in worktree ${created.path} (branch ${created.branch})`);
     } else {
-      console.warn(`[coder] session-start worktree creation failed: ${created.error} — running in the project root instead`);
+      throw new Error(`Requested session worktree could not be prepared: ${created.error}`);
     }
+  } catch (cause) {
+    // Surface preparation failure through the normal done/finally boundary so
+    // owned MCP connections and output writers are drained before returning.
+    worktreePreparationError = cause;
   }
 
   // Rehydrate the worktree scope on session resume. If the DB says this
@@ -3334,6 +3353,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       tool_name: string;
       args: Record<string, unknown>;
       result_text: string;
+      effect_outcome?: 'unknown';
       is_error: boolean;
       duration_ms: number;
       output_chars: number;
@@ -3450,7 +3470,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Captured synchronously so a later turn's telemetry cannot cross-stamp
     // this one. The bundle metric promise is awaited inside `persist`.
     const telemetryId = runner.lastTurnTelemetryId;
-    const telemetryIdPromise = runner.lastTurnTelemetryIdPromise;
     const persist = async (): Promise<void> => {
     if (
       missingGoalMutationIds.length > 0
@@ -3483,12 +3502,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (turn.checkpoint) {
       try { await turn.checkpoint.promise; } catch { /* fall back to fresh insert */ }
     }
-    // By now persistTurnTelemetry has run for this turn (runner emits it before
-    // turn_start), so its immutable metric identity can be stamped on each
-    // tool-call metadata record.
-    const resolvedTelemetryId = telemetryIdPromise != null
-      ? await telemetryIdPromise
-      : telemetryId;
+    // Diagnostic telemetry is best effort. A slow metric write must not hold
+    // the authoritative transcript barrier or the next provider turn. Stamp an
+    // identity only when it was already available at this turn boundary.
+    const resolvedTelemetryId = telemetryId;
     if (resolvedTelemetryId != null) {
       for (const tc of turn.toolCalls) tc.turn_telemetry_id = resolvedTelemetryId;
       for (const tc of turn.nestedToolCalls) tc.turn_telemetry_id = resolvedTelemetryId;
@@ -3691,6 +3708,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // carries the original input precisely for this row.
       args: pending?.input ?? result.input ?? {},
       result_text: content,
+      ...(result.effectOutcome ? { effect_outcome: result.effectOutcome } : {}),
       is_error: Boolean(result.isError),
       duration_ms: durationMs,
       // output_chars = RAW tool output (pre-reduce, from result.rawChars);
@@ -3945,8 +3963,37 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // the earlier promise.
   void transcriptFlushed.catch(() => undefined);
 
-  const donePromise = runner
-    .run()
+  const donePromise = Promise.resolve()
+    .then(async () => {
+      if (worktreePreparationError) throw worktreePreparationError;
+      if (opts.admitAttempt) {
+        if (!opts.controlPlaneParentAgentRunId) throw new Error('Attempt admission requires the owning AgentRun');
+        const preparation = prepareCoderAttempt({
+          sessionId: session.id,
+          agentRunId: asAgentRunId(opts.controlPlaneParentAgentRunId),
+          runnerRunId: runner.runId,
+          provider: session.provider, model: session.model,
+          reasoningEffort: effectiveReasoningEffort ?? undefined,
+          agentDefinitionId: opts.agentSelectionId ?? effectiveAgentId ?? 'code-agent/default',
+          systemPromptSha256: createHash('sha256').update(systemPrompt).digest('hex'),
+          capabilityProfile: preResolvedProfile,
+          environment: { kind: sandboxBinding ? 'container' : runner.worktreePath ? 'worktree' : 'host', cwd: runner.worktreePath ?? toolContext.cwd },
+          policy: { permissionMode: resolvedPermissionMode, planMode: !!opts.planMode,
+            specMode: opts.specMode ?? (effectiveAgentId === 'spec'), runtime: opts.runtimePolicy },
+        }, registry, catalogOnlyCapabilities);
+        await admitCoderAttempt(preparation, opts.admitAttempt, opts.signal);
+      }
+      opts.signal?.throwIfAborted();
+      return runner.run();
+    })
+    .catch((error: unknown) => {
+      // Stop during admission is a cancellation with zero provider usage.
+      // A concurrent disk/authority error remains an error, even after Stop.
+      if (opts.signal?.aborted && error === opts.signal.reason) {
+        return { reason: 'aborted' as const, totalUsage: { input_tokens: 0, output_tokens: 0 } };
+      }
+      throw error;
+    })
     .then(async (res) => {
       await flushPendingTurn();
       if (criticalTranscriptPersistenceError) {
@@ -4035,11 +4082,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 export {
   FsSessionStore,
   FsSessionStore as SessionStore,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
+} from '@mcp/session-storage/fs-store/index.js';
 export type {
   FsCoderSession as CoderSession,
-} from '@mcp/code-agent/sessions/fs-store/index.js';
-export type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
+} from '@mcp/session-storage/fs-store/index.js';
+export type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
 export type { CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 /**
  * Backwards-compatible alias used by HTTP admin routes. Derived dynamically

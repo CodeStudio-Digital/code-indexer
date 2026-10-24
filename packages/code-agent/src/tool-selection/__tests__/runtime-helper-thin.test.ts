@@ -43,7 +43,7 @@ function makeTool(name: string, desc?: string): ThinTool {
 
 const ALL_TOOLS: ThinTool[] = [
   ...['read_file','write_file','edit_file','run_command','glob','mcp__grep_code','task_list','code_exec'].map((n) => makeTool(n)),
-  ...['DesignSystem','Database','WebFetch','GitStatus','Kanban','Slack','Notion','Jira','PlaywrightRun','Sandbox'].map((n) => makeTool(n)),
+  ...['ArchitectureMap','Database','WebFetch','GitStatus','Kanban','Slack','Notion','Jira','PlaywrightRun','Sandbox'].map((n) => makeTool(n)),
 ];
 
 describe('applyToolSelectionThin', () => {
@@ -239,14 +239,14 @@ describe('applyToolSelectionThin', () => {
       k: 9,
       recentToolCalls: [
         ...Array.from({ length: 5 }, (_, i) => ({
-          name: 'DesignSystem', timestampMs: now - i, ok: false,
+          name: 'ArchitectureMap', timestampMs: now - i, ok: false,
         })),
         { name: 'Jira', timestampMs: now, ok: true },
       ],
     });
     const names = new Set(out.map((tool) => tool.name));
     expect(names.has('Jira')).toBe(true);
-    expect(names.has('DesignSystem')).toBe(false);
+    expect(names.has('ArchitectureMap')).toBe(false);
   });
 
   it('keeps skill workflow follow-ups after successful namespace discovery', async () => {
@@ -296,7 +296,7 @@ describe('applyToolSelectionThin', () => {
       k: 9,
     });
     // With ties broken by original order, the first non-essential wins the slot.
-    expect(new Set(baseline.map((t) => t.name)).has('DesignSystem')).toBe(true);
+    expect(new Set(baseline.map((t) => t.name)).has('ArchitectureMap')).toBe(true);
 
     const out = await applyToolSelectionThin({
       allTools: ALL_TOOLS,
@@ -304,9 +304,9 @@ describe('applyToolSelectionThin', () => {
       embed: constEmbed,
       embeddingStore: new InMemoryToolEmbeddingStore(),
       k: 9,
-      toolPolicy: { discouraged: ['DesignSystem'] },
+      toolPolicy: { discouraged: ['ArchitectureMap'] },
     });
-    expect(new Set(out.map((t) => t.name)).has('DesignSystem')).toBe(false);
+    expect(new Set(out.map((t) => t.name)).has('ArchitectureMap')).toBe(false);
   });
 
   it('matches policy names canonically (snake_case engine name ↔ PascalCase candidate)', async () => {

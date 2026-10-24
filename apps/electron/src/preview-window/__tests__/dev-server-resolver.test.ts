@@ -77,6 +77,19 @@ describe('resolveDevUrl — reuse', () => {
 });
 
 describe('resolveDevUrl — start (owned)', () => {
+  it('retains ownership when cancellation cannot confirm the server stop', async () => {
+    const controller = new AbortController();
+    const onOwnedTask = vi.fn(), onOwnedTaskStopped = vi.fn();
+    const bridge = makeBridge({
+      start: async () => { controller.abort(); return task({ taskId: 'unconfirmed' }); },
+      stop: async () => { throw new Error('stop ACK lost'); },
+    });
+    await expect(resolveDevUrl(bridge, 1, { signal: controller.signal, onOwnedTask, onOwnedTaskStopped }))
+      .rejects.toThrow('stop ACK lost');
+    expect(onOwnedTask).toHaveBeenCalledWith('unconfirmed');
+    expect(onOwnedTaskStopped).not.toHaveBeenCalled();
+  });
+
   it('starts a tracked server when none is running and returns ownership', async () => {
     const start = vi.fn(async () => task({ taskId: 'owned', terminalId: 'tOwned' }));
     const bridge = makeBridge({

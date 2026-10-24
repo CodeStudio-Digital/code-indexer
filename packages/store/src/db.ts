@@ -21,9 +21,16 @@ import {
   purgeProjectIndex,
 } from './db-split/index.js';
 import { initSchema } from './db/schema/index.js';
-import { repairCodeFtsIndexes } from './db/schema/fts.js';
+import { repairCodeFtsIndexes, createDocChunksFtsIfReady } from './db/schema/fts.js';
 import * as projects from './db/projects.js';
 import * as files from './db/files.js';
+import * as agentIndexReads from './db/agent-index-reads.js';
+import * as agentSymbolReads from './db/agent-symbol-reads.js';
+import * as agentTypeReads from './db/agent-type-reads.js';
+import * as agentReferenceReads from './db/agent-reference-reads.js';
+import * as agentSemanticReads from './db/agent-semantic-reads.js';
+import * as agentEditContext from './db/agent-edit-context.js';
+import * as agentRepoMap from './db/agent-repo-map.js';
 import * as filesStructural from './db/files-structural.js';
 import * as fileContents from './db/file-contents.js';
 import * as symbols from './db/symbols.js';
@@ -34,6 +41,7 @@ import * as runs from './db/runs.js';
 import * as snapshots from './db/snapshots.js';
 import * as snapshotsArchive from './db/snapshots-archive.js';
 import * as agentMemory from './db/agent-memory.js';
+import * as agentMemoryPages from './db/agent-memory-pages.js';
 import * as agentMemoryConsolidation from './db/agent-memory-consolidation.js';
 import * as agentMemoryKpis from './db/agent-memory-kpis.js';
 import * as memoryConsolidation from './db/memory-consolidation.js';
@@ -170,6 +178,9 @@ export class CodeIndexDB {
     // Schema must exist before migrations that ALTER it.
     initSchema(this.db);
     runMigrations(this.db);
+    // The first schema pass precedes migration 086 on a fresh database.
+    // Documentation search must work before the connection is reopened.
+    createDocChunksFtsIfReady(this.db);
     try {
       assertSessionScopedSqliteAbsent(this.db);
     } catch (error) {
@@ -719,6 +730,46 @@ export class CodeIndexDB {
   getFileById(id: number, projectId?: number): DBFile | undefined { return files.getById(this.idx(projectId), id); }
   getFileByPath(projectId: number, path: string): DBFile | undefined { return files.get(this.idx(projectId), projectId, path); }
   listFiles(projectId: number, language?: string): DBFile[] { return files.list(this.idx(projectId), projectId, language); }
+  listAgentIndexFiles(projectId: number, page: agentIndexReads.IndexPage & { order?: 'path' | 'updated' } = {}) {
+    return agentIndexReads.filePage(this.idx(projectId), projectId, page);
+  }
+  listAgentDirectoryFiles(projectId: number, prefix: string, depth: number, page: agentIndexReads.IndexPage = {}) {
+    return agentIndexReads.directoryPage(this.idx(projectId), projectId, prefix, depth, page);
+  }
+  getAgentFileSkeleton(projectId: number, path: string, page: agentSymbolReads.SymbolPageInput) {
+    return agentSymbolReads.skeletonPage(this.idx(projectId), projectId, path, page);
+  }
+  listAgentSymbolDefinitions(projectId: number, name: string, path: string | undefined, page: agentSymbolReads.SymbolPageInput) {
+    return agentSymbolReads.definitionsPage(this.idx(projectId), projectId, name, path, page);
+  }
+  listAgentSymbolReferences(projectId: number, name: string, page: agentReferenceReads.ReferencePageInput) {
+    return agentReferenceReads.referencePage(this.idx(projectId), projectId, name, page);
+  }
+  getAgentSemanticSeed(id: number, projectId?: number) { return agentSemanticReads.seed(this.idx(projectId), id, projectId); }
+  listAgentSemanticNeighbors(projectId: number, ids: number[]) { return agentSemanticReads.neighbors(this.idx(projectId), projectId, ids); }
+  getAgentEditContext(projectId: number, path: string, line: number, page: agentEditContext.EditContextPage) {
+    return agentEditContext.editContext(this.idx(projectId), projectId, path, line, page);
+  }
+  listAgentRepoMap(projectId: number, page: agentRepoMap.RepoMapPageInput = {}) {
+    return agentRepoMap.repoMapPage(this.idx(projectId), projectId, page);
+  }
+  listAgentImplementations(projectId: number, name: string, page: agentTypeReads.TypePage) {
+    return agentTypeReads.implementationsPage(this.idx(projectId), projectId, name, page);
+  }
+  getAgentTypeHierarchy(projectId: number, name: string, path: string | undefined, page: agentTypeReads.TypePage) {
+    return agentTypeReads.hierarchyPage(this.idx(projectId), projectId, name, path, page);
+  }
+  listAgentIndexDependencies(projectId: number, fileId: number, reverse: boolean, page: agentIndexReads.IndexPage = {}) {
+    return agentIndexReads.dependencyPage(this.idx(projectId), projectId, fileId, reverse, page);
+  }
+  getAgentProjectShape(projectId: number) { return agentIndexReads.projectShape(this.idx(projectId), projectId); }
+  /** Count on the routed index without loading every file row/body. */
+  countFiles(projectId: number): number {
+    return (this.idx(projectId).prepare('SELECT COUNT(*) AS n FROM files WHERE project_id = ?').get(projectId) as { n: number }).n;
+  }
+  searchFilePaths(projectId: number, query: string, limit?: number, fuzzy?: boolean): Array<{ path: string }> {
+    return files.searchPaths(this.idx(projectId), projectId, query, limit, fuzzy);
+  }
   listFileScanMeta(projectId: number): files.FileScanMeta[] { return files.listScanMeta(this.idx(projectId), projectId); }
   touchFileMtime(projectId: number, path: string, mtimeMs: number): void { files.touchMtime(this.idx(projectId), projectId, path, mtimeMs); }
   deleteFile(projectId: number, path: string): void { files.del(this.idx(projectId), projectId, path); }
@@ -783,6 +834,9 @@ export class CodeIndexDB {
   getAgentMemoryById(id: number): AgentMemoryRow | undefined { return agentMemory.getById(this.db, id); }
   /** Batched hydration; unspecified row order — see agentMemory.getByIds. */
   getAgentMemoriesByIds(ids: readonly number[]): AgentMemoryRow[] { return agentMemory.getByIds(this.db, ids); }
+  getProjectMemoryContentPages(projectId: number, ids: readonly number[], offset: number, limit: number) {
+    return agentMemoryPages.projectMemoryPages(this.db, projectId, ids, offset, limit);
+  }
   getAgentMemoryByName(scope: AgentMemoryScope, projectId: number, name: string): AgentMemoryRow | undefined { return agentMemory.getByName(this.db, scope, projectId, name); }
   listAgentMemoryIndex(scope: AgentMemoryScope, projectId: number, limit = 12, type?: AgentMemoryType): agentMemory.AgentMemoryIndexEntry[] { return agentMemory.listMemoryIndex(this.db, scope, projectId, limit, type); }
   searchAgentMemoryFts(scope: AgentMemoryScope, projectId: number, query: string, limit = 15): AgentMemoryRow[] { return agentMemory.searchFts(this.db, scope, projectId, query, limit); }

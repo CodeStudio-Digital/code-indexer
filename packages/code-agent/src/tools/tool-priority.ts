@@ -22,11 +22,8 @@ import {
   BROWSER_TOOLS,
   CORE_TIER_NAMES,
   DB_TOOLS,
-  DESIGN_SYSTEM_CONSUMER_TOOLS,
-  DESIGN_SYSTEM_STUDIO_TOOLS,
   DIAGRAM_TOOLS,
   QA_TOOLS,
-  SPRITE_STUDIO_TOOLS,
   type ToolTier,
 } from '@mcp/code-agent/tools/tiers.js';
 
@@ -100,11 +97,8 @@ export const ROLE_CAPABILITY_FLOOR: ReadonlySet<string> = new Set([
   ...APP_STUDIO_TOOLS,
   ...BROWSER_TOOLS,
   ...DB_TOOLS,
-  ...DESIGN_SYSTEM_CONSUMER_TOOLS,
-  ...DESIGN_SYSTEM_STUDIO_TOOLS,
   ...DIAGRAM_TOOLS,
   ...QA_TOOLS,
-  ...SPRITE_STUDIO_TOOLS,
 ]);
 
 /**
@@ -201,9 +195,6 @@ function survivalGroup(tier: ToolTier, hot: boolean): number {
     case 'db':
     case 'qa':
     case 'app':
-    case 'design-system-studio':
-    case 'design-system-consumer':
-    case 'sprite-studio':
       return 5;
     case 'navigate':
       return hot ? 6 : 4;

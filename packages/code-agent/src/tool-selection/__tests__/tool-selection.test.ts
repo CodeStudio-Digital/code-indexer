@@ -58,7 +58,7 @@ describe('ToolSelectionPipeline', () => {
     makeTool('mcp__grep_code', 'Search file content'),
     makeTool('task_list', 'Manage task list'),
     makeTool('code_exec', 'Run structured tool calls'),
-    makeTool('DesignSystemExtract', 'Extract design tokens from a project'),
+    makeTool('ArchitectureMap', 'Map a project architecture'),
     makeTool('DatabaseQuery', 'Run a SQL query on the attached database'),
     makeTool('WebFetch', 'Fetch the content of a URL'),
     makeTool('PlaywrightRun', 'Execute Playwright e2e tests', { riskLevel: 'admin' }),

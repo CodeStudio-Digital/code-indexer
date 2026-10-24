@@ -12,12 +12,23 @@
  *     plain data has the same view as a renderer with the live collector.
  */
 import { describe, it, expect } from 'vitest';
+import { recordMemoTool } from '../record-memo.js';
 import {
   SubagentCollector,
   renderCollectedSnapshotForParent,
 } from '@mcp/code-agent/tools/subagent-collector.js';
 
 const BOARD_POST_ID = '00000000-0000-4000-8000-000000000042';
+
+it('bounds each memo and isolates returned snapshots from later caller mutation', async () => {
+  const collector = new SubagentCollector();
+  expect(collector.recordMemo('x'.repeat(301))).toBe(false);
+  expect(collector.recordMemo('x'.repeat(300))).toBe(true);
+  const snapshot = collector.snapshot(); snapshot.memos[0].text = 'changed outside';
+  expect(collector.snapshot().memos[0].text).toHaveLength(300);
+  const result = await recordMemoTool.handler({ text: 'y'.repeat(301) }, { cwd: '.', projectName: 'test', subagentCollector: collector });
+  expect(result.isError).toBe(true); expect(collector.snapshot().memos).toHaveLength(1);
+});
 
 describe('subagent-collector renderer', () => {
   it('renders empty string when no entries', () => {

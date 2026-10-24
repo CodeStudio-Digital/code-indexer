@@ -13,6 +13,7 @@ pub enum SessionStoreError {
     InvalidRoot,
     UnsafePath,
     WriterAlreadyActive,
+    StorageLockBusy,
     StaleAuthority,
     AuthorityGap,
     AuthorityLimitExceeded,

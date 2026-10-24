@@ -12,8 +12,9 @@
  * never have to think about the underlying storage layout.
  */
 
-import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import { DOCS_MIRROR_PREFIX, isDocsMirrorPath } from './file-path-core.js';
 

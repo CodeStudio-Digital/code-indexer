@@ -16,8 +16,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { CoderTask, TasksState } from '@mcp/session-storage/session-state-types.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { newSessionId, type SessionId } from '@mcp/session-storage';
 
 const SESSION_ID = newSessionId();
@@ -116,6 +116,41 @@ beforeEach(() => {
 });
 
 describe('execute_tasks persistence bridge (PR-B)', () => {
+  it('does not create another durable run while an inline task scope is active', async () => {
+    const { tool, ctx, store, runner } = setup([task({ id: 'active', status: 'running' })]);
+    runner.currentTaskScopeId.mockReturnValue('active' as never);
+    const result = await tool.handler({}, ctx);
+    expect(result.isError).toBe(true); expect(result.content).toContain('already active');
+    expect(store.createTaskRun).not.toHaveBeenCalled(); expect(runSubagent).not.toHaveBeenCalled();
+  });
+
+  it('persists native child admission before the child starts work and binds the parent tool identity', async () => {
+    const { tool, ctx, store } = setup([task({ id: 'native-write' })]);
+    ctx.runtimeGeneration = 'rust_v1'; ctx.currentToolUseId = `native-tool:${'a'.repeat(64)}`;
+    ctx.sessionId = SESSION_ID;
+    let payload: string | null = null;
+    Object.assign(store, {
+      loadOrchestrationCheckpointForAudit: async () => payload ? { payload_json: payload } : null,
+      saveOrchestrationCheckpoint: async (input: { payloadJson: string }) => { payload = input.payloadJson; return true; },
+      tryAcquireOrchestrationCheckpoint: async () => 'lease', renewOrchestrationCheckpoint: async () => true,
+      releaseOrchestrationCheckpoint: async () => {},
+    });
+    ctx.ports = { agentTree: { runtimeGeneration: 'rust_v1', ownerAgentRunId: 'owner', run: vi.fn(),
+      reconcile: vi.fn(async () => ({ outcome: 'terminal' as const, stepStatus: 'completed' as const, detail: 'validated' })) } };
+    const reference = 'native-child-journal:' + Array(4).fill('11111111-1111-4111-8111-111111111111').join(':');
+    let admitted = false;
+    store.upsertTaskRunItem.mockImplementation(async input => { if (input.native_transcript_ref) admitted = true; });
+    vi.mocked(runSubagent).mockImplementation(async (_parent, spec) => {
+      expect(admitted).toBe(false); await spec.onNativeAdmission!(reference); expect(admitted).toBe(true);
+      return { reason: 'completed', finalText: 'native confirmed', usage: { input_tokens: 1, output_tokens: 1 }, sandboxViolations: [] };
+    });
+    const result = await tool.handler({}, ctx);
+    expect(result.isError, result.content).toBeFalsy();
+    expect(store.createTaskRun).toHaveBeenCalledWith(expect.objectContaining({ runtime_generation: 'rust_v1',
+      task_plan_sha256: expect.stringMatching(/^[a-f\d]{64}$/), owner_tool_use_id: ctx.currentToolUseId }));
+    expect(store.upsertTaskRunItem).toHaveBeenCalledWith(expect.objectContaining({ native_transcript_ref: reference, status: 'running' }));
+  });
+
   it('createTaskRun fires once with session_id + mode + started_at', async () => {
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'completed',
@@ -339,5 +374,30 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
     store.updateTaskRun.mockImplementation(() => { throw new Error('disk full'); });
     const { tool, ctx } = setup([task({ id: 'tsk_one' })], { store });
     await expect(tool.handler({}, ctx)).rejects.toThrow('disk full');
+  });
+
+  it('does not turn disk-full after a child effect into an ordinary retryable task failure', async () => {
+    let effects = 0;
+    vi.mocked(runSubagent).mockImplementation(async () => {
+      effects++; return { reason: 'completed', finalText: 'effect confirmed', usage: { input_tokens: 1, output_tokens: 1 }, sandboxViolations: [] };
+    });
+    const { tool, ctx, store } = setup([task({ id: 'write' })]);
+    vi.mocked(ctx.updateTaskStatus!).mockImplementation(async (id, patch) => {
+      Object.assign(ctx.getTasksState!()!.tasks.find(t => t.id === id)!, patch); return ctx.getTasksState!()!;
+    });
+    store.upsertTaskRunItem.mockImplementation(async input => { if (input.status === 'done') throw new Error('disk full after effect'); });
+    const result = await tool.handler({}, ctx);
+    expect(result.effectOutcome).toBe('unknown'); expect(result.error?.code).toBe('TOOL_OUTCOME_UNKNOWN'); expect(effects).toBe(1);
+    expect(ctx.getTasksState!()!.tasks[0].result?.effectOutcome).toBe('unknown');
+    const again = await tool.handler({}, ctx); expect(again.isError).toBe(true); expect(effects).toBe(1);
+  });
+
+  it('preserves uncertainty when only the aggregate run checkpoint fails after child completion', async () => {
+    vi.mocked(runSubagent).mockResolvedValue({ reason: 'completed', finalText: 'effect confirmed', usage: { input_tokens: 1, output_tokens: 1 }, sandboxViolations: [] });
+    const { tool, ctx, store } = setup([task()]);
+    store.updateTaskRun.mockRejectedValue(new Error('disk full on aggregate'));
+    const result = await tool.handler({}, ctx);
+    expect(result.effectOutcome).toBe('unknown'); expect(result.error?.retryable).toBe(false);
+    expect(runSubagent).toHaveBeenCalledOnce();
   });
 });

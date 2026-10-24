@@ -2,7 +2,7 @@
  * Top horizontal navbar that wraps non-workspace routes. The Workspace
  * IDE (`/projects/:id`) opts out via `view.page === 'project'` and runs
  * full-bleed; everything else (home / agents / admin / telemetry / docs /
- * design-systems) gets the nav bar.
+ * projects) gets the nav bar.
  *
  * Design intent: feels like a software's top menu — small (h-9), tight
  * font (text-xs / 11-12px), icons + labels. Replaces the old left
@@ -18,10 +18,8 @@ import {
   ChevronsUpDown,
   Clock,
   Home,
-  ImagePlay,
   Moon,
   Orbit,
-  Palette,
   Pin,
   PinOff,
   Search,
@@ -164,8 +162,7 @@ export function AppShell() {
   const appStudioPathId = /^\/apps\/([^/]+)(?:\/|$)/.exec(location.pathname)?.[1];
   const isAppStudioWorkbench = isAppStudioUuid(appStudioPathId);
   const isCompanyWorkbench = view.page === 'agents';
-  const isSpriteWorkbench = view.page === 'sprites';
-  const isWorkbenchView = isProjectView || isAppStudioWorkbench || isCompanyWorkbench || isSpriteWorkbench;
+  const isWorkbenchView = isProjectView || isAppStudioWorkbench || isCompanyWorkbench;
   const { data: activeProject } = useApi<{ name: string }>(
     isProjectView && view.projectId ? `/projects/${view.projectId}` : '',
   );
@@ -217,20 +214,6 @@ export function AppShell() {
     },
     { id: 'agents', label: t('nav.agents'), icon: Users, href: '/agents' },
     { id: 'global', label: t('nav.global'), icon: Orbit, href: '/global' },
-    {
-      id: 'design-systems',
-      label: t('nav.designSystems'),
-      icon: Palette,
-      href: '/design-systems',
-      show: features.designSystemEnabled,
-    },
-    {
-      id: 'sprites',
-      label: t('nav.sprites'),
-      icon: ImagePlay,
-      href: '/sprites',
-      show: features.spriteStudioEnabled,
-    },
     { id: 'telemetry', label: t('nav.telemetry'), icon: Activity, href: '/telemetry' },
     { id: 'docs', label: t('nav.docs'), icon: BookOpen, href: '/docs' },
     { id: 'admin', label: t('nav.admin'), icon: Settings, href: '/admin' },
@@ -306,19 +289,6 @@ export function AppShell() {
             >
               <Users className="h-3.5 w-3.5 text-violet-400" />
               <span>{t('nav.agents')}</span>
-            </button>
-          </div>
-        )}
-        {isSpriteWorkbench && (
-          <div className="no-drag flex min-w-0 items-center gap-1 text-[12px]">
-            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <button
-              type="button"
-              onClick={() => navigate('/sprites')}
-              className="flex h-7 items-center gap-1.5 rounded px-1.5 font-medium transition-colors hover:bg-[var(--workbench-hover)]"
-            >
-              <ImagePlay className="h-3.5 w-3.5 text-violet-400" />
-              <span>{t('nav.sprites')}</span>
             </button>
           </div>
         )}
@@ -417,7 +387,7 @@ export function AppShell() {
       {/* Global pinned tabs — persists across the whole app; hidden when empty. */}
       <PinnedTabsBar />
       {/* Container padding by route. Pages that own their full-bleed
-          surface (agents zones, design-systems gallery, project analytics)
+          surface (agents zones, project analytics)
           opt out and manage their own margins. Everything else (home grid,
           admin, docs, telemetry, fallback) gets a comfortable container so
           content doesn't slam against the viewport. */}
@@ -425,7 +395,7 @@ export function AppShell() {
         className={cn(
           'flex-1 min-h-0',
           // Full-bleed surfaces — these own their own padding and (for
-          // ProjectView / AgentsTab / DesignSystems) their own
+          // ProjectView / AgentsTab) their own
           // resize-panel layout, so AppShell mustn't inject overflow
           // or padding. We also flip `<main>` to flex-column so the
           // route root (which uses h-full internally) gets a proper
@@ -435,8 +405,6 @@ export function AppShell() {
           view.page === 'project' ||
           view.page === 'agents' ||
           view.page === 'global' ||
-          view.page === 'design-systems' ||
-          view.page === 'sprites' ||
           // Settings (/admin), Docs (/docs) and Telemetry (/telemetry) own
           // their own padding + a fixed-height, independently-scrolling body
           // under a compact top band (IDE-style), so they opt out of the

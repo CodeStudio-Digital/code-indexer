@@ -51,6 +51,30 @@ function makeVectorStore() {
 }
 
 describe('InvestigationSemanticIndex', () => {
+  it('cancels embedding reads without falling through to a vector query', async () => {
+    const ctrl = new AbortController();
+    const embedding = { embed: vi.fn(), embedQuery: vi.fn(),
+      embedQueryForNamespace: vi.fn(async (_ns, _text, options) => {
+        expect(options.signal).toBe(ctrl.signal); ctrl.abort();
+        return { vector: [1], tokens: 1 };
+      }) } as unknown as EmbeddingService;
+    const vectors = makeVectorStore();
+    const index = new InvestigationSemanticIndex({ listProject: () => [] }, null, vectors, embedding);
+    await expect(index.search(7, 'auth', 8, ctrl.signal)).rejects.toThrow();
+    expect(vectors.search).not.toHaveBeenCalled();
+  });
+  it('cancels embedding reads without falling through to a vector query', async () => {
+    const ctrl = new AbortController();
+    const embedding = { embed: vi.fn(), embedQuery: vi.fn(),
+      embedQueryForNamespace: vi.fn(async (_ns, _text, options) => {
+        expect(options.signal).toBe(ctrl.signal); ctrl.abort();
+        return { vector: [1], tokens: 1 };
+      }) } as unknown as EmbeddingService;
+    const vectors = makeVectorStore();
+    const index = new InvestigationSemanticIndex({ listProject: () => [] }, null, vectors, embedding);
+    await expect(index.search(7, 'auth', 8, ctrl.signal)).rejects.toThrow();
+    expect(vectors.search).not.toHaveBeenCalled();
+  });
   it('writes a generation-pinned semantic item into the project Knowledge namespace', async () => {
     const embedding = {
       embed: vi.fn(),

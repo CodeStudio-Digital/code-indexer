@@ -12,7 +12,6 @@
     { "path": "../services" },
     { "path": "../code-agent" },
     { "path": "../session-storage" },
-    { "path": "../design-system" },
     { "path": "../company-contracts" },
     { "path": "../candidate-pipeline" }
   ]

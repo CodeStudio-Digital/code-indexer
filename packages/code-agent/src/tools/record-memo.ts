@@ -17,6 +17,7 @@
  */
 import type { CoderTool, ToolResult, ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { MAX_MEMO_CHARS } from './subagent-collector.js';
 
 const MEMO_KINDS = ['observation', 'decision', 'warning', 'progress'] as const;
 
@@ -37,6 +38,7 @@ const recordMemoSchema: JsonSchema = {
     text: {
       type: 'string',
       description: 'The memo content. Keep under 300 chars. Concrete > vague.',
+      maxLength: MAX_MEMO_CHARS,
     },
     kind: {
       type: 'string',
@@ -71,6 +73,7 @@ export const recordMemoTool: CoderTool = {
     }
     const text = typeof args.text === 'string' ? args.text.trim() : '';
     if (!text) return err('record_memo: `text` is required and non-empty.');
+    if (text.length > MAX_MEMO_CHARS) return err(`record_memo: text exceeds ${MAX_MEMO_CHARS} characters; summarize the finding.`);
     const kindRaw = typeof args.kind === 'string' ? args.kind : 'observation';
     const kind = (MEMO_KINDS as readonly string[]).includes(kindRaw) ? kindRaw : 'observation';
     const accepted = collector.recordMemo(text, kind);

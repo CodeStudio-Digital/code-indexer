@@ -4,6 +4,8 @@ use prost::Message;
 use super::{ProviderContextError, compose_initial_provider_context_from_spec};
 use support::{Fixture, tool};
 
+mod initial_conversation;
+mod resume;
 mod support;
 
 #[test]
@@ -93,9 +95,7 @@ fn resume_inputs_and_incoherent_inference_options_are_not_smuggled() {
     resume.spec.trigger = wire::AttemptTrigger::Resume as i32;
     assert_eq!(
         compose_initial_provider_context_from_spec(&resume.spec, &resume.material),
-        Err(ProviderContextError::UnsupportedTrigger(
-            wire::AttemptTrigger::Resume as i32
-        ))
+        Err(ProviderContextError::InvalidResumeInput)
     );
 
     let mut preset = Fixture::valid();

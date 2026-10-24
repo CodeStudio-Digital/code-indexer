@@ -37,3 +37,16 @@ pub trait CapabilityExecutorPort: Send {
         grant: &SealedExecutionGrant,
     ) -> impl Future<Output = Result<CapabilityExecutionOutcome, Self::Error>> + Send;
 }
+
+/// Bounded Host read windows. Each invocation has already crossed its own
+/// durable started boundary; results arrive independently in completion order.
+pub trait CapabilityReadBatchPort: CapabilityExecutorPort {
+    fn start_read_batch(
+        &mut self,
+        members: &[(CapabilityInvocation, SealedExecutionGrant)],
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn next_read_result(
+        &mut self,
+    ) -> impl Future<Output = Result<(String, CapabilityExecutionOutcome), Self::Error>> + Send;
+}

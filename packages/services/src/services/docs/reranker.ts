@@ -95,6 +95,7 @@ export interface RerankerOptions {
 }
 
 export interface RerankOpts {
+  signal?: AbortSignal;
   resolveContext?: ResolveContext;
   /** Override the score cutoff (0-1). Default 0 (keep everything). */
   scoreCutoff?: number;
@@ -129,6 +130,7 @@ export class Reranker implements DocReranker {
     candidates: TCandidate[],
     opts: RerankOpts = {},
   ): Promise<RerankResult<TCandidate>> {
+    opts.signal?.throwIfAborted();
     const started = Date.now();
     const normalizedQuery = query.trim();
 
@@ -150,6 +152,7 @@ export class Reranker implements DocReranker {
       'reranker',
       opts.resolveContext ?? {},
     );
+    opts.signal?.throwIfAborted();
     if (!binding) {
       const result: RerankResult<TCandidate> = {
         candidates,
@@ -190,7 +193,8 @@ export class Reranker implements DocReranker {
     }
 
     // LLM call.
-    const scores = await this.callLlm(binding, normalizedQuery, candidates);
+    const scores = await this.callLlm(binding, normalizedQuery, candidates, opts.signal);
+    opts.signal?.throwIfAborted();
     if (!scores) {
       const result: RerankResult<TCandidate> = {
         candidates,
@@ -307,15 +311,18 @@ export class Reranker implements DocReranker {
     binding: ResolvedBinding,
     query: string,
     candidates: RerankCandidate[],
+    signal?: AbortSignal,
   ): Promise<number[] | null> {
     const chat = pickChatFn(binding);
     try {
       const result = await chat(binding, [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildPrompt(query, candidates) },
-      ]);
+      ], { signal });
+      signal?.throwIfAborted();
       return parseLlmResponse(result.content, candidates.length);
     } catch {
+      signal?.throwIfAborted();
       return null;
     }
   }

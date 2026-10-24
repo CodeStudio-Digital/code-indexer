@@ -13,7 +13,7 @@ import {
 
 async function git(args: string[], ctx: ToolContext): Promise<ToolResult> {
   const shell = ctx.ports?.shell ?? defaultLocalShellPort();
-  const r = await shell.run('git', args, { cwd: ctx.cwd, encoding: 'utf-8' });
+  const r = await shell.run('git', args, { cwd: ctx.cwd, encoding: 'utf-8', signal: ctx.signal, runtimeEnv: ctx.runtimeEnv });
   // `run()` surfaces spawn errors via stderr+exitCode=null, matching the
   // pre-refactor spawnSync branch that reported `r.error.message`.
   if (r.exitCode === null && !r.stdout && r.stderr) {

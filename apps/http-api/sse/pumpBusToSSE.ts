@@ -105,10 +105,9 @@ export function pumpBusToSSE(
       void queuedWriter.writeSSE(msg).catch(() => undefined);
     };
 
-    // Bounded semantic attach replay: coder routes opt in and it is enabled
-    // by default (CODER_ATTACH_REPLAY_TRIM=0 is the emergency compatibility
-    // escape hatch). Compute it before bus_info so the preamble reports the
-    // actual first replay seq.
+    // Bounded semantic attach replay: coder routes opt in. Retired environment
+    // switches do not expand cursorless replay. Compute before bus_info so
+    // the preamble reports the actual first replay seq.
     const trimmedReplay: readonly BufferedEvent[] | null =
       opts.trimReplay && attachReplayTrimEnabled() && since < 0
         ? buildAttachReplay(bus)

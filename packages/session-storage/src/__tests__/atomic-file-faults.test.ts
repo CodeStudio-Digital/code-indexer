@@ -39,6 +39,17 @@ afterEach(async () => {
 });
 
 describe('atomic filesystem fault boundaries', () => {
+  it('revalidates authority after temp fsync and preserves the previous published file on revocation', async () => {
+    const root = await temporaryRoot(), target = join(root, 'state.json');
+    await writeFile(target, 'previous');
+    let revoked = false;
+    await expect(atomicWriteFile(target, 'new', {
+      faultInjector: ({ point }) => { if (point === 'atomic:after-temp-fsync-before-rename') revoked = true; },
+      beforePublish: () => { if (revoked) throw new Error('revoked'); },
+    })).rejects.toThrow('revoked');
+    expect(await readFile(target, 'utf8')).toBe('previous');
+    expect((await readdir(root)).some(name => name.includes('.tmp-'))).toBe(false);
+  });
   const writePoints = [
     'atomic:before-temp-write',
     'atomic:after-temp-write-before-fsync',

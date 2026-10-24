@@ -27,6 +27,11 @@ export type WorkflowStepStatus =
 
 export type WorkflowStatus = 'running' | 'completed' | 'partial' | 'failed' | 'aborted';
 
+/** Older checkpoints encoded uncertainty only in the error; keep them fenced. */
+export function workflowStepNeedsReconciliation(step: Pick<WorkflowStepState, 'effectOutcome' | 'error'>): boolean {
+  return step.effectOutcome === 'unknown' || /outcome[_ ]unknown/i.test(step.error ?? '');
+}
+
 /** Raw step as accepted from the model (post-schema, pre-normalization). */
 export interface WorkflowStepInput {
   id: string;
@@ -49,13 +54,18 @@ export interface WorkflowStepState {
   status: WorkflowStepStatus;
   /** agents_group id of the wave dispatch — links UI lanes + resume registry. */
   groupId?: string;
+  /** Persisted after native admission, before any child provider/tool effect. */
+  nativeTranscriptRef?: string;
   summary?: string;
   error?: string;
+  effectOutcome?: 'unknown';
   toolCallCount?: number;
   usage?: ChatUsage;
 }
 
 export interface WorkflowRecord {
+  /** Missing on historical checkpoints means the legacy executor. */
+  runtimeGeneration?: 'legacy_ts' | 'rust_v1';
   id: string;
   name: string;
   sessionId?: SessionId;

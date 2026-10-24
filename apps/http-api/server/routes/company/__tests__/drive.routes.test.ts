@@ -28,7 +28,7 @@ vi.mock('../../../../sse/workerPoolSingleton.js', () => ({
   getWorkerOrchestratorPool: () => ({ get: () => liveEntry }),
 }));
 
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type { JsonValue } from '@mcp/session-storage';
 import { mountCompanyDriveRoutes } from '../drive.js';
 import type { ServerDeps } from '../../../deps.js';

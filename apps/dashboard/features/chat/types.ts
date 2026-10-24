@@ -473,10 +473,11 @@ export interface PersistedTasksState {
 }
 
 export interface PromptHandlers {
-  onAnswer: (answer: string) => Promise<void>;
-  onPlanResponse: (verdict: { approved: boolean; aborted?: boolean; feedback?: string }) => Promise<void>;
+  onAnswer: (answer: string, interactionId?: string) => Promise<void>;
+  onPlanResponse: (verdict: { approved: boolean; aborted?: boolean; feedback?: string; interactionId?: string }) => Promise<void>;
   onTasksResponse: (verdict: {
     approved: boolean;
+    interaction_id?: string;
     feedback?: string;
     tasks?: StreamTask[];
     execution_mode?: StreamTaskExecutionMode;
@@ -489,6 +490,7 @@ export interface PromptHandlers {
     approved: boolean,
     spec_path: string,
     requested_changes?: string,
+    interactionId?: string,
   ) => Promise<void>;
   /** Fork the session at the given persisted user-message sequence: create a new
    *  session containing history up to (exclusive) the message, pre-fill the
@@ -512,7 +514,7 @@ export interface PromptHandlers {
   ) => Promise<void>;
   /** Resolve a `decision_gate` questionnaire — the user's chosen approaches.
    *  Optional so hosts that don't render plan-mode forks can omit it. */
-  onDecide?: (answers: DecisionAnswers) => Promise<void>;
+  onDecide?: (answers: DecisionAnswers, interactionId?: string) => Promise<void>;
   /**
    * Session the stream belongs to. Live agent rows use it for per-agent
    * abort (POST /agents/abort) and retained-transcript fetches; persisted

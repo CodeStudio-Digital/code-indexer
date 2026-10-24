@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import {
   SessionLocator,
   asCompanySessionId,
@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@mcp/code-agent/index.js', () => ({ runCoder: mocks.runCoder }));
 vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({
+  getReadyDocsResearchTools: vi.fn(() => []),
   installDocsDeepResearch: mocks.installDocsDeepResearch,
 }));
 vi.mock('@mcp/company/services/subordinate/completion-handler.js', () => ({

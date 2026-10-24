@@ -10,8 +10,8 @@
  */
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
-import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
+import type { ChatUsage } from "@mcp/provider-sdk";
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 
 // Re-export every data model + event for backwards compatibility.
 // Existing imports `from '@mcp/company/types.js'` keep working unchanged.
@@ -71,7 +71,7 @@ export interface SandboxBinding {
    * Absolute HOST path the container's `workdir` is bind-mounted from
    * (e.g. `D:\MCP\data\virtual-projects\<uuid>`). Present when the
    * sandbox was provisioned with `hostWorkdirMount` set — every
-   * `'node-only'` Design System session has this. Tools that run in
+   * A `'node-only'` session has this. Tools that run in
    * the host process and need to touch the package filesystem
    * (`npm pack`, `readFile`, hash) translate container paths
    * (`/app/pkg`) to host paths via this field. Without it, host-side

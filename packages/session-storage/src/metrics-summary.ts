@@ -146,6 +146,19 @@ export function calculateSessionMetricsSummary(
   updatedAt = new Date().toISOString(),
   additionalTurnMetrics: readonly JsonValue[] = [],
 ): SessionMetricsSummary {
+  return calculateSessionMetricsProjection(bundlePath, updatedAt, additionalTurnMetrics).summary;
+}
+
+export interface SessionMetricsProjection {
+  summary: SessionMetricsSummary;
+  highestTurnSeq: number;
+}
+
+export function calculateSessionMetricsProjection(
+  bundlePath: string,
+  updatedAt = new Date().toISOString(),
+  additionalTurnMetrics: readonly JsonValue[] = [],
+): SessionMetricsProjection {
   let turns = 0;
   let toolCalls = 0;
   let tokens: SessionMetricTokenTotals =
@@ -182,15 +195,39 @@ export function calculateSessionMetricsSummary(
   }
 
   return {
-    schema_version: 1,
-    updated_at: updatedAt,
-    turns,
-    tool_calls: toolCalls,
-    provider_attempts: jsonFiles(
-      bundlePath,
-      'metrics/provider_attempts',
-    ).length,
-    tokens,
+    highestTurnSeq: metrics.reduce((maximum, metric) => Math.max(maximum, metric.turnSeq ?? 0), 0),
+    summary: {
+      schema_version: 1,
+      updated_at: updatedAt,
+      turns,
+      tool_calls: toolCalls,
+      provider_attempts: jsonFiles(bundlePath, 'metrics/provider_attempts').length,
+      tokens,
+    },
+  };
+}
+
+/** Append-only hot path. Replacements, rollback markers and out-of-order
+ * imports require a full rebuild; ordinary new turns require constant work. */
+export function appendSessionMetric(
+  previous: SessionMetricsProjection,
+  directory: 'metrics/turns' | 'metrics/provider_attempts',
+  value: JsonValue,
+): SessionMetricsProjection | null {
+  const summary = { ...previous.summary, updated_at: new Date().toISOString() };
+  if (directory === 'metrics/provider_attempts') {
+    return { ...previous, summary: { ...summary, provider_attempts: summary.provider_attempts + 1 } };
+  }
+  const metric = turnMetricValue(value, 'new turn metric');
+  if (metric.truncateFromMessageSeq !== null
+    || (metric.turnSeq !== null && metric.turnSeq <= previous.highestTurnSeq)) return null;
+  return {
+    highestTurnSeq: Math.max(previous.highestTurnSeq, metric.turnSeq ?? 0),
+    summary: { ...summary,
+      turns: summary.turns + metric.turns,
+      tool_calls: summary.tool_calls + metric.toolCalls,
+      tokens: addUsage(addUsage(summary.tokens, metric.usage), metric.subagentUsage),
+    },
   };
 }
 

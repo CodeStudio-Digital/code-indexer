@@ -8,6 +8,8 @@ describe('Coder terminal outcome contract', () => {
   it.each([
     ['completed', 'completed'],
     ['max_turns', 'interrupted'],
+    ['max_tool_calls', 'interrupted'],
+    ['ipc_identity_budget', 'interrupted'],
     ['tool_budget', 'interrupted'],
     ['time_budget', 'interrupted'],
     ['aborted', 'cancelled'],

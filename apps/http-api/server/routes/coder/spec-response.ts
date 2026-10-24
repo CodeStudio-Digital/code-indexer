@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { AgentMessage } from "@mcp/provider-sdk";
 import { formatSpecResult } from '@mcp/code-agent/tools/spec/index.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
@@ -7,11 +7,13 @@ import { parseSessionIdParam } from '../_helpers.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
+import { resolveNativeInteraction } from './native-interaction-response.js';
 
 interface SpecResponseBody {
   approved: boolean;
   requested_changes?: string;
   spec_path?: string;
+  interaction_id?: string;
 }
 
 /**
@@ -34,6 +36,10 @@ export function mountCoderSpecResponseRoute(
   app.post('/api/coder/sessions/:id/spec-response', async (c) => {
     const id = parseSessionIdParam(c);
     const body = await c.req.json<SpecResponseBody>();
+    if (typeof body.approved !== 'boolean' || (body.requested_changes !== undefined
+      && (typeof body.requested_changes !== 'string' || body.requested_changes.length > 64 * 1024))) {
+      return c.json({ error: 'Invalid specification response' }, 400);
+    }
     const approved = !!body.approved;
     const requested = body.requested_changes;
     const bus = workerPool.getBus(id);
@@ -43,6 +49,9 @@ export function mountCoderSpecResponseRoute(
     });
 
     const payload = JSON.stringify({ approved, requested_changes: requested });
+    const native = await resolveNativeInteraction({ pool: workerPool, sessions: sessionStore,
+      sessionId: id, interactionId: body.interaction_id, prefix: 'native-tool:', value: payload });
+    if (native) return c.json(native.body, native.status);
 
     try {
       const ok = await workerPool.provideUserInput(id, payload);

@@ -11,7 +11,9 @@ use crate::capability_gateway::CapabilityDataGateway;
 use crate::provider_data::{ProviderDataClient, ProviderDataClock, ProviderDataTiming};
 use crate::provider_event_sink::ProviderEventDataSink;
 
+mod checkpoint;
 mod error;
+mod lifetime;
 mod mapping;
 mod operation;
 mod request;
@@ -32,6 +34,7 @@ pub struct ProviderDataGateway<S, C> {
     clock: Arc<C>,
     max_context_bytes: usize,
     first_start_signal: Option<oneshot::Sender<()>>,
+    identity_reserve: Option<usize>,
 }
 
 impl<S, C> ProviderDataGateway<S, C>
@@ -72,11 +75,12 @@ where
             clock: Arc::new(clock),
             max_context_bytes,
             first_start_signal: None,
+            identity_reserve: None,
         })
     }
 
-    /// Installs the startup barrier completed after `ProviderStart` has been
-    /// physically written, without waiting for the Host/provider response.
+    /// Installs the startup barrier completed after the first request frame has been
+    /// physically written (inline or first chunk), before the Host/provider response.
     pub(crate) fn signal_first_start_with(&mut self, signal: oneshot::Sender<()>) {
         self.first_start_signal = Some(signal);
     }
@@ -146,18 +150,14 @@ where
             self.max_context_bytes,
             &request,
         )?;
-        let signal = self.first_start_signal.take();
-        self.client
-            .lock()
-            .await
-            .start_observed(start, self.timing, self.clock.as_ref(), move || {
-                if let Some(signal) = signal {
-                    let _ = signal.send(());
-                }
-            })
-            .await
-            .map_err(ProviderGatewayError::Data)?;
-        Ok(ProviderDataOperation::new(operation_id, tools))
+        let opened = self.start_or_checkpoint(start).await?;
+        let mut operation = ProviderDataOperation::new(operation_id, tools);
+        if !opened {
+            operation.buffered = Some(ProviderEvent::Interrupted {
+                reason_code: crate::provider_data::IDENTITY_BUDGET_REASON.into(),
+            });
+        }
+        Ok(operation)
     }
 
     async fn next_inner(
@@ -172,13 +172,7 @@ where
                 operation.terminal_delivered = true;
                 return settle_provider_event(operation, event);
             }
-            let event = self
-                .client
-                .lock()
-                .await
-                .next(self.timing, self.clock.as_ref())
-                .await
-                .map_err(ProviderGatewayError::Data)?;
+            let event = self.next_with_budget().await?;
             let mapped = map_wire_event(event, &operation.operation_id, &operation.tools)?;
             operation.buffered = mapped.buffered;
             operation.terminal_delivered = mapped.terminal_delivered;

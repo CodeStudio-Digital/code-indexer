@@ -52,6 +52,7 @@ export interface ResumableAgentState {
    * from RAM, so a big all-completed group no longer pins tens of MB.
    */
   transcript?: AgentMessage[];
+  nativeTranscriptRef?: string;
   /**
    * Set when this agent's transcript was spilled to a bundle entity instead of
    * kept in `transcript`. read_agent_transcript falls back to it. Only
@@ -59,6 +60,7 @@ export interface ResumableAgentState {
    */
   spillPath?: string;
   reason: StopReason;
+  effectOutcome?: 'unknown';
   /** Watchdog message / error text — feeds the continuation nudge. */
   failureNote?: string;
   /** Final report text (capped) — read_agent_transcript's fallback/summary. */
@@ -84,6 +86,12 @@ export interface ResumableGroup {
   seq?: number;
   /** FULL roster — completed agents keep metadata but carry no transcript. */
   agents: ResumableAgentState[];
+}
+
+export function resumeNeedsReconciliation(state: Pick<ResumableAgentState, 'effectOutcome' | 'failureNote' | 'transcript'>): boolean {
+  return state.effectOutcome === 'unknown' || /outcome[_ ]unknown/i.test(state.failureNote ?? '')
+    || !!state.transcript?.some(message => message.role === 'tool'
+      && message.content.some(block => block.type === 'tool_result' && block.effect_outcome === 'unknown'));
 }
 
 const MAX_GROUPS_PER_SESSION = 8;
@@ -169,6 +177,12 @@ export interface ResumeCheckpointStore {
     kind: 'subagent_resume',
     limit?: number,
   ): Promise<Array<{ scope_id: string; payload_json: string }>>;
+  loadOrchestrationCheckpointForAudit?(
+    sessionId: SessionId, kind: 'subagent_resume', scopeId: string,
+  ): Promise<{ payload_json: string } | null>;
+  listOrchestrationCheckpointsForAudit?(
+    sessionId: SessionId, kind: 'subagent_resume', limit?: number,
+  ): Promise<Array<{ scope_id: string; payload_json: string }>>;
   removeOrchestrationCheckpoint(
     sessionId: SessionId,
     kind: 'subagent_resume',
@@ -213,7 +227,7 @@ async function hydrateSpillPaths(
 ): Promise<void> {
   if (typeof store?.findSubagentTranscript !== 'function') return;
   await Promise.all(group.agents.map(async (agent) => {
-    if (agent.transcript || agent.spillPath) return;
+    if (agent.transcript || agent.spillPath || agent.nativeTranscriptRef) return;
     agent.spillPath = (
       await store.findSubagentTranscript!(
         group.sessionId,
@@ -270,6 +284,9 @@ function parsePersistedGroup(
       return undefined;
     }
     for (const agent of group.agents) {
+      if (agent.effectOutcome !== undefined && agent.effectOutcome !== 'unknown') return undefined;
+      if (agent.nativeTranscriptRef !== undefined && (typeof agent.nativeTranscriptRef !== 'string'
+        || !/^native-child-journal:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}$/i.test(agent.nativeTranscriptRef))) return undefined;
       if (agent.transcript) {
         agent.transcript = sanitizeTranscriptForResume(agent.transcript, agent.reason);
         agent.approxBytes = approxBytesOf(agent.transcript);
@@ -302,18 +319,9 @@ async function persistGroup(
       expiresAt: new Date(Date.now() + ttlMs()).toISOString(),
       leaseToken,
     });
-    const rows = await store.listOrchestrationCheckpoints(
-      group.sessionId,
-      'subagent_resume',
-      MAX_GROUPS_PER_SESSION + 20,
-    );
-    for (const row of rows.slice(MAX_GROUPS_PER_SESSION)) {
-      await store.removeOrchestrationCheckpoint(
-        group.sessionId,
-        'subagent_resume',
-        row.scope_id,
-      );
-    }
+    // RAM is bounded by sweep(); resume authority expires through the durable
+    // TTL. Keep the redacted roster on disk to locate audit transcripts after
+    // eviction. Deleting it strands both bundle files and native journal refs.
     return saved;
   } catch {
     // Memory retention remains available in the current executor.
@@ -654,7 +662,7 @@ export function listResumable(
     for (const a of g.agents) {
       // Completed agents may carry a transcript (observability retention) —
       // they are readable, never resumable.
-      if (a.transcript && a.reason !== 'completed') {
+      if ((a.transcript || a.nativeTranscriptRef) && a.reason !== 'completed') {
         out.push({ spawnId: g.spawnId, agentIndex: a.agentIndex, label: a.label, reason: a.reason, attempt: a.attempt });
       }
     }
@@ -662,24 +670,42 @@ export function listResumable(
   return out;
 }
 
-/** Groups with at least one retained transcript — feed for read_agent_transcript. */
+/** Audit reads neither refresh TTL nor populate the resumable in-memory cache. */
+export async function getReadableGroup(sessionId: SessionId, spawnId: string,
+  store?: ResumeCheckpointStore): Promise<ResumableGroup | undefined> {
+  const durableStore = store ?? storesBySession.get(sessionId);
+  sweep(sessionId);
+  const resident = bySession.get(sessionId)?.get(spawnId);
+  if (resident) { await hydrateSpillPaths(resident, durableStore); return resident; }
+  if (!durableStore?.loadOrchestrationCheckpointForAudit) return getGroup(sessionId, spawnId, store);
+  const checkpoint = await durableStore.loadOrchestrationCheckpointForAudit(sessionId, 'subagent_resume', spawnId);
+  const group = checkpoint ? parsePersistedGroup(checkpoint.payload_json, sessionId, spawnId) : undefined;
+  if (group) await hydrateSpillPaths(group, durableStore);
+  return group;
+}
+
+/** Bounded recent inventory; an exact spawn id can still read older groups. */
 export async function listReadableGroups(
   sessionId: SessionId,
   store?: ResumeCheckpointStore,
 ): Promise<Array<{ spawnId: string; createdAt: number; agents: Array<{ agentIndex: number; label: string; reason: StopReason; hasTranscript: boolean }> }>> {
   const durableStore = store ?? storesBySession.get(sessionId);
+  sweep(sessionId);
+  const groups = new Map(bySession.get(sessionId));
   if (durableStore) {
-    for (const checkpoint of await durableStore.listOrchestrationCheckpoints(
+    const list = durableStore.listOrchestrationCheckpointsForAudit ?? durableStore.listOrchestrationCheckpoints;
+    for (const checkpoint of await list.call(durableStore,
       sessionId,
       'subagent_resume',
       MAX_GROUPS_PER_SESSION,
     )) {
-      await getGroup(sessionId, checkpoint.scope_id, durableStore);
+      if (groups.has(checkpoint.scope_id)) continue;
+      const group = parsePersistedGroup(checkpoint.payload_json, sessionId, checkpoint.scope_id);
+      if (group) { await hydrateSpillPaths(group, durableStore); groups.set(group.spawnId, group); }
     }
   }
-  sweep(sessionId);
   const out: Array<{ spawnId: string; createdAt: number; agents: Array<{ agentIndex: number; label: string; reason: StopReason; hasTranscript: boolean }> }> = [];
-  for (const g of bySession.get(sessionId)?.values() ?? []) {
+  for (const g of groups.values()) {
     out.push({
       spawnId: g.spawnId,
       createdAt: g.createdAt,
@@ -688,11 +714,11 @@ export async function listReadableGroups(
         label: a.label,
         reason: a.reason,
         // A spilled (completed) transcript is still readable via its pointer.
-        hasTranscript: (a.transcript?.length ?? 0) > 0 || !!a.spillPath,
+        hasTranscript: (a.transcript?.length ?? 0) > 0 || !!a.spillPath || !!a.nativeTranscriptRef,
       })),
     });
   }
-  return out.sort((a, b) => b.createdAt - a.createdAt);
+  return out.sort((a, b) => b.createdAt - a.createdAt).slice(0, MAX_GROUPS_PER_SESSION);
 }
 
 export async function clearSession(

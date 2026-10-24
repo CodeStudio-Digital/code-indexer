@@ -52,7 +52,7 @@ import { readActiveSelection } from '../../workspace/editor/chat-actions.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
 import type { NotificationSourceContext } from '../../notifications/index.js';
 import type { AgentPreset } from '@mcp/api-bus';
-import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/code-agent/sessions/run-limits.js';
+import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/session-storage/run-limits.js';
 import {
   consumePendingAttachments,
   consumeSelectionPrefix,
@@ -732,10 +732,10 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   }, [selectedId, updateSessionData]);
 
   const handlers: PromptHandlers = useMemo(() => ({
-    onAnswer: (answer) => answerQuestion(answer),
+    onAnswer: (answer, interactionId) => answerQuestion(answer, undefined, { interactionId }),
     onPlanResponse: (verdict) => respondToPlan(verdict),
     onTasksResponse: (verdict) => respondToTasks(verdict),
-    onDecide: (answers) => decideGate(answers),
+    onDecide: (answers, interactionId) => decideGate(answers, undefined, { interactionId }),
     onToolApproval: (toolUseId, verdict) => respondToToolApproval(toolUseId, verdict),
   }), [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval]);
 

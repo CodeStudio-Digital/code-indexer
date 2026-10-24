@@ -7,7 +7,7 @@ import {
   type SummarizeSpanV3Options,
 } from '@mcp/code-agent/core/summarizer.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 
 export interface ReliableSummaryResult {

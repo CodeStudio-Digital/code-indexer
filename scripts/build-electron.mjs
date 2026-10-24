@@ -19,8 +19,11 @@
  *   --skip-tsc            Skip the typescript compile step (use when
  *                         caller already ran `pnpm build`).
  *   --skip-dashboard      Skip the vite dashboard build.
+ *   --reuse-native-runtime Verify and reuse the already built native package,
+ *                         allowing scale tests to keep its binaries open.
  *   --target=<targets>    Pass-through to electron-builder
  *                         (e.g. --target=nsis, --target=dir).
+ *   --output=<directory>  Keep a candidate separate from a previously certified build.
  *   --require-signing     Fail when a platform signing identity is missing.
  *   --no-package          Stop after the asset prep - useful for CI smoke
  *                         tests that just want to verify tsc + esbuild
@@ -30,7 +33,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, copyFileSync, cpSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, copyFileSync, cpSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,22 +47,35 @@ const argv_get = (name) => {
 
 const skipTsc = flag('--skip-tsc');
 const skipDashboard = flag('--skip-dashboard');
+const reuseNativeRuntime = flag('--reuse-native-runtime');
 const noPackage = flag('--no-package');
 const requireSigning = flag('--require-signing');
 const target = argv_get('--target');
+const output = argv_get('--output');
 
 function run(cmd, args, opts = {}) {
   console.log(`\n→ ${cmd} ${args.join(' ')}`);
-  const r = spawnSync(cmd, args, {
+  const r = spawnSync(cmd === 'node' ? process.execPath : cmd, args, {
     cwd: root,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: false,
     ...opts,
   });
   if (r.status !== 0) {
     console.error(`\n✗ Step failed: ${cmd} ${args.join(' ')} (exit ${r.status})`);
     process.exit(r.status ?? 1);
   }
+}
+
+/** Build the checked-out dependencies. A package-manager `exec` can trigger
+ * dependency synchronization and delete node_modules during a noninteractive
+ * build; resolving the installed CLI also avoids Windows shell quoting. */
+function runTool(packageName, command, args) {
+  const packageRoot = resolve(root, 'node_modules', packageName);
+  const manifest = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8'));
+  const entry = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.[command];
+  if (!entry) throw new Error(`Installed ${packageName} has no ${command} CLI`);
+  run('node', [resolve(packageRoot, entry), ...args]);
 }
 
 async function buildPreload() {
@@ -99,6 +115,8 @@ async function buildPreload() {
 }
 
 console.log('Building CodeStudio Electron app…');
+run('node', ['scripts/check-desktop-runtime-dependencies.mjs']);
+run('node', ['--import', 'tsx', 'scripts/generate-internal-mcp-catalog.ts', '--check']);
 console.log(`  root: ${root}`);
 console.log(
   `  flags: tsc=${!skipTsc} dashboard=${!skipDashboard}`
@@ -112,15 +130,15 @@ if (!skipTsc) {
   // .js.map / .d.ts(.map) ever ships in the ASAR. (Dev `pnpm build` keeps
   // maps via tsconfig.json.) tsc-alias rewrites the same dist with the prod
   // config's paths.
-  run('pnpm', ['exec', 'tsc', '-p', 'tsconfig.prod.json']);
-  run('pnpm', ['exec', 'tsc-alias', '-p', 'tsconfig.prod.json']);
+  runTool('typescript', 'tsc', ['-p', 'tsconfig.prod.json']);
+  run('node', ['scripts/resolve-build-aliases.mjs', 'tsconfig.prod.json']);
   run('node', ['scripts/copy-prompts.mjs']);
 }
 
 // 2. Vite dashboard (parallel-safe with esbuild because separate outputs,
 //    but we run after tsc to keep stdio readable).
 if (!skipDashboard) {
-  run('pnpm', ['exec', 'vite', 'build', 'apps/dashboard']);
+  runTool('vite', 'vite', ['build', 'apps/dashboard']);
 }
 
 // 3. CJS preload bundle (overwrites the ESM tsc output)
@@ -157,7 +175,10 @@ await buildPreload();
 // 3d. Bundled provider plugins → dist/bundled-plugins/ (electron-builder ships
 //     it via extraResources → resourcesPath/bundled-plugins; seeded on first boot).
 run('node', ['scripts/build-bundled-plugins.mjs']);
-run('node', ['scripts/package-rust-agent-runtime.mjs']);
+run('node', reuseNativeRuntime
+  ? ['--import', 'tsx', 'scripts/verify-rust-agent-runtime-package.ts']
+  : ['scripts/package-rust-agent-runtime.mjs']);
+run('node', ['scripts/ensure-electron-script-runtime.mjs']);
 
 if (noPackage) {
   console.log('\n--no-package: skipping electron-builder. Done.');
@@ -170,10 +191,11 @@ if (noPackage) {
 //     under pnpm/Windows. node-pty ships N-API prebuilds (ABI-stable) and needs
 //     no rebuild; better-sqlite3 uses the V8 C++ API and MUST be rebuilt for
 //     Electron — that's exactly what `electron:rebuild` (-o better-sqlite3) does.
-run('pnpm', ['run', 'electron:rebuild']);
+runTool('@electron/rebuild', 'electron-rebuild', ['-f', '-o', 'better-sqlite3']);
 
 // 4. electron-builder
-const builderArgs = ['exec', 'electron-builder', '--config', 'apps/electron/electron-builder.json'];
+const builderArgs = ['--config', 'apps/electron/electron-builder.json'];
+if (output) builderArgs.push(`--config.directories.output=${resolve(root, output)}`);
 if (target) {
   const platformFlag = {
     win32: '--win',
@@ -187,6 +209,6 @@ if (target) {
   builderArgs.push(platformFlag, ...targets);
 }
 if (requireSigning) builderArgs.push('--config.forceCodeSigning=true');
-run('pnpm', builderArgs);
+runTool('electron-builder', 'electron-builder', builderArgs);
 
-console.log('\n✓ Build complete. Artifacts in dist/electron-builder/');
+console.log(`\n✓ Build complete. Artifacts in ${output ?? 'dist/electron-builder'}/`);

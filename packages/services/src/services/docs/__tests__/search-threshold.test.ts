@@ -62,6 +62,16 @@ function fakeReranker(scores: Record<number, number>): Reranker {
 }
 
 describe('DocHybridSearch relevance + threshold', () => {
+  it('reranks the actual chunk beyond the UI preview while keeping the response compact', async () => {
+    const chunks = fakeChunks();
+    chunks[0]!.content = 'intro '.repeat(100) + 'needle beyond the preview';
+    const reranker = fakeReranker({ 1: 0.9, 2: 0.5, 3: 0.4 });
+    const search = new DocHybridSearch(fakeDocStore(chunks), null, null, undefined, { reranker });
+    const { results } = await search.search({ query: 'needle', enhancements: { rerank: true } });
+    const passed = vi.mocked(reranker.rerank).mock.calls[0]![1];
+    expect(passed[0]!.snippet).toContain('needle beyond the preview');
+    expect(results[0]!.snippet).not.toContain('needle beyond the preview');
+  });
   it('surfaces the calibrated rerank score and drops weak hits', async () => {
     const search = new DocHybridSearch(
       fakeDocStore(fakeChunks()),

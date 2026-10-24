@@ -72,6 +72,10 @@ export interface ReviewSessionOutcome {
 }
 
 export interface ReviewSessionOptions {
+  signal?: AbortSignal;
+  /** Recheck the session/workspace owner at async boundaries and before writes. */
+  assertOwner?: () => void;
+  onCancellationSettled?: (receipt: { runId: string }) => void;
   /** Author note (1-3 sentences) from the `self_review` tool's `focus` param. */
   focus?: string | null;
   /** Session intent (title + original request + task list), built by the
@@ -84,16 +88,23 @@ export interface ReviewSessionOptions {
 
 const DIFF_CONTEXT = 3;
 
+function assertReviewCurrent(opts: ReviewSessionOptions): void {
+  opts.signal?.throwIfAborted(); opts.assertOwner?.();
+}
+
 async function loadDiffs<
   SessionKey extends string,
   RecordId extends string,
 >(
   service: SessionSnapshotService<SessionKey, RecordId>,
   baselineIds: RecordId[],
+  signal?: AbortSignal,
 ): Promise<FileDiff<RecordId>[]> {
   const diffs: FileDiff<RecordId>[] = [];
   for (const baselineId of baselineIds) {
+    signal?.throwIfAborted();
     const diff = await service.getDiff(baselineId, { context: DIFF_CONTEXT });
+    signal?.throwIfAborted();
     if (diff) diffs.push(diff);
   }
   return diffs;
@@ -153,8 +164,13 @@ async function persistComments<
   runId: RecordId,
   diffs: FileDiff<RecordId>[],
   findings: SnapshotReviewFinding[],
+  signal?: AbortSignal,
+  assertOwner?: () => void,
+  onWriteRejected?: () => void,
 ): Promise<void> {
   for (const finding of findings) {
+    signal?.throwIfAborted();
+    assertOwner?.();
     const kind = finding.kind ?? 'defect';
     let diff = diffs.find(
       (d) => d.baseline.id === finding.baselineId || d.baseline.filePath === finding.filePath,
@@ -176,7 +192,7 @@ async function persistComments<
           : kind === 'scope_creep'
             ? '[scope creep] '
             : '';
-    await reviewStore.createComment({
+    try { await reviewStore.createComment({
       run_id: runId,
       baseline_id: diff.baseline.id,
       source: 'auto',
@@ -193,7 +209,7 @@ async function persistComments<
       suggested_fix: finding.suggestedFix ?? null,
       diff_excerpt:
         finding.diffExcerpt ?? (external ? null : excerptFor(diff, finding.hunkFingerprint)),
-    });
+    }); } catch (error) { onWriteRejected?.(); throw error; }
   }
 }
 
@@ -206,116 +222,152 @@ export async function reviewSessionSnapshots<
   opts: ReviewSessionOptions = {},
 ): Promise<ReviewSessionOutcome> {
   const { snapshotStore, snapshotService, pipeline, reviewStore } = deps;
+  assertReviewCurrent(opts);
   const baselineIds = await snapshotStore.listActiveBaselineIds('coder', coderSessionId);
+  assertReviewCurrent(opts);
   // Drop internal/never-reviewed paths (.mcp-indexer/**, .git, node_modules,
   // dist) up front so they don't count toward pendingHunks or reach the model.
-  const diffs = filterReviewableDiffs(await loadDiffs(snapshotService, baselineIds));
+  const diffs = filterReviewableDiffs(await loadDiffs(snapshotService, baselineIds, opts.signal));
   const pendingHunks = countPendingHunks(diffs);
+  assertReviewCurrent(opts);
 
   const run = reviewStore
     ? await reviewStore.createRun({
-    session_kind: 'coder',
-    session_id: coderSessionId,
-    source: 'auto',
+        session_kind: 'coder',
+        session_id: coderSessionId,
+        source: 'auto',
       })
     : undefined;
 
-  if (pendingHunks === 0) {
-    if (run) {
-      await reviewStore!.completeRun(run.id, {
-        status: 'completed',
-        raw_response: '{"findings":[]}',
+  let uncertainReviewWrite = false;
+  const commitReview = async <T>(write: () => T | Promise<T>): Promise<T> => {
+    try { return await write(); }
+    catch (error) { uncertainReviewWrite = true; throw error; }
+  };
+
+  try {
+    assertReviewCurrent(opts);
+    if (pendingHunks === 0) {
+      if (run) {
+        await commitReview(() => reviewStore!.completeRun(run.id, {
+          status: 'completed',
+          raw_response: '{"findings":[]}',
+        }));
+      }
+      assertReviewCurrent(opts);
+      return { ok: true, pendingHunks: 0, findings: [] };
+    }
+
+    // Close the learning loop BEFORE the new run: observe the fate of prior
+    // findings (accepted / dismissed / region re-edited / ignored) and turn the
+    // aggregate into calibration priors for this review. Best-effort.
+    let priors: string | null = null;
+    if (deps.intelStore && reviewStore) {
+      await recordSessionFates(
+        reviewStore,
+        deps.intelStore,
+        'coder',
+        coderSessionId,
+        diffs,
+        opts.signal,
+      );
+      priors = await buildReviewPriors(deps.intelStore, deps.projectId, opts.signal);
+    }
+    assertReviewCurrent(opts);
+
+    // Compile the intent contract (cached per intent hash) — null degrades to
+    // a contract-less review.
+    let obligations: IntentObligation[] | null = null;
+    if (deps.intentCompiler && opts.intent?.trim()) {
+      obligations = await deps.intentCompiler.compile({
+        sessionKind: 'coder',
+        sessionId: coderSessionId,
+        resolveContext: { sessionId: String(coderSessionId) },
+        intentSource: opts.intent,
+        signal: opts.signal,
       });
     }
-    return { ok: true, pendingHunks: 0, findings: [] };
-  }
+    assertReviewCurrent(opts);
 
-  // Close the learning loop BEFORE the new run: observe the fate of prior
-  // findings (accepted / dismissed / region re-edited / ignored) and turn the
-  // aggregate into calibration priors for this review. Best-effort.
-  let priors: string | null = null;
-  if (deps.intelStore && reviewStore) {
-    await recordSessionFates(
-      reviewStore,
-      deps.intelStore,
-      'coder',
-      coderSessionId,
+    const bundle = await buildReviewBundle({
+      sessionKind: 'coder',
+      sessionId: coderSessionId,
       diffs,
-    );
-    priors = await buildReviewPriors(deps.intelStore, deps.projectId);
-  }
+      focus: opts.focus,
+      intent: opts.intent,
+      evidence: opts.evidence,
+      priors,
+      referenceLookup: deps.referenceLookup,
+      obligations,
+    });
+    assertReviewCurrent(opts);
 
-  // Compile the intent contract (cached per intent hash) — null degrades to
-  // a contract-less review.
-  let obligations: IntentObligation[] | null = null;
-  if (deps.intentCompiler && opts.intent?.trim()) {
-    obligations = await deps.intentCompiler.compile({
+    const result = await pipeline.review({
+      signal: opts.signal,
       sessionKind: 'coder',
       sessionId: coderSessionId,
       resolveContext: { sessionId: String(coderSessionId) },
-      intentSource: opts.intent,
+      diffs,
+      contextText: bundle.contextText,
+      absencesText: bundle.absencesText,
+      contractText: bundle.contractText,
     });
-  }
+    assertReviewCurrent(opts);
 
-  const bundle = await buildReviewBundle({
-    sessionKind: 'coder',
-    sessionId: coderSessionId,
-    diffs,
-    focus: opts.focus,
-    intent: opts.intent,
-    evidence: opts.evidence,
-    priors,
-    referenceLookup: deps.referenceLookup,
-    obligations,
-  });
+    if (!result.ok) {
+      if (run) {
+        await commitReview(() => reviewStore!.completeRun(run.id, {
+          status: 'error',
+          provider_id: result.providerId ?? null,
+          model_id: result.modelId ?? null,
+          raw_response: result.raw,
+          error: result.error ?? 'review failed',
+        }));
+      }
+      assertReviewCurrent(opts);
+      return {
+        ok: false,
+        pendingHunks,
+        findings: [],
+        providerId: result.providerId,
+        modelId: result.modelId,
+        errorCode: result.errorCode,
+        error: result.error,
+      };
+    }
 
-  const result = await pipeline.review({
-    sessionKind: 'coder',
-    sessionId: coderSessionId,
-    resolveContext: { sessionId: String(coderSessionId) },
-    diffs,
-    contextText: bundle.contextText,
-    absencesText: bundle.absencesText,
-    contractText: bundle.contractText,
-  });
-
-  if (!result.ok) {
     if (run) {
-      await reviewStore!.completeRun(run.id, {
-        status: 'error',
+      await commitReview(() => reviewStore!.completeRun(run.id, {
+        status: 'completed',
         provider_id: result.providerId ?? null,
         model_id: result.modelId ?? null,
         raw_response: result.raw,
-        error: result.error ?? 'review failed',
-      });
+      }));
+      await persistComments(reviewStore!, run.id, diffs, result.findings, opts.signal, opts.assertOwner,
+        () => { uncertainReviewWrite = true; });
     }
+    assertReviewCurrent(opts);
+
     return {
-      ok: false,
+      ok: true,
       pendingHunks,
-      findings: [],
+      findings: result.findings,
+      obligations,
       providerId: result.providerId,
       modelId: result.modelId,
-      errorCode: result.errorCode,
-      error: result.error,
     };
+  } catch (error) {
+    // Close the already-created bookkeeping run after its owned operation has
+    // settled. Cancellation never publishes a later provider result as success.
+    if (run) {
+      try {
+        opts.assertOwner?.();
+        await commitReview(() => reviewStore!.completeRun(run.id, { status: 'error',
+          error: opts.signal?.aborted ? 'Review cancelled.' : error instanceof Error ? error.message : String(error) }));
+        opts.assertOwner?.();
+        if (opts.signal?.aborted && !uncertainReviewWrite) opts.onCancellationSettled?.({ runId: run.id });
+      } catch { /* preserve the original failure if storage is unavailable */ }
+    }
+    throw error;
   }
-
-  if (run) {
-    await reviewStore!.completeRun(run.id, {
-      status: 'completed',
-      provider_id: result.providerId ?? null,
-      model_id: result.modelId ?? null,
-      raw_response: result.raw,
-    });
-    await persistComments(reviewStore!, run.id, diffs, result.findings);
-  }
-
-  return {
-    ok: true,
-    pendingHunks,
-    findings: result.findings,
-    obligations,
-    providerId: result.providerId,
-    modelId: result.modelId,
-  };
 }

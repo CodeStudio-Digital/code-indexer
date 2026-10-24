@@ -1,4 +1,4 @@
-import { clone } from '@bufbuild/protobuf';
+import { detachedMessage } from '../ipc/DetachedMessage.js';
 import {
   agentV1Supervisor,
 } from '@mcp/agent-runtime-contracts';
@@ -15,18 +15,10 @@ import type {
   ActiveAttemptAuthorityHandle,
 } from '../driver/HostLifecycleReceipts.js';
 import type {
-  RustHostAttemptCoordinatorOptions,
   RustHostAttemptRunResult,
 } from '../driver/RustHostAttemptCoordinatorTypes.js';
-import type {
-  HostSupervisorBootstrapProvision,
-} from '../ipc/HostSupervisorBootstrapTypes.js';
 import { scrubLaunch } from '../ipc/HostSupervisorLaunchValidation.js';
 import type {
-  VerifiedRuntimePackage,
-} from '../packaging/RuntimePackageTypes.js';
-import type {
-  NativeHostBridgeBinding,
   NativeHostSupervisorCloseReceipt,
 } from './NativeHostBridgeBinding.js';
 import {
@@ -35,28 +27,21 @@ import {
 } from './NativeHostSupervisorManagement.js';
 import {
   createNativeShadowAttemptAdapters,
-  type NativeShadowAttemptAdaptersOptions,
 } from './NativeShadowAttemptAdapters.js';
 import {
   NativeDurableEngineEventCommitter,
-  type NativeDurableEngineEventCommitterOptions,
 } from './NativeDurableEngineEventCommitter.js';
 import type {
   UnresolvedCapabilityDispatch,
 } from './NativeEngineEventRecoveryTypes.js';
+import type { EngineEventRecoveryStorePort } from './NativeEngineEventRecovery.js';
+import { NativeAttemptChannelBudget } from './NativeAttemptChannelBudget.js';
+import { withChannelBudget } from './NativeChannelBudgetData.js';
+import { withNativeTerminalCommitBarrier } from './NativeTerminalCommitBarrier.js';
+import { prepareNativeRuntimeSession } from './NativeRuntimeSessionPreparation.js';
 
-export interface NativeRustHostAttemptRuntimeOptions {
-  readonly binding: NativeHostBridgeBinding;
-  readonly runtimePackage: VerifiedRuntimePackage;
-  readonly supervisor: HostSupervisorBootstrapProvision;
-  readonly launch: agentV1Supervisor.LaunchAttemptProcess;
-  readonly openDeadlineAtUnixMs: bigint;
-  readonly durableFacts: RustHostAttemptCoordinatorOptions['durableFacts'];
-  readonly management: RustHostAttemptCoordinatorOptions['management'];
-  readonly control: NativeShadowAttemptAdaptersOptions['control'];
-  readonly data: NativeShadowAttemptAdaptersOptions['data'];
-  readonly sessionStore?: NativeDurableEngineEventCommitterOptions;
-}
+import type { NativeRustHostAttemptRuntimeOptions } from './NativeRustHostAttemptRuntimeTypes.js';
+export type { NativeRustHostAttemptRuntimeOptions } from './NativeRustHostAttemptRuntimeTypes.js';
 
 /**
  * Single process-real composition root for one Rust attempt.
@@ -75,6 +60,7 @@ export class NativeRustHostAttemptRuntime {
     owner: NativeHostSupervisorManagementOwner,
     coordinator: RustHostAttemptCoordinator,
     launch: agentV1Supervisor.LaunchAttemptProcess,
+    private readonly channelBudget: NativeAttemptChannelBudget,
     sessionStore?: NativeDurableEngineEventCommitter,
   ) {
     this.#owner = owner;
@@ -85,36 +71,34 @@ export class NativeRustHostAttemptRuntime {
 
   static async create(
     options: NativeRustHostAttemptRuntimeOptions,
+    signal?: AbortSignal,
   ): Promise<NativeRustHostAttemptRuntime> {
-    const launch = clone(
+    const launch = detachedMessage(
       agentV1Supervisor.LaunchAttemptProcessSchema,
       options.launch,
     );
     let owner: NativeHostSupervisorManagementOwner | undefined;
     let sessionStore: NativeDurableEngineEventCommitter | undefined;
+    const channelBudget = new NativeAttemptChannelBudget();
     try {
+      const prepared = await prepareNativeRuntimeSession(options, signal);
+      sessionStore = prepared.sessionStore;
+      options.beforeSupervisorSpawn?.();
       owner = await createNativeHostSupervisorManagementBootstrap({
         binding: options.binding,
         runtimePackage: options.runtimePackage,
         provision: options.supervisor,
+        lifecycleOutboxDirectory: prepared.lifecycleOutboxDirectory,
       });
-      if (options.sessionStore && options.data.engineEventCommitter) {
-        throw new Error('native session store authority is ambiguous');
-      }
-      sessionStore = options.sessionStore
-        ? await NativeDurableEngineEventCommitter.open(
-          options.binding,
-          options.sessionStore,
-        )
-        : undefined;
+      signal?.throwIfAborted();
       const adapters = createNativeShadowAttemptAdapters({
         binding: options.binding,
         launch,
         openDeadlineAtUnixMs: options.openDeadlineAtUnixMs,
         control: options.control,
-        data: sessionStore
-          ? { ...options.data, engineEventCommitter: sessionStore }
-          : options.data,
+        data: withChannelBudget(sessionStore
+          ? { ...options.data, engineEventCommitter: withNativeTerminalCommitBarrier(sessionStore, options.beforeTerminalCommit) }
+          : options.data, channelBudget.signal),
       });
       const coordinator = new RustHostAttemptCoordinator({
         bootstrap: owner,
@@ -127,9 +111,11 @@ export class NativeRustHostAttemptRuntime {
         owner,
         coordinator,
         launch,
+        channelBudget,
         sessionStore,
       );
     } catch (cause) {
+      channelBudget.close();
       scrubLaunch(launch);
       await sessionStore?.close().catch(() => undefined);
       await owner?.close().catch(() => undefined);
@@ -149,6 +135,10 @@ export class NativeRustHostAttemptRuntime {
     const launch = this.#launch;
     this.#launch = undefined;
     return this.#coordinator.run({ launch, prepare }, signal)
+      .then(result => {
+        if (result.kind === 'active') this.channelBudget.start(() => this.inspectActive(result.authority));
+        return result;
+      })
       .finally(() => scrubLaunch(launch));
   }
 
@@ -158,10 +148,15 @@ export class NativeRustHostAttemptRuntime {
     return this.#coordinator.inspectActive(handle);
   }
 
+  renewAuthority(handle: ActiveAttemptAuthorityHandle, request: import('../driver/HostLifecycleTypes.js').HostAuthorityRenewalRequest): Promise<void> {
+    return this.#coordinator.renewAuthority(handle, request);
+  }
+
   cancelActive(
     handle: ActiveAttemptAuthorityHandle,
     request: HostCancelAttemptRequest,
   ): Promise<void> {
+    this.channelBudget.close();
     return this.#coordinator.cancelActive(handle, request);
   }
 
@@ -169,11 +164,36 @@ export class NativeRustHostAttemptRuntime {
     handle: ActiveAttemptAuthorityHandle,
     request: HostFenceAttemptRequest,
   ): Promise<void> {
+    this.channelBudget.close();
     return this.#coordinator.fenceActive(handle, request);
   }
 
   waitForPhysicalReap(): Promise<void> {
     return this.#coordinator.waitForPhysicalReap();
+  }
+
+  waitForTerminal() {
+    if (!this.#sessionStore) return Promise.reject(new Error('native session store is not configured'));
+    return this.#sessionStore.waitForTerminal().finally(() => this.channelBudget.close());
+  }
+
+  get latestEventSequence(): bigint { return this.#sessionStore?.latestSequence ?? 0n; }
+  get identityBudgetSignal(): AbortSignal { return this.channelBudget.signal; }
+  readCommittedHistory<T>(project: (store: EngineEventRecoveryStorePort) => Promise<T>): Promise<T | undefined> {
+    if (this.#closed || !this.#sessionStore) return Promise.resolve(undefined);
+    return this.#sessionStore.readCommittedHistory(project);
+  }
+  commitAttachment(...args: Parameters<NativeDurableEngineEventCommitter['commitAttachment']>): Promise<void> {
+    if (!this.#sessionStore) return Promise.reject(new Error('native session store is not configured'));
+    return this.#sessionStore.commitAttachment(...args);
+  }
+  subscribeCommittedEvents(afterSequence = 0n, signal?: AbortSignal) {
+    if (!this.#sessionStore) throw new Error('native session store is not configured');
+    return this.#sessionStore.subscribeCommittedEvents(afterSequence, signal);
+  }
+  replayCommittedEvents(afterSequence = 0n, maximumRecords = 100_000, signal?: AbortSignal) {
+    if (!this.#sessionStore) throw new Error('native session store is not configured');
+    return this.#sessionStore.replayCommittedEvents(afterSequence, maximumRecords, signal);
   }
 
   inspectUnresolvedCapabilityDispatches(
@@ -185,12 +205,18 @@ export class NativeRustHostAttemptRuntime {
     return this.#sessionStore.inspectUnresolvedCapabilityDispatches(maximumRecords);
   }
 
+  inspectProviderFrontier(agentRunId: string, maximumRecords: number) {
+    if (!this.#sessionStore) return Promise.reject(new Error('native session store is not configured'));
+    return this.#sessionStore.inspectProviderFrontier(agentRunId, maximumRecords);
+  }
+
 
   tick(): void {
     this.#coordinator.tick();
   }
 
   async close(cause?: unknown): Promise<NativeHostSupervisorCloseReceipt> {
+    this.channelBudget.close();
     if (!this.#closed) {
       this.#closed = true;
       scrubLaunch(this.#launch);

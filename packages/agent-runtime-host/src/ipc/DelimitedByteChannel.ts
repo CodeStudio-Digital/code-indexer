@@ -47,6 +47,11 @@ export class DelimitedByteChannel {
       writable,
       this.#maximumTransportChunkBytes,
     );
+    // A first write can fail before the readable async iterator subscribes.
+    // Keep transport errors owned even during hydration/prepare and teardown.
+    for (const endpoint of new Set<Readable | Writable>([readable, writable])) {
+      endpoint.on('error', (cause) => { this.#poison(cause); });
+    }
   }
 
   claim(owner: object): void {

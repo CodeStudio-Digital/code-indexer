@@ -13,6 +13,9 @@ const result = spawnSync(process.execPath, [
   'run',
   'packages/agent-runtime-host/src/__tests__/'
     + 'native-process-real-active.windows.test.ts',
+  'packages/agent-runtime-host/src/__tests__/native-process-resume.windows.test.ts',
+  'packages/agent-runtime-host/src/__tests__/native-runtime-adapter.windows.test.ts',
+  '--maxWorkers=1',
 ], {
   cwd: root,
   env: {

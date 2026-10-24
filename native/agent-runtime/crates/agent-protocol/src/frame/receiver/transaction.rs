@@ -130,6 +130,14 @@ impl AttemptFrameReceiver {
         self.pending.is_some()
     }
 
+    /// Capacity reserved for new identities; replay never restores this budget.
+    #[must_use]
+    pub fn remaining_identity_capacity(&self) -> usize {
+        self.history
+            .remaining_identity_capacity()
+            .saturating_sub(usize::from(self.has_pending()))
+    }
+
     #[must_use]
     pub const fn maximum_frame_bytes(&self) -> usize {
         self.seed.maximum_frame_bytes

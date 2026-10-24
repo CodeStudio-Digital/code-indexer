@@ -110,6 +110,8 @@ describe('host attempt lifecycle driver', () => {
       openFileCount: 404,
       spoolBytes: 0n,
     });
+    const remaining = harness.driver.inspectActive(authority).remainingControlIdentities!;
+    expect(remaining).toBeGreaterThan(0);
 
     now = 11n;
     harness.input.write(delimit(heartbeatFrame(
@@ -136,6 +138,7 @@ describe('host attempt lifecycle driver', () => {
       phase: agentV1Runtime.PhysicalAttemptPhase.ACTIVE,
       resources,
     });
+    expect(harness.driver.inspectActive(authority).remainingControlIdentities).toBe(remaining - 1);
     expect(harness.driver.inspectActive(authority).signal.aborted).toBe(false);
     harness.driver.abort();
   });

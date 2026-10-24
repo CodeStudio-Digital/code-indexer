@@ -10,7 +10,7 @@ import type { MasterStartResult } from '@mcp/code-agent/index.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import {
   asCompanySessionId,
   type CompanySessionId,
@@ -154,7 +154,7 @@ export class CompanyOrchestrator {
 
   /**
    * Effective session id for SHARED resources (kanban, env,
-   * services, drive, docs, databases, design-system). Sub-sessions resolve
+   * services, drive, docs, databases). Sub-sessions resolve
    * to the parent's id so all tabs see the same project-wide artefacts.
    */
   get effectiveSessionId(): CompanySessionId { return this.ctx.effectiveSessionId; }

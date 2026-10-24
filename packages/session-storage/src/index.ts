@@ -12,5 +12,3 @@ export * from './types.js';
 export * from './entities/entity-file-repository.js';
 export * from './entities/company-session-repository.js';
 export * from './entities/control-plane-file-repository.js';
-export * from './entities/design-system-session-repository.js';
-export * from './entities/sprite-session-repository.js';

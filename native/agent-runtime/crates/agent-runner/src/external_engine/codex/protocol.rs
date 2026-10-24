@@ -45,6 +45,11 @@ pub(super) fn decode_context(bytes: &[u8]) -> Result<DecodedContext, CodexGatewa
         ));
     }
     let system = context.system.as_ref().and_then(inline_text);
+    if context.prepared_user_context.is_some() {
+        return Err(CodexGatewayError::InvalidContext(
+            "prepared user context is not supported by this comparison adapter",
+        ));
+    }
     let user = context
         .messages
         .iter()
@@ -184,6 +189,8 @@ pub(super) fn parse_tool_call(
             capability_version: authority.descriptor.capability_version.clone(),
             execution_class,
             mutates: authority.descriptor.mutates,
+            parallel_safe: authority.descriptor.parallel_safe,
+            read_only: authority.descriptor.read_only,
             arguments_sha256: Sha256::digest(&encoded_arguments).into(),
             encoded_arguments,
             provider_response_id: None,

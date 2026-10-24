@@ -21,7 +21,12 @@ function isPrivateIpv4(host: string): boolean {
     a === 0 || // "this host" 0/8 (0.0.0.0 etc.)
     (a === 172 && b >= 16 && b <= 31) || // private 172.16/12
     (a === 192 && b === 168) || // private 192.168/16
-    (a === 169 && b === 254) // link-local 169.254/16 (cloud metadata)
+    (a === 169 && b === 254) || // link-local 169.254/16 (cloud metadata)
+    (a === 100 && b >= 64 && b <= 127) || // shared carrier space
+    (a === 192 && b === 0 && (parts[2] === 0 || parts[2] === 2)) || // protocol assignments/documentation
+    (a === 192 && b === 88 && parts[2] === 99) || // deprecated relay range
+    (a === 198 && (b === 18 || b === 19 || (b === 51 && parts[2] === 100))) ||
+    (a === 203 && b === 0 && parts[2] === 113) || a >= 224 // multicast/reserved
   );
 }
 
@@ -30,21 +35,22 @@ export function isPrivateHost(hostname: string): boolean {
   let host = hostname.trim().toLowerCase();
   if (!host) return true;
   // Strip IPv6 zone id and surrounding brackets from `[::1]` style hosts.
-  host = host.replace(/^\[/, '').replace(/\]$/, '').replace(/%.*$/, '');
+  host = host.replace(/^\[/, '').replace(/\]$/, '').replace(/%.*$/, '').replace(/\.$/, '');
 
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
 
   const kind = isIP(host);
   if (kind === 4) return isPrivateIpv4(host);
   if (kind === 6) {
-    if (host === '::1' || host === '::') return true;
-    // IPv4-mapped / -compatible (`::ffff:127.0.0.1`): check the embedded v4.
-    const v4 = host.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
-    if (v4 && isPrivateIpv4(v4[1])) return true;
-    // Unique-local fc00::/7 (fc.. / fd..) and link-local fe80::/10.
-    if (/^f[cd]/.test(host)) return true;
-    if (/^fe[89ab]/.test(host)) return true;
-    return false;
+    // WHATWG canonicalization converts dotted/mapped forms to hexadecimal.
+    // Only global unicast is eligible; transition, local, documentation and
+    // protocol ranges are intentionally unavailable to public-page fetching.
+    const canonical = new URL(`http://[${host}]/`).hostname.slice(1, -1);
+    const first = parseInt(canonical.split(':')[0], 16);
+    if (!(first >= 0x2000 && first <= 0x3fff)) return true;
+    if (first === 0x2002 || first === 0x3fff) return true;
+    const second = parseInt(canonical.split(':')[1] || '0', 16);
+    return first === 0x2001 && (second <= 0x1ff || second === 0xdb8);
   }
 
   // Not a recognized DNS name or dotted-quad: a bare integer or hex literal

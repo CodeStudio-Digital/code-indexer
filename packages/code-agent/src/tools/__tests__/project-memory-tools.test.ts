@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../../core/tool.js';
-import { forgetMemoryTool, rememberTool } from '../project-memory-tools.js';
+import { forgetMemoryTool, rememberTool, recallMemoryTool } from '../project-memory-tools.js';
 
 const context = (overrides: Partial<ToolContext>): ToolContext => ({
   cwd: 'D:\\project',
@@ -9,6 +9,16 @@ const context = (overrides: Partial<ToolContext>): ToolContext => ({
 } as ToolContext);
 
 describe('project memory write tools', () => {
+  it('passes cancellation to explicit recall and never reports an aborted result as empty memory', async () => {
+    const ctrl = new AbortController();
+    const recall = vi.fn(async (_query, _limit, signal: AbortSignal) => { ctrl.abort(); signal.throwIfAborted(); return []; });
+    const result = await recallMemoryTool.handler({ query: 'remember this' }, context({
+      signal: ctrl.signal, projectMemory: { save: vi.fn(), recall },
+    }));
+    expect(recall).toHaveBeenCalledWith('remember this', 5, ctrl.signal);
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain('No agent memory matches');
+  });
   it('never reports success when the persistence port returns null', async () => {
     const result = await rememberTool.handler({
       title: 'durable fact',
@@ -40,7 +50,7 @@ describe('project memory write tools', () => {
     expect(assertMutation).toHaveBeenCalledWith({
       kind: 'database',
       operation: 'remember.save',
-      resource: 'memory:project:project',
+      resource: 'memory:project',
     });
     expect(result.isError).toBeUndefined();
   });
@@ -48,5 +58,33 @@ describe('project memory write tools', () => {
   it('classifies forget_memory as a database mutation', () => {
     expect(forgetMemoryTool.mutates).toBe(true);
     expect(forgetMemoryTool.effectBoundary).toBe('database');
+  });
+  it.each([NaN, Infinity, 0, -1, 1.5, 13, '3'])('rejects an invalid recall window %s before host dispatch', async limit => {
+    const recall = vi.fn();
+    const result = await recallMemoryTool.handler({ query: 'x', limit }, context({ projectMemory: { recall, save: vi.fn() } }));
+    expect(result.isError).toBe(true); expect(recall).not.toHaveBeenCalled();
+  });
+  it.each([rememberTool, forgetMemoryTool].map(tool => [tool.name, tool] as const))('reports an uncertain effect from %s when the write response is lost', async (_name, tool) => {
+    const write = vi.fn().mockRejectedValue(new Error('ACK lost'));
+    const result = await tool.handler({ title: 'Fact', content: 'Confirmed', target: 'Fact' }, context({
+      projectMemory: { save: write, forget: write, recall: vi.fn() },
+    }));
+    expect(result).toMatchObject({ isError: true, effectOutcome: 'unknown' });
+    expect(result.content).toContain('Reconcile memory before retrying'); expect(write).toHaveBeenCalledOnce();
+  });
+  it('dispatches native writes exclusively through the bound port', async () => {
+    const save = vi.fn(); const invoke = vi.fn().mockResolvedValue({ created: 1, merged: 0, skipped: 0 });
+    const result = await rememberTool.handler({ title: 'Fact', content: 'Confirmed', scope: 'user' }, context({
+      currentToolUseId: 'tool-1', userMemory: { save } as any, ports: { memoryMutations: { invoke } } as any,
+      mutationFence: { mode: 'enforce', resourceBinding: { bindingId: 'sealed' }, assertMutation: vi.fn() } as any,
+    }));
+    expect(result.isError).toBeUndefined(); expect(save).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ toolName: 'remember', toolUseId: 'tool-1', binding: { bindingId: 'sealed' } }));
+  });
+  it('does not describe skipped memories as saved', async () => {
+    const result = await rememberTool.handler({ title: 'Fact', content: 'Confirmed' }, context({
+      projectMemory: { save: vi.fn().mockResolvedValue({ created: 0, merged: 0, skipped: 1 }), recall: vi.fn() },
+    }));
+    expect(result.content).toContain('No new project memory was written');
   });
 });

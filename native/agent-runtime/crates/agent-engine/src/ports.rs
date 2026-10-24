@@ -48,6 +48,8 @@ pub struct ProviderToolCall {
     pub capability_version: String,
     pub execution_class: agent_tools::capability::ExecutionClass,
     pub mutates: bool,
+    pub parallel_safe: bool,
+    pub read_only: bool,
     pub encoded_arguments: Vec<u8>,
     pub arguments_sha256: [u8; 32],
     pub provider_response_id: Option<String>,
@@ -60,8 +62,9 @@ pub enum ProviderEvent {
     ThinkingDelta(String),
     Usage(ProviderUsage),
     ToolCall(ProviderToolCall),
+    ToolCalls(Vec<ProviderToolCall>),
     Completed {
-        response_id: String,
+        response_id: Option<String>,
         response_message_count: Option<u64>,
     },
     Failed {
@@ -85,6 +88,16 @@ pub trait ProviderGatewayPort: Send {
         &mut self,
         operation: &mut Self::Operation,
     ) -> impl Future<Output = Result<Option<ProviderEvent>, Self::Error>> + Send;
+}
+
+/// Persists a settled conversation frontier without opening a model stream.
+pub trait ProviderFrontierPort: Send {
+    type Error: Send;
+
+    fn checkpoint(
+        &mut self,
+        request: ProviderRequest,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 pub trait AuthorityPort: Send {
@@ -122,11 +135,12 @@ pub enum EngineEvent<'a> {
     },
     ProviderCompleted {
         operation_id: &'a str,
-        response_id: &'a str,
+        response_id: Option<&'a str>,
     },
     CapabilityBoundary {
         operation_id: &'a str,
         tool_use_id: &'a str,
+        call: &'a ProviderToolCall,
     },
     CapabilityDispatchStarted {
         operation_id: &'a str,
@@ -134,6 +148,11 @@ pub enum EngineEvent<'a> {
         grant_id: &'a str,
         effective_input_sha256: &'a [u8; 32],
         started_at_unix_ms: i64,
+    },
+    CapabilityRefused {
+        operation_id: &'a str,
+        tool_use_id: &'a str,
+        rejection: &'a agent_tools::capability::CapabilityRejection,
     },
     CapabilityTerminal {
         operation_id: &'a str,

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import { McpServerManager } from '../mcp-server-manager.js';
+import type { ToolContext } from '../../core/tool.js';
 
 function serverConfig(id = 'unity'): McpServerConfig {
   return {
@@ -22,6 +23,39 @@ function serverConfig(id = 'unity'): McpServerConfig {
 }
 
 describe('McpServerManager tool catalogue isolation', () => {
+  it.each(['ECONNRESET after commit', 'HTTP 401 after commit', 'socket hang up'])('never replays a dispatched mutation after %s', async (failure) => {
+    let effects = 0;
+    const callTool = vi.fn(async () => { effects++; throw new Error(failure); });
+    const manager = new McpServerManager();
+    const internal = manager as unknown as { connections: Map<string, unknown>; reconnectServer: () => Promise<void> };
+    internal.connections.set('unity', { state: 'connected', config: { ...serverConfig(), auth_type: 'oauth2' },
+      client: { callTool, listTools: async () => ({ tools: [{ name: 'write', inputSchema: { type: 'object' } }] }) } });
+    const reconnect = vi.spyOn(internal, 'reconnectServer');
+    const { tools } = await manager.listAllTools();
+    const result = await tools[0].handler({}, {} as ToolContext);
+    expect(result).toMatchObject({ effectOutcome: 'unknown', isError: true, error: { retryable: false } });
+    expect(effects).toBe(1);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it('passes cancellation into the SDK and does not send a pre-cancelled call', async () => {
+    const controller = new AbortController();
+    const callTool = vi.fn(async (_request, _schema, options) => {
+      expect(options.signal).toBe(controller.signal);
+      return { content: [{ type: 'text', text: 'ok' }] };
+    });
+    const manager = new McpServerManager();
+    (manager as unknown as { connections: Map<string, unknown> }).connections.set('unity', {
+      state: 'connected', config: serverConfig(), client: { callTool,
+        listTools: async () => ({ tools: [{ name: 'write', inputSchema: { type: 'object' } }] }) },
+    });
+    const { tools } = await manager.listAllTools();
+    await tools[0].handler({}, { signal: controller.signal } as ToolContext);
+    controller.abort();
+    expect(await tools[0].handler({}, { signal: controller.signal } as ToolContext)).toMatchObject({ isError: true });
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
   it('keeps valid tools when one sibling has an invalid input schema', async () => {
     const schemaError = Object.assign(new Error('Invalid input: expected "object"'), {
       issues: [{

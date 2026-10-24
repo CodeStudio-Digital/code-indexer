@@ -10,7 +10,7 @@ use super::validation::{
 };
 use super::{ProviderDataClient, ProviderDataError, ProviderDataTiming};
 
-fn identity() -> wire::AttemptIdentity {
+pub(super) fn identity() -> wire::AttemptIdentity {
     wire::AttemptIdentity {
         session_id: "11111111-1111-4111-8111-111111111111".into(),
         command_id: "22222222-2222-4222-8222-222222222222".into(),
@@ -114,6 +114,49 @@ fn terminal_is_the_only_event_that_closes_the_wire_operation() {
 }
 
 #[test]
+fn stateless_terminal_allows_absent_id_but_not_a_dangling_resume_count() {
+    let terminal = wire::ProviderTerminal {
+        identity: Some(identity()),
+        operation_id: "provider-operation/1".into(),
+        event_sequence: 1,
+        classification: wire::ProviderTerminalClassification::Completed as i32,
+        reason_code: "provider_completed".into(),
+        completed_at_unix_ms: 10,
+        ..wire::ProviderTerminal::default()
+    };
+    assert!(
+        validate_stream_event(
+            wire::frame_payload::Body::ProviderTerminal(terminal.clone()),
+            &wire::FrameHeader::default(),
+            "provider-operation/1",
+            1
+        )
+        .unwrap()
+        .is_terminal()
+    );
+    for invalid in [
+        wire::ProviderTerminal {
+            response_id: Some(String::new()),
+            ..terminal.clone()
+        },
+        wire::ProviderTerminal {
+            response_message_count: Some(3),
+            ..terminal
+        },
+    ] {
+        assert!(
+            validate_stream_event(
+                wire::frame_payload::Body::ProviderTerminal(invalid),
+                &wire::FrameHeader::default(),
+                "provider-operation/1",
+                1
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn tool_usage_and_terminal_payloads_fail_closed_when_semantically_corrupt() {
     let tool = wire::ProviderToolCall {
         identity: Some(identity()),
@@ -169,6 +212,7 @@ fn tool_usage_and_terminal_payloads_fail_closed_when_semantically_corrupt() {
         event_sequence: 1,
         classification: wire::ProviderTerminalClassification::Completed as i32,
         reason_code: "provider_completed".into(),
+        response_id: Some(String::new()),
         completed_at_unix_ms: 10,
         ..wire::ProviderTerminal::default()
     };
@@ -208,6 +252,7 @@ async fn capability_prepare_receives_an_exact_correlated_decision_over_data() {
     let mut client =
         ProviderDataClient::new(runner, identity.clone(), "runtime/capability-duplex".into());
     let timing = ProviderDataTiming {
+        settlement_deadline_at_unix_ms: 2_000,
         hard_deadline: physical_deadline(),
         replay_write_timeout: Duration::from_secs(1),
     };

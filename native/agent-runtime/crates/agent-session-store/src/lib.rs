@@ -17,8 +17,10 @@ mod lease;
 mod limits;
 mod manifest;
 mod payload;
+mod read_view;
 mod record;
 mod recovery;
+mod root_lock;
 mod state;
 mod transfer;
 
@@ -33,6 +35,8 @@ pub use journal::{
 };
 pub use kind::SessionRecordKind;
 pub use limits::SessionStoreLimits;
+pub use read_view::SessionReadView;
+pub use root_lock::StorageRootLock;
 pub use state::SessionStateSnapshot;
 pub use transfer::{
     LegacyStorageTransferReceipt, LegacyStorageTransferRequest, LegacyTransferLimits,

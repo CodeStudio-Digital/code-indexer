@@ -23,11 +23,14 @@ import {
   countWorkflowOutcomes,
   validateWorkflowSteps,
   workflowStatusFromSteps,
+  workflowStepNeedsReconciliation,
   type WorkflowRecord,
   type WorkflowStepInput,
   type WorkflowStepState,
 } from './workflow-types.js';
 import { executeWorkflow } from './workflow-run.js';
+import { emitSubagentEvent } from '../subagent-events.js';
+import type { AgentTreeReconciliation } from '../../ports/agent-tree-port.js';
 import {
   getWorkflow,
   reloadWorkflowUnderLease,
@@ -136,7 +139,9 @@ function renderWorkflowResult(record: WorkflowRecord): string {
   });
   // Separate section so the dashboard's reload parser never folds the hint
   // into the last step's body.
-  const hint = counts.failed > 0 || counts.skipped > 0
+  const hint = record.steps.some(workflowStepNeedsReconciliation)
+    ? '\n\n---\n\n[An effect is uncertain. Reconcile the existing child execution before retrying.]'
+    : counts.failed > 0 || counts.skipped > 0
     ? `\n\n---\n\n[${counts.failed + counts.skipped} step(s) did not complete — ` +
       `workflow({resume_workflow_id:"${record.id}", retry_failed:true}) relaunches them ` +
       `reusing completed results.]`
@@ -152,6 +157,7 @@ function workflowToolResult(
   const counts = countWorkflowOutcomes(record);
   return {
     ...(record.status === 'completed' ? ok(content) : err(content)),
+    ...(record.steps.some(workflowStepNeedsReconciliation) ? { effectOutcome: 'unknown' as const } : {}),
     structuredData: {
       kind: 'workflow_result',
       status: record.status,
@@ -176,7 +182,12 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
     source: 'native',
     mutates: true,
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-      const sessionId = ctx.runner?.sessionId;
+      const sessionId = ctx.sessionId ?? ctx.runner?.sessionId;
+      const runtimeGeneration = ctx.runtimeGeneration === 'rust_v1' ? 'rust_v1' : 'legacy_ts';
+      if (runtimeGeneration === 'rust_v1' && (!sessionId || !deps.sessionStore
+        || !ctx.ports?.agentTree?.reconcile || ctx.ports.agentTree.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId)) {
+        return err('workflow: native execution requires the owned tree, recovery port and durable session checkpoints.');
+      }
       const resumeId = typeof args.resume_workflow_id === 'string' ? args.resume_workflow_id.trim() : '';
       let record: WorkflowRecord | undefined;
       let leaseAcquired = false;
@@ -224,19 +235,24 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           } else {
             record = observed;
           }
-          // Only failures that were already terminal when this resume began
-          // are eligible for this call's retry flag. A crash-orphan that is
-          // discovered below must first be durably classified; even when the
-          // caller supplied retry_failed:true, it is never replayed in this
-          // same recovery call after a possibly-lost ACK.
+          if ((record.runtimeGeneration ?? 'legacy_ts') !== runtimeGeneration) {
+            return err('workflow: resume must use the original runtime generation; mixing native and legacy children is forbidden.');
+          }
+          // A model-authored retry flag cannot authorize repeating an uncertain
+          // effect. Reconcile such children on every resume until durable
+          // evidence establishes a terminal outcome.
           const retryableAtEntry = new Set(
             record.steps
-              .filter((step) => step.status === 'failed' || step.status === 'skipped')
+              .filter((step) => !workflowStepNeedsReconciliation(step) && (step.status === 'failed' || step.status === 'skipped'))
               .map((step) => step.id),
           );
           for (const step of record.steps) {
-            if (step.status !== 'running') continue;
-            const reconciliation = sessionId != null
+            if (step.status !== 'running' && !workflowStepNeedsReconciliation(step)) continue;
+            const reconciliation: AgentTreeReconciliation = runtimeGeneration === 'rust_v1'
+              ? step.nativeTranscriptRef
+                ? await ctx.ports!.agentTree!.reconcile!(step.nativeTranscriptRef, { signal: ctx.signal })
+                : { outcome: 'outcome_unknown', detail: 'native child admission has no confirmed journal reference' }
+              : sessionId != null
               && step.groupId
               && deps.sessionStore?.reconcileWorkflowStepRun
               ? await deps.sessionStore.reconcileWorkflowStepRun(
@@ -250,13 +266,14 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
                     ? 'durable AgentRun reconciliation is unavailable'
                     : 'the running checkpoint has no idempotency group id',
                 };
-            if (reconciliation.outcome === 'terminal') {
+            if (reconciliation.outcome === 'terminal' && !/outcome[_ ]unknown/i.test(reconciliation.reason ?? '')) {
+              step.effectOutcome = undefined;
               step.status = reconciliation.stepStatus ?? 'failed';
               const reference = reconciliation.resultRef
                 ? ` Result reference: ${reconciliation.resultRef}.`
                 : '';
               if (step.status === 'completed' || step.status === 'partial') {
-                step.summary =
+                step.summary = reconciliation.summary ??
                   `[reconciled after executor crash: ${reconciliation.detail}.` +
                   `${reference || ' Result body was not recoverable from the bounded checkpoint.'}]`;
                 step.error = undefined;
@@ -268,15 +285,16 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
               }
             } else {
               step.status = 'failed';
+              step.effectOutcome = 'unknown';
               step.summary = undefined;
               step.error =
                 `outcome_unknown: ${reconciliation.detail}. No automatic retry was performed. ` +
-                `Call workflow({resume_workflow_id:"${record.id}", retry_failed:true}) again ` +
-                'to explicitly accept replay risk.';
+                'Reconcile the durable child execution before retrying. A retry flag does not authorize repeating an uncertain effect.';
             }
           }
           for (const step of record.steps) {
             if (args.retry_failed === true
+              && !workflowStepNeedsReconciliation(step)
               && retryableAtEntry.has(step.id)
               && (step.status === 'failed' || step.status === 'skipped')) {
               step.status = 'pending';
@@ -296,9 +314,11 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
             ) {
               return err(`workflow: recovery classification for '${record.id}' was fenced.`);
             }
-            const content =
-              `workflow ${record.id} has no pending steps (use retry_failed:true to relaunch ` +
-              'failed/skipped ones).\n\n' + renderWorkflowResult(record);
+            const content = `workflow ${record.id} has no pending steps. ` +
+              (record.steps.some(workflowStepNeedsReconciliation)
+                ? 'Uncertain effects require durable reconciliation before retry. '
+                : 'Use retry_failed:true to relaunch failed/skipped steps. ') +
+              '\n\n' + renderWorkflowResult(record);
             return workflowToolResult(record, content);
           }
           record.runCount += 1;
@@ -310,6 +330,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
             id: `wf_${randomUUID().slice(0, 8)}`,
             name: String(args.name ?? 'workflow').trim().slice(0, 100) || 'workflow',
             sessionId,
+            runtimeGeneration,
             status: 'running',
             steps: normalized,
             totalUsage: { input_tokens: 0, output_tokens: 0 },
@@ -363,7 +384,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           }
         }
 
-        ctx.runner?.emit('workflow_run_started', {
+        emitSubagentEvent(ctx, 'workflow_run_started', {
           workflow_id: record.id,
           name: record.name,
           ...(resumeId ? { resumed: true } : {}),
@@ -392,6 +413,12 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
         // the normal terminal renderer.
         if (!record) throw error;
         const detail = error instanceof Error ? error.message : String(error);
+        // The wave may have executed effects before its final checkpoint failed.
+        // Keep its identity and fail closed rather than returning a retryable run.
+        for (const step of record.steps) if (step.status === 'running') {
+          step.status = 'failed'; step.effectOutcome = 'unknown';
+          step.error = 'outcome_unknown: wave stopped before its terminal checkpoint';
+        }
         return workflowToolResult(
           record,
           `workflow ${record.id} failed before a terminal checkpoint: ${detail}`,
@@ -407,7 +434,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
         }
         if (runStarted && record) {
           const counts = countWorkflowOutcomes(record);
-          ctx.runner?.emit('workflow_run_finished', {
+          emitSubagentEvent(ctx, 'workflow_run_finished', {
             workflow_id: record.id,
             status: record.status === 'running' ? 'failed' : record.status,
             completed_count: counts.completed + counts.partial,

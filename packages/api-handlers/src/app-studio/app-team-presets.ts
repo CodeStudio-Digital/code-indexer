@@ -148,7 +148,7 @@ export const APP_TEAM_ROLE_PRESETS: readonly AppTeamRolePreset[] = [
     systemPromptOverride: prompt(
       'You own the user-facing implementation of the assigned flow: state, interaction, accessibility, responsiveness, visual consistency, and integration with accepted contracts.',
       [
-        'Inspect the existing component, design-system, routing, and i18n patterns before editing.',
+        'Inspect the existing component, styling, routing, and i18n patterns before editing.',
         'Implement every relevant loading, empty, success, error, disabled, and responsive state.',
         'Reuse established UI primitives and avoid introducing a parallel design language.',
         'Do not change backend contracts silently; escalate mismatches with concrete evidence.',

@@ -11,6 +11,7 @@
  * this module decoupled and unit-testable.
  */
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
+import { rememberNativeProviderSelection } from '../runtime/native-provider-binding.js';
 import type {
   MicroAgentProfile,
   MicroAgentProfileId,
@@ -75,7 +76,10 @@ export function createSubagentProviderResolver(
     const key = `${target.providerId}:${model ?? ''}`;
     let p = cache.get(key);
     if (!p) {
-      p = opts.createProvider(target.providerId, model);
+      p = opts.createProvider(target.providerId, model).then(provider => {
+        rememberNativeProviderSelection(provider, { provider: target.providerId, model: model ?? provider.model });
+        return provider;
+      });
       cache.set(key, p);
     }
     return p;
@@ -121,7 +125,9 @@ export async function providerForProfile(
   const id = typeof profile === 'string' ? profile : profile?.id;
   if (deps.resolveProviderForProfile) {
     const p = await deps.resolveProviderForProfile(id);
-    if (p) return p;
+    // The snapshotted resolver already includes the default target. Undefined
+    // explicitly inherits the parent; a legacy default must not override it.
+    return p ?? deps.provider;
   }
   return deps.subagentProvider ?? deps.provider;
 }

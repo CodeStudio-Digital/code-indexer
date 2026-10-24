@@ -33,8 +33,6 @@ import {
   APP_STUDIO_TOOLS,
   BUILDER_TOOLS,
   COMPANY_TOOLS,
-  DESIGN_SYSTEM_CONSUMER_TOOLS,
-  DESIGN_SYSTEM_STUDIO_TOOLS,
   QA_TOOLS,
   SANDBOX_TOOLS,
 } from '@mcp/code-agent/tools/tiers-company.js';
@@ -46,8 +44,6 @@ export {
   APP_STUDIO_TOOLS,
   BUILDER_TOOLS,
   COMPANY_TOOLS,
-  DESIGN_SYSTEM_CONSUMER_TOOLS,
-  DESIGN_SYSTEM_STUDIO_TOOLS,
   QA_TOOLS,
   SANDBOX_TOOLS,
 };
@@ -65,10 +61,7 @@ export type CoreTier =
   | 'company'
   | 'sandbox'
   | 'qa'
-  | 'app'
-  | 'design-system-studio'
-  | 'design-system-consumer'
-  | 'sprite-studio';
+  | 'app';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -86,9 +79,6 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'sandbox',
   'qa',
   'app',
-  'design-system-studio',
-  'design-system-consumer',
-  'sprite-studio',
 ]);
 
 /**
@@ -179,20 +169,6 @@ export const BROWSER_TOOLS: ReadonlySet<string> = new Set<string>([
 ]);
 
 /**
- * Sprite Studio tools — registered only for projects carrying the
- * `.sprite-studio/` marker. They used to ride the unknown-tool bootstrap
- * fallback, which made the administrative catalog mislabel another product
- * surface as core infrastructure.
- */
-export const SPRITE_STUDIO_TOOLS: ReadonlySet<string> = new Set<string>([
-  'sprite_get_project',
-  'sprite_list_assets',
-  'sprite_generate',
-  'sprite_process',
-  'sprite_export',
-]);
-
-/**
  * Profile = user-facing shorthand for "which tiers start active".
  * - bootstrap: only Tier 0 (default for new sessions)
  * - navigate:  Tier 0 + Tier 1 (default when the user asks to "implement"/"refactor")
@@ -207,7 +183,7 @@ export type CoderProfile = 'bootstrap' | 'navigate' | 'full';
 /**
  * Tier 0 — bootstrap. Always visible: the minimal read/interaction core plus
  * orchestration discovery (expand_toolset/find_tools/spawn_agent). Company,
- * App, QA, sandbox, Design System and studio tools have contextual tiers. Cold tools
+ * App, QA and sandbox tools have contextual tiers. Cold tools
  * (≤12 calls in 12k turns) were demoted to navigate — see "Phase B" markers.
  *
  * Exported for test access so regression tests can keep the global bootstrap
@@ -234,7 +210,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // each across 12k turns. Subordinates run profile 'navigate'+ and masters
   // 'full', so they still see them; only solo bootstrap sessions defer them
   // until expand_toolset('navigate').
-  // Company collaboration, App Studio, Design System, QA, sandbox and other
+  // Company collaboration, App Studio, QA, sandbox and other
   // product capabilities live in dedicated contextual tiers. runCoder
   // auto-activates those tiers only when the matching runtime is present.
   'expand_toolset',
@@ -555,9 +531,6 @@ export function getToolTier(
   if (SANDBOX_TOOLS.has(name)) return 'sandbox';
   if (QA_TOOLS.has(name)) return 'qa';
   if (APP_STUDIO_TOOLS.has(name)) return 'app';
-  if (DESIGN_SYSTEM_STUDIO_TOOLS.has(name)) return 'design-system-studio';
-  if (DESIGN_SYSTEM_CONSUMER_TOOLS.has(name)) return 'design-system-consumer';
-  if (SPRITE_STUDIO_TOOLS.has(name)) return 'sprite-studio';
   // Unlisted — no explicit tier.
   if (opts?.strict) {
     throw new Error(
@@ -585,9 +558,6 @@ export function allTieredToolNames(): Set<string> {
     ...SANDBOX_TOOLS,
     ...QA_TOOLS,
     ...APP_STUDIO_TOOLS,
-    ...DESIGN_SYSTEM_STUDIO_TOOLS,
-    ...DESIGN_SYSTEM_CONSUMER_TOOLS,
-    ...SPRITE_STUDIO_TOOLS,
   ]);
 }
 
@@ -609,9 +579,6 @@ export interface ContextualToolTierContext {
   sandbox?: boolean;
   qa?: boolean;
   app?: boolean;
-  designSystemStudio?: boolean;
-  designSystemConsumer?: boolean;
-  spriteStudio?: boolean;
   isMaster?: boolean;
   previewAvailable?: boolean;
   browserAvailable?: boolean;
@@ -636,9 +603,6 @@ export function contextualTiersForRuntime(
   if (context.sandbox) tiers.add('sandbox');
   if (context.qa) tiers.add('qa');
   if (context.app) tiers.add('app');
-  if (context.designSystemStudio) tiers.add('design-system-studio');
-  if (context.designSystemConsumer) tiers.add('design-system-consumer');
-  if (context.spriteStudio) tiers.add('sprite-studio');
   if (context.isMaster) tiers.add('master');
   if (
     context.previewAvailable
@@ -917,27 +881,6 @@ const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
   app_update_database: 'Apply an App database state update or migration',
   app_run_checks: 'Run the checks owned by an App specialist role',
 
-  // Design System Studio / consumer
-  ds_get_session_info: 'Read the current Design System Studio package and version context',
-  ds_record_component: 'Record an approved component in the Design System draft',
-  ds_list_components: 'List draft and published Design System components',
-  ds_audit_package: 'Audit the Design System package before publication',
-  ds_set_version_status: 'Update the current Design System version status',
-  ds_publish_version: 'Publish the approved Design System version',
-  ds_get_pipeline: 'Read the Design System Studio pipeline state',
-  ds_submit_stage: 'Submit an artifact to a Design System pipeline stage',
-  ds_analyze_import: 'Analyze an imported package for Design System adoption',
-  ds_components: 'List components from the Design System linked to this project',
-  ds_component: 'Read one linked Design System component and its props',
-  ds_docs: 'Read documentation from the linked Design System version',
-
-  // Sprite Studio
-  sprite_get_project: 'Read the Sprite Studio project style contract and asset summary',
-  sprite_list_assets: 'List assets and versions in the Sprite Studio project',
-  sprite_generate: 'Generate and save a sprite from a visual intent',
-  sprite_process: 'Apply deterministic processing to create a sprite version',
-  sprite_export: 'Export Sprite Studio assets into the project output directory',
-
   // Company master
   spawn_subordinate_agent: 'Spawn a persistent Company subordinate for a role and task',
   wait_for_subordinates: 'Wait for persistent Company subordinates to progress or finish',
@@ -1005,9 +948,6 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('sandbox', SANDBOX_TOOLS);
   push('qa', QA_TOOLS);
   push('app', APP_STUDIO_TOOLS);
-  push('design-system-studio', DESIGN_SYSTEM_STUDIO_TOOLS);
-  push('design-system-consumer', DESIGN_SYSTEM_CONSUMER_TOOLS);
-  push('sprite-studio', SPRITE_STUDIO_TOOLS);
   return result;
 }
 
@@ -1026,7 +966,4 @@ export const TIER_COUNTS = {
   sandbox: SANDBOX_TOOLS.size,
   qa: QA_TOOLS.size,
   app: APP_STUDIO_TOOLS.size,
-  'design-system-studio': DESIGN_SYSTEM_STUDIO_TOOLS.size,
-  'design-system-consumer': DESIGN_SYSTEM_CONSUMER_TOOLS.size,
-  'sprite-studio': SPRITE_STUDIO_TOOLS.size,
 } as const;

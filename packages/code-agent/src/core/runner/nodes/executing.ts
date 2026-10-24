@@ -1,3 +1,5 @@
+import { toolExtraUserMessages } from '../../tool-extra-user-messages.js';
+import { BoundaryPreparation } from '../boundary-preparation.js';
 /**
  * Executing node — drives ONE full provider turn.
  *
@@ -75,7 +77,7 @@ import {
   maybeVerificationNudge,
 } from './executing-verification-gate.js';
 import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
-import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
+import { dispatchTools, buildToolMessage, type DispatchedToolResult } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
 import { evaluatePerTurnLoops } from './executing-loop-guards.js';
 import { applyVisionFallback } from '../vision-fallback.js';
@@ -171,6 +173,8 @@ function fallbackAttemptErrorMeta(error: unknown, fallbackCode: string): {
  * one-line description. Feeds the loop-enforcement reminder so the agent is
  * reminded what to do INSTEAD of the call it keeps repeating.
  */
+const proactiveRecall = new WeakMap<object, BoundaryPreparation<ReadonlyArray<(() => void) | undefined>>>();
+
 export class ExecutingNode implements BehaviorNode {
   readonly state = 'Executing' as const;
 
@@ -224,7 +228,8 @@ export class ExecutingNode implements BehaviorNode {
     // on the critical path before the provider call. Run them concurrently;
     // the internal synthesize→retrieve dependency of the project-memory
     // block is preserved inside its closure.
-    const recallProjectMemory = async (): Promise<void> => {
+    const recallTurn = ctx.turn;
+    const recallProjectMemory = async (): Promise<(() => void) | undefined> => {
       if (ignoreMemory || !ctx.bridge?.getRelevantProjectMemory) return;
       // Derive the recall query + throttle verdict (pure). A normal message IS
       // the query; a META / continuation ("continue", "Reanalise tudo que fez,
@@ -250,8 +255,11 @@ export class ExecutingNode implements BehaviorNode {
         }
       }
       try {
-        ctx.injectionState.pendingMemory = await ctx.bridge.getRelevantProjectMemory(memoryQuery, ctx.turn);
-        ctx.injectionState.lastMemoryQuery = candidate; // STABLE throttle key
+        const recalled = await ctx.bridge.getRelevantProjectMemory(memoryQuery, recallTurn);
+        return () => {
+          ctx.injectionState.pendingMemory = recalled;
+          ctx.injectionState.lastMemoryQuery = candidate;
+        };
       } catch (e) {
         dbg('memory retrieval failed', (e as Error).message);
       }
@@ -259,7 +267,7 @@ export class ExecutingNode implements BehaviorNode {
 
     // Session-local history uses the same material-task-change throttle as
     // project memory, but retrieval is independently bounded to two excerpts.
-    const recallConversationChapters = async (): Promise<void> => {
+    const recallConversationChapters = async (): Promise<(() => void) | undefined> => {
       if (!ctx.bridge?.getRelevantConversationChapters) return;
       const { candidate, shouldRetrieve } = planMemoryRecall(
         memoryTaskText,
@@ -269,14 +277,26 @@ export class ExecutingNode implements BehaviorNode {
       );
       if (!shouldRetrieve || !candidate.trim()) return;
       try {
-        ctx.injectionState.pendingConversationChapters =
-          await ctx.bridge.getRelevantConversationChapters(candidate, ctx.turn);
-        ctx.injectionState.lastConversationChapterQuery = candidate;
+        const recalled = await ctx.bridge.getRelevantConversationChapters(candidate, recallTurn);
+        return () => {
+          ctx.injectionState.pendingConversationChapters = recalled;
+          ctx.injectionState.lastConversationChapterQuery = candidate;
+        };
       } catch (e) {
         dbg('conversation chapter retrieval failed', (e as Error).message);
       }
     };
-    await Promise.all([recallProjectMemory(), recallConversationChapters()]);
+    let preparation = proactiveRecall.get(ctx);
+    if (!preparation) {
+      preparation = new BoundaryPreparation();
+      proactiveRecall.set(ctx, preparation);
+    }
+    const recalled = await preparation.take(
+      memoryTaskText ?? '',
+      () => Promise.all([recallProjectMemory(), recallConversationChapters()]),
+      ctx.opts.toolContext.signal,
+    );
+    for (const apply of recalled ?? []) apply?.();
 
     let durableConversationChapterIndex: Awaited<
       ReturnType<
@@ -869,6 +889,13 @@ export class ExecutingNode implements BehaviorNode {
       });
     };
     let result!: Awaited<ReturnType<typeof consumeStream>>;
+    // One transport scope per physical provider turn. A timeout cancels the
+    // old HTTP stream before recovery may try another provider request.
+    const providerRequest = new AbortController();
+    const parentSignal = ctx.opts.toolContext.signal;
+    const relayProviderAbort = () => providerRequest.abort(parentSignal?.reason);
+    parentSignal?.addEventListener?.('abort', relayProviderAbort, { once: true });
+    if (parentSignal?.aborted) relayProviderAbort();
     try {
     let stream: AsyncIterable<ChatDelta>;
     try {
@@ -885,7 +912,7 @@ export class ExecutingNode implements BehaviorNode {
           : {}),
         sessionId: ctx.opts.sessionId,
         onAttempt: recordProviderAttempt,
-        signal: ctx.opts.toolContext.signal,
+        signal: providerRequest.signal,
         ...(tempResolution && typeof tempResolution.temperature === 'number'
           ? { inference: { temperature: tempResolution.temperature } }
           : {}),
@@ -954,6 +981,7 @@ export class ExecutingNode implements BehaviorNode {
       result = await consumeStream({
         stream,
         signal: ctx.opts.toolContext.signal,
+        cancelStream: (reason) => providerRequest.abort(reason),
         // Scale the thinking-only watchdog by reasoning effort and by how many
         // thinking-timeouts already fired this run, so a retry gets a strictly
         // larger budget than the attempt that just timed out (a same-budget
@@ -1054,6 +1082,8 @@ export class ExecutingNode implements BehaviorNode {
       outputTokens: result.usage?.output_tokens,
     };
     } finally {
+      parentSignal?.removeEventListener?.('abort', relayProviderAbort);
+      providerRequest.abort();
       if (ctx.opts.hookBus) {
         try {
           await ctx.opts.hookBus.fireObservation('after_provider_call', {
@@ -1288,7 +1318,55 @@ export class ExecutingNode implements BehaviorNode {
     for (const toolUse of result.toolUses) {
       touchDynamicToolPin(ctx.pinnedTools, requiredPinnedTools, toolUse.name);
     }
+    // Refused calls never fired tool_call_start, so the telemetry listener in
+    // index.ts has no pending entry to read args from — carry the original
+    // input on the result event itself (along with the refusal kind).
+    const inputByUseId = new Map(result.toolUses.map((t) => [t.id, t.input]));
+    const publishToolResult = (r: DispatchedToolResult): void => {
+      ctx.operations.finish(`tool:${r.toolUseId}`, r.isError ? 'failed' : 'completed', {
+        phase: r.isError ? 'failed' : 'completed',
+      });
+      // Surface a tool image (e.g. preview_screenshot / view_image) in the
+      // result so the dashboard shows it inline under the tool call — the
+      // same image the model receives via the synthetic user message above.
+      const img = r.extraUserBlocks?.find(
+        (b): b is { type: 'image'; mediaType: string; base64: string } =>
+          (b as { type?: string }).type === 'image',
+      );
+      // Diagnostic (terminal-visible): confirms the worker is emitting the
+      // image on tool_call_result. If you see this line but no image in the
+      // chat, the gap is dashboard-side; if absent, the worker build is stale.
+      if (img) {
+        try { console.error(`[preview-img] emit ${r.name} ${img.base64?.length ?? 0}b`); } catch { /* noop */ }
+      }
+      ctx.emit(
+        'tool_call_result',
+        r.toolUseId,
+        r.name,
+        {
+          content: r.content,
+          isError: r.isError,
+          effectOutcome: r.effectOutcome,
+          rawChars: r.rawChars,
+          contentFormat: r.contentFormat,
+          structuredOutputChars: r.structuredOutputChars,
+          input: inputByUseId.get(r.toolUseId),
+          refusalKind: r.refusalKind,
+          reductionReport: r.reductionReport,
+          sourceTruncations: r.sourceTruncations,
+          truncated: r.truncated,
+          outputId: r.outputId,
+          ledgerEntry: r.ledgerEntry,
+          guardVerdict: r.guardVerdict,
+          stateEpoch: r.stateEpoch,
+          ...(img ? { image: { mediaType: img.mediaType, base64: img.base64 } } : {}),
+        },
+        r.durationMs,
+      );
+    };
+
     const dispatch = await dispatchTools({
+      onToolResult: publishToolResult,
       toolUses: result.toolUses,
       retrievalBatch: { taskText: memoryTaskText ?? undefined },
       registry: ctx.opts.registry,
@@ -1499,62 +1577,7 @@ export class ExecutingNode implements BehaviorNode {
     // preview_screenshot) get them surfaced as a synthetic user message
     // right after the tool message, so the model actually SEES the image.
     // Provider-agnostic (a user-role image block works everywhere).
-    const extraBlocks = dispatch.results.flatMap((r) => r.extraUserBlocks ?? []);
-    if (extraBlocks.length > 0) {
-      ctx.messages.push({
-        role: 'user',
-        content: [
-          ...extraBlocks,
-          { type: 'text', text: '(Image(s) attached from the tool call above.)' },
-        ],
-      });
-    }
-
-    // Refused calls never fired tool_call_start, so the telemetry listener in
-    // index.ts has no pending entry to read args from — carry the original
-    // input on the result event itself (along with the refusal kind).
-    const inputByUseId = new Map(result.toolUses.map((t) => [t.id, t.input]));
-    for (const r of dispatch.results) {
-      ctx.operations.finish(`tool:${r.toolUseId}`, r.isError ? 'failed' : 'completed', {
-        phase: r.isError ? 'failed' : 'completed',
-      });
-      // Surface a tool image (e.g. preview_screenshot / view_image) in the
-      // result so the dashboard shows it inline under the tool call — the
-      // same image the model receives via the synthetic user message above.
-      const img = r.extraUserBlocks?.find(
-        (b): b is { type: 'image'; mediaType: string; base64: string } =>
-          (b as { type?: string }).type === 'image',
-      );
-      // Diagnostic (terminal-visible): confirms the worker is emitting the
-      // image on tool_call_result. If you see this line but no image in the
-      // chat, the gap is dashboard-side; if absent, the worker build is stale.
-      if (img) {
-        try { console.error(`[preview-img] emit ${r.name} ${img.base64?.length ?? 0}b`); } catch { /* noop */ }
-      }
-      ctx.emit(
-        'tool_call_result',
-        r.toolUseId,
-        r.name,
-        {
-          content: r.content,
-          isError: r.isError,
-          rawChars: r.rawChars,
-          contentFormat: r.contentFormat,
-          structuredOutputChars: r.structuredOutputChars,
-          input: inputByUseId.get(r.toolUseId),
-          refusalKind: r.refusalKind,
-          reductionReport: r.reductionReport,
-          sourceTruncations: r.sourceTruncations,
-          truncated: r.truncated,
-          outputId: r.outputId,
-          ledgerEntry: r.ledgerEntry,
-          guardVerdict: r.guardVerdict,
-          stateEpoch: r.stateEpoch,
-          ...(img ? { image: { mediaType: img.mediaType, base64: img.base64 } } : {}),
-        },
-        r.durationMs,
-      );
-    }
+    ctx.messages.push(...toolExtraUserMessages(dispatch.results));
 
     // Telemetry — persist BEFORE tool_call_result handlers in `index.ts`
     // flush. The flushPendingTurn read happens on the NEXT turn's
@@ -1563,6 +1586,12 @@ export class ExecutingNode implements BehaviorNode {
     // produced its `largest_tool_result_chars` value.
     const toolResultBlocks = Array.isArray(toolMessage.content) ? toolMessage.content : [];
     runPersistTelemetry(toolResultBlocks);
+
+    if (dispatch.outcomeUnknown) {
+      ctx.stopReason = 'error';
+      ctx.error = new Error('TOOL_OUTCOME_UNKNOWN: a tool may have taken effect but its result was not confirmed. Reconcile before retrying.');
+      return events.toolOutcomeUnknown();
+    }
 
     // Fix B — advance loop-aware compaction signals every turn, BEFORE any
     // early return below, so `stuck-progress` / `cumulative` work even when the

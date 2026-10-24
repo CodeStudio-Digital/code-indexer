@@ -66,6 +66,10 @@ export class HostSupervisorReplayHistory {
       < this.identityCapacity;
   }
 
+  get remainingIdentityCapacity(): number {
+    return this.identityCapacity - this.#retired.size - (this.#active ? 1 : 0);
+  }
+
   canRetain(byteLength: number): boolean {
     return byteLength > 0 && byteLength <= this.byteCapacity;
   }

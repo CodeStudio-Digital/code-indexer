@@ -13,36 +13,9 @@ use super::{
     SupervisorDriverError, SupervisorDriverStep, SupervisorLifecycleCore, SupervisorPhysicalDriver,
 };
 use crate::management::ManagementEnvelopeReceipt;
-use crate::process_table::OwnershipKey;
 
-#[derive(Debug)]
-pub(in crate::management) struct PreparedFactEmission {
-    payload: Option<wire::ManagementPayload>,
-    action: PendingFactAction,
-    failure_key: OwnershipKey,
-}
-
-impl PreparedFactEmission {
-    pub(super) const fn new(
-        payload: wire::ManagementPayload,
-        action: PendingFactAction,
-        failure_key: OwnershipKey,
-    ) -> Self {
-        Self {
-            payload: Some(payload),
-            action,
-            failure_key,
-        }
-    }
-
-    pub(in crate::management) const fn take_payload(&mut self) -> wire::ManagementPayload {
-        self.payload.take().expect("fact payload is consumed once")
-    }
-
-    pub(in crate::management) const fn failure_key(&self) -> &OwnershipKey {
-        &self.failure_key
-    }
-}
+mod emission;
+pub(in crate::management) use emission::PreparedFactEmission;
 
 impl<P, V> SupervisorLifecycleCore<P, V>
 where
@@ -137,14 +110,38 @@ where
                 )))
             }
             PendingFactStage::Containment
-            | PendingFactStage::Reaped
             | PendingFactStage::AcceptedReplay
             | PendingFactStage::Rejected => Ok(None),
-            PendingFactStage::Exited { key, reaped } => Ok(Some(PreparedFactEmission::new(
-                reaped.to_wire(),
-                PendingFactAction::new(FactIntent::Unregistered, PendingFactStage::Reaped),
-                key,
-            ))),
+            PendingFactStage::Reaped { outbox_attempt_id } => {
+                if let Some(outbox) = &mut self.durable_lifecycle_outbox {
+                    outbox
+                        .acknowledge(&outbox_attempt_id)
+                        .map_err(SupervisorDriverError::OutboxPersistence)?;
+                }
+                Ok(None)
+            }
+            PendingFactStage::Exited { key, reaped } => {
+                let payload = reaped.to_wire();
+                let Some(wire::management_payload::Body::AttemptProcessReaped(value)) =
+                    &payload.body
+                else {
+                    return Err(SupervisorDriverError::FactFlowInvariant);
+                };
+                let outbox_attempt_id = value
+                    .identity
+                    .as_ref()
+                    .ok_or(SupervisorDriverError::FactFlowInvariant)?
+                    .attempt_id
+                    .clone();
+                Ok(Some(PreparedFactEmission::new(
+                    payload,
+                    PendingFactAction::new(
+                        FactIntent::Unregistered,
+                        PendingFactStage::Reaped { outbox_attempt_id },
+                    ),
+                    key,
+                )))
+            }
         }
     }
 

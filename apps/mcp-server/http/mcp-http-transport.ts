@@ -21,7 +21,7 @@ import {
   ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { normalizeMcpToolResult, type McpTool } from '../tool.js';
+import { normalizeMcpToolResult, mcpToolResultFields, type McpTool } from '../tool.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { AuthContext } from '@mcp/services/auth/domain/auth-context.js';
 import type { McpConnectionPolicy, McpTier } from '@mcp/services/auth/domain/api-token.js';
@@ -37,6 +37,7 @@ import {
   readResource,
   DEFAULT_RESOURCE_SCOPE,
 } from '../resources/index.js';
+import { resourcePage } from '../resources/page.js';
 import { coerceArgs } from '../utils.js';
 import { SessionManager } from './session-manager.js';
 
@@ -147,20 +148,19 @@ export function createMcpHttpApp(
   const registry = buildToolRegistry();
   const sessions = new SessionManager();
   const authContexts = new AsyncLocalStorage<AuthContext | undefined>();
-  let statelessTransport: WebStandardStreamableHTTPServerTransport | null = null;
-
   const currentAuthCtx = () => authContexts.getStore();
-
-  const ensureStatelessTransport = async () => {
-    if (statelessTransport) return statelessTransport;
+  const handleStatelessRequest = async (request: Request) => {
+    // SDK stateless transports have one request lifetime. Reusing one after
+    // initialize makes every subsequent tools/list or tools/call fail.
     const server = buildServer(ctx, registry, currentAuthCtx, deps);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
     await server.connect(transport);
-    statelessTransport = transport;
-    return transport;
+    // JSON mode resolves only after the complete response has been produced.
+    try { return await transport.handleRequest(request); }
+    finally { await server.close(); }
   };
 
   const app = new Hono();
@@ -170,15 +170,17 @@ export function createMcpHttpApp(
   // All MCP traffic (POST/GET/DELETE) lands on the root of this sub-app.
   app.all('/', async (c) => {
     const authCtx = deps.resolveAuthContext?.(c);
-
-    const transport = config.mcp.http.stateful
-      ? await resolveStatefulTransport(c.req.raw, sessions, ctx, registry, currentAuthCtx, deps)
-      : await ensureStatelessTransport();
-
     // AsyncLocalStorage binds authentication to the complete asynchronous
     // request chain. Concurrent MCP calls cannot overwrite each other's
     // principal, tier or scopes.
-    return authContexts.run(authCtx, () => transport.handleRequest(c.req.raw));
+    return authContexts.run(authCtx, async () => {
+      if (!config.mcp.http.stateful) {
+        if (c.req.method === 'GET') return c.json({ error: 'Stateless MCP uses JSON POST responses' }, 405, { Allow: 'POST' });
+        return handleStatelessRequest(c.req.raw);
+      }
+      const transport = await resolveStatefulTransport(c.req.raw, sessions, ctx, registry, currentAuthCtx, deps);
+      return transport.handleRequest(c.req.raw);
+    });
   });
 
   return app;
@@ -254,7 +256,7 @@ function buildServer(
     };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: rawArgs } = request.params;
     const tool = registry.get(name);
     if (!tool) {
@@ -338,21 +340,20 @@ function buildServer(
         });
         return { content: [{ type: 'text', text: projectGate.error }], isError: true };
       }
-      const result = normalizeMcpToolResult(await tool.handler(projectGate.args, ctx, authCtx));
+      extra.signal.throwIfAborted();
+      const result = normalizeMcpToolResult(await tool.handler(projectGate.args, { ...ctx, signal: extra.signal }, authCtx));
+      extra.signal.throwIfAborted();
       deps.audit?.execute({
         principal: authCtx?.principal ?? null,
         tokenType: authCtx?.tokenType ?? null,
-        event: 'tool_call_ok',
-        status: 200,
+        event: result.effectOutcome ? 'tool_call_error' : 'tool_call_ok',
+        status: result.effectOutcome ? 500 : 200,
         toolName: name,
-        meta: {},
+        meta: result.effectOutcome ? { effectOutcome: result.effectOutcome } : {},
       });
       return {
         content: [{ type: 'text', text: result.text }],
-        ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
-        ...(result.sourceTruncations?.length
-          ? { _meta: { sourceTruncations: result.sourceTruncations } }
-          : {}),
+        ...mcpToolResultFields(result),
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -374,7 +375,7 @@ function buildServer(
   // principal that cannot read individual resources should not enumerate
   // them either.
 
-  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     const authCtx = currentAuthCtx();
     if (authCtx && deps.enforceScope) {
       const gate = deps.enforceScope.execute(authCtx, DEFAULT_RESOURCE_SCOPE);
@@ -391,21 +392,21 @@ function buildServer(
       }
     }
     const resources = await collectListedResources(ctx, authCtx);
-    return {
-      resources: resources.filter((resource) =>
+    const page = resourcePage(resources.filter((resource) =>
         isResourceAllowedForPolicy(resource.uri, ctx, authCtx?.policy),
-      ),
-    };
+      ), 'resources', request.params?.cursor);
+    return { resources: page.items, nextCursor: page.nextCursor };
   });
 
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
-    resourceTemplates: allResources.map((r) => ({
+  server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
+    const page = resourcePage(allResources.map((r) => ({
       uriTemplate: r.uriTemplate,
       name: r.name,
       description: r.description,
       ...(r.mimeType ? { mimeType: r.mimeType } : {}),
-    })),
-  }));
+    })), 'templates', request.params?.cursor);
+    return { resourceTemplates: page.items, nextCursor: page.nextCursor };
+  });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;

@@ -62,6 +62,7 @@ export interface SubagentBoardPostRef {
 }
 
 const MAX_MEMOS = 50;
+export const MAX_MEMO_CHARS = 300;
 const MAX_SNAPSHOTS = 20;
 const MAX_BOARD_POSTS = 20;
 
@@ -71,6 +72,7 @@ export class SubagentCollector {
   private readonly _boardPosts: SubagentBoardPostRef[] = [];
 
   recordMemo(text: string, kind: SubagentMemoKind = 'observation'): boolean {
+    if (!text.trim() || text.length > MAX_MEMO_CHARS) return false;
     if (this._memos.length >= MAX_MEMOS) {
       console.warn(
         `[subagent-collector] memo cap (${MAX_MEMOS}) reached — dropping subsequent memos`,
@@ -109,9 +111,9 @@ export class SubagentCollector {
   /** Read-only snapshot of everything collected so far. */
   snapshot(): { memos: SubagentMemo[]; snapshots: SubagentSnapshotRef[]; boardPosts: SubagentBoardPostRef[] } {
     return {
-      memos: this._memos.slice(),
-      snapshots: this._snapshots.slice(),
-      boardPosts: this._boardPosts.slice(),
+      memos: this._memos.map(entry => ({ ...entry })),
+      snapshots: this._snapshots.map(entry => ({ ...entry })),
+      boardPosts: this._boardPosts.map(entry => ({ ...entry })),
     };
   }
 

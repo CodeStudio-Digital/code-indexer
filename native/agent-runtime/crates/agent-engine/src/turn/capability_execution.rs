@@ -6,13 +6,12 @@ use agent_tools::capability::{
     SealedExecutionGrant,
 };
 
-use super::TurnEngine;
-use crate::lifecycle::RunState;
+use super::CapabilityBatch;
 use crate::ports::{
     AuthorityCheckpoint, AuthorityPort, ClockPort, EngineEvent, EventSinkPort, ProviderToolCall,
 };
 
-impl TurnEngine {
+impl CapabilityBatch {
     /// Crosses the durable started boundary, revalidates authority immediately
     /// before the effect, executes once, then commits an exact terminal record.
     /// An executor transport/runtime error after `started` is ambiguity, so it
@@ -24,8 +23,8 @@ impl TurnEngine {
     /// errors after the durable boundary are returned as a successful unknown
     /// outcome only after its terminal record is committed.
     #[allow(clippy::too_many_arguments)]
-    pub async fn execute_capability<X, A, E, C>(
-        &mut self,
+    pub async fn execute<X, A, E, C>(
+        &self,
         call: &ProviderToolCall,
         capability_set_sha256: [u8; 32],
         deadline_at_unix_ms: i64,
@@ -41,41 +40,23 @@ impl TurnEngine {
         E: EventSinkPort,
         C: ClockPort,
     {
-        if self.state() != RunState::CapabilityDispatch || deadline_at_unix_ms <= 0 {
-            return Err(CapabilityExecutionError::InvalidState);
-        }
-        let invocation =
-            super::capability::invocation(call, capability_set_sha256, deadline_at_unix_ms);
-        if !grant_matches(grant, &invocation) {
-            return Err(CapabilityExecutionError::InvalidGrant);
-        }
-        authority
-            .verify(AuthorityCheckpoint::CapabilityDispatch)
-            .await
-            .map_err(CapabilityExecutionError::Authority)?;
-        let started_at = clock
-            .now_unix_ms()
-            .await
-            .map_err(CapabilityExecutionError::Clock)?;
-        if started_at >= grant.expires_at_unix_ms || started_at >= deadline_at_unix_ms {
-            return Err(CapabilityExecutionError::InvalidGrant);
-        }
-        events
-            .append(EngineEvent::CapabilityDispatchStarted {
-                operation_id: invocation.operation_id.as_str(),
-                tool_use_id: invocation.tool_use_id.as_str(),
-                grant_id: grant.grant_id.as_str(),
-                effective_input_sha256: &grant.effective_input_sha256,
-                started_at_unix_ms: started_at,
-            })
-            .await
-            .map_err(CapabilityExecutionError::EventSink)?;
+        let started = self
+            .start(
+                call,
+                capability_set_sha256,
+                deadline_at_unix_ms,
+                grant,
+                authority,
+                events,
+                clock,
+            )
+            .await?;
         let outcome = match authority
             .verify(AuthorityCheckpoint::CapabilityEffect)
             .await
         {
             Ok(()) => executor
-                .execute(&invocation, grant)
+                .execute(started.invocation(), grant)
                 .await
                 .unwrap_or_else(|_| {
                     CapabilityExecutionOutcome::OutcomeUnknown(CapabilityFailure {
@@ -88,10 +69,29 @@ impl TurnEngine {
                 duration_ms: 0,
             }),
         };
+        self.settle::<A::Error, E, C::Error>(started, outcome, events)
+            .await
+    }
+
+    /// Consume a durable start and commit its terminal exactly once.
+    /// # Errors
+    /// Rejects a foreign boundary or a failed terminal commit.
+    pub async fn settle<A, E: EventSinkPort, C>(
+        &self,
+        started: super::StartedCapability,
+        outcome: CapabilityExecutionOutcome,
+        events: &mut E,
+    ) -> Result<CapabilityExecutionOutcome, CapabilityExecutionError<A, E::Error, C>> {
+        if !std::sync::Arc::ptr_eq(&self.state, &started.state) {
+            return Err(CapabilityExecutionError::InvalidState);
+        }
+        let invocation = &started.invocation;
+        let grant = &started.grant;
         // Do not introduce a second fallible clock read after the effect. Once
         // execution has happened, the terminal record must be attempted even
         // if the wall clock source becomes unavailable.
-        let completed_at = started_at
+        let completed_at = started
+            .started_at
             .saturating_add(i64::try_from(outcome_duration_ms(&outcome)).unwrap_or(i64::MAX));
         events
             .append(EngineEvent::CapabilityTerminal {
@@ -103,9 +103,7 @@ impl TurnEngine {
             })
             .await
             .map_err(CapabilityExecutionError::EventSink)?;
-        self.lifecycle
-            .transition(RunState::Composing)
-            .map_err(CapabilityExecutionError::Transition)?;
+        self.mark_settled();
         Ok(outcome)
     }
 }
@@ -119,7 +117,10 @@ const fn outcome_duration_ms(outcome: &CapabilityExecutionOutcome) -> u64 {
     }
 }
 
-fn grant_matches(grant: &SealedExecutionGrant, invocation: &CapabilityInvocation) -> bool {
+pub(super) fn grant_matches(
+    grant: &SealedExecutionGrant,
+    invocation: &CapabilityInvocation,
+) -> bool {
     if grant.effective_input_sha256 != invocation.input_sha256 {
         return false;
     }

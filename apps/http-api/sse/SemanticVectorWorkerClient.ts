@@ -1,4 +1,5 @@
 import { WorkerHost } from '@mcp/orchestrator-host';
+import { randomUUID } from 'node:crypto';
 import type { VectorMatch, VectorRecord } from '@mcp/shared/types.js';
 import type {
   VectorItemState,
@@ -17,8 +18,11 @@ import type {
 import type {
   EmbeddingTarget,
   RerankerTarget,
+  SemanticStore,
+  SemanticJobRow,
 } from '@mcp/store/semantic-store.js';
 import { localEmbeddingFingerprint } from '@mcp/indexer/search/local-embeddings.js';
+import type { ProjectJobScope, ProjectJobsPageInput, ProjectJobsPage } from './semantic-job-query-port.js';
 
 const REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_IDLE_MS = 5 * 60_000;
@@ -76,6 +80,40 @@ export class SemanticVectorWorkerClient implements VectorStore {
     return new SemanticVectorWorkerClient(dbPath, resolved);
   }
 
+  projectJobsPage(input: ProjectJobsPageInput, signal?: AbortSignal): Promise<ProjectJobsPage> {
+    return this.request('semantic.projectJobsPage', input, signal);
+  }
+
+  currentProjectJobs(scopes: ProjectJobScope[], signal?: AbortSignal): Promise<Array<SemanticJobRow | null>> {
+    return this.request('semantic.currentProjectJobs', scopes, signal);
+  }
+
+  /** Bounded RPC pages keep SQLite scans and cursor JSON decoding off main. */
+  async listSemanticJobs(filter: Parameters<SemanticStore['listJobs']>[0] = {}): Promise<SemanticJobRow[]> {
+    const jobs: SemanticJobRow[] = [];
+    let afterId = filter.afterId ?? 0;
+    let throughId = filter.throughId;
+    do {
+      const page = await this.request<{ throughId: number; jobs: SemanticJobRow[] }>(
+        'semantic.jobsPage', { filter, afterId, throughId },
+      );
+      if (!Number.isSafeInteger(page.throughId) || page.throughId < 0
+        || (throughId !== undefined && page.throughId !== throughId)
+        || page.jobs.length > 256) throw new Error('invalid semantic jobs page');
+      throughId = page.throughId;
+      for (const job of page.jobs) {
+        if (!Number.isSafeInteger(job.id) || job.id <= afterId || job.id > throughId) {
+          throw new Error('semantic job cursor did not advance');
+        }
+        afterId = job.id;
+        jobs.push(job);
+      }
+      if (page.jobs.length < 256 || afterId >= throughId) break;
+    } while (true);
+    jobs.sort((a, b) => filter.order === 'newest' ? b.id - a.id : b.priority - a.priority || a.id - b.id);
+    return filter.limit === undefined ? jobs : jobs.slice(0, filter.limit);
+  }
+
   /** ONNX proxy used by SemanticProfileRuntime. There is deliberately no
    * in-process fallback: if the worker fails, the coordinator pauses and
    * queries fall back to FTS instead of loading weights in Electron main. */
@@ -86,7 +124,9 @@ export class SemanticVectorWorkerClient implements VectorStore {
       embed: (texts) => texts.length === 0
         ? Promise.resolve({ vectors: [], tokens: 0 })
         : this.request('inference.embed', { target, texts }),
-      embedQuery: (text) => this.request('inference.embedQuery', { target, text }),
+      embedQuery: (text, options) => this.request('inference.embedQuery', {
+        target, text, supersessionKey: options?.supersessionKey,
+      }, options?.signal),
       fingerprint: () => localEmbeddingFingerprint({
         model: target.model,
         revision: target.revision,
@@ -137,7 +177,7 @@ export class SemanticVectorWorkerClient implements VectorStore {
           candidates,
           topK,
           supersessionKey: options?.supersessionKey,
-        }).then((response) => {
+        }, options?.signal).then((response) => {
           this.rerankerDiagnosticCache.set(JSON.stringify(target), {
             diagnostics: response.diagnostics,
             updatedAt: Date.now(),
@@ -308,18 +348,39 @@ export class SemanticVectorWorkerClient implements VectorStore {
     this.rerankerDiagnosticInflight.clear();
   }
 
-  private async request<T>(type: string, payload: unknown): Promise<T> {
+  private async request<T>(type: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
     const host = await this.ensureHost();
+    signal?.throwIfAborted();
+    const bridge = host.requireBridge();
+    const inferenceRequestId = type.startsWith('inference.') ? randomUUID() : undefined;
+    const cancel = () => {
+      try {
+        if (inferenceRequestId) bridge.emit('inference.cancel', { inferenceRequestId });
+      } catch { /* A closed worker already cancelled its queue. */ }
+    };
+    let onAbort: (() => void) | undefined;
     this.inflight++;
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
     try {
-      return await host.requireBridge().request(type, payload, {
+      const request = bridge.request(type, inferenceRequestId
+        ? { ...(payload as object), inferenceRequestId } : payload, {
         timeoutMs: REQUEST_TIMEOUT_MS,
-      }) as T;
+      });
+      const aborted = signal ? new Promise<never>((_resolve, reject) => {
+        onAbort = () => { cancel(); reject(signal.reason ?? new Error('Inference aborted')); };
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      }) : null;
+      return await (aborted ? Promise.race([request, aborted]) : request) as T;
+    } catch (error) {
+      if ((error as { code?: string }).code === 'request_timeout') cancel();
+      throw error;
     } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
       this.inflight--;
       this.scheduleIdleEviction();
     }

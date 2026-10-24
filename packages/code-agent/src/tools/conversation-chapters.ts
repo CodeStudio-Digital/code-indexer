@@ -1,12 +1,13 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { err, ok } from '@mcp/code-agent/core/tool.js';
 import { isUuid } from '@mcp/session-storage';
+import { assertSessionDataCurrent } from './session-data-context.js';
 import type {
   FsConversationChapterRow,
-} from '@mcp/code-agent/sessions/fs-store/history-metrics-types.js';
+} from '@mcp/session-storage/fs-store/history-metrics-types.js';
 import type {
   FsCoderMessageRow,
-} from '@mcp/code-agent/sessions/fs-store/types.js';
+} from '@mcp/session-storage/fs-store/types.js';
 
 const UNAVAILABLE = 'Conversation chapters are not available in this session.';
 const MAX_LIST_LIMIT = 50;
@@ -68,6 +69,7 @@ export const recallConversationTool: CoderTool = {
   parallelSafe: true,
   repeatable: true,
   riskLevel: 'read',
+  outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true },
   parameters: {
     type: 'object',
     properties: {
@@ -81,9 +83,13 @@ export const recallConversationTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    assertSessionDataCurrent(ctx);
     const port = history(ctx);
     if (!port) return err(UNAVAILABLE);
     const mode = typeof args.mode === 'string' ? args.mode : '';
+    const max = mode === 'source' ? MAX_SOURCE_LIMIT : MAX_LIST_LIMIT;
+    if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > max)) return err(`recall_conversation: limit must be an integer between 1 and ${max}.`);
+    if (args.cursor !== undefined && (typeof args.cursor !== 'string' || args.cursor.length > 2048)) return err('recall_conversation: invalid cursor.');
 
     try {
       if (mode === 'list') {
@@ -91,6 +97,7 @@ export const recallConversationTool: CoderTool = {
           limit: limit(args.limit, 10, MAX_LIST_LIMIT),
           cursor: cursor(args.cursor),
         });
+        assertSessionDataCurrent(ctx);
         if (page.items.length === 0) return ok(`No conversation chapters found.${renderPageFooter(page.next_cursor)}`);
         return ok([
           `Conversation chapters (${page.items.length} in this page):`,
@@ -100,11 +107,12 @@ export const recallConversationTool: CoderTool = {
 
       if (mode === 'search') {
         const query = typeof args.query === 'string' ? args.query.trim() : '';
-        if (!query) return err('recall_conversation: `query` is required for mode="search".');
+        if (!query || query.length > 2000) return err('recall_conversation: `query` must contain 1-2000 characters for mode="search".');
         const page = await port.search(query, {
           limit: limit(args.limit, 8, MAX_LIST_LIMIT),
           cursor: cursor(args.cursor),
         });
+        assertSessionDataCurrent(ctx);
         if (page.items.length === 0) return ok(`No conversation chapter matches ${JSON.stringify(query)}.`);
         const matches = page.items.map((row) => [
           chapterHeader(row),
@@ -131,6 +139,7 @@ export const recallConversationTool: CoderTool = {
         const id = chapterId(args.chapter_id);
         if (id == null) return err('recall_conversation: UUID `chapter_id` is required for mode="get".');
         const row = await port.get(id);
+        assertSessionDataCurrent(ctx);
         if (!row) return err(`Conversation chapter ${id} was not found in this session.`);
         return ok([
           chapterHeader(row),
@@ -149,10 +158,12 @@ export const recallConversationTool: CoderTool = {
         if (!(await port.get(id))) {
           return err(`Conversation chapter ${id} was not found in this session.`);
         }
+        assertSessionDataCurrent(ctx);
         const page = await port.source(id, {
           limit: limit(args.limit, 10, MAX_SOURCE_LIMIT),
           cursor: cursor(args.cursor),
         });
+        assertSessionDataCurrent(ctx);
         const rows = page.items.map((row) => JSON.stringify({
           id: row.id,
           seq: row.seq,
@@ -169,6 +180,7 @@ export const recallConversationTool: CoderTool = {
 
       return err('recall_conversation: invalid `mode`. Use list, search, get, or source.');
     } catch (error) {
+      assertSessionDataCurrent(ctx);
       return err(`recall_conversation failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   },

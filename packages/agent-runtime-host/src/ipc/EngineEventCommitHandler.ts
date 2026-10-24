@@ -49,5 +49,6 @@ export async function commitEngineEventProposal(
         'EngineEventCommitted receipt is foreign',
       );
     }
+    committer.afterEngineEventAcknowledged?.(request.record, receipt);
   });
 }

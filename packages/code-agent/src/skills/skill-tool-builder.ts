@@ -11,7 +11,7 @@ import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import { groupSkillsByNamespace } from '@mcp/code-agent/skills/namespace.js';
 import type { InstalledNamespaceSummary } from '@mcp/code-agent/skills/agent-skills-installer.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type { SessionId } from '@mcp/session-storage';
 
 const SAMPLE_SKILL_IDS_PER_NAMESPACE = 5;
@@ -53,6 +53,7 @@ export function buildSkillDiscoveryTools(
     description:
       'List all skill packs (namespaces) available in this session, with counts, repo origin, and a few sample skill IDs to hint at each pack\'s theme. Call this first when starting a new task to choose which pack to explore. Then call get_skills_list({namespace}) to see specific skills inside a pack, and get_skill_content({skill_id}) to load instructions before doing the work.',
     source: 'native',
+    mutates: false, parallelSafe: true, riskLevel: 'read',
     parameters: {
       type: 'object',
       properties: {},
@@ -93,6 +94,7 @@ export function buildSkillDiscoveryTools(
     description:
       'List skills, optionally filtered to a single namespace. Pass `namespace` (from list_skill_namespaces) to drill into one pack and get the full set of {id, name, description, slashCommand}. Without `namespace` you get a compact overview {totalSkills, byNamespace[{namespace, count}]} — call list_skill_namespaces instead for richer metadata (repo, sample IDs). After picking a skill, call get_skill_content with its ID to load full instructions.',
     source: 'native',
+    mutates: false, parallelSafe: true, riskLevel: 'read',
     parameters: {
       type: 'object',
       properties: {
@@ -163,6 +165,7 @@ export function buildSkillDiscoveryTools(
     description:
       'Get the full instructions of a specific skill by ID. Use get_skills_list first to discover available skill IDs.',
     source: 'native',
+    mutates: false, parallelSafe: false, riskLevel: 'read',
     outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true },
     parameters: {
       type: 'object',
@@ -240,6 +243,7 @@ export function buildInvokeSkillTool(
     name: 'invoke_skill',
     description: `Invoke a reusable skill by ID. Skills are pre-configured prompt instruction packages that guide your behavior for specific tasks.\n\nAvailable skills:\n${catalog}\n\nWhen invoked, the skill's instructions are returned for you to follow.`,
     source: 'native',
+    mutates: false, parallelSafe: false, riskLevel: 'read',
     outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true },
     parameters: {
       type: 'object',

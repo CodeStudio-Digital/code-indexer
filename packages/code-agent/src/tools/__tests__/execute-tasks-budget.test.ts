@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { CoderTask, TasksState } from '@mcp/session-storage/session-state-types.js';
 
 vi.mock('../implement-subagent.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../implement-subagent.js')>();
@@ -39,10 +39,9 @@ function makeStubRunner(answer: string | null) {
       for (const l of list) l(payload);
       if (event === 'budget_request' && answer !== null) {
         const askId = (payload as { ask_id: string }).ask_id;
-        queueMicrotask(() => {
-          const r = pending.get(askId);
-          if (r) { pending.delete(askId); r(answer); }
-        });
+        // A synchronous UI response must find an already registered waiter.
+        const r = pending.get(askId);
+        if (r) { pending.delete(askId); r(answer); }
       }
       return true;
     }),

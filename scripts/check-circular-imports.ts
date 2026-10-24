@@ -37,7 +37,6 @@ const ROOTS = [
   'packages/shared/src',
   'packages/indexer/src',
   'packages/code-agent/src',
-  'packages/design-system/src',
   'apps/http-api',
   'apps/dashboard',
 ];
@@ -64,8 +63,6 @@ const ALIAS_MAP: Array<{ prefix: string; replacement: string }> = [
   { prefix: '@mcp/indexer', replacement: 'packages/indexer/src/index.ts' },
   { prefix: '@mcp/code-agent/', replacement: 'packages/code-agent/src/' },
   { prefix: '@mcp/code-agent', replacement: 'packages/code-agent/src/index.ts' },
-  { prefix: '@mcp/design-system/', replacement: 'packages/design-system/src/' },
-  { prefix: '@mcp/design-system', replacement: 'packages/design-system/src/index.ts' },
   { prefix: '@apps/', replacement: 'apps/' },
 ];
 

@@ -1,92 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { parseAppWorkspace, parseDsConsumer, parseDsWorkspace } from '../builder-config.js';
-
-const SESSION_ID = '11111111-1111-4111-8111-111111111111';
-const CONSUMER = JSON.stringify({
-  stack: 'react-ts',
-  port: 5181,
-  designSystem: { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.2.0', linkedAt: 'x' },
-});
-
-describe('parseDsConsumer', () => {
-  it('parses a valid consumer link', () => {
-    expect(parseDsConsumer(CONSUMER)).toEqual({
-      sessionId: SESSION_ID,
-      packageName: '@acme/ui',
-      semver: '1.2.0',
-    });
-  });
-
-  it('returns null for null/empty/malformed json', () => {
-    expect(parseDsConsumer(null)).toBeNull();
-    expect(parseDsConsumer(undefined)).toBeNull();
-    expect(parseDsConsumer('')).toBeNull();
-    expect(parseDsConsumer('{not json')).toBeNull();
-  });
-
-  it('returns null when designSystem is absent (plain builder project)', () => {
-    expect(parseDsConsumer(JSON.stringify({ stack: 'react-ts', port: 5181 }))).toBeNull();
-  });
-
-  it('returns null on a DS Studio workspace even if designSystem is present', () => {
-    const workspace = JSON.stringify({
-      stack: 'react-ts',
-      kind: 'ds',
-      packageName: '@acme/ds',
-      designSystem: { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.0.0' },
-    });
-    expect(parseDsConsumer(workspace)).toBeNull();
-  });
-
-  it.each([
-    ['missing sessionId', { packageName: '@acme/ui', semver: '1.0.0' }],
-    ['legacy numeric sessionId', { sessionId: 1, packageName: '@acme/ui', semver: '1.0.0' }],
-    ['malformed UUID', { sessionId: 'not-a-uuid', packageName: '@acme/ui', semver: '1.0.0' }],
-    ['missing packageName', { sessionId: SESSION_ID, semver: '1.0.0' }],
-    ['empty packageName', { sessionId: SESSION_ID, packageName: '', semver: '1.0.0' }],
-    ['missing semver', { sessionId: SESSION_ID, packageName: '@acme/ui' }],
-    ['non-string semver', { sessionId: SESSION_ID, packageName: '@acme/ui', semver: 2 }],
-  ])('returns null on invalid designSystem: %s', (_label, ds) => {
-    expect(parseDsConsumer(JSON.stringify({ stack: 'react-ts', designSystem: ds }))).toBeNull();
-  });
-
-  it('returns null when designSystem is not an object', () => {
-    expect(parseDsConsumer(JSON.stringify({ designSystem: '@acme/ui' }))).toBeNull();
-  });
-});
-
-describe('parseDsWorkspace (regression)', () => {
-  it('still parses a workspace and ignores consumer-only json', () => {
-    expect(
-      parseDsWorkspace(JSON.stringify({ stack: 'vue-ts', port: 5182, kind: 'ds', packageName: '@a/b' })),
-    ).toEqual({ stack: 'vue-ts', port: 5182, packageName: '@a/b', mode: null });
-    expect(parseDsWorkspace(CONSUMER)).toBeNull();
-  });
-});
+import { parseAppWorkspace } from '../builder-config.js';
 
 describe('parseAppWorkspace', () => {
   it('parses a kind:app workspace with defaults', () => {
-    expect(
-      parseAppWorkspace(
-        JSON.stringify({ stack: 'cf-fullstack', port: 5183, kind: 'app', appName: 'Lanchonete', appSlug: 'lanchonete', dbEngine: 'd1' }),
-      ),
-    ).toEqual({ stack: 'cf-fullstack', port: 5183, appName: 'Lanchonete', appSlug: 'lanchonete', dbEngine: 'd1' });
-  });
-
-  it('returns null for non-app kinds', () => {
-    expect(parseAppWorkspace(JSON.stringify({ kind: 'ds' }))).toBeNull();
-    expect(parseAppWorkspace(CONSUMER)).toBeNull();
-    expect(parseAppWorkspace(null)).toBeNull();
-  });
-
-  it('a kind:app project is NOT treated as a DS consumer (mutual exclusivity)', () => {
-    // Even carrying a designSystem link, an app workspace must not register ds_* consumer tools.
-    const appWithDs = JSON.stringify({
-      kind: 'app',
+    expect(parseAppWorkspace(JSON.stringify({
       stack: 'cf-fullstack',
-      designSystem: { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.0.0' },
+      port: 5183,
+      kind: 'app',
+      appName: 'Lanchonete',
+      appSlug: 'lanchonete',
+      dbEngine: 'd1',
+    }))).toEqual({
+      stack: 'cf-fullstack',
+      port: 5183,
+      appName: 'Lanchonete',
+      appSlug: 'lanchonete',
+      dbEngine: 'd1',
     });
-    expect(parseDsConsumer(appWithDs)).toBeNull();
-    expect(parseAppWorkspace(appWithDs)).not.toBeNull();
+  });
+
+  it('returns null for other kinds and missing data', () => {
+    expect(parseAppWorkspace(JSON.stringify({ kind: 'builder' }))).toBeNull();
+    expect(parseAppWorkspace(null)).toBeNull();
   });
 });

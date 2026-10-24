@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { ControlPlaneFileRepository } from '@mcp/session-storage';
 import {
   readAgentRunShadowMetrics,

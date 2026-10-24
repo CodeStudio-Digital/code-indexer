@@ -1,5 +1,6 @@
 import type { CostSummary } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
+import { costSummary } from './cost-summary-cache.js';
 
 export interface InsertCostData {
   projectId: number;
@@ -31,6 +32,9 @@ export function insert(db: DB, data: InsertCostData): void {
 }
 
 export function projectSummary(db: DB, projectId: number, since?: string): CostSummary {
+  return costSummary(db, JSON.stringify(['project', projectId, since]), () => projectSummaryNow(db, projectId, since));
+}
+function projectSummaryNow(db: DB, projectId: number, since?: string): CostSummary {
   const whereClause = since ? 'WHERE project_id = ? AND created_at >= ?' : 'WHERE project_id = ?';
   const params = since ? [projectId, since] : [projectId];
 
@@ -71,6 +75,9 @@ export function projectSummary(db: DB, projectId: number, since?: string): CostS
 }
 
 export function globalSummary(db: DB, since?: string): CostSummary {
+  return costSummary(db, JSON.stringify(['global', since]), () => globalSummaryNow(db, since));
+}
+function globalSummaryNow(db: DB, since?: string): CostSummary {
   const whereClause = since ? 'WHERE created_at >= ?' : '';
   const params = since ? [since] : [];
 

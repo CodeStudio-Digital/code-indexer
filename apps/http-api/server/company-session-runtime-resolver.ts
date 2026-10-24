@@ -1,4 +1,4 @@
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 import type { CompanySessionRuntimeContext } from '../sse/WorkerOrchestratorPool.js';

@@ -1,4 +1,5 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { nextSemanticRetry, SemanticRetryDeferredError } from './semantic-retry-policy.js';
 import type { DocStore } from '@mcp/store/doc-store.js';
 import {
   embeddingTargetsEqual,
@@ -65,6 +66,7 @@ import { join } from 'node:path';
 interface CoordinatorDeps {
   db: CodeIndexDB;
   semanticStore: SemanticStore;
+  listJobsOffThread?(filter: Parameters<SemanticStore['listJobs']>[0]): Promise<SemanticJobRow[]>;
   router: LocalVectorRouter;
   vectorStore: VectorStore & {
     removeProject?(projectId: number): Promise<void>;
@@ -224,6 +226,11 @@ function projectIdFromSemanticNamespace(namespace: string): number | null {
 /** Persistent generation/job coordinator. Relational FTS remains searchable
  * throughout a build; only complete, delta-free namespaces are activated. */
 export class SemanticIndexCoordinator {
+  private listJobsOffThread(filter: Parameters<SemanticStore['listJobs']>[0]): Promise<SemanticJobRow[]> {
+    return this.deps.listJobsOffThread
+      ? this.deps.listJobsOffThread(filter)
+      : Promise.resolve(this.deps.semanticStore.listJobs(filter));
+  }
   private readonly locks = new Map<string, Promise<void>>();
   /** Public catch-up requests are idempotent per namespace. `serial` remains a
    * queue for mutation/removal barriers, while this map makes duplicate UI,
@@ -257,6 +264,7 @@ export class SemanticIndexCoordinator {
   private readonly codeDeltaRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private readonly codeDeltaRetryAttempts = new Map<number, number>();
   private disposed = false;
+  private disposal: Promise<void> | undefined;
 
   constructor(private readonly deps: CoordinatorDeps) {
     this.memoryMutationOwner = deps.mutationFenceOwner ?? randomUUID();
@@ -275,13 +283,7 @@ export class SemanticIndexCoordinator {
     }
     // Keep completed removal markers fenced until the caller deletes the
     // project row. This survives a crash in the gap after vectors.db is gone.
-    for (const job of deps.semanticStore.listJobs({ kinds: ['cleanup'] })) {
-      if (job.kind !== 'cleanup' || job.cursor?.reason !== 'project-removal') continue;
-      const projectId = projectIdFromRemovalNamespace(job.namespace);
-      if (projectId !== null && job.status !== 'failed' && job.status !== 'cancelled') {
-        this.projectTombstones.add(projectId);
-      }
-    }
+    for (const projectId of deps.semanticStore.listProjectRemovalIds()) this.projectTombstones.add(projectId);
     // External clients can publish a marker without sharing this process's
     // in-memory Set. Polling is a recovery path for a failed/missed localhost
     // wake-up and also closes the crash gap after physical cleanup.
@@ -333,6 +335,7 @@ export class SemanticIndexCoordinator {
   /** Global documentation and user memory do not resolve to a project id, so
    * they remain writable while a project-local vector database is removed. */
   allowsNamespaceMutation(namespace: string): boolean {
+    if (this.disposed) return false;
     const projectId = projectIdFromSemanticNamespace(namespace);
     return projectId === null
       || (!this.projectTombstones.has(projectId)
@@ -343,6 +346,7 @@ export class SemanticIndexCoordinator {
   }
 
   reindex(purpose: SemanticPurpose, force = true): Promise<ReindexResult> {
+    if (this.disposed) return Promise.reject(new Error('Semantic coordinator is shutting down'));
     if (this.embeddingDisabled(purpose)) return Promise.resolve(this.disabledResult(purpose));
     const running = this.purposeRuns.get(purpose);
     if (running) return running;
@@ -355,6 +359,7 @@ export class SemanticIndexCoordinator {
    * and project-scoped: provider targets never receive a surprise request and
    * no registered-but-closed project is fanned out. */
   activateCodeProject(projectId: number, leaseId = 'editor'): SemanticJobRow | null {
+    if (this.disposed) return null;
     const project = this.deps.db.getProject(projectId);
     if (!project || project.is_synthetic) return null;
     const leases = this.codeProjectLeases.get(projectId) ?? new Set<string>();
@@ -366,7 +371,7 @@ export class SemanticIndexCoordinator {
     const namespace = codeNamespace(projectId);
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
     if (state?.active_generation_id && !state.building_generation_id) {
-      const pendingDelta = this.deps.semanticStore.listJobs({ namespace }).find((job) =>
+      const pendingDelta = this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] }).find((job) =>
         (job.kind === 'delta' || (job.kind === 'backfill' && job.cursor?.reason === 'code-delta'))
         && (job.status === 'pending' || job.status === 'paused' || job.status === 'running'));
       if (pendingDelta) {
@@ -438,6 +443,7 @@ export class SemanticIndexCoordinator {
    * Routing is proven per SQLite/table, so a generation still serving another
    * project or collection cannot be removed accidentally. */
   cleanupUnusedVectors(projectId?: number): Promise<SemanticUnusedVectorCleanupResult> {
+    if (this.disposed) return Promise.reject(new Error('Semantic coordinator is shutting down'));
     const key = projectId === undefined ? 'global' : `project:${projectId}`;
     const existing = this.unusedVectorCleanupRuns.get(key);
     if (existing) return existing;
@@ -457,10 +463,10 @@ export class SemanticIndexCoordinator {
     if (!hasGeneration || !compact || !this.deps.vectorStore.dropGeneration) {
       throw new SemanticVectorWorkerUnavailableError('unused vector cleanup');
     }
-    const executing = this.deps.semanticStore.listJobs({
+    const executing = (await this.listJobsOffThread({
       statuses: ['running'],
       kinds: ['build', 'backfill'],
-    }).some((job) =>
+    })).some((job) =>
       // Pending rows are durable requests waiting for an explicit wake-up;
       // only running means a worker currently owns the physical database.
       job.status === 'running'
@@ -647,12 +653,13 @@ export class SemanticIndexCoordinator {
    * itself: without an active/explicitly-building namespace the durable delta
    * stays pending until the user requests this project. */
   catchUpCodeProject(projectId: number): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     if (this.embeddingDisabled('code')) return Promise.resolve();
     const namespace = codeNamespace(projectId);
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
     const generationId = state?.building_generation_id ?? state?.active_generation_id;
     if (!generationId) return Promise.resolve();
-    const requiresExplicitSweep = this.deps.semanticStore.listJobs({ namespace }).some((job) => {
+    const requiresExplicitSweep = this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] }).some((job) => {
       if ((job.status !== 'pending' && job.status !== 'paused' && job.status !== 'running')
         || (job.kind !== 'delta' && job.kind !== 'backfill')
         || job.cursor?.reason !== 'code-delta') return false;
@@ -678,6 +685,7 @@ export class SemanticIndexCoordinator {
   /** Explicit project-scoped rebuild used by the per-project API. A forced
    * request creates a replacement vector space, but only code:p<ID> is built. */
   reindexCodeProject(projectId: number, force = true): Promise<ReindexResult> {
+    if (this.disposed) return Promise.reject(new Error('Semantic coordinator is shutting down'));
     const project = this.deps.db.getProject(projectId);
     if (!project || project.is_synthetic) {
       return Promise.reject(new Error(`Project ${projectId} not found`));
@@ -721,12 +729,12 @@ export class SemanticIndexCoordinator {
     force = true,
     reason = 'explicit-project-reindex',
   ): SemanticJobRow {
+    if (this.disposed) throw new Error('Semantic coordinator is shutting down');
     const project = this.deps.db.getProject(projectId);
     if (!project || project.is_synthetic) throw new Error(`Project ${projectId} not found`);
     const markerNamespace = `semantic:reindex:code:p${projectId}`;
-    const existing = this.deps.semanticStore.listJobs({ namespace: markerNamespace }).find((job) =>
-      job.kind === 'build'
-      && (job.status === 'pending' || job.status === 'running' || job.status === 'paused'));
+    const existing = this.deps.semanticStore.listJobs({ namespace: markerNamespace,
+      kinds: ['build'], statuses: ['pending', 'running', 'paused'], limit: 1 })[0];
     let job: SemanticJobRow;
     if (existing) {
       const preserveExplicit = existing.cursor?.reason === 'explicit-project-reindex'
@@ -743,7 +751,7 @@ export class SemanticIndexCoordinator {
           force: effectiveForce,
           pause_requested: false,
         },
-        expected_items: this.deps.db.listFiles(projectId).length,
+        expected_items: this.deps.db.countFiles(projectId),
         ...(existing.status === 'running' ? {} : { processed_items: 0, failed_items: 0, error: null }),
       }) ?? existing;
     } else {
@@ -753,7 +761,7 @@ export class SemanticIndexCoordinator {
         kind: 'build',
         priority: reason.startsWith('automatic-') ? 20 : 100,
         cursor: { reason, project_id: projectId, force, pause_requested: false },
-        expected_items: this.deps.db.listFiles(projectId).length,
+        expected_items: this.deps.db.countFiles(projectId),
       });
     }
     if (job.status !== 'running') queueMicrotask(() => this.dispatchCodeProjectReindex(projectId, job.id));
@@ -761,7 +769,7 @@ export class SemanticIndexCoordinator {
   }
 
   private dispatchCodeProjectReindex(projectId: number, jobId: number): void {
-    if (this.projectReindexDispatches.has(projectId)) return;
+    if (this.disposed || this.projectReindexDispatches.has(projectId)) return;
     const run = (async () => {
       const current = this.deps.semanticStore.getJob(jobId);
       if (!current || (current.status !== 'pending' && current.status !== 'paused')) return;
@@ -796,6 +804,7 @@ export class SemanticIndexCoordinator {
       }
     });
     this.projectReindexDispatches.set(projectId, tracked);
+    void tracked.catch(error => console.warn(`[semantic] project reindex dispatch failed: ${errorMessage(error)}`));
   }
 
   private coalesceCodeCatchup(projectId: number, operation: () => Promise<void>): Promise<void> {
@@ -835,7 +844,7 @@ export class SemanticIndexCoordinator {
   }
 
   private shouldPauseCodeProject(projectId: number): boolean {
-    return this.codePauseRequested.has(projectId)
+    return this.disposed || this.codePauseRequested.has(projectId)
       && (this.codeProjectLeases.get(projectId)?.size ?? 0) === 0;
   }
 
@@ -893,6 +902,10 @@ export class SemanticIndexCoordinator {
     }
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
     if (!state?.active_generation_id && !state?.building_generation_id) return Promise.resolve();
+    const retry = this.deps.semanticStore.getNamespaceBuildRetry(namespace);
+    if (retry?.blocked || (retry?.not_before_ms ?? 0) > Date.now()) {
+      throw new SemanticRetryDeferredError(retry?.blocked ? Infinity : retry!.not_before_ms);
+    }
     return this.ensureMemoryNamespace(namespace);
   }
 
@@ -949,11 +962,7 @@ export class SemanticIndexCoordinator {
   ): Promise<T> {
     let result!: T;
     await this.serial(docNamespace(collectionId), async () => {
-      const inFlight = this.deps.semanticStore.listJobs({ namespace: docNamespace(collectionId) })
-        .some((job) => job.kind === 'delta'
-          && job.status === 'running'
-          && job.cursor?.reason === 'mutation-fence'
-          && job.cursor?.fence_phase === 'in-flight');
+      const inFlight = this.deps.semanticStore.hasLiveMutationFence(docNamespace(collectionId));
       if (inFlight) {
         throw new Error(`Documentation collection ${collectionId} is currently being mutated`);
       }
@@ -1026,16 +1035,16 @@ export class SemanticIndexCoordinator {
    * The job survives app restarts and is safe to retry because both namespace
    * preparation and embedding upserts are idempotent. */
   retryPendingDocsBackfills(): Promise<number> {
-    if (this.embeddingDisabled('docs')) {
-      this.pauseDocsBackfillsForDisabled();
-      return Promise.resolve(0);
-    }
     if (this.docsBackfillRun) return this.docsBackfillRun;
-    const run = this.drainPendingDocsBackfills().finally(() => {
-      if (this.docsBackfillRun === run) this.docsBackfillRun = null;
-      if (!this.embeddingDisabled('docs') && this.hasPendingDocsBackfills()) {
-        this.scheduleDocsBackfillRetry();
-      }
+    const run = this.drainPendingDocsBackfills().finally(async () => {
+      try {
+        if (!this.embeddingDisabled('docs') && await this.hasPendingDocsBackfills()) {
+          // Release the in-flight owner only after the worker query, so a
+          // concurrent retry cannot start another scan during finalization.
+          if (this.docsBackfillRun === run) this.docsBackfillRun = null;
+          this.scheduleDocsBackfillRetry();
+        }
+      } finally { if (this.docsBackfillRun === run) this.docsBackfillRun = null; }
     });
     this.docsBackfillRun = run;
     return run;
@@ -1086,7 +1095,7 @@ export class SemanticIndexCoordinator {
       : [{ kind: 'upsert' as const, path: '*' }];
     const generationId = state?.building_generation_id ?? state?.active_generation_id ?? null;
     const kind = generationId === null ? 'backfill' as const : 'delta' as const;
-    const existing = this.deps.semanticStore.listJobs({ namespace }).find((job) =>
+    const existing = this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused'], kinds: [kind] }).find((job) =>
       job.generation_id === generationId
       && job.kind === kind
       && (job.status === 'pending' || job.status === 'paused')
@@ -1210,7 +1219,8 @@ export class SemanticIndexCoordinator {
       projectMemoryNamespace(projectId),
     ];
     const markerNamespace = projectRemovalNamespace(projectId);
-    const existingMarker = this.deps.semanticStore.listJobs({ namespace: markerNamespace })
+    // Removal must publish its tombstone before yielding to another writer.
+    const existingMarker = this.deps.semanticStore.listJobs({ namespace: markerNamespace, kinds: ['cleanup'] })
       .find((job) => job.kind === 'cleanup' && job.cursor?.reason === 'project-removal');
     // Older test doubles do not expose requestProjectRemoval; the fallback is
     // intentionally confined to coordinator-local callers.
@@ -1331,7 +1341,11 @@ export class SemanticIndexCoordinator {
       || state?.building_generation_id === job.generation_id;
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    return this.disposal ??= this.drainForDisposal();
+  }
+
+  private async drainForDisposal(): Promise<void> {
     this.disposed = true;
     if (this.docsBackfillTimer) clearTimeout(this.docsBackfillTimer);
     this.docsBackfillTimer = null;
@@ -1342,8 +1356,23 @@ export class SemanticIndexCoordinator {
     this.pendingCodeDeltas.clear();
     this.pendingCodeDeltaPreviousKeys.clear();
     this.codeDeltaRetryAttempts.clear();
-    await this.docsBackfillRun?.catch(() => undefined);
-    await this.projectRemovalRecoveryRun?.catch(() => undefined);
+    // The owned SQLite connection is closed immediately after this resolves.
+    // Include terminal job writes, not only the embedding/build promise, and
+    // re-sample because already-owned work may enqueue a final cleanup tail.
+    const observed = new Set<Promise<unknown>>();
+    for (;;) {
+      const candidates: Array<Promise<unknown> | null | undefined> = [this.docsBackfillRun, this.projectRemovalRecoveryRun,
+        this.mutationFenceRecovery, this.codeBuildTail, ...this.locks.values(),
+        ...this.codeCatchupRuns.values(), ...this.projectReindexRuns.values(),
+        ...this.projectReindexDispatches.values(), ...this.purposeRuns.values(),
+        ...this.generationRuns.values(), ...this.cleanupRuns.values(),
+        ...this.unusedVectorCleanupRuns.values(), ...[...this.projectRemovalRuns.values()].map(run => run.promise),
+      ];
+      const pending = candidates.filter((run): run is Promise<unknown> => !!run && !observed.has(run));
+      if (!pending.length) return;
+      for (const run of pending) observed.add(run);
+      await Promise.allSettled(pending);
+    }
   }
 
   private recoverExpiredMemoryMutationFences(now = Date.now()): number {
@@ -1385,10 +1414,10 @@ export class SemanticIndexCoordinator {
 
   private async drainPendingProjectRemovals(): Promise<number> {
     let completed = 0;
-    const requests = this.deps.semanticStore.listJobs({
+    const requests = (await this.listJobsOffThread({
       statuses: ['pending', 'paused', 'running'],
       kinds: ['cleanup'],
-    }).filter((job) =>
+    })).filter((job) =>
       job.kind === 'cleanup'
       && job.cursor?.reason === 'project-removal'
       && job.cursor?.finalize_project === true
@@ -1453,8 +1482,10 @@ export class SemanticIndexCoordinator {
     };
   }
 
-  private pauseDocsBackfillsForDisabled(): void {
-    for (const job of this.pendingDocsBackfillJobs()) {
+  private async pauseDocsBackfillsForDisabled(): Promise<void> {
+    for (const candidate of await this.pendingDocsBackfillJobs()) {
+      const job = this.currentDocsBackfill(candidate.id);
+      if (!job) continue;
       if (job.status === 'paused' && job.error === 'docs semantic profile is disabled') continue;
       this.deps.semanticStore.updateJob(job.id, {
         status: 'paused',
@@ -1477,11 +1508,12 @@ export class SemanticIndexCoordinator {
     this.scheduleDocsBackfillRetry();
   }
 
-  private pendingDocsBackfillJobs(): SemanticJobRow[] {
-    return this.deps.semanticStore.listJobs({
+  private async pendingDocsBackfillJobs(): Promise<SemanticJobRow[]> {
+    return (await this.listJobsOffThread({
       statuses: ['pending', 'paused', 'running'],
       kinds: ['backfill'],
-    }).filter((job) =>
+      namespacePrefix: 'docs:c', generationId: null,
+    })).filter((job) =>
       job.generation_id === null
       && job.kind === 'backfill'
       && /^docs:c\d+$/.test(job.namespace)
@@ -1489,8 +1521,16 @@ export class SemanticIndexCoordinator {
     );
   }
 
-  private hasPendingDocsBackfills(): boolean {
-    return this.pendingDocsBackfillJobs().length > 0;
+  private async hasPendingDocsBackfills(): Promise<boolean> {
+    return (await this.pendingDocsBackfillJobs()).length > 0;
+  }
+
+  private currentDocsBackfill(id: number): SemanticJobRow | null {
+    // The worker query may overlap a completed/cancelled job or a cursor
+    // update. Re-read only the selected candidate before claiming it.
+    const job = this.deps.semanticStore.getJob(id);
+    return job && job.kind === 'backfill' && job.generation_id === null
+      && /^docs:c\d+$/.test(job.namespace) && ['pending', 'paused', 'running'].includes(job.status) ? job : null;
   }
 
   private scheduleDocsBackfillRetry(delayMs = DOCS_BACKFILL_RETRY_MS): void {
@@ -1510,13 +1550,15 @@ export class SemanticIndexCoordinator {
 
   private async drainPendingDocsBackfills(): Promise<number> {
     if (this.embeddingDisabled('docs')) {
-      this.pauseDocsBackfillsForDisabled();
+      await this.pauseDocsBackfillsForDisabled();
       return 0;
     }
     let completed = 0;
-    for (const job of this.pendingDocsBackfillJobs()) {
+    for (const candidate of await this.pendingDocsBackfillJobs()) {
+      const job = this.currentDocsBackfill(candidate.id);
+      if (!job) continue;
       if (this.embeddingDisabled('docs')) {
-        this.pauseDocsBackfillsForDisabled();
+        await this.pauseDocsBackfillsForDisabled();
         return completed;
       }
       const match = /^docs:c(\d+)$/.exec(job.namespace);
@@ -1758,10 +1800,10 @@ export class SemanticIndexCoordinator {
    * idempotent, so a crash after the physical operation but before the job
    * update is recovered safely on the next attempt. */
   private async recoverPendingCleanupJobs(purpose: SemanticPurpose): Promise<void> {
-    const jobs = this.deps.semanticStore.listJobs({
+    const jobs = (await this.listJobsOffThread({
       statuses: ['pending', 'paused', 'running'],
       kinds: ['cleanup'],
-    })
+    }))
       .filter((job) => job.kind === 'cleanup'
         && (job.status === 'pending' || job.status === 'paused' || job.status === 'running')
         && job.generation_id
@@ -1931,14 +1973,14 @@ export class SemanticIndexCoordinator {
       await this.drainActiveCodeDeltas(projectId, project.root_path, generation, resumableDeltaJobs);
       return;
     }
-    const expected = this.deps.db.listFiles(projectId).length;
+    const expected = this.deps.db.countFiles(projectId);
     this.prepareNamespaceGeneration(namespace, 'code', generation.id, expected);
     const deltaJobs = resumableDeltaJobs;
     for (const deltaJob of deltaJobs) {
       this.deps.semanticStore.updateJob(deltaJob.id, { status: 'running', error: null });
     }
     const jobKind = before?.active_generation_id ? 'build' as const : 'backfill' as const;
-    const interruptedJob = this.deps.semanticStore.listJobs({ namespace }).find((candidate) =>
+    const interruptedJob = (await this.listJobsOffThread({ namespace, statuses: ['pending', 'paused', 'running'], kinds: [jobKind] })).find((candidate) =>
       candidate.generation_id === generation.id
       && candidate.kind === jobKind
       && candidate.cursor?.reason !== 'code-delta'
@@ -1965,7 +2007,7 @@ export class SemanticIndexCoordinator {
       // drained before this catch-up. Any job enqueued during embedding still
       // points at not-yet-reconciled structural state and blocks activation.
       const capturedIds = new Set(deltaJobs.map((deltaJob) => deltaJob.id));
-      const newerDelta = this.deps.semanticStore.listJobs({ namespace }).some((candidate) =>
+      const newerDelta = (await this.listJobsOffThread({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta'] })).some((candidate) =>
         candidate.kind === 'delta'
         && candidate.generation_id === generation.id
         && !capturedIds.has(candidate.id)
@@ -2185,7 +2227,7 @@ export class SemanticIndexCoordinator {
       && (candidate.status === 'pending'
         || candidate.status === 'paused'
         || candidate.status === 'running');
-    const jobs = this.deps.semanticStore.listJobs({ namespace }).filter(relevant);
+    const jobs = this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] }).filter(relevant);
     for (const job of jobs) {
       if (job.status !== 'running') continue;
       this.deps.semanticStore.updateJob(job.id, {
@@ -2195,7 +2237,7 @@ export class SemanticIndexCoordinator {
         error: null,
       });
     }
-    return this.deps.semanticStore.listJobs({ namespace }).filter((candidate) =>
+    return this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] }).filter((candidate) =>
       relevant(candidate) && (candidate.status === 'pending' || candidate.status === 'paused'));
   }
 
@@ -2371,7 +2413,7 @@ export class SemanticIndexCoordinator {
       if (activating) {
         this.prepareNamespaceGeneration(namespace, 'docs', generation.id, total);
       }
-      const job = this.deps.semanticStore.createJob({
+      const job = this.deps.semanticStore.getOrCreateBuildJob({
         generation_id: generation.id,
         namespace,
         // Mutation fences are the delta watermark. Keep this execution job
@@ -2505,7 +2547,7 @@ export class SemanticIndexCoordinator {
       const total = this.deps.db.listSnapshotsForSemanticIndex(projectId).length;
       const activating = before?.active_generation_id !== generation.id;
       if (activating) this.prepareNamespaceGeneration(namespace, 'memory', generation.id, total);
-      const job = this.deps.semanticStore.createJob({
+      const job = this.deps.semanticStore.getOrCreateBuildJob({
         generation_id: generation.id,
         namespace,
         kind: before?.active_generation_id ? 'build' : 'backfill',
@@ -2579,7 +2621,7 @@ export class SemanticIndexCoordinator {
         ? this.memorySourceRows(scope, projectId).length + investigationRows.length
         : targetedKeys.length;
       if (activating) this.prepareNamespaceGeneration(namespace, 'memory', generation.id, total);
-      const job = this.deps.semanticStore.createJob({
+      const job = this.deps.semanticStore.getOrCreateBuildJob({
         generation_id: generation.id,
         namespace,
         kind: before?.active_generation_id ? 'build' : 'backfill',
@@ -2835,7 +2877,7 @@ export class SemanticIndexCoordinator {
       && job.cursor?.reason === 'mutation-fence'
       && job.cursor?.fence_phase === 'in-flight';
 
-    for (const job of this.deps.semanticStore.listJobs({ namespace }).filter(relevant)) {
+    for (const job of this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] }).filter(relevant)) {
       if (isLiveFence(job) || job.status !== 'running') continue;
       // A non-fence running delta/backfill was interrupted before it could
       // commit its watermark. Return it to pending before claiming this pass.
@@ -2843,7 +2885,7 @@ export class SemanticIndexCoordinator {
         status: 'pending', processed_items: 0, failed_items: 0, error: null,
       });
     }
-    const captured = this.deps.semanticStore.listJobs({ namespace })
+    const captured = this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] })
       .filter((job) => relevant(job) && !isLiveFence(job));
     for (const job of captured) {
       this.deps.semanticStore.updateJob(job.id, {
@@ -2854,17 +2896,11 @@ export class SemanticIndexCoordinator {
   }
 
   private hasOpenDocsMutationJobs(namespace: string): boolean {
-    return this.deps.semanticStore.listJobs({ namespace }).some((job) =>
-      (job.kind === 'delta' || (job.kind === 'backfill' && job.generation_id === null))
-      && (job.status === 'pending' || job.status === 'paused' || job.status === 'running'));
+    return this.deps.semanticStore.hasOpenNamespaceMutationJobs(namespace);
   }
 
   private hasLiveDocsMutationFence(namespace: string): boolean {
-    return this.deps.semanticStore.listJobs({ namespace }).some((job) =>
-      job.kind === 'delta'
-      && job.status === 'running'
-      && job.cursor?.reason === 'mutation-fence'
-      && job.cursor?.fence_phase === 'in-flight');
+    return this.deps.semanticStore.hasLiveMutationFence(namespace);
   }
 
   /** Capture the durable watermark for a full snapshot/memory pass. Running
@@ -2880,14 +2916,14 @@ export class SemanticIndexCoordinator {
       && job.status === 'running'
       && job.cursor?.reason === 'mutation-fence'
       && job.cursor?.fence_phase === 'in-flight';
-    for (const job of this.deps.semanticStore.listJobs({ namespace }).filter(relevant)) {
+    for (const job of this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] }).filter(relevant)) {
       if (job.status !== 'running') continue;
       if (isLiveFence(job)) continue;
       this.deps.semanticStore.updateJob(job.id, {
         status: 'pending', processed_items: 0, failed_items: 0, error: null,
       });
     }
-    const captured = this.deps.semanticStore.listJobs({ namespace })
+    const captured = this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused', 'running'], kinds: ['delta', 'backfill'] })
       .filter((job) => relevant(job) && !isLiveFence(job));
     for (const job of captured) {
       this.deps.semanticStore.updateJob(job.id, {
@@ -2898,11 +2934,7 @@ export class SemanticIndexCoordinator {
   }
 
   private hasLiveMemoryMutationFence(namespace: string): boolean {
-    return this.deps.semanticStore.listJobs({ namespace }).some((job) =>
-      job.kind === 'delta'
-      && job.status === 'running'
-      && job.cursor?.reason === 'mutation-fence'
-      && job.cursor?.fence_phase === 'in-flight');
+    return this.deps.semanticStore.hasLiveMutationFence(namespace);
   }
 
   private async verifySnapshotVectorCoverage(
@@ -3152,8 +3184,13 @@ export class SemanticIndexCoordinator {
 
   private pauseNamespace(namespace: string, jobId: number, error: unknown): void {
     const message = errorMessage(error);
+    const job = this.deps.semanticStore.getJob(jobId);
+    const previous = job?.cursor?.retry as { attempt?: number } | undefined;
+    const retry = nextSemanticRetry(error, previous?.attempt);
     this.deps.semanticStore.updateNamespaceProgress(namespace, { failed_items: 1, last_error: message });
-    this.deps.semanticStore.updateJob(jobId, { status: 'paused', failed_items: 1, error: message });
+    this.deps.semanticStore.updateJob(jobId, {
+      status: 'paused', failed_items: 1, error: message, cursor: { ...job?.cursor, retry },
+    });
   }
 
   private refreshGenerationProgress(generationId: number): void {

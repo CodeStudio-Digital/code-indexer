@@ -15,8 +15,9 @@
  * 'master'/'agent' so the timeline distinguishes agent-initiated flips
  * from supervisor/operator ones.
  */
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
+import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import type { RoleSkills } from '@mcp/company/types.js';
 import { getServiceSupervisorStores } from '@mcp/company/services/service-supervisor/stores.js';

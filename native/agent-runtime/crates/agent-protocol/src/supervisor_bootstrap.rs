@@ -95,6 +95,11 @@ impl ValidatedSupervisorProcessHandoff {
     }
 
     #[must_use]
+    pub fn lifecycle_outbox_directory(&self) -> &str {
+        &self.handoff.lifecycle_outbox_directory
+    }
+
+    #[must_use]
     pub fn runner_environment(&self) -> &[wire::SupervisorProcessEnvironmentEntry] {
         &self.handoff.runner_environment
     }

@@ -7,37 +7,13 @@
  * Templates (`{{var}}`) are resolved here for text-bearing kinds. Legacy
  * `body_kind === 'form'` (pre-mig-156) is treated as 'urlencoded'.
  */
-import { readFile } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { basename } from 'node:path';
+import { readProjectFile, type ProjectFilePolicy } from './read-project-file.js';
 import { normalizeKvList, resolveTemplate, type KvRow } from './request-builder.js';
 
 /** Options controlling where file-backed bodies (binary / form-data) may read from. */
-export interface FilePolicy {
-  /** Project root that file paths must stay within (when not allowing absolute). */
-  fileRoot?: string;
-  /** Trusted local caller — allow absolute / out-of-root paths (e.g. a file picker). */
-  allowAbsoluteFiles?: boolean;
-}
-
-/**
- * Resolve a request-attached file path under the file policy. A path is
- * attacker/agent-influenceable (stored request, imported curl `-F @file`, agent
- * patch), so unless the caller is the trusted local user (`allowAbsoluteFiles`)
- * the path MUST resolve inside the project root — otherwise this is an
- * arbitrary-file-read-then-POST exfiltration primitive.
- */
-function resolveFilePath(p: string, policy?: FilePolicy): string {
-  if (policy?.allowAbsoluteFiles) return p;
-  const root = policy?.fileRoot;
-  if (!root) throw new Error('file-backed request bodies are not permitted here');
-  const rootAbs = resolve(root);
-  const abs = resolve(rootAbs, p);
-  const rel = relative(rootAbs, abs);
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error('attached file path escapes the project root');
-  }
-  return abs;
-}
+export type FilePolicy = ProjectFilePolicy;
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 export interface BodyLike {
   body_kind: string;
@@ -72,6 +48,7 @@ export async function encodeBody(
   vars: Record<string, string>,
   opts?: { boundary?: string } & FilePolicy,
 ): Promise<EncodedBody> {
+  opts?.signal?.throwIfAborted();
   const kind = req.body_kind === 'form' ? 'urlencoded' : req.body_kind;
   switch (kind) {
     case 'none':
@@ -113,7 +90,7 @@ export async function encodeBody(
       const path = req.body_binary_path;
       if (!path) return {};
       // Async read so a large cold file upload never blocks the http-api event loop.
-      return { body: await readFile(resolveFilePath(path, opts)), contentType: 'application/octet-stream' };
+      return { body: await readProjectFile(path, opts, MAX_BODY_BYTES), contentType: 'application/octet-stream' };
     }
 
     default:
@@ -137,23 +114,28 @@ function dispoParam(s: string): string {
 
 async function encodeMultipart(parts: KvRow[], vars: Record<string, string>, boundary: string, policy?: FilePolicy): Promise<EncodedBody> {
   const chunks: Buffer[] = [];
+  let size = 0;
+  const push = (...items: Buffer[]) => {
+    for (const item of items) { size += item.length; if (size > MAX_BODY_BYTES) throw new Error('Multipart body exceeds 16 MiB limit'); chunks.push(item); }
+  };
   const CRLF = '\r\n';
   for (const p of parts) {
+    policy?.signal?.throwIfAborted();
     const name = dispoParam(resolveTemplate(p.key, vars));
     if (p.src) {
-      const file = await readFile(resolveFilePath(p.src, policy));
-      chunks.push(Buffer.from(
+      const file = await readProjectFile(p.src, policy, MAX_BODY_BYTES - size);
+      push(Buffer.from(
         `--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"; filename="${dispoParam(basename(p.src))}"${CRLF}`
         + `Content-Type: application/octet-stream${CRLF}${CRLF}`,
       ));
-      chunks.push(file, Buffer.from(CRLF));
+      push(file, Buffer.from(CRLF));
     } else {
       const value = resolveTemplate(p.value, vars);
-      chunks.push(Buffer.from(
+      push(Buffer.from(
         `--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}${value}${CRLF}`,
       ));
     }
   }
-  chunks.push(Buffer.from(`--${boundary}--${CRLF}`));
+  push(Buffer.from(`--${boundary}--${CRLF}`));
   return { body: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` };
 }

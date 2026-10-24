@@ -45,17 +45,17 @@ async fn native_read_crosses_durable_lifecycle_and_resumes_provider() {
     let outcome = outcome.expect("runner lifecycle");
 
     assert!(matches!(outcome, TurnOutcome::Completed { .. }));
-    assert_eq!(records.len(), 7);
+    assert_eq!(records.len(), 9);
     assert!(matches!(
-        records[1].body,
+        records[2].body,
         Some(wire::engine_event_record_v1::Body::CapabilityBoundary(_))
     ));
     assert!(matches!(
-        records[2].body,
+        records[3].body,
         Some(wire::engine_event_record_v1::Body::CapabilityDispatchStarted(_))
     ));
     assert!(matches!(
-        records[3].body,
+        records[5].body,
         Some(wire::engine_event_record_v1::Body::CapabilityTerminal(_))
     ));
     std::fs::remove_dir_all(root).expect("temp cleanup");
@@ -109,7 +109,7 @@ async fn run_capability_runner(
     let TurnOutcome::CapabilityRequired {
         call,
         assistant_text,
-        usage: _,
+        ..
     } = first
     else {
         return Err("tool call expected");
@@ -179,6 +179,7 @@ async fn serve_capability_host(
     )
     .await
     .expect("tool event");
+    accept_consumed(&mut host, first.operation_id.as_str()).await;
     host.send_new(
         &provider_terminal(&identity, first.operation_id.as_str(), 2, "response/1", 1),
         1_000,
@@ -188,9 +189,11 @@ async fn serve_capability_host(
     .await
     .expect("first terminal");
     records.push(commit_engine_event(&mut host, &identity, 2).await);
-    accept_capability_prepare(&mut host, &identity, root, now.as_ref()).await;
     records.push(commit_engine_event(&mut host, &identity, 3).await);
+    accept_capability_prepare(&mut host, &identity, root, now.as_ref()).await;
     records.push(commit_engine_event(&mut host, &identity, 4).await);
+    records.push(commit_engine_event(&mut host, &identity, 5).await);
+    records.push(commit_engine_event(&mut host, &identity, 6).await);
 
     let second = accept_provider_start(&mut host, &identity, now.as_ref()).await;
     assert_eq!(second.operation_id, "provider-operation/2");
@@ -205,7 +208,7 @@ async fn serve_capability_host(
             body: Some(wire::provider_content_block::Body::ToolResult(_)),
         })
     ));
-    records.push(commit_engine_event(&mut host, &identity, 5).await);
+    records.push(commit_engine_event(&mut host, &identity, 7).await);
     host.send_new(
         &provider_terminal(&identity, second.operation_id.as_str(), 1, "response/2", 3),
         1_000,
@@ -214,8 +217,8 @@ async fn serve_capability_host(
     )
     .await
     .expect("second terminal");
-    records.push(commit_engine_event(&mut host, &identity, 6).await);
-    records.push(commit_engine_event(&mut host, &identity, 7).await);
+    records.push(commit_engine_event(&mut host, &identity, 8).await);
+    records.push(commit_engine_event(&mut host, &identity, 9).await);
     records
 }
 
@@ -347,7 +350,16 @@ async fn commit_engine_event(
                     session_id: identity.session_id.clone(),
                     operation_id: format!("event/{sequence}"),
                     global_sequence: sequence,
-                    kind: wire::SessionRecordKind::LifecycleEvent as i32,
+                    kind: match &record.body {
+                        Some(wire::engine_event_record_v1::Body::Content(content)) => {
+                            if content.kind == wire::EngineContentKindV1::ToolInput as i32 {
+                                wire::SessionRecordKind::Input as i32
+                            } else {
+                                wire::SessionRecordKind::ToolOutput as i32
+                            }
+                        }
+                        _ => wire::SessionRecordKind::LifecycleEvent as i32,
+                    },
                     durability: event_durability(&record),
                     previous_commit_sha256: vec![0; 32],
                     payload_sha256: proposal.expected_payload_sha256,
@@ -377,6 +389,8 @@ fn provider_context() -> wire::ProviderTurnContext {
             capability_version: "1".into(),
             execution_class: wire::CapabilityExecutionClass::NativeRead as i32,
             mutates: false,
+            parallel_safe: false,
+            read_only: false,
         }],
         ..wire::ProviderTurnContext::default()
     }
@@ -428,7 +442,8 @@ fn event_durability(record: &wire::EngineEventRecordV1) -> i32 {
     match record.body.as_ref() {
         Some(Body::ProviderDelta(_)) => wire::SessionDurabilityClass::Coalesced as i32,
         Some(
-            Body::CapabilityBoundary(_)
+            Body::Content(_)
+            | Body::CapabilityBoundary(_)
             | Body::CapabilityDispatchStarted(_)
             | Body::CapabilityTerminal(_)
             | Body::Terminal(_),
@@ -454,6 +469,7 @@ fn operation(value: &str) -> OperationId {
 
 fn timing() -> ProviderDataTiming {
     ProviderDataTiming {
+        settlement_deadline_at_unix_ms: 2_000,
         hard_deadline: deadline(),
         replay_write_timeout: Duration::from_secs(1),
     }
@@ -484,4 +500,24 @@ impl ClockPort for FixedClock {
     fn now_unix_ms(&mut self) -> impl Future<Output = Result<i64, Self::Error>> + Send {
         ready(Ok(self.0))
     }
+}
+
+async fn accept_consumed(
+    host: &mut AsyncEstablishedAttemptChannel<DuplexStream>,
+    operation_id: &str,
+) {
+    let FrameReceiveOutcome::Pending(mut pending) = host
+        .begin_receive(deadline(), deadline(), Duration::from_secs(1), || 20)
+        .await
+        .expect("consumption receipt")
+    else {
+        panic!("fresh receipt");
+    };
+    let (body, _) = pending.take_body_and_digest().expect("credit body");
+    let wire::frame_payload::Body::ProviderEventConsumed(consumed) = body else {
+        panic!("consumption expected");
+    };
+    assert_eq!(consumed.operation_id, operation_id);
+    assert_eq!(consumed.event_sequence, 1);
+    host.commit_accepted(*pending).expect("credit committed");
 }

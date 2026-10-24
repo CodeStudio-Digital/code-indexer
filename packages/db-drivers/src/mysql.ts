@@ -7,6 +7,7 @@
  * For MySQL a "schema" is a database, so `listSchemas` returns the database.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { assertDatabaseDispatch } from './dispatch.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
   ColumnInfo,
@@ -82,10 +83,12 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
   const pool = mysql.createPool(buildPoolConfig(config));
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
+    assertDatabaseDispatch(opts);
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     const conn = await pool.getConnection();
     let onAbort: (() => void) | null = null;
     try {
+      assertDatabaseDispatch(opts);
       // Applies to all subsequent transactions on this pooled session. MySQL
       // enforces this below the app's SQL classifier for persistent tables.
       if (config.readOnly) await conn.query('SET SESSION TRANSACTION READ ONLY');
@@ -99,8 +102,10 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       }
       // Schema-scoped console (schema == database in MySQL): switch on THIS conn only.
       if (opts.schema) {
+        assertDatabaseDispatch(opts);
         await conn.query(`USE ${qIdent(opts.schema)}`);
       }
+      assertDatabaseDispatch(opts);
       const [rows, fields] = await conn.query(sql, opts.params);
       return shapeMysqlResult(rows, fields, max);
     } finally {
@@ -108,7 +113,10 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       // A `USE <schema>` switch must not leak to the next pooled borrower. Restore
       // the connection's known default db; if there's none to restore to (or the
       // restore fails), DESTROY the connection instead of releasing it dirty.
-      if (opts.schema) {
+      if (opts.signal?.aborted) {
+        // A queued KILL QUERY cannot be allowed to cancel a new borrower.
+        conn.destroy();
+      } else if (opts.schema) {
         if (config.database) {
           try {
             await conn.query(`USE ${qIdent(config.database)}`);

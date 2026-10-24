@@ -139,7 +139,9 @@ export class IntentContractCompiler {
     resolveContext: ResolveContext;
     /** Session intent text (buildSessionIntent output). */
     intentSource: string;
+    signal?: AbortSignal;
   }): Promise<IntentObligation[] | null> {
+    if (input.signal?.aborted) return null;
     const source = input.intentSource.trim().slice(0, MAX_SOURCE_CHARS);
     if (!source) return null;
     const hash = createHash('md5').update(source).digest('hex');
@@ -149,12 +151,14 @@ export class IntentContractCompiler {
         input.sessionId,
         hash,
       );
+      if (input.signal?.aborted) return null;
       if (cached) return parseObligations(cached);
     } catch {
       /* cache is best-effort */
     }
     try {
       const chain = await this.resolver.resolveChain(PIPELINE_NAME, ROLE, input.resolveContext);
+      if (input.signal?.aborted) return null;
       if (chain.length === 0) return null;
       const failover = await callChatWithFailover(
         chain,
@@ -165,10 +169,11 @@ export class IntentContractCompiler {
               { role: 'system', content: SYSTEM },
               { role: 'user', content: `Task:\n${source}` },
             ],
-            { temperature: 0, maxTokens: 1200 },
+            { temperature: 0, maxTokens: 1200, signal: input.signal },
           ),
-        { label: `${PIPELINE_NAME}/${ROLE}`, codePrefix: 'intent_contract', retry: { maxRetries: 0 } },
+        { label: `${PIPELINE_NAME}/${ROLE}`, codePrefix: 'intent_contract', retry: { maxRetries: 0 }, signal: input.signal },
       );
+      if (input.signal?.aborted) return null;
       if (failover.result.errorBody) return null;
       const obligations = parseObligations(failover.result.content);
       if (obligations.length === 0) return null;

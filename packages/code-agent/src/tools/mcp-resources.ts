@@ -37,11 +37,20 @@ export function buildMcpResourceTools(bridge: McpToolBridge): CoderTool[] {
     mutates: false,
     parallelSafe: true,
     riskLevel: 'read',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
-    handler: async (): Promise<ToolResult> => {
+    parameters: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['all', 'resources', 'templates'], description: 'Default all. Select one kind to follow its next cursor.' },
+      cursor: { type: 'string', description: 'Opaque next cursor returned by the server for the selected kind.' },
+    }, additionalProperties: false },
+    handler: async (args, ctx): Promise<ToolResult> => {
       try {
-        const { resources, templates } = await bridge.listResources();
-        if (resources.length === 0 && templates.length === 0) {
+        const kind = args.kind ?? 'all';
+        if (kind !== 'all' && kind !== 'resources' && kind !== 'templates') return err('Invalid resource kind.');
+        const cursor = args.cursor;
+        if (cursor != null && (typeof cursor !== 'string' || cursor.length > 8192 || kind === 'all')) return err('cursor requires one kind and at most 8192 characters.');
+        ctx.signal?.throwIfAborted();
+        const { resources, templates, nextResourceCursor, nextTemplateCursor } = await bridge.listResources({ kind, cursor: cursor as string | undefined, signal: ctx.signal });
+        ctx.signal?.throwIfAborted();
+        if (resources.length === 0 && templates.length === 0 && nextResourceCursor == null && nextTemplateCursor == null) {
           return ok('(no resources or templates exposed by the MCP server)');
         }
         const lines: string[] = [];
@@ -62,6 +71,8 @@ export function buildMcpResourceTools(bridge: McpToolBridge): CoderTool[] {
             lines.push(`- ${t.uriTemplate}${mime}: ${t.name}${desc}`);
           }
         }
+        if (nextResourceCursor != null) lines.push('Continue resources: mcp_list_resources(' + JSON.stringify({ kind: 'resources', cursor: nextResourceCursor }) + ').');
+        if (nextTemplateCursor != null) lines.push('Continue templates: mcp_list_resources(' + JSON.stringify({ kind: 'templates', cursor: nextTemplateCursor }) + ').');
         return ok(lines.join('\n'));
       } catch (e) {
         return err(`mcp_list_resources failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -84,11 +95,14 @@ export function buildMcpResourceTools(bridge: McpToolBridge): CoderTool[] {
       required: ['uri'],
       additionalProperties: false,
     },
-    handler: async (args): Promise<ToolResult> => {
+    handler: async (args, ctx): Promise<ToolResult> => {
       const uri = String(args.uri ?? '').trim();
       if (!uri) return err('uri cannot be empty');
+      if (uri.length > 8192) return err('uri must be at most 8192 characters');
       try {
-        const { contents, mimeType } = await bridge.readResource(uri);
+        ctx.signal?.throwIfAborted();
+        const { contents, mimeType } = await bridge.readResource(uri, ctx.signal);
+        ctx.signal?.throwIfAborted();
         const header = mimeType ? `${uri} [${mimeType}]\n` : `${uri}\n`;
         return ok(header + contents);
       } catch (e) {

@@ -21,7 +21,6 @@ export type SectionId =
   | 'ai-geral'
   | 'lsp-servers'
   | 'chrome-service'
-  | 'verdaccio'
   | 'pipeline-bindings'
   | 'perf'
   | 'auth';

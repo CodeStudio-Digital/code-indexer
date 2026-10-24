@@ -9,6 +9,11 @@
  * In headless / non-Electron runs nothing is wired → tools degrade.
  */
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
+import { cancellableToolRpc } from '../cancellable-rpc.js';
+import { PreviewOutcomeUnknownError } from './failure.js';
+import type { PreviewAuthority } from './authority.js';
+import type { PreviewDispatchScope } from '@mcp/services/preview/contracts.js';
 import {
   assertMutationFence,
   MutationFenceError,
@@ -28,6 +33,7 @@ const PREVIEW_EFFECT_METHODS = new Set<PreviewInvoke['method']>([
   'hover',
   'double_click',
   'right_click',
+  'wait_for',
 ]);
 
 /** A single agent→devtools request. `key` scopes the window per agent. */
@@ -69,10 +75,16 @@ export interface PreviewInvoke {
   args?: Record<string, unknown>;
   /** Correlates cancellation across worker -> host. */
   requestId?: string;
+  runId?: number;
+  authority?: PreviewAuthority;
 }
 
 export interface IPreviewDevtools {
-  invoke(req: PreviewInvoke): Promise<unknown>;
+  invoke(req: PreviewInvoke, scope?: PreviewDispatchScope): Promise<unknown>;
+  /** Supports revalidation at each physical dispatch, including after awaits. */
+  readonly authorityAttested?: true;
+  closeOwnedScope?(key: string, owner: object): Promise<void>;
+  existingRunners?(): Pick<import('@mcp/services/preview/contracts.js').PreviewRunnerBridge, 'list' | 'readBuffer' | 'pinnedPort'> | null;
   /** Best-effort cancellation for long-running open/wait/eval operations. */
   cancel?(requestId: string): void | Promise<void>;
 }
@@ -108,6 +120,7 @@ export function previewRpcTimeoutMs(req: PreviewInvoke): number {
  * (coder chat OR company subordinate/master) owns its own preview window(s).
  */
 export function previewKey(ctx: ToolContext): string {
+  if (ctx.previewAuthority) return ctx.previewAuthority.key;
   const cc = ctx.companyContext as
     | { agentRunId?: string; companySessionId?: string }
     | undefined;
@@ -130,7 +143,13 @@ export async function invokePreview(
   if (!backend) throw new Error(PREVIEW_UNAVAILABLE);
   const key = previewKey(ctx);
   const requestId = `preview-${key}-${Date.now().toString(36)}-${(++previewRequestSeq).toString(36)}`;
-  if (ctx.signal?.aborted) throw new Error('Preview operation aborted.');
+  const signal = asAbortSignal(ctx.signal);
+  if (signal?.aborted) throw new Error('Preview operation aborted.');
+  const native = ctx.previewAuthority;
+  const invocation = ctx.currentToolInvocation;
+  if (native && (!invocation || invocation.name !== `preview_${method}` || !ctx.mutationFence?.resourceBinding)) {
+    throw new Error('Native preview has no sealed invocation');
+  }
   if (PREVIEW_EFFECT_METHODS.has(method)) {
     if (ctx.mutationFence?.mode === 'enforce' && typeof backend.cancel !== 'function') {
       throw new MutationFenceError(
@@ -144,27 +163,25 @@ export async function invokePreview(
       resource: key,
     });
   }
-  const pending = backend.invoke({ key, method, args, requestId });
-  if (!ctx.signal) return pending;
-  return new Promise((resolve, reject) => {
-    const onAbort = (): void => {
-      ctx.signal!.removeEventListener('abort', onAbort);
-      void Promise.resolve(backend.cancel?.(requestId)).catch(() => undefined);
-      reject(new Error('Preview operation aborted.'));
-    };
-    ctx.signal!.addEventListener('abort', onAbort, { once: true });
-    if (ctx.signal!.aborted) onAbort();
-    pending.then(
-      (value) => {
-        ctx.signal!.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        ctx.signal!.removeEventListener('abort', onAbort);
-        reject(error);
-      },
+  let dispatched = false;
+  try {
+    return await cancellableToolRpc(
+      () => { dispatched = true; return backend.invoke({ key, method, args, requestId,
+        ...(native && invocation ? { runId: native.runId, authority: { payload: native.payload,
+          binding: ctx.mutationFence?.resourceBinding, toolUseId: ctx.currentToolUseId,
+          toolName: invocation.name, input: invocation.input } } : {}) }); },
+      () => backend.cancel?.(requestId), signal, 'Preview operation aborted.',
     );
-  });
+  } catch (error) {
+    // A transport rejection is not evidence that CDP never delivered a click,
+    // keypress, evaluation, navigation or server start. Preserve this ambiguity
+    // through the tool result so both runners stop before repeating effects.
+    if (dispatched && PREVIEW_EFFECT_METHODS.has(method)) {
+      native?.outcomeUnknown();
+      throw new PreviewOutcomeUnknownError(error);
+    }
+    throw error;
+  }
 }
 
 let previewRequestSeq = 0;

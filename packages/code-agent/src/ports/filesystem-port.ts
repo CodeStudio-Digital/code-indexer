@@ -20,7 +20,7 @@
  *     and MUST preserve the exact behavior of the pre-refactor tools.
  */
 
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import type { ToolMutationFence } from '@mcp/code-agent/core/tool.js';
 
 /**
@@ -63,8 +63,23 @@ export interface IFilesystemPort {
   /** Write `data` to `absPath` in utf-8. Overwrites if the file exists. */
   writeFile(absPath: string, data: string): Promise<void>;
 
+  /** Atomically create a new UTF-8 file without replacing any existing entry.
+   * Older custom adapters may omit this; callers must fail closed, not emulate
+   * it with access + writeFile. */
+  createFile?(absPath: string, data: string): Promise<void>;
+  /** Exclusive binary creation; an existing image must never be overwritten. */
+  createFileBytes?(absPath: string, data: Uint8Array): Promise<void>;
+
   /** Read the whole file at `absPath` as utf-8. Throws if it doesn't exist. */
   readFile(absPath: string): Promise<string>;
+
+  /** Read a regular UTF-8 file with a physical byte limit, including growth
+   * after open. Callers must not emulate this with stat + unbounded read. */
+  readFileBounded?(absPath: string, maxBytes: number, signal?: AbortSignal): Promise<string>;
+
+  /** Directory entries in filesystem order, without materializing the whole
+   * directory. Closing the iterator must close its directory handle. */
+  iterateDirectory?(absPath: string, signal?: AbortSignal): AsyncIterable<PortDirent>;
 
   /**
    * Create the directory at `absPath`. When `recursive` is true, creates
@@ -86,6 +101,9 @@ export interface IFilesystemPort {
 
   /** Move or rename a filesystem entry. Destination parent must exist. */
   rename(oldAbsPath: string, newAbsPath: string): Promise<void>;
+  /** Supported only with an atomic no-replace primitive, never access + rename. */
+  readonly exclusiveRenameSupported?: true;
+  renameNoReplace?(oldAbsPath: string, newAbsPath: string): Promise<void>;
 
   /** Remove a file or directory. Mirrors the subset of node fs.rm we need. */
   rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
@@ -97,6 +115,23 @@ export interface IFilesystemPort {
  */
 export class LocalFilesystemAdapter implements IFilesystemPort {
   readonly mutationFenceAttested = true as const;
+  readonly exclusiveRenameSupported?: true;
+  readonly renameNoReplace?: (source: string, destination: string) => Promise<void>;
+
+  constructor(exclusiveRename?: (source: string, destination: string) => void) {
+    if (exclusiveRename) {
+      this.exclusiveRenameSupported = true;
+      this.renameNoReplace = async (source, destination) => { exclusiveRename(source, destination); };
+    }
+  }
+
+  async createFile(absPath: string, data: string): Promise<void> {
+    await fs.writeFile(absPath, data, { encoding: 'utf8', flag: 'wx' });
+  }
+
+  async createFileBytes(absPath: string, data: Uint8Array): Promise<void> {
+    await fs.writeFile(absPath, data, { flag: 'wx' });
+  }
 
   async writeFile(absPath: string, data: string): Promise<void> {
     await fs.writeFile(absPath, data, 'utf-8');
@@ -104,6 +139,37 @@ export class LocalFilesystemAdapter implements IFilesystemPort {
 
   async readFile(absPath: string): Promise<string> {
     return await fs.readFile(absPath, 'utf-8');
+  }
+
+  async readFileBounded(absPath: string, maxBytes: number, signal?: AbortSignal): Promise<string> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16 * 1024 * 1024) throw new Error('Invalid bounded read size');
+    signal?.throwIfAborted();
+    const file = await fs.open(absPath, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile()) throw new Error('Expected a regular file');
+      if (stat.size > maxBytes) throw new Error(`File exceeds ${maxBytes} bytes`);
+      const data = Buffer.allocUnsafe(maxBytes + 1);
+      let length = 0;
+      while (length < data.length) {
+        signal?.throwIfAborted();
+        const { bytesRead } = await file.read(data, length, Math.min(65536, data.length - length), null);
+        if (!bytesRead) break;
+        length += bytesRead;
+      }
+      signal?.throwIfAborted();
+      if (length > maxBytes) throw new Error(`File exceeds ${maxBytes} bytes`);
+      return data.subarray(0, length).toString('utf8');
+    } finally { await file.close(); }
+  }
+
+  async *iterateDirectory(absPath: string, signal?: AbortSignal): AsyncIterable<PortDirent> {
+    signal?.throwIfAborted();
+    const directory = await fs.opendir(absPath);
+    for await (const entry of directory) {
+      signal?.throwIfAborted();
+      yield entry;
+    }
   }
 
   async mkdir(absPath: string, options?: { recursive?: boolean }): Promise<void> {

@@ -17,6 +17,37 @@ use crate::management::{
 use crate::process_table::{OwnershipKey, reaped_attempt_for_test};
 
 #[tokio::test]
+async fn async_renewal_ack_commits_the_new_watchdog_without_another_process() {
+    let (mut host, accepted, containment, mut service) = fact_bound_service().await;
+    host.acknowledge(&accepted).await;
+    service.advance().await;
+    let spawned = host.receive().await;
+    host.acknowledge(&spawned).await;
+    service.advance().await;
+    let report = host.receive().await;
+    host.acknowledge(&report).await;
+    service.advance().await;
+    let expiry = host.renew_authority().await;
+    assert!(matches!(
+        service.advance().await,
+        SupervisorAsyncServiceAdvance::AuthorityUpdated(
+            crate::management::SupervisorDriverStep::AuthorityUpdated {
+                reused_existing: false
+            }
+        )
+    ));
+    assert!(matches!(
+        host.receive().await.body,
+        wire::management_payload::Body::ManagementAck(_)
+    ));
+    assert_eq!(
+        service.owner().next_physical_deadline_unix_ms(),
+        Some(expiry)
+    );
+    assert_eq!(containment.spawn_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn staged_physical_exit_is_sent_before_reaped_and_each_waits_for_host_ack() {
     let mut core = empty_core();
     let plan = LaunchPlan::from_validated(&launch_attempt(), [8; 32]).expect("plan");

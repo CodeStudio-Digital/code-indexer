@@ -11,6 +11,9 @@
  * small FTS-only DB double to exercise the production stage wiring.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { HybridSearchResult } from '@mcp/shared/types.js';
 import {
   createHybridSearchPipeline,
@@ -285,6 +288,24 @@ describe('DedupFilter', () => {
 });
 
 describe('RerankerHydrator', () => {
+  it('hydrates late symbols asynchronously and skips oversized sources', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rerank-source-'));
+    try {
+      await writeFile(join(root, 'late.ts'), '// padding\n'.repeat(10000) + 'function lateNeedle() { return 42; }\n');
+      await writeFile(join(root, 'huge.ts'), 'oversized-source'.repeat(200000));
+      const rerank = vi.fn(async (_query: string, docs: RerankCandidate[]) => docs.map((c) => ({ id: c.id, score: 0.9, originalScore: c.originalScore })));
+      const db = { getProject: () => ({ root_path: root }), getSymbolsByFile: () => [] } as unknown as CodeIndexDB;
+      const late = makeCandidate(1);
+      late.result = { ...makeResult(1, 'symbol'), data: {
+        file_path: 'late.ts', name: 'lateNeedle', line: 10001, end_line: 10001,
+      } as unknown as HybridSearchResult['data'] };
+      const huge = makeCandidate(2);
+      huge.result.data = { path: 'huge.ts' } as unknown as HybridSearchResult['data'];
+      await new RerankerHydrator({ name: 'test', rerank }, db).hydrate({ ...emptyQuery, limit: 2, diag: {} }, [late, huge]);
+      expect(rerank.mock.calls[0]![1][0]!.text).toContain('function lateNeedle() { return 42; }');
+      expect(rerank.mock.calls[0]![1][1]!.text).not.toContain('oversized-source');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   it('is enabled when reranker is non-null', () => {
     const reranker: RerankerService = {
       name: 'mock',

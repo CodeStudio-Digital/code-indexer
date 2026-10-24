@@ -94,12 +94,14 @@ export async function anthropicChat(
   const timeoutMs = options.timeoutMs ?? Math.max(1000, toNumber(cfg.timeout) ?? 30_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
-    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    else options.signal.addEventListener('abort', onAbort, { once: true });
   }
   const fetchImpl = options.fetchFn ?? fetch;
   try {
+    controller.signal.throwIfAborted();
     const res = await fetchImpl(url, {
       method: 'POST',
       headers: {
@@ -113,6 +115,7 @@ export async function anthropicChat(
     const latencyMs = performance.now() - startedAt;
     if (!res.ok) {
       const errorBody = await res.text().catch(() => '');
+      controller.signal.throwIfAborted();
       return {
         content: '',
         errorBody: errorBody.slice(0, 2000),
@@ -122,6 +125,7 @@ export async function anthropicChat(
       };
     }
     const parsed = (await res.json()) as AnthropicResponse;
+    controller.signal.throwIfAborted();
     const content = (parsed.content ?? [])
       .filter((b) => b.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text as string)
@@ -133,8 +137,10 @@ export async function anthropicChat(
       latencyMs,
     };
   } catch (e) {
-    return { content: '', errorBody: (e as Error).message, latencyMs: performance.now() - startedAt };
+    return { content: '', errorBody: e instanceof Error ? e.message : String(e), latencyMs: performance.now() - startedAt,
+      finishReason: controller.signal.aborted ? options.signal?.aborted ? 'aborted' : 'timeout' : 'error' };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
   }
 }

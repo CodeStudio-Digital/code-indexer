@@ -5,8 +5,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
-import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { CoderTask, TasksState } from '@mcp/session-storage/session-state-types.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { newSessionId } from '@mcp/session-storage';
 
 const SESSION_ID = newSessionId();
@@ -78,6 +78,41 @@ beforeEach(() => {
 });
 
 describe('execute_tasks retry integration', () => {
+  it('persists uncertainty and never retries based on a salvage summary or retryable transport failure', async () => {
+    vi.mocked(runSubagent).mockResolvedValue({
+      reason: 'completed', finalText: 'partial work retained', failureDetail: 'ECONNRESET',
+      effectOutcome: 'unknown', usage: { input_tokens: 1, output_tokens: 0 }, sandboxViolations: [],
+    });
+    const { tool, ctx, store } = setup([task({ id: 'tsk_uncertain' })]);
+    const outcome = await tool.handler({}, ctx);
+    expect(outcome).toMatchObject({ isError: true, effectOutcome: 'unknown' });
+    expect(runSubagent).toHaveBeenCalledTimes(1);
+    expect(ctx.updateTaskStatus).toHaveBeenCalledWith('tsk_uncertain', expect.objectContaining({
+      status: 'failed', result: expect.objectContaining({ effectOutcome: 'unknown', errors: 'outcome_unknown: ECONNRESET' }),
+    }));
+    expect(store.upsertTaskRunItem.mock.calls.filter(c => c[0].status === 'failed')).toHaveLength(1);
+  });
+
+  it('rejects rerunning a task with a persisted uncertain outcome', async () => {
+    const { tool, ctx } = setup([task({ id: 'tsk_uncertain', status: 'pending',
+      result: { summary: 'unconfirmed write', files_modified: [], effectOutcome: 'unknown' } })]);
+    const result = await tool.handler({}, ctx);
+    expect(result.isError).toBe(true);
+    expect(runSubagent).not.toHaveBeenCalled();
+  });
+
+  it('stops retrying when the parent is cancelled during a child attempt', async () => {
+    const controller = new AbortController();
+    vi.mocked(runSubagent).mockImplementation(async () => {
+      controller.abort(new Error('parent cancelled'));
+      return { reason: 'error', finalText: 'ECONNRESET', usage: { input_tokens: 0, output_tokens: 0 }, sandboxViolations: [] };
+    });
+    const { tool, ctx } = setup([task()]);
+    ctx.signal = controller.signal;
+    await tool.handler({}, ctx);
+    expect(runSubagent).toHaveBeenCalledTimes(1);
+  });
+
   it('transient subagent failure → retry → second attempt succeeds', async () => {
     let i = 0;
     vi.mocked(runSubagent).mockImplementation(async () => {

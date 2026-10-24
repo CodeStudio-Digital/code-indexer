@@ -680,8 +680,8 @@ export class CoderRunner extends EventEmitter {
   public lastTurnTelemetryId: string | null = null;
 
   /**
-   * Pending UUID of the current turn's filesystem metric. The host awaits it
-   * before committing the transcript/tool metadata. Never rejects.
+   * Pending UUID of the current turn's diagnostic metric. It is outside the
+   * transcript durability barrier and never rejects.
    */
   public lastTurnTelemetryIdPromise: Promise<string | null> | null = null;
 
@@ -748,7 +748,7 @@ export class CoderRunner extends EventEmitter {
   public readonly isSubagent: boolean;
   /** Optional SessionStore for input-log mirroring; see RunnerOptions. */
   public readonly sessionStore:
-    | import('@mcp/code-agent/sessions/fs-store/index.js').FsSessionStore
+    | import('@mcp/session-storage/fs-store/index.js').FsSessionStore
     | undefined;
   /**
    * Resolved per-block tool-result cap for this run. Computed once in the
@@ -1588,6 +1588,7 @@ export class CoderRunner extends EventEmitter {
     const initialTiers = this.activeTiers ?? null;
     return runBehaviorTree({
       opts: this.opts,
+      runId: this.runId,
       emit: ((event: string, ...args: unknown[]) => {
         // Mirror the loop-local turn (RunContext.turn) into the public field
         // (see the `turn` docstring). Every `turn_start` flows through here
@@ -1892,14 +1893,15 @@ export class CoderRunner extends EventEmitter {
       agentDecisionTelemetry: this.opts.agentDecisionTelemetry,
       actualAgent: this.opts.agentId ?? null,
     });
-    // The filesystem writer is asynchronous. Stash the promise so
-    // `flushPendingTurn` can stamp tool metadata with the immutable record id.
+    // Diagnostic writes never participate in transcript durability. A late
+    // completion must not stamp a newer turn with an older metric identity.
     if (persisted && typeof persisted === 'object') {
       this.lastTurnTelemetryId = null;
-      this.lastTurnTelemetryIdPromise = persisted.then((resolved) => {
-        this.lastTurnTelemetryId = resolved;
+      const pending = persisted.catch(() => null).then((resolved) => {
+        if (this.lastTurnTelemetryIdPromise === pending) this.lastTurnTelemetryId = resolved;
         return resolved;
       });
+      this.lastTurnTelemetryIdPromise = pending;
     } else {
       this.lastTurnTelemetryId = persisted;
       this.lastTurnTelemetryIdPromise = null;
@@ -2412,12 +2414,15 @@ export function extractPathsFromToolArgs(toolName: string, args: Record<string, 
   push((args as { destination?: unknown }).destination);
   push((args as { from_path?: unknown }).from_path);
   push((args as { to_path?: unknown }).to_path);
+  push(args.cwd);
+  push(args.workdir);
   const paths = (args as { paths?: unknown }).paths;
   if (Array.isArray(paths)) for (const p of paths) push(p);
 
-  // run_command: parse the command string for `cd <path>` and absolute paths.
-  if (toolName === 'run_command' && typeof (args as { command?: unknown }).command === 'string') {
-    const cmd = (args as { command: string }).command;
+  // Shell scope is advisory: it cannot infer all effects of arbitrary code.
+  const command = toolName === 'run_command' ? args.command : toolName === 'exec_command' ? args.cmd : undefined;
+  if (typeof command === 'string') {
+    const cmd = command;
     // cd <path>
     const cdMatch = cmd.match(/(?:^|\s)cd\s+([^\s;|&]+)/);
     if (cdMatch) push(cdMatch[1]);

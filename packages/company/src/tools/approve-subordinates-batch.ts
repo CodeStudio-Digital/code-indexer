@@ -13,8 +13,9 @@
  * Name deliberately starts with `approve_subordinate` so the existing
  * master-filter prefix allowlist keeps it (proven in master-filter.test.ts).
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 
 const MAX_BATCH = 15;

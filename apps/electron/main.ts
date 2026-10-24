@@ -41,6 +41,8 @@ import {
 } from '@apps/http-api/server/secret-decrypt-port.js';
 import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { PreviewWindowService } from './src/preview-window/service.js';
+import { DiagramRenderService } from './src/diagram-render/service.js';
+import { setDiagramRenderer } from '@mcp/code-agent/tools/diagram/render-port.js';
 import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
 import { type BackendDispatch, OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
@@ -358,6 +360,8 @@ async function bootstrap() {
     handlers.runner ? buildRunnerBridge(handlers.runner, deps) : null,
   );
   setGlobalPreviewDevtools(previewService);
+  const diagramRenderer = new DiagramRenderService();
+  setDiagramRenderer(diagramRenderer);
   // Dashboard "Inspect": reuse the SAME service so universal element-selection
   // windows are managed alongside the agent's preview windows.
   mountPreviewInspectIpc(previewService);
@@ -397,6 +401,7 @@ async function bootstrap() {
 
     const graceful = (async (): Promise<void> => {
       setGlobalPreviewDevtools(null);
+      setDiagramRenderer(null); diagramRenderer.close();
       await previewService.closeAll();
       stopOAuthLoopback();
       await backend.dispose('electron-quit');

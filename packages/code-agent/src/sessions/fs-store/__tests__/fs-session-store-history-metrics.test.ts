@@ -109,6 +109,14 @@ describe('FsSessionStore chapter and attempt repositories', () => {
     expect(chapterPage.revision).toBeGreaterThan(0);
     expect(chapterPage.next_cursor).toBeNull();
 
+    const coldIndex = await store.getConversationChapterIndex(session.id);
+    expect(coldIndex.total).toBe(1);
+    const chapterRepository = await import('../conversation-chapter-repository.js');
+    const listChapters = vi.spyOn(chapterRepository.FsConversationChapterRepository.prototype, 'list');
+    expect(await store.getConversationChapterIndex(session.id)).toEqual(coldIndex);
+    expect(listChapters).not.toHaveBeenCalled();
+    listChapters.mockRestore();
+
     const replay = await store.commitConversationChapter(input);
     expect(replay).toMatchObject({
       status: 'noop',
@@ -155,6 +163,15 @@ describe('FsSessionStore chapter and attempt repositories', () => {
       'session',
       session.id,
     );
+    const chapterPath = join(bundle, 'chapters', `${committed.chapter.id}.json`);
+    const chapterBytes = await readFile(chapterPath, 'utf8');
+    const editedChapter = JSON.parse(chapterBytes);
+    editedChapter.data.title = 'Título atualizado externamente';
+    await writeFile(chapterPath, JSON.stringify(editedChapter), 'utf8');
+    expect((await store.getConversationChapterIndex(session.id)).entries[0]?.title)
+      .toBe('Título atualizado externamente');
+    await writeFile(chapterPath, chapterBytes, 'utf8');
+    expect(await store.getConversationChapterIndex(session.id)).toEqual(coldIndex);
     await store.close();
     const statePath = join(bundle, 'state.json');
     const state = JSON.parse(await readFile(statePath, 'utf8')) as {
@@ -168,6 +185,8 @@ describe('FsSessionStore chapter and attempt repositories', () => {
     };
     await writeFile(statePath, `${JSON.stringify(state)}\n`, 'utf8');
     store = openStore();
+
+    expect(await store.getConversationChapterIndex(session.id)).toEqual(coldIndex);
 
     const recovered = await store.loadSessionWithMessages(session.id);
     expect(recovered?.session.summary_boundary_id).toBe(2);

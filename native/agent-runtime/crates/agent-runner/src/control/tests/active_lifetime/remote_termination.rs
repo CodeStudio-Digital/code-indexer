@@ -37,6 +37,78 @@ async fn remote_cancel_returns_typed_cleanup_owner() {
 }
 
 #[tokio::test]
+async fn cancellation_drains_existing_data_after_ack_with_effects_revoked() {
+    let clock = ManualClock::new(1_000);
+    let (lifetime, _, gate, drops) = active([cancel_frame("cancel-drain", 4)], clock, None).await;
+    let token = gate.token().expect("active token");
+    let (_handle, mut cancellation) = endpoint_cancellation();
+    let mut future = Box::pin(lifetime.advance_with_settlement(
+        &mut cancellation,
+        || Ok(wire::ResourceSample::default()),
+        Some(pending_settlement),
+    ));
+    tokio::select! {
+        result = &mut future => panic!("settlement must still own Data: {}", super::support::outcome(&result)),
+        () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+    }
+    assert_revoked(&gate, &token);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        10,
+        "settlement hook owns the resources after ACK"
+    );
+    let started = tokio::time::Instant::now();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), future)
+        .await
+        .expect("bounded cancel drain");
+    let ActiveRunnerLifetimeAdvance::CleanupRequired(cleanup) = result else {
+        panic!("cancel cannot continue")
+    };
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    cleanup.close_local();
+    assert_eq!(drops.load(Ordering::SeqCst), 11);
+}
+
+fn pending_settlement(
+    probe: &mut super::support::DropProbe,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+    probe.0.fetch_add(10, Ordering::SeqCst);
+    Box::pin(std::future::pending())
+}
+
+#[tokio::test]
+async fn completed_settlement_does_not_consume_the_cancel_grace_period() {
+    let clock = ManualClock::new(1_000);
+    let (lifetime, _, gate, drops) = active([cancel_frame("cancel-settled", 4)], clock, None).await;
+    let token = gate.token().expect("active token");
+    let (_handle, mut cancellation) = endpoint_cancellation();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        lifetime.advance_with_settlement(
+            &mut cancellation,
+            || Ok(wire::ResourceSample::default()),
+            Some(completed_settlement),
+        ),
+    )
+    .await
+    .expect("completed engine must not wait the 300ms grace");
+    let ActiveRunnerLifetimeAdvance::CleanupRequired(cleanup) = result else {
+        panic!("cancel cannot continue")
+    };
+    assert_revoked(&gate, &token);
+    assert_eq!(drops.load(Ordering::SeqCst), 10);
+    cleanup.close_local();
+    assert_eq!(drops.load(Ordering::SeqCst), 11);
+}
+
+fn completed_settlement(
+    probe: &mut super::support::DropProbe,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+    probe.0.fetch_add(10, Ordering::SeqCst);
+    Box::pin(std::future::ready(()))
+}
+
+#[tokio::test]
 async fn remote_fence_returns_typed_cleanup_owner() {
     let clock = ManualClock::new(1_000);
     let (lifetime, _, gate, drops) = active([fence_frame("fence-active", 4)], clock, None).await;

@@ -14,8 +14,9 @@
  * health-check parser and the message formatter without spinning up
  * a real container.
  */
-import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import type { JsonSchema } from "@mcp/provider-sdk";
+import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import type { ChromeServiceState } from '@mcp/services/chrome-service/chrome-service.js';

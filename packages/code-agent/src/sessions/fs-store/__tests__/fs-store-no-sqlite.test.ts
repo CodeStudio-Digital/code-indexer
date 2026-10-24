@@ -7,9 +7,8 @@ describe('filesystem session architecture boundary', () => {
     const root = join(
       process.cwd(),
       'packages',
-      'code-agent',
+      'session-storage',
       'src',
-      'sessions',
       'fs-store',
     );
     const files = (await readdir(root))
@@ -28,6 +27,9 @@ describe('filesystem session architecture boundary', () => {
       ).toBeLessThanOrEqual(500);
     }
     const source = sources.map((item) => item.source).join('\n');
+    expect(files.length).toBeGreaterThan(0);
+    // Inspect the implementation owner, not the legacy compatibility exports.
+    expect(source).not.toMatch(/(?:@mcp\/code-agent|packages\/code-agent|@mcp\/services)/);
     expect(source).not.toMatch(/better-sqlite3/i);
     expect(source).not.toMatch(/\bSELECT\b|\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b/i);
     expect(source).not.toContain('.prepare(');

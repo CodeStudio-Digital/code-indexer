@@ -44,8 +44,7 @@ export const INDEX_TABLES: ManifestEntry[] = [
 
 /**
  * FEATURE-class tables (R1). All project-scoped, in dependency order. Hybrids
- * (`design_system`) copy ONLY the project rows. Operational QA state lives in
- * filesystem session bundles, not either SQLite
+ * Operational QA state lives in filesystem session bundles, not either SQLite
  * database. `file_history_blobs` is a content-addressed shared
  * pool — copy only the blobs referenced by THIS project's local history.
  */
@@ -66,9 +65,6 @@ export const FEATURE_TABLES: ManifestEntry[] = [
   // File local history (160) — history direct; blobs are the referenced pool.
   { table: 'file_local_history', cls: 'FEATURE' },
   { table: 'file_history_blobs', cls: 'FEATURE', where: "hash IN (SELECT DISTINCT content_hash FROM legacy.file_local_history WHERE project_id = @pid AND content_hash IS NOT NULL)" },
-  // Design System sessions, versions, and components are operational session
-  // state. They are exported to filesystem bundles by the big-bang migrator
-  // and must never be copied into a project SQLite database.
   // Training (121) — datasets direct; children join via dataset.
   { table: 'training_datasets', cls: 'FEATURE' },
   { table: 'training_examples', cls: 'FEATURE', where: 'dataset_id IN (SELECT id FROM legacy.training_datasets WHERE project_id = @pid)' },

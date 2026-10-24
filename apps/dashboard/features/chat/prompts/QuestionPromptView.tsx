@@ -10,6 +10,7 @@ import {
   setPromptDraft,
 } from '../../../hooks/agent-stream/prompt-resolution-store.js';
 import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
+import { usePromptSubmission } from '../../../hooks/agent-stream/usePromptSubmission.js';
 
 interface QuestionPromptViewProps {
   question: {
@@ -22,7 +23,7 @@ interface QuestionPromptViewProps {
     multiSelect?: boolean;
     resolved?: string;
   };
-  onAnswer: (answer: string) => Promise<void>;
+  onAnswer: (answer: string, interactionId?: string) => Promise<void>;
   /** Bridges this card to its persisted twin, which carries a different id. */
   signature?: string;
   sessionId?: string;
@@ -47,15 +48,16 @@ export function QuestionPromptView({
   const [selected, setSelected] = useState<string[]>(draft?.selected ?? []);
   const storedResolution = usePromptResolution<string>(question.id, signature, sessionId);
   const resolved = question.resolved ?? storedResolution;
+  const submission = usePromptSubmission();
 
   useEffect(() => {
     setPromptDraft(question.id, { text, selected });
   }, [question.id, selected, text]);
 
-  const submit = async (val: string) => {
-    await onAnswer(val);
+  const submit = (val: string) => submission.submit(async () => {
+    await onAnswer(val, question.id);
     markPromptResolved({ id: question.id, signature, sessionId, resolution: val });
-  };
+  });
   const hasOptions = !!question.options && question.options.length > 0;
   const multi = !!question.multiSelect && hasOptions;
 
@@ -100,6 +102,7 @@ export function QuestionPromptView({
                   return (
                     <button
                       key={o.value}
+                      disabled={submission.submitting}
                       onClick={() => (multi ? toggleLabel(o.label) : submit(o.value))}
                       className={`group flex items-start gap-2.5 text-left px-3 py-2.5 rounded-lg border transition-colors ${
                         active
@@ -131,6 +134,7 @@ export function QuestionPromptView({
             )}
             <div className="flex gap-2">
               <Input
+                disabled={submission.submitting}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
@@ -145,17 +149,18 @@ export function QuestionPromptView({
                 <Button
                   size="sm"
                   onClick={confirmMulti}
-                  disabled={selected.length === 0 && !text.trim()}
+                  disabled={submission.submitting || (selected.length === 0 && !text.trim())}
                 >
                   {t('chat:question.confirm')}
                 </Button>
               ) : (
-                <Button size="sm" onClick={() => text.trim() && void submit(text.trim())} disabled={!text.trim()}>
+                <Button size="sm" onClick={() => text.trim() && void submit(text.trim())} disabled={submission.submitting || !text.trim()}>
                   {t('common:actions.send')}
                 </Button>
               )}
             </div>
           </div>
+          {submission.error && <p role="alert" className="mt-2 text-xs text-destructive">{submission.error}</p>}
         </>
       )}
     </div>

@@ -610,9 +610,15 @@ export async function terminalizeLocalCoderCommand(
       status: input.status,
       reason: input.reason,
       errorRef: input.errorRef,
+      // Check under the authority queue, not in a preceding snapshot read:
+      // the worker may commit its terminal between that read and this write.
+      preserveExistingTerminal: true,
     }), 'terminalizeCommand');
-    acceptance.commandStatus = input.status;
-    acceptance.commandReasonCode = input.reason;
+    const current = acceptance.runContext
+      ? (await store.getAttemptState(acceptance.runContext, false)).command : undefined;
+    if (current && current.commandId !== acceptance.commandContext.commandId) throw new Error('Terminal command identity differs');
+    acceptance.commandStatus = current?.status ?? input.status;
+    acceptance.commandReasonCode = current?.reasonCode ?? input.reason;
     recordMirrored('A');
   } catch (error) {
     metrics.lifecycleErrors += 1;

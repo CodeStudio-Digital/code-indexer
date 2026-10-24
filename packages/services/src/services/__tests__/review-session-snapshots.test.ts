@@ -113,6 +113,49 @@ function makeReviewStore() {
 }
 
 describe('reviewSessionSnapshots', () => {
+  it('does not create a run when ownership changes during diff preparation', async () => {
+    const rs = makeReviewStore(); let owned = true, reviewed = false;
+    await expect(reviewSessionSnapshots({ snapshotStore: snapshotStoreWith([BASELINE_ID]),
+      snapshotService: { getDiff: async () => { owned = false; return fakeDiff(); } } as never,
+      pipeline: pipelineReturning({ ok: true, findings: [], raw: '{}' }, () => { reviewed = true; }),
+      reviewStore: rs.store }, SESSION_ID, { assertOwner: () => { if (!owned) throw new Error('owner retired'); } }))
+      .rejects.toThrow('owner retired');
+    expect(rs.runs).toEqual([]); expect(rs.comments).toEqual([]); expect(reviewed).toBe(false);
+  });
+  it('discards late findings without writing through a retired owner', async () => {
+    const rs = makeReviewStore(); let owned = true;
+    await expect(reviewSessionSnapshots({ snapshotStore: snapshotStoreWith([BASELINE_ID]),
+      snapshotService: snapshotServiceWith(fakeDiff()),
+      pipeline: pipelineReturning({ ok: true, findings: [FINDING], raw: '{}' }, () => { owned = false; }),
+      reviewStore: rs.store }, SESSION_ID, { assertOwner: () => { if (!owned) throw new Error('owner retired'); } }))
+      .rejects.toThrow('owner retired');
+    expect(rs.runs).toHaveLength(1); expect(rs.comments).toEqual([]); expect(rs.completed).toEqual([]);
+  });
+  it('closes the owned run as cancelled and discards late provider findings', async () => {
+    const controller = new AbortController();
+    const rs = makeReviewStore();
+    const pipeline = pipelineReturning({ ok: true, findings: [FINDING], raw: '{}' }, (input) => {
+      expect((input as { signal: AbortSignal }).signal).toBe(controller.signal);
+      controller.abort(new Error('review stopped'));
+    });
+    await expect(reviewSessionSnapshots({ snapshotStore: snapshotStoreWith([BASELINE_ID]),
+      snapshotService: snapshotServiceWith(fakeDiff()), pipeline, reviewStore: rs.store },
+      SESSION_ID, { signal: controller.signal })).rejects.toThrow('review stopped');
+    expect(rs.comments).toEqual([]);
+    expect(rs.completed).toEqual([{ id: REVIEW_RUN_ID, patch: { status: 'error', error: 'Review cancelled.' } }]);
+  });
+  it('stops preparing later files after cancellation while a diff is loading', async () => {
+    const controller = new AbortController();
+    let reads = 0, reviewed = false;
+    const rs = makeReviewStore();
+    await expect(reviewSessionSnapshots({ snapshotStore: snapshotStoreWith([BASELINE_ID, 'later']),
+      snapshotService: { getDiff: async () => { reads++; controller.abort(new Error('stop')); return fakeDiff(); } } as never,
+      pipeline: pipelineReturning({ ok: true, findings: [], raw: '{}' }, () => { reviewed = true; }),
+      reviewStore: rs.store }, SESSION_ID, { signal: controller.signal })).rejects.toThrow('stop');
+    expect(reads).toBe(1);
+    expect(reviewed).toBe(false);
+    expect(rs.runs).toEqual([]);
+  });
   it('reviews pending diffs, returns findings, and persists auto comments', async () => {
     let captured: unknown = null;
     const pipeline = pipelineReturning(

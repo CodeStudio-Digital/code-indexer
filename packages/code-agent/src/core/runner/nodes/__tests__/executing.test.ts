@@ -79,6 +79,35 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('ExecutingNode', () => {
+  it('emits the fast tool result while another tool is still pending', async () => {
+    const registry = new ToolRegistry();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const slow = new Promise<void>((resolve) => { release = resolve; });
+    for (const name of ['fast_read', 'slow_read']) registry.register({
+      name, description: name, source: 'native', parameters: { type: 'object', properties: {} },
+      handler: async () => { if (name === 'slow_read') { entered(); await slow; } return { content: name }; },
+    });
+    const { ctx, recordedEvents } = makeTestContext({ registry, toolContext: emptyToolContext(),
+      provider: makeStreamingProvider([
+        { type: 'tool_call_end', id: 'fast', name: 'fast_read', input: {} },
+        { type: 'tool_call_end', id: 'slow', name: 'slow_read', input: {} },
+        { type: 'done', stop_reason: 'tool_use' },
+      ]),
+    });
+    ctx.activeTiers = null;
+    const pending = new ExecutingNode().execute(ctx, null);
+    try {
+      await started;
+      expect(recordedEvents.filter((event) => event.event === 'tool_call_result').map((event) => event.args[0]))
+        .toEqual(['fast']);
+    } finally { release(); }
+    await pending;
+    expect(recordedEvents.filter((event) => event.event === 'tool_call_result').map((event) => event.args[0]))
+      .toEqual(['fast', 'slow']);
+  });
+
   it('fires provider and capability lifecycle hooks in order and contains failures', async () => {
     const order: string[] = [];
     const bus = new HookBus();
@@ -1295,6 +1324,31 @@ describe('ExecutingNode', () => {
       event: 'operation_finished',
       args: [expect.objectContaining({ status: 'aborted', kind: 'provider' })],
     }));
+  });
+
+  it('returns promptly on cancel even when iterator next and return never settle', async () => {
+    const controller = new AbortController();
+    const close = vi.fn(() => new Promise<IteratorResult<ChatDelta>>(() => {}));
+    const cancelStream = vi.fn();
+    const stream = { [Symbol.asyncIterator]: () => ({
+      next: () => new Promise<IteratorResult<ChatDelta>>(() => {}), return: close,
+    }) };
+    const pending = consumeStream({ stream, signal: controller.signal, cancelStream });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(cancelStream).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('cancels transport on an idle timeout without awaiting a stuck iterator return', async () => {
+    const close = vi.fn(() => new Promise<IteratorResult<ChatDelta>>(() => {}));
+    const cancelStream = vi.fn();
+    const stream = { [Symbol.asyncIterator]: () => ({
+      next: () => new Promise<IteratorResult<ChatDelta>>(() => {}), return: close,
+    }) };
+    await expect(consumeStream({ stream, firstByteTimeoutMs: 1, cancelStream })).rejects.toMatchObject({ code: 'TIMEOUT' });
+    expect(cancelStream).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('retracts a mid-stream failure so the retry does not stack on the discarded attempt', async () => {

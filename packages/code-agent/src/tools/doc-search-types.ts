@@ -18,7 +18,7 @@ export interface DocSearchBackend {
     scope?: 'project' | 'all';
     /** Session's project id — lets the backend resolve linked collections. */
     project_id?: number;
-  }): Promise<{
+  }, signal?: AbortSignal): Promise<{
     results: Array<{
       chunk_id: number;
       collection: string;
@@ -68,19 +68,19 @@ export interface DocSearchBackend {
    * Optional so older backend wirings keep type-checking; the tool emits a
    * clear "not available" error when absent. Null = chunk id not found.
    */
-  readChunk?(input: { chunk_id: number; window?: number }): Promise<DocChunkRead | null>;
+  readChunk?(input: { chunk_id: number; window?: number; char_offset?: number; max_chars?: number }, signal?: AbortSignal): Promise<DocChunkRead | null>;
   /**
    * Whole-section read: every chunk sharing the seed's heading on the same
    * page, reassembled in `ord` order. Backs `rag_read_doc({mode:'section'})`.
    * Null = chunk id not found.
    */
-  readSection?(input: { chunk_id: number }): Promise<DocSectionRead | null>;
+  readSection?(input: { chunk_id: number; offset?: number; limit?: number }, signal?: AbortSignal): Promise<DocSectionRead | null>;
   /**
    * Navigation: a source's heading TREE (when `source_id` is given) or a
    * collection's SOURCE list (when `collection` is given). Backs
    * `rag_doc_outline`. Null = unknown source/collection.
    */
-  outline?(input: { source_id?: number; collection?: string }): Promise<DocOutline | null>;
+  outline?(input: { source_id?: number; collection?: string; offset?: number; limit?: number }, signal?: AbortSignal): Promise<DocOutline | null>;
 }
 
 export interface DocChunkNeighborRef {
@@ -88,6 +88,7 @@ export interface DocChunkNeighborRef {
   ord: number;
   heading_path: string | null;
   content: string;
+  content_length?: number;
   token_count: number;
   /** Page URL this neighbor came from — lets the agent see when it's a different page. */
   source_uri: string | null;
@@ -104,6 +105,9 @@ export interface DocChunkRead {
     api_symbol: string | null;
     api_signature: string | null;
     content: string;
+    content_length?: number;
+    char_offset?: number;
+    next_char_offset?: number;
     token_count: number;
     summary: string | null;
     concepts: string[];
@@ -123,7 +127,9 @@ export interface DocSectionRead {
   api_symbol: string | null;
   api_signature: string | null;
   doc_type: string | null;
-  chunks: Array<{ chunk_id: number; ord: number; content: string; token_count: number }>;
+  chunks: Array<{ chunk_id: number; ord: number; content: string; token_count: number; content_length?: number; next_char_offset?: number }>;
+  offset?: number;
+  next_offset?: number;
   total_tokens: number;
 }
 
@@ -153,6 +159,8 @@ export interface DocOutlineSource {
 
 /** Navigation result: a source list (kind='sources') or a heading tree (kind='headings'). */
 export interface DocOutline {
+  offset?: number;
+  next_offset?: number;
   kind: 'sources' | 'headings';
   collection: string;
   /** kind='headings' only. */

@@ -26,6 +26,16 @@ describe('ApiClientStore', () => {
   beforeEach(() => { h = setup(); });
   afterEach(() => teardown(h));
 
+  it('bounds interactive summaries and does not materialize request secrets or bodies', () => {
+    const col = h.store.createCollection({ project_id: 1, name: 'Paged' });
+    for (let id = 0; id < 4; id++) h.store.createRequest({ collection_id: col.id, name: `row-${id}`, body_json: 'secret-body', auth_json: 'secret-auth' });
+    const rows = h.store.listRequestSummaries(col.id, 2, 1);
+    expect(rows.map(row => row.name)).toEqual(['row-1', 'row-2']);
+    expect(JSON.stringify(rows)).not.toContain('secret-');
+    expect(rows[0]).not.toHaveProperty('body_json'); expect(rows[0]).not.toHaveProperty('auth_json');
+    expect(h.store.listRequestSummaries(col.id, NaN, NaN)).toHaveLength(4);
+  });
+
   it('creates + lists + deletes collections (cascade to requests)', () => {
     const col = h.store.createCollection({ project_id: 1, name: 'Users', spec_hash: 'abc' });
     expect(col.id).toBeGreaterThan(0);

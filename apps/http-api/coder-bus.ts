@@ -22,6 +22,7 @@ export interface BufferedEvent {
   seq: number;
   event: string;
   data: unknown;
+  occurredAt?: string;
 }
 
 export type BusSubscriber = (ev: BufferedEvent) => void;
@@ -173,7 +174,7 @@ export function setBusRunner(bus: CoderRunBus, runner: CoderRunner): void {
 }
 
 export function publish(bus: CoderRunBus, event: string, data: unknown): BufferedEvent {
-  const ev: BufferedEvent = { seq: bus.nextSeq++, event, data };
+  const ev: BufferedEvent = { seq: bus.nextSeq++, event, data, occurredAt: new Date().toISOString() };
   ensureBufferAccounting(bus);
   const eventBytes = estimateReplayBytes(event) + estimateReplayBytes(data);
   bus.buffer.push(ev);
@@ -376,9 +377,8 @@ export function attachReplayCap(): number {
 /**
  * Bounded semantic replay is the safe default for coder attaches. The original
  * opt-in implementation dropped transcript-bearing kinds; buildAttachReplay
- * now retains those kinds plus the complete live tail. Keep an explicit
- * emergency compatibility switch (`CODER_ATTACH_REPLAY_TRIM=0`) without
- * making every cursorless remount pay for the whole 2,000-row ring.
+ * now retains those kinds plus the complete live tail. The retired environment
+ * switches do not make cursorless remounts replay the whole 2,000-row ring.
  */
 export function attachReplayTrimEnabled(): boolean {
   return true;

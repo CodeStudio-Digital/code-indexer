@@ -34,20 +34,24 @@ export const diagramCreateTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
     const r = resolveDiagramPath(ctx, String(args.name ?? ''));
     if ('error' in r) return r.error;
     const v = validateMxXml(args.xml, typeof args.title === 'string' ? args.title : undefined);
     if (!v.ok) return err(`Invalid diagram XML: ${v.error}.`);
     const port = fsPort(ctx);
-    if (await fileExists(port, r.abs)) {
-      return err(`A diagram named "${r.slug}" already exists (${r.rel}). Use diagram_update to modify it.`);
-    }
+    if (!port.createFile) return err('Filesystem adapter does not support exclusive diagram creation.');
     const dir = diagramsDirAbs(ctx);
     if (dir) await port.mkdir(dir, { recursive: true });
-    await port.writeFile(r.abs, v.xml);
+    ctx.signal?.throwIfAborted();
+    try { await port.createFile(r.abs, v.xml); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return err(`A diagram named "${r.slug}" already exists (${r.rel}). Use diagram_update to modify it.`);
+      throw error;
+    }
     emitDiagramChanged(ctx, r.rel, v.xml);
     return ok(
-      `Created ${r.rel} — now open in the Diagram panel. Re-read it with diagram_read "${r.slug}" or change it with diagram_update.`,
+      `Created ${r.rel}. Re-read it with diagram_read "${r.slug}" or change it with diagram_update.`,
     );
   },
 };
@@ -71,6 +75,7 @@ export const diagramUpdateTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx) => {
+    ctx.signal?.throwIfAborted();
     const r = resolveDiagramPath(ctx, String(args.name ?? ''));
     if ('error' in r) return r.error;
     const port = fsPort(ctx);
@@ -79,6 +84,7 @@ export const diagramUpdateTool: CoderTool = {
     }
     const v = validateMxXml(args.xml);
     if (!v.ok) return err(`Invalid diagram XML: ${v.error}.`);
+    ctx.signal?.throwIfAborted();
     await port.writeFile(r.abs, v.xml);
     emitDiagramChanged(ctx, r.rel, v.xml);
     return ok(`Updated ${r.rel}.`);

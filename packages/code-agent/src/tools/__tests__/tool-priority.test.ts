@@ -332,7 +332,6 @@ describe('buildTools — priority trim at a weak-model cap', () => {
   it('keeps complete active specialist capabilities instead of trimming role identity', () => {
     const activeTiers = new Set<ToolTier>([
       'bootstrap', 'api', 'app', 'db', 'diagram', 'qa',
-      'design-system-studio', 'design-system-consumer', 'sprite-studio',
       'browser',
     ]);
     const catalog = [...BOOTSTRAP_SET, ...ROLE_CAPABILITY_FLOOR].map(named);

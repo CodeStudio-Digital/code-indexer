@@ -1,19 +1,19 @@
 import { Hono } from 'hono';
 import { asSessionId, type CatalogEntry } from '@mcp/session-storage';
-import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
+import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 import {
   FsSessionWorkbenchBootstrapProjectionReader,
   type FsSessionWorkbenchBootstrapSource,
-} from '@mcp/code-agent/sessions/fs-store/session-workbench-bootstrap-projection.js';
+} from '@mcp/session-storage/fs-store/session-workbench-bootstrap-projection.js';
 import type {
   FsSessionGoal,
   FsTasksRow,
-} from '@mcp/code-agent/sessions/fs-store/operational-types.js';
+} from '@mcp/session-storage/fs-store/operational-types.js';
 import {
   FsSessionWorkbenchProjection,
   FsSessionWorkbenchProjectionError,
   type FsSessionWorkbenchProjectionSource,
-} from '@mcp/code-agent/sessions/fs-store/session-workbench-projection.js';
+} from '@mcp/session-storage/fs-store/session-workbench-projection.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerDeps } from '../../../../deps.js';
 import { SessionWorkbenchQueryService } from '../query-service.js';

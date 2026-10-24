@@ -9,11 +9,35 @@ import {
   type EngineEventRecoveryStorePort,
 } from '../native/NativeEngineEventRecovery.js';
 import { identity } from './attempt-channel-support.js';
+import { engineRecordStorage } from '../ipc/EngineContentRecord.js';
 
 const SESSION = identity().sessionId;
 const RUNTIME = 'runtime/recovery';
 
 describe('native engine event recovery scanner', () => {
+  it('delivers authenticated transcript content to continuation observers', async () => {
+    const bytes = Buffer.from('confirmed partial response');
+    const record = create(agentV1SessionStore.EngineEventRecordV1Schema, {
+      schemaVersion: 1, identity: identity(), runtimeInstanceId: RUNTIME, localSequence: 1n,
+      body: { case: 'content', value: { kind: agentV1SessionStore.EngineContentKindV1.TRANSCRIPT,
+        operationId: 'provider/1', contentId: 'content/1', contentSchemaId: 'text/utf8', contentSchemaVersion: 1,
+        encodedChunk: bytes, totalBytes: BigInt(bytes.length), contentSha256: digest(bytes) } },
+    });
+    const seen: string[] = [];
+    const source = fixture([record]);
+    await expect(inspectUnresolvedCapabilityDispatches(source.store, SESSION, 8,
+      (_receipt, _bytes, event) => { seen.push(event?.body.case ?? 'checkpoint'); })).resolves.toEqual([]);
+    expect(seen).toEqual(['content']);
+    const list = source.store.list.bind(source.store);
+    source.store.list = async (...args) => {
+      const page = await list(...args);
+      page.records[0]!.durability = agentV1SessionStore.SessionDurabilityClass.AUTHORITATIVE;
+      return page;
+    };
+    await expect(inspectUnresolvedCapabilityDispatches(source.store, SESSION, 8, () => {}))
+      .rejects.toThrow('storage classification diverged');
+  });
+
   it('returns a started capability only when no exact terminal proof exists', async () => {
     const open = fixture([started(1n)]);
 
@@ -64,6 +88,34 @@ describe('native engine event recovery scanner', () => {
       1,
     )).rejects.toThrow(/scan limit exceeded/);
   });
+
+  it('keeps a durable unknown effect unresolved and refuses a replacement terminal', async () => {
+    const unknown = terminal(2n);
+    if (unknown.body.case !== 'capabilityTerminal') throw new Error('fixture');
+    unknown.body.value.classification = agentV1SessionStore.EngineCapabilityTerminalClassificationV1.OUTCOME_UNKNOWN;
+    unknown.body.value.reasonCode = 'ack_lost_after_effect';
+    const unresolved = await inspectUnresolvedCapabilityDispatches(fixture([started(1n), unknown]).store, SESSION, 8);
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]?.outcomeUnknownReason).toBe('ack_lost_after_effect');
+    await expect(inspectUnresolvedCapabilityDispatches(fixture([started(1n), unknown, terminal(3n)]).store, SESSION, 8))
+      .rejects.toThrow('explicit reconciliation');
+  });
+
+  it('does not let an unspecified terminal settle a started effect', async () => {
+    const invalid = terminal(2n);
+    if (invalid.body.case !== 'capabilityTerminal') throw new Error('fixture');
+    invalid.body.value.classification = agentV1SessionStore.EngineCapabilityTerminalClassificationV1.UNSPECIFIED;
+    await expect(inspectUnresolvedCapabilityDispatches(fixture([started(1n), invalid]).store, SESSION, 8))
+      .rejects.toThrow('classification or time');
+  });
+
+  it('rejects a store page that exceeds the remaining scan budget', async () => {
+    const source = fixture([started(1n), terminal(2n)]).store;
+    const list = source.list.bind(source);
+    source.list = after => list(after, 2);
+    await expect(inspectUnresolvedCapabilityDispatches(source, SESSION, 1))
+      .rejects.toThrow('page is invalid');
+  });
 });
 
 function fixture(
@@ -81,8 +133,7 @@ function fixture(
         writerId: '20000000-0000-0000-0000-000000000001',
       }),
       globalSequence: sequence,
-      kind: agentV1SessionStore.SessionRecordKind.LIFECYCLE_EVENT,
-      durability: agentV1SessionStore.SessionDurabilityClass.AUTHORITATIVE,
+      ...engineRecordStorage(event),
       previousCommitSha256: new Uint8Array(32).fill(index),
       payloadSha256: digest(payload),
       commitSha256: new Uint8Array(32).fill(index + 1),

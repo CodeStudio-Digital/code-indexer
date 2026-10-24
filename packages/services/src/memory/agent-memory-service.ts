@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { abortableRead } from '@mcp/shared/utils/abortable.js';
 import type {
   AgentMemoryRow,
   AgentMemoryScope,
@@ -119,12 +120,12 @@ function memoryContentTokens(value: string): Set<string> {
 
 /** Containment overlap works better than union-Jaccard here: an automatic
  * distillation commonly repeats a short canonical fact inside a longer note. */
-function memoryContentSimilarity(a: string, b: string): number {
-  const left = memoryContentTokens(a);
-  const right = memoryContentTokens(b);
+function memoryContentSimilarity(left: ReadonlySet<string>, right: ReadonlySet<string>, minimumShared = 1): number {
   if (left.size === 0 || right.size === 0) return 0;
   let shared = 0;
-  for (const token of left) if (right.has(token)) shared += 1;
+  const [smaller, larger] = left.size <= right.size ? [left, right] : [right, left];
+  for (const token of smaller) if (larger.has(token)) shared += 1;
+  if (shared < minimumShared) return 0;
   return shared / Math.min(left.size, right.size);
 }
 
@@ -161,16 +162,6 @@ function memoryTitleConcepts(value: string): Set<string> {
   return new Set(concepts);
 }
 
-function memoryTitleSimilarity(a: string, b: string): number {
-  const left = memoryTitleConcepts(a);
-  const right = memoryTitleConcepts(b);
-  if (left.size === 0 || right.size === 0) return 0;
-  let shared = 0;
-  for (const token of left) if (right.has(token)) shared += 1;
-  if (shared < 2) return 0;
-  return shared / Math.min(left.size, right.size);
-}
-
 function memorySourceAuthority(source: string): number {
   if (source === 'user') return 3;
   if (source === 'agent') return 2;
@@ -187,6 +178,15 @@ function memorySourceAuthority(source: string): number {
  */
 export function dedupeAgentMemoryHits(hits: AgentMemoryHit[]): AgentMemoryHit[] {
   const kept: AgentMemoryHit[] = [];
+  // A candidate used to be normalized/tokenized anew for every pair. Cache
+  // only within this retrieval; no content or mutable row escapes the call.
+  const bodies = new Map<string, Set<string>>(), titles = new Map<string, Set<string>>();
+  const tokens = (value: string, title = false) => {
+    const cache = title ? titles : bodies;
+    let result = cache.get(value);
+    if (!result) { result = title ? memoryTitleConcepts(value) : memoryContentTokens(value); cache.set(value, result); }
+    return result;
+  };
   for (const candidate of hits) {
     const duplicateIndex = kept.findIndex((existing) => {
       if (
@@ -196,9 +196,9 @@ export function dedupeAgentMemoryHits(hits: AgentMemoryHit[]): AgentMemoryHit[] 
         return false;
       }
       return (
-        memoryContentSimilarity(existing.content, candidate.content)
+        memoryContentSimilarity(tokens(existing.content), tokens(candidate.content))
           >= MEMORY_DUPLICATE_CONTENT_THRESHOLD
-        || memoryTitleSimilarity(existing.name, candidate.name)
+        || memoryContentSimilarity(tokens(existing.name, true), tokens(candidate.name, true), 2)
           >= MEMORY_DUPLICATE_TITLE_THRESHOLD
       );
     });
@@ -213,8 +213,8 @@ export function dedupeAgentMemoryHits(hits: AgentMemoryHit[]): AgentMemoryHit[] 
     const candidateIsRicherAutomatic =
       candidateAuthority === existingAuthority
       && AUTO_MEMORY_SOURCES.has(candidate.source)
-      && memoryContentTokens(candidate.content).size
-        > memoryContentTokens(existing.content).size;
+      && tokens(candidate.content).size
+        > tokens(existing.content).size;
     if (candidateAuthority > existingAuthority || candidateIsRicherAutomatic) {
       kept[duplicateIndex] = {
         ...candidate,
@@ -228,6 +228,8 @@ export function dedupeAgentMemoryHits(hits: AgentMemoryHit[]): AgentMemoryHit[] 
 export class AgentMemoryService {
   private projectNameCache = new Map<number, string>();
   private readonly mutationBatch = new AsyncLocalStorage<MemoryMutationBatch>();
+  private mutationTail: Promise<void> = Promise.resolve();
+  private pendingMutationBatches = 0;
 
   constructor(
     private readonly db: CodeIndexDB,
@@ -351,11 +353,17 @@ export class AgentMemoryService {
    * observes one namespace wake-up instead of one full pass per learned fact.
    */
   async runMutationBatch<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.mutationBatch.getStore()
-      || typeof this.semanticMutationSink?.beginMutation !== 'function'
-      || typeof this.semanticMutationSink?.settleMutation !== 'function') {
-      return operation();
-    }
+    if (this.mutationBatch.getStore()) return operation();
+    if (this.pendingMutationBatches >= 64) throw new Error('Memory mutation queue is full');
+    this.pendingMutationBatches++;
+    // Dedupe and persistence share one owner. Serializing only the INSERT
+    // lets concurrent callers both observe "absent" and create two memories.
+    const result = this.mutationTail.then(() => this.runOwnedMutationBatch(operation));
+    this.mutationTail = result.then(() => undefined, () => undefined);
+    try { return await result; } finally { this.pendingMutationBatches--; }
+  }
+
+  private async runOwnedMutationBatch<T>(operation: () => Promise<T>): Promise<T> {
     const batch: MemoryMutationBatch = {
       identityFences: new Map(),
       targetedFences: [],
@@ -389,6 +397,11 @@ export class AgentMemoryService {
     if (operationError) throw operationError;
     if (settleError) throw settleError;
     return result;
+  }
+
+  get hasDurableMutationQueue(): boolean {
+    return typeof this.semanticMutationSink?.beginMutation === 'function'
+      && typeof this.semanticMutationSink?.settleMutation === 'function';
   }
 
   /**
@@ -658,9 +671,12 @@ export class AgentMemoryService {
     query: string,
     limit: number,
     type?: AgentMemoryType,
+    signal?: AbortSignal,
   ): Promise<AgentMemoryHit[]> {
+    signal?.throwIfAborted();
     const q = query.trim();
     if (!q) return [];
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error('Memory search limit must be 1..128');
     const ftsRows = this.db.searchAgentMemoryFts(scope, projectId, q, Math.max(limit * 3, 15));
     const ftsFiltered = type ? ftsRows.filter((r) => r.type === type) : ftsRows;
 
@@ -668,23 +684,25 @@ export class AgentMemoryService {
     if (this.queryEmbeddingService && this.vectorStore) {
       try {
         const namespace = this.namespace(scope, projectId);
-        const { vector, generationId } = await embedQueryForNamespace(this.queryEmbeddingService, namespace, q);
+        const { vector, generationId } = await abortableRead(() =>
+          embedQueryForNamespace(this.queryEmbeddingService!, namespace, q, signal ? { signal } : undefined), signal);
         if (vector.length > 0) {
-          const matches = await this.vectorStore.search(vector, {
+          const matches = await abortableRead(() => this.vectorStore!.search(vector, {
             topK: limit * 4,
             filter: { type: 'agent_memory', scope },
             namespace,
             generationId,
-          });
+          }), signal);
+          signal?.throwIfAborted();
           // Collect the distinct ref_ids IN MATCH ORDER first, then hydrate them
           // in one batch. The old shape ran one synchronous point query per
           // match — up to 60 per turn (retrieve) and 144 per recall_memory —
           // each blocking the Electron main thread, which shares this handle.
           const seen = new Set<number>();
           const refIds: number[] = [];
-          for (const m of matches) {
-            const refId = m.metadata.ref_id ? parseInt(m.metadata.ref_id, 10) : 0;
-            if (!refId || seen.has(refId)) continue;
+          for (const m of matches.slice(0, limit * 4)) {
+            const rawId = String(m.metadata.ref_id ?? ''), refId = Number(rawId);
+            if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(refId) || seen.has(refId)) continue;
             seen.add(refId);
             refIds.push(refId);
           }
@@ -696,6 +714,7 @@ export class AgentMemoryService {
             if (
               row &&
               row.scope === scope &&
+              row.project_id === (scope === 'user' ? 0 : projectId) &&
               !row.archived_at &&
               (!type || row.type === type)
             ) {
@@ -704,6 +723,7 @@ export class AgentMemoryService {
           }
         }
       } catch (err) {
+        signal?.throwIfAborted();
         console.error('[agent-memory-search] vector side failed:', (err as Error).message);
       }
     }
@@ -740,7 +760,7 @@ export class AgentMemoryService {
       );
       const candidates = fused.slice(0, depth);
       try {
-        const reranked = await this.reranker.rerank(
+        const reranked = await abortableRead(() => this.reranker!.rerank(
           q,
           candidates.map((row) => ({
             id: String(row.id),
@@ -748,7 +768,9 @@ export class AgentMemoryService {
             originalScore: row.score,
           })),
           Math.min(limit, candidates.length),
-        );
+          signal ? { signal } : undefined,
+        ), signal);
+        signal?.throwIfAborted();
         const byId = new Map(candidates.map((entry) => [String(entry.id), entry]));
         const seen = new Set<string>();
         if (reranked.length !== Math.min(limit, candidates.length) || reranked.some((row) => {
@@ -760,6 +782,7 @@ export class AgentMemoryService {
           .map((result) => ({ ...byId.get(result.id)!, score: result.score }))
           .sort((a, b) => b.score - a.score);
       } catch (err) {
+        signal?.throwIfAborted();
         console.warn(`[agent-memory-search] ${this.reranker.name} rerank unavailable; preserving RRF order: ${
           err instanceof Error ? err.message : String(err)
         }`);

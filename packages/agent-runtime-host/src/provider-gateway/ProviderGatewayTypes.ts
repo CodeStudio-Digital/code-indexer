@@ -4,6 +4,7 @@ import type {
   agentV1Runtime,
 } from '@mcp/agent-runtime-contracts';
 import type { ChatProvider } from '@mcp/provider-sdk/adapter.js';
+import type { ProviderContextPreparationPort } from './ProviderContextPreparation.js';
 
 export interface ProviderGatewayLimits {
   maxActiveOperations: number;
@@ -59,13 +60,16 @@ export type ProviderGatewayEvent =
   | { case: 'providerTerminal'; value: agentV1Runtime.ProviderTerminal };
 
 export interface ProviderGatewayEventSinkPort {
-  emit(event: ProviderGatewayEvent): void | Promise<void>;
+  emit(event: ProviderGatewayEvent, signal?: AbortSignal): void | Promise<void>;
 }
 
 export interface ProviderGatewayDependencies {
   runtimeInstanceId: string;
   resolver: ProviderResolverPort;
   artifactReader?: ProviderArtifactReaderPort;
+  contextPreparation?: ProviderContextPreparationPort;
+  /** Shared tree consumption, after the durable frontier and before opening upstream. */
+  admitOperation?(identity: agentV1Common.AttemptIdentity, signal: AbortSignal): void | Promise<void>;
   limits?: Partial<ProviderGatewayLimits>;
   now?: () => number;
 }

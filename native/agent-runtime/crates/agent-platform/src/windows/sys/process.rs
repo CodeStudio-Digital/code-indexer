@@ -5,9 +5,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, PROCESS_INFORMATION, ResumeThread,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, WaitForSingleObject,
+    CreateProcessW, GetExitCodeProcess, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, STARTUPINFOW, WaitForSingleObject,
 };
 
 #[cfg(test)]
@@ -150,16 +149,18 @@ fn create_suspended_in_job(
         startup_info.hStdInput = stdio.stdin;
         startup_info.hStdOutput = stdio.stdout;
         startup_info.hStdError = stdio.stderr;
+    } else if child_handles.windows_pseudoconsole_raw().is_some() {
+        // Null handles prevent inheriting redirected host streams instead of ConPTY.
+        startup_info.dwFlags = STARTF_USESTDHANDLES;
     }
     let startup = STARTUPINFOEXW {
         StartupInfo: startup_info,
         lpAttributeList: attributes.as_ptr(),
     };
     let mut information = PROCESS_INFORMATION::default();
-    let flags = CREATE_SUSPENDED
-        | CREATE_UNICODE_ENVIRONMENT
-        | CREATE_NO_WINDOW
-        | EXTENDED_STARTUPINFO_PRESENT;
+    let flags = super::super::pseudoconsole::creation_flags(
+        child_handles.windows_pseudoconsole_raw().is_some(),
+    );
 
     // SAFETY: all buffers and the attribute list remain live for the call.
     // Job membership and the exact inherited-handle set are supplied through

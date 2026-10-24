@@ -7,14 +7,6 @@ import { useTranslation } from 'react-i18next';
 import { Input } from '../../../components/ui/input.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Switch } from '../../../components/ui/switch.js';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../../components/ui/select.js';
-import { useLinkableDesignSystems } from './useLinkableDesignSystems.js';
 import { templateById, type TemplateId } from './templates.js';
 
 export interface ConfigState {
@@ -24,8 +16,6 @@ export interface ConfigState {
   gitInit: boolean;
   /** Builder mode (react-vite only): Tailwind + shadcn + element selection. */
   builder: boolean;
-  /** Published DS (DS Studio session id) to link at create time. */
-  dsSessionId: string | null;
 }
 
 interface ConfigStepProps {
@@ -51,9 +41,6 @@ export function ConfigStep({ template, value, onChange }: ConfigStepProps) {
   const { t } = useTranslation(['projects']);
   const meta = templateById(template);
   const slug = previewSlug(value.name);
-  // Builder projects scaffold as react-ts; only matching DSs are linkable.
-  const dsPickerOn = template === 'react-vite' && value.builder;
-  const ds = useLinkableDesignSystems('react-ts', dsPickerOn);
 
   return (
     <div className="space-y-4">
@@ -126,39 +113,6 @@ export function ConfigStep({ template, value, onChange }: ConfigStepProps) {
         </label>
       )}
 
-      {dsPickerOn && (
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">{t('wizard.dsLabel', 'Design system')}</label>
-          {ds.loading ? (
-            <p className="text-xs text-muted-foreground">{t('wizard.dsLoading', 'Loading design systems…')}</p>
-          ) : ds.items.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t('wizard.dsEmpty', 'No published design system yet — create one in the DS Studio.')}
-            </p>
-          ) : (
-            <Select
-              value={value.dsSessionId == null ? 'none' : String(value.dsSessionId)}
-              onValueChange={(v) => onChange({ dsSessionId: v === 'none' ? null : v })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">{t('wizard.dsNone', 'No design system')}</SelectItem>
-                {ds.items.map((d) => (
-                  <SelectItem key={d.sessionId} value={String(d.sessionId)} disabled={!d.compatible}>
-                    {d.packageName}@{d.semver}
-                    {!d.compatible && ` — ${t('wizard.dsIncompatible', 'incompatible stack ({{stack}})', { stack: d.stack })}`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <p className="text-xs text-muted-foreground">
-            {t('wizard.dsHint', 'The agent installs the package from the local registry and builds UI with its components first.')}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

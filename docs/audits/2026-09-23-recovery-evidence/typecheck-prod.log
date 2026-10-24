@@ -1,0 +1,501 @@
+packages/codestudio-ui/src/legacy/apps/dashboard/components/AboutDialog.tsx(24,44): error TS2304: Cannot find name '__APP_VERSION__'.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/agent-config/ToolAssignmentEditor.tsx(258,44): error TS2339: Property 'globallyDisabled' does not exist on type '{ name: string; tier: string; source: string; description: string; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/agent-config/ToolAssignmentEditor.tsx(279,46): error TS2339: Property 'globallyDisabled' does not exist on type '{ name: string; tier: string; source: string; description: string; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/AppMenu.tsx(39,17): error TS2304: Cannot find name '__APP_VERSION__'.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/ProjectSwitcher.tsx(128,37): error TS2339: Property 'windowRegistry' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/ProjectSwitcher.tsx(131,39): error TS7006: Parameter 'list' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/ProjectSwitcher.tsx(132,46): error TS7006: Parameter 'x' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/ProjectSwitcher.tsx(134,46): error TS7006: Parameter 'list' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/ProjectSwitcher.tsx(134,83): error TS7006: Parameter 'x' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/ProjectSwitcher.tsx(197,37): error TS2339: Property 'windowRegistry' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/components/ProjectSwitcher.tsx(202,37): error TS7006: Parameter 'r' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/e2e/session-workbench.baseline.spec.ts(90,22): error TS2352: Conversion of type 'Window & typeof globalThis' to type 'Window & { __CSW_BASELINE__: { commits: number[]; mutationRecords: number; }; }' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property '__CSW_BASELINE__' is missing in type 'Window & typeof globalThis' but required in type '{ __CSW_BASELINE__: { commits: number[]; mutationRecords: number; }; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/e2e/session-workbench.baseline.spec.ts(151,36): error TS2307: Cannot find module '/hooks/agent-stream/worker-log-store.ts' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/app-settings/useAppSettings.ts(85,13): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/CapabilityFallbacksPanel.tsx(25,45): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/ProviderCard.tsx(200,39): error TS2322: Type '{}' is not assignable to type 'Key | null | undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/ProviderCard.tsx(200,51): error TS2322: Type '{}' is not assignable to type 'string | number | readonly string[] | undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/ProviderCard.tsx(201,33): error TS2322: Type '{}' is not assignable to type 'ReactI18NextChildren | Iterable<ReactI18NextChildren>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/SupervisorPanel.tsx(88,94): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/SupervisorPanel.tsx(391,69): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/SupervisorPanel.tsx(408,63): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/SupervisorPanel.tsx(452,5): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/SupervisorPanel.tsx(459,70): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/SupervisorPanel.tsx(488,29): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/SupervisorPanel.tsx(597,52): error TS2503: Cannot find namespace 'JSX'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/useMcpOAuthFlow.ts(63,25): error TS2339: Property 'oauthLoopbackStop' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/admin/useMcpOAuthFlow.ts(106,37): error TS2339: Property 'oauthLoopbackStart' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/AgentSessionModal.tsx(10,15): error TS2305: Module '"@mcp/code-agent"' has no exported member 'CoderMessageRow'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/AgentSessionModal.tsx(200,9): error TS2322: Type 'unknown' is not assignable to type 'string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<...> | null | undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/AgentsTab.tsx(526,20): error TS2339: Property 'openInNewWindow' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/AgentsTab.tsx(532,26): error TS2339: Property 'openInNewWindow' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/BoardPanel.tsx(211,17): error TS2322: Type '((answer: string) => void) | undefined' is not assignable to type '(answer: string) => void'.
+  Type 'undefined' is not assignable to type '(answer: string) => void'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/BoardPanel.tsx(214,17): error TS2322: Type '((approved: boolean, fb: string | undefined) => void) | undefined' is not assignable to type '(approved: boolean, feedback?: string | undefined) => void'.
+  Type 'undefined' is not assignable to type '(approved: boolean, feedback?: string | undefined) => void'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/CompanySessionView.tsx(199,55): error TS2339: Property 'containerId' does not exist on type 'SandboxSnapshot'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/CompanySessionView.tsx(614,31): error TS2322: Type '(providerId: string) => EnrichedProviderModel[]' is not assignable to type '(provider: string) => { id: string; name: string; mode?: string | undefined; }[]'.
+  Type 'EnrichedProviderModel[]' is not assignable to type '{ id: string; name: string; mode?: string | undefined; }[]'.
+    Type 'EnrichedProviderModel' is not assignable to type '{ id: string; name: string; mode?: string | undefined; }'.
+      Types of property 'mode' are incompatible.
+        Type 'string | null' is not assignable to type 'string | undefined'.
+          Type 'null' is not assignable to type 'string | undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/CompanySessionView.tsx(727,11): error TS2322: Type '(providerId: string) => EnrichedProviderModel[]' is not assignable to type '(provider: string) => { id: string; name: string; mode?: string | undefined; }[]'.
+  Type 'EnrichedProviderModel[]' is not assignable to type '{ id: string; name: string; mode?: string | undefined; }[]'.
+    Type 'EnrichedProviderModel' is not assignable to type '{ id: string; name: string; mode?: string | undefined; }'.
+      Types of property 'mode' are incompatible.
+        Type 'string | null' is not assignable to type 'string | undefined'.
+          Type 'null' is not assignable to type 'string | undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/kanban-card-flags.ts(44,28): error TS7006: Parameter 'a' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/kanban-card-flags.ts(44,62): error TS7006: Parameter 'a' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/RoleEditModal.tsx(191,17): error TS2322: Type '{ id: string; label: string; }[]' is not assignable to type 'ProviderOption[]'.
+  Property 'models' is missing in type '{ id: string; label: string; }' but required in type 'ProviderOption'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/RoleEditModal.tsx(192,17): error TS2322: Type '(provider: string) => { id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }[]' is not assignable to type '(providerId: string) => EnrichedProviderModel[]'.
+  Type '{ id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }[]' is not assignable to type 'EnrichedProviderModel[]'.
+    Type '{ id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }' is not assignable to type 'EnrichedProviderModel'.
+      Types of property 'mode' are incompatible.
+        Type 'string | undefined' is not assignable to type 'string | null'.
+          Type 'undefined' is not assignable to type 'string | null'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/TemplateBuilderModal.tsx(268,11): error TS2322: Type '(providerId: string) => EnrichedProviderModel[]' is not assignable to type '(provider: string) => { id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }[]'.
+  Type 'EnrichedProviderModel[]' is not assignable to type '{ id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }[]'.
+    Type 'EnrichedProviderModel' is not assignable to type '{ id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }'.
+      Types of property 'mode' are incompatible.
+        Type 'string | null' is not assignable to type 'string | undefined'.
+          Type 'null' is not assignable to type 'string | undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/TemplateListPanel.tsx(152,11): error TS2322: Type 'Template' is not assignable to type '{ id: number; name: string; description: string; roles: RoleConfig[]; }'.
+  Types of property 'roles' are incompatible.
+    Type 'RoleConfig[]' is not assignable to type 'import("D:/MCP/packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/RoleEditModal", { with: { "resolution-mode": "import" } }).RoleConfig[]'.
+      Type 'RoleConfig' is not assignable to type 'import("D:/MCP/packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/RoleEditModal", { with: { "resolution-mode": "import" } }).RoleConfig'.
+        Types of property 'tier' are incompatible.
+          Type 'string' is not assignable to type '"bootstrap" | "navigate" | "full"'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/tests/history/RunHistoryTable.tsx(74,70): error TS2345: Argument of type 'string' is not assignable to parameter of type 'SetStateAction<number | null>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/tests/history/RunHistoryTable.tsx(82,11): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/agents/tests/plan/TestPlanView.tsx(111,12): error TS2352: Conversion of type '{ icon: "○"; label: string; toneClass: "text-zinc-400"; }' to type 'StatusVisual' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'icon' are incompatible.
+    Type '"○"' is not comparable to type '"✓" | "✗" | "⊘" | "⏳" | "⚠"'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/ApiClientTab.tsx(496,40): error TS2322: Type 'Promise<void> | null' is not assignable to type 'void | Promise<void>'.
+  Type 'null' is not assignable to type 'void | Promise<void>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/MonacoEditorImpl.tsx(19,6): error TS2604: JSX element type 'Editor' does not have any construct or call signatures.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/MonacoEditorImpl.tsx(19,6): error TS2786: 'Editor' cannot be used as a JSX component.
+  Its type 'typeof import("D:/MCP/node_modules/.pnpm/@monaco-editor+react@4.7.0__19537b804caea8e183a29f7bc25c1d6c/node_modules/@monaco-editor/react/dist/index")' is not a valid JSX element type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/MonacoEditorImpl.tsx(24,18): error TS7006: Parameter 'v' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/SaveRequestDialog.tsx(58,39): error TS2349: This expression is not callable.
+  Type 'String' has no call signatures.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/SaveRequestDialog.tsx(58,39): error TS2448: Block-scoped variable 't' used before its declaration.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/SaveRequestDialog.tsx(58,39): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/SaveRequestDialog.tsx(58,84): error TS2349: This expression is not callable.
+  Type 'String' has no call signatures.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/SaveRequestDialog.tsx(58,84): error TS2448: Block-scoped variable 't' used before its declaration.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/api-client/SaveRequestDialog.tsx(58,84): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/__tests__/attachment-references.test.ts(13,33): error TS2352: Conversion of type '{ getPathForFile: () => string; }' to type 'ElectronAPI' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ getPathForFile: () => string; }' is missing the following properties from type 'ElectronAPI': invoke, openStream, isStreamingPath
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/__tests__/attachment-references.test.ts(30,33): error TS2352: Conversion of type '{ getPathForFile: () => string; }' to type 'ElectronAPI' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ getPathForFile: () => string; }' is missing the following properties from type 'ElectronAPI': invoke, openStream, isStreamingPath
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/__tests__/message-grouping.test.ts(27,9): error TS2353: Object literal may only specify known properties, and 'isMeta' does not exist in type 'PersistedMessage'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/__tests__/message-grouping.test.ts(50,23): error TS2322: Type '"thinking"' is not assignable to type '"text" | "tool_use" | "tool_result" | "image" | "document"'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/__tests__/message-grouping.test.ts(65,9): error TS2322: Type '"thinking"' is not assignable to type '"text" | "tool_use" | "tool_result" | "image" | "document"'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/__tests__/session-import-visuals.test.ts(27,66): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '{}' is missing the following properties from type 'RunDelta': input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/__tests__/session-import-visuals.test.ts(36,60): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '{}' is missing the following properties from type 'RunDelta': input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/global/GlobalNewSessionDialog.tsx(83,13): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/__tests__/file-change-row.test.ts(37,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' is not assignable to parameter of type 'Attributes & { actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+      Property 'children' is missing in type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' but required in type '{ actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/__tests__/file-change-row.test.ts(50,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' is not assignable to parameter of type 'Attributes & { actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+      Property 'children' is missing in type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' but required in type '{ actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/__tests__/file-change-row.test.ts(65,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' is not assignable to parameter of type 'Attributes & { actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+      Property 'children' is missing in type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' but required in type '{ actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/__tests__/file-change-row.test.ts(87,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' is not assignable to parameter of type 'Attributes & { actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+      Property 'children' is missing in type '{ actions: null; files: Map<string, SnapshotFileSummary>; }' but required in type '{ actions: SnapshotActions | null; files: Map<string, SnapshotFileSummary>; children: ReactNode; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/MessageList.tsx(226,9): error TS2739: Type 'ReadonlyMap<string, ToolResultView>' is missing the following properties from type 'Map<string, ToolResultView>': clear, delete, set, [Symbol.toStringTag]
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/MessageList.tsx(245,9): error TS2739: Type 'ReadonlyMap<string, ToolResultView>' is missing the following properties from type 'Map<string, ToolResultView>': clear, delete, set, [Symbol.toStringTag]
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/MessageList.tsx(263,9): error TS2739: Type 'ReadonlyMap<string, ToolResultView>' is missing the following properties from type 'Map<string, ToolResultView>': clear, delete, set, [Symbol.toStringTag]
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/messages/TaskExecutionBlock.tsx(251,9): error TS2322: Type '{ positional: never[]; }' is not assignable to type 'Record<string, string> & { positional: string[]; }'.
+  Type '{ positional: never[]; }' is not assignable to type 'Record<string, string>'.
+    Property 'positional' is incompatible with index signature.
+      Type 'never[]' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(36,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(37,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(38,34): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(47,33): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(48,35): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(49,25): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(50,35): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(51,29): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(68,24): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(69,34): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(77,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(78,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(79,27): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(80,17): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(81,27): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(83,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(84,27): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(89,55): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(90,34): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(98,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(99,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(100,22): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(101,35): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(102,29): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(103,24): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/notifications/__tests__/session-notifications-store.test.ts(104,29): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(25,41): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(28,23): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(29,23): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(31,25): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(37,41): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(40,19): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(41,19): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(42,19): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(44,23): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(45,23): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(50,19): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(51,42): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(55,21): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(57,23): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(62,21): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(64,23): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(70,42): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(71,19): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/__tests__/diagram-store.test.ts(74,19): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/right-panel/diagram/drawio-embed.ts(64,54): error TS2352: Conversion of type 'Record<string, unknown>' to type 'DrawioEvent' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'event' is missing in type 'Record<string, unknown>' but required in type 'DrawioEvent'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/SessionImportDialog.tsx(118,45): error TS2339: Property 'openFiles' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/SessionImportDialog.tsx(119,30): error TS7006: Parameter 'value' implicitly has an 'any' type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/SessionImportDialog.tsx(165,106): error TS2339: Property 'openFiles' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/utils.ts(925,45): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/utils.ts(968,25): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/utils.ts(1049,36): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/chat/utils.ts(1119,45): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/git-push/CommitFileDiff.tsx(37,11): error TS2322: Type 'string' is not assignable to type 'BundledLanguage | SpecialLanguage | undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/notifications/index.ts(22,3): error TS2305: Module '"./stream-events.js"' has no exported member 'notifyPipelineStreamEvent'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/onboarding/OnboardingWizard.tsx(198,13): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/onboarding/OnboardingWizard.tsx(327,13): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/popout/openDetached.ts(15,12): error TS2339: Property 'openInNewWindow' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/popout/openDetached.ts(18,14): error TS2339: Property 'openInNewWindow' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/preflight/storage.ts(36,60): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/editor-chat/SessionPickerDropdown.tsx(247,60): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/editor-chat/SessionPickerDropdown.tsx(409,92): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/list/projectContextMenu.ts(66,20): error TS2339: Property 'openInNewWindow' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/list/projectContextMenu.ts(72,26): error TS2339: Property 'openInNewWindow' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/ProjectCreateDialog.tsx(55,13): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/ProjectIdeToolbar.tsx(71,10): error TS2741: Property 'onRequestCommit' is missing in type '{ projectId: number; onMutated: () => void; onClose: () => void; }' but required in type 'BranchPopoverProps'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/ProjectView.tsx(124,38): error TS2339: Property 'dirty' does not exist on type 'OpenFile | OpenMerge | OpenSftpFile | OpenDatabaseTab'.
+  Property 'dirty' does not exist on type 'OpenMerge'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/ProjectView.tsx(129,15): error TS2339: Property 'content' does not exist on type 'OpenFile | OpenMerge | OpenSftpFile | OpenDatabaseTab'.
+  Property 'content' does not exist on type 'OpenMerge'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/ProjectView.tsx(136,71): error TS2339: Property 'lastModified' does not exist on type 'OpenFile | OpenMerge | OpenSftpFile | OpenDatabaseTab'.
+  Property 'lastModified' does not exist on type 'OpenMerge'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/ProjectView.tsx(332,25): error TS2339: Property 'windowRegistry' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/ProjectView.tsx(441,7): error TS2345: Argument of type '{ id: string; title: string; titlePt: string; category: string; target: "project" | "editor"; defaultKeys: { intellij: string[]; vscode: string[]; } | undefined; allowInInputs: true; run: () => Promise<PluginToolResponse | undefined>; }[]' is not assignable to parameter of type '(CommandSpec & CommandHandler)[]'.
+  Type '{ id: string; title: string; titlePt: string; category: string; target: "project" | "editor"; defaultKeys: { intellij: string[]; vscode: string[]; } | undefined; allowInInputs: true; run: () => Promise<PluginToolResponse | undefined>; }' is not assignable to type 'CommandSpec & CommandHandler'.
+    Type '{ id: string; title: string; titlePt: string; category: string; target: "project" | "editor"; defaultKeys: { intellij: string[]; vscode: string[]; } | undefined; allowInInputs: true; run: () => Promise<PluginToolResponse | undefined>; }' is not assignable to type 'CommandHandler'.
+      The types returned by 'run()' are incompatible between these types.
+        Type 'Promise<PluginToolResponse | undefined>' is not assignable to type 'void | Promise<void>'.
+          Type 'Promise<PluginToolResponse | undefined>' is not assignable to type 'Promise<void>'.
+            Type 'PluginToolResponse | undefined' is not assignable to type 'void'.
+              Type 'PluginToolResponse' is not assignable to type 'void'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/panes/EditorPreferencesPane.tsx(161,16): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'SetStateAction<LspServerInfo[]>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/panes/EditorPreferencesPane.tsx(161,39): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'SetStateAction<{ projectId: number; serverId: string; state: string; }[]>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/panes/EditorThemePane.tsx(150,12): error TS2604: JSX element type 'Editor' does not have any construct or call signatures.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/panes/EditorThemePane.tsx(150,12): error TS2786: 'Editor' cannot be used as a JSX component.
+  Its type 'typeof import("D:/MCP/node_modules/.pnpm/@monaco-editor+react@4.7.0__19537b804caea8e183a29f7bc25c1d6c/node_modules/@monaco-editor/react/dist/index")' is not a valid JSX element type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/ProjectSettingsModal.tsx(187,50): error TS2322: Type '({ id: "general"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | { ...; })[] | ({ ...; } | ... 4 more ... | { ...; })[] | ({ ...; } | ... 3 more ... | { ...; })[] | ({ ...; } | { ...; })[] | { ...; }[]' is not assignable to type '{ id: "general"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | { ...; } | readonly ({ ...; } | { ...; })[]'.
+  Type '({ id: "node"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | ... 4 more ... | { ...; })[]' is not assignable to type '{ id: "general"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | { ...; } | readonly ({ ...; } | { ...; })[]'.
+    Type '({ id: "node"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | ... 4 more ... | { ...; })[]' is not assignable to type 'readonly ({ id: "general"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | { ...; })[]'.
+      Type '{ id: "node"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | ... 4 more ... | { ...; }' is not assignable to type '{ id: "general"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | { ...; }'.
+        Type '{ id: "node"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; }' is not assignable to type '{ id: "general"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; } | { ...; }'.
+          Type '{ id: "node"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; }' is not assignable to type '{ id: "search"; label: string; Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>; }'.
+            Types of property 'id' are incompatible.
+              Type '"node"' is not assignable to type '"search"'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/ProjectSettingsModal.tsx(187,78): error TS18046: 'item' is of type 'unknown'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/ProjectSettingsModal.tsx(244,32): error TS2339: Property 'label' does not exist on type '{}'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/settings/ProjectSettingsModal.tsx(245,31): error TS2339: Property 'Icon' does not exist on type '{}'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/tabs/index-workspace/__tests__/project-semantic-api.test.ts(120,12): error TS2493: Tuple type '[]' of length '0' has no element at index '0'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/tabs/index-workspace/__tests__/project-semantic-api.test.ts(120,17): error TS2493: Tuple type '[]' of length '0' has no element at index '1'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/project/tabs/TransientSurface.tsx(112,77): error TS2322: Type '{ key: number; projectId: number; projectName: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'projectId' does not exist on type 'IntrinsicAttributes'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/search-everywhere/SearchEverywhere.tsx(213,28): error TS2339: Property 'vectorAvailable' does not exist on type '{ vectorAvailable?: boolean | undefined; embeddingAvailable?: boolean | undefined; vectorError?: string | undefined; telemetryRequestId?: string | undefined; } | { vectorError: string; }'.
+  Property 'vectorAvailable' does not exist on type '{ vectorError: string; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/search-everywhere/SearchEverywhere.tsx(214,31): error TS2339: Property 'embeddingAvailable' does not exist on type '{ vectorAvailable?: boolean | undefined; embeddingAvailable?: boolean | undefined; vectorError?: string | undefined; telemetryRequestId?: string | undefined; } | { vectorError: string; }'.
+  Property 'embeddingAvailable' does not exist on type '{ vectorError: string; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/search-everywhere/SearchEverywhere.tsx(221,50): error TS2339: Property 'telemetryRequestId' does not exist on type '{ vectorAvailable?: boolean | undefined; embeddingAvailable?: boolean | undefined; vectorError?: string | undefined; telemetryRequestId?: string | undefined; } | { vectorError: string; }'.
+  Property 'telemetryRequestId' does not exist on type '{ vectorError: string; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/sprite-studio/engine/__tests__/engine-resize.test.ts(116,53): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/sftp/SftpEditMount.tsx(124,10): error TS2604: JSX element type 'Editor' does not have any construct or call signatures.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/sftp/SftpEditMount.tsx(124,10): error TS2786: 'Editor' cannot be used as a JSX component.
+  Its type 'typeof import("D:/MCP/node_modules/.pnpm/@monaco-editor+react@4.7.0__19537b804caea8e183a29f7bc25c1d6c/node_modules/@monaco-editor/react/dist/index")' is not a valid JSX element type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/__tests__/vault-sync-core.test.ts(2,92): error TS2307: Cannot find module '@mcp/vault-crypto' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts(45,8): error TS2307: Cannot find module '@mcp/vault-crypto' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts(315,48): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts(317,43): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts(317,75): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts(429,48): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts(431,55): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/use-ssh-vault-sync.ts(431,87): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/ssh/vault/vault-sync-core.ts(14,48): error TS2307: Cannot find module '@mcp/vault-crypto' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/annotation-highlight.test.ts(19,36): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/typescript/typescript.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/typescript/typescript.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/typescript/typescript.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/annotation-highlight.test.ts(21,40): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/python/python.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/python/python.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/python/python.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/annotation-highlight.test.ts(23,38): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/rust/rust.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/rust/rust.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/rust/rust.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/completion-provider.test.ts(190,7): error TS2353: Object literal may only specify known properties, and 'textEdit' does not exist in type '{ label: string; kind: string; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/java-csharp-highlight.test.ts(2,25): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/java-csharp-highlight.test.ts(28,59): error TS2493: Tuple type '[]' of length '0' has no element at index '0'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(5,33): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/php/php.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/php/php.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/php/php.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(6,32): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/go/go.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/go/go.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/go/go.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(7,34): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/rust/rust.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/rust/rust.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/rust/rust.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(8,34): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/java/java.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/java/java.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/java/java.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(9,33): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/cpp/cpp.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/cpp/cpp.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/cpp/cpp.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(10,36): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/csharp/csharp.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/csharp/csharp.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/csharp/csharp.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(11,36): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/kotlin/kotlin.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/kotlin/kotlin.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/kotlin/kotlin.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(12,35): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/swift/swift.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/swift/swift.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/swift/swift.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/language-configs.test.ts(13,34): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/dart/dart.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/dart/dart.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/dart/dart.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/monarch-tokenize.ts(12,25): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/php-highlight.test.ts(9,25): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/php-highlight.test.ts(33,21): error TS2352: Conversion of type 'undefined' to type '{ create(): unknown; }' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/__tests__/php-highlight.test.ts(33,65): error TS2493: Tuple type '[]' of length '0' has no element at index '1'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(19,11): error TS2339: Property 'content' does not exist on type 'OpenTab'.
+  Property 'content' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(19,36): error TS2339: Property 'content' does not exist on type 'OpenTab'.
+  Property 'content' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(20,10): error TS2339: Property 'dirty' does not exist on type 'OpenTab'.
+  Property 'dirty' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(20,22): error TS2339: Property 'dirty' does not exist on type 'OpenTab'.
+  Property 'dirty' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(21,10): error TS2339: Property 'lastModified' does not exist on type 'OpenTab'.
+  Property 'lastModified' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(21,29): error TS2339: Property 'lastModified' does not exist on type 'OpenTab'.
+  Property 'lastModified' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(22,10): error TS2339: Property 'externallyChanged' does not exist on type 'OpenTab'.
+  Property 'externallyChanged' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/active-file-render.ts(22,34): error TS2339: Property 'externallyChanged' does not exist on type 'OpenTab'.
+  Property 'externallyChanged' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/annotation-highlight.ts(84,24): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/typescript/typescript.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/typescript/typescript.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/typescript/typescript.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/annotation-highlight.ts(90,24): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/javascript/javascript.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/javascript/javascript.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/javascript/javascript.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/annotation-highlight.ts(96,24): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/python/python.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/python/python.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/python/python.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/annotation-highlight.ts(102,24): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/rust/rust.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/rust/rust.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/rust/rust.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/conflict-markers.ts(174,5): error TS2322: Type 'IEvent<void>' is not assignable to type 'IEvent<CodeLensProvider>'.
+  Type 'void' is not assignable to type 'CodeLensProvider'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/java-csharp-highlight.ts(9,38): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/java/java.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/java/java.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/java/java.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/java-csharp-highlight.ts(11,40): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/csharp/csharp.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/csharp/csharp.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/csharp/csharp.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/jsonl-support.ts(94,11): error TS2322: Type '{ severity: MarkerSeverity.Error; source: string; lineNumber: number; startColumn: number; endColumn: number; message: string; }[]' is not assignable to type 'IMarkerData[]'.
+  Type '{ severity: MarkerSeverity.Error; source: string; lineNumber: number; startColumn: number; endColumn: number; message: string; }' is missing the following properties from type 'IMarkerData': startLineNumber, endLineNumber
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/lsp/apply-workspace-edit.ts(101,14): error TS2339: Property 'dirty' does not exist on type 'OpenTab'.
+  Property 'dirty' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/lsp/completion.ts(59,42): error TS2551: Property 'CompletionItemInsertTextRules' does not exist on type 'typeof languages'. Did you mean 'CompletionItemInsertTextRule'?
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/lsp/completion.ts(59,117): error TS2724: '"D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api".languages' has no exported member named 'CompletionItemInsertTextRules'. Did you mean 'CompletionItemInsertTextRule'?
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/merge/merge-lens.ts(35,5): error TS2322: Type 'IEvent<void>' is not assignable to type 'IEvent<CodeLensProvider>'.
+  Type 'void' is not assignable to type 'CodeLensProvider'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/merge/MergeTabView.tsx(156,58): error TS2322: Type 'RefObject<HTMLDivElement | null>' is not assignable to type 'RefObject<HTMLDivElement>'.
+  Type 'HTMLDivElement | null' is not assignable to type 'HTMLDivElement'.
+    Type 'null' is not assignable to type 'HTMLDivElement'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/merge/MergeTabView.tsx(158,59): error TS2322: Type 'RefObject<HTMLDivElement | null>' is not assignable to type 'RefObject<HTMLDivElement>'.
+  Type 'HTMLDivElement | null' is not assignable to type 'HTMLDivElement'.
+    Type 'null' is not assignable to type 'HTMLDivElement'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/merge/MergeTabView.tsx(160,61): error TS2322: Type 'RefObject<HTMLDivElement | null>' is not assignable to type 'RefObject<HTMLDivElement>'.
+  Type 'HTMLDivElement | null' is not assignable to type 'HTMLDivElement'.
+    Type 'null' is not assignable to type 'HTMLDivElement'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(178,25): error TS2345: Argument of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' is not assignable to parameter of type 'SetStateAction<typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api") | null>'.
+  Property 'default' is missing in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' but required in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(179,24): error TS2345: Argument of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' is not assignable to parameter of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+  Property 'default' is missing in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' but required in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(183,51): error TS2345: Argument of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' is not assignable to parameter of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+  Property 'default' is missing in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' but required in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(227,66): error TS2345: Argument of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' is not assignable to parameter of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+  Property 'default' is missing in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' but required in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(233,25): error TS2345: Argument of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' is not assignable to parameter of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+  Property 'default' is missing in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' but required in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(234,25): error TS2345: Argument of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' is not assignable to parameter of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+  Property 'default' is missing in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' but required in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(252,42): error TS2345: Argument of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' is not assignable to parameter of type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+  Property 'default' is missing in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")' but required in type 'typeof import("D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/editor.api")'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(469,8): error TS2604: JSX element type 'Editor' does not have any construct or call signatures.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/MonacoMount.tsx(469,8): error TS2786: 'Editor' cannot be used as a JSX component.
+  Its type 'typeof import("D:/MCP/node_modules/.pnpm/@monaco-editor+react@4.7.0__19537b804caea8e183a29f7bc25c1d6c/node_modules/@monaco-editor/react/dist/index")' is not a valid JSX element type.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/php-highlight.ts(29,37): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/basic-languages/php/php.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/basic-languages/php/php.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/basic-languages/php/php.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/editor/plugin-editor-gutter.ts(147,25): error TS18047: 'editor' is possibly 'null'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/EditorTabBar.tsx(371,41): error TS2339: Property 'externallyChanged' does not exist on type 'OpenFile | OpenSftpFile'.
+  Property 'externallyChanged' does not exist on type 'OpenSftpFile'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/file-tree/file-git-actions.ts(35,15): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/file-tree/tree-context.ts(250,21): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/StatusBar.tsx(32,61): error TS2339: Property 'dirty' does not exist on type 'OpenFile | OpenGitLog | OpenGitStash | OpenMerge | OpenSftpFile | OpenDatabaseTab'.
+  Property 'dirty' does not exist on type 'OpenGitLog'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/__tests__/use-git-window.test.ts(43,12): error TS2532: Object is possibly 'undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/__tests__/use-git-window.test.ts(43,35): error TS2493: Tuple type '[]' of length '0' has no element at index '0'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/__tests__/use-git-window.test.ts(90,12): error TS2532: Object is possibly 'undefined'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/__tests__/use-git-window.test.ts(90,35): error TS2493: Tuple type '[]' of length '0' has no element at index '0'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/CreateStashDialog.tsx(65,17): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/StashDetailView.tsx(72,9): error TS2322: Type '"git-stash"' is not assignable to type '"other" | "git-unstaged" | "git-staged"'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/StashView.tsx(150,9): error TS2322: Type '"git-stash"' is not assignable to type '"other" | "git-unstaged" | "git-staged"'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/use-branch-ops.ts(137,31): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/use-branch-ops.ts(218,36): error TS2339: Property 'message' does not exist on type '{ success(title: string, opts?: PushShape): void; error(title: string, opts?: PushShape): void; info(title: string, opts?: PushShape): void; warning(title: string, opts?: PushShape): void; }'.
+packages/codestudio-ui/src/legacy/apps/dashboard/features/workspace/jetbrains/tool-windows/git/use-git-window.ts(294,25): error TS2345: Argument of type 'unknown' is not assignable to parameter of type 'SetStateAction<GitStatusCounts | null>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/active-processes.test.ts(43,32): error TS2769: No overload matches this call.
+  Overload 1 of 3, '(callbackfn: (previousValue: { id: string; source: string; kind: string; label: string; background: boolean; }, currentValue: { id: string; source: string; kind: string; label: string; background: boolean; }, currentIndex: number, array: { ...; }[]) => { ...; }, initialValue: { ...; }): { ...; }', gave the following error.
+    Type 'ActiveProcess[]' is missing the following properties from type '{ id: string; source: string; kind: string; label: string; background: boolean; }': id, source, kind, label, background
+  Overload 2 of 3, '(callbackfn: (previousValue: never[], currentValue: { id: string; source: string; kind: string; label: string; background: boolean; }, currentIndex: number, array: { id: string; source: string; kind: string; label: string; background: boolean; }[]) => never[], initialValue: never[]): never[]', gave the following error.
+    Type 'ActiveProcess[]' is not assignable to type 'never[]'.
+      Type 'ActiveProcess' is not assignable to type 'never'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/active-processes.test.ts(45,38): error TS2345: Argument of type '{ id: string; source: string; kind: string; label: string; background: boolean; }' is not assignable to parameter of type 'ActiveProcess[]'.
+  Type '{ id: string; source: string; kind: string; label: string; background: boolean; }' is missing the following properties from type 'ActiveProcess[]': length, pop, push, concat, and 29 more.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-active-processes.test.ts(14,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-activity.test.ts(12,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-agent-progress.test.ts(12,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-plan-sweep.test.ts(28,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-snapshot-inventory.test.ts(14,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-task-run.test.ts(12,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-thinking.test.ts(8,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-tool-progress.test.ts(20,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-turn-continuity.test.ts(12,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/__tests__/handlers-workflow.test.ts(12,5): error TS2322: Type 'number' is not assignable to type 'string'.
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/handlers.ts(937,17): error TS2352: Conversion of type 'Record<string, unknown>' to type 'AgentProgressPayload' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'Record<string, unknown>' is missing the following properties from type 'AgentProgressPayload': groupId, agentIndex, label, event
+packages/codestudio-ui/src/legacy/apps/dashboard/hooks/agent-stream/handlers.ts(1363,19): error TS2352: Conversion of type '{ task_id: string; } & Record<string, unknown>' to type '{ status: StreamTaskStatus; result: { summary: string; files_modified: string[]; errors?: string | undefined; sandbox_violations?: string[] | undefined; } | null | undefined; finished_at: string; }' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ task_id: string; } & Record<string, unknown>' is missing the following properties from type '{ status: StreamTaskStatus; result: { summary: string; files_modified: string[]; errors?: string | undefined; sandbox_violations?: string[] | undefined; } | null | undefined; finished_at: string; }': status, result, finished_at
+packages/codestudio-ui/src/legacy/apps/dashboard/i18n/__tests__/i18n-coverage.test.ts(188,38): error TS2339: Property 'text' does not exist on type 'LeftHandSideExpression'.
+packages/codestudio-ui/src/legacy/apps/dashboard/i18n/index.ts(11,35): error TS2339: Property 'glob' does not exist on type 'ImportMeta'.
+packages/codestudio-ui/src/legacy/apps/dashboard/i18n/test-bootstrap.ts(24,35): error TS2339: Property 'glob' does not exist on type 'ImportMeta'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/__tests__/keymap-core.test.ts(94,52): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/__tests__/keymap-core.test.ts(95,47): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/__tests__/keymap-core.test.ts(124,95): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/__tests__/keymap-core.test.ts(148,83): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/__tests__/keymap-core.test.ts(174,70): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/__tests__/keymap-core.test.ts(196,70): error TS2322: Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/dispatcher.ts(134,17): error TS2339: Property 'when' does not exist on type 'CommandDef'.
+packages/codestudio-ui/src/legacy/apps/dashboard/keymap/dispatcher.ts(134,30): error TS2339: Property 'when' does not exist on type 'CommandDef'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/__tests__/api-client-stream-bridge.test.ts(8,15): error TS2790: The operand of a 'delete' operator must be optional.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/__tests__/radix-presence-react19.test.ts(2,48): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean '../radix-presence-state.js'?
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(296,36): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(297,19): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(302,20): error TS2339: Property 'cancelInvoke' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(317,36): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(321,31): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(778,36): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(780,22): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/api-client.ts(781,26): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/material-icons/resolve.ts(10,26): error TS1543: Importing a JSON file into an ECMAScript module requires a 'type: "json"' import attribute when 'module' is set to 'NodeNext'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/material-icons/resolve.ts(23,26): error TS2339: Property 'glob' does not exist on type 'ImportMeta'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-setup.ts(24,36): error TS7016: Could not find a declaration file for module 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'. 'D:/MCP/node_modules/.pnpm/monaco-editor@0.52.2/node_modules/monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js' implicitly has an 'any' type.
+  If the 'monaco-editor' package actually exposes this module, try adding a new declaration (.d.ts) file containing `declare module 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js';`
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-setup.ts(28,26): error TS2307: Cannot find module 'monaco-editor/esm/vs/editor/editor.worker?worker' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-setup.ts(29,22): error TS2307: Cannot find module 'monaco-editor/esm/vs/language/typescript/ts.worker?worker' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-setup.ts(30,24): error TS2307: Cannot find module 'monaco-editor/esm/vs/language/json/json.worker?worker' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-setup.ts(31,23): error TS2307: Cannot find module 'monaco-editor/esm/vs/language/css/css.worker?worker' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-setup.ts(32,24): error TS2307: Cannot find module 'monaco-editor/esm/vs/language/html/html.worker?worker' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-workspace-text-model-service.ts(135,15): error TS2339: Property 'content' does not exist on type 'OpenTab'.
+  Property 'content' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-workspace-text-model-service.ts(135,41): error TS2339: Property 'content' does not exist on type 'OpenTab'.
+  Property 'content' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/monaco-workspace-text-model-service.ts(135,76): error TS2339: Property 'content' does not exist on type 'OpenTab'.
+  Property 'content' does not exist on type 'OpenDiff'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/perf/route-startup-metrics.ts(122,46): error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/public-asset.ts(27,39): error TS2339: Property 'env' does not exist on type 'ImportMeta'.
+packages/codestudio-ui/src/legacy/apps/dashboard/lib/textmate/registry.ts(24,25): error TS2307: Cannot find module 'vscode-oniguruma/release/onig.wasm?url' or its corresponding type declarations.
+packages/codestudio-ui/src/legacy/apps/dashboard/state/editor-settings.ts(95,15): error TS2345: Argument of type '(state: EditorSettingsState) => { configs: { [x: string]: unknown; }; }' is not assignable to parameter of type 'EditorSettingsState | Partial<EditorSettingsState> | ((state: EditorSettingsState) => EditorSettingsState | Partial<...>)'.
+  Type '(state: EditorSettingsState) => { configs: { [x: string]: unknown; }; }' is not assignable to type '(state: EditorSettingsState) => EditorSettingsState | Partial<EditorSettingsState>'.
+    Type '{ configs: { [x: string]: unknown; }; }' is not assignable to type 'EditorSettingsState | Partial<EditorSettingsState>'.
+      Type '{ configs: { [x: string]: unknown; }; }' is not assignable to type 'Partial<EditorSettingsState>'.
+        Types of property 'configs' are incompatible.
+          Type '{ [x: string]: unknown; }' is not assignable to type 'Record<string, ConfigResult>'.
+            'string' index signatures are incompatible.
+              Type 'unknown' is not assignable to type 'ConfigResult'.
+packages/documentation-ui/src/DocumentationApp.tsx(3,18): error TS1543: Importing a JSON file into an ECMAScript module requires a 'type: "json"' import attribute when 'module' is set to 'NodeNext'.
+packages/documentation-ui/src/DocumentationApp.tsx(4,16): error TS1543: Importing a JSON file into an ECMAScript module requires a 'type: "json"' import attribute when 'module' is set to 'NodeNext'.
+packages/my-apps-ui/src/legacy/apps/dashboard/components/agent-config/ToolAssignmentEditor.tsx(258,44): error TS2339: Property 'globallyDisabled' does not exist on type '{ name: string; tier: string; source: string; description: string; }'.
+packages/my-apps-ui/src/legacy/apps/dashboard/components/agent-config/ToolAssignmentEditor.tsx(279,46): error TS2339: Property 'globallyDisabled' does not exist on type '{ name: string; tier: string; source: string; description: string; }'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/agents/AgentSessionModal.tsx(10,15): error TS2305: Module '"@mcp/code-agent"' has no exported member 'CoderMessageRow'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/agents/AgentSessionModal.tsx(200,9): error TS2322: Type 'unknown' is not assignable to type 'string | number | bigint | boolean | ReactElement<unknown, string | JSXElementConstructor<any>> | Iterable<ReactNode> | ReactPortal | Promise<...> | null | undefined'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/agents/BoardPanel.tsx(211,17): error TS2322: Type '((answer: string) => void) | undefined' is not assignable to type '(answer: string) => void'.
+  Type 'undefined' is not assignable to type '(answer: string) => void'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/agents/BoardPanel.tsx(214,17): error TS2322: Type '((approved: boolean, fb: string | undefined) => void) | undefined' is not assignable to type '(approved: boolean, feedback?: string | undefined) => void'.
+  Type 'undefined' is not assignable to type '(approved: boolean, feedback?: string | undefined) => void'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/agents/RoleEditModal.tsx(191,17): error TS2322: Type '{ id: string; label: string; }[]' is not assignable to type 'ProviderOption[]'.
+  Property 'models' is missing in type '{ id: string; label: string; }' but required in type 'ProviderOption'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/agents/RoleEditModal.tsx(192,17): error TS2322: Type '(provider: string) => { id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }[]' is not assignable to type '(providerId: string) => EnrichedProviderModel[]'.
+  Type '{ id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }[]' is not assignable to type 'EnrichedProviderModel[]'.
+    Type '{ id: string; name: string; mode?: string | undefined; supported_reasoning_levels?: string[] | null | undefined; }' is not assignable to type 'EnrichedProviderModel'.
+      Types of property 'mode' are incompatible.
+        Type 'string | undefined' is not assignable to type 'string | null'.
+          Type 'undefined' is not assignable to type 'string | null'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/messages/MessageList.tsx(226,9): error TS2739: Type 'ReadonlyMap<string, ToolResultView>' is missing the following properties from type 'Map<string, ToolResultView>': clear, delete, set, [Symbol.toStringTag]
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/messages/MessageList.tsx(245,9): error TS2739: Type 'ReadonlyMap<string, ToolResultView>' is missing the following properties from type 'Map<string, ToolResultView>': clear, delete, set, [Symbol.toStringTag]
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/messages/MessageList.tsx(263,9): error TS2739: Type 'ReadonlyMap<string, ToolResultView>' is missing the following properties from type 'Map<string, ToolResultView>': clear, delete, set, [Symbol.toStringTag]
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/messages/TaskExecutionBlock.tsx(251,9): error TS2322: Type '{ positional: never[]; }' is not assignable to type 'Record<string, string> & { positional: string[]; }'.
+  Type '{ positional: never[]; }' is not assignable to type 'Record<string, string>'.
+    Property 'positional' is incompatible with index signature.
+      Type 'never[]' is not assignable to type 'string'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/utils.ts(925,45): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/utils.ts(968,25): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/utils.ts(1049,36): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/chat/utils.ts(1119,45): error TS2339: Property 'isMeta' does not exist on type 'PersistedMessage'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/notifications/index.ts(22,3): error TS2305: Module '"./stream-events.js"' has no exported member 'notifyPipelineStreamEvent'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/project/editor-chat/SessionPickerDropdown.tsx(247,60): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+packages/my-apps-ui/src/legacy/apps/dashboard/features/project/editor-chat/SessionPickerDropdown.tsx(409,92): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+packages/my-apps-ui/src/legacy/apps/dashboard/hooks/agent-stream/handlers.ts(937,17): error TS2352: Conversion of type 'Record<string, unknown>' to type 'AgentProgressPayload' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'Record<string, unknown>' is missing the following properties from type 'AgentProgressPayload': groupId, agentIndex, label, event
+packages/my-apps-ui/src/legacy/apps/dashboard/hooks/agent-stream/handlers.ts(1363,19): error TS2352: Conversion of type '{ task_id: string; } & Record<string, unknown>' to type '{ status: StreamTaskStatus; result: { summary: string; files_modified: string[]; errors?: string | undefined; sandbox_violations?: string[] | undefined; } | null | undefined; finished_at: string; }' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ task_id: string; } & Record<string, unknown>' is missing the following properties from type '{ status: StreamTaskStatus; result: { summary: string; files_modified: string[]; errors?: string | undefined; sandbox_violations?: string[] | undefined; } | null | undefined; finished_at: string; }': status, result, finished_at
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(296,36): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(297,19): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(302,20): error TS2339: Property 'cancelInvoke' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(317,36): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(321,31): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(778,36): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(780,22): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/api-client.ts(781,26): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/my-apps-ui/src/legacy/apps/dashboard/lib/perf/route-startup-metrics.ts(122,46): error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+packages/my-apps-ui/src/MyAppsApp.tsx(5,18): error TS1543: Importing a JSON file into an ECMAScript module requires a 'type: "json"' import attribute when 'module' is set to 'NodeNext'.
+packages/my-apps-ui/src/MyAppsApp.tsx(6,16): error TS1543: Importing a JSON file into an ECMAScript module requires a 'type: "json"' import attribute when 'module' is set to 'NodeNext'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(296,36): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(297,19): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(302,20): error TS2339: Property 'cancelInvoke' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(317,36): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(321,31): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(778,36): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(780,22): error TS2339: Property 'invoke' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/api-client.ts(781,26): error TS2339: Property 'openStream' does not exist on type 'ElectronAPI'.
+packages/sprite-ui/src/legacy/apps/dashboard/lib/perf/route-startup-metrics.ts(122,46): error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.
+  Type 'undefined' is not assignable to type 'number'.
+packages/sprite-ui/src/SpriteStudioApp.tsx(4,18): error TS1543: Importing a JSON file into an ECMAScript module requires a 'type: "json"' import attribute when 'module' is set to 'NodeNext'.
+packages/sprite-ui/src/SpriteStudioApp.tsx(5,16): error TS1543: Importing a JSON file into an ECMAScript module requires a 'type: "json"' import attribute when 'module' is set to 'NodeNext'.

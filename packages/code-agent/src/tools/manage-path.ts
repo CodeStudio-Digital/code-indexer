@@ -1,5 +1,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { err, ok } from '@mcp/code-agent/core/tool.js';
+import { err, ok, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
+import { randomUUID } from 'node:crypto';
 import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
@@ -9,7 +10,6 @@ import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files
 import { pathFor, resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 
 type Operation = 'mkdir' | 'move' | 'delete';
-type DeleteMode = 'trash' | 'permanent';
 
 const BLOCKED_TOP_LEVEL = new Set(['.git', '.mcp-indexer', 'node_modules']);
 
@@ -35,6 +35,7 @@ function safeTarget(raw: unknown, ctx: ToolContext): {
 } | { error: string } {
   const input = cleanInput(raw);
   if (!input) return { error: 'Path is required' };
+  if (input.length > 4096 || input.includes('\0')) return { error: 'Path is invalid or exceeds 4096 characters' };
   if (hasTraversal(input)) return { error: `Path '${input}' uses traversal segments` };
 
   const resolved = resolveWorkspacePath(input, ctx, 'write');
@@ -77,12 +78,17 @@ async function exists(fs: IFilesystemPort, abs: string): Promise<boolean> {
   try {
     await fs.access(abs);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }
 
-async function isNonEmptyDirectory(fs: IFilesystemPort, abs: string): Promise<boolean> {
+async function isNonEmptyDirectory(fs: IFilesystemPort, abs: string, signal?: AbortSignal): Promise<boolean> {
+  if (fs.iterateDirectory) {
+    for await (const _entry of fs.iterateDirectory(abs, signal)) return true;
+    return false;
+  }
   const entries = await fs.readdir(abs, { withFileTypes: true });
   return entries.length > 0;
 }
@@ -91,14 +97,14 @@ function trashPath(rootPath: string, rel: string): { abs: string; rel: string } 
   const p = pathFor(rootPath);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const parts = rel.split('/').filter(Boolean);
-  const trashRel = ['.mcp-indexer', 'trash', `${stamp}-${Date.now()}`, ...parts].join('/');
+  const trashRel = ['.mcp-indexer', 'trash', `${stamp}-${randomUUID()}`, ...parts].join('/');
   return {
     abs: p.resolve(rootPath, ...trashRel.split('/')),
     rel: trashRel,
   };
 }
 
-async function mkdir(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+async function mkdir(args: Record<string, unknown>, ctx: ToolContext, beforeMutation: () => void): Promise<ToolResult> {
   const target = safeTarget(args.path, ctx);
   if ('error' in target) return err(target.error);
 
@@ -108,13 +114,14 @@ async function mkdir(args: Record<string, unknown>, ctx: ToolContext): Promise<T
     const st = await fs.stat(target.abs);
     if (!st.isDirectory()) return err(`Path '${target.display}' already exists and is not a directory`);
   }
-  await fs.mkdir(target.abs, { recursive: true });
+  ctx.signal?.throwIfAborted();
+  if (!alreadyExists) { beforeMutation(); await fs.mkdir(target.abs, { recursive: true }); }
   markOverlay(ctx, target);
   emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
   return ok(`${alreadyExists ? 'Directory already exists' : 'Created directory'}: ${target.display}`);
 }
 
-async function move(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+async function move(args: Record<string, unknown>, ctx: ToolContext, beforeMutation: () => void): Promise<ToolResult> {
   const from = safeTarget(args.from_path, ctx);
   if ('error' in from) return err(`from_path: ${from.error}`);
   const to = safeTarget(args.to_path, ctx);
@@ -128,13 +135,18 @@ async function move(args: Record<string, unknown>, ctx: ToolContext): Promise<To
   if (await exists(fs, to.abs)) return err(`Destination '${to.display}' already exists`);
 
   const fromStats = await fs.stat(from.abs);
-  if (fromStats.isDirectory() && (to.rel === from.rel || to.rel.startsWith(`${from.rel}/`))) {
+  const sourceRel = process.platform === 'win32' ? from.rel.toLowerCase() : from.rel;
+  const destinationRel = process.platform === 'win32' ? to.rel.toLowerCase() : to.rel;
+  if (fromStats.isDirectory() && (destinationRel === sourceRel || destinationRel.startsWith(`${sourceRel}/`))) {
     return err(`Refusing to move '${from.display}' into itself`);
   }
 
   const p = pathFor(to.rootPath);
+  ctx.signal?.throwIfAborted();
+  beforeMutation();
   await fs.mkdir(p.dirname(to.abs), { recursive: true });
-  await fs.rename(from.abs, to.abs);
+  ctx.signal?.throwIfAborted();
+  await renameEntry(fs, from.abs, to.abs);
   markOverlay(ctx, from);
   markOverlay(ctx, to);
   emitRecentFileTouched({ absolutePath: from.abs, kind: 'edit' });
@@ -142,7 +154,7 @@ async function move(args: Record<string, unknown>, ctx: ToolContext): Promise<To
   return ok(`Moved ${from.display} -> ${to.display}`);
 }
 
-async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+async function deletePath(args: Record<string, unknown>, ctx: ToolContext, beforeMutation: () => void): Promise<ToolResult> {
   const target = safeTarget(args.path, ctx);
   if ('error' in target) return err(target.error);
 
@@ -154,13 +166,15 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Prom
   const confirm = cleanInput(args.confirm);
   const st = await fs.stat(target.abs);
 
-  if (st.isDirectory() && !recursive && (await isNonEmptyDirectory(fs, target.abs))) {
+  if (st.isDirectory() && !recursive && (await isNonEmptyDirectory(fs, target.abs, ctx.signal))) {
     return err(`Directory '${target.display}' is not empty. Set recursive=true and confirm 'DELETE ${target.display}'.`);
   }
 
   if (mode === 'permanent') {
     const expected = `PERMANENT DELETE ${target.display}`;
     if (confirm !== expected) return err(`Permanent delete requires confirm='${expected}'`);
+    ctx.signal?.throwIfAborted();
+    beforeMutation();
     await fs.rm(target.abs, { recursive, force: false });
     markOverlay(ctx, target);
     emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
@@ -174,8 +188,11 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Prom
 
   const trash = trashPath(target.rootPath, target.rel);
   const p = pathFor(target.rootPath);
+  ctx.signal?.throwIfAborted();
+  beforeMutation();
   await fs.mkdir(p.dirname(trash.abs), { recursive: true });
-  await fs.rename(target.abs, trash.abs);
+  ctx.signal?.throwIfAborted();
+  await renameEntry(fs, target.abs, trash.abs);
   markOverlay(ctx, target);
   emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
   return ok(`Moved ${target.display} to trash: ${trash.abs}`);
@@ -211,10 +228,31 @@ export const managePathTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    let dispatched = false;
+    const beforeMutation = () => { ctx.signal?.throwIfAborted(); dispatched = true; };
+    try {
+    ctx.signal?.throwIfAborted();
+    if (args.recursive !== undefined && typeof args.recursive !== 'boolean') return err('recursive must be a boolean');
+    if (args.delete_mode !== undefined && args.delete_mode !== 'trash' && args.delete_mode !== 'permanent') return err('delete_mode must be trash or permanent');
+    if (args.confirm !== undefined && (typeof args.confirm !== 'string' || args.confirm.length > 4200)) return err('confirm must be a bounded string');
     const operation = cleanInput(args.operation) as Operation;
-    if (operation === 'mkdir') return await mkdir(args, ctx);
-    if (operation === 'move') return await move(args, ctx);
-    if (operation === 'delete') return await deletePath(args, ctx);
+    if (operation === 'mkdir') return await mkdir(args, ctx, beforeMutation);
+    if (operation === 'move') return await move(args, ctx, beforeMutation);
+    if (operation === 'delete') return await deletePath(args, ctx, beforeMutation);
     return err("operation must be one of 'mkdir', 'move', or 'delete'");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return dispatched ? unknownToolOutcome(`manage_path did not confirm all effects: ${message}. Inspect source, destination and trash before retrying.`)
+        : err(`manage_path failed before mutation: ${message}`);
+    }
   },
 };
+
+async function renameEntry(fs: IFilesystemPort, from: string, to: string): Promise<void> {
+  if (fs.exclusiveRenameSupported) {
+    if (!fs.renameNoReplace) throw new Error('Atomic exclusive rename unavailable');
+    await fs.renameNoReplace(from, to);
+  } else {
+    await fs.rename(from, to);
+  }
+}

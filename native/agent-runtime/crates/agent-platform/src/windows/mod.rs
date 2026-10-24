@@ -11,10 +11,14 @@ pub mod bootstrap;
 mod environment;
 mod error;
 pub mod filesystem;
+pub mod filesystem_move;
+#[cfg(test)]
+mod filesystem_move_tests;
 pub mod ipc;
 mod launch;
 mod lifecycle;
 mod limits;
+pub mod pseudoconsole;
 mod resource;
 #[allow(unsafe_code)]
 mod sys;
@@ -137,6 +141,16 @@ pub struct WindowsJobGroup {
 }
 
 impl WindowsJobGroup {
+    /// Inspect the root without granting its raw process handle.
+    /// # Errors
+    /// Returns the OS failure when process state cannot be read.
+    pub fn root_exit_code(&self) -> Result<Option<u32>, WindowsContainmentError> {
+        if sys::wait_process(&self.root_process, 0)? == sys::WaitState::Signaled {
+            Ok(Some(sys::exit_code(&self.root_process)?))
+        } else {
+            Ok(None)
+        }
+    }
     #[must_use]
     pub const fn resource_group_id(&self) -> &ResourceGroupId {
         &self.resource_group_id

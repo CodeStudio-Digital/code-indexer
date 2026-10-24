@@ -1,3 +1,5 @@
+import { buildDocNavigation } from '../doc-navigation.js';
+import { installDiagramRenderShim } from './diagram-render-shim.js';
 /**
  * Company-session worker entrypoint (P13).
  *
@@ -43,12 +45,10 @@ installLlmDispatcher();
 import { CompanyStore } from '../../../packages/store/src/company-store.js';
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
 import { hydrateWorkerCapabilities } from './worker-capabilities.js';
-import { DesignSystemStore } from '../../../packages/store/src/design-system-store.js';
 import { ApiClientStore } from '../../../packages/store/src/api-client-store.js';
 import { setApiClientStore } from '../../../packages/code-agent/src/tools/api-client/index.js';
 import { DbClientStore } from '../../../packages/store/src/db-client-store.js';
 import { setDbToolsStores, setDbSecretDecryptor } from '../../../packages/code-agent/src/tools/db/index.js';
-import { SkillStore } from '../../../packages/store/src/skill-store.js';
 import { CompanySessionEnvStore } from '../../../packages/store/src/company-session-env-store.js';
 import { QaTestRunStore } from '../../../packages/services/src/qa/store/qa-test-run-store.js';
 import { CompanyServiceTransitionsStore } from '../../../packages/store/src/company-service-transitions-store.js';
@@ -66,19 +66,10 @@ import { setServiceSupervisorStores } from '../../../packages/company/src/servic
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
 import { COOLDOWN_RESURRECT_MS } from '../../../packages/company/src/services/RuntimeReconciler.js';
 import {
-  setDesignSystemStore,
-  setDesignSystemSkillStore,
-} from '../../../packages/company/src/tools/design-system/index.js';
-import {
   setAppStudioDbClientStore,
   setAppStudioStore,
 } from '../../../packages/company/src/tools/app-studio/index.js';
 import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
-import { VerdaccioStore } from '../../../packages/store/src/verdaccio-store.js';
-import {
-  VerdaccioService,
-  setVerdaccioService,
-} from '../../../packages/services/src/verdaccio/verdaccio-service.js';
 import {
   setQaTestRunStore,
   setQaEndpointEnvStore,
@@ -207,7 +198,7 @@ const bridge = new MessageBridge({
 // subordinate runner inside THIS worker errors with "doc corpus backend
 // is not wired into this process". Search stays in this worker's own WAL
 // connection so a slow semantic provider cannot block Electron's event
-// loop. Navigation reads and deep research retain their existing host RPCs.
+// loop. Navigation also reads locally; deep research retains its host RPC.
 //
 // `docs_deep_research` additionally needs a per-runner
 // `installDocsDeepResearch(runner)` call (it's not a always-registered
@@ -215,30 +206,7 @@ const bridge = new MessageBridge({
 // paths (MasterLifecycle.wireAllForRunner + subordinate spawn).
 const workerSearchDocStore = new DocStore(dbConn.handle);
 const workerDocSearch = buildWorkerDocSearch(workerSearchDocStore);
-const docSearchShim: DocSearchBackend = {
-  search: workerDocSearch.search,
-  // rag_read_doc — plain SQLite reads on the main side, so a short ceiling.
-  readChunk: async (input) =>
-    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readChunk']>>>>(
-      'docReadChunk',
-      input,
-      { timeoutMs: 15_000 },
-    ),
-  // rag_read_doc mode:'section' — whole-section reassembly (plain reads).
-  readSection: async (input) =>
-    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['readSection']>>>>(
-      'docReadSection',
-      input,
-      { timeoutMs: 15_000 },
-    ),
-  // rag_doc_outline — heading tree / source list (plain reads).
-  outline: async (input) =>
-    bridge.request<Awaited<ReturnType<NonNullable<DocSearchBackend['outline']>>>>(
-      'docOutline',
-      input,
-      { timeoutMs: 15_000 },
-    ),
-};
+const docSearchShim: DocSearchBackend = { search: workerDocSearch.search, ...buildDocNavigation(workerSearchDocStore) };
 setGlobalDocSearch(docSearchShim);
 
 // Role recommender shim → forwards to the main process (WorkerOrchestratorPool
@@ -263,6 +231,7 @@ const previewShim: IPreviewDevtools = {
   },
 };
 setGlobalPreviewDevtools(previewShim);
+installDiagramRenderShim(bridge, () => companySessionId);
 
 // Vision describer shim → forwards to the main process (WorkerOrchestratorPool
 // registers the `visionDescribe` handler), so company subordinates also get
@@ -318,19 +287,8 @@ setSandboxArchiveBundleResolver({
 });
 const companyStore = new CompanyStore(db.raw());
 
-// ─── Company-tool store bindings (DS + QA) ──────────────────────
-// worker_threads don't share module state, so the setDesignSystemStore()
-// / setQaTestRunStore() calls in server.ts (main thread) leave these
-// module-level bindings NULL here. Master + subordinates all run in THIS
-// worker, so without this the ds_*/qa_* tools fail with "... not wired"
-// (ds_get_session_info is the very first call of a Design System round).
-// Re-wire against the worker's own DB handle — identical construction to
-// apps/http-api/server/deps.ts, WAL handle shared (ownsConnection=false,
-// so the existing stop-handler close on companyStore still covers it).
-// Harmless when the feature is off: tool registration stays gated by
-// designSystemEnabled in packages/code-agent/src/index.ts.
+// Worker-local stores share the database handle used by this process.
 const rawDb = db.raw();
-setDesignSystemStore(new DesignSystemStore(sessionStore));
 // App Studio operational state is filesystem-only. SQLite remains involved
 // here only as the essential project-root catalog.
 setAppStudioStore(new AppStudioStore({
@@ -373,7 +331,6 @@ setAppStudioDbClientStore({
 setDbSecretDecryptor((blob) =>
   bridge.request<string>('secretsDecrypt', { blob }, { timeoutMs: 10_000 }),
 );
-setDesignSystemSkillStore(new SkillStore(rawDb));
 // <indexed-docs> hint provider — worker-local DocStore reads (two SELECTs
 // per 30s/project; no RPC). Inlined for the same alias-resolution reason
 // as the coder-worker: server/docs/search-backend.ts pulls `@mcp/*`
@@ -393,11 +350,6 @@ setGlobalDocsHintProvider({
     }
   },
 });
-// Verdaccio: setVerdaccioService() in server.ts is main-thread only, so
-// ds_publish_version inside this worker found no service and failed with
-// "VerdaccioService not wired" (pre-existing gap — the service reads all
-// state from the DB, so a worker-local instance is equivalent to main's).
-setVerdaccioService(new VerdaccioService({ store: new VerdaccioStore(rawDb) }));
 setQaTestRunStore(new QaTestRunStore(sessionStore));
 // One CompanySessionEnvStore shared by BOTH the QA browser-endpoint tools and
 // the env_* tools (env_list/env_read/env_set/…). Each has its own module-level

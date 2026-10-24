@@ -25,7 +25,14 @@ export class ProjectDb {
     this.dbPath = dbPath;
     this.now = opts.now ?? Date.now;
     this.db = openRawProjectDb(dbPath, opts);
-    if (!opts.readonly) initProjectSchema(this.db);
+    try {
+      if (!opts.readonly) initProjectSchema(this.db);
+    } catch (error) {
+      // A failed migration must not leave an unowned SQLite connection (or
+      // its WAL handles) alive each time a chat retries project initialization.
+      this.db.close();
+      throw error;
+    }
     this.lastUsedAt = this.now();
   }
 
