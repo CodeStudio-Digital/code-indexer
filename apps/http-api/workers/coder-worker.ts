@@ -117,6 +117,7 @@ import { normalizeCoderTerminalSignal } from '../../../packages/agent-runtime-co
 import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
 import { createWorkerAgentReadPort } from './agent-read-port.js';
+import { materializePendingAgentTransition } from './coder-agent-transition.js';
 import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
@@ -843,6 +844,10 @@ bridge.handle('runFresh', async (payload) => {
   activeRun = run;
   let pluginHost: PluginWorkerHost | null = null;
   try {
+    await materializePendingAgentTransition(
+      getSharedSessionStore(dbPath, sessionContext.writerOwnerId),
+      sessionId,
+    );
     const { toolPlugins, bundles } = listWorkerEnabledPluginRuntime(
       sessionContext.projectRoot,
     );

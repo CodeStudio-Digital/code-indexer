@@ -12,6 +12,8 @@ export const criticalPaths = [
   'src/__tests__/chatgpt-stream-handler.test.ts',
   'packages/services/src/services/docs/__tests__/attachment',
   'apps/http-api/server/routes/coder/__tests__/session-images.test.ts',
+  'apps/http-api/server/routes/coder/__tests__/stream-idempotency.test.ts',
+  'apps/http-api/workers/__tests__/coder-agent-transition.test.ts',
   'apps/dashboard/features/chat/__tests__',
   'apps/dashboard/features/chat/messages/__tests__',
 ];

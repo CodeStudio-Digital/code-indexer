@@ -28,7 +28,6 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
   getCoderWorkerPool: () => poolMock,
 }));
 
-vi.mock('@mcp/app-studio/local-db.js', () => ({ findLocalD1File: () => null }));
 
 import { mountCoderStreamRoutes } from '../stream.js';
 import { createBus, markEnded, publish, type CoderRunBus } from '../../../../coder-bus.js';
@@ -637,7 +636,7 @@ describe('POST /messages idempotency', () => {
     expect(text).toContain('after-command');
   });
 
-  it('materializes the final pending agent transition only when the fresh run starts', async () => {
+  it.each(['messages', 'continue'])('leaves a warm worker in charge of the mode transition on /%s', async (endpoint) => {
     const h = setup(new RecentMessageKeys(), {
       pendingTransition: {
         sessionId: SESSION_ID,
@@ -647,28 +646,21 @@ describe('POST /messages idempotency', () => {
       },
     });
 
-    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
+    const previousBus = createBus(new AbortController());
+    markEnded(previousBus, 'done', { reason: 'completed' });
+    h.activeRuns.set(SESSION_ID, previousBus);
+    const consume = vi.spyOn(h.deps.sessionStore, 'consumePendingAgentTransition')
+      .mockRejectedValue(Object.assign(new Error('writer belongs to the warm worker'), { name: 'SessionLeaseHeldError' }));
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/${endpoint}`, {
       content: 'write the plan',
       client_msg_id: 'transition-turn-1',
     });
 
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    expect(h.consumeTransitionCalls).toEqual([SESSION_ID]);
-    expect(h.appendCalls).toEqual([{
-      role: 'user',
-      content: [{
-        type: 'text',
-        text: expect.stringContaining('Agent transition: explore → plan.'),
-      }],
-      isMeta: true,
-    }]);
-    expect(h.inputCalls).toEqual([expect.objectContaining({
-      session_id: SESSION_ID,
-      kind: 'system_reminder',
-      source_label: 'reminder:agent-transition',
-      content: expect.stringContaining('The active agent is now plan.'),
-    })]);
+    expect(consume).not.toHaveBeenCalled();
+    expect(h.appendCalls).toEqual([]);
+    expect(h.inputCalls).toEqual([]);
   });
 
   it('starts a fresh normal runner while structural indexing continues in the background', async () => {
@@ -793,7 +785,7 @@ describe('POST /messages idempotency', () => {
     markEnded(live.bus, 'done', {});
   });
 
-  it('keeps a persisted app coordinator even if the POST carries a stale agent', async () => {
+  it('allows a retired app coordinator session to switch to a supported agent', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
     const res = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
@@ -804,7 +796,7 @@ describe('POST /messages idempotency', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'app_orchestrator' });
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'explore' });
   });
 
   it('still honors explicit agent changes for normal non-specialist sessions', async () => {
@@ -933,7 +925,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
     expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a persisted app coordinator during continue', async () => {
+  it('continues a retired app coordinator session with the requested supported agent', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
     const res = await h.post(`/api/coder/sessions/${SESSION_ID}/continue`, {
@@ -943,7 +935,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'app_orchestrator', resume: true });
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'explore', resume: true });
   });
 });
 

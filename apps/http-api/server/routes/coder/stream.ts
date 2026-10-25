@@ -492,33 +492,6 @@ export function mountCoderStreamRoutes(
     else bus.endListeners.add(() => void settle());
   }
 
-  async function materializePendingAgentTransition(sessionId: SessionId): Promise<void> {
-    const transition = await sessionStore.consumePendingAgentTransition?.(sessionId) ?? null;
-    if (!transition) return;
-
-    const from = transition.fromAgent ?? 'session-default';
-    const to = transition.toAgent ?? 'session-default';
-    const reminder =
-      `<system-reminder>Agent transition: ${from} → ${to}. ` +
-      `The active agent is now ${to}. Follow the current system prompt, behavior, ` +
-      `tool rules, and mutation policy for this new agent. Earlier assistant claims ` +
-      `about the active agent or mode are stale.</system-reminder>`;
-    await sessionStore.appendMessage({
-      session_id: sessionId,
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text: reminder }],
-        isMeta: true,
-      },
-    });
-    await sessionStore.recordSessionInput({
-      session_id: sessionId,
-      kind: 'system_reminder',
-      source_label: 'reminder:agent-transition',
-      content: reminder,
-    });
-  }
-
   function contains(root: string, candidate: string): boolean {
     const rel = relative(resolve(root), candidate);
     return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
@@ -1292,7 +1265,6 @@ export function mountCoderStreamRoutes(
           body: { error: referenceError, code: 'ATTACHMENT_REFERENCE_NOT_AUTHORIZED' },
         };
       }
-      await materializePendingAgentTransition(id);
       const freshBus = await pool.runFresh(id, {
         userMessage: body.content,
         attachments: body.attachments,
@@ -1550,8 +1522,6 @@ export function mountCoderStreamRoutes(
           }
           return { kind: 'attach' as const, bus: live, tailFrom };
         }
-
-        await materializePendingAgentTransition(id);
         const newBus = await workerPool.runFresh(id, {
           userMessage: '',
           maxTurns: continueMaxTurns,
