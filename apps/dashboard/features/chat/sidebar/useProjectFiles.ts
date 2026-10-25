@@ -28,7 +28,8 @@ interface SearchState {
  * when the user expands a directory; search results come from a separate
  * recursive endpoint and replace the tree view while active.
  */
-export function useProjectFiles(projectId: number | null) {
+export function useProjectFiles(projectId: number | null, sessionId?: string) {
+  const scopeQuery = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : '';
   const [root, setRoot] = useState<ProjectTreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +49,7 @@ export function useProjectFiles(projectId: number | null) {
       if (projectId == null) return null;
       try {
         const r = await fetch(
-          `/api/coder/projects/${projectId}/tree?path=${encodeURIComponent(path)}`,
+          `/api/coder/projects/${projectId}/tree?path=${encodeURIComponent(path)}${scopeQuery}`,
         );
         if (!r.ok) {
           const body = (await r.json().catch(() => ({}))) as { error?: string };
@@ -61,7 +62,7 @@ export function useProjectFiles(projectId: number | null) {
         return null;
       }
     },
-    [projectId],
+    [projectId, scopeQuery],
   );
 
   // Load the root listing on project change or manual reload.
@@ -71,6 +72,7 @@ export function useProjectFiles(projectId: number | null) {
       return;
     }
     let cancelled = false;
+    setRoot(null);
     setError(null);
     fetchEntries('.').then((entries) => {
       if (cancelled || !entries) return;
@@ -96,7 +98,7 @@ export function useProjectFiles(projectId: number | null) {
     }
     let cancelled = false;
     setSearchState({ query: debouncedSearch, results: [], truncated: false, loading: true });
-    fetch(`/api/coder/projects/${projectId}/tree?q=${encodeURIComponent(debouncedSearch)}`)
+    fetch(`/api/coder/projects/${projectId}/tree?q=${encodeURIComponent(debouncedSearch)}${scopeQuery}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((data: { entries: SearchResult[]; truncated: boolean }) => {
         if (cancelled) return;
@@ -114,7 +116,7 @@ export function useProjectFiles(projectId: number | null) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, debouncedSearch]);
+  }, [projectId, debouncedSearch, scopeQuery]);
 
   const toggleExpand = useCallback(
     async (node: ProjectTreeNode) => {

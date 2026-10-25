@@ -13,10 +13,12 @@ import {
   messageRow,
   parseCoderTurnPayload,
   projectConversation,
+  type ProjectedStoredMessage,
 } from './conversation-codec.js';
 import { readChapterBoundarySync } from './conversation-chapter-codec.js';
 import { compactionBoundary, finiteNumber } from './session-projection.js';
 import { FsSessionDirectory } from './session-directory.js';
+import { attachmentPage, readAttachment } from './session-attachments.js';
 import type { FsCoderMessageRow, FsMessagePage, FsSessionWithMessages } from './types.js';
 import type { FsConversationChapterSourcePage } from './history-metrics-types.js';
 import { queryConversationProjection, type FsConversationProjection,
@@ -28,6 +30,10 @@ interface HydratedConversation {
   rows: FsCoderMessageRow[];
   messages: AgentMessage[];
   selection?: FsConversationProjection['selection'];
+}
+
+interface StoredConversation extends HydratedConversation {
+  stored: Map<number, ProjectedStoredMessage>;
 }
 
 const CONVERSATION_TAIL_CHUNK_BYTES = 64 * 1024;
@@ -142,14 +148,14 @@ async function highestMessageSeqFromTail(
 export class FsConversationReader {
   private hydratedCache: {
     key: string;
-    value: HydratedConversation;
+    value: StoredConversation;
     expiresAt: number;
   } | null = null;
-  private readonly hydratedInFlight = new Map<string, Promise<HydratedConversation>>();
+  private readonly hydratedInFlight = new Map<string, Promise<StoredConversation>>();
 
   constructor(private readonly directory: FsSessionDirectory) {}
 
-  private async hydrated(id: SessionId | string, query?: FsConversationProjectionQuery): Promise<HydratedConversation> {
+  private async projection(id: SessionId | string): Promise<StoredConversation> {
     const entry = await this.directory.requireEntry(id);
     const conversationPath = join(entry.location.bundle_path, 'conversation.jsonl');
     let fileSignature = 'missing';
@@ -168,9 +174,9 @@ export class FsConversationReader {
     if (
       this.hydratedCache?.key === key
       && this.hydratedCache.expiresAt >= Date.now()
-    ) return this.window(this.hydratedCache.value, query);
+    ) return this.hydratedCache.value;
     const existing = this.hydratedInFlight.get(key);
-    if (existing) return this.window(await existing, query);
+    if (existing) return existing;
 
     const pending = this.hydrateEntry(entry);
     this.hydratedInFlight.set(key, pending);
@@ -179,7 +185,7 @@ export class FsConversationReader {
       // Keep only the most recent projection and only long enough for one HTTP
       // detail request's tail/count/archive/preceding lookups to share it.
       this.hydratedCache = { key, value, expiresAt: Date.now() + 1_000 };
-      return this.window(value, query);
+      return value;
     } finally {
       if (this.hydratedInFlight.get(key) === pending) {
         this.hydratedInFlight.delete(key);
@@ -187,13 +193,18 @@ export class FsConversationReader {
     }
   }
 
-  private window(value: HydratedConversation, query?: FsConversationProjectionQuery): HydratedConversation {
-    if (!query) return value;
+  private async hydrated(id: SessionId | string, query?: FsConversationProjectionQuery): Promise<HydratedConversation> {
+    const value = await this.projection(id);
     // Legacy hydration reconciles chapter commits with state.json once. Reuse
     // that boundary, including a crash between the chapter and state commits.
-    const resolved = 'boundary' in query && !(query.kind === 'before' && query.includeArchived)
+    const resolved = query && 'boundary' in query && !(query.kind === 'before' && query.includeArchived)
       ? { ...query, boundary: compactionBoundary(value.session.state) } : query;
-    return { ...value, ...queryConversationProjection(value, resolved) };
+    const selected = resolved ? queryConversationProjection(value, resolved) : value;
+    // Choose metadata first. Counts never open blobs, and a 40-message preview
+    // must not hydrate attachments/tool outputs from the entire conversation.
+    const messages = selected.rows.map(row => hydrateMessage(value.entry.location, value.stored.get(row.seq)!));
+    const rows = selected.rows.map((row, index) => messageRow(value.entry.session.id, value.stored.get(row.seq)!, messages[index]!));
+    return { ...value, ...selected, messages, rows };
   }
 
   private async boundary(id: SessionId | string): Promise<number> {
@@ -204,7 +215,7 @@ export class FsConversationReader {
 
   private async hydrateEntry(
     entry: Awaited<ReturnType<FsSessionDirectory['requireEntry']>>,
-  ): Promise<HydratedConversation> {
+  ): Promise<StoredConversation> {
     const mapped = this.directory.map(entry);
     const chapterBoundary = readChapterBoundarySync(
       entry.location.bundle_path,
@@ -234,17 +245,15 @@ export class FsConversationReader {
     const projection = projectConversation(
       await this.directory.repository.readConversation(entry.location),
     );
-    const messages = projection.storedMessages.map((stored) =>
-      hydrateMessage(entry.location, stored),
-    );
-    const rows = projection.storedMessages.map((stored, index) =>
-      messageRow(entry.session.id, stored, messages[index]),
+    const rows = projection.storedMessages.map((stored) =>
+      messageRow(entry.session.id, stored, { role: stored.role, phase: stored.phase, content: [] }),
     );
     return {
       entry,
       session,
       rows,
-      messages,
+      messages: [],
+      stored: new Map(projection.storedMessages.map(message => [message.seq, message])),
     };
   }
 
@@ -275,6 +284,17 @@ export class FsConversationReader {
   async count(id: SessionId | string): Promise<number> {
     const result = await this.hydrated(id, { kind: 'stats', boundary: await this.boundary(id) });
     return result.selection!.visibleCount;
+  }
+
+  async listAttachments(id: SessionId | string, offset = 0, limit = 50) {
+    const value = await this.projection(id);
+    return attachmentPage(value.stored.values(), offset, limit);
+  }
+
+  async readAttachment(id: SessionId | string, seq: number, index: number) {
+    const value = await this.projection(id);
+    const message = value.stored.get(seq);
+    return message ? readAttachment(value.entry.location, message, index) : null;
   }
 
   async loadTail(
@@ -384,7 +404,7 @@ export class FsConversationReader {
     id: SessionId | string,
     beforeSeq: number,
   ): Promise<number | null> {
-    const result = await this.hydrated(id, { kind: 'previousUser', beforeSeq });
+    const result = queryConversationProjection(await this.projection(id), { kind: 'previousUser', beforeSeq });
     return result.rows[0]?.seq ?? null;
   }
 

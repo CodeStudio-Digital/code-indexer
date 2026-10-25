@@ -7,11 +7,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  EntityFileRepository,
   FileSessionRepository,
   SessionCatalog,
   SessionLocator,
 } from '../../../packages/session-storage/src/index.js';
-import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
 import {
   buildBundlePlans,
   commitStagingBundle,
@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 electronDescribe('App Studio filesystem migration', () => {
-  it('exports the v6 graph in the exact layout reopened by AppStudioStore', async () => {
+  it('preserves the retired v6 graph as readable archive entities', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sessions-fs-app-studio-'));
     cleanup.push(root);
     const dataDir = join(root, 'data');
@@ -51,7 +51,6 @@ electronDescribe('App Studio filesystem migration', () => {
     const Database = loadDatabaseConstructor();
     const db = new Database(':memory:');
     let repository: FileSessionRepository | undefined;
-    let store: AppStudioStore | undefined;
     try {
       db.exec(`
         PRAGMA foreign_keys = ON;
@@ -268,47 +267,43 @@ electronDescribe('App Studio filesystem migration', () => {
       });
       repository = new FileSessionRepository({ locator });
       const catalog = new SessionCatalog({ locator, repository });
-      store = new AppStudioStore({
-        repository,
-        catalog,
-        locator,
-        getProject: (projectId) =>
-          projectId === 1 ? { id: 1, root_path: projectRoot } : null,
-      });
+      await catalog.refresh();
+      const entry = catalog.get(plan!.uuid);
+      expect(entry?.session.kind).toBe('app_studio');
+      const list = async (namespace: string, kind: string) => {
+        const entities = new EntityFileRepository<Record<string, string | number>>({
+          sessionRoot: entry!.location.bundle_path,
+          namespace: 'company/app-studio/' + namespace,
+          kind: 'app_studio_' + kind,
+        });
+        return (await entities.list({ order: 'asc' })).items.map(item => ({ ...item.data, id: item.id }));
+      };
 
-      expect(await store.getSession(plan!.uuid)).toMatchObject({
-        id: plan!.uuid,
-        seq: 7,
-        project_id: 1,
-        name: 'Hotel',
-        app_slug: 'hotel',
-      });
-      const [build, verify] = await store.listWorkItems(plan!.uuid);
+      const [build, verify] = await list('work-items', 'work_item');
       expect(build).toMatchObject({
         source_id: 'build',
         plan_revision_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       });
       expect(build.id).not.toBe('build');
-      expect(JSON.parse(verify.depends_on_json)).toEqual([build.id]);
+      expect(JSON.parse(String(verify.depends_on_json))).toEqual([build.id]);
       expect(
-        (await store.listWorkItemRuns(plan!.uuid))[0],
+        (await list('work-item-runs', 'work_item_run'))[0],
       ).toMatchObject({
         work_item_id: build.id,
         status: 'interrupted',
       });
       expect(JSON.parse(
-        (await store.listDecisions(plan!.uuid))[0].blocked_work_item_ids_json,
+        String((await list('decisions', 'decision'))[0].blocked_work_item_ids_json),
       )).toEqual([verify.id]);
-      expect((await store.listEvents(plan!.uuid))[0]).toMatchObject({
+      expect((await list('events', 'event'))[0]).toMatchObject({
         entity_id: build.id,
       });
-      expect(await store.getLatestDeployment(plan!.uuid)).toMatchObject({
+      expect((await list('deployments', 'deployment'))[0]).toMatchObject({
         plan_revision_id: build.plan_revision_id,
         status: 'live',
         health_ok: 1,
       });
     } finally {
-      await store?.close();
       await repository?.close();
       db.close();
     }

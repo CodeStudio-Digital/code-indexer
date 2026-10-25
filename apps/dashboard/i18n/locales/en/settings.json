@@ -31,6 +31,8 @@
   "chrome.title": "Settings",
   "chrome.unset": "unset",
   "error.fetch": "Failed to load settings.",
+  "error.invalidSetting": "Invalid value or incompatible settings: {{key}}. No changes were saved.",
+  "error.invalidStored": "This saved value is invalid and is being ignored. Correct or clear it.",
   "item.ANTHROPIC_DEFAULT_OPUS_MODEL.description": "Override the default `claude-opus-*` model id.",
   "item.ANTHROPIC_DEFAULT_OPUS_MODEL.label": "Anthropic Opus model id",
   "item.ANTHROPIC_DEFAULT_SONNET_MODEL.description": "Override the default `claude-sonnet-*` model id used by Anthropic-backed sessions.",
@@ -195,8 +197,6 @@
   "item.MCP_SUBORDINATE_MASTER_WAIT_MS.label": "Subordinate → Master wait timeout (ms)",
   "item.MCP_SUPERVISOR_ENABLED.description": "Detects stuck company agents and recovers them (resume / resurrect master / unwedge tool), with circuit breakers to bound retries. The single biggest guard against a frozen company session. On by default; set to 0 to disarm. Applies to sessions started after you toggle it; watch incidents in Admin → Supervisor.",
   "item.MCP_SUPERVISOR_ENABLED.label": "Agent supervisor (auto-recover stuck agents)",
-  "item.MCP_SUPERVISOR_PERSISTENCE.description": "Persists supervisor state to agent_supervision so a restart can detect agents whose process died mid-run and mark them terminal. Set 0 to keep the supervisor in-memory only. Only relevant when the supervisor is enabled.",
-  "item.MCP_SUPERVISOR_PERSISTENCE.label": "Supervisor persistence (ghost cleanup on boot)",
   "item.MCP_SUPERVISOR_RECOVERY_MODE.description": "How the supervisor reacts to a stuck tool call. \"inject\" (default) unwedges the single call with a synthetic error so the run continues; \"abort\" terminates the whole runner instead; \"read_only\" detects + logs incidents but never acts; \"off\" disables recovery (detection only). Only relevant when the supervisor is enabled.",
   "item.MCP_SUPERVISOR_RECOVERY_MODE.label": "Supervisor recovery mode",
   "item.MCP_WATCH_DEBOUNCE_MS.description": "How long to coalesce file-change bursts (git checkout, formatter sweeps) before re-indexing.",
@@ -236,6 +236,6 @@
   "toast.restartingDesc": "The host will spawn a fresh backend process in a moment.",
   "toast.saveFailed": "Save failed",
   "toast.saved": "Saved {{count}} setting(s)",
-  "toast.savedApplied": "Changes applied immediately.",
+  "toast.savedApplied": "Changes apply to new operations and agent attempts.",
   "toast.savedRestart": "Some changes require a backend restart to take effect."
 }

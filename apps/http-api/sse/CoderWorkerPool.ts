@@ -81,7 +81,6 @@ import {
 } from '@mcp/store/control-plane/index.js';
 import type { ControlPlaneAuthority } from '../file-control-plane-store.js';
 import {
-  coderControlPlaneShadowEnabled,
   markLocalCoderRunStarted,
   mirrorLocalCoderLifecycleEvent,
   mirrorLocalCoderToolBoundary,
@@ -1297,7 +1296,7 @@ export class CoderWorkerPool {
     data: unknown,
   ): Promise<void> {
     const store = this.opts.getControlPlaneStore?.() ?? null;
-    if (!store || !context || !coderControlPlaneShadowEnabled()) return;
+    if (!store || !context) return;
     try {
       const record = data && typeof data === 'object' ? data as Record<string, unknown> : {};
       const terminal = classifyCoderTerminalOutcome({

@@ -1,4 +1,4 @@
-import { cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir, readdir, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,6 +18,12 @@ for (const asset of ASSETS) {
   const source = resolve(root, asset.from);
   const target = resolve(root, 'dist', asset.from);
   await mkdir(target, { recursive: true });
+  const sourceNames = new Set(await readdir(source));
+  for (const entry of await readdir(target, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(asset.ext) && !sourceNames.has(entry.name)) {
+      await unlink(resolve(target, entry.name));
+    }
+  }
   await cp(source, target, {
     recursive: true,
     filter: (path) => path.endsWith(asset.ext) || path === source,

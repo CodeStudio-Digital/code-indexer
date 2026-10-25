@@ -41,7 +41,6 @@ import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.j
 import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
 import { setDbSecretDecryptor, setDbToolsStores } from '@mcp/code-agent/tools/db/index.js';
 import { setQaEndpointEnvStore, setQaTestRunStore } from '@mcp/company/tools/qa/index.js';
-import { setAppStudioDbClientStore, setAppStudioStore } from '@mcp/company/tools/app-studio/index.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { setSandboxServiceEnvStore } from '@mcp/company/services/SandboxService.js';
 import { setChromeServiceForDocs } from './deps.js';
@@ -176,8 +175,6 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
     setDbSecretDecryptor(null);
     setQaTestRunStore(null);
     setQaEndpointEnvStore(null);
-    setAppStudioDbClientStore(null);
-    setAppStudioStore(null);
     setApiClientStore(null);
     setSandboxServiceEnvStore(null);
     setChromeServiceForDocs(null);

@@ -19,6 +19,7 @@ import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { prepareCoderAttempt, preparationSha256 } from '@mcp/code-agent/runtime/attempt-preparation.js';
 import { activateCoderRuntimeFacade } from '../sse/coder-runtime-facade.js';
 import { createBus, publish } from '../coder-bus.js';
+import { mirrorLocalCoderToolBoundary } from '../control-plane-shadow.js';
 
 let temporaryRoot: string;
 let dataDir: string;
@@ -52,6 +53,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await sessions.close();
   await rm(temporaryRoot, { recursive: true, force: true });
 });
@@ -115,6 +117,25 @@ describe('FileControlPlaneStore', () => {
     });
     return { store, context, preparation, admission, bus, abortWorker, provideInput, activate };
   }
+
+  it.each([undefined, '0', '1'])('persists redacted tool events with retired rollout flags set to %s', async (flag) => {
+    for (const key of ['CODER_CONTROL_PLANE_SHADOW', 'CODER_RUNTIME_JOURNAL_SHADOW']) {
+      vi.stubEnv(key, flag);
+    }
+    const { authority, context } = await preparingAttempt();
+    expect(authority.journalEnabled).toBe(true);
+    const value = { privateContent: 'must-not-reach-journal' };
+    await mirrorLocalCoderToolBoundary(authority, context, {
+      phase: 'completed', toolUseId: 'tool-journal', toolName: 'read_file', value,
+    });
+    const location = await sessions.getSessionLocation(context.sessionId);
+    const repository = new ControlPlaneFileRepository({ sessionRoot: location!.bundle_path });
+    const events = await repository.list('event', { limit: 100 });
+    const recorded = JSON.stringify(events.items);
+    expect(recorded).toContain('tool-journal');
+    expect(recorded).toContain(hashControlPlanePayload(value));
+    expect(recorded).not.toContain(value.privateContent);
+  });
 
   it('dispatches domain events through the public runtime-event method', async () => {
     const { authority, context } = await preparingAttempt();
@@ -376,6 +397,39 @@ describe('FileControlPlaneStore', () => {
     ).toEqual(expect.arrayContaining([`${attemptId}.json`]));
   });
 
+  it('holds new commands until restart recovery finishes and preserves their live authority', async () => {
+    const { authority, context } = await preparingAttempt();
+    let releaseRecovery!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseRecovery = resolve; });
+    const ensureCatalog = sessions.ensureCatalog.bind(sessions);
+    vi.spyOn(sessions, 'ensureCatalog').mockImplementationOnce(async () => {
+      await gate;
+      return ensureCatalog();
+    });
+    const recovery = authority.recoverInterruptedRuns();
+    const command = commandFor(context.sessionId, 'after-restart');
+    const newRunId = asAgentRunId(randomUUID());
+    let settled = false;
+    const acceptance = authority.acceptCommand({
+      command, payloadHash: hashControlPlanePayload(command.payload),
+      run: { agentRunId: newRunId, attemptId: asAgentRunAttemptId(randomUUID()),
+        role: 'build', agentDefinitionId: 'build', waitMode: 'foreground',
+        requestedCapabilityProfile: 'full', executorOwnerId: 'new-worker',
+        executorExpiresAt: new Date(Date.now() + 600_000).toISOString() },
+    }).then((result) => { settled = true; return result; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(await authority.getCommand(context.sessionId, command.commandId)).toBeNull();
+    } finally {
+      releaseRecovery();
+    }
+    expect(await recovery).toBe(1);
+    expect((await acceptance).kind).toBe('accepted');
+    expect(await authority.getRun(context.sessionId, context.agentRunId)).toMatchObject({ status: 'interrupted' });
+    expect(await authority.getRun(context.sessionId, newRunId)).toMatchObject({ status: 'starting' });
+  });
+
   it('recovers a non-terminal run as interrupted without consulting SQLite', async () => {
     const session = await sessions.createSession({
       project_id: 7,
@@ -423,6 +477,11 @@ describe('FileControlPlaneStore', () => {
 
     const restarted = new FileControlPlaneStore(sessions);
     expect(await restarted.recoverInterruptedRuns()).toBe(1);
+    expect(await restarted.getAttemptState(context, false)).toMatchObject({
+      attempt: { status: 'terminal', executorLease: { status: 'fenced' } },
+    });
+    await expect(restarted.getAttemptState(context)).rejects.toThrow();
+    await expect(restarted.markRunStarted(context, 'stale-runner')).rejects.toThrow();
     expect(await restarted.getRun(session.id, agentRunId)).toMatchObject({
       status: 'interrupted',
       terminalReason: 'process-restart',

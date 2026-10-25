@@ -1,4 +1,5 @@
 export interface ToolContextServices {
+  sessionNetwork?: import('../runtime/session-network.js').SessionNetwork;
   ultraBudget?: import('../runtime/ultra-budget.js').UltraAgentBudget;
   ultraPolicy?: import('@mcp/agent-runtime-contracts').PresetResolution;
   /** Session/peer mailbox independent of Company orchestration. */

@@ -84,6 +84,15 @@ describe('enter_worktree', () => {
 // ── exit_worktree ───────────────────────────────────────────────────
 
 describe('exit_worktree', () => {
+  it('keeps UI workspace sessions in their shared checkout', async () => {
+    const runner = makeRunner();
+    runner.worktreePath = '/fake/project/.mcp-indexer/worktrees/shared';
+    const result = await exitWorktree.handler({ action: 'remove', discard_changes: true },
+      { ...ctx(), runner, worktreeWorkspace: true } as any);
+    expect(result.isError).toBe(true);
+    expect(runner.exitWorktreeScope).not.toHaveBeenCalled();
+    expect(result.content).toContain('workspace bar');
+  });
   it('returns ok when no worktree is active', async () => {
     const runner = makeRunner();
     runner.worktreePath = undefined;

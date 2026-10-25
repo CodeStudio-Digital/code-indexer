@@ -3,8 +3,8 @@
  *
  * Resolution order on read (`get(key)`):
  *   1. DB row (operator saved a value) — authoritative.
- *   2. Catalog default — same default we'd show in the input
- *      placeholder.
+ *   2. Inherited deployment/.env value before the first DB override.
+ *   3. Catalog default.
  *
  * **NOT** queried at every `process.env.X` read site — that would be a
  * huge refactor. Instead, `applyToProcessEnv()` runs once at boot and
@@ -25,10 +25,31 @@
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import { APP_SETTINGS, getSettingDef, type SettingDef } from './app-settings-catalog.js';
+import { normalizeSettingUpdates, normalizeSettingValue } from './app-settings-validation.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
 type DB = InstanceType<typeof Database>;
+
+// Capture only keys actually overridden, before the first assignment. All store
+// instances in this process share the original deployment/.env fallback.
+const inheritedEnv = new Map<string, string | undefined>();
+const restartPending = new Set<string>();
+export function settingsRestartRequired(): boolean { return restartPending.size > 0; }
+function publishSetting(key: string, value: string | null): void {
+  if (!inheritedEnv.has(key)) inheritedEnv.set(key, process.env[key]);
+  const next = value ?? inheritedEnv.get(key);
+  if (next === undefined) delete process.env[key];
+  else process.env[key] = next;
+}
+export function inheritedSettingsEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const [key, value] of inheritedEnv) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
+  return env;
+}
 
 export interface AppSettingRow {
   key: string;
@@ -45,6 +66,7 @@ export interface ResolvedSetting {
   /** Where the effective value came from — drives the UI badge. */
   source: 'db' | 'env' | 'default' | 'unset';
   updatedAt: string | null;
+  validationError?: string;
 }
 
 export class AppSettingsStore {
@@ -71,8 +93,12 @@ export class AppSettingsStore {
       if (row.value === null) continue;
       // Only assign for keys we know about — silently ignore strays so
       // a stale row after a catalog rename doesn't poison process.env.
-      if (!getSettingDef(row.key)) continue;
-      process.env[row.key] = row.value;
+      const def = getSettingDef(row.key);
+      if (!def) continue;
+      let value: string | null;
+      try { value = normalizeSettingValue(def, row.value); }
+      catch { continue; } // Older invalid rows remain editable, but never poison runtime.
+      publishSetting(row.key, value);
       applied++;
     }
     return { applied };
@@ -98,11 +124,15 @@ export class AppSettingsStore {
       .prepare<[string], AppSettingRow>('SELECT key, value, updated_at FROM app_settings WHERE key = ?')
       .get(key);
     const stored = row?.value ?? null;
-    const envValue = process.env[key];
+    let validStored: string | null = null;
+    let validationError: string | undefined;
+    try { validStored = normalizeSettingValue(def, stored); }
+    catch { validationError = 'invalid_stored_value'; }
+    const envValue = inheritedEnv.has(key) ? inheritedEnv.get(key) : process.env[key];
     let effective: string | null;
     let source: ResolvedSetting['source'];
-    if (stored !== null && stored !== '') {
-      effective = stored;
+    if (validStored !== null) {
+      effective = validStored;
       source = 'db';
     } else if (envValue !== undefined && envValue !== '') {
       effective = envValue;
@@ -120,6 +150,7 @@ export class AppSettingsStore {
       effectiveValue: effective,
       source,
       updatedAt: row?.updated_at ?? null,
+      ...(validationError ? { validationError } : {}),
     };
   }
 
@@ -139,21 +170,29 @@ export class AppSettingsStore {
    * restart. The UI surfaces this with a "Restart needed" pill.
    */
   set(key: string, value: string | null): void {
-    if (!getSettingDef(key)) {
-      throw new Error(`Unknown setting: ${key}`);
-    }
-    if (value === null || value === '') {
-      this.db.prepare('DELETE FROM app_settings WHERE key = ?').run(key);
-      delete process.env[key];
-      return;
-    }
-    this.db
-      .prepare(
+    this.setMany({ [key]: value });
+  }
+
+  /** Validate the complete batch and commit atomically before publishing env. */
+  setMany(updates: Record<string, unknown>, validate?: (updates: Record<string, string | null>) => void): void {
+    const normalized = normalizeSettingUpdates(updates);
+    validate?.(normalized);
+    const remove = this.db.prepare('DELETE FROM app_settings WHERE key = ?');
+    const upsert = this.db.prepare(
         `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      )
-      .run(key, value);
-    process.env[key] = value;
+    );
+    this.db.transaction(() => {
+      for (const [key, value] of Object.entries(normalized)) {
+        if (value === null) remove.run(key);
+        else upsert.run(key, value);
+      }
+    })();
+    for (const [key, value] of Object.entries(normalized)) {
+      const previous = process.env[key];
+      publishSetting(key, value);
+      if (getSettingDef(key)?.restartNeeded && previous !== process.env[key]) restartPending.add(key);
+    }
   }
 
   close(): void {

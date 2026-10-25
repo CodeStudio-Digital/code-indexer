@@ -74,7 +74,7 @@ export function evaluatePerTurnLoops(args: PerTurnLoopArgs): PerTurnLoopVerdict 
     window,
     reason:
       `Tool '${dom.toolName}' dominated ${dom.count}/${window} turns with ` +
-      `zero assistant text — forcing a planning turn to break the grind.`,
+      `zero assistant text; recorded for diagnostics.`,
     snapshot: {
       strict: [],
       fuzzy: [],

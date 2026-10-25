@@ -2,7 +2,7 @@ import type { ControlPlaneAuthority } from './file-control-plane-store.js';
 import { type ControlPlaneRunContext } from '@mcp/store/control-plane/index.js';
 import { CONTROL_PLANE_SCHEMA_VERSION, asRuntimeEventId, classifyCoderTerminalOutcome, runtimeEventClass, type ControlPlaneEventType } from '@mcp/agent-runtime-contracts';
 import { type LocalCoderShadowAcceptance } from './control-plane-shadow-commands.js';
-import { measureAppend, metrics, recordMirrored, coderRuntimeJournalShadowEnabled, enqueueShadowWrite } from './control-plane-shadow-queue.js';
+import { measureAppend, metrics, recordMirrored, enqueueShadowWrite } from './control-plane-shadow-queue.js';
 import { EXECUTOR_LEASE_MS, opaqueValueHash, stableUuid, digest } from './control-plane-shadow-fingerprint.js';
 
 export async function bindLocalCommandBus(
@@ -119,7 +119,7 @@ export function mirrorLocalCoderToolBoundary(
     durationMs?: number;
   },
 ): Promise<void> {
-  if (!store || !context || !coderRuntimeJournalShadowEnabled()) return Promise.resolve();
+  if (!store || !context) return Promise.resolve();
   // Reduce before enqueueing: the backlog must never retain raw tool input or
   // result objects, even transiently. This mirrors ClaudeOpen's hook/event
   // boundary, where transport carries metadata rather than capability data.
@@ -160,7 +160,7 @@ export function mirrorLocalCoderLifecycleEvent(
     occurredAt?: string;
   },
 ): Promise<void> {
-  if (!store || !context || !coderRuntimeJournalShadowEnabled()) return Promise.resolve();
+  if (!store || !context) return Promise.resolve();
   // Compute hashes before enqueueing so the closure holds only the redacted,
   // bounded projection and stable identity — never the raw worker payload.
   const occurredAt = input.occurredAt ?? new Date().toISOString();

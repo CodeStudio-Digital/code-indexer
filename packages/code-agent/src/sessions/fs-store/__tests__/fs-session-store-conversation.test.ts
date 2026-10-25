@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { toolOutputRecordFileName } from '@mcp/session-storage';
+import { ArtifactStore, toolOutputRecordFileName } from '@mcp/session-storage';
 import { FsSessionStore } from '../fs-session-store.js';
 import { unresolvedToolOutcome } from '../../../core/uncertain-tool-outcome.js';
 
@@ -45,6 +45,58 @@ afterEach(async () => {
 });
 
 describe('FsSessionStore conversation journal', () => {
+  it('hydrates only the selected window and lists every sent attachment without opening blobs', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Bounded attachments', provider: 'test', model: 'test' });
+    for (let index = 0; index < 24; index++) {
+      await store.appendMessage({ session_id: session.id, operation_id: `attachment-${index}`, message: {
+        role: 'user', content: [{ type: 'document', name: `file-${index}.txt`, mediaType: 'text/plain', text: `body-${index}`.repeat(4096) }],
+      } });
+    }
+    const read = vi.spyOn(ArtifactStore.prototype, 'read');
+    try {
+      const tail = await store.loadSessionMessagesTail(session.id, 2);
+      expect(tail?.messages).toHaveLength(2);
+      expect(read).toHaveBeenCalledTimes(2);
+      read.mockClear();
+      expect(await store.getMessageCount(session.id)).toBe(24);
+      expect(await store.getArchivedMessageCount(session.id)).toBe(0);
+      const first = await store.listSessionAttachments(session.id, 0, 10);
+      const second = await store.listSessionAttachments(session.id, first.next_offset!, 10);
+      expect(first).toMatchObject({ total: 24, next_offset: 10 });
+      expect(first.items[0]?.name).toBe('file-0.txt');
+      expect(second.items[0]?.name).toBe('file-10.txt');
+      expect(read).not.toHaveBeenCalled();
+      const download = await store.readSessionAttachment(session.id, first.items[0]!.seq, first.items[0]!.index);
+      expect(Buffer.from(download!.bytes).toString()).toBe('body-0'.repeat(4096));
+      await store.loadAllSessionMessages(session.id);
+      expect(read).toHaveBeenCalledTimes(24);
+    } finally { read.mockRestore(); }
+  });
+
+  it('keeps image filenames and local references discoverable after compaction', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Named image', provider: 'test', model: 'test' });
+    await store.appendMessage({ session_id: session.id, message: { role: 'user', content: [
+      { type: 'image', name: 'capture.png', mediaType: 'image/png', base64: Buffer.from('image fixture').toString('base64') },
+      { type: 'document', name: 'external.txt', mediaType: 'text/plain', path: 'D:/fixture/external.txt' },
+    ] } });
+    await store.persistAssistantTurn({ session_id: session.id, operation_id: 'generated-image', usage: null, tool_calls: [], message: {
+      role: 'assistant', content: [{ type: 'image', name: 'generated-image.png', mediaType: 'image/png', base64: Buffer.from('generated pixels').toString('base64') }],
+    } });
+    await store.appendMessage({ session_id: session.id, message: { role: 'user', content: [
+      { type: 'text', text: '(Image(s) attached from the tool call above.)' },
+      { type: 'image', name: 'tool-preview.png', mediaType: 'image/png', base64: Buffer.from('preview pixels').toString('base64') },
+    ] } });
+    await store.setCompactionBoundary(session.id, 'summary', 1, 'manual');
+    const all = await store.listSessionAttachments(session.id);
+    expect(all.items.map(item => [item.name, item.downloadable, item.origin])).toEqual([
+      ['capture.png', true, 'sent'], ['external.txt', false, 'sent'], ['generated-image.png', true, 'generated'], ['tool-preview.png', true, 'tool'],
+    ]);
+    const generated = all.items.find(item => item.origin === 'generated')!;
+    const original = await store.readSessionAttachment(session.id, generated.seq, generated.index);
+    expect(Buffer.from(original!.bytes).toString()).toBe('generated pixels');
+    expect(await store.readSessionAttachment(session.id, 1, 1)).toBeNull();
+  });
+
   it('retains uncertain-effect authority across close and recovery', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Unknown effect', provider: 'test', model: 'test' });
     await store.persistAssistantTurn({ session_id: session.id, operation_id: 'uncertain-turn', usage: null,

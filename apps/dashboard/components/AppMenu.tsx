@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Activity, BookOpen, ChevronDown, Home, Info, LogOut, Orbit, Settings, Sparkles, Users } from 'lucide-react';
+import { Activity, BookOpen, ChevronDown, Home, Info, LogOut, Orbit, Settings, Users } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,10 +45,6 @@ export function AppMenu() {
           <DropdownMenuItem onClick={() => navigate('/')}>
             <Home />
             {t('nav.projects')}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => navigate('/apps')}>
-            <Sparkles />
-            {t('nav.apps', { defaultValue: 'Meus apps' })}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => navigate('/agents')}>
             <Users />

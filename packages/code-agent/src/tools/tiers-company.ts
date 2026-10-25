@@ -74,23 +74,3 @@ export const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   'service_start',
   'service_stop',
 ]);
-
-/**
- * Persistent App Studio v6 control plane. This list intentionally mirrors
- * `packages/company/src/tools/app-studio/index.ts::allTools` exactly. The 34
- * pre-v6 architecture/spec/UX/wireframe tools were removed with the v6 reset
- * and must not remain as phantom catalog entries.
- */
-export const APP_STUDIO_TOOLS: ReadonlySet<string> = new Set([
-  'app_get_state',
-  'app_get_plan',
-  'app_update_plan',
-  'app_upsert_work_items',
-  'app_request_decision',
-  'app_request_plan_approval',
-  'app_dispatch_ready_work',
-  'app_record_work_evidence',
-  'app_get_db_state',
-  'app_update_database',
-  'app_run_checks',
-]);

@@ -21,14 +21,10 @@ import { useMarkdownShortcuts } from './useMarkdownShortcuts.js';
 import { useComposerDraft } from './useComposerDraft.js';
 import type { QueueMode } from './useMessageQueue.js';
 import type { AgentPreset } from '@mcp/api-bus';
-
-interface SlashCommand {
-  id: string;
-  command: string;
-  name: string;
-  description: string;
-  context_mode: string;
-}
+import { useSkillPicker } from './useSkillPicker.js';
+import type { SkillSuggestion } from './skill-mention.js';
+import { useSessionReferences, type SessionReference } from './useSessionReferences.js';
+import { AgenticModeControl } from './AgenticModeControl.js';
 
 type AgentId = AgentPreset;
 
@@ -41,7 +37,6 @@ const BORDER_TINT: Partial<Record<AgentId, string>> = {
   build: 'border-l-emerald-500',
   admin: 'border-l-rose-500',
   spec: 'border-l-amber-500',
-  app_orchestrator: 'border-l-violet-500',
   app_db: 'border-l-teal-500',
   api: 'border-l-cyan-500',
   diagram: 'border-l-violet-500',
@@ -56,6 +51,7 @@ export interface ComposerHandle {
 }
 
 interface ComposerProps {
+  sessionCollaboration?: boolean;
   onSend: (text: string, attachments: AgentAttachment[], selectedSkillIds?: string[]) => void;
   onAbort: () => void;
   streaming: boolean;
@@ -72,7 +68,7 @@ interface ComposerProps {
   filePicks?: string[];
   onRemovePick?: (path: string) => void;
   onClearPicks?: () => void;
-  /** Skill ids chosen in the sidebar; forwarded to the server which prepends
+  /** Skill ids explicitly chosen for the message; forwarded to the server which prepends
    *  their interpolated prompt bodies inside an `<active_skills>` block on
    *  the user message. Cleared via `onClearSkillPicks` after send. */
   skillPicks?: string[];
@@ -213,29 +209,43 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       return () => clearTimeout(h);
     }, [input]);
 
-    // ─── Slash command autocomplete ─────────────────────────────
-    const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
-    const [showSlash, setShowSlash] = useState(false);
-    const [slashIndex, setSlashIndex] = useState(0);
-
-    // Load available slash commands once
-    useEffect(() => {
-      fetch('/api/coder/skills/slash-commands')
-        .then((r) => r.json())
-        .then((data: { commands: SlashCommand[] }) => setSlashCommands(data.commands))
-        .catch(() => {});
-    }, []);
-
-    // Filter slash commands based on current input
-    const slashPrefix = input.startsWith('/') ? input.slice(1).split(/\s/)[0].toLowerCase() : '';
-    const filteredSlash = input.startsWith('/') && !input.includes(' ')
-      ? slashCommands.filter((c) => c.command.toLowerCase().startsWith(slashPrefix))
-      : [];
-
-    useEffect(() => {
-      setShowSlash(filteredSlash.length > 0 && input.startsWith('/') && !input.includes(' '));
-      setSlashIndex(0);
-    }, [input]);
+    const picker = useSkillPicker(input, props.sessionId);
+    const references = useSessionReferences(props.sessionCollaboration ? props.sessionId : undefined, input, picker.caret);
+    const selectReference = (item: SessionReference) => {
+      if (!references.mention) return;
+      const { start, end, trigger } = references.mention;
+      const replacement = `${trigger}${item.label} `;
+      references.choose(item);
+      setInput(input.slice(0, start) + replacement + input.slice(end));
+      picker.setCaret(start + replacement.length);
+      requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(start + replacement.length, start + replacement.length); });
+    };
+    const pendingSkill = useRef(false);
+    const currentDraft = useRef({ input, attachments, sessionId: props.sessionId });
+    currentDraft.current = { input, attachments, sessionId: props.sessionId };
+    const resolveTypedSkill = useCallback(async (command: string) => {
+      if (pendingSkill.current) return undefined;
+      pendingSkill.current = true;
+      const snapshot = currentDraft.current;
+      try {
+        const skill = await picker.resolveSlash(command);
+        const current = currentDraft.current;
+        return current.input === snapshot.input && current.attachments === snapshot.attachments && current.sessionId === snapshot.sessionId ? skill : undefined;
+      } catch {
+        toast.error(t('composer.skillsError'));
+        return undefined;
+      } finally { pendingSkill.current = false; }
+    }, [picker.resolveSlash, t]);
+    const selectSkill = (skill: SkillSuggestion) => {
+      if (!picker.mention) return;
+      const { start, end, trigger } = picker.mention;
+      const replacement = trigger === '/' ? '/' + skill.command + ' ' : '';
+      picker.setPicks(current => current.some(item => item.id === skill.id) ? current : [...current, skill]);
+      setInput(input.slice(0, start) + replacement + input.slice(end));
+      const nextCaret = start + replacement.length;
+      picker.setCaret(nextCaret);
+      requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(nextCaret, nextCaret); });
+    };
 
     useImperativeHandle(ref, () => ({ setInput, setAttachments }), []);
 
@@ -296,10 +306,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       await handleFiles(dt.files);
     }, [handleFiles]);
 
-    const hasInput = input.trim().length > 0 || attachments.length > 0;
+    const hasInput = input.trim().length > 0 || attachments.length > 0 || picker.picks.length > 0 || !!props.skillPicks?.length;
 
     const handleSend = useCallback(async () => {
-      if (props.sendBlocked || (!input.trim() && attachments.length === 0)) return;
+      if (props.sendBlocked || (!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length)) return;
 
       // Admin send-gate (friction-only). Real safety is the runner's
       // confirmBeforeIrreversible — this is just a heads-up on first send.
@@ -318,9 +328,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
 
       const text = input.trim()
         ? input
-        : t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' });
+        : attachments.length ? t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' }) : t('composer.useSkills');
       const picks = props.filePicks ?? [];
-      const skillIds = props.skillPicks ?? [];
+      const skillIds = [...new Set([...(props.skillPicks ?? []), ...picker.picks.map(item => item.id)])];
+      if (!await references.commit()) return;
 
       // Intercept slash commands: /command args → attach the skill instead of
       // inlining its expanded prompt. The typed `/command args` stays visible
@@ -329,11 +340,14 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       if (text.startsWith('/') && props.sessionId) {
         const spaceIdx = text.indexOf(' ');
         const cmd = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
-        const match = slashCommands.find((c) => c.command.toLowerCase() === cmd.toLowerCase());
+        const match = await resolveTypedSkill(cmd);
+        if (match === undefined) return;
         if (match) {
           setInput('');
           setAttachments([]);
           clearDraft();
+          picker.clear();
+          references.clear();
           props.onClearPicks?.();
           props.onClearSkillPicks?.();
           const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
@@ -349,34 +363,40 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       setInput('');
       setAttachments([]);
       clearDraft();
+      picker.clear();
+      references.clear();
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.sendBlocked, confirm, clearDraft, t]);
+    }, [input, attachments, picker.picks, resolveTypedSkill, references.commit, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.sendBlocked, confirm, clearDraft, t]);
 
     // Enqueue the composed message while the agent is streaming. Same
     // file_refs prefixing + clears as `handleSend`, but the delivery timing
     // (next turn vs end of session) is decided by the queue. Attachments travel
     // with the queued item so they cannot bleed into a later immediate send.
-    const handleQueue = useCallback((mode: QueueMode) => {
-      if ((!input.trim() && attachments.length === 0) || !props.onQueue) return;
+    const handleQueue = useCallback(async (mode: QueueMode) => {
+      if ((!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length) || !props.onQueue) return;
       const text = input.trim()
         ? input
-        : t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' });
+        : attachments.length ? t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' }) : t('composer.useSkills');
       const picks = props.filePicks ?? [];
-      const skillIds = props.skillPicks ?? [];
+      const skillIds = [...new Set([...(props.skillPicks ?? []), ...picker.picks.map(item => item.id)])];
       const atts = attachments;
+      if (!await references.commit()) return;
       // Slash command: same interception as handleSend — the typed `/cmd`
       // stays as the message, the matched skill rides as a pick (no file_refs
       // prefix), so a queued slash command behaves like a sent one.
       if (text.startsWith('/') && props.sessionId) {
         const spaceIdx = text.indexOf(' ');
         const cmd = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
-        const match = slashCommands.find((c) => c.command.toLowerCase() === cmd.toLowerCase());
+        const match = await resolveTypedSkill(cmd);
+        if (match === undefined) return;
         if (match) {
           setInput('');
           setAttachments([]);
           clearDraft();
+          picker.clear();
+          references.clear();
           props.onClearPicks?.();
           props.onClearSkillPicks?.();
           const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
@@ -390,10 +410,12 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       setInput('');
       setAttachments([]);
       clearDraft();
+      picker.clear();
+      references.clear();
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onQueue(finalText, mode, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, clearDraft, t]);
+    }, [input, attachments, picker.picks, resolveTypedSkill, references.commit, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, clearDraft, t]);
 
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;
@@ -412,12 +434,19 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       return () => document.removeEventListener('mousedown', onDocClick);
     }, [picksOpen]);
 
-    const skillPicks = props.skillPicks ?? [];
+    const skillPicks = [...new Set([...(props.skillPicks ?? []), ...picker.picks.map(item => item.id)])];
 
     return (
       <div className="relative border-t border-[var(--workbench-border)] bg-[var(--workbench-raised)]" {...dropHandlers}>
         <DropOverlay show={isDragging} />
         {props.queuedStrip}
+        {props.sessionCollaboration && props.sessionId && <div className="flex items-center justify-between border-b px-2 py-1">
+          <AgenticModeControl sessionId={props.sessionId} /><span className="text-[10px] text-muted-foreground"># skills · @ chats · $ projetos</span>
+        </div>}
+        {references.error && <p role="alert" className="p-2 text-xs text-destructive">{references.error}</p>}
+        {references.picks.length > 0 && <div className="flex flex-wrap gap-1 p-2">{references.picks.map(item => <span key={`${item.kind}:${item.id}`} className="inline-flex items-center gap-1 rounded border bg-muted px-2 text-xs">
+          {item.kind === 'chat' ? '@' : '$'}{item.label}<button type="button" aria-label={t('network.removeReference', { name: item.label })} onClick={() => references.remove(item)}><X className="h-3 w-3" /></button>
+        </span>)}</div>}
         {(attachments.length > 0 || filePicks.length > 0 || skillPicks.length > 0) && (
           <div className="flex flex-wrap items-center gap-1.5 mb-3">
             {skillPicks.map((id) => (
@@ -427,10 +456,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
                 title={id}
               >
                 <Sparkles className="h-3 w-3 shrink-0" />
-                <span className="truncate">{id}</span>
+                <span className="truncate">{picker.picks.find(item => item.id === id)?.name ?? id}</span>
                 <button
                   type="button"
-                  onClick={() => props.onRemoveSkillPick?.(id)}
+                  onClick={() => { picker.setPicks(current => current.filter(item => item.id !== id)); if (props.skillPicks?.includes(id)) props.onRemoveSkillPick?.(id); }}
                   className="shrink-0 p-0.5 rounded hover:bg-violet-500/20 text-violet-500/70 hover:text-violet-600 dark:hover:text-violet-300"
                   title={t('composer.remove')}
                 >
@@ -521,29 +550,26 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
 
         <div className={`relative border-l-2 ${BORDER_TINT[props.agent] ?? ''} bg-background focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring transition`}>
           {voiceRecording && <VoiceCaptureBar onStop={requestVoiceCaptureStop} />}
-          {/* Slash command autocomplete dropdown */}
-          {showSlash && filteredSlash.length > 0 && (
-            <div className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-lg border bg-popover text-popover-foreground shadow-md max-h-48 overflow-auto">
-              {filteredSlash.map((cmd, i) => (
-                <button
-                  key={cmd.id}
-                  type="button"
-                  className={`flex items-center gap-2 w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors ${i === slashIndex ? 'bg-muted' : ''}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    setInput(`/${cmd.command} `);
-                    setShowSlash(false);
-                    textareaRef.current?.focus();
-                  }}
-                >
-                  <Sparkles className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="font-mono text-xs font-medium">/{cmd.command}</span>
-                  <span className="text-xs text-muted-foreground truncate">{cmd.name}</span>
-                  {cmd.description && (
-                    <span className="text-xs text-muted-foreground/60 truncate ml-auto">
-                      {cmd.description}
-                    </span>
-                  )}
+          {references.open && <div role="listbox" aria-label={t(references.mention?.trigger === '$' ? 'network.projects' : 'network.chats')} className="absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-auto rounded-lg border bg-popover text-popover-foreground shadow-md">
+            {references.loading && <p className="p-3 text-xs">{t('drive.loading')}</p>}
+            {!references.loading && references.items.length === 0 && <p className="p-3 text-xs text-muted-foreground">{t('network.noSuggestions')}</p>}
+            {references.items.map((item, index) => <button key={`${item.kind}:${item.id}`} type="button" role="option" aria-selected={index === references.index}
+              className={`block w-full px-3 py-2 text-left text-xs hover:bg-muted ${index === references.index ? 'bg-muted' : ''}`}
+              onMouseDown={event => { event.preventDefault(); selectReference(item); }}>
+              <span className="block font-medium">{item.kind === 'chat' ? '@' : '$'}{item.label}</span><span className="block truncate text-muted-foreground">{item.detail}</span>
+            </button>)}
+          </div>}
+          {picker.open && (
+            <div role="listbox" aria-label={t('composer.skills')} className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-lg border bg-popover text-popover-foreground shadow-md max-h-56 overflow-auto">
+              {picker.loading && <p className="p-3 text-xs text-muted-foreground">{t('composer.skillsLoading')}</p>}
+              {!picker.loading && picker.visible.length === 0 && <p className="p-3 text-xs text-muted-foreground">{t(picker.error ? 'composer.skillsError' : 'composer.skillsEmpty')}</p>}
+              {picker.visible.map((skill, index) => (
+                <button key={skill.id} type="button" role="option" aria-selected={index === picker.index}
+                  className={'flex items-start gap-2 w-full px-3 py-2 text-left text-sm hover:bg-muted ' + (index === picker.index ? 'bg-muted' : '')}
+                  onMouseDown={event => { event.preventDefault(); selectSkill(skill); }}>
+                  <Sparkles className="h-3.5 w-3.5 mt-0.5 text-muted-foreground shrink-0" />
+                  <span className="min-w-0"><span className="block truncate text-xs font-medium">{picker.mention?.trigger}{picker.mention?.trigger === '/' ? skill.command : skill.name}</span>
+                    <span className="block text-xs text-muted-foreground line-clamp-2">{skill.description}</span></span>
                 </button>
               ))}
             </div>
@@ -551,31 +577,31 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
           <Textarea
             ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); picker.setCaret(e.target.selectionStart); }}
+            onSelect={(e) => picker.setCaret(e.currentTarget.selectionStart)}
             onPaste={onPaste}
             onKeyDown={(e) => {
-              // Slash command navigation
-              if (showSlash && filteredSlash.length > 0) {
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setSlashIndex((i) => Math.min(i + 1, filteredSlash.length - 1));
-                  return;
+              if (e.nativeEvent.isComposing) return;
+              if (references.open) {
+                if (e.key === 'Escape') { e.preventDefault(); references.dismiss(); return; }
+                if (references.items.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                  e.preventDefault(); references.setIndex(index => Math.max(0, Math.min(references.items.length - 1, index + (e.key === 'ArrowDown' ? 1 : -1)))); return;
                 }
-                if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setSlashIndex((i) => Math.max(i - 1, 0));
-                  return;
+                if (references.items.length && (e.key === 'Tab' || (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey))) {
+                  e.preventDefault(); selectReference(references.items[references.index]!); return;
                 }
-                if (e.key === 'Tab' || (e.key === 'Enter' && !e.metaKey && !e.ctrlKey)) {
-                  e.preventDefault();
-                  const cmd = filteredSlash[slashIndex];
-                  if (cmd) setInput(`/${cmd.command} `);
-                  setShowSlash(false);
-                  return;
-                }
-                if (e.key === 'Escape') {
-                  setShowSlash(false);
-                  return;
+              }
+              if (picker.open) {
+                if (e.key === 'Escape') { e.preventDefault(); picker.dismiss(); return; }
+                if (picker.visible.length > 0) {
+                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    picker.setIndex(index => Math.max(0, Math.min(picker.visible.length - 1, index + (e.key === 'ArrowDown' ? 1 : -1))));
+                    return;
+                  }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.shiftKey)) {
+                    e.preventDefault(); const skill = picker.visible[picker.index]; if (skill) selectSkill(skill); return;
+                  }
                 }
               }
               // Highest priority: send message — or enqueue while streaming.

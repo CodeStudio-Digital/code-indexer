@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Bot, Boxes, Info, Loader2, PanelLeft, Scissors, Star, Workflow } from 'lucide-react';
+import { AlertTriangle, Bell, Bot, Boxes, Info, Loader2, PanelLeft, Scissors, Star, Workflow } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
@@ -26,6 +26,9 @@ interface ChatHeaderProps {
   contextStatus: ContextStatus | null;
   indexStatus: IndexStatus | null;
   onOpenDetails: () => void;
+  onOpenNotifications?: () => void;
+  unreadNotifications?: number;
+  notificationsOpen?: boolean;
   /** Trigger the manual "summarize & clear" action. Hides the button if undefined. */
   onSummarizeClear?: () => void;
   /** True while the summary is being generated — shows a spinner + disables the button. */
@@ -70,7 +73,7 @@ interface ChatHeaderProps {
   onFocusProject?: (projectId: number) => void;
 }
 
-export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas, linkedCount, onManageProjects, linkedProjects, workspaceProjectId, activeProjectId, onFocusProject }: ChatHeaderProps) {
+export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenNotifications, unreadNotifications = 0, notificationsOpen = false, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas, linkedCount, onManageProjects, linkedProjects, workspaceProjectId, activeProjectId, onFocusProject }: ChatHeaderProps) {
   const { t } = useTranslation(['chat', 'common']);
   // Global session: the workspace accent ties this conversation to its sidebar
   // group. `isGlobal` is implied by having a manage handler + linked count.
@@ -295,6 +298,13 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
               : <Scissors className="h-4 w-4" />}
           </button>
         )}
+        {onOpenNotifications && <button type="button" onClick={onOpenNotifications}
+          aria-label={unreadNotifications > 0 ? t('chat:rightRail.unreadNotifications', { count: unreadNotifications }) : t('chat:rightRail.notifications')}
+          title={t('chat:rightRail.notifications')} aria-pressed={notificationsOpen}
+          className={cn('relative rounded-md p-1.5 transition-colors', notificationsOpen ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}>
+          <Bell className="h-4 w-4" />
+          {unreadNotifications > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1 text-[9px] text-primary-foreground">{unreadNotifications > 99 ? '99+' : unreadNotifications}</span>}
+        </button>}
         {/* Session-details is still on the header as a fallback affordance —
             the activity rail also has a Details panel, but power users still
             expect a clickable "i" in the title bar. The other tool toggles

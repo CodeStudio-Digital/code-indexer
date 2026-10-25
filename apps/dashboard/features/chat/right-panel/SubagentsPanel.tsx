@@ -8,6 +8,7 @@ import type { SessionData } from '../types.js';
 import { SubagentDetail } from './SubagentDetail.js';
 import {
   collectListedGroups,
+  collectPersistedGroups,
   type ListedAgentsGroup,
 } from './subagents-panel-data.js';
 
@@ -22,9 +23,10 @@ interface SubagentsPanelProps {
  */
 export function SubagentsPanel({ sessionData, currentTurn }: SubagentsPanelProps) {
   const { t } = useTranslation('chat');
+  const history = useMemo(() => collectPersistedGroups(sessionData), [sessionData]);
   const { activeGroups, recentGroups } = useMemo(
-    () => collectListedGroups(sessionData, currentTurn),
-    [currentTurn, sessionData],
+    () => collectListedGroups(sessionData, currentTurn, history),
+    [currentTurn, sessionData, history],
   );
   const allGroups = useMemo(
     () => [...activeGroups, ...recentGroups],

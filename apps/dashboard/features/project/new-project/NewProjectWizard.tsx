@@ -6,9 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 import { Sparkles, ArrowLeft, CloudDownload } from 'lucide-react';
-import { useFeatures } from '../../../hooks/useFeatures.js';
 import { Button } from '../../../components/ui/button.js';
 import {
   Dialog,
@@ -38,8 +36,6 @@ const EMPTY_CONFIG: ConfigState = { name: '', description: '', repoUrl: '', gitI
 
 export default function NewProjectWizard({ open, onOpenChange, onCreated }: NewProjectWizardProps) {
   const { t } = useTranslation(['projects', 'common']);
-  const navigate = useNavigate();
-  const features = useFeatures();
   const [step, setStep] = useState<Step>('pick');
   const [template, setTemplate] = useState<TemplateId | null>(null);
   const [config, setConfig] = useState<ConfigState>(EMPTY_CONFIG);
@@ -139,26 +135,6 @@ export default function NewProjectWizard({ open, onOpenChange, onCreated }: NewP
 
         {step === 'pick' && (
           <div className="space-y-3">
-            {/* App Studio: outra jornada (guiada p/ leigos), não um template —
-                por isso um hero acima da grade, e não uma entrada em templates.ts. */}
-            {features.appStudioEnabled && (
-              <button
-                type="button"
-                onClick={() => {
-                  close();
-                  navigate('/apps?new=1');
-                }}
-                className="flex w-full items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 px-4 py-3 text-left transition-colors hover:bg-primary/10"
-              >
-                <Sparkles className="h-6 w-6 shrink-0 text-primary" />
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold">{t('wizard.appStudioTitle', { defaultValue: 'Criar app completo com IA' })}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {t('wizard.appStudioHelp', { defaultValue: 'Descreva sua ideia e a IA constrói com você — do plano à publicação.' })}
-                  </span>
-                </span>
-              </button>
-            )}
             <TemplateGrid selected={template} onSelect={pickTemplate} />
             <button
               type="button"

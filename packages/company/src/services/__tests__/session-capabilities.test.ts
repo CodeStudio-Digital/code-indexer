@@ -29,7 +29,7 @@ describe('CompanySessionCapabilities', () => {
     });
   });
 
-  it('resolves an App team to the controlled workflow capability', () => {
+  it('keeps archived App teams inert after retirement', () => {
     const capabilities = resolveCompanySessionCapabilities(
       'app_studio',
       APP_STUDIO_SESSION_ID,
@@ -40,10 +40,10 @@ describe('CompanySessionCapabilities', () => {
       toolProfile: 'app_studio',
       autonomyPolicy: 'controlled_app_work',
       workSource: 'app_workflow',
-      allowAppTools: true,
+      allowAppTools: false,
       allowCompanyKanban: false,
       allowCompanyScheduler: false,
-      allowAppScheduler: true,
+      allowAppScheduler: false,
       allowFreeSubordinateSpawn: false,
     });
     expect(resolveCompanyServiceWiringPlan(capabilities)).toEqual({
@@ -99,8 +99,8 @@ describe('App Studio prompt capability', () => {
         tier: 'full', projectIds: [7],
       }],
     });
-    expect(prompt).toContain('app_dispatch_ready_work');
-    expect(prompt).toContain('gpt-5.6-sol');
+    expect(prompt).toContain('App Studio is retired');
+    expect(prompt).not.toContain('app_dispatch_ready_work');
     expect(prompt).not.toContain('kanban_card_id');
     expect(prompt).not.toContain('create a card BEFORE');
   });
@@ -111,7 +111,8 @@ describe('App Studio prompt capability', () => {
       role: 'backend',
       projects,
     });
-    expect(prompt).toContain('app_record_work_evidence');
+    expect(prompt).toContain('App Studio is retired');
+    expect(prompt).not.toContain('app_record_work_evidence');
     expect(prompt).not.toContain('kanban_move_to_review');
     expect(prompt).not.toContain('kanban_read_my_card');
   });

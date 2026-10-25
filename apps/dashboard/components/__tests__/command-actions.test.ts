@@ -2,18 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildCommandActions, filterCommands, type CommandSources } from '../command-actions.js';
 
 const Icon = () => null;
-const RECENT_SESSION_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 function makeSources(overrides: Partial<CommandSources> = {}): CommandSources {
   return {
     nav: [{ id: 'home', label: 'Projetos', href: '/', icon: Icon }],
     projects: [{ id: 7, name: 'whatsapp-pro-api' }],
-    recent: [{
-      id: RECENT_SESSION_ID,
-      title: 'Fix login',
-      project_id: 7,
-      project_name: 'whatsapp-pro-api',
-    }],
     navigate: vi.fn(),
     toggleTheme: vi.fn(),
     toggleLanguage: vi.fn(),
@@ -23,22 +16,20 @@ function makeSources(overrides: Partial<CommandSources> = {}): CommandSources {
 }
 
 describe('buildCommandActions', () => {
-  it('emits groups in nav → projects → recent → actions order', () => {
+  it('emits groups in nav → projects → actions order', () => {
     const actions = buildCommandActions(makeSources());
-    expect(actions.map((a) => a.group)).toEqual(['nav', 'projects', 'recent', 'actions', 'actions']);
+    expect(actions.map((a) => a.group)).toEqual(['nav', 'projects', 'actions', 'actions']);
   });
 
-  it('routes nav, project and recent actions to the right destinations', () => {
+  it('routes nav and project actions to the right destinations', () => {
     const navigate = vi.fn();
     const actions = buildCommandActions(makeSources({ navigate }));
 
     actions.find((a) => a.id === 'nav:home')!.run();
     actions.find((a) => a.id === 'project:7')!.run();
-    actions.find((a) => a.id === `recent:${RECENT_SESSION_ID}`)!.run();
 
     expect(navigate).toHaveBeenNthCalledWith(1, '/');
     expect(navigate).toHaveBeenNthCalledWith(2, '/projects/7');
-    expect(navigate).toHaveBeenNthCalledWith(3, `/projects/7?session=${RECENT_SESSION_ID}`);
   });
 
   it('wires the theme and language toggles to their callbacks', () => {
@@ -64,16 +55,11 @@ describe('filterCommands', () => {
 
   it('matches on label, case-insensitively', () => {
     expect(filterCommands(actions, 'PROJETOS').map((a) => a.id)).toContain('nav:home');
-    expect(filterCommands(actions, 'fix').map((a) => a.id)).toEqual([
-      `recent:${RECENT_SESSION_ID}`,
-    ]);
+    expect(filterCommands(actions, 'WHATSAPP').map((a) => a.id)).toEqual(['project:7']);
   });
 
-  it('matches on the hint (a session\'s project name)', () => {
-    // "whatsapp" hits the project label AND the recent session's project hint.
-    expect(filterCommands(actions, 'whatsapp').map((a) => a.id)).toEqual([
-      'project:7',
-      `recent:${RECENT_SESSION_ID}`,
-    ]);
+  it('matches on secondary descriptions', () => {
+    const withHint = [{ ...actions[0]!, hint: 'Workspace navigation' }];
+    expect(filterCommands(withHint, 'WORKSPACE')).toEqual(withHint);
   });
 });

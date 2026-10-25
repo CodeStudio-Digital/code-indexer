@@ -66,6 +66,22 @@ export function mountCoderSkillsRoutes(
 ): void {
   const { sessionStore } = deps;
 
+  app.get('/api/coder/skills/suggestions', async c => {
+    const sessionId = c.req.query('session_id');
+    let projectIds: number[] = [];
+    if (sessionId) {
+      const session = await sessionStore.getSession(sessionId);
+      if (!session) return notFound(c, 'session not found');
+      projectIds = sessionProjectIds(session, projectId => {
+        const project = deps.db.getProject(projectId);
+        return Boolean(project && !project.is_synthetic && project.root_path.trim());
+      });
+    }
+    return c.json({ commands: deps.skillStore.listComposerSkills(
+      ['global', ...projectIds.map(String)], c.req.query('query') ?? '', c.req.query('trigger') === '/',
+    ) });
+  });
+
   /**
    * GET /api/coder/sessions/:id/skills — resolved skills for a session.
    * Definitions remain in the essential SQLite catalog; the per-session

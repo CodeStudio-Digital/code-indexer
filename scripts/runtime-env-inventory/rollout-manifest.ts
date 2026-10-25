@@ -34,57 +34,11 @@ const RETIREMENT_ACTIONS = new Set([
 /**
  * Temporary code-run env controls. CI rejects an undeclared or expired entry,
  * preventing a rollout switch from silently becoming permanent product API.
+ * The four runtime-migration switches were retired on 2026-10-24; see
+ * docs/architecture/runtime-retirement.md. Keep validation for future rollouts
+ * and reject reintroduced consumers of the retired switches as undeclared.
  */
-export const CODE_RUN_ROLLOUT_MANIFEST: readonly CodeRunRolloutEntry[] = Object.freeze([
-  {
-    key: 'CODER_AGENT_RUN_STORE_ENFORCE',
-    owner: 'runtime-migration',
-    introducedAt: '2026-08-05',
-    expiresAt: '2026-09-30',
-    promotionMetric: 'zero fencing divergence across the P3 fault corpus',
-    rollbackReceipt: 'disable enforcement while preserving shadow journal receipts',
-    canaryStages: REQUIRED_CODE_RUN_CANARY_STAGES,
-    stopConditions: REQUIRED_CODE_RUN_STOP_CONDITIONS,
-    receiptPrefix: receiptPrefix('CODER_AGENT_RUN_STORE_ENFORCE'),
-    retirementAction: 'bake_default_and_remove_switch',
-  },
-  {
-    key: 'CODER_AGENT_RUN_STORE_SHADOW',
-    owner: 'runtime-migration',
-    introducedAt: '2026-08-05',
-    expiresAt: '2026-09-30',
-    promotionMetric: '100 percent child-run lifecycle parity in P3 and canary',
-    rollbackReceipt: 'disable child shadow writes; legacy session ownership remains authoritative',
-    canaryStages: REQUIRED_CODE_RUN_CANARY_STAGES,
-    stopConditions: REQUIRED_CODE_RUN_STOP_CONDITIONS,
-    receiptPrefix: receiptPrefix('CODER_AGENT_RUN_STORE_SHADOW'),
-    retirementAction: 'remove_shadow_switch',
-  },
-  {
-    key: 'CODER_CONTROL_PLANE_SHADOW',
-    owner: 'runtime-migration',
-    introducedAt: '2026-08-05',
-    expiresAt: '2026-09-30',
-    promotionMetric: 'zero command or lifecycle parity defects in P3 and canary',
-    rollbackReceipt: 'disable mirror writes; legacy control plane remains authoritative',
-    canaryStages: REQUIRED_CODE_RUN_CANARY_STAGES,
-    stopConditions: REQUIRED_CODE_RUN_STOP_CONDITIONS,
-    receiptPrefix: receiptPrefix('CODER_CONTROL_PLANE_SHADOW'),
-    retirementAction: 'remove_shadow_switch',
-  },
-  {
-    key: 'CODER_RUNTIME_JOURNAL_SHADOW',
-    owner: 'runtime-migration',
-    introducedAt: '2026-08-05',
-    expiresAt: '2026-09-30',
-    promotionMetric: 'journal completeness and ordering match in 100 percent of P3 fixtures',
-    rollbackReceipt: 'disable journal mirror; local session event log remains authoritative',
-    canaryStages: REQUIRED_CODE_RUN_CANARY_STAGES,
-    stopConditions: REQUIRED_CODE_RUN_STOP_CONDITIONS,
-    receiptPrefix: receiptPrefix('CODER_RUNTIME_JOURNAL_SHADOW'),
-    retirementAction: 'remove_shadow_switch',
-  },
-]);
+export const CODE_RUN_ROLLOUT_MANIFEST: readonly CodeRunRolloutEntry[] = Object.freeze([]);
 
 export interface RolloutManifestValidation {
   ok: boolean;

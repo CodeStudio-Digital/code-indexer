@@ -204,10 +204,7 @@ export function createFileInboxWatchdogSource(
       await sessionStore.ensureCatalog();
       const messages: AgentInboxMessage[] = [];
       for (const entry of sessionStore.catalog.list()) {
-        if (
-          entry.session.kind !== 'company' &&
-          entry.session.kind !== 'app_studio'
-        ) {
+        if (entry.session.kind !== 'company') {
           continue;
         }
         const files = new CompanySessionFiles({

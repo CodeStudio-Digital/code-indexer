@@ -27,7 +27,6 @@ function setup() {
       const session = sessions.get(id);
       if (session) session.thinking_enabled = enabled;
     },
-    listRecentSessionsGlobal: () => [],
   };
   const app = new Hono();
   mountCoderSessionsRoutes(

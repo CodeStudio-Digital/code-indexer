@@ -75,28 +75,10 @@ describe('isMasterAllowed — external MCP is default-deny', () => {
   });
 });
 
-describe('isMasterAllowed — App Studio capability boundary', () => {
-  it('exposes app tools only to the specialised App master', () => {
-    expect(isMasterAllowed(native('app_get_state'))).toBe(false);
-    expect(isMasterAllowed(native('app_get_state'), { allowAppStudio: true })).toBe(true);
-  });
-
-  it('removes execute_tasks from the persistent App master', () => {
-    expect(isMasterAllowed(native('execute_tasks'), { allowAppStudio: true })).toBe(false);
-  });
-
-  it.each([
-    'spawn_subordinate_agent',
-    'kanban_create_card',
-    'kanban_list_cards',
-  ])('removes incompatible Company capability %s from the App master', (name) => {
-    expect(isMasterAllowed(native(name), { allowAppStudio: true })).toBe(false);
-  });
-
-  it('does not let an external connector impersonate an App capability', () => {
-    expect(isMasterAllowed(external('app_get_state', {
-      mutates: false,
-      riskLevel: 'read',
-    }), { allowAppStudio: true })).toBe(false);
-  });
+describe('isMasterAllowed — retired App Studio tools', () => {
+  it.each(['app_get_state', 'app_update_plan', 'app_dispatch_ready_work'])(
+    'does not expose retired native tool %s', (name) => {
+      expect(isMasterAllowed(native(name))).toBe(false);
+    },
+  );
 });

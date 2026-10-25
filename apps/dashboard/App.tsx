@@ -15,7 +15,6 @@ import {
   ConfirmDialogHost,
   ToastHost,
 } from './components/ui/prompt-dialog.js';
-import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
@@ -27,7 +26,6 @@ import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
 import { GlobalNotificationListener } from './features/notifications/GlobalNotificationListener.js';
 import { PushDialogHost } from './features/git-push/PushDialogHost.js';
-import { isAppStudioUuid } from './features/app-studio/session-id.js';
 
 const SESSION_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -53,12 +51,6 @@ const ProjectView = lazy(() =>
 );
 const AgentsTab = lazy(() =>
   import('./features/agents/AgentsTab.js').then((module) => ({ default: module.AgentsTab })),
-);
-const AppStudioHome = lazy(() =>
-  import('./features/app-studio/AppStudioHome.js').then((module) => ({ default: module.AppStudioHome })),
-);
-const AppStudioView = lazy(() =>
-  import('./features/app-studio/AppStudioView.js').then((module) => ({ default: module.AppStudioView })),
 );
 const TelemetryDashboard = lazy(() =>
   import('./features/telemetry/TelemetryDashboard.js').then((module) => ({ default: module.TelemetryDashboard })),
@@ -293,30 +285,6 @@ function CompanyRedirectRoute() {
   return <Navigate to={buildAgentsDefaultUrl(id)} replace />;
 }
 
-function AppsRoute() {
-  const features = useFeatures();
-  if (!features.appStudioEnabled) return <Navigate to="/" replace />;
-  return <AppStudioHome />;
-}
-
-function AppStudioSessionRoute() {
-  const features = useFeatures();
-  const navigate = useNavigate();
-  const { sessionId } = useParams<{ sessionId: string }>();
-  const location = useLocation();
-  if (!features.appStudioEnabled) return <Navigate to="/" replace />;
-  if (!isAppStudioUuid(sessionId)) return <Navigate to="/apps" replace />;
-  const state = (location.state ?? {}) as { masterSessionId?: string; idea?: string };
-  return (
-    <AppStudioView
-      sessionId={sessionId}
-      initialMasterSessionId={state.masterSessionId}
-      initialIdeaPrompt={state.idea ? `Minha ideia inicial: ${state.idea}` : null}
-      onBack={() => navigate('/apps')}
-    />
-  );
-}
-
 // ─── Router setup ────────────────────────────────────────────
 
 // Hash routing, not `createBrowserRouter`, because the desktop app loads the
@@ -351,8 +319,6 @@ const router = createHashRouter([
       { path: 'company/sessions/:rootId', element: <CompanyRedirectRoute /> },
       { path: 'company/sessions/:rootId/:frontId/:zone/:tab', element: <RouteBoundary><AgentsTab /></RouteBoundary> },
       { path: 'admin', element: <RouteBoundary><Admin /></RouteBoundary> },
-      { path: 'apps', element: <RouteBoundary><AppsRoute /></RouteBoundary> },
-      { path: 'apps/:sessionId', element: <RouteBoundary><AppStudioSessionRoute /></RouteBoundary> },
       { path: 'telemetry', element: <RouteBoundary><TelemetryDashboard /></RouteBoundary> },
       { path: 'docs', element: <RouteBoundary><DocsPage /></RouteBoundary> },
       { path: '*', element: <Navigate to="/" replace /> },

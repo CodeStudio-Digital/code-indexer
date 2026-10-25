@@ -19,7 +19,6 @@ interface CommandPaletteProps {
 const GROUP_LABEL_KEYS: Record<CommandGroup, string> = {
   nav: 'commandPalette.groupNav',
   projects: 'commandPalette.groupProjects',
-  recent: 'commandPalette.groupRecent',
   actions: 'commandPalette.groupActions',
 };
 
@@ -37,7 +36,7 @@ interface CommandRowProps {
  * Memoized row. Handlers are shared, stable references passed from the parent
  * (the row carries its index via `data-idx`), so re-renders of the palette no
  * longer allocate a fresh closure per row. Combined with virtualization this
- * keeps ⌘K cheap even with 100+ projects/recent sessions in the list.
+ * keeps ⌘K cheap even with 100+ projects in the list.
  */
 const CommandRow = memo(function CommandRow({
   action,
@@ -77,7 +76,7 @@ const CommandRow = memo(function CommandRow({
 
 /**
  * ⌘K command palette. A thin filtered list over the injected `actions`
- * (built in AppShell from nav destinations + projects + recent sessions +
+ * (built in AppShell from nav destinations + projects +
  * theme/language toggles). Keyboard-first: ↑/↓ move, Enter runs, Esc closes
  * (handled by the Dialog). Actions are pre-sorted by group, so the flat
  * `active` index lines up with the grouped render below.
@@ -105,7 +104,6 @@ export function CommandPalette({ open, onOpenChange, actions }: CommandPalettePr
     () => ({
       nav: t(GROUP_LABEL_KEYS.nav),
       projects: t(GROUP_LABEL_KEYS.projects),
-      recent: t(GROUP_LABEL_KEYS.recent),
       actions: t(GROUP_LABEL_KEYS.actions),
     }),
     [t],

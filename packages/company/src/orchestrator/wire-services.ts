@@ -25,7 +25,6 @@ import { MasterInboxRouter } from '../services/MasterInboxRouter.js';
 import { RuntimeReconciler } from '../services/RuntimeReconciler.js';
 import { ServiceSupervisor } from '../services/service-supervisor/ServiceSupervisor.js';
 import { CompanyScheduler } from '../services/scheduler/CompanyScheduler.js';
-import { AppStudioScheduler } from '../services/scheduler/AppStudioScheduler.js';
 import type { IKanbanNotifier } from '../services/ports.js';
 import {
   constrainAutonomyForCapabilities,
@@ -65,7 +64,6 @@ export interface WiredServices {
    */
   serviceSupervisor: ServiceSupervisor;
   scheduler: CompanyScheduler | null;
-  appStudioScheduler: AppStudioScheduler | null;
   /**
    * C0/C2 — per-session autonomy config provider (cached read of
    * `config_json.autonomy`, invalidated on `session.config_updated`).
@@ -110,8 +108,10 @@ export function wireServices(args: {
           sessionStore: args.sessionStore,
         });
   const runtimeKind = sessionRow?.runtime_kind ?? 'company';
-  const appStudioSessionId =
-    runtimeKind === 'app_studio' ? companySessionId : null;
+  if (runtimeKind === 'app_studio') {
+    throw new Error('App Studio has been retired. This session is preserved as an archive.');
+  }
+  const appStudioSessionId = null;
   const capabilities = resolveCompanySessionCapabilities(runtimeKind, appStudioSessionId);
   const servicePlan = resolveCompanyServiceWiringPlan(capabilities);
 
@@ -293,22 +293,12 @@ export function wireServices(args: {
       })
     : null;
   scheduler?.start();
-  const appStudioScheduler = capabilities.allowAppScheduler
-    ? new AppStudioScheduler({
-        ctx,
-        host: args.orchestratorRef,
-        master,
-        bus: publisher,
-        autonomy,
-      })
-    : null;
-  appStudioScheduler?.start();
 
   return {
     ctx, publisher, wirer, kanban, board, status, attention,
     sandboxService, eventBus, humanInLoop, idle, watchdog,
     subordinates, master,
     inbox, masterInbox, reconciler, serviceSupervisor, scheduler,
-    autonomy, driveStore, metaBus, parentSessionId, appStudioScheduler,
+    autonomy, driveStore, metaBus, parentSessionId,
   };
 }

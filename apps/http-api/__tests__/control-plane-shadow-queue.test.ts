@@ -22,8 +22,9 @@ const context = {
 
 describe('control-plane observational write queue', () => {
   beforeEach(() => {
-    vi.stubEnv('CODER_CONTROL_PLANE_SHADOW', '1');
-    vi.stubEnv('CODER_RUNTIME_JOURNAL_SHADOW', '1');
+    // Stale environment values cannot disable the current runtime's journal.
+    vi.stubEnv('CODER_CONTROL_PLANE_SHADOW', '0');
+    vi.stubEnv('CODER_RUNTIME_JOURNAL_SHADOW', '0');
     resetCoderControlPlaneShadowMetricsForTests();
   });
 

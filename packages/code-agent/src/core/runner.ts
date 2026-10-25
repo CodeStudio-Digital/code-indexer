@@ -948,9 +948,9 @@ export class CoderRunner extends EventEmitter {
    * operates against the worktree. Remembers the original root so
    * `exitWorktreeScope` can restore it. Emits `worktree_entered`.
    */
-  enterWorktreeScope(absWorktreePath: string): void {
+  enterWorktreeScope(absWorktreePath: string, originalRoot?: string): void {
     if (this.worktreePath) return; // already inside — no-op, tool enforces this
-    this.originalCwd = this.opts.toolContext.cwd;
+    this.originalCwd = originalRoot ?? this.opts.toolContext.cwd;
     this.worktreePath = absWorktreePath;
     this.opts.toolContext.cwd = absWorktreePath;
     this.emit('worktree_entered', { path: absWorktreePath, originalCwd: this.originalCwd });
@@ -2212,9 +2212,8 @@ export class CoderRunner extends EventEmitter {
     this.pollingResultRun.set(toolName, next);
     if (next.count >= POLLING_STUCK_CAP) {
       this.pollingResultRun.delete(toolName);
-      this.setTransition('polling-stuck');
       console.warn(
-        `[coder] polling-stuck refusal (BT): ${toolName} same result ${next.count}× — refused at turn ${turn}`,
+        `[coder] polling observation: ${toolName} same result ${next.count}× at turn ${turn}`,
       );
       return buildPollingStuckRefusal({
         toolName,

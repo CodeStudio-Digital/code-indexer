@@ -93,7 +93,6 @@ export default defineConfig(({ command }) => ({
       ...pkgAliases('@mcp/indexer', 'indexer'),
       // App Studio: o dashboard importa SÓ os módulos puros (spec/*,
       // blueprint/*) — verification/workspace-checks usa node:fs e quebraria o build.
-      ...pkgAliases('@mcp/app-studio', 'app-studio'),
       ...pkgAliases('@mcp/code-agent', 'code-agent'),
       // Renderer consumers use only pure session contracts (for example run
       // limits); persistence implementations remain in the host process.

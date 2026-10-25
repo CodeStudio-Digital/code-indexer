@@ -8,7 +8,6 @@ const BUILT_IN_AGENTS = new Set<AgentPreset>([
   'build',
   'admin',
   'spec',
-  'app_orchestrator',
   'app_db',
   'api',
   'diagram',

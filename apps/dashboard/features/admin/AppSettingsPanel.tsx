@@ -114,7 +114,7 @@ export function AppSettingsPanel() {
           )}
         </div>
         {restartNeeded && (
-          <Button variant="outline" size="sm" onClick={() => void restart()}>
+          <Button variant="outline" size="sm" onClick={() => void restart()} disabled={dirtyCount > 0 || saving}>
             <AlertTriangle className="h-3.5 w-3.5 mr-1.5 text-amber-500" />
             {t('chrome.restartBackend')}
           </Button>

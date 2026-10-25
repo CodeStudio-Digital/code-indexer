@@ -135,13 +135,6 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
         return filtered.map(toCoderSession);
       },
 
-      async recent({ limit }) {
-        const cap = Math.max(1, Math.min(50, limit ?? 10));
-        return (await sessionStore.listRecentSessionsGlobal(cap)).map(
-          toCoderSession,
-        );
-      },
-
       async get({ id, includeMessages }) {
         if (includeMessages) {
           const data = await sessionStore.loadSessionWithMessages(id);

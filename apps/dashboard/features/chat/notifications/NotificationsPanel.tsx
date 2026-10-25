@@ -8,6 +8,7 @@
  * history). Rendered inside `PanelChrome` by `RightPanelHost`.
  */
 import { useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { BellOff } from 'lucide-react';
 import { NotificationRow } from './NotificationRow.js';
 import {
@@ -22,6 +23,7 @@ interface NotificationsPanelProps {
 }
 
 export function NotificationsPanel({ sessionId }: NotificationsPanelProps) {
+  const { t } = useTranslation('chat');
   const all = useSessionNotifications(sessionId);
 
   // Reading the panel clears the unread badge.
@@ -36,7 +38,7 @@ export function NotificationsPanel({ sessionId }: NotificationsPanelProps) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-muted-foreground">
         <BellOff className="h-6 w-6 opacity-40" />
-        <p className="text-xs">No notifications yet</p>
+        <p className="text-xs">{t('notifications.empty')}</p>
       </div>
     );
   }
@@ -44,7 +46,7 @@ export function NotificationsPanel({ sessionId }: NotificationsPanelProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
-        <span className="tabular-nums">{all.length} total</span>
+        <span className="tabular-nums">{t('notifications.total', { count: all.length })}</span>
         <div className="ml-auto flex items-center gap-1">
           <button
             type="button"
@@ -52,14 +54,14 @@ export function NotificationsPanel({ sessionId }: NotificationsPanelProps) {
             disabled={activeCount === 0}
             className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
           >
-            Dismiss active
+            {t('notifications.dismissActive')}
           </button>
           <button
             type="button"
             onClick={() => clearNotifications(sessionId)}
             className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
           >
-            Clear all
+            {t('notifications.clearAll')}
           </button>
         </div>
       </div>

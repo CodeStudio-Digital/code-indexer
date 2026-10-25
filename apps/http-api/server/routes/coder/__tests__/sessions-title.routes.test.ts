@@ -28,7 +28,6 @@ function setup(initialTitle = 'Nova sessão') {
     loadSessionWithMessages: (id: SessionId) => id === SESSION_ID ? { session, messages: [], message_rows: [] } : null,
     getSession: (id: SessionId) => id === SESSION_ID ? session : null,
     setSessionTitle,
-    listRecentSessionsGlobal: () => [],
   };
   const app = new Hono();
   mountCoderSessionsRoutes(app, {

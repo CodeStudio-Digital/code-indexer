@@ -66,11 +66,6 @@ import { setServiceSupervisorStores } from '../../../packages/company/src/servic
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
 import { COOLDOWN_RESURRECT_MS } from '../../../packages/company/src/services/RuntimeReconciler.js';
 import {
-  setAppStudioDbClientStore,
-  setAppStudioStore,
-} from '../../../packages/company/src/tools/app-studio/index.js';
-import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
-import {
   setQaTestRunStore,
   setQaEndpointEnvStore,
 } from '../../../packages/company/src/tools/qa/index.js';
@@ -289,19 +284,6 @@ const companyStore = new CompanyStore(db.raw());
 
 // Worker-local stores share the database handle used by this process.
 const rawDb = db.raw();
-// App Studio operational state is filesystem-only. SQLite remains involved
-// here only as the essential project-root catalog.
-setAppStudioStore(new AppStudioStore({
-  repository: sessionStore.repository,
-  catalog: sessionStore.catalog,
-  locator: sessionStore.locator,
-  getProject: (projectId) => {
-    const project = db.getProject(projectId);
-    return project
-      ? { id: project.id, root_path: project.root_path }
-      : null;
-  },
-}));
 // API client store for the `api_*` tools, re-wired per worker (module globals
 // don't cross worker_threads).
 setApiClientStore(new ApiClientStore(rawDb));
@@ -322,11 +304,6 @@ setDbToolsStores(dbClientStore, {
       label: session.project_labels[String(projectId)] ?? null,
     }));
   },
-});
-setAppStudioDbClientStore({
-  listConnections: (projectId) => dbClientStore.listConnections(projectId),
-  createConnection: (input) => dbClientStore.createConnection(input),
-  updateConnection: (_projectId, id, patch) => dbClientStore.updateConnection(id, patch),
 });
 setDbSecretDecryptor((blob) =>
   bridge.request<string>('secretsDecrypt', { blob }, { timeoutMs: 10_000 }),

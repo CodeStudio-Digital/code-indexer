@@ -119,7 +119,6 @@ import { SkillStore } from '@mcp/store/skill-store.js';
 import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
 import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.js';
 import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
-import { AppStudioStore } from '@mcp/store/app-studio-store.js';
 import { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { SshStore } from '@mcp/store/ssh-store.js';
 import { DbClientStore } from '@mcp/store/db-client-store.js';
@@ -393,15 +392,6 @@ export interface ChromeServiceDeps {
   chromeServiceStore: ChromeServiceStore;
 }
 
-export interface AppStudioDeps {
-  /**
-   * CRUD store for App Studio sessions and recorded features (migration
-   * 200). Read by the /api/app-studio routes and by the app_* tools
-   * registered on runners of `kind:'app'` workspaces.
-   */
-  appStudioStore: AppStudioStore;
-}
-
 export interface ApiClientDeps {
   /**
    * CRUD store for the in-app Postman tables (migration 147): collections,
@@ -591,7 +581,6 @@ export type ServerDeps = CoreDeps
   & CompanyDeps
   & QaDeps
   & ChromeServiceDeps
-  & AppStudioDeps
   & ApiClientDeps
   & PipelineDeps
   & DocCorpusDeps
@@ -1089,9 +1078,7 @@ export function createDeps(): ServerDeps {
       },
     },
   });
-  const controlPlaneStore = new FileControlPlaneStore(sessionStore, {
-    journalEnabled: process.env.CODER_RUNTIME_JOURNAL_SHADOW === '1',
-  });
+  const controlPlaneStore = new FileControlPlaneStore(sessionStore);
   const investigationSemanticIndex = new InvestigationSemanticIndex(
     { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },
     memoryEmbeddingService,
@@ -1113,17 +1100,6 @@ export function createDeps(): ServerDeps {
   const qaTestRunStore = new QaTestRunStore(sessionStore);
   const qaTestResultStore = new QaTestResultStore(sessionStore);
   const chromeServiceStore = new ChromeServiceStore(db.raw());
-  const appStudioStore = new AppStudioStore({
-    repository: sessionStore.repository,
-    catalog: sessionStore.catalog,
-    locator: sessionStore.locator,
-    getProject: (projectId) => {
-      const project = db.getProject(projectId);
-      return project
-        ? { id: project.id, root_path: project.root_path }
-        : null;
-    },
-  });
   const apiClientStore = new ApiClientStore(db.raw());
   // R1 — per-project feature stores. The ProjectDbPool caches the live SQLite
   // connection; wrappers must be recreated on access because an idle/LRU
@@ -1697,7 +1673,6 @@ export function createDeps(): ServerDeps {
     qaTestRunStore,
     qaTestResultStore,
     chromeServiceStore,
-    appStudioStore,
     apiClientStore,
     apiClientFor,
     sshStore,

@@ -54,7 +54,6 @@ import type {
   FsMetricsSummary,
   FsPersistAssistantTurnInput,
   FsProjectInfo,
-  FsRecentCoderSession,
   FsSessionWithMessages,
   FsToolCallResult,
   FsToolOutputRead,
@@ -166,10 +165,6 @@ export class FsSessionStore {
     return queryMcpRunMetadata(this.#directory.catalog.entriesSnapshot(), query);
   }
 
-  listRecentSessionsGlobal(limit = 10): Promise<FsRecentCoderSession[]> {
-    return this.#directory.listRecentSessionsGlobal(limit);
-  }
-
   listGlobalSessions(
     options: { archived?: boolean | null } = {},
   ): Promise<FsGlobalCoderSession[]> {
@@ -248,6 +243,14 @@ export class FsSessionStore {
 
   getMessageCount(id: SessionId | string): Promise<number> {
     return this.#reader.count(id);
+  }
+
+  listSessionAttachments(id: SessionId | string, offset = 0, limit = 50) {
+    return this.#reader.listAttachments(id, offset, limit);
+  }
+
+  readSessionAttachment(id: SessionId | string, seq: number, index: number) {
+    return this.#reader.readAttachment(id, seq, index);
   }
 
   loadSessionMessagesTail(

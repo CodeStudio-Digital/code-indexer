@@ -158,7 +158,6 @@
     "@mcp/agent-runtime-host": "workspace:*",
     "@mcp/api-bus": "workspace:*",
     "@mcp/api-handlers": "workspace:*",
-    "@mcp/app-studio": "workspace:*",
     "@mcp/code-agent": "workspace:*",
     "@mcp/company": "workspace:*",
     "@mcp/docs-agent": "workspace:*",

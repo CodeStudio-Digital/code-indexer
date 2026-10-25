@@ -18,6 +18,7 @@ import type {
   ChatDelta,
   ChatUsage,
   ChatProviderResponseMeta,
+  ImageBlock,
 } from '@mcp/code-agent/core/messages.js';
 import { AbortError, TimeoutError } from './executing-abort.js';
 
@@ -33,6 +34,7 @@ export interface StreamResult {
   textBlocks: string[];
   toolUses: ToolUseAccumulated[];
   thinkingBlocks: string[];
+  generatedImages: ImageBlock[];
   usage: ChatUsage | null;
   stopReason: string;
   /** Server-side response id (Codex / ChatGPT only). */
@@ -123,6 +125,7 @@ export function thinkingOnlyBudgetMs(effort: string | undefined, attempts: numbe
 export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResult> {
   const textBlocks: string[] = [];
   const thinkingBlocks: string[] = [];
+  const imagesById = new Map<string, ImageBlock>();
   const toolUses: ToolUseAccumulated[] = [];
   const toolUsesById = new Map<string, ToolUseAccumulated>();
   let currentText = '';
@@ -275,8 +278,15 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
         responseMeta = delta.meta;
         break;
 
-      // 'image_generated' currently ignored — the Executing minimal
-      // scope doesn't synthesize ImageBlocks yet.
+      case 'image_generated': {
+        lastNonThinkingAt = Date.now();
+        const extension = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' } as Record<string, string>)[delta.mediaType] ?? 'bin';
+        imagesById.set(delta.id, {
+          type: 'image', mediaType: delta.mediaType, base64: delta.base64,
+          name: `generated-${delta.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100)}.${extension}`,
+        });
+        break;
+      }
     }
   }
 
@@ -312,9 +322,9 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   // return HTTP 200 + finish_reason with no assistant text and no tool call.
   // Treat that as a retryable protocol failure instead of persisting a clean
   // completion that leaves the user with an empty turn. Thinking alone is not
-  // a deliverable: the model still owes either visible text or a tool request.
+  // a deliverable: the model still owes visible text, an image or a tool request.
   const hasVisibleText = textBlocks.some((text) => text.trim().length > 0);
-  if (!hasVisibleText && toolUses.length === 0) {
+  if (!hasVisibleText && toolUses.length === 0 && imagesById.size === 0) {
     const error = new Error(
       'provider committed an empty terminal response (provider_empty_result)',
     );
@@ -342,6 +352,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     textBlocks,
     toolUses,
     thinkingBlocks,
+    generatedImages: [...imagesById.values()],
     usage,
     stopReason,
     responseId,

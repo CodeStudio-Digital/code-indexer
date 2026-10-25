@@ -585,9 +585,6 @@ export function mountCoderStreamRoutes(
   ): Promise<ResolvedAgentSelection | null> {
     const session = await sessionStore.getSession(id);
     const persisted = resolveAgentSelection(providerStore, session?.agent);
-    if (persisted?.baseAgentId === 'app_orchestrator') {
-      return persisted;
-    }
     const resolved = resolveAgentSelection(providerStore, requested) ?? persisted;
     if (resolved) return resolved;
     // A disabled/deleted custom agent can still be referenced by an old
@@ -1522,6 +1519,7 @@ export function mountCoderStreamRoutes(
           }
           return { kind: 'attach' as const, bus: live, tailFrom };
         }
+
         const newBus = await workerPool.runFresh(id, {
           userMessage: '',
           maxTurns: continueMaxTurns,

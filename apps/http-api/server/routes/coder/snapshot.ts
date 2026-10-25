@@ -11,6 +11,7 @@
  * truth.
  */
 import type { Hono } from 'hono';
+import { resolveSessionWorkspaceRoot } from '@mcp/code-agent/tools/project-worktrees.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../deps.js';
 import {
@@ -49,7 +50,7 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
     // metadata must never revive authority after project removal.
     const p = db.getProject(resolvedProjectId);
     return p && !p.is_synthetic && p.root_path.trim().length > 0
-      ? p.root_path
+      ? (resolvedProjectId === s.project_id ? await resolveSessionWorkspaceRoot(p.root_path, s) : p.root_path)
       : null;
   });
   const roundReviewPipeline = new SnapshotReviewPipeline(

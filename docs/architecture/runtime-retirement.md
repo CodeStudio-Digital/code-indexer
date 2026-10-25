@@ -25,3 +25,41 @@ intact, and metadata management (including archiving and deletion) remains avail
 
 Rust language support in the editor and indexer, and unrelated native
 dependencies such as SQLite and node-pty, remain part of the product.
+
+## Retirement of the migration switches (2026-10-24)
+
+The four temporary rollouts that expired on 2026-09-30 have no production
+environment consumers anymore:
+
+- `CODER_AGENT_RUN_STORE_ENFORCE`
+- `CODER_AGENT_RUN_STORE_SHADOW`
+- `CODER_CONTROL_PLANE_SHADOW`
+- `CODER_RUNTIME_JOURNAL_SHADOW`
+
+The filesystem command ledger and root/child execution fences were already
+authoritative in the TypeScript path. The remaining switches incorrectly gated
+startup recovery, journal diagnostics and their status display. Recovery now
+starts on every boot. Command admission awaits the store's recovery promise,
+preventing the startup scan from fencing a newly admitted run. The server uses
+the filesystem store's enabled journal default. Old environment values,
+including `0`, no longer disable these paths.
+Existing diagnostics response field names remain compatible.
+
+This removes the obsolete controls instead of extending their deadlines or
+claiming the historical native-runtime canary was completed. The rollout manifest
+is empty; its validator still rejects undeclared, expired, duplicate or incomplete
+future rollouts. Reintroducing any of these consumers fails the environment audit.
+
+Command idempotency, lease/fencing checks before execution and result publication,
+permission checks, cancellation, timeouts, explicit budgets and unknown-outcome
+protection remain in place. Tool journal payloads retain hashes instead of raw
+inputs/results, and the bounded observational queue remains separate from awaited
+authority writes. These changes do not migrate or delete saved conversations.
+Rollback requires a reviewed build change; the retired environment variables are
+not a supported way to bypass authority or fencing.
+
+Regression coverage includes filesystem persistence and redaction with flags
+absent, `0` and `1`; stale-executor rejection after restart recovery; subagent
+failure before provider invocation when a fence cannot be established; worker
+terminal publication; command replay/uncertain acknowledgement handling; and the
+observational queue's capacity limit.

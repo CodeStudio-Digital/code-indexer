@@ -42,7 +42,6 @@ import { wireSupervisorToRunner } from '@mcp/company/services/supervisor/wire-ru
 import { tryAcquireResume, releaseResume } from '@mcp/company/services/subordinate/resume-guard.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
-import { buildAppStudioSubordinateRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
 import {
   readRoleRuntimePolicy,
   type RoleToolTier,
@@ -270,12 +269,6 @@ async function resumeSubordinateInner(
     ),
     runtimeKind: ctx.capabilities.promptProfile,
   });
-  if (ctx.runtimeKind === 'app_studio' && ctx.appStudioSessionId != null) {
-    subordinateBlock += `\n\n${buildAppStudioSubordinateRuntimeBlock({
-      appSessionId: ctx.appStudioSessionId,
-      role: agentRun.role,
-    })}`;
-  }
 
   deps.board.post('system', agentRun.id, 'message', `Resuming @${agentRun.role} agent...`);
 

@@ -633,6 +633,10 @@ export function resolveClaudeCodeRequestedModel(
   accountInfo?: ClaudeCodeAccountInfo | null,
 ): string {
   const alias = normalizeClaudeCodeModelAlias(model);
+  // Read operator overrides after settings bootstrap, including later saves.
+  const CLAUDE_CODE_DEFAULT_OPUS_MODEL = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? 'claude-opus-5';
+  const CLAUDE_CODE_DEFAULT_SONNET_MODEL = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ?? 'claude-sonnet-5';
+  const CLAUDE_CODE_SMALL_FAST_MODEL = process.env.ANTHROPIC_SMALL_FAST_MODEL ?? 'claude-haiku-4-5-20251001';
   switch (alias.toLowerCase()) {
     case 'default':
       return isClaudeCodeMaxDefaultAccount(accountInfo)

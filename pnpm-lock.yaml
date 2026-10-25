@@ -289,9 +289,6 @@ importers:
       '@mcp/api-handlers':
         specifier: workspace:*
         version: link:packages/api-handlers
-      '@mcp/app-studio':
-        specifier: workspace:*
-        version: link:packages/app-studio
       '@mcp/code-agent':
         specifier: workspace:*
         version: link:packages/code-agent
@@ -434,8 +431,6 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
-  packages/app-studio: {}
-
   packages/candidate-pipeline:
     dependencies:
       '@mcp/shared':
@@ -511,9 +506,6 @@ importers:
       '@mcp/agent-runtime-host':
         specifier: workspace:*
         version: link:../agent-runtime-host
-      '@mcp/app-studio':
-        specifier: workspace:*
-        version: link:../app-studio
       '@mcp/candidate-pipeline':
         specifier: workspace:*
         version: link:../candidate-pipeline
@@ -785,9 +777,6 @@ importers:
       '@mcp/agent-runtime-contracts':
         specifier: workspace:*
         version: link:../agent-runtime-contracts
-      '@mcp/app-studio':
-        specifier: workspace:*
-        version: link:../app-studio
       '@mcp/session-storage':
         specifier: workspace:*
         version: link:../session-storage

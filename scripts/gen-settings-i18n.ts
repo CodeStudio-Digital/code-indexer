@@ -56,12 +56,14 @@ const CHROME_EN: Record<string, string> = {
   'source.unset': 'unset',
   'toast.saved': 'Saved {{count}} setting(s)',
   'toast.savedRestart': 'Some changes require a backend restart to take effect.',
-  'toast.savedApplied': 'Changes applied immediately.',
+  'toast.savedApplied': 'Changes apply to new operations and agent attempts.',
   'toast.saveFailed': 'Save failed',
   'toast.restarting': 'Restarting backend…',
   'toast.restartingDesc': 'The host will spawn a fresh backend process in a moment.',
   'toast.restartFailed': 'Restart failed',
   'error.fetch': 'Failed to load settings.',
+  'error.invalidSetting': 'Invalid value or incompatible settings: {{key}}. No changes were saved.',
+  'error.invalidStored': 'This saved value is invalid and is being ignored. Correct or clear it.',
 };
 
 function buildEn(): Record<string, string> {

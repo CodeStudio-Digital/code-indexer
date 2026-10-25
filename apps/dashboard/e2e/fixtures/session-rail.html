@@ -1,0 +1,26 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Session rail integration</title></head>
+<body><div id="root"></div><script type="module">
+import React, {useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {LiveChatRightRail} from '/features/chat/right-panel/ChatRightRail.tsx';
+import {TooltipProvider} from '/components/ui/tooltip.tsx';
+import {updateAgentSession} from '/hooks/agent-stream/session-stream-store.ts';
+import {i18nReady} from '/i18n/index.ts';
+import '/index.css';
+const h=React.createElement;
+await i18nReady;
+const plugins=[{pluginNs:'cloudflare',id:'cf-manage',title:'Cloudflare',icon:'Cloud',side:'right',entry:'ui/index.html'},
+  {pluginNs:'fixture',id:'left-only',title:'Somente esquerda',side:'left',entry:'ui/index.html'}];
+function Fixture(){
+  const [active,setActive]=useState(null),[preview,setPreview]=useState(true),[agents,setAgents]=useState(false),[session,setSession]=useState('one');
+  const data=React.useMemo(()=>({session:{id:session,status:agents?'running':'idle'},messages:agents?[{role:'assistant',content:[{type:'tool_use',id:'spawn-1',name:'spawn_agent',input:{agents:[{label:'Revisor',task:'Revisar',type:'investigator'},{label:'Validador',task:'Validar',type:'investigator'}]}}]}]:[]}),[session,agents]);
+  React.useEffect(()=>{updateAgentSession(session,{currentTurn:agents?{blocks:[{type:'agents',group:{groupId:'live-1',toolUseId:'spawn-1',status:'running',agents:[{index:0,label:'Revisor',status:'running',toolCallCount:1},{index:1,label:'Validador',status:'running',toolCallCount:1}]}}]}:null});},[session,agents]);
+  return h('main',{className:'flex h-screen'},h('div',{className:'flex-1 p-6 space-x-4'},
+    h('button',{onClick:()=>setPreview(!preview)},'Alternar preview'),
+    h('button',{onClick:()=>setAgents(!agents)},'Simular subagentes'),
+    h('button',{onClick:()=>{setSession('two');setAgents(false);setActive(null);}},'Trocar sessão'),
+    h('output',{'data-testid':'selected'},active??'closed')),
+    h(LiveChatRightRail,{sessionId:session,sessionData:data,activePanelId:active,onSelectPanel:setActive,onOpenSnapshots:()=>setActive('changes'),pendingSnapshots:27,pluginWindows:plugins,previewAvailable:preview}));
+}
+createRoot(document.getElementById('root')).render(h(TooltipProvider,null,h(Fixture)));
+</script></body></html>

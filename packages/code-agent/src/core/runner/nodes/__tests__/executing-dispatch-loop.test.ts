@@ -89,7 +89,7 @@ describe('dispatchTools — local repeat protection', () => {
     expect(second.results.every((r) => !r.isError)).toBe(true);
   });
 
-  it('warns then blocks the third identical mutation in one batch', async () => {
+  it('executes repeated authorized mutations without a frequency refusal', async () => {
     let invoked = 0;
     const registry = registryWith({
       name: 'write_file',
@@ -99,11 +99,9 @@ describe('dispatchTools — local repeat protection', () => {
     }, () => { invoked++; });
 
     const result = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 1));
-    expect(invoked).toBe(2);
-    expect(result.results[1].guardVerdict).toMatchObject({ action: 'warn', count: 2 });
-    expect(result.results[2]).toMatchObject({ isError: true, refusalKind: 'dedup' });
-    expect(result.toolLoopDetected).toBe(true);
-    expect(result.loopDetail).toEqual({ toolName: 'write_file', count: 3 });
+    expect(invoked).toBe(3);
+    expect(result.results.every((entry) => !entry.isError && !entry.refusalKind)).toBe(true);
+    expect(result.toolLoopDetected).toBe(false);
   });
 
   it('does not retain a hard-refusal counter across dispatch batches', async () => {
@@ -117,7 +115,7 @@ describe('dispatchTools — local repeat protection', () => {
 
     const first = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 1));
     const next = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }], 2));
-    expect(first.toolLoopDetected).toBe(true);
+    expect(first.toolLoopDetected).toBe(false);
     expect(next.toolLoopDetected).toBe(false);
     expect(next.results[0].isError).toBe(false);
   });
@@ -149,7 +147,7 @@ describe('dispatchTools — local repeat protection', () => {
     expect(invoked).toBe(3);
   });
 
-  it('actively breaks repeated unchanged control-plane snapshots when the tool opts in', async () => {
+  it('observes unchanged control-plane snapshots without redirecting the agent', async () => {
     let invoked = 0;
     const registry = registryWith({
       name: 'app_get_workflow',
@@ -170,15 +168,11 @@ describe('dispatchTools — local repeat protection', () => {
     expect((await run(2)).toolLoopDetected).toBe(false);
     const third = await run(3);
     expect(third.results[0].guardVerdict).toMatchObject({
-      action: 'block',
-      reason: 'cross-turn-no-progress-blocked',
+      action: 'shadow',
+      reason: 'cross-turn-no-progress',
       wouldBlock: true,
     });
-    expect(third).toMatchObject({
-      toolLoopDetected: true,
-      loopGuard: 'doom-loop',
-      loopDetail: { toolName: 'app_get_workflow', count: 3 },
-    });
+    expect(third.toolLoopDetected).toBe(false);
     expect(third.results[0].isError).toBe(false);
     expect(invoked).toBe(3);
   });

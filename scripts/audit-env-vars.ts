@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -7,12 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { APP_SETTINGS } from '../packages/store/src/app-settings-catalog.js';
 import { AppSettingsStore } from '../packages/store/src/app-settings-store.js';
 import { loadConfig } from '../packages/shared/src/utils/config.js';
-import { collectEnvReads } from './runtime-env-inventory/ast-collector.js';
+import { collectEnvReads, collectSettingReferences } from './runtime-env-inventory/ast-collector.js';
 import { classifyRuntimeEnv } from './runtime-env-inventory/disposition.js';
 import { validateCodeRunRolloutManifest } from './runtime-env-inventory/rollout-manifest.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CHECK_MODE = process.argv.includes('--check');
+const SOURCE_ONLY = process.argv.includes('--source-only');
 const ROOTS = ['apps', 'packages', 'src'] as const;
 const REVIEW_BASELINE = 276;
 const EXCLUDE_PREFIX = ['CLAUDE_CODE_', 'NODE_', 'npm_', 'VITE_', 'AWS_', 'GITHUB_ACTIONS'];
@@ -60,7 +61,12 @@ const dynamicCodeRunConsumers = dynamicConsumers.filter((consumer) =>
   || consumer.file === 'apps/http-api/server/preflight-capability-catalog.ts'
 );
 const catalog = new Map(APP_SETTINGS.map((setting) => [setting.key, setting]));
-const settings = localSettings();
+const settings = SOURCE_ONLY ? new Map() : localSettings();
+const localEnvSource = existsSync(join(repoRoot, '.env')) ? readFileSync(join(repoRoot, '.env'), 'utf8') : '';
+const localEnvKeys = [...new Set(localEnvSource.match(/^\s*[A-Z][A-Z0-9_]+(?=\s*=)/gm)?.map((key) => key.trim()) ?? [])];
+const references = collectSettingReferences(repoRoot, [...ROOTS, 'extensions'], [...catalog.keys(), ...localEnvKeys]);
+const catalogWithoutReferences = [...catalog.keys()].filter((key) => !references.get(key)?.length);
+const localEnvWithoutReferences = localEnvKeys.filter((key) => !references.get(key)?.length);
 const runtimeUnclassified: string[] = [];
 const report = [...hits.values()].map((hit) => {
   const inferredType = Object.entries(hit.votes)
@@ -108,6 +114,13 @@ const artifact = {
   build: packageJson.version,
   host: hostname(),
   scannedFiles,
+  sourceOnly: SOURCE_ONLY,
+  catalogAudit: {
+    withoutSourceReferences: catalogWithoutReferences,
+    indirectReferences: Object.fromEntries([...catalog.keys()].filter((key) => !hits.has(key)).map((key) => [key, references.get(key)])),
+    localEnvWithoutSourceReferences: localEnvWithoutReferences,
+    note: 'Missing or indirect references require review; this report never deletes settings.',
+  },
   runtimeClassificationCoverage: {
     classified: runtime.length,
     unclassified: runtimeUnclassified,
@@ -122,6 +135,7 @@ writeFileSync(join(outDir, 'env-vars.json'), `${JSON.stringify(artifact, null, 2
 
 console.log(`[audit-env-vars] AST scanned ${scannedFiles} files, ${report.length} distinct env reads`);
 console.log(`  cataloged: ${cataloged}; excluded: ${excludedCount}; review: ${review}`);
+console.log(`  catalog without source references: ${catalogWithoutReferences.length}; local env candidates: ${localEnvWithoutReferences.length}`);
 console.log(`  code-run disposition: ${runtime.length} classified, ${runtimeUnclassified.length} unclassified`);
 console.log(`  code-run dynamic env access: ${dynamicCodeRunConsumers.length}`);
 console.log(`  rollout manifest: ${rolloutValidation.ok ? 'valid' : 'INVALID'}`);
@@ -129,11 +143,13 @@ console.log('  full redacted snapshot -> scripts/.audit/env-vars.json');
 
 if (CHECK_MODE && (
   review > REVIEW_BASELINE
+  || catalogWithoutReferences.length > 0
   || runtimeUnclassified.length > 0
   || dynamicCodeRunConsumers.length > 0
   || !rolloutValidation.ok
 )) {
   if (review > REVIEW_BASELINE) console.error(`env review drift: ${review} > ${REVIEW_BASELINE}`);
+  if (catalogWithoutReferences.length > 0) console.error(`catalog without source references: ${catalogWithoutReferences.join(', ')}`);
   if (runtimeUnclassified.length > 0) console.error(`unclassified code-run env: ${runtimeUnclassified.join(', ')}`);
   if (dynamicCodeRunConsumers.length > 0) {
     console.error(`dynamic code-run env access: ${dynamicCodeRunConsumers.map((item) => `${item.file}:${item.line}`).join(', ')}`);

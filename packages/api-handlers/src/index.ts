@@ -34,25 +34,6 @@ export type { HandlerDeps } from './types.js';
 export { createContext, createInternalContext } from './context.js';
 export { createProjectsHandlers } from './projects/index.js';
 export { runScaffoldStream } from './projects/scaffold.js';
-export { runAppStudioScaffoldStream } from './app-studio/studio-scaffold.js';
-export type {
-  AppStudioCreateInput,
-  AppStudioExecutionMode,
-  AppStudioStreamEvent,
-} from './app-studio/studio-scaffold.js';
-export {
-  canonicalAppTeamRole,
-  createAppTeamSession,
-  getAppTeamSession,
-} from './app-studio/app-team-session.js';
-export type {
-  AppTeamSessionView,
-  CreateAppTeamSessionResult,
-} from './app-studio/app-team-session.js';
-export { runWranglerLoginStream, runWranglerWhoami } from './app-studio/login-stream.js';
-export type { AppCfLoginEvent, CfWhoami } from './app-studio/login-stream.js';
-export { runAppLaunchStream } from './app-studio/launch-stream.js';
-export type { AppLaunchEvent } from './app-studio/launch-stream.js';
 export { reinstrumentBuilder, type ReinstrumentResult } from './projects/reinstrument.js';
 export { visualEdit, type VisualEditBody, type VisualEditOkResult } from './projects/visual-edit.js';
 export { createFilesHandlers, resolveSafe } from './files/index.js';

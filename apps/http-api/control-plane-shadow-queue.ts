@@ -162,24 +162,6 @@ export function recordLocalCoderShadowDivergences(count: number): void {
   metrics.divergences += count;
 }
 
-export function coderControlPlaneShadowEnabled(): boolean {
-  // Compatibility name: this now controls only the optional root AgentRun
-  // projection. SessionCommand acceptance/terminal state is always authoritative
-  // whenever the HTTP server's filesystem control-plane authority is available.
-  // Child AgentRun enforcement requires the root run to be established
-  // synchronously with command acceptance. Opting into ENFORCE therefore
-  // enables this projection even when the audit-only root flag is omitted.
-  // The child shadow also needs a root parent row; treating it as an alias
-  // prevents every child spawn from degrading on a missing parent.
-  return process.env.CODER_CONTROL_PLANE_SHADOW === '1'
-    || process.env.CODER_AGENT_RUN_STORE_SHADOW === '1'
-    || process.env.CODER_AGENT_RUN_STORE_ENFORCE === '1';
-}
-
-export function coderRuntimeJournalShadowEnabled(): boolean {
-  return coderControlPlaneShadowEnabled() && process.env.CODER_RUNTIME_JOURNAL_SHADOW === '1';
-}
-
 export function snapshotCoderControlPlaneShadowMetrics(): CoderControlPlaneShadowMetrics {
   const {
     queueHighWatermark,

@@ -46,7 +46,6 @@ export type BuiltInAgentPreset =
   | 'build'
   | 'admin'
   | 'spec'
-  | 'app_orchestrator'
   | 'app_db'
   | 'api'
   | 'diagram'
@@ -59,6 +58,7 @@ export type ExecutionMode = 'standard' | 'ultra';
 export type CoderProvider = 'anthropic' | 'openai' | 'openrouter' | 'gemini' | 'bedrock' | 'zai' | 'deepseek' | 'kimi-code' | 'claude-code' | 'cloudflare';
 
 export interface CoderSession {
+  worktree_path?: string | null;
   id: SessionId;
   project_id: number | null;
   title: string;
@@ -92,6 +92,7 @@ export interface CoderTranscriptRow {
 }
 
 export interface CreateSessionInput {
+  worktree_path?: string | null;
   project_id: number;
   title: string;
   provider: CoderProvider;
@@ -258,7 +259,6 @@ export interface ToolCallStats {
 
 export interface CoderSessionsApi {
   list(input: { projectId?: number; archived?: boolean; favorite?: boolean }, ctx: ApiContext): Promise<CoderSession[]>;
-  recent(input: { limit?: number }, ctx: ApiContext): Promise<CoderSession[]>;
   get(input: { id: SessionId; includeMessages?: boolean }, ctx: ApiContext): Promise<{ session: CoderSession; messages?: unknown[] }>;
   create(input: CreateSessionInput, ctx: ApiContext): Promise<CoderSession>;
   update(input: { id: SessionId } & UpdateSessionInput, ctx: ApiContext): Promise<CoderSession>;

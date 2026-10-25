@@ -13,7 +13,7 @@ import { type StartMemorySweeperArgs, type MemorySweeperHandle, DEFAULT_INTERVAL
 
 export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperHandle {
   const intervalMs = args.intervalMs ?? DEFAULT_INTERVAL_MS;
-  const idleAfterMs = args.idleAfterMs ?? DEFAULT_IDLE_AFTER_MS;
+  const idleAfterMs = args.idleAfterMs ?? Number(process.env.MCP_MEMORY_IDLE_AFTER_MS ?? 10 * 60 * 1000);
   const maxPerSweep = args.maxPerSweep ?? DEFAULT_MAX_PER_SWEEP;
   const maxCandidatesInspected = Math.max(
     maxPerSweep,

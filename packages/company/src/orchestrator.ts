@@ -48,7 +48,6 @@ import type { MasterInboxRouter } from './services/MasterInboxRouter.js';
 import type { RuntimeReconciler } from './services/RuntimeReconciler.js';
 import type { ServiceSupervisor } from './services/service-supervisor/ServiceSupervisor.js';
 import type { CompanyScheduler } from './services/scheduler/CompanyScheduler.js';
-import type { AppStudioScheduler } from './services/scheduler/AppStudioScheduler.js';
 import { dispatchCard, type DispatchCardResult } from './services/scheduler/dispatch-card.js';
 import { getGlobalCompanyRecommend } from './services/scheduler/recommend-shim.js';
 import type { CompanyDriveStore } from './services/CompanyDriveStore.js';
@@ -128,7 +127,6 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
   private readonly reconciler: RuntimeReconciler;
   private readonly serviceSupervisor: ServiceSupervisor;
   private readonly scheduler: CompanyScheduler | null;
-  private readonly appStudioScheduler: AppStudioScheduler | null;
 
   constructor(opts: CompanyOrchestratorOpts) {
     this.companySessionId = asCompanySessionId(String(opts.companySessionId));
@@ -154,7 +152,6 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
     this.reconciler = w.reconciler;
     this.serviceSupervisor = w.serviceSupervisor;
     this.scheduler = w.scheduler;
-    this.appStudioScheduler = w.appStudioScheduler;
     this.autonomy = w.autonomy;
   }
 
@@ -583,7 +580,6 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
     this.reconciler.stop();
     this.serviceSupervisor.stop();
     this.scheduler?.stop();
-    this.appStudioScheduler?.stop();
     this.subordinates.abortAll();
     this.master.abort();
     await this.humanInLoop.cancelPendingMasterPrompts().catch(() => undefined);

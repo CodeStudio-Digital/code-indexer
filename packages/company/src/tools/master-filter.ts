@@ -83,15 +83,6 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'kanban_plan_graph',
 ]);
 
-export interface MasterToolFilterOptions {
-  /** App Studio sessions contribute app_* orchestration/artifact tools. */
-  allowAppStudio?: boolean;
-}
-
-const APP_STUDIO_DISABLED_COMPANY_TOOLS: ReadonlySet<string> = new Set([
-  'spawn_subordinate_agent',
-]);
-
 /**
  * MCP tool suffixes the Master is allowed to use (after the project prefix).
  * e.g. if suffix is "get_project_pulse", then mcp__my_project__get_project_pulse is kept.
@@ -182,24 +173,8 @@ function extractMcpSuffix(name: string): string | null {
 /**
  * Filter predicate for master agents. Returns true if the tool should be kept.
  */
-export function isMasterAllowed(tool: CoderTool, options: MasterToolFilterOptions = {}): boolean {
+export function isMasterAllowed(tool: CoderTool): boolean {
   const { name, source } = tool;
-
-  // App Studio contributes these tools only to sessions explicitly tagged
-  // with the App capability. Keep the prefix closed for ordinary Company
-  // sessions and external/plugin tools.
-  if (name.startsWith('app_')) {
-    return options.allowAppStudio === true && source === 'native';
-  }
-
-  // Persistent App teams delegate through their Company lifecycle. Leaving
-  // execute_tasks visible would re-introduce the ephemeral global-subagent
-  // path this runtime exists to replace.
-  if (options.allowAppStudio && name === 'execute_tasks') return false;
-  if (options.allowAppStudio && (
-    APP_STUDIO_DISABLED_COMPANY_TOOLS.has(name)
-    || name.startsWith('kanban_')
-  )) return false;
 
   // Company tools are always allowed
   if (isCompanyTool(name)) return true;
@@ -232,7 +207,6 @@ export function isMasterAllowed(tool: CoderTool, options: MasterToolFilterOption
  */
 export function filterForMaster(
   tools: CoderTool[],
-  options: MasterToolFilterOptions = {},
 ): CoderTool[] {
-  return tools.filter((tool) => isMasterAllowed(tool, options));
+  return tools.filter((tool) => isMasterAllowed(tool));
 }

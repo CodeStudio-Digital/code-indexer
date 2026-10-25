@@ -74,7 +74,6 @@ function setup() {
     getLastUsedProviderModel: () => null,
     createSession: vi.fn((input: Record<string, unknown>) => addSession(input)),
     getSession: (id: SessionId) => sessions.get(id) ?? null,
-    listRecentSessionsGlobal: () => [],
     setSessionExecutionMode,
     setSessionReasoningEffort,
   };

@@ -21,7 +21,7 @@ import {
 } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
 import { ChatHeader } from './ChatHeader.js';
-import { ChatRightRail } from './right-panel/ChatRightRail.js';
+import { LiveChatRightRail as ChatRightRail } from './right-panel/ChatRightRail.js';
 import { RightPanelHost } from './right-panel/RightPanelHost.js';
 import {
   SESSION_INSIGHTS_TAB_EVENT,
@@ -63,6 +63,9 @@ import { useUnreadNotificationCount } from './notifications/session-notification
 // through `RightPanelHost`; metrics/details/tool stats share Insights. Only
 // Snapshots stays as a true Dialog because its diff viewer needs full width.
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
+import { SessionWorkspaceBar } from './SessionWorkspaceBar.js';
+import { useSessionWorktrees } from './useSessionWorktrees.js';
+import { usePortalHost } from '../../hooks/usePortalHost.js';
 // Rarely-opened surfaces, each in its own async chunk. They used to sit in the
 // chat's eager bundle even though the user has to click something to reach
 // them: the snapshots review panel alone pulls ~3.7k lines (file list + diff
@@ -85,6 +88,7 @@ import {
   type SessionLaunchConfig,
 } from './SessionLaunchDialog.js';
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
+import { useActiveSurface } from '../../state/active-surface.js';
 import { buildSessionPin } from '../../state/pinned-tabs-describe.js';
 import { sessionPinId as makeSessionPinId } from '../../state/pinned-tabs-types.js';
 import { fetchSnapshotList } from '../snapshots/api.js';
@@ -136,6 +140,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     return () => window.removeEventListener('coder:sessions-changed', onSessionsChanged);
   }, [refetchSessions, refetchGroups, isGlobal]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sessionActionsRef, sessionActionsHost] = usePortalHost<HTMLDivElement>();
+  const [sessionCreateError, setSessionCreateError] = useState<string | null>(null);
   // Global mode: which linked project the right-rail file tree is rooted at.
   // Defaults to the selected session's primary; reset when the session changes.
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
@@ -279,6 +285,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     return saved as RightPanelId;
   });
   useEffect(() => {
+    const open = (event: Event) => { if ((event as CustomEvent).detail?.sessionId === selectedId) setActiveRightPanelId('collaboration'); };
+    window.addEventListener('coder:open-collaboration', open);
+    return () => window.removeEventListener('coder:open-collaboration', open);
+  }, [selectedId]);
+  useEffect(() => {
     localStorage.setItem('chatRightPanelId', activeRightPanelId ?? 'null');
   }, [activeRightPanelId]);
   useEffect(() => {
@@ -312,6 +323,19 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     () => sessionDataForSelection(sessionData, selectedId),
     [selectedId, sessionData],
   );
+  // Reuse visible-chat metadata for the shell's pin button, with no global scan.
+  const activeSessionTitle = selectedSessionData?.session.title
+    ?? sessions?.find((session) => session.id === selectedId)?.title;
+  useEffect(() => {
+    if (!selectedId || !activeSessionTitle) return;
+    const session = { id: selectedId, title: activeSessionTitle };
+    useActiveSurface.getState().setSession(session);
+    return () => {
+      if (useActiveSurface.getState().session === session) {
+        useActiveSurface.getState().setSession(null);
+      }
+    };
+  }, [selectedId, activeSessionTitle]);
   const {
     agent,
     setAgent: handleAgentChange,
@@ -328,6 +352,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const sessionDataRef = useRef(selectedSessionData);
+  const worktrees = useSessionWorktrees({
+    projectId, isGlobal, sessions, selectedId,
+    selectedSession: selectedSessionData?.session ?? null,
+    onSelect: setSelectedId,
+  });
   sessionDataRef.current = selectedSessionData;
   const messagePageAbortControllersRef = useRef<Set<AbortController>>(new Set());
   useEffect(() => () => {
@@ -604,19 +633,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   }, []);
   const clearPicks = useCallback(() => setFilePicks([]), []);
 
-  // Skill picks: skill ids selected in SkillsSection. The server expands them
-  // into an `<active_skills>` block prepended to the user message so the agent
-  // does not need to discover or load the skill content via tool calls first.
-  const [skillPicks, setSkillPicks] = useState<string[]>([]);
-  const toggleSkillPick = useCallback((id: string) => {
-    setSkillPicks((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }, []);
-  const clearSkillPicks = useCallback(() => setSkillPicks([]), []);
-
   // Reset picks when switching sessions.
   useEffect(() => {
     setFilePicks([]);
-    setSkillPicks([]);
   }, [selectedId]);
 
   const createSession = useCallback(async (
@@ -624,6 +643,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   ) => {
     if (creatingSessionRef.current) return null;
     creatingSessionRef.current = true;
+    setSessionCreateError(null);
     setCreatingSession(true);
     try {
       const selectedProvider = config.provider || provider;
@@ -648,6 +668,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         : (config.temperature === undefined ? sessionTemperature : config.temperature);
       const explicitTitle = config.title?.trim();
       const created = await apiPost<CoderSession>('/coder/sessions', {
+        worktree_path: worktrees.path,
         project_id: projectId,
         title: (explicitTitle || 'Nova sessão').slice(0, 80),
         provider: selectedProvider,
@@ -681,7 +702,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       creatingSessionRef.current = false;
       setCreatingSession(false);
     }
-  }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, executionMode, adoptExecutionMode, adoptAgent, thinking, sessionTemperature, refetchSessions]);
+  }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, executionMode, adoptExecutionMode, adoptAgent, thinking, sessionTemperature, refetchSessions, worktrees.path]);
 
   const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseSessionId?: string }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
@@ -705,6 +726,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   };
 
   const handleNewSession = useCallback(() => {
+    if (worktrees.unavailable) {
+      setSessionCreateError(t('chat:worktrees.unavailable'));
+      return;
+    }
     // Global mode opens the project multi-select dialog instead of an
     // immediate single-project create.
     if (isGlobal) {
@@ -712,9 +737,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       return;
     }
     void createSession({ useLastModel: true }).catch((error) => {
+      setSessionCreateError(error instanceof Error ? error.message : String(error));
       console.warn('[new-session] creation failed:', error);
     });
-  }, [isGlobal, createSession]);
+  }, [isGlobal, createSession, worktrees.unavailable, t]);
 
   const handleOpenImport = useCallback(() => setSessionImportOpen(true), []);
   const handleImportedSession = useCallback((sessionId: string) => {
@@ -1227,7 +1253,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   }, [confirm, t, selectedId, refetchSessions]);
 
   const handleDeleteAll = useCallback(async () => {
-    const ids = (sessions ?? []).map((s) => s.id);
+    const ids = (worktrees.visible ?? []).map((s) => s.id);
     if (ids.length === 0) return;
     const ok = await confirm({
       title: t('chat:deleteAllSessions', { count: ids.length }),
@@ -1241,7 +1267,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     await apiPost('/coder/sessions/batch-delete', { ids });
     if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
     refetchSessions();
-  }, [sessions, confirm, t, view, selectedId, refetchSessions]);
+  }, [worktrees.visible, confirm, t, view, selectedId, refetchSessions]);
 
   const handleArchive = useCallback(async (id: string, archived: boolean) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
@@ -1530,6 +1556,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     [queue.items, queue.promote, queue.remove],
   );
 
+  const workspaceBar = (
+    <SessionWorkspaceBar
+      key={projectId ?? 'global'} projectId={projectId} isGlobal={isGlobal}
+      path={worktrees.path} data={worktrees.data} loading={worktrees.loading}
+      error={worktrees.error} unavailable={worktrees.unavailable} sessionError={sessionCreateError}
+      actionsRef={sessionActionsRef} onRefresh={worktrees.refetch}
+      onSelect={(path) => { setSessionCreateError(null); worktrees.switchTo(path); }}
+    />
+  );
+
   return (
     // Tooltips use the single root <TooltipProvider> in App.tsx — a nested one
     // here was redundant (extra Radix context layer re-rendering on every chat
@@ -1657,7 +1693,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       )}
       {/* Snapshots is the only ex-modal that stays modal — its full-width
           diff viewer needs the viewport. The remaining surfaces live in the rail. */}
-      <div ref={chatAreaRef} className="flex h-full min-h-0">
+      <div ref={chatAreaRef} className="flex h-full min-h-0 flex-col">
+        {workbenchSlots?.toolbarHost
+          ? createPortal(workspaceBar, workbenchSlots.toolbarHost)
+          : workspaceBar}
+        <div className="flex min-h-0 flex-1">
         {/* `agent-chat-cols-v2` bumps the persisted-storage key so the
             three-panel layout (sessions / chat / right-rail) gets a fresh
             split instead of inheriting the legacy two-panel sizing — which
@@ -1678,7 +1718,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           className="min-w-0"
         >
         <SessionSidebar
-          sessions={sessions ?? null}
+          actionsHost={sessionActionsHost}
+          scopeKey={String(projectId) + ':' + (worktrees.path ?? '')}
+          newDisabled={worktrees.unavailable}
+          sessions={worktrees.visible ?? null}
           groups={groups ?? null}
           view={view}
           onViewChange={handleViewChange}
@@ -1750,6 +1793,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   // and the tokens widget. The activity rail (rendered next
                   // to the right panel) owns those buttons.
                   onOpenDetails={openDetailsPanel}
+                  onOpenNotifications={() => setActiveRightPanelId((id) => id === 'notifications' ? null : 'notifications')}
+                  unreadNotifications={unreadNotifications}
+                  notificationsOpen={activeRightPanelId === 'notifications'}
                   onSummarizeClear={handleSummarizeClear}
                   summarizing={summarizing}
                   onOpenSidebar={openMobileSidebar}
@@ -1801,13 +1847,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               <div className="relative">
               <IndexingOverlay projectId={projectIndexId} />
               <Composer
+                    sessionCollaboration
                 ref={composerRef}
                 filePicks={filePicks}
                 onRemovePick={togglePick}
                 onClearPicks={clearPicks}
-                skillPicks={skillPicks}
-                onRemoveSkillPick={toggleSkillPick}
-                onClearSkillPicks={clearSkillPicks}
                 agent={agent}
                 setAgent={handleAgentChange}
                 hideAgentPicker={hideAgentPicker}
@@ -1888,6 +1932,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             >
               <RightPanelHost
                 activeId={activeRightPanelId}
+                onSelectPanel={setActiveRightPanelId}
                 sessionId={selectedId}
                 session={sessionData?.session ?? null}
                 sessionData={sessionData ?? null}
@@ -1899,8 +1944,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 onTogglePick={togglePick}
                 onSetManyPicks={setManyPicks}
                 onClearPicks={clearPicks}
-                skillPicks={skillPicks}
-                onToggleSkillPick={toggleSkillPick}
                 activeProcesses={activeProcesses}
                 pluginWindows={pluginPanelWindows}
                 preview={preview}
@@ -1921,17 +1964,21 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               onSelectPanel={setActiveRightPanelId}
               onOpenSnapshots={openSnapshots}
               pendingSnapshots={snapshotPending}
-              unreadNotifications={unreadNotifications}
+              sessionData={sessionData ?? null}
               pluginWindows={pluginPanelWindows}
               previewAvailable={previewAvailable}
             />
           </div>
         )}
+        </div>
       </div>
       {workbenchSlots?.sessionsHost && createPortal(
         <SessionSidebar
           docked
-          sessions={sessions ?? null}
+          actionsHost={sessionActionsHost}
+          scopeKey={String(projectId) + ':' + (worktrees.path ?? '')}
+          newDisabled={worktrees.unavailable}
+          sessions={worktrees.visible ?? null}
           groups={groups ?? null}
           view={view}
           onViewChange={handleViewChange}
@@ -1965,6 +2012,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       {workbenchSlots?.rightPanelHost && selectedId && activeRightPanelId && createPortal(
         <RightPanelHost
           activeId={activeRightPanelId}
+          onSelectPanel={setActiveRightPanelId}
           sessionId={selectedId}
           session={sessionData?.session ?? null}
           sessionData={sessionData ?? null}
@@ -1976,8 +2024,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           onTogglePick={togglePick}
           onSetManyPicks={setManyPicks}
           onClearPicks={clearPicks}
-          skillPicks={skillPicks}
-          onToggleSkillPick={toggleSkillPick}
           activeProcesses={activeProcesses}
           pluginWindows={pluginPanelWindows}
           preview={preview}
@@ -1992,7 +2038,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           onSelectPanel={setActiveRightPanelId}
           onOpenSnapshots={openSnapshots}
           pendingSnapshots={snapshotPending}
-          unreadNotifications={unreadNotifications}
+          sessionData={sessionData ?? null}
           pluginWindows={pluginPanelWindows}
           previewAvailable={previewAvailable}
         />,

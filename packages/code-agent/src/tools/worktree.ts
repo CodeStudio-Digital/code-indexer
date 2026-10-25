@@ -127,6 +127,9 @@ export const exitWorktree: CoderTool = {
       return err('exit_worktree requires a runner that supports worktree scoping.');
     }
     const wtPath = runner.worktreePath;
+    if (ctx.worktreeWorkspace) {
+      return err('This session belongs to a worktree workspace. Select Main or another worktree in the workspace bar and use a session there; this checkout may be shared by other sessions.');
+    }
     if (!wtPath) {
       return ok('No worktree currently active — nothing to exit.');
     }

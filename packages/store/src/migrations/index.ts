@@ -270,6 +270,7 @@ import { removeDeadCodeRunSettings266 } from './266_remove_dead_code_run_setting
 import { retireSpriteAndDesignSystem267 } from './267_retire_sprite_and_design_system.js';
 import { semanticJobLookup268 } from './268_semantic_job_lookup.js';
 import { symbolReferenceKind269 } from './269_symbol_reference_kind.js';
+import { retireAppStudioSkill270 } from './270_retire_app_studio_skill.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -539,6 +540,7 @@ export const MIGRATIONS: Migration[] = [
   retireSpriteAndDesignSystem267,
   semanticJobLookup268,
   symbolReferenceKind269,
+  retireAppStudioSkill270,
 ];
 
 /**

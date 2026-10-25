@@ -82,7 +82,7 @@ export interface SubagentSpec {
   chatKey?: string;
   pushTimeCap?: number;
   limits?: SubagentLimits;
-  /** Explicit convergence cutoff for this run; defaults to the product invariant. */
+  /** Repetition observation threshold; does not terminate execution. */
   sameOperationMax?: number;
   /** Explicit salvage-summary timeout; primarily useful for bounded hosts/tests. */
   salvageTimeoutMs?: number;
@@ -931,12 +931,12 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
         repeatedNoProgressOperation = logicalOperationId;
         repeatedNoProgressCount = 1;
       }
-      if (repeatedNoProgressCount >= sameOperationMax) {
-        failWatchdog(
-          `subagent_convergence_watchdog: logical operation ${logicalOperationId} ` +
-          `made no progress ${repeatedNoProgressCount} consecutive times`,
-          'quality',
-        );
+      if (repeatedNoProgressCount === sameOperationMax) {
+        spec.onProgress?.({
+          event: 'heartbeat', phase: 'repetition_observation', toolCallCount: subToolCalls,
+          toolName: name,
+          note: `Logical operation ${logicalOperationId} returned unchanged results ${repeatedNoProgressCount} consecutive times; execution continues.`,
+        });
       }
     } else {
       repeatedNoProgressOperation = null;
@@ -948,18 +948,9 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
     }
   });
 
-  // PR-C quality watchdog (forwarding variant). Codex tracks "agente
-  // está falando muito sem chamar tool" via `should_compact_session`; we
-  // approximate by counting assistant messages that have NO tool_use
-  // block. A streak of N (default 3) is a strong signal the sub is
-  // monologuing instead of acting — abort with a recognisable reason so
-  // the parent's retry classifier flags it as transient.
-  //
-  // Reset to 0 on every tool_call_result (any tool execution = progress).
-  // Env override: `CODER_SUBAGENT_QUALITY_NO_TOOL_MAX=N` (default 3,
-  // 0 disables). State `QUALITY_NO_TOOL_MAX` and `consecutiveNoToolCount`
-  // are declared above the tool_call_result handler so both listeners
-  // can mutate them.
+  // Observe narration streaks for diagnostics. Legitimate synthesis may span
+  // several messages; only explicit budgets, inactivity and cancellation stop
+  // execution. Tool results reset the narration counter.
   subRunner.on('message_complete', (message, usage) => {
     // `CoderRunner.run()` owns the canonical total on normal completion. Keep
     // a parallel per-turn accumulator only for interrupted/error exits where
@@ -983,11 +974,11 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
         note: `[subagent] no_tool_streak=${consecutiveNoToolCount}/${QUALITY_NO_TOOL_MAX}`,
       });
     }
-    if (QUALITY_NO_TOOL_MAX > 0 && consecutiveNoToolCount >= QUALITY_NO_TOOL_MAX) {
-      failWatchdog(
-        `subagent_quality_watchdog: ${consecutiveNoToolCount} consecutive turns without tool use`,
-        'quality',
-      );
+    if (QUALITY_NO_TOOL_MAX > 0 && consecutiveNoToolCount === QUALITY_NO_TOOL_MAX) {
+      spec.onProgress?.({
+        event: 'heartbeat', phase: 'repetition_observation', toolCallCount: subToolCalls,
+        note: `${consecutiveNoToolCount} consecutive turns without tool use; execution continues.`,
+      });
     }
   });
 

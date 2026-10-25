@@ -135,13 +135,14 @@ export function prepareMessage(
         kind: 'attachment',
         data: decodeBase64(block.base64, `image block ${index}`),
         media_type: block.mediaType,
-        logical_name: `image-${index}`,
+        logical_name: block.name ?? `image-${index}`,
       };
       const prepared = artifactBlock(artifactStore, input, {
         type: 'artifact_ref',
         source_type: 'image',
         encoding: 'base64',
         media_type: block.mediaType,
+        ...(block.name ? { name: block.name } : {}),
         ...(block.describeHint ? { describe_hint: block.describeHint } : {}),
       });
       artifacts.push(prepared.input);
@@ -234,6 +235,7 @@ function hydrateContentBlock(
     if (block.source_type === 'image') {
       return {
         type: 'image',
+        ...(block.name ? { name: block.name } : {}),
         mediaType: block.media_type,
         base64: Buffer.from(bytes).toString('base64'),
         ...(block.describe_hint

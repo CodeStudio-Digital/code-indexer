@@ -3,6 +3,8 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
 import { resolveProjectPath } from '../workspace/paths.js';
 import { listDirFiltered, listFilesRecursive, searchFiles } from './project-files.js';
+import { resolveProjectWorktree } from '@mcp/code-agent/tools/project-worktrees.js';
+import { resolveSafe } from '@mcp/code-agent/tools/paths.js';
 
 export function mountCoderProjectTreeRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/coder/projects/:pid/tree', async (c) => {
@@ -12,7 +14,23 @@ export function mountCoderProjectTreeRoutes(app: Hono, deps: ServerDeps): void {
     }
     const relPath = c.req.query('path') ?? '.';
     const query = c.req.query('q')?.trim() ?? '';
-    const resolved = resolveProjectPath(deps, projectId, relPath);
+    let resolved = resolveProjectPath(deps, projectId, relPath);
+    const sessionId = c.req.query('session_id');
+    if (sessionId) {
+      const session = await deps.sessionStore.getSession(sessionId);
+      if (!session || (session.project_id !== projectId && !session.linked_projects.some(link => link.project_id === projectId))) {
+        return c.json({ error: 'Session does not belong to this project' }, 404);
+      }
+      if (session.worktree_path && session.project_id === projectId && resolved) {
+        try {
+          const root = await resolveProjectWorktree(resolved.root, session.worktree_path) ?? resolved.root;
+          const abs = resolveSafe(relPath, root);
+          resolved = abs ? { root, abs } : null;
+        } catch (error) {
+          return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+        }
+      }
+    }
     if (!resolved) {
       return c.json({ error: 'Project has no local path or path is outside the root' }, 400);
     }

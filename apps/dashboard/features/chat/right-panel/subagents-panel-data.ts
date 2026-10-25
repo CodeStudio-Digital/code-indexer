@@ -17,6 +17,7 @@ interface PersistedResult {
 export function collectListedGroups(
   sessionData: SessionData | null,
   currentTurn: AssistantTurn | null,
+  history: ListedAgentsGroup[] = collectPersistedGroups(sessionData),
 ): { activeGroups: ListedAgentsGroup[]; recentGroups: ListedAgentsGroup[] } {
   const liveGroups: ListedAgentsGroup[] = (currentTurn?.blocks ?? [])
     .flatMap((block) => (
@@ -37,7 +38,7 @@ export function collectListedGroups(
   // identity wins; the label/task fingerprint is only a compatibility fallback
   // for legacy stream events that predate toolUseId propagation.
   const unmatchedLive = [...liveGroups];
-  const persistedGroups = collectPersistedGroups(sessionData).filter((entry) => {
+  const persistedGroups = history.filter((entry) => {
     const matchIndex = unmatchedLive.findIndex((live) => groupsMatch(live.group, entry.group));
     if (matchIndex < 0) return true;
     unmatchedLive.splice(matchIndex, 1);
@@ -59,7 +60,7 @@ export function collectListedGroups(
   };
 }
 
-function collectPersistedGroups(sessionData: SessionData | null): ListedAgentsGroup[] {
+export function collectPersistedGroups(sessionData: SessionData | null): ListedAgentsGroup[] {
   if (!sessionData) return [];
 
   const results = new Map<string, PersistedResult>();

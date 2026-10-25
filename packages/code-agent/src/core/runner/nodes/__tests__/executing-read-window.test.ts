@@ -61,8 +61,8 @@ it('preserves duplicate-read reuse and mutation epoch protection across windows'
     { ...call(5), input: call(0).input }];
   const result = await dispatchTools({ registry, toolUses: tools, toolContext: context, turn: 1, dupCalls: new Map() });
   expect(read).toHaveBeenCalledTimes(2);
-  expect(write).toHaveBeenCalledTimes(2);
-  expect(result.results[4]?.refusalKind).toBe('dedup');
+  expect(write).toHaveBeenCalledTimes(3);
+  expect(result.results[4]?.refusalKind).toBeUndefined();
   expect(result.results[5]?.isError).toBe(false);
 });
 

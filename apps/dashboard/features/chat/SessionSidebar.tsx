@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   Archive,
@@ -52,6 +53,9 @@ import type {
 export type SessionView = 'active' | 'archived';
 
 interface SessionSidebarProps {
+  actionsHost?: HTMLElement | null;
+  scopeKey?: string;
+  newDisabled?: boolean;
   sessions: CoderSession[] | null;
   groups: CoderSessionGroup[] | null;
   selectedId: string | null;
@@ -124,6 +128,9 @@ export function sessionSidebarClassName(docked: boolean, mobileOpen: boolean): s
 // SessionRow memo was previously defeated by the unstable handlers flowing
 // through here.
 export const SessionSidebar = memo(function SessionSidebar({
+  actionsHost,
+  scopeKey,
+  newDisabled = false,
   sessions,
   groups,
   selectedId,
@@ -183,6 +190,10 @@ export const SessionSidebar = memo(function SessionSidebar({
     return () => window.removeEventListener('keydown', onKey);
   }, [docked, mobileOpen, onMobileClose]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setSelectMode(false);
+  }, [scopeKey, view]);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -282,22 +293,8 @@ export const SessionSidebar = memo(function SessionSidebar({
   // recreated inline per render, which defeated the row memo).
   const rowGroups = useMemo(() => groups ?? [], [groups]);
 
-  return (
-    <>
-      {/* Mobile backdrop — only visible below lg when the drawer is open. */}
-      {!docked && mobileOpen && (
-        <div
-          className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 lg:hidden"
-          onClick={onMobileClose}
-          aria-hidden="true"
-        />
-      )}
-      <aside
-        className={sessionSidebarClassName(docked, mobileOpen)}
-      >
-      {/* Thin single-row header — matches the system's section strips
-          (icon + compact title on the left, action icons on the right). */}
-      <div className="flex items-center gap-1 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] px-2 h-9">
+  const actions = (
+      <div className={cn("flex items-center gap-2 px-2", actionsHost ? "h-7" : "h-9 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)]")}>
         <div className="flex min-w-0 items-center gap-1.5">
           <MessageSquareCode className="h-4 w-4 text-primary shrink-0" />
           {/* Some quando a barra aperta — sobra o ícone + as ações. */}
@@ -449,7 +446,7 @@ export const SessionSidebar = memo(function SessionSidebar({
                 variant="ghost"
                 className="h-7 w-7"
                 onClick={onNew}
-                disabled={creating}
+                disabled={creating || newDisabled}
                 aria-busy={creating}
                 aria-label={t('chat:sidebar.new')}
               >
@@ -466,6 +463,22 @@ export const SessionSidebar = memo(function SessionSidebar({
           </Tooltip>
         </div>
       </div>
+  );
+
+  return (
+    <>
+      {/* Mobile backdrop — only visible below lg when the drawer is open. */}
+      {!docked && mobileOpen && (
+        <div
+          className="fixed inset-0 bg-background/80 backdrop-blur-sm z-40 lg:hidden"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        className={sessionSidebarClassName(docked, mobileOpen)}
+      >
+      {actionsHost ? createPortal(actions, actionsHost) : actions}
 
       {/* Batch-action bar */}
       {selectMode && selectedCount > 0 && (

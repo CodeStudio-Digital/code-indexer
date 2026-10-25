@@ -85,30 +85,6 @@ describe('FsSessionStore session catalog', () => {
     expect(metricsRead).not.toHaveBeenCalled();
   });
 
-  it('hydrates metrics only for the requested recent-session window', async () => {
-    const sessions = await Promise.all(
-      Array.from({ length: 6 }, (_, index) =>
-        store.createSession({
-          project_id: index % 2 === 0 ? 1 : 2,
-          title: `Recent ${index}`,
-          provider: 'openai',
-          model: 'gpt-test',
-        }),
-      ),
-    );
-    await store.setSessionArchived(sessions[0].id, true);
-    const metricsRead = vi.spyOn(
-      store.repository,
-      'readMetricsSummarySync',
-    );
-
-    const recent = await store.listRecentSessionsGlobal(2);
-
-    expect(recent).toHaveLength(2);
-    expect(recent.every((session) => !session.is_archived)).toBe(true);
-    expect(metricsRead).toHaveBeenCalledTimes(2);
-  });
-
   it('queries MCP metadata and active identities without opening metrics or transcript files', async () => {
     const sessions = [];
     for (const [principal, profile, project] of [['a', null, 1], ['b', null, 1], ['a', 'p', 2], ['a', null, 2]] as const) {
@@ -165,6 +141,7 @@ describe('FsSessionStore session catalog', () => {
           block_code_comments: boolean;
           max_turns: number | null;
           max_auto_continues: number;
+          worktree_path: string | null;
         };
       };
     };
@@ -175,6 +152,7 @@ describe('FsSessionStore session catalog', () => {
       block_code_comments: true,
       max_turns: null,
       max_auto_continues: 15,
+      worktree_path: null,
     });
   });
 

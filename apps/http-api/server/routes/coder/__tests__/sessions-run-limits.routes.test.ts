@@ -43,7 +43,6 @@ function setup() {
   const sessionStore = {
     getSession: (id: SessionId) => id === SESSION_ID ? session : null,
     setSessionRunLimits,
-    listRecentSessionsGlobal: () => [],
   };
   const app = new Hono();
   mountCoderSessionsRoutes(

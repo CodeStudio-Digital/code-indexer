@@ -52,9 +52,7 @@ async function routeAllowsCompanySurface(
   return surface === 'kanban' && runtime.capabilities.allowCompanyKanban;
 }
 
-/** App-owned teams keep lifecycle reads/streaming in Company, but every
- * destructive/config mutation must enter through the App facade so workflow
- * attempts and compatibility state are updated atomically. */
+/** Retired App teams remain readable; mutations must preserve their archive. */
 export async function isAppOwnedCompanySession(
   sessionStore: FsSessionStore,
   sessionId: CompanySessionId,
@@ -64,7 +62,7 @@ export async function isAppOwnedCompanySession(
 
 export function appOwnedControlPlaneConflict(c: Context, operation: string) {
   return c.json({
-    error: `App Studio owns this team's ${operation}. Use the App workflow/team controls instead.`,
+    error: `App Studio has been retired. This team's ${operation} is unavailable; saved projects and history are preserved.`,
     code: 'APP_STUDIO_CONTROL_PLANE_OWNED',
     runtime_kind: 'app_studio',
     operation,
@@ -74,7 +72,7 @@ export function appOwnedControlPlaneConflict(c: Context, operation: string) {
 /** Stable 409 used by every incompatible Company mutation. */
 export function companySurfaceConflict(c: Context, surface: CompanyRouteSurface) {
   return c.json({
-    error: `Company ${surface} is unavailable for App Studio teams; use the App workflow instead.`,
+    error: `Company ${surface} is unavailable for archived App Studio teams.`,
     code: 'COMPANY_SURFACE_UNAVAILABLE_FOR_APP',
     runtime_kind: 'app_studio',
     surface,

@@ -38,6 +38,24 @@ import { INDEXING_SETTINGS } from './app-settings/indexing.js';
 import { SANDBOX_SETTINGS } from './app-settings/sandbox.js';
 import { GIT_IDENTITY_SETTINGS } from './app-settings/git-identity.js';
 
+// These owners retain a worker, timer or manager across operations. Publishing
+// process.env cannot reconfigure existing instances; a restart recreates them.
+const RESTART_SETTINGS = new Set([
+  'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL',
+  'MCP_CODER_WORKER_DEBUG', 'MCP_CODER_WORKER_STRICT_CRASH',
+  'CODER_WORKER_TTL_MS', 'CODER_WORKER_POST_RUN_LINGER_MS',
+  'MCP_MAX_SANDBOXES', 'MCP_SANDBOX_IDLE_MS', 'MCP_SANDBOX_PAUSE_AFTER_MS',
+  'MCP_SANDBOX_DESTROY_AFTER_PAUSE_MS', 'MCP_SANDBOX_STATS_MS', 'MCP_SANDBOX_AUTO_IDLE_REAPER',
+  'MCP_MEMORY_SWEEPER', 'MCP_MEMORY_IDLE_AFTER_MS', 'MCP_MEMORY_CONSOLIDATE',
+  'MCP_MEMORY_CONSOLIDATE_INTERVAL_MS', 'MCP_MEMORY_CONSOLIDATE_IDLE_MS', 'MCP_MEMORY_CONSOLIDATE_MAX_PROJECTS',
+  'MCP_MEMORY_MERGE_COSINE', 'MCP_MEMORY_MERGE_TITLE_JACCARD', 'MCP_MEMORY_MAX_MERGES_PER_PASS',
+  'MCP_MEMORY_MAX_SNAPSHOTS_PER_PASS', 'MCP_MEMORY_ARCHIVE_IMPORTANCE_MAX',
+  'MCP_MEMORY_ARCHIVE_UNUSED_DAYS', 'MCP_MEMORY_ARCHIVE_MAX_ACCESS',
+  'CODER_COMPANY_ORCHESTRATOR_TTL_MS', 'MCP_COMPANY_INBOX_WATCHDOG_ENABLED',
+  'MCP_COMPANY_INBOX_WATCHDOG_INTERVAL_MS', 'MCP_COMPANY_INBOX_WATCHDOG_STUCK_MS',
+  'MCP_LSP_WORKER_IDLE_MS',
+]);
+
 export const APP_SETTINGS: readonly SettingDef[] = [
   ...LLM_SETTINGS,
   ...MCP_SETTINGS,
@@ -54,7 +72,7 @@ export const APP_SETTINGS: readonly SettingDef[] = [
   ...NOTIFICATION_SETTINGS,
   ...MEMORY_SETTINGS,
   ...DEBUG_SETTINGS,
-];
+].map((def) => RESTART_SETTINGS.has(def.key) ? { ...def, restartNeeded: true } : def);
 
 /** Index-by-key lookup for O(1) access during SettingStore reads. */
 const BY_KEY = new Map<string, SettingDef>(APP_SETTINGS.map((d) => [d.key, d]));

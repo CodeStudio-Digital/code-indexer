@@ -8,8 +8,6 @@ import type {
 } from '../../hooks/agent-stream/types.js';
 import { ActiveProcessesSection } from './sidebar/ActiveProcessesSection.js';
 import { CollapsibleSection } from './sidebar/CollapsibleSection.js';
-import { ProjectFilesSection } from './sidebar/ProjectFilesSection.js';
-import { SkillsSection } from './sidebar/SkillsSection.js';
 
 interface GoalSummary {
   text: string;
@@ -48,14 +46,6 @@ interface SessionStateSidebarProps {
   refreshKey?: number;
   onActiveTaskChange?: (taskId: string | null) => void;
   todos: TodoItem[];
-  projectId: number | null;
-  filePicks: string[];
-  onTogglePick: (path: string) => void;
-  onSetManyPicks: (paths: string[], select: boolean) => void;
-  onClearPicks: () => void;
-  /** Skill IDs the user has pre-selected for injection on the next send. */
-  skillPicks: string[];
-  onToggleSkillPick: (id: string) => void;
   /** Transient processes from the live session stream. */
   activeProcesses?: ActiveProcess[];
   /**
@@ -68,20 +58,13 @@ interface SessionStateSidebarProps {
 }
 
 /**
- * Right-side panel with collapsible sections: Goal, Tasks, Todos, and a
- * project-files browser with selection that feeds the composer.
+ * Session progress: goal, tasks, todos and live processes.
  */
 export function SessionStateSidebar({
   sessionId,
   refreshKey,
   onActiveTaskChange,
   todos,
-  projectId,
-  filePicks,
-  onTogglePick,
-  onSetManyPicks,
-  skillPicks,
-  onToggleSkillPick,
   activeProcesses = [],
   embedded,
 }: SessionStateSidebarProps) {
@@ -90,6 +73,7 @@ export function SessionStateSidebar({
 
   useEffect(() => {
     let cancelled = false;
+    setData(null);
     fetch(`/api/coder/sessions/${sessionId}/state-summary`)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d: StateSummary) => {
@@ -128,6 +112,7 @@ export function SessionStateSidebar({
   const sections = (
     <>
       <ActiveProcessesSection sessionId={sessionId} processes={activeProcesses} />
+      {data && !goal && !tasks && effectiveTodos.length === 0 && activeProcesses.length === 0 && <p className="px-3 py-4 text-xs text-muted-foreground">{t("chat:state.empty")}</p>}
       {goal && (
         <CollapsibleSection
           id="goal"
@@ -214,37 +199,11 @@ export function SessionStateSidebar({
             </div>
           )}
           <ul className="px-2 pb-2 space-y-1">
-            {tasks.tasks.map((task) => {
-              const isCurrent = task.id === tasks.current_task_id;
-              return (
-                <li
-                  key={task.id}
-                  className={cn(
-                    'flex items-start gap-2 text-xs px-1.5 py-1.5 rounded transition-colors',
-                    isCurrent ? 'bg-info/10' : 'hover:bg-muted/50',
-                  )}
-                >
-                  <span className="mt-0.5 shrink-0">{taskStatusIcon(task.status, isCurrent)}</span>
-                  <span
-                    className={cn(
-                      (task.status === 'done' || task.status === 'skipped') && 'text-muted-foreground line-through',
-                      task.status === 'failed' && 'text-destructive',
-                      task.status === 'interrupted' && 'text-warning',
-                      isCurrent && 'text-foreground font-medium',
-                      !isCurrent &&
-                        task.status !== 'done' &&
-                        task.status !== 'skipped' &&
-                        task.status !== 'failed' &&
-                        task.status !== 'interrupted' &&
-                        'text-muted-foreground',
-                    )}
-                    title={task.title}
-                  >
-                    {task.title}
-                  </span>
-                </li>
-              );
-            })}
+            <TaskRows items={tasks.tasks.filter((task) => !['done', 'skipped'].includes(task.status))} currentTaskId={tasks.current_task_id} />
+            {tasks.tasks.some((task) => ['done', 'skipped'].includes(task.status)) && <li><details className="px-1.5 py-1 text-xs text-muted-foreground">
+              <summary className="cursor-pointer py-1">{t('chat:state.closedItems', { count: tasks.tasks.filter((task) => ['done', 'skipped'].includes(task.status)).length })}</summary>
+              <ul><TaskRows items={tasks.tasks.filter((task) => ['done', 'skipped'].includes(task.status))} currentTaskId={tasks.current_task_id} /></ul>
+            </details></li>}
           </ul>
         </CollapsibleSection>
       )}
@@ -274,52 +233,15 @@ export function SessionStateSidebar({
           defaultOpen
         >
           <ul className="px-2 py-2 space-y-1">
-            {effectiveTodos.map((td, i) => (
-              <li
-                key={td.id ?? `legacy-${i}-${td.content}`}
-                className="flex items-start gap-2 text-xs px-1.5 py-1.5 rounded hover:bg-muted/50 transition-colors"
-              >
-                <span className="mt-0.5 shrink-0">
-                  {td.status === 'completed' ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                  ) : td.status === 'in_progress' ? (
-                    <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 animate-spin" />
-                  ) : (
-                    <Circle className="h-3.5 w-3.5 text-muted-foreground" />
-                  )}
-                </span>
-                <span
-                  className={
-                    td.status === 'completed'
-                      ? 'text-muted-foreground line-through'
-                      : td.status === 'in_progress'
-                        ? 'text-foreground font-medium'
-                        : 'text-muted-foreground'
-                  }
-                >
-                  {td.status === 'in_progress' ? td.activeForm : td.content}
-                </span>
-              </li>
-            ))}
+            <TodoRows items={effectiveTodos.filter((item) => item.status !== 'completed')} />
+            {todosCompleted > 0 && <li><details className="px-1.5 py-1 text-xs text-muted-foreground">
+              <summary className="cursor-pointer py-1">{t('chat:state.completedItems', { count: todosCompleted })}</summary>
+              <ul><TodoRows items={effectiveTodos.filter((item) => item.status === 'completed')} /></ul>
+            </details></li>}
           </ul>
         </CollapsibleSection>
       )}
 
-      {projectId != null && (
-        <ProjectFilesSection
-          sessionId={sessionId}
-          projectId={projectId}
-          selected={filePicks}
-          onToggleSelect={onTogglePick}
-          onSetMany={onSetManyPicks}
-        />
-      )}
-
-      <SkillsSection
-        sessionId={sessionId}
-        selected={skillPicks}
-        onToggleSelect={onToggleSkillPick}
-      />
     </>
   );
 
@@ -365,4 +287,68 @@ function formatK(n: number): string {
   if (n >= 1_000_000) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1_000) return `${Math.round(n / 1000)}k`;
   return String(n);
+}
+
+function TaskRows({ items, currentTaskId }: { items: TaskRow[]; currentTaskId: string | null }) {
+  return <>{items.map((task) => {
+    const isCurrent = task.id === currentTaskId;
+    return (
+      <li
+        key={task.id}
+        className={cn(
+          'flex items-start gap-2 text-xs px-1.5 py-1.5 rounded transition-colors',
+          isCurrent ? 'bg-info/10' : 'hover:bg-muted/50',
+        )}
+      >
+        <span className="mt-0.5 shrink-0">{taskStatusIcon(task.status, isCurrent)}</span>
+        <span
+          className={cn(
+            (task.status === 'done' || task.status === 'skipped') && 'text-muted-foreground line-through',
+            task.status === 'failed' && 'text-destructive',
+            task.status === 'interrupted' && 'text-warning',
+            isCurrent && 'text-foreground font-medium',
+            !isCurrent &&
+              task.status !== 'done' &&
+              task.status !== 'skipped' &&
+              task.status !== 'failed' &&
+              task.status !== 'interrupted' &&
+              'text-muted-foreground',
+          )}
+          title={task.title}
+        >
+          {task.title}
+        </span>
+      </li>
+    );
+  })}</>;
+}
+
+function TodoRows({ items }: { items: TodoItem[] }) {
+  return <>{items.map((td, i) => (
+    <li
+      key={td.id ?? `legacy-${i}-${td.content}`}
+      className="flex items-start gap-2 text-xs px-1.5 py-1.5 rounded hover:bg-muted/50 transition-colors"
+    >
+      <span className="mt-0.5 shrink-0">
+        {td.status === 'completed' ? (
+          <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+        ) : td.status === 'in_progress' ? (
+          <Loader2 className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 animate-spin" />
+        ) : (
+          <Circle className="h-3.5 w-3.5 text-muted-foreground" />
+        )}
+      </span>
+      <span
+        className={
+          td.status === 'completed'
+            ? 'text-muted-foreground line-through'
+            : td.status === 'in_progress'
+              ? 'text-foreground font-medium'
+              : 'text-muted-foreground'
+        }
+      >
+        {td.status === 'in_progress' ? td.activeForm : td.content}
+      </span>
+    </li>
+  ))}</>;
 }

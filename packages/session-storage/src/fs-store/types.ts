@@ -107,11 +107,8 @@ export interface FsCoderSession {
   state: SessionState;
 }
 
-export interface FsRecentCoderSession extends FsCoderSession {
+export interface FsGlobalCoderSession extends FsCoderSession {
   project_name: string;
-}
-
-export interface FsGlobalCoderSession extends FsRecentCoderSession {
   linked_count: number;
   workspace_label: string;
 }
@@ -123,6 +120,8 @@ export interface FsProjectInfo {
 }
 
 export interface FsCreateSessionInput {
+  /** Validated checkout selected when publishing the session. */
+  worktree_path?: string | null;
   id?: SessionId;
   parent_session_id?: SessionId | null;
   project_id: ProjectId;

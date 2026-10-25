@@ -3,6 +3,8 @@ import { chatChangesTools } from './tools/chat-changes.js';
 import { buildResumeChatTool } from './tools/chat-resume.js';
 import { resolveUltraPreset } from './sessions/ultra-policy.js';
 import { chatCollaborationTools } from './tools/chat-collaboration.js';
+import { sessionNetworkTools } from './tools/session-network.js';
+import { SessionNetwork } from './runtime/session-network.js';
 import { createRootCollaboration, attachChatMailbox } from './runtime/chat-collaboration.js';
 import { resolve as resolvePath, join as joinPath, relative as relativePath, isAbsolute as isAbsolutePath } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -144,7 +146,6 @@ import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
 import { buildBoardTools } from '@mcp/company/tools/board-tools.js';
 import { buildQaTools, roleHasQaPlaywrightSkill } from '@mcp/company/tools/qa/index.js';
-import { buildAppStudioTools } from '@mcp/company/tools/app-studio/index.js';
 import { buildSubordinateTools } from '@mcp/company/tools/subordinate-tools.js';
 import { buildSharedDriveTools } from '@mcp/company/tools/shared-drive-tools.js';
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -215,6 +216,7 @@ import { sendMessageTools } from '@mcp/code-agent/tools/send-message.js';
 import { sendInputTools } from '@mcp/code-agent/tools/send-input.js';
 import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools, createProjectWorktree } from '@mcp/code-agent/tools/worktree.js';
+import { resolveProjectWorktree, resolveSessionWorkspaceRoot } from '@mcp/code-agent/tools/project-worktrees.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import { resolveActiveWorkspaceSkills } from '@mcp/code-agent/skills/workspace-skills.js';
@@ -574,8 +576,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         : null;
     },
   );
-  const project = db.getProject(projectAuthority.primary.project_id);
-  if (!project || project.is_synthetic || project.root_path.trim().length === 0) {
+  const registeredProject = db.getProject(projectAuthority.primary.project_id);
+  if (!registeredProject || registeredProject.is_synthetic || registeredProject.root_path.trim().length === 0) {
     throw new Error(
       `Real project ${projectAuthority.primary.project_id} not found`,
     );
@@ -592,6 +594,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     await store.setSessionWorktree(session.id, null);
     session = { ...session, worktree_path: null };
   }
+  const originalProjectRoot = registeredProject.root_path;
+  const sessionWorkspaceRoot = await resolveSessionWorkspaceRoot(originalProjectRoot, session);
+  const project = { ...registeredProject, root_path: sessionWorkspaceRoot };
   const unionProjectLinks = session.is_global
     ? projectAuthority.projects.map((linked) => ({
         project_id: linked.project_id,
@@ -677,6 +682,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Tool registry: native tools + bridged MCP tools
   const registry = new ToolRegistry();
   registry.registerAll(chatCollaborationTools);
+  if (!opts.companyContext) registry.registerAll(sessionNetworkTools);
   registry.registerAll(chatChangesTools);
   // Mutable by design: code_exec/find_tools capture this map before external
   // MCP and plugin tools are registered, then observe the completed catalog
@@ -689,8 +695,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const isAppStudioCompany = opts.companyContext != null
     && (appCompanyCapabilities?.runtimeKind === 'app_studio'
       || opts.companyContext.runtimeKind === 'app_studio');
-  const allowAppCompanyTools = isAppStudioCompany
-    && (appCompanyCapabilities?.allowAppTools ?? opts.companyContext?.appStudioSessionId != null);
   const allowCompanyKanban = appCompanyCapabilities?.allowCompanyKanban ?? !isAppStudioCompany;
   const normalizedCompanyRole = opts.companyContext?.agentRole.trim().toLowerCase() ?? '';
   const hasGenericQaCapability = opts.companyContext != null
@@ -819,19 +823,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // at the ToolContext wiring, so an absent port degrades to a clear message.
   if (opts.projectMemory) {
     registry.registerAll(buildProjectMemoryTools());
-  }
-  // App Studio v6 tools exist only inside its persistent Company team.
-  if (
-    allowAppCompanyTools
-    && opts.companyContext != null
-    && opts.companyContext.appStudioSessionId != null
-    && config.features.appStudioEnabled
-  ) {
-    registerCompanyTools(buildAppStudioTools(project.id, {
-      audience: opts.companyContext.isMaster ? 'company-master' : 'company-subordinate',
-      appSessionId: opts.companyContext.appStudioSessionId,
-      role: opts.companyContext.agentRole,
-    }));
   }
   // Cross-agent comm tools (list_agents / wait_agents / send_message /
   // send_input / followup_task) were registered here UNCONDITIONALLY, so they
@@ -1216,9 +1207,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       );
       if (allowCompanyKanban) registerCompanyTools(buildKanbanTools(orchestrator));
       // Strip code-level tools from Master — it should only orchestrate, not read code
-      registry.filterInPlace((tool) => isMasterAllowed(tool, {
-        allowAppStudio: allowAppCompanyTools,
-      }));
+      registry.filterInPlace((tool) => isMasterAllowed(tool));
       console.log(`[coder] Master: filtered to ${registry.list().length} tools (orchestration-only)`);
     }
   }
@@ -1522,11 +1511,22 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const collaboration = !opts.companyContext
     ? await createRootCollaboration(store.locator.dataDir, session.id, session.title || 'Chat')
     : undefined;
+  const sessionNetwork = collaboration ? new SessionNetwork({ sessions: store, mailbox: collaboration.store,
+    project: id => db.getProject(id),
+    validateModel: (providerId, modelId) => {
+      const catalog = new ProviderStore(config.dbPath);
+      try {
+        if (!catalog.getProvider(providerId)?.enabled || !catalog.listModels(providerId, true).some(model => `${model.model_id}${model.mode ? `::${model.mode}` : ''}` === modelId)) throw new Error('Unknown or disabled provider/model');
+      } finally { catalog.close(); }
+    },
+  }) : undefined;
   const toolContext: ToolContext = {
+    sessionNetwork,
     collaboration,
     ultraPolicy: ultraPreset,
     ultraBudget: ultraExecutionEnabled ? new UltraAgentBudget(ultraPreset.effective.parallelism.maxAgents,
       ultraPreset.effective.parallelism.maxAgents * (ultraPreset.effective.parallelism.maxWaves ?? 8)) : undefined,
+    worktreeWorkspace: session.metadata?.worktree_workspace === true && !!session.worktree_path,
     cwd: effectiveCwd,
     projectName: workspace.displayName,
     globalWorkspace: session.is_global
@@ -2282,6 +2282,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     availableTools,
   });
 
+  if (sessionNetwork) systemPrompt += '\n\n' + await sessionNetwork.context(session.id);
   if (opts.customAgentPrompt?.trim()) {
     systemPrompt = appendStaticPromptSection(
       systemPrompt,
@@ -2384,7 +2385,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     company: opts.companyContext != null,
     sandbox: opts.companyContext?.sandbox != null,
     qa: hasGenericQaCapability,
-    app: allowAppCompanyTools,
     isMaster: opts.companyContext?.isMaster === true,
     previewAvailable: opts.previewAvailable,
     browserAvailable: opts.browserAvailable,
@@ -3163,18 +3163,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Rehydrate the worktree scope on session resume. If the DB says this
   // session was inside a worktree when the server stopped, put the runner
   // back there before the first turn runs so tool calls see the right cwd.
-  if (session.worktree_path && existsSync(session.worktree_path)) {
-    // Only enter if the session-start path above didn't already do it.
-    if (!runner.worktreePath) runner.enterWorktreeScope(session.worktree_path);
-  } else if (session.worktree_path) {
-    // Worktree directory was deleted externally — clear the column so the
-    // next resume doesn't trip on the stale path.
-    console.warn(`[coder] session ${session.id} worktree_path ${session.worktree_path} no longer exists — clearing`);
-    try {
-      store.setSessionWorktree(session.id, null);
-    } catch {
-      /* ignore */
-    }
+  if (session.worktree_path) try {
+    const checkout = await resolveProjectWorktree(originalProjectRoot, session.worktree_path);
+    if (checkout && !runner.worktreePath) runner.enterWorktreeScope(checkout, originalProjectRoot);
+  } catch (cause) {
+    // Never silently redirect a worktree conversation into the main checkout.
+    // Keep the binding so restoring the directory makes the session resumable.
+    worktreePreparationError = new Error(`Session worktree is unavailable: ${session.worktree_path}. Restore the checkout before continuing.`, { cause });
   }
 
   // Persist worktree enter/exit so a server restart can resume in the same cwd.
@@ -3921,6 +3916,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         usage: res.totalUsage,
         error: lastRunnerError?.message,
       };
+      if (collaboration) await collaboration.store.files.put('completions', session.id, {
+        sessionId: session.id, runId: runner.runId, reason: res.reason, at: Date.now(),
+      });
       // The SSE terminal event must not race the final DB writer. Expose this
       // earlier lifecycle boundary so the worker can close the stream only
       // after a transcript refetch is guaranteed to see the terminal turn.
@@ -3941,6 +3939,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
       try {
         await store.updateSessionStatus(session.id, 'error');
+        if (collaboration) await collaboration.store.files.put('completions', session.id, {
+          sessionId: session.id, runId: runner.runId, reason: 'error', at: Date.now(),
+        });
       } catch (statusError) {
         console.error(
           `[coder] failed to mark session ${session.id} as error:`,

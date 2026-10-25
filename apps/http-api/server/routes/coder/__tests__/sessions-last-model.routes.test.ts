@@ -41,7 +41,6 @@ function setup(options: {
     getLastUsedProviderModel,
     createSession,
     getSession: (id: SessionId) => id === SESSION_ID ? createSession.mock.results.at(-1)?.value : null,
-    listRecentSessionsGlobal: () => [],
     setSessionExecutionMode: vi.fn(),
     setSessionReasoningEffort: vi.fn(),
   };

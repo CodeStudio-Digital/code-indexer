@@ -26,15 +26,13 @@ import type {
 import type { DetailedReduction, ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
 import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.js';
 import {
-  checkDupCall,
+  invocationGuardKey,
   createInvocationGuardState,
   normalizeGuardInput,
 } from '../guards/tuple-hash-dedup.js';
 import type { NoProgressTracker } from '../guards/no-progress.js';
 import {
   checkFailureStreak,
-  buildFailureStreakReminderMarker,
-  buildFailureStreakRefusalText,
   type FailureStreakState,
   type FailureStreakVerdict,
 } from '../guards/failure-streak.js';
@@ -215,9 +213,8 @@ export interface DispatchArgs {
     | void
     | Promise<{ content: string; isError?: boolean } | null | void>;
   /**
-   * Polling-stuck detector. Returns a refusal string when a polling
-   * tool returned identical content N times in a row. Replaces the
-   * shaped content with the refusal payload.
+   * Observes repeated polling results for telemetry. Never replaces a result
+   * or changes its success status.
    */
   detectPollingStuck?: (
     toolName: string,
@@ -271,7 +268,7 @@ export interface DispatchArgs {
    */
   onFailureStreakIntervention?: (payload: {
     toolName: string;
-    kind: 'reminder' | 'refuse';
+    kind: 'reminder';
     count: number;
     firstFailureTurn: number;
     lastError: string;
@@ -639,80 +636,15 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       }
     }
 
-    const verdict = checkDupCall({
-      name: tu.name,
-      input: normalizedInput,
-      normalizedInput,
-      isRepeatable,
-      repeatPolicy: resolvedMetadata?.repeatPolicy,
-      turn: args.turn,
-      useId: tu.id,
-      dupCalls: args.dupCalls,
-      invocationState: invocationGuard,
-      stateEpoch: invocationGuard.stateEpoch,
-      forceReread: normalizedInput.force_reread === true,
-    });
-
-    const noProgressRefusal = args.toolContext.toolCallLedger?.checkRepeat({
-      name: tu.name,
-      args: normalizedInput,
-      repeatPolicy: resolvedMetadata?.repeatPolicy,
-      mutates: resolvedMetadata?.mutates,
-    });
-    if (noProgressRefusal) {
-      const guardVerdict: GuardVerdict = {
-        action: 'block',
-        reason: 'cross-turn-no-progress',
-        refusalKind: 'dedup',
-        shouldReflect: true,
-        affectsFailureStreak: false,
-        count: noProgressRefusal.count,
-        sourceTool: tu.name,
-        originToolUseId: tu.id,
-        stateEpoch: invocationGuard.stateEpoch,
-      };
-      await pushResult({
-        toolUseId: tu.id,
-        name: tu.name,
-        content: `[no-progress REFUSED: \`${tu.name}\` repeated without new results. Switch strategy before retrying.]`,
-        isError: true,
-        durationMs: 0,
-        wasRefusedByDedup: true,
-        refusalKind: 'dedup',
-        guardVerdict,
-        stateEpoch: invocationGuard.stateEpoch,
-      });
-      toolLoopDetected = true;
-      loopGuard = 'doom-loop';
-      loopDetail = { toolName: tu.name, count: noProgressRefusal.count };
-      return;
-    }
-
-    if (verdict.action === 'block') {
-      await pushResult({
-        toolUseId: tu.id,
-        name: tu.name,
-        content: verdict.refuseText,
-        isError: true,
-        durationMs: 0,
-        wasRefusedByDedup: true,
-        refusalKind: 'dedup',
-        guardVerdict: verdict,
-        stateEpoch: invocationGuard.stateEpoch,
-      });
-      toolLoopDetected = verdict.shouldReflect;
-      loopGuard = 'tuple-hash';
-      loopDetail = { toolName: tu.name, count: verdict.entry.count };
-      return;
-    }
-
+    // Frequency is not authorization or evidence that fresh execution is useless.
+    // Permission, outcome-unknown, timeout and unsafe-lane checks remain separate.
+    const invocationKey = invocationGuardKey(tu.name, normalizedInput);
     const reusable =
-      verdict.action === 'allow' &&
       resolvedMetadata?.repeatPolicy === 'stable' &&
       resolvedMetadata.executionClass === 'read' &&
       !interactive &&
       normalizedInput.force_reread !== true
-        ? reusableResults.get(`${verdict.key}|epoch:${invocationGuard.stateEpoch}`)
+        ? reusableResults.get(`${invocationKey}|epoch:${invocationGuard.stateEpoch}`)
         : undefined;
     if (reusable && !reusable.result.isError && !reusable.result.extraUserBlocks) {
       reusable.count += 1;
@@ -740,8 +672,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       await pushResult(reused);
       return;
     }
-
-    const reminderPrefix = verdict.kind === 'allow-with-reminder' ? verdict.reminderText : '';
 
     const t0 = Date.now();
     let invocationContent: string;
@@ -1012,9 +942,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       console.warn(`[coder/bt] postProcessToolResult threw (${tu.name}): ${errText(e)} — skipping post-process`);
     }
 
-    // Polling-stuck detection. When a polling tool returns byte-identical
-    // content N consecutive times the state isn't changing — replace with
-    // a refusal so the agent stops burning tokens on dead polls.
+    // Identical polls may be legitimate while external work is still running.
     let stuckRefusal: string | null = null;
     try {
       stuckRefusal = args.detectPollingStuck?.(
@@ -1028,13 +956,10 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       console.warn(`[coder/bt] detectPollingStuck threw (${tu.name}): ${errText(e)} — skipping`);
     }
     if (stuckRefusal !== null) {
-      shapedContent = stuckRefusal;
-      invocationIsError = true;
-      refusalKind = 'polling-stuck';
+      // Keep detection as telemetry. An unchanged successful poll is still success.
       invocationGuardVerdict = {
-        action: 'block',
+        action: 'shadow',
         reason: 'polling-stuck',
-        refusalKind: 'polling-stuck',
         shouldReflect: false,
         affectsFailureStreak: false,
         sourceTool: tu.name,
@@ -1043,13 +968,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       };
     }
 
-    let finalContent = reminderPrefix + shapedContent;
-    let finalIsError = invocationIsError;
+    const finalContent = shapedContent;
+    const finalIsError = invocationIsError;
 
-    // PR 5 — failure-streak guard. After the call has settled (with
-    // all post-processing applied) we record the success/failure and
-    // decide whether the streak crossed a threshold. Mutates state in
-    // place; verdict drives content rewrite + ToolLoopDetected routing.
+    // Repeated errors are diagnostic. Preserve the result and let the agent
+    // decide how to recover within the explicit execution budget.
     const affectsFailureStreak = invocationGuardVerdict
       ? invocationGuardVerdict.affectsFailureStreak !== false
       : true;
@@ -1065,28 +988,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         // failure category changes). Off by default → identical legacy behavior.
         classifyErrors: true,
       });
-      if (verdict.kind === 'reminder') {
-        finalContent =
-          buildFailureStreakReminderMarker({ ...verdict, toolName: tu.name }) +
-          '\n\n' + finalContent;
+      if (verdict.kind !== 'pass') {
+        // Report repeated errors without replacing their actionable details.
         args.onFailureStreakIntervention?.({
           toolName: tu.name,
           kind: 'reminder',
-          count: verdict.count,
-          firstFailureTurn: verdict.firstFailureTurn,
-          lastError: verdict.lastError,
-          turn: args.turn,
-        });
-      } else if (verdict.kind === 'refuse') {
-        finalContent = buildFailureStreakRefusalText({ ...verdict, toolName: tu.name });
-        finalIsError = true;
-        refusalKind = 'failure-streak';
-        toolLoopDetected = true;
-        loopGuard = 'failure-streak';
-        loopDetail = { toolName: tu.name, count: verdict.count };
-        args.onFailureStreakIntervention?.({
-          toolName: tu.name,
-          kind: 'refuse',
           count: verdict.count,
           firstFailureTurn: verdict.firstFailureTurn,
           lastError: verdict.lastError,
@@ -1166,7 +1072,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       if (sharedEpochBefore !== undefined && invocationGuard.stateEpoch !== sharedEpochBefore) {
         invocationGuard.syncEpoch(sharedEpochBefore);
       }
-      invocationGuard.noteStateChange(verdict.key);
+      invocationGuard.noteStateChange(invocationKey);
       reusableResults.clear();
     }
 
@@ -1194,19 +1100,12 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     const effectiveNoProgressVerdict = stopRepeatedUnchangedResult
       ? {
           ...noProgressVerdict,
-          action: 'block' as const,
-          reason: 'cross-turn-no-progress-blocked',
-          shouldReflect: true,
+          action: 'shadow' as const,
+          reason: 'cross-turn-no-progress',
+          shouldReflect: false,
         }
       : noProgressVerdict;
-    if (stopRepeatedUnchangedResult) {
-      toolLoopDetected = true;
-      loopGuard = 'doom-loop';
-      loopDetail = { toolName: tu.name, count: noProgressVerdict.count ?? 3 };
-    }
-    const selectedGuardVerdict = invocationGuardVerdict
-      ?? effectiveNoProgressVerdict
-      ?? (verdict.action === 'allow' ? undefined : verdict);
+    const selectedGuardVerdict = invocationGuardVerdict ?? effectiveNoProgressVerdict;
     const finalGuardVerdict = selectedGuardVerdict && stateChangingSuccess
       ? { ...selectedGuardVerdict, stateEpoch: invocationGuard.stateEpoch }
       : selectedGuardVerdict;
@@ -1245,7 +1144,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       normalizedInput.force_reread !== true
     ) {
       reusableResults.set(
-        `${verdict.key}|epoch:${invocationGuard.stateEpoch}`,
+        `${invocationKey}|epoch:${invocationGuard.stateEpoch}`,
         { result: dispatched, count: 1 },
       );
     }

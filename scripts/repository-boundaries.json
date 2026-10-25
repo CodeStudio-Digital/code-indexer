@@ -12,7 +12,6 @@
         "evals",
         "packages/api-bus",
         "packages/api-handlers",
-        "packages/app-studio",
         "packages/candidate-pipeline",
         "packages/code-agent",
         "packages/company",

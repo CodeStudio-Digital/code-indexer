@@ -607,7 +607,7 @@ describe('code_exec nested loop guards (observer wired via ToolContext)', () => 
     expect(events[0]!.sourceTruncations).toEqual(sourceTruncations);
   });
 
-  it('a script looping the SAME unsafe mutation is interrupted by the local guard', async () => {
+  it('executes ten authorized mutations without an arbitrary repetition cutoff', async () => {
     const registry = new ToolRegistry();
     registry.register(noopTool('edit_file'));
     const codeExec = buildCodeExecTool(registry);
@@ -632,10 +632,9 @@ describe('code_exec nested loop guards (observer wired via ToolContext)', () => 
       { ...makeCtx(), nestedToolObserver: observer },
     );
 
-    expect(res.isError).toBe(true);
-    expect(res.content).toContain('tool edit_file refused');
-    expect(res.content).toContain('[loop-refused');
-    expect(res.content).not.toContain('finished all 10');
+    expect(res.isError).toBeFalsy();
+    expect(res.content).not.toContain('[loop-refused');
+    expect(res.content).toContain('finished all 10');
   });
 
   it('without an observer (tests/subagents/kill-switch) nothing changes', async () => {
@@ -1037,12 +1036,14 @@ describe('code_exec metadata safety and scheduling', () => {
           return ok('sibling-read-result');
         },
       });
-      const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
-      const observer = buildNestedToolObserver({
-        failureStreaks: { streaks: new Map() },
-        turn: 1,
-        parentToolUseId: 'parent-refusal',
-      });
+      // Exercise the explicit policy-block contract independently of repetition.
+      const observer: NonNullable<ToolContext['nestedToolObserver']> = {
+        beforeNestedCall: (name, _args, opts) => name === 'edit_file' && editInvocations === 2
+          ? { action: 'block', reason: 'policy-gate', refusalKind: 'gate',
+              shouldReflect: true, affectsFailureStreak: false, originToolUseId: opts?.originToolUseId, refusalText: 'policy denied' }
+          : null,
+        afterNestedCall: () => {},
+      };
       const put = vi.fn(() => 'abc123def456');
 
       const result = await buildCodeExecTool(registry).handler({
@@ -1063,7 +1064,7 @@ describe('code_exec metadata safety and scheduling', () => {
 
       expect(result.isError).toBe(true);
       expect(result.guardVerdict).toMatchObject({
-        action: 'block', reason: 'mutating-repeat-blocked', originToolUseId: 'parent-refusal#3',
+        action: 'block', reason: 'policy-gate', originToolUseId: 'parent-refusal#3',
       });
       expect(editInvocations).toBe(2);
       expect(siblingSettled).toBe(true);
@@ -1076,7 +1077,7 @@ describe('code_exec metadata safety and scheduling', () => {
         kind: 'code_exec_failure',
         nested: { summary: { total: 4, succeeded: 3, refused: 1 } },
       });
-      expect(result.content.match(/\[loop-refused:/g)).toHaveLength(1);
+      expect(result.content).toContain('policy denied');
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

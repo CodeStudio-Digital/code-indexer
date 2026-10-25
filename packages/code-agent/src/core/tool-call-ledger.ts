@@ -41,9 +41,9 @@ export interface ToolCallLedgerEntry {
 }
 
 const CONTINUATION_KEYS = new Set([
-  'offset', 'limit', 'cursor', 'page', 'page_size', 'after', 'before',
-  'start_line', 'end_line', 'line_start', 'line_end', 'start', 'end',
+  'offset', 'limit', 'cursor', 'page', 'page_size',
 ]);
+const READ_RANGE_KEYS = new Set(['start_line', 'end_line', 'line_start', 'line_end']);
 
 function fnv1a(value: string): string {
   let h = 0x811c9dc5 >>> 0;
@@ -54,19 +54,21 @@ function fnv1a(value: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
-function logicalArgs(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(logicalArgs);
-  if (!value || typeof value !== 'object') return value;
+function logicalArgs(name: string, value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (CONTINUATION_KEYS.has(key.toLowerCase())) continue;
-    out[key] = logicalArgs(child);
+    if (/(?:^|__)read_file$/.test(name) && READ_RANGE_KEYS.has(key.toLowerCase())) continue;
+    // Nested filters and semantic start/end/before/after values are part of
+    // the operation, even when their names resemble pagination controls.
+    out[key] = child;
   }
   return out;
 }
 
 export function logicalOperationId(name: string, args: unknown): string {
-  return `${name}:${fnv1a(stableArgsKey(logicalArgs(args)))}`;
+  return `${name}:${fnv1a(stableArgsKey(logicalArgs(name, args)))}`;
 }
 
 export class ToolCallLedger {
@@ -139,7 +141,7 @@ export class ToolCallLedger {
     return this.entries.filter((entry) => entry.seq > afterSeq).map((entry) => ({ ...entry }));
   }
 
-  /** Pre-dispatch guard: refuse only after repeated, observed no-progress. */
+  /** Repetition diagnostic; callers must not use frequency as an execution veto. */
   checkRepeat(input: {
     name: string;
     args: unknown;
@@ -240,6 +242,13 @@ export class ToolCallLedger {
     this.entries.push(entry);
     while (this.entries.length > 500) this.entries.shift();
     if (outcome === 'success') {
+      if (input.mutates || input.repeatPolicy === 'mutating' || input.executionClass === 'write' || input.executionClass === 'execute') {
+        // Earlier read snapshots and counters describe a state that may have
+        // changed. Keep the ledger and unsafe-operation protections intact.
+        this.resultsByOperation.clear();
+        this.coverage.clear();
+        this.noProgressByOperation.clear();
+      }
       if (input.mutates || input.repeatPolicy === 'mutating' || input.repeatPolicy === 'pollable' || entry.productive) {
         this.noProgressByOperation.set(operation, 0);
       } else {

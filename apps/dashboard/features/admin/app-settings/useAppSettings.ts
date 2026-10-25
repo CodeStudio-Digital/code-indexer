@@ -49,9 +49,7 @@ export function useAppSettings() {
 
   const dirtyKeys = Object.keys(edits);
   const dirtyCount = dirtyKeys.length;
-  const restartNeeded = data
-    ? dirtyKeys.some((k) => data.items.find((i) => i.key === k)?.restartNeeded)
-    : false;
+  const restartNeeded = !!data?.restartRequired;
 
   const save = useCallback(async () => {
     if (Object.keys(edits).length === 0) return;
@@ -63,8 +61,10 @@ export function useAppSettings() {
         body: JSON.stringify({ updates: edits }),
       });
       if (!r.ok) {
-        const body = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error ?? `save failed (${r.status})`);
+        const body = (await r.json().catch(() => ({}))) as { error?: string; key?: string };
+        throw new Error(body.error === 'invalid_setting'
+          ? t('error.invalidSetting', { key: body.key ?? '' })
+          : body.error ?? `save failed (${r.status})`);
       }
       const j = (await r.json()) as { restartNeeded?: boolean };
       toast.success(t('toast.saved', { count: Object.keys(edits).length }), {

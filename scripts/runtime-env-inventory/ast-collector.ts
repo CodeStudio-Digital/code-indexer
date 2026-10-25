@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 
@@ -20,12 +20,11 @@ export interface EnvHit {
 }
 
 function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const path = join(dir, entry);
-    const stat = statSync(path);
-    if (stat.isDirectory()) walk(path, out);
-    else if (/\.[cm]?tsx?$/.test(path) && !path.endsWith('.d.ts')) out.push(path);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(entry.name) || entry.isSymbolicLink()) continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) walk(path, out);
+    else if (entry.isFile() && /\.[cm]?tsx?$/.test(path) && !/\.(?:d\.ts|test\.[cm]?tsx?|spec\.[cm]?tsx?)$/.test(path)) out.push(path);
   }
   return out;
 }
@@ -145,4 +144,36 @@ export function collectEnvReads(repoRoot: string, roots: readonly string[]): {
     }
   }
   return { scannedFiles, hits, dynamicConsumers };
+}
+
+/**
+ * Inverse catalog audit. Indirect references (helper arguments, env aliases,
+ * policy maps and dashboard settings) are evidence to review, not proof that a
+ * value is read. Comments, tests, catalog declarations and migrations do not
+ * keep an obsolete setting alive. No values from local env files are returned.
+ */
+export function collectSettingReferences(repoRoot: string, roots: readonly string[], keys: Iterable<string>): Map<string, EnvConsumer[]> {
+  const references = new Map([...keys].map((key) => [key, [] as EnvConsumer[]]));
+  for (const root of roots) {
+    let files: string[];
+    try { files = walk(join(repoRoot, root)); } catch { continue; }
+    for (const file of files) {
+      const name = relative(repoRoot, file).replace(/\\/g, '/');
+      if (/\/migrations\/|\/app-settings(?:\/|-catalog\.ts)/.test(name)) continue;
+      const sourceFile = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node): void => {
+        if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+          const matches = references.get(node.text);
+          if (matches) {
+            const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+            matches.push({ file: name, line: position.line + 1, column: position.character + 1,
+              readTiming: readTiming(node), expression: node.parent.getText(sourceFile).replace(/\s+/g, ' ').slice(0, 240) });
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+  }
+  return references;
 }

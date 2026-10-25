@@ -72,7 +72,6 @@ function setup() {
       inputs.push(input);
       return input;
     },
-    listRecentSessionsGlobal: () => [],
   };
   const customAgent = {
     id: '12345678-abcd-4321-abcd-123456789abc',

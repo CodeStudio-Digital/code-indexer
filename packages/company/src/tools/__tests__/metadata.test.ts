@@ -16,7 +16,7 @@ function tool(name: string, overrides: Partial<CoderTool> = {}): CoderTool {
 
 describe('company tool metadata normalization', () => {
   it('classifies persisted data changes as serialized mutations', () => {
-    for (const name of ['env_set', 'write_shared_file', 'app_save_spec']) {
+    for (const name of ['env_set', 'write_shared_file', 'kanban_create_card']) {
       expect(resolveToolMetadata(withCompanyToolMetadata(tool(name)))).toMatchObject({
         mutates: true,
         parallelSafe: false,
@@ -29,11 +29,10 @@ describe('company tool metadata normalization', () => {
 
   it('keeps live reads parallel-safe but volatile', () => {
     for (const name of [
-      'app_get_context',
-      'app_get_workflow',
+      'read_board',
+      'read_shared_file',
       'docs_read',
-      'app_spec_audit',
-      'ds_analyze_import',
+      'env_read',
     ]) {
       expect(resolveToolMetadata(withCompanyToolMetadata(tool(name))), name).toMatchObject({
         mutates: false,
@@ -46,7 +45,7 @@ describe('company tool metadata normalization', () => {
   });
 
   it('marks workflows and runtime actions as execute-risk mutations', () => {
-    for (const name of ['app_dispatch_ready_work', 'app_provision_db', 'app_run_test_cycle', 'review_subordinate_work']) {
+    for (const name of ['qa_start_run', 'service_restart', 'review_subordinate_work']) {
       expect(resolveToolMetadata(withCompanyToolMetadata(tool(name))), name).toMatchObject({
         mutates: true,
         parallelSafe: false,

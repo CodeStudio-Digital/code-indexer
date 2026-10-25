@@ -6,9 +6,11 @@ import { withSessionLock } from './sessionLock.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { acceptLocalCoderCommand, bindLocalCommandBus, terminalizeLocalCoderCommand } from '../../../control-plane-shadow.js';
+import type { SessionNetwork } from '@mcp/code-agent/runtime/session-network.js';
+import { reserveNetworkWake } from '@mcp/code-agent/runtime/session-network-events.js';
 
 /** Uses the same durable admission and exclusive session writer as human sends. */
-export async function wakeCollaboratingChat(deps: ServerDeps, runtime: CoderRuntime, mailbox: ChatCollaborationStore, message: ChatMessage): Promise<boolean> {
+export async function wakeCollaboratingChat(deps: ServerDeps, runtime: CoderRuntime, mailbox: ChatCollaborationStore, message: ChatMessage, network?: SessionNetwork): Promise<boolean> {
   const recipient = await mailbox.requireParticipant(message.to);
   const sender = await mailbox.requireParticipant(message.from);
   const root = await mailbox.participant(rootChatId(recipient.sessionId));
@@ -19,10 +21,11 @@ export async function wakeCollaboratingChat(deps: ServerDeps, runtime: CoderRunt
     const pool = getCoderWorkerPool();
     const active = pool.getBus(id);
     if (active && !active.ended) return false;
-    const session = await deps.sessionStore.getSession(id);
+    const session = network ? await network.session(id).catch(() => null) : await deps.sessionStore.getSession(id);
     if (!session || await runtime.findPendingInteraction(id)) return false;
     const agent = resolveAgentSelection(deps.providerStore, session.agent ?? 'explore');
     if (!agent) return false;
+    if (network && !await reserveNetworkWake(network, id, message.id)) return false;
     const acceptance = await acceptLocalCoderCommand({
       store: deps.controlPlaneStore, sessionId: id, kind: 'send_message',
       idempotencyKey: `collaboration:${message.id}`, fingerprint: { collaborationMessageId: message.id, recipient: message.to },

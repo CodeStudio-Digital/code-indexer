@@ -79,6 +79,20 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('ExecutingNode', () => {
+  it('commits an image-only generation to the assistant message and dashboard event', async () => {
+    const image: ChatDelta = { type: 'image_generated', id: 'img_1', mediaType: 'image/png', base64: Buffer.from('pixels').toString('base64') };
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: makeStreamingProvider([image, image, { type: 'done', stop_reason: 'stop' }]),
+      registry: makeRegistry({}), toolContext: emptyToolContext(),
+    });
+    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('CleanFinish');
+    const expected = { role: 'assistant', phase: 'final_answer', content: [
+      { type: 'image', name: 'generated-img_1.png', mediaType: 'image/png', base64: image.base64 },
+    ] };
+    expect(ctx.messages).toContainEqual(expected);
+    expect(recordedEvents.find(event => event.event === 'message_complete')?.args[0]).toEqual(expected);
+  });
+
   it('emits the fast tool result while another tool is still pending', async () => {
     const registry = new ToolRegistry();
     let release!: () => void;
@@ -1078,7 +1092,7 @@ describe('ExecutingNode', () => {
     expect(payload.prompt_tokens).toBeGreaterThan(0);
   });
 
-  it('routes to ToolLoopDetected after 3 identical local mutations', async () => {
+  it('continues after repeated authorized local mutations', async () => {
     const repeatDeltas: ChatDelta[] = [
       { type: 'tool_call_start', id: 'tu1', name: 'echo' },
       { type: 'tool_call_end', id: 'tu1', name: 'echo', input: { msg: 'x' } },
@@ -1103,17 +1117,14 @@ describe('ExecutingNode', () => {
 
     const event = await new ExecutingNode().execute(ctx, null);
 
-    expect(event.kind).toBe('ToolLoopDetected');
-    if (event.kind === 'ToolLoopDetected') {
-      expect(event.guard).toBe('tuple-hash');
-    }
-    // Tool result was synthesized as an error (no real invocation).
+    expect(event.kind).toBe('TurnSucceeded');
     const lastMsg = ctx.messages.at(-1);
     expect(lastMsg?.role).toBe('tool');
-    expect(JSON.stringify(lastMsg?.content)).toMatch(/loop-refused/);
+    expect(JSON.stringify(lastMsg?.content)).toContain('pong');
+    expect(JSON.stringify(lastMsg?.content)).not.toMatch(/loop-refused/);
   });
 
-  it('routes to ToolLoopDetected{guard:"failure-streak"} after the 5th consecutive failure', async () => {
+  it('continues after the fifth failure and delivers its original details', async () => {
     // Tool that always fails. The pre-seeded streak puts us at 4
     // failures already → the next dispatch is the 5th and crosses the
     // refuse threshold.
@@ -1142,15 +1153,13 @@ describe('ExecutingNode', () => {
 
     const event = await new ExecutingNode().execute(ctx, null);
 
-    expect(event.kind).toBe('ToolLoopDetected');
-    if (event.kind === 'ToolLoopDetected') {
-      expect(event.guard).toBe('failure-streak');
-    }
+    expect(event.kind).toBe('TurnSucceeded');
     expect(ctx.failureStreaks.streaks.get('write_stdin')?.consecutive).toBe(5);
 
-    // The tool_result content has been REPLACED with the refusal text.
+    // The original actionable error remains visible.
     const lastMsg = ctx.messages.at(-1);
-    expect(JSON.stringify(lastMsg?.content)).toMatch(/failure-streak REFUSED/);
+    expect(JSON.stringify(lastMsg?.content)).toContain('session not active');
+    expect(JSON.stringify(lastMsg?.content)).not.toMatch(/failure-streak REFUSED/);
 
     // The runner emitted a tool_loop_intervention event tagged
     // 'failure-streak' so the dashboard sees the banner.
@@ -1158,10 +1167,10 @@ describe('ExecutingNode', () => {
     expect(intervention).toBeDefined();
     const payload = intervention?.args[0] as { kind?: string; severity?: string };
     expect(payload?.kind).toBe('failure-streak');
-    expect(payload?.severity).toBe('refused');
+    expect(payload?.severity).toBe('informational');
   });
 
-  it('routes to ToolLoopDetected{guard:"dominance"} when one tool grinds a silent window', async () => {
+  it('observes tool dominance without redirecting a productive turn', async () => {
     // Dominance catches the silent-grind runaway: one tool owning a long
     // window with ZERO assistant text (session 609's 700-turn read_file/grep).
     const deltas: ChatDelta[] = [
@@ -1182,8 +1191,7 @@ describe('ExecutingNode', () => {
       hadText: false,
     }));
     const event = await new ExecutingNode().execute(ctx, null);
-    expect(event.kind).toBe('ToolLoopDetected');
-    if (event.kind === 'ToolLoopDetected') expect(event.guard).toBe('dominance');
+    expect(event.kind).toBe('TurnSucceeded');
     const intervention = recordedEvents.find((e) => e.event === 'tool_loop_intervention');
     expect((intervention?.args[0] as { kind?: string })?.kind).toBe('dominance');
     expect(ctx.dominance.window).toHaveLength(0); // reset on fire

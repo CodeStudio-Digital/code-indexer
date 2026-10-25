@@ -44,7 +44,6 @@ export function resolveCompanySessionCapabilities(
   appStudioSessionId: string | null = null,
 ): CompanySessionCapabilities {
   if (runtimeKind === 'app_studio') {
-    const linked = appStudioSessionId != null;
     return {
       runtimeKind,
       appStudioSessionId,
@@ -52,12 +51,11 @@ export function resolveCompanySessionCapabilities(
       toolProfile: 'app_studio',
       autonomyPolicy: 'controlled_app_work',
       workSource: 'app_workflow',
-      // Fail closed when the DB linkage is incomplete: the Company worker may
-      // still expose lifecycle/recovery, but no App mutation surface starts.
-      allowAppTools: linked,
+      // Retired sessions remain readable, but cannot restart tools or scheduling.
+      allowAppTools: false,
       allowCompanyKanban: false,
       allowCompanyScheduler: false,
-      allowAppScheduler: linked,
+      allowAppScheduler: false,
       allowFreeSubordinateSpawn: false,
     };
   }

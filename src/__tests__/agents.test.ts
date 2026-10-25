@@ -3,7 +3,7 @@ import { AGENTS, isAgentId, getAgent, agentsSummary } from '@mcp/code-agent/agen
 
 describe('agent presets', () => {
   it('exposes the built-in core and specialist agents', () => {
-    expect(Object.keys(AGENTS).sort()).toEqual(['admin', 'api', 'app_db', 'app_orchestrator', 'build', 'builder', 'diagram', 'explore', 'plan', 'research', 'spec']);
+    expect(Object.keys(AGENTS).sort()).toEqual(['admin', 'api', 'app_db', 'build', 'builder', 'diagram', 'explore', 'plan', 'research', 'spec']);
   });
 
   it('explore is read-only with bootstrap profile', () => {

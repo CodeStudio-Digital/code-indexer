@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentsGroup, AssistantTurn } from '../../../../hooks/agent-stream/types.js';
 import type { SessionData } from '../../types.js';
-import { collectListedGroups } from '../subagents-panel-data.js';
+import { collectListedGroups, collectPersistedGroups } from '../subagents-panel-data.js';
 
 function sessionData(
   status: 'running' | 'idle',
@@ -49,6 +49,16 @@ function liveGroup(status: AgentsGroup['status']): AssistantTurn {
 }
 
 describe('subagents panel data', () => {
+  it('reuses saved history across live updates without retaining a stale active group', () => {
+    const data = sessionData('running');
+    const history = collectPersistedGroups(data);
+    const before = structuredClone(history);
+    expect(collectListedGroups(data, liveGroup('running'), history).activeGroups).toHaveLength(1);
+    const completed = collectListedGroups(data, liveGroup('completed'), history);
+    expect(completed.activeGroups).toHaveLength(0);
+    expect(completed.recentGroups).toHaveLength(1);
+    expect(history).toEqual(before);
+  });
   it('uses the live group and suppresses its persisted duplicate', () => {
     const data = sessionData('running');
     const groups = collectListedGroups(data, liveGroup('running'));

@@ -5,7 +5,7 @@
  * control and a click-through to the project's Runners tab.
  *
  * Reads from the `useRunningTasks` store (fed by the `runner.events`
- * stream). Modeled on `RecentSessionsDropdown` in AppShell.
+ * stream). Mounted in the application header.
  */
 
 import { useTranslation } from 'react-i18next';

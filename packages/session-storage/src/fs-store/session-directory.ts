@@ -35,7 +35,6 @@ import type {
   FsGlobalCoderSession,
   FsLinkedProject,
   FsMetricsSummary,
-  FsRecentCoderSession,
 } from './types.js';
 
 export interface FsSessionDirectoryOptions {
@@ -55,11 +54,13 @@ function initialRuntimeState(
     | 'block_code_comments'
     | 'max_turns'
     | 'max_auto_continues'
+    | 'worktree_path'
   >,
 ) {
   return {
     extra: {
       runtime: toJsonValue({
+        worktree_path: input.worktree_path ?? null,
         max_turns: normalizeSessionMaxTurns(input.max_turns),
         max_auto_continues: normalizeSessionMaxAutoContinues(
           input.max_auto_continues,
@@ -312,53 +313,6 @@ export class FsSessionDirectory {
             session.group_id === options.groupId,
         ),
     );
-  }
-
-  async listRecentSessionsGlobal(limit = 10): Promise<FsRecentCoderSession[]> {
-    await this.ensureCatalog();
-    const cappedLimit = Math.max(0, limit);
-    if (cappedLimit === 0) return [];
-
-    // Mapping hydrates metrics/summary.json synchronously. Rank the cheap
-    // in-memory projections first so a 10-row sidebar request never touches
-    // every historical session bundle (which can span slow/offline volumes).
-    const candidates = this.catalog
-      .list()
-      .filter(
-        (entry) =>
-          entry.session.kind === 'coder' &&
-          entry.session.storage_scope.kind === 'project' &&
-          entry.state?.archived_at == null,
-      )
-      .sort((left, right) => {
-        if (left.session.favorite !== right.session.favorite) {
-          return left.session.favorite ? -1 : 1;
-        }
-        const leftTime = Math.max(
-          Date.parse(left.session.updated_at),
-          Date.parse(left.state?.updated_at ?? left.session.updated_at),
-        );
-        const rightTime = Math.max(
-          Date.parse(right.session.updated_at),
-          Date.parse(right.state?.updated_at ?? right.session.updated_at),
-        );
-        return (
-          rightTime - leftTime ||
-          String(left.session.id).localeCompare(String(right.session.id))
-        );
-      })
-      .slice(0, cappedLimit)
-      .map((entry) => this.map(entry));
-
-    return candidates
-      .map((session) => ({
-        ...session,
-        project_name:
-          session.project_id == null
-            ? ''
-            : this.project(session.project_id)?.name ??
-              String(session.project_id),
-      }));
   }
 
   async listGlobalSessions(

@@ -41,9 +41,6 @@
       "@mcp/indexer/*": [
         "packages/indexer/src/*"
       ],
-      "@mcp/app-studio/*": [
-        "packages/app-studio/src/*"
-      ],
       "@mcp/code-agent": [
         "packages/code-agent/src/index.ts"
       ],

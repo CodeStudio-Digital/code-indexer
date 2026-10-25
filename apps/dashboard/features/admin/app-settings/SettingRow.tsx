@@ -63,6 +63,9 @@ export function SettingRow({
         {description && (
           <div className="text-[11.5px] text-muted-foreground mt-0.5 leading-snug">{description}</div>
         )}
+        {item.validationError && (
+          <div role="alert" className="text-xs text-destructive mt-1">{t('error.invalidStored')}</div>
+        )}
       </div>
       <div className="shrink-0 w-[240px] flex items-center gap-2">
         <SettingInput item={item} value={displayValue} dirty={dirty} onChange={onChange} />

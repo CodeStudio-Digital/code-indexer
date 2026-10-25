@@ -62,7 +62,6 @@ function setup() {
     }),
     deleteSession: async (id: SessionId) => byId.get(id)!,
     trashSessionsBatch: async (ids: SessionId[]) => ids.map((id) => byId.get(id)!),
-    listRecentSessionsGlobal: async () => [],
   };
   const app = new Hono();
   mountCoderSessionsRoutes(

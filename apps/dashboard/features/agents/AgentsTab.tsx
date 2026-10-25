@@ -255,7 +255,6 @@ export function AgentsTab() {
               sessionName={selectedSession.name}
               sessionStatus={selectedSession.status}
               runtimeKind={selectedSession.runtime_kind ?? 'company'}
-              appSessionId={selectedSession.app_session_id ?? null}
               workbenchSlots={sessionWorkbenchSlots}
             />
           </div>
@@ -510,7 +509,6 @@ interface SessionRowProps {
 
 function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: SessionRowProps) {
   const { t } = useTranslation('agents');
-  const navigate = useNavigate();
   const isAppTeam = s.runtime_kind === 'app_studio';
 
   const items: ContextMenuItem[] = [
@@ -534,15 +532,7 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
     });
   }
 
-  if (isAppTeam && s.app_session_id != null) {
-    items.push({
-      id: 'open-app',
-      label: t('company.openAppWorkflow'),
-      icon: ExternalLink,
-      separatorBefore: true,
-      onSelect: () => navigate(`/apps/${s.app_session_id}`),
-    });
-  } else {
+  if (!isAppTeam) {
     items.push({
       id: 'duplicate',
       label: t('duplicateSession', 'Duplicate'),
@@ -589,17 +579,7 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
         <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{s.name}</span>
         {isAppTeam && <Badge variant="outline" className="h-4 px-1 text-[8px] text-violet-400">{t('company.appBadge')}</Badge>}
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {isAppTeam && s.app_session_id != null ? (
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={(event) => { event.stopPropagation(); navigate(`/apps/${s.app_session_id}`); }}
-              className="cursor-pointer text-muted-foreground hover:text-primary"
-              title={t('company.openAppWorkflow')}
-            >
-              <ExternalLink className="h-3 w-3" />
-            </span>
-          ) : (
+          {!isAppTeam && (
             <>
               <span
                 role="button"

@@ -93,7 +93,6 @@ import {
   setQaEndpointEnvStore,
 } from '@mcp/company/tools/qa/index.js';
 import { startQaWatchdog } from '@mcp/services/qa/watchdog.js';
-import { setAppStudioDbClientStore, setAppStudioStore } from '@mcp/company/tools/app-studio/index.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { ResearchBrowserService } from '@mcp/services/research-browser/service.js';
@@ -103,7 +102,6 @@ import {
   hasQaPlaywrightSkill,
 } from '@mcp/company/services/SandboxService.js';
 import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
-import { mountAppStudioRoutes } from './server/routes/app-studio/index.js';
 import { mountConfigRoutes } from './server/routes/config.js';
 import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
@@ -126,10 +124,6 @@ import {
   getCoderWorkerPool,
 } from './sse/coderWorkerPoolSingleton.js';
 import { createStructuralIndexerExecutor } from './sse/IndexerWorkerClient.js';
-import {
-  coderControlPlaneShadowEnabled,
-  coderRuntimeJournalShadowEnabled,
-} from './control-plane-shadow.js';
 import { startPerfSampler, stopPerfSampler } from './server/perf/perf-sampler.js';
 import {
   enterBackgroundActivity,
@@ -286,27 +280,25 @@ export function createApp() {
   // createDeps migrates a fresh database before the worker pool reads its
   // persisted runtime policy. Still fail before mounting any routes.
   getCoderWorkerPool();
-  // The command ledger is always the restart-safe idempotency authority.
-  // AgentRun recovery remains feature-gated.
+  // Start recovery before mounting routes. acceptCommand awaits this store's
+  // recovery promise so the startup scan cannot fence a newly admitted run.
   setCoderWorkerControlPlaneStore(deps.controlPlaneStore);
-  if (coderControlPlaneShadowEnabled()) {
-    void deps.controlPlaneStore.recoverInterruptedRuns('process-restart').then(
-      (recovered) => {
-        console.log(
-          `[control-plane] filesystem recovery completed recovered=${recovered}`,
-        );
-      },
-      (error) => {
-        console.warn(
-          `[control-plane-agent-run] startup recovery failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      },
-    );
-  }
+  void deps.controlPlaneStore.recoverInterruptedRuns('process-restart').then(
+    (recovered) => {
+      console.log(
+        `[control-plane] filesystem recovery completed recovered=${recovered}`,
+      );
+    },
+    (error) => {
+      console.warn(
+        `[control-plane-agent-run] startup recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+  );
   console.log(
     `[control-plane] command-ledger=authoritative ` +
-      `agent-runs=${coderControlPlaneShadowEnabled() ? 'enabled' : 'disabled'} ` +
-      `journal=${coderRuntimeJournalShadowEnabled() ? 'enabled' : 'disabled'} ` +
+      'agent-runs=enabled ' +
+      `journal=${deps.controlPlaneStore.journalEnabled ? 'enabled' : 'disabled'} ` +
       'storage=filesystem',
   );
 
@@ -375,15 +367,6 @@ export function createApp() {
   // longer a valid runtime or decision path.
   setQaTestRunStore(deps.qaTestRunStore);
   setQaEndpointEnvStore(deps.companySessionEnvStore);
-  // App Studio store — wired for the app_* agent tools (same gate posture).
-  if (deps.config.features.appStudioEnabled) {
-    setAppStudioStore(deps.appStudioStore);
-    setAppStudioDbClientStore({
-      listConnections: (projectId) => deps.dbClientFor(projectId).listConnections(projectId),
-      createConnection: (input) => deps.dbClientFor(input.project_id).createConnection(input),
-      updateConnection: (projectId, id, patch) => deps.dbClientFor(projectId).updateConnection(id, patch),
-    });
-  }
   // API client (auto-test/auto-fix) store — wired for the `api_*` agent tools.
   setApiClientStore(deps.apiClientStore);
   setSandboxServiceEnvStore(deps.companySessionEnvStore);
@@ -415,10 +398,7 @@ export function createApp() {
     listCompanySessions: () => {
       const sessions: Array<{ id: string; status: string; configJson: string }> = [];
       for (const entry of deps.sessionStore.catalog.list()) {
-        if (
-          entry.session.kind !== 'company' &&
-          entry.session.kind !== 'app_studio'
-        ) {
+        if (entry.session.kind !== 'company') {
           continue;
         }
         try {
@@ -917,9 +897,6 @@ export function createApp() {
   mountEditorRoutes(app, deps);
   mountProjectGitRoutes(app, deps);
   mountConfigRoutes(app, deps);
-  // App Studio routes (Code Studio para leigos — scaffold SSE + sessões +
-  // pipeline). O gate APP_STUDIO_ENABLED vive dentro do mount.
-  mountAppStudioRoutes(app, deps);
   mountWorkspaceRoutes(app, deps);
   // Self-hosted draw.io editor webapp — served at /drawio/* (mcp://app/drawio
   // in Electron). Static assets, no auth; the embedded editor for the diagram

@@ -56,16 +56,16 @@ describe('nested invocation-local dedup', () => {
     expect(d.dupCalls.get('read_file|legacy')?.count).toBe(99);
   });
 
-  it('warns on the 2nd identical mutation and blocks the 3rd with a child attempt id', () => {
+  it('records repeated mutations as observations with a child attempt id', () => {
     const obs = buildNestedToolObserver(deps());
     const opts = { repeatPolicy: 'mutating' as const, executionClass: 'write' as const, stateEpoch: 0 };
 
     expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)).toBeNull();
     expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)).toMatchObject({
-      action: 'warn', count: 2,
+      action: 'shadow', count: 2, shouldReflect: false,
     });
     expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)).toMatchObject({
-      action: 'block', kind: 'dedup', count: 3, originToolUseId: 'ce_parent_1#3',
+      action: 'shadow', count: 3, originToolUseId: 'ce_parent_1#3', shouldReflect: false,
     });
   });
 
@@ -78,10 +78,10 @@ describe('nested invocation-local dedup', () => {
     })).toBeNull();
     expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, {
       ...base, originToolUseId: 'ce_parent_1#3',
-    })?.action).toBe('warn');
+    })?.action).toBe('shadow');
     expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, {
       ...base, originToolUseId: 'ce_parent_1#4',
-    })).toMatchObject({ action: 'block', originToolUseId: 'ce_parent_1#4' });
+    })).toMatchObject({ action: 'shadow', originToolUseId: 'ce_parent_1#4' });
   });
 
   it('different args never trip the dedup', () => {
@@ -122,7 +122,7 @@ describe('nested invocation-local dedup', () => {
     const obs = buildNestedToolObserver(deps());
     const opts = { repeatPolicy: 'mutating' as const, executionClass: 'write' as const };
     expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)).toBeNull();
-    expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)?.action).toBe('warn');
+    expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)?.action).toBe('shadow');
     expect(obs.beforeNestedCall('write_file', { path: 'b.ts' }, opts)).toBeNull();
     obs.afterNestedCall({
       ...afterArgs('write_file', false), args: { path: 'b.ts' },
@@ -134,7 +134,7 @@ describe('nested invocation-local dedup', () => {
 });
 
 describe('nested failure-streak (shared state, pre-check enforcement)', () => {
-  it('refuses the FIRST nested attempt when the streak already crossed the threshold', () => {
+  it('observes an earlier failure streak without refusing a fresh attempt', () => {
     const d = deps({
       failureStreaks: {
         streaks: new Map([
@@ -145,8 +145,7 @@ describe('nested failure-streak (shared state, pre-check enforcement)', () => {
     const obs = buildNestedToolObserver(d);
     const verdict = obs.beforeNestedCall('write_stdin', { data: 'x' });
     expect(verdict).not.toBeNull();
-    expect(verdict!.kind).toBe('failure-streak');
-    expect(verdict!.refusalText).toContain('[failure-streak REFUSED');
+    expect(verdict).toMatchObject({ action: 'shadow', reason: 'failure-streak', shouldReflect: false });
   });
 
   it('nested failures feed the shared streak; one success clears it', () => {
@@ -183,7 +182,7 @@ describe('observer robustness + telemetry sink', () => {
       });
     }
     expect(obs.beforeNestedCall('search', { query: 'same' }, opts)).toMatchObject({
-      action: 'block',
+      action: 'shadow',
       reason: 'cross-turn-no-progress',
     });
   });

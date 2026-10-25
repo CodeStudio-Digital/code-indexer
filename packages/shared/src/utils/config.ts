@@ -37,15 +37,7 @@ export interface McpOAuthConfig {
  */
 export type IndexProfile = 'aggressive' | 'balanced' | 'conservative';
 
-export interface FeatureFlags {
-  /**
-   * Master switch for the App Studio module (Code Studio para leigos —
-   * /apps surface, /api/app-studio routes, and the app_* tool group
-   * registered in the coder). Default ON. Set `APP_STUDIO_ENABLED=false`
-   * to disable.
-   */
-  appStudioEnabled: boolean;
-}
+export type FeatureFlags = Record<string, never>;
 
 export interface IndexerConfig {
   dbPath: string;
@@ -175,9 +167,7 @@ const DEFAULT_CONFIG: IndexerConfig = {
   maxFileSize: 200,
   ignorePatterns: [],
   indexProfile: 'balanced',
-  features: {
-    appStudioEnabled: true,
-  },
+  features: {},
   dashboard: {
     port: 7333,
     // Loopback by DEFAULT. This listener serves the whole IDE API — projects,
@@ -212,11 +202,6 @@ const DEFAULT_CONFIG: IndexerConfig = {
 };
 
 function applyEnvOverrides(config: IndexerConfig): void {
-  // Feature flags
-  if (process.env.APP_STUDIO_ENABLED !== undefined) {
-    config.features.appStudioEnabled = process.env.APP_STUDIO_ENABLED !== 'false';
-  }
-
   if (process.env.MCP_INDEX_DB) {
     config.dbPath = process.env.MCP_INDEX_DB;
   }

@@ -146,7 +146,6 @@ export interface WebhooksApi {
 
 export interface ConfigApi {
   features(input: void, ctx: ApiContext): Promise<{
-    appStudioEnabled: boolean;
     docsEnabled: boolean;
     hostTerminalEnabled: boolean;
     userAuthRequired: boolean;

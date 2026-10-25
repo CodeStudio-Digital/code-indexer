@@ -22,9 +22,6 @@ import {
   type FsSessionStore,
 } from '@mcp/session-storage/fs-store/index.js';
 
-const DEFAULT_INTERVAL_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_INTERVAL_MS ?? 6 * 60 * 60 * 1000);
-const DEFAULT_IDLE_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_IDLE_MS ?? 30 * 60 * 1000);
-const DEFAULT_MAX_PROJECTS = Number(process.env.MCP_MEMORY_CONSOLIDATE_MAX_PROJECTS ?? 3);
 
 /**
  * Off by default (opt-in). Archiving is reversible (rows soft-delete with a
@@ -131,9 +128,9 @@ export function startMemoryConsolidator(args: StartMemoryConsolidatorArgs): Memo
   // createApp() may be rebuilt in-process by tests/dev harnesses. Never leave
   // the previous timer and its full dependency graph retained.
   activeHandle?.stop();
-  const intervalMs = args.intervalMs ?? DEFAULT_INTERVAL_MS;
-  const idleMs = args.idleMs ?? DEFAULT_IDLE_MS;
-  const maxProjects = args.maxProjects ?? DEFAULT_MAX_PROJECTS;
+  const intervalMs = args.intervalMs ?? num(process.env.MCP_MEMORY_CONSOLIDATE_INTERVAL_MS, 6 * 60 * 60 * 1000);
+  const idleMs = args.idleMs ?? num(process.env.MCP_MEMORY_CONSOLIDATE_IDLE_MS, 30 * 60 * 1000);
+  const maxProjects = args.maxProjects ?? num(process.env.MCP_MEMORY_CONSOLIDATE_MAX_PROJECTS, 3);
   const options = args.options ?? consolidatorOptionsFromEnv();
   const { db, sessionStore, snapshotService, embeddingService } = args;
 

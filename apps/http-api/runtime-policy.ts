@@ -7,18 +7,31 @@ import {
   legacyRuntimePolicyLayerFromEnv,
   resolveRuntimePolicyV1,
 } from '@mcp/agent-runtime-host';
-import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
+import { AppSettingsStore, inheritedSettingsEnv } from '@mcp/store/app-settings-store.js';
 
 export function resolveAppRuntimePolicy(
   dbPath: string,
-  options: { env?: Readonly<Record<string, string | undefined>>; resolvedAt?: string } = {},
+  options: {
+    env?: Readonly<Record<string, string | undefined>>;
+    resolvedAt?: string;
+    updates?: Readonly<Record<string, string | null>>;
+  } = {},
 ): ResolvedRuntimePolicyV1 {
-  const env = { ...(options.env ?? process.env) };
+  const env = { ...(options.env ?? inheritedSettingsEnv()) };
   const operatorEnv: Record<string, string> = {};
   const operatorRevisions: string[] = [];
   const store = new AppSettingsStore(dbPath);
   try {
     for (const key of LEGACY_RUNTIME_POLICY_ENV_KEYS) {
+      if (options.updates && Object.prototype.hasOwnProperty.call(options.updates, key)) {
+        const value = options.updates[key];
+        if (value !== null) {
+          delete env[key];
+          operatorEnv[key] = value;
+          operatorRevisions.push(`${key}@pending`);
+        }
+        continue;
+      }
       const setting = store.resolve(key);
       if (setting?.source !== 'db') continue;
       if (setting.effectiveValue == null) continue;

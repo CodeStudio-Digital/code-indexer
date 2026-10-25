@@ -57,7 +57,7 @@ function runRepeatedTool(repeatPolicy: CoderTool['repeatPolicy'], content: strin
   const registry = new ToolRegistry();
   registry.register(tool);
   const runner = new CoderRunner({
-    provider: new RepeatingProvider('status_tool', { scope: 'same' }, 3),
+    provider: new RepeatingProvider('status_tool', { scope: 'same' }, 12),
     registry,
     systemPrompt: 'sys',
     toolContext: { cwd: '/tmp', projectName: 'test' },
@@ -69,16 +69,16 @@ function runRepeatedTool(repeatPolicy: CoderTool['repeatPolicy'], content: strin
 }
 
 describe('hybrid cross-turn dedup', () => {
-  // Exercise cross-turn reuse below the independent five-repeat loop guard.
+  // Exceed the former read, dominance and polling thresholds in a real runner.
   it('executes stable calls again on later turns even with identical args/results', async () => {
     const scenario = runRepeatedTool('stable', 'unchanged snapshot'.repeat(8));
     await scenario.run();
-    expect(scenario.count()).toBe(3);
+    expect(scenario.count()).toBe(12);
   });
 
   it.each(['volatile', 'pollable'] as const)('%s calls always execute', async (policy) => {
     const scenario = runRepeatedTool(policy, 'unchanged live status'.repeat(8));
     await scenario.run();
-    expect(scenario.count()).toBe(3);
+    expect(scenario.count()).toBe(12);
   });
 });

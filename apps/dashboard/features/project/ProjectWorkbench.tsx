@@ -56,6 +56,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const { t } = useTranslation('projects');
   const layout = useWorkspaceLayout();
   const [sessionsHostRef, sessionsHost] = usePortalHost<HTMLDivElement>();
+  const [sessionToolbarHostRef, sessionToolbarHost] = usePortalHost<HTMLDivElement>();
   const [databaseHostRef, databaseHost] = usePortalHost<HTMLDivElement>();
   const [gitHostRef, gitHost] = usePortalHost<HTMLDivElement>();
   const [apiLeftHostRef, apiLeftHost] = usePortalHost<HTMLDivElement>();
@@ -101,12 +102,13 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     onCloseRight: closeApiRight,
   }), [apiLeftHost, apiRightHost, closeApiLeft, closeApiRight]);
   const sessionWorkbenchSlots = useMemo<AgentChatWorkbenchSlots>(() => ({
+    toolbarHost: sessionToolbarHost,
     sessionsHost,
     rightPanelHost: sessionRightPanelHost,
     rightRailHost: sessionRightRailHost,
     onSessionStateChange: handleSessionStateChange,
     onSessionSelected: handleSessionSelected,
-  }), [handleSessionSelected, handleSessionStateChange, sessionRightPanelHost, sessionRightRailHost, sessionsHost]);
+  }), [handleSessionSelected, handleSessionStateChange, sessionRightPanelHost, sessionRightRailHost, sessionsHost, sessionToolbarHost]);
   const leftPlugins = useMemo(
     () => props.contribWindows.filter((window) => window.side === 'left'),
     [props.contribWindows],
@@ -286,7 +288,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           }}
           pluginTabs={leftPlugins.map(pluginTab)}
         />
-        <div className="min-w-0 flex-1 p-1.5">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-1.5">
+          {sessionsMode && <div ref={sessionToolbarHostRef} className="shrink-0" />}
           <PanelGroup direction="vertical" autoSaveId={`mcp-workbench-vertical-${props.projectId}`}>
             <Panel id="workbench-main" order={1} minSize={28} className="min-h-0">
               <PanelGroup

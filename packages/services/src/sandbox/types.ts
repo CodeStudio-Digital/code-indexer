@@ -177,9 +177,9 @@ export interface SandboxIsolation {
  *   MCP_SANDBOX_PIDS   (positive integer)         — default 256
  */
 export const DEFAULT_SANDBOX_LIMITS: SandboxLimits = {
-  memory: process.env.MCP_SANDBOX_MEMORY ?? '1g',
-  cpus: process.env.MCP_SANDBOX_CPUS ?? '1',
-  pids: Number(process.env.MCP_SANDBOX_PIDS ?? '256') || 256,
+  get memory() { return process.env.MCP_SANDBOX_MEMORY ?? '1g'; },
+  get cpus() { return process.env.MCP_SANDBOX_CPUS ?? '1'; },
+  get pids() { return Number(process.env.MCP_SANDBOX_PIDS ?? '256') || 256; },
 };
 
 export const DEFAULT_SANDBOX_ISOLATION: SandboxIsolation = {
@@ -187,7 +187,7 @@ export const DEFAULT_SANDBOX_ISOLATION: SandboxIsolation = {
   // `node` user (uid 1000 in the official node image family) so nothing
   // in `/app` ends up root-owned. If your custom image uses a different
   // non-root user, override via MCP_SANDBOX_USER.
-  user: process.env.MCP_SANDBOX_USER ?? '1000:1000',
+  get user() { return process.env.MCP_SANDBOX_USER ?? '1000:1000'; },
   // Default OFF. Rationale:
   //   - In rootless Podman (and `docker --userns-remap`), the container
   //     is ALREADY unprivileged via user-namespace mapping — the host
@@ -199,25 +199,25 @@ export const DEFAULT_SANDBOX_ISOLATION: SandboxIsolation = {
   //     producing "chown: Operation not permitted" failures as root.
   //   - Operators who run privileged (rootful) Docker and want the
   //     defense-in-depth can opt in with MCP_SANDBOX_DROP_CAPS=1.
-  dropAllCaps: process.env.MCP_SANDBOX_DROP_CAPS === '1',
-  noNewPrivs: process.env.MCP_SANDBOX_NO_NEW_PRIVS !== '0',
+  get dropAllCaps() { return process.env.MCP_SANDBOX_DROP_CAPS === '1'; },
+  get noNewPrivs() { return process.env.MCP_SANDBOX_NO_NEW_PRIVS !== '0'; },
   // Read-only root is off by default because npm install writes into
   // `/root/.npm` during the first invocation inside the container, and
   // the primer image pre-warms that cache under /root. Enable via
   // MCP_SANDBOX_READONLY_ROOT=1 once a dedicated `/home/node/.npm`
   // cache is plumbed into the Dockerfile (tracked for a follow-up).
-  readOnlyRoot: process.env.MCP_SANDBOX_READONLY_ROOT === '1',
+  get readOnlyRoot() { return process.env.MCP_SANDBOX_READONLY_ROOT === '1'; },
   // Seccomp profile path. Default is `null` — use the OCI runtime's own
   // default profile (already restrictive on Docker; permissive on plain
   // Podman). Ops can point at `docker/sandbox-node/seccomp.json` to
   // load the stricter MCP profile that denies mount/unshare/bpf/etc.
-  seccompProfile: process.env.MCP_SANDBOX_SECCOMP ?? null,
+  get seccompProfile() { return process.env.MCP_SANDBOX_SECCOMP ?? null; },
   // Network: `null` uses the default bridge (direct egress). Setting
   // this to `mcp-sandbox-net` pairs with the egress firewall (phase 6b).
-  network: process.env.MCP_SANDBOX_NETWORK ?? null,
+  get network() { return process.env.MCP_SANDBOX_NETWORK ?? null; },
   // HTTP proxy: when combined with a deny-egress network, this forces
   // all traffic through the allow-listed squid sidecar. `null` = direct.
-  httpProxy: process.env.MCP_SANDBOX_HTTP_PROXY ?? null,
+  get httpProxy() { return process.env.MCP_SANDBOX_HTTP_PROXY ?? null; },
 };
 
 /**

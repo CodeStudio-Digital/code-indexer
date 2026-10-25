@@ -1,8 +1,4 @@
-/**
- * Plans panel — dedicated right-rail tool window for `submit_plan` history.
- * Extracted from the old `details` panel's "Planos" tab so it gets its own
- * rail icon. Fetches `/coder/sessions/:id/plans` (gated on `active`).
- */
+/** Plan history, available from the State panel. Fetches only while active. */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';

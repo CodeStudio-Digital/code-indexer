@@ -205,37 +205,6 @@
       "runtimeDisposition": null
     },
     {
-      "key": "APP_STUDIO_ENABLED",
-      "prefix": "APP",
-      "inferredType": "bool",
-      "enums": [],
-      "usageCount": 2,
-      "consumers": [
-        {
-          "file": "packages/shared/src/utils/config.ts",
-          "line": 228,
-          "column": 7,
-          "readTiming": "runtime",
-          "expression": "process.env.APP_STUDIO_ENABLED !== undefined"
-        },
-        {
-          "file": "packages/shared/src/utils/config.ts",
-          "line": 229,
-          "column": 40,
-          "readTiming": "runtime",
-          "expression": "process.env.APP_STUDIO_ENABLED !== 'false'"
-        }
-      ],
-      "inCatalog": false,
-      "catalogDefault": null,
-      "rawDbValue": null,
-      "inheritedEnvValue": null,
-      "effectiveValue": null,
-      "effectiveSource": "consumer_fallback",
-      "tier": "review",
-      "runtimeDisposition": null
-    },
-    {
       "key": "APPDATA",
       "prefix": "APPDATA",
       "inferredType": "string",
@@ -3298,30 +3267,6 @@
           "column": 37,
           "readTiming": "runtime",
           "expression": "Number(process.env.MCP_API_CLIENT_READ_CAP)"
-        }
-      ],
-      "inCatalog": false,
-      "catalogDefault": null,
-      "rawDbValue": null,
-      "inheritedEnvValue": null,
-      "effectiveValue": null,
-      "effectiveSource": "consumer_fallback",
-      "tier": "review",
-      "runtimeDisposition": null
-    },
-    {
-      "key": "MCP_APP_STUDIO_SCHEDULER_TICK_MS",
-      "prefix": "MCP",
-      "inferredType": "int",
-      "enums": [],
-      "usageCount": 1,
-      "consumers": [
-        {
-          "file": "packages/company/src/services/scheduler/AppStudioScheduler.ts",
-          "line": 25,
-          "column": 22,
-          "readTiming": "runtime",
-          "expression": "Number(process.env.MCP_APP_STUDIO_SCHEDULER_TICK_MS)"
         }
       ],
       "inCatalog": false,

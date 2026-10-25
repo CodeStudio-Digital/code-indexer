@@ -28,7 +28,6 @@ function setup() {
       const session = sessions.get(id);
       if (session) session.block_code_comments = enabled;
     },
-    listRecentSessionsGlobal: () => [],
   };
   const app = new Hono();
   mountCoderSessionsRoutes(

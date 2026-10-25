@@ -14,12 +14,22 @@ export interface ActiveProjectTab {
   tab: string;
 }
 
+interface ActiveSession {
+  id: string;
+  title: string;
+}
+
 interface ActiveSurfaceState {
+  /** Metadata already loaded by the visible chat; never fetch history for the shell. */
+  session: ActiveSession | null;
+  setSession: (session: ActiveSession | null) => void;
   projectTab: ActiveProjectTab | null;
   setProjectTab: (v: ActiveProjectTab | null) => void;
 }
 
 export const useActiveSurface = create<ActiveSurfaceState>((set) => ({
+  session: null,
+  setSession: (session) => set({ session }),
   projectTab: null,
   setProjectTab: (v) => set({ projectTab: v }),
 }));

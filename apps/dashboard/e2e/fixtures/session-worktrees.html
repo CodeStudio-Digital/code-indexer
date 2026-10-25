@@ -1,0 +1,20 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Session worktree workbench</title></head>
+<body><div id="root"></div><script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {MemoryRouter} from 'react-router-dom';
+import {ProjectWorkbench} from '/features/project/ProjectWorkbench.tsx';
+import {DialogProvider} from '/components/ui/dialog-provider.tsx';
+import {TooltipProvider} from '/components/ui/tooltip.tsx';
+import {useWorkspaceLayout} from '/state/workspace-layout.ts';
+import {i18nReady} from '/i18n/index.ts';
+import '/index.css';
+const h = React.createElement;
+await i18nReady;
+useWorkspaceLayout.getState().setPrimarySurface('sessions');
+createRoot(document.getElementById('root')).render(h(MemoryRouter, null,
+  h(DialogProvider, null, h(TooltipProvider, null,
+    h('div', {className:'font-sans',style:{height:'100vh',width:'100vw',display:'flex',flexDirection:'column'}},
+      h(ProjectWorkbench, {projectId:7,projectName:'CodeStudio',projectRoot:'D:/fixture/project',
+        activeFilePath:null,onOpenFile:()=>{},contribWindows:[],builderJson:null,previewEnabled:false}))))));
+</script></body></html>

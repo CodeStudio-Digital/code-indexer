@@ -18,7 +18,6 @@
  */
 import {
   API_TOOLS,
-  APP_STUDIO_TOOLS,
   BROWSER_TOOLS,
   CORE_TIER_NAMES,
   DB_TOOLS,
@@ -94,7 +93,6 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
  */
 export const ROLE_CAPABILITY_FLOOR: ReadonlySet<string> = new Set([
   ...API_TOOLS,
-  ...APP_STUDIO_TOOLS,
   ...BROWSER_TOOLS,
   ...DB_TOOLS,
   ...DIAGRAM_TOOLS,
@@ -126,11 +124,6 @@ export const PREVIEW_WORKFLOW_FLOOR: ReadonlySet<string> = new Set([
  */
 const HOT_RANK: readonly string[] = [
   'code_exec',
-  'app_get_state',
-  'app_get_plan',
-  'app_update_plan',
-  'app_upsert_work_items',
-  'app_dispatch_ready_work',
   'read_file',
   'mcp__search',
   'mcp__grep_code',

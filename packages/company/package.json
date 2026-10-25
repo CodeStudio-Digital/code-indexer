@@ -7,7 +7,6 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@mcp/app-studio": "workspace:*",
     "@mcp/agent-runtime-host": "workspace:*",
     "@mcp/candidate-pipeline": "workspace:*",
     "@mcp/code-agent": "workspace:*",

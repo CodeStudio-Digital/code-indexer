@@ -43,10 +43,6 @@ const READ_ONLY_PREFIXES = [
   'get_',
   'list_',
   'read_',
-  'app_fetch_',
-  'app_get_',
-  'app_list_',
-  'app_search_',
   'ds_analyze_',
   'ds_audit_',
   'ds_component',
@@ -80,9 +76,6 @@ const CONTROL_NAMES = new Set([
 
 const EXECUTE_PREFIXES = ['qa_', 'service_'] as const;
 const EXECUTE_NAMES = new Set([
-  'app_dispatch_ready_work',
-  'app_provision_db',
-  'app_run_test_cycle',
   'review_subordinate_work',
 ]);
 const ADMIN_VERBS = /(?:^|_)(delete|destroy|drop|publish|deploy|remove|stop)(?:_|$)/i;

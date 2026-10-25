@@ -8,6 +8,7 @@
 import type { Hono } from 'hono';
 import type { AgentRun } from '@mcp/agent-runtime-contracts';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
+import type { ControlPlaneAuthority } from '../../../file-control-plane-store.js';
 import {
   ControlPlaneFileRepository,
   type ControlPlaneEntityDataMap,
@@ -23,8 +24,6 @@ import {
   getCoderWorkerPool,
 } from '../../../sse/coderWorkerPoolSingleton.js';
 import {
-  coderControlPlaneShadowEnabled,
-  coderRuntimeJournalShadowEnabled,
   snapshotCoderControlPlaneShadowMetrics,
   type CoderControlPlaneShadowMetrics,
 } from '../../../control-plane-shadow.js';
@@ -399,7 +398,7 @@ export async function readPolicyDivergences(
 
 export function mountWorkersDiagnosticRoute(
   app: Hono,
-  deps: { sessionStore: FsSessionStore },
+  deps: { sessionStore: FsSessionStore; controlPlaneStore: Pick<ControlPlaneAuthority, 'journalEnabled'> },
 ): void {
   app.get('/api/admin/workers/control-plane/storage', async (c) => {
     return c.json(await readJournalStorageByRun(deps.sessionStore));
@@ -447,12 +446,13 @@ export function mountWorkersDiagnosticRoute(
         workers: coder,
       },
       controlPlaneShadow: {
-        enabled: coderControlPlaneShadowEnabled(),
-        journalEnabled: coderRuntimeJournalShadowEnabled(),
+        // Keep the response field names for existing diagnostics clients.
+        enabled: true,
+        journalEnabled: deps.controlPlaneStore.journalEnabled,
         metrics: snapshotCoderControlPlaneShadowMetrics(),
       },
       agentRunShadow: {
-        enabled: process.env.CODER_AGENT_RUN_STORE_SHADOW === '1',
+        enabled: true,
         metrics: await readAgentRunShadowMetrics(deps.sessionStore),
       },
       node: {

@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { ToolCallLedger, logicalOperationId } from '../tool-call-ledger.js';
 
 describe('ToolCallLedger', () => {
+  it('keeps semantic date bounds and nested pagination-named filters distinct', () => {
+    for (const field of ['start', 'end', 'before', 'after']) {
+      expect(logicalOperationId('query', { [field]: '2025' })).not.toBe(logicalOperationId('query', { [field]: '2026' }));
+    }
+    expect(logicalOperationId('query', { filter: { page: 1, start: '2025' } }))
+      .not.toBe(logicalOperationId('query', { filter: { page: 2, start: '2026' } }));
+  });
+
+  it('invalidates stale read observations after a successful edit', () => {
+    const ledger = new ToolCallLedger();
+    const input = { name: 'read_file', args: { path: 'a.ts' }, content: 'snapshot', isError: false };
+    for (let i = 0; i < 5; i++) ledger.record(input);
+    expect(ledger.checkRepeat(input)).not.toBeNull();
+    ledger.record({ name: 'edit_file', args: { path: 'a.ts' }, content: 'updated', isError: false, mutates: true });
+    expect(ledger.checkRepeat(input)).toBeNull();
+    expect(ledger.record(input).productive).toBe(true);
+    expect(ledger.snapshot()).toHaveLength(7);
+  });
   it('groups paginated slices into one logical operation', () => {
     expect(logicalOperationId('read_file', { path: 'a.ts', start_line: 1, end_line: 50 }))
       .toBe(logicalOperationId('read_file', { path: 'a.ts', start_line: 51, end_line: 100 }));

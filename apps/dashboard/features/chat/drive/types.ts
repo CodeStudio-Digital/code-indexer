@@ -53,4 +53,4 @@ export interface DriveAggregate {
   tasks: DriveTasks | null;
 }
 
-export type DriveTab = 'map' | 'memory' | 'investigations' | 'plans';
+export type DriveTab = 'attachments' | 'files' | 'map' | 'memory' | 'investigations' | 'chapters';

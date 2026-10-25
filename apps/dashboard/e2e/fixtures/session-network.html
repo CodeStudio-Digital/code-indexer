@@ -1,0 +1,25 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Ordinary session network</title></head>
+<body><div id="root"></div><script type="module">
+import React,{useEffect,useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {Composer} from '/features/chat/composer/Composer.tsx';
+import {ChatCollaborationPanel} from '/features/chat/right-panel/ChatCollaborationPanel.tsx';
+import {TooltipProvider} from '/components/ui/tooltip.tsx';
+import {DialogProvider} from '/components/ui/dialog-provider.tsx';
+import {i18nReady} from '/i18n/index.ts';
+import '/index.css';
+await i18nReady;
+const h=React.createElement,noop=()=>{},id='11111111-1111-4111-8111-111111111111';
+function Fixture(){
+ const [sent,setSent]=useState(null),[open,setOpen]=useState(true);
+ useEffect(()=>{const show=()=>setOpen(true);window.addEventListener('coder:open-collaboration',show);return()=>window.removeEventListener('coder:open-collaboration',show)},[]);
+ return h('main',{className:'flex h-screen bg-background text-foreground'},
+  h('div',{className:'flex-1 min-w-0 flex flex-col p-6'},h('h1',{className:'font-medium'},'Planejar uma nova feature'),
+   h('p',{className:'mt-2 text-sm text-muted-foreground'},'Coordenador · Modelo A'),h('pre',{'data-testid':'sent',className:'flex-1 whitespace-pre-wrap pt-4'},JSON.stringify(sent)),
+   h(Composer,{sessionCollaboration:true,sessionId:id,agent:'explore',setAgent:noop,provider:'p1',model:'m1',setModel:noop,onSwitchProvider:noop,
+    providerOptions:[],currentProviderModels:[],maxTurns:null,setMaxTurns:noop,maxAutoContinues:0,setMaxAutoContinues:noop,temperature:null,setTemperature:noop,
+    streaming:false,onSend:(text,attachments,skills)=>setSent({text,attachments,skills}),onAbort:noop})),
+  open&&h('aside',{className:'w-[390px] border-l flex flex-col'},h('h2',{className:'p-3 border-b font-medium'},'Colaboração entre chats'),h(ChatCollaborationPanel,{sessionId:id})));
+}
+createRoot(document.getElementById('root')).render(h(DialogProvider,null,h(TooltipProvider,null,h(Fixture))));
+</script></body></html>

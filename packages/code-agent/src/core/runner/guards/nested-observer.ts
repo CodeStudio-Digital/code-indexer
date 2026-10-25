@@ -4,7 +4,7 @@
  * Duplicate-call state is deliberately LOCAL to this observer. Production
  * creates one observer per parent `code_exec`, so a read performed in an
  * earlier turn/script cannot poison a later batch. Stable reads are reused by
- * `code-exec.ts`; this observer only stops a tight loop of unsafe operations.
+ * `code-exec.ts`; this observer records repetition without refusing execution.
  * Cross-turn no-progress detection belongs to the runner's result-aware
  * tracker, not to this pre-dispatch hook.
  *
@@ -12,11 +12,11 @@
  * still useful across direct/nested calls; policy and permission denials are
  * recorded with `affectsFailureStreak=false` by the caller.
  *
- * Kill switch: `CODER_NESTED_GUARDS_DISABLE=1`.
+ * Permissions, execution timeouts and uncertain-operation protection are
+ * enforced independently by code_exec.
  */
 import {
   checkFailureStreak,
-  buildFailureStreakRefusalText,
   type FailureStreakState,
 } from './failure-streak.js';
 import { FAILURE_STREAK_REFUSE_THRESHOLD } from '@mcp/code-agent/core/runner/constants.js';
@@ -84,24 +84,15 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
         if (repeatPolicy !== 'pollable') {
           const entry = deps.failureStreaks.streaks.get(name);
           if (entry && entry.consecutive >= FAILURE_STREAK_REFUSE_THRESHOLD) {
-            const text = buildFailureStreakRefusalText({
-              toolName: name,
-              count: entry.consecutive,
-              firstFailureTurn: entry.firstFailureTurn,
-              lastError: entry.lastError,
-            });
             return {
-              action: 'block',
+              action: 'shadow',
               reason: 'failure-streak',
-              refusalKind: 'failure-streak',
-              shouldReflect: true,
+              shouldReflect: false,
               affectsFailureStreak: false,
               count: entry.consecutive,
               sourceTool: name,
               originToolUseId: attemptId,
               ...(opts?.stateEpoch !== undefined ? { stateEpoch: opts.stateEpoch } : {}),
-              refusalText: text,
-              kind: 'failure-streak',
             };
           }
         }
@@ -114,16 +105,13 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
         });
         if (noProgress) {
           return {
-            action: 'block',
+            action: 'shadow',
             reason: 'cross-turn-no-progress',
-            refusalKind: 'dedup',
-            shouldReflect: true,
+            shouldReflect: false,
             affectsFailureStreak: false,
             count: noProgress.count,
             sourceTool: name,
             originToolUseId: attemptId,
-            refusalText: `[no-progress REFUSED: \`${name}\` repeated without new results. Switch strategy before retrying.]`,
-            kind: 'dedup',
           };
         }
 
@@ -141,14 +129,11 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
           forceReread: opts?.forceReread,
         });
         if (dedup.action === 'allow') return null;
-        if (dedup.action === 'block') {
-          return {
-            ...dedup,
-            refusalText: dedup.refuseText,
-            kind: 'dedup',
-          };
-        }
-        return dedup;
+        return {
+          action: 'shadow', reason: 'repeated-invocation', shouldReflect: false,
+          affectsFailureStreak: true, count: dedup.count,
+          sourceTool: name, originToolUseId: attemptId, stateEpoch: dedup.stateEpoch,
+        };
       } catch {
         // A guard malfunction must never break a running script.
         return null;
@@ -178,8 +163,7 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
           });
       try {
         // A successful different write/execute establishes a new local state
-        // epoch. Preserve the successful operation's own counter so repeating
-        // the same unsafe action is still warned/blocked; clear all others.
+        // epoch. Preserve its own diagnostic counter and clear stale counters.
         const changesState = e.repeatPolicy === 'mutating' ||
           e.executionClass === 'write' || e.executionClass === 'execute';
         if (!e.isError && changesState) {

@@ -55,7 +55,6 @@ interface CompanySessionViewProps {
   onToggleSessionsList?: () => void;
   workbenchSlots?: CompanySessionWorkbenchSlots;
   runtimeKind?: 'company' | 'app_studio';
-  appSessionId?: string | null;
 }
 
 interface SessionFullData {
@@ -100,7 +99,6 @@ export function CompanySessionView({
   onToggleSessionsList,
   workbenchSlots,
   runtimeKind = 'company',
-  appSessionId = null,
 }: CompanySessionViewProps) {
   const { t } = useTranslation('agents');
   const contribWindows = useContributions((s) => s.toolWindows);
@@ -509,19 +507,6 @@ export function CompanySessionView({
                       sessionId={activeSessionId}
                       readOnly={runtimeKind === 'app_studio'}
                     />
-                    {runtimeKind === 'app_studio' && appSessionId != null && (
-                      <div className="flex h-8 items-center gap-2 border-b border-violet-500/20 bg-violet-500/5 px-3 text-[10px] text-muted-foreground">
-                        <span className="font-medium text-violet-300">{t('company.appTeam.title')}</span>
-                        <span>{t('company.appTeam.description')}</span>
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/apps/${appSessionId}`)}
-                          className="ml-auto text-violet-300 hover:underline"
-                        >
-                          {t('company.openAppWorkflow')}
-                        </button>
-                      </div>
-                    )}
 
                     {/* Front tabs — visible across every zone so the user always
                         has a way to switch between Main and child fronts. */}

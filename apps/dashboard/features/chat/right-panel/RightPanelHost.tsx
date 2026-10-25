@@ -11,11 +11,10 @@
  * position or partial state per panel, this is the place to add
  * mounting that respects an `mounted: Set<RightPanelId>` cache.
  */
-import { Bell, Bot, BookOpen, ChartNoAxesCombined, ClipboardList, Compass, HardDrive, ScrollText, Settings, Workflow } from 'lucide-react';
+import { Bell, Bot, ChartNoAxesCombined, Compass, Library, ScrollText, Settings, Workflow } from 'lucide-react';
 import { lazy, memo, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
-import { ConversationChaptersPanel } from '../messages/ConversationChapters.js';
 
 /**
  * Every rail panel is its own async chunk.
@@ -28,14 +27,12 @@ import { ConversationChaptersPanel } from '../messages/ConversationChapters.js';
  * A rail panel is always opened by an explicit click, so a one-frame Suspense
  * fallback is invisible in practice.
  *
- * `ConversationChaptersPanel` stays eager: `MessageList` imports the chapter
- * divider from the same module, so it is already in this chunk regardless.
  */
-const SessionStateSidebar = lazy(() =>
-  import('../SessionStateSidebar.js').then((m) => ({ default: m.SessionStateSidebar })),
+const SessionStatePanel = lazy(() =>
+  import('./SessionStatePanel.js').then((m) => ({ default: m.SessionStatePanel })),
 );
-const SessionDriveView = lazy(() =>
-  import('../SessionDrivePanel.js').then((m) => ({ default: m.SessionDriveView })),
+const SessionContextPanel = lazy(() =>
+  import('./SessionContextPanel.js').then((m) => ({ default: m.SessionContextPanel })),
 );
 const SessionConfigView = lazy(() =>
   import('./SessionConfigPanel.js').then((m) => ({ default: m.SessionConfigView })),
@@ -43,7 +40,6 @@ const SessionConfigView = lazy(() =>
 const SessionInsightsPanel = lazy(() =>
   import('./SessionInsightsPanel.js').then((m) => ({ default: m.SessionInsightsPanel })),
 );
-const PlansPanel = lazy(() => import('./PlansPanel.js').then((m) => ({ default: m.PlansPanel })));
 const DiagramPanel = lazy(() =>
   import('./diagram/DiagramPanel.js').then((m) => ({ default: m.DiagramPanel })),
 );
@@ -99,14 +95,13 @@ interface RightPanelHostProps {
   onTogglePick: (path: string) => void;
   onSetManyPicks: (paths: string[], select: boolean) => void;
   onClearPicks: () => void;
-  skillPicks: string[];
-  onToggleSkillPick: (id: string) => void;
   activeProcesses: ActiveProcess[];
   /** Plugin tool windows (side: 'right') the rail can activate. */
   pluginWindows?: ContribToolWindow[];
   /** Live preview contributed by the hosting project. */
   preview?: AgentChatPreviewConfig;
   onClose: () => void;
+  onSelectPanel: (id: RightPanelId) => void;
 }
 
 export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHostProps) {
@@ -136,22 +131,18 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
 
   switch (activeId) {
     case 'meta':
+    case 'plans':
       return (
-        <PanelChrome title={t('chat:rightRail.meta', 'Session state')} icon={Compass} onClose={onClose}>
+        <PanelChrome title={t('chat:rightRail.state', 'State')} icon={Compass} onClose={onClose} bodyClassName="overflow-hidden">
           <PanelBody>
-            <SessionStateSidebar
+            <SessionStatePanel
+              key={sessionId}
               sessionId={sessionId}
               refreshKey={props.refreshKey}
               todos={props.todos}
-              projectId={props.projectId}
-              filePicks={props.filePicks}
-              onTogglePick={props.onTogglePick}
-              onSetManyPicks={props.onSetManyPicks}
-              onClearPicks={props.onClearPicks}
-              skillPicks={props.skillPicks}
-              onToggleSkillPick={props.onToggleSkillPick}
               activeProcesses={props.activeProcesses}
-              embedded
+              showPlans={activeId === 'plans'}
+              onSelectTab={(plans) => props.onSelectPanel(plans ? 'plans' : 'meta')}
             />
           </PanelBody>
         </PanelChrome>
@@ -171,22 +162,16 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
         </PanelBody>
       );
     case 'drive':
-      return (
-        <PanelChrome title={t('chat:rightRail.drive', 'Drive')} icon={HardDrive} onClose={onClose}>
-          <PanelBody>
-            <SessionDriveView sessionId={sessionId} active />
-          </PanelBody>
-        </PanelChrome>
-      );
     case 'chapters':
       return (
-        <PanelChrome title={t('chat:rightRail.chapters', 'Chapters')} icon={BookOpen} onClose={onClose}
-          bodyClassName="overflow-hidden">
-          <ConversationChaptersPanel
-            sessionId={sessionId}
-            sessionStatus={props.session?.status}
-            fallbackSummary={props.session?.compaction_summary}
-          />
+        <PanelChrome title={t('chat:rightRail.context', 'Context')} icon={Library} onClose={onClose} bodyClassName="overflow-hidden">
+          <PanelBody>
+            <SessionContextPanel key={sessionId} sessionId={sessionId} projectId={props.projectId}
+              showChapters={activeId === 'chapters'} sessionStatus={props.session?.status}
+              fallbackSummary={props.session?.compaction_summary} filePicks={props.filePicks}
+              onTogglePick={props.onTogglePick} onSetManyPicks={props.onSetManyPicks}
+              revision={props.session?.updated_at} />
+          </PanelBody>
         </PanelChrome>
       );
     case 'config':
@@ -228,14 +213,6 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
         >
           <PanelBody>
             <LiveSubagentsPanel sessionId={sessionId} sessionData={props.sessionData} />
-          </PanelBody>
-        </PanelChrome>
-      );
-    case 'plans':
-      return (
-        <PanelChrome title={t('chat:rightRail.plans', 'Plans')} icon={ClipboardList} onClose={onClose}>
-          <PanelBody>
-            <PlansPanel sessionId={sessionId} active />
           </PanelBody>
         </PanelChrome>
       );

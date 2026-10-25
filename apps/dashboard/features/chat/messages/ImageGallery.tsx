@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from '../../../components/ui/dialo
 interface GalleryImage { name: string; src: string; thumbnail?: string }
 
 /** Portaled viewer stays outside transformed/virtualized transcript rows. */
-export function ImageGallery({ images }: { images: GalleryImage[] }) {
+export function ImageGallery({ images, compact = false }: { images: GalleryImage[]; compact?: boolean }) {
   const { t } = useTranslation('chat');
   const [selected, setSelected] = useState<number | null>(null);
   const [zoom, setZoom] = useState(false);
@@ -18,10 +18,10 @@ export function ImageGallery({ images }: { images: GalleryImage[] }) {
     <div className="my-1 flex max-w-[34rem] flex-wrap gap-1.5" aria-label={t('gallery.attachments')}>
       {images.map((image, index) => <button key={`${image.name}-${index}`} type="button" onClick={() => select(index)}
         title={image.name} aria-label={t('gallery.open', { index: index + 1, name: image.name })}
-        className="group/image flex w-32 flex-col overflow-hidden rounded-lg border border-border/50 bg-muted/40 text-left hover:border-primary/60">
+        className={`group/image flex ${compact ? 'w-10 shrink-0' : 'w-32'} flex-col overflow-hidden rounded-lg border border-border/50 bg-muted/40 text-left hover:border-primary/60`}>
         <img src={image.thumbnail || image.src} alt={image.name} loading="lazy" decoding="async"
-          className="h-24 w-full object-contain bg-black/15 p-1" />
-        <span className="w-full truncate px-2 py-1 text-[10px] text-muted-foreground">{image.name}</span>
+          className={`${compact ? 'h-10' : 'h-24'} w-full object-contain bg-black/15 p-1`} />
+        {!compact && <span className="w-full truncate px-2 py-1 text-[10px] text-muted-foreground">{image.name}</span>}
       </button>)}
     </div>
     <Dialog open={current != null} onOpenChange={open => { if (!open) setSelected(null); }}>

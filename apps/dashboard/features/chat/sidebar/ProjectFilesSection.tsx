@@ -29,7 +29,7 @@ export const ProjectFilesSection = memo(function ProjectFilesSection({
 }: ProjectFilesSectionProps) {
   const { t } = useTranslation('chat');
   const { root, expanded, toggleExpand, error, search, setSearch, searchState } =
-    useProjectFiles(projectId);
+    useProjectFiles(projectId, sessionId);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
 
   const folderStateOf = useCallback((folderPath: string): FolderState => {
@@ -46,7 +46,7 @@ export const ProjectFilesSection = memo(function ProjectFilesSection({
     }
     try {
       const r = await fetch(
-        `/api/coder/projects/${projectId}/tree?path=${encodeURIComponent(folderPath)}&recursive=1`,
+        `/api/coder/projects/${projectId}/tree?path=${encodeURIComponent(folderPath)}&recursive=1&session_id=${encodeURIComponent(sessionId)}`,
       );
       if (!r.ok) return;
       const data = (await r.json()) as { files: string[]; truncated: boolean };
@@ -54,7 +54,7 @@ export const ProjectFilesSection = memo(function ProjectFilesSection({
     } catch {
       /* ignore */
     }
-  }, [onSetMany, projectId, selected]);
+  }, [onSetMany, projectId, selected, sessionId]);
 
   const headerExtra =
     selected.length > 0 ? (

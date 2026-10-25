@@ -375,6 +375,8 @@ export type { GuardAction, GuardVerdict, ToolErrorKind, ToolErrorInfo, ToolOutpu
 export { ok, err, unknownToolOutcome } from '@mcp/agent-runtime-host/tool-result.js';
 
 export interface ToolContext extends ToolContextServices {
+  /** The user created this session inside a shared worktree workspace. */
+  worktreeWorkspace?: boolean;
   /** Best-effort post-handler observation, shared by built-in, external and nested calls.
    * It cannot change policy or tool inputs/results and is not awaited by dispatch. */
   onToolSettled?: (event: ToolSettledEvent) => void | Promise<void>;

@@ -22,7 +22,6 @@
   },
   "dependencies": {
     "@mcp/agent-runtime-contracts": "workspace:*",
-    "@mcp/app-studio": "workspace:*",
     "@mcp/session-storage": "workspace:*",
     "@mcp/shared": "workspace:*",
     "better-sqlite3": "^12.11.1"

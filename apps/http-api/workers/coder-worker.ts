@@ -95,11 +95,6 @@ import { setApiClientStore } from '../../../packages/code-agent/src/tools/api-cl
 import { DbClientStore } from '../../../packages/store/src/db-client-store.js';
 import { setDbToolsStores, setDbSecretDecryptor } from '../../../packages/code-agent/src/tools/db/index.js';
 import {
-  setAppStudioDbClientStore,
-  setAppStudioStore,
-} from '../../../packages/company/src/tools/app-studio/index.js';
-import { AppStudioStore } from '../../../packages/store/src/app-studio-store.js';
-import {
   createBus,
   clearReplayBuffer,
   publish,
@@ -359,20 +354,6 @@ const operationalSessionStore = getSharedSessionStore(
   sessionContext.writerOwnerId,
 );
 await operationalSessionStore.ensureCatalog();
-// App Studio operational state is filesystem-only. The worker receives the
-// shared bundle repository/catalog and reads SQLite solely for the essential
-// project-root catalog needed to locate a project-owned bundle.
-setAppStudioStore(new AppStudioStore({
-  repository: operationalSessionStore.repository,
-  catalog: operationalSessionStore.catalog,
-  locator: operationalSessionStore.locator,
-  getProject: (projectId) => {
-    const row = dbConn.handle
-      .prepare('SELECT id, root_path FROM projects WHERE id = ?')
-      .get(projectId) as { id: number; root_path: string } | undefined;
-    return row ? { id: row.id, root_path: row.root_path } : null;
-  },
-}));
 // API client store for the `api_*` agent tools (auto-test/auto-fix). Single
 // `api`-agent sessions run in this worker, so the main-thread binding is null
 // here — re-wire a fresh dual-mode instance. R1: when project-DB routing is on
@@ -391,11 +372,6 @@ setApiClientStore(new ApiClientStore(apiClientDbPath));
 // (registered by CoderWorkerPool via worker-secrets-handlers).
 const dbClientStore = new DbClientStore(apiClientDbPath);
 setDbToolsStores(dbClientStore, null);
-setAppStudioDbClientStore({
-  listConnections: (projectId) => dbClientStore.listConnections(projectId),
-  createConnection: (input) => dbClientStore.createConnection(input),
-  updateConnection: (_projectId, id, patch) => dbClientStore.updateConnection(id, patch),
-});
 setDbSecretDecryptor((blob) =>
   bridge.request<string>('secretsDecrypt', { blob, runId: activeRun?.runId }, { timeoutMs: 10_000 }),
 );

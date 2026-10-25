@@ -4,8 +4,6 @@ export { fingerprintLocalCompanyCommand } from './control-plane-shadow-fingerpri
 export type { CoderControlPlaneShadowMetrics } from './control-plane-shadow-queue.js';
 export { drainLocalCoderShadowWrites } from './control-plane-shadow-queue.js';
 export { recordLocalCoderShadowDivergences } from './control-plane-shadow-queue.js';
-export { coderControlPlaneShadowEnabled } from './control-plane-shadow-queue.js';
-export { coderRuntimeJournalShadowEnabled } from './control-plane-shadow-queue.js';
 export { snapshotCoderControlPlaneShadowMetrics } from './control-plane-shadow-queue.js';
 export { resetCoderControlPlaneShadowMetricsForTests } from './control-plane-shadow-queue.js';
 

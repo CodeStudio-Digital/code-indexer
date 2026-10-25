@@ -785,7 +785,7 @@ describe('POST /messages idempotency', () => {
     markEnded(live.bus, 'done', {});
   });
 
-  it('keeps a persisted app coordinator even if the POST carries a stale agent', async () => {
+  it('allows a retired app coordinator session to switch to a supported agent', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
     const res = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
@@ -796,7 +796,7 @@ describe('POST /messages idempotency', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'app_orchestrator' });
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'explore' });
   });
 
   it('still honors explicit agent changes for normal non-specialist sessions', async () => {
@@ -925,7 +925,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
     expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a persisted app coordinator during continue', async () => {
+  it('continues a retired app coordinator session with the requested supported agent', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
     const res = await h.post(`/api/coder/sessions/${SESSION_ID}/continue`, {
@@ -935,7 +935,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'app_orchestrator', resume: true });
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ agent: 'explore', resume: true });
   });
 });
 

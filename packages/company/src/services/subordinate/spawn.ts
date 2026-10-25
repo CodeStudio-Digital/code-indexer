@@ -40,7 +40,6 @@ import { attachSubordinateCompletionHandler } from '@mcp/company/services/subord
 import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
-import { buildAppStudioSubordinateRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
 import { createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
 
 /**
@@ -316,12 +315,6 @@ export async function spawnSubordinate(
     ),
     runtimeKind: ctx.capabilities.promptProfile,
   });
-  if (ctx.runtimeKind === 'app_studio' && ctx.appStudioSessionId != null) {
-    subordinateBlock += `\n\n${buildAppStudioSubordinateRuntimeBlock({
-      appSessionId: ctx.appStudioSessionId,
-      role: spec.role,
-    })}`;
-  }
 
   // Stored in the outer closure so `attachSubordinateCompletionHandler`
   // can call it from the `.finally` block after handle.done resolves

@@ -2,6 +2,7 @@ import type { DecisionAnswers, SessionId, StreamTask, StreamTaskExecutionMode } 
 import type { AgentPreset } from '@mcp/api-bus';
 
 export interface AgentChatWorkbenchSlots {
+  toolbarHost?: HTMLElement | null;
   sessionsHost: HTMLElement | null;
   rightPanelHost: HTMLElement | null;
   rightRailHost: HTMLElement | null;
@@ -64,6 +65,7 @@ export interface AgentChatProps {
 }
 
 export interface CoderSession {
+  worktree_path?: string | null;
   id: SessionId;
   project_id: number;
   /** Global (multi-project) session flag (migration 152). */

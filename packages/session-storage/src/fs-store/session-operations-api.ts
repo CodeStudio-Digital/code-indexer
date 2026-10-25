@@ -65,7 +65,6 @@ function runtimeForCopy(state: SessionState): JsonValue {
     last_response_id: null,
     last_response_message_count: null,
     cloudcode_session_id: null,
-    worktree_path: null,
     pending_agent_transition: null,
     config_lock: null,
   });

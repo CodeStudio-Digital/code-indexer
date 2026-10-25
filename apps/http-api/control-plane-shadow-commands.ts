@@ -45,9 +45,8 @@ function commandExecutionBusId(command: { result?: unknown }): string | undefine
 export async function acceptLocalCoderCommand(
   input: AcceptLocalCoderCommandInput,
 ): Promise<LocalCoderShadowAcceptance | null> {
-  // The command ledger is the idempotency authority, independently from the
-  // diagnostic shadow flags. Journal/AgentRun projections remain separately
-  // gated by their callers and the filesystem authority's journal setting.
+  // The filesystem command ledger is the idempotency authority. Fresh runs
+  // establish the root fence synchronously; only diagnostic writes are queued.
   if (!input.store) return null;
 
   const requestedAt = input.requestedAt ?? new Date().toISOString();

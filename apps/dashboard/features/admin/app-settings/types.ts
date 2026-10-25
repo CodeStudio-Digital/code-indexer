@@ -20,6 +20,7 @@ export interface SettingItem {
   category: SettingCategory;
   advanced: boolean;
   restartNeeded: boolean;
+  validationError?: string;
   options?: readonly string[];
   min?: number;
   max?: number;
@@ -40,6 +41,7 @@ export interface CategoryDef {
 export interface SettingsResponse {
   items: SettingItem[];
   categories: readonly CategoryDef[];
+  restartRequired?: boolean;
 }
 
 /** Sparse map: only keys the user touched land here. */

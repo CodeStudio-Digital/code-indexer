@@ -10,9 +10,10 @@
  * single transactional write and a single audit event per save.
  */
 import { Hono } from 'hono';
-import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
+import { AppSettingsStore, settingsRestartRequired } from '@mcp/store/app-settings-store.js';
 import { APP_SETTINGS, SETTING_CATEGORIES, getSettingDef } from '@mcp/store/app-settings-catalog.js';
 import { resolveAppRuntimePolicy } from '../runtime-policy.js';
+import { InvalidAppSetting } from '@mcp/store/app-settings-validation.js';
 
 /**
  * Hook the Electron main sets at boot so a settings-driven restart
@@ -52,19 +53,26 @@ export function createAppSettingsRouter(dbPath: string): Hono {
           default: r.def.default ?? null,
           source: r.source,
           updatedAt: r.updatedAt,
+          ...(r.validationError ? { validationError: r.validationError } : {}),
           // Secrets get hasValue+effectiveValueMasked instead of the raw value.
           ...(isSecret
             ? {
                 hasValue: r.effectiveValue !== null && r.effectiveValue !== '',
                 value: null,
               }
-            : { value: r.effectiveValue, hasValue: r.effectiveValue !== null }),
+            : { value: r.validationError ? r.storedValue : r.effectiveValue, hasValue: r.effectiveValue !== null }),
         };
       });
+      let runtimePolicy: ReturnType<typeof resolveAppRuntimePolicy> | null = null;
+      let runtimePolicyError: string | undefined;
+      try { runtimePolicy = resolveAppRuntimePolicy(dbPath); }
+      catch { runtimePolicyError = 'invalid_runtime_policy'; }
       return c.json({
         items,
         categories: SETTING_CATEGORIES,
-        runtimePolicy: resolveAppRuntimePolicy(dbPath),
+        restartRequired: settingsRestartRequired(),
+        runtimePolicy,
+        ...(runtimePolicyError ? { runtimePolicyError } : {}),
         runtimePolicyAppliesTo: 'new_attempts_only',
       });
     } finally {
@@ -73,8 +81,10 @@ export function createAppSettingsRouter(dbPath: string): Hono {
   });
 
   app.put('/settings', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { updates?: Record<string, string | null> };
-    const updates = body.updates ?? {};
+    const body: unknown = await c.req.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'invalid_body' }, 400);
+    const updates = (body as { updates?: unknown }).updates;
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) return c.json({ error: 'invalid_updates' }, 400);
     const keys = Object.keys(updates);
     if (keys.length === 0) return c.json({ error: 'no updates' }, 400);
 
@@ -87,15 +97,12 @@ export function createAppSettingsRouter(dbPath: string): Hono {
     const store = new AppSettingsStore(dbPath);
     let restartNeeded = false;
     try {
-      for (const key of keys) {
-        const def = getSettingDef(key)!;
-        const value = updates[key];
-        // Coerce numbers/bools through string before saving — the
-        // schema stores everything as TEXT.
-        const stringified = value === null || value === undefined ? null : String(value);
-        store.set(key, stringified);
-        if (def.restartNeeded) restartNeeded = true;
-      }
+      store.setMany(updates as Record<string, unknown>, (candidate) => {
+        // Validate cross-field policy constraints before any SQLite/env mutation.
+        try { resolveAppRuntimePolicy(dbPath, { updates: candidate }); }
+        catch { throw new InvalidAppSetting('runtimePolicy', 'invalid_runtime_policy'); }
+      });
+      restartNeeded = settingsRestartRequired();
       return c.json({
         ok: true,
         updated: keys.length,
@@ -104,6 +111,11 @@ export function createAppSettingsRouter(dbPath: string): Hono {
         runtimePolicyAppliesTo: 'new_attempts_only',
         runtimePolicy: resolveAppRuntimePolicy(dbPath),
       });
+    } catch (error) {
+      if (error instanceof InvalidAppSetting) {
+        return c.json({ error: 'invalid_setting', key: error.key, reason: error.reason }, 400);
+      }
+      throw error;
     } finally {
       store.close();
     }

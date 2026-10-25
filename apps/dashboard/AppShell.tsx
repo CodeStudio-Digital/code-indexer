@@ -16,7 +16,6 @@ import {
   BookOpen,
   ChevronRight,
   ChevronsUpDown,
-  Clock,
   Home,
   Moon,
   Orbit,
@@ -24,20 +23,11 @@ import {
   PinOff,
   Search,
   Settings,
-  Sparkles,
   Sun,
   Users,
 } from 'lucide-react';
 import { Button } from './components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from './components/ui/tooltip.js';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from './components/ui/dropdown-menu.js';
 import { CloudStatusButton } from './features/account/CloudStatusButton.js';
 import { LanguageSwitcher } from './components/LanguageSwitcher.js';
 import { RunningTasksDropdown } from './components/RunningTasksDropdown.js';
@@ -55,11 +45,9 @@ import { registerCommandHandlers } from './keymap/commands.js';
 import { useWindowChrome } from './hooks/useWindowChrome.js';
 import { initRunningTasks } from './state/running-tasks.js';
 import { initDebugSessions } from './state/debug-sessions.js';
-import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 import { ProjectBranchControl, ProjectRunControl } from './features/project/ProjectIdeToolbar.js';
-import { isAppStudioUuid } from './features/app-studio/session-id.js';
 
 const CommandPalette = lazy(() =>
   import('./components/CommandPalette.js').then((module) => ({ default: module.CommandPalette })),
@@ -116,7 +104,6 @@ function NavButton({ item, active, onClick }: NavButtonProps) {
 
 export function AppShell() {
   const { t, i18n } = useTranslation();
-  const features = useFeatures();
   const location = useLocation();
   const navigate = useNavigate();
   const { platform, isFocused } = useWindowChrome();
@@ -156,26 +143,22 @@ export function AppShell() {
     return () => { unregister(); uninstall(); };
   }, []);
 
-  // Breadcrumb name + palette sources. Both endpoints are tiny; the
-  // recent-sessions one is also read by RecentSessionsDropdown (cheap).
+  // Project metadata supplies the breadcrumb and command palette.
   const isProjectView = view.page === 'project';
-  const appStudioPathId = /^\/apps\/([^/]+)(?:\/|$)/.exec(location.pathname)?.[1];
-  const isAppStudioWorkbench = isAppStudioUuid(appStudioPathId);
   const isCompanyWorkbench = view.page === 'agents';
-  const isWorkbenchView = isProjectView || isAppStudioWorkbench || isCompanyWorkbench;
+  const isWorkbenchView = isProjectView || isCompanyWorkbench;
   const { data: activeProject } = useApi<{ name: string }>(
     isProjectView && view.projectId ? `/projects/${view.projectId}` : '',
   );
   const projectName = isProjectView ? (activeProject?.name ?? null) : null;
   const { data: projectsData } = useApi<Array<{ id: number; name: string; root_path?: string }>>('/projects');
-  const { data: recentData } = useApi<
-    Array<{ id: string; title: string; project_id: number; project_name: string }>
-  >('/coder/sessions/recent?limit=10');
-
   // Pinned tabs: the header button pins/unpins the CURRENT view. `currentPin`
   // is null on pages with no pinnable target (button hidden). Rail capture
   // reads the live active tab from active-surface (not the URL — see that store).
   const activeProjectTab = useActiveSurface((s) => s.projectTab);
+  const sessionTitle = useActiveSurface((s) =>
+    s.session?.id === view.sessionId ? s.session.title : null,
+  );
   const togglePin = usePinnedTabs((s) => s.togglePin);
   const currentPin = useMemo(
     () =>
@@ -186,10 +169,10 @@ export function AppShell() {
         activeProjectTab,
         names: {
           projectName,
-          sessionTitle: recentData?.find((s) => s.id === view.sessionId)?.title ?? null,
+          sessionTitle,
         },
       }),
-    [view, location.pathname, location.search, activeProjectTab, projectName, recentData],
+    [view, location.pathname, location.search, activeProjectTab, projectName, sessionTitle],
   );
   const currentPinned = usePinnedTabs((s) =>
     currentPin ? s.pins.some((p) => p.id === currentPin.id) : false,
@@ -205,26 +188,18 @@ export function AppShell() {
 
   const nav: NavItem[] = [
     { id: 'home', label: t('nav.projects'), icon: Home, href: '/' },
-    {
-      id: 'apps',
-      label: t('nav.apps', { defaultValue: 'Meus apps' }),
-      icon: Sparkles,
-      href: '/apps',
-      show: features.appStudioEnabled,
-    },
     { id: 'agents', label: t('nav.agents'), icon: Users, href: '/agents' },
     { id: 'global', label: t('nav.global'), icon: Orbit, href: '/global' },
     { id: 'telemetry', label: t('nav.telemetry'), icon: Activity, href: '/telemetry' },
     { id: 'docs', label: t('nav.docs'), icon: BookOpen, href: '/docs' },
     { id: 'admin', label: t('nav.admin'), icon: Settings, href: '/admin' },
-  ].filter((n) => n.show !== false);
+  ];
 
   const commandActions = useMemo(
     () =>
       buildCommandActions({
         nav: nav.map((n) => ({ id: String(n.id), label: n.label, href: n.href, icon: n.icon })),
         projects: projectsData ?? [],
-        recent: recentData ?? [],
         navigate,
         toggleTheme: () => setDark((d) => !d),
         toggleLanguage: () =>
@@ -234,7 +209,7 @@ export function AppShell() {
           toggleLanguage: t('commandPalette.action.toggleLanguage'),
         },
       }),
-    [nav, projectsData, recentData, navigate, i18n, t],
+    [nav, projectsData, navigate, i18n, t],
   );
 
   const shortcut = platform === 'darwin' ? '⌘K' : 'Ctrl K';
@@ -264,19 +239,6 @@ export function AppShell() {
               <span className="truncate max-w-[200px]">{projectName}</span>
               <ChevronsUpDown className="h-3 w-3 shrink-0 text-muted-foreground" />
             </ProjectSwitcher>
-          </div>
-        )}
-        {isAppStudioWorkbench && (
-          <div className="no-drag flex min-w-0 items-center gap-1 text-[12px]">
-            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <button
-              type="button"
-              onClick={() => navigate('/apps')}
-              className="flex h-7 items-center gap-1.5 rounded px-1.5 font-medium transition-colors hover:bg-[var(--workbench-hover)]"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-violet-400" />
-              <span>{t('nav.apps', { defaultValue: 'Meus apps' })}</span>
-            </button>
           </div>
         )}
         {isCompanyWorkbench && (
@@ -354,12 +316,6 @@ export function AppShell() {
             </Tooltip>
           )}
           <RunningTasksDropdown />
-          <RecentSessionsDropdown
-            activeSessionId={view.sessionId}
-            onSelect={(projectId, sessionId) =>
-              navigate(`/projects/${projectId}${sessionId ? `?session=${sessionId}` : ''}`)
-            }
-          />
           {!isWorkbenchView && <LanguageSwitcher />}
           <CloudStatusButton />
           {!isWorkbenchView && <Tooltip>
@@ -410,7 +366,6 @@ export function AppShell() {
           // under a compact top band (IDE-style), so they opt out of the
           // outer scroll+padding like the other two-pane surfaces above.
           view.page === 'admin' ||
-          view.page === 'apps' ||
           view.page === 'docs' ||
           view.page === 'telemetry'
             ? 'flex flex-col overflow-hidden'
@@ -420,66 +375,5 @@ export function AppShell() {
         <Outlet />
       </main>
     </div>
-  );
-}
-
-/**
- * Compact "Recent sessions" dropdown in the topbar. Replaces the
- * always-visible sidebar list — saves vertical space and keeps the
- * topbar dense.
- */
-function RecentSessionsDropdown({
-  activeSessionId,
-  onSelect,
-}: {
-  activeSessionId: string | null;
-  onSelect: (projectId: number, sessionId: string) => void;
-}) {
-  const { t } = useTranslation();
-  // RecentCoderSession = CoderSession + project_name (see @mcp/code-agent
-  // sessions/types). The store query joins projects on project_id.
-  const { data } = useApi<
-    Array<{ id: string; title: string; project_id: number; project_name: string }>
-  >('/coder/sessions/recent?limit=10');
-
-  return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={t('recentSessions.tooltip')}>
-              <Clock className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent>{t('recentSessions.tooltip')}</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          {t('recentSessions.label')}
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {(!data || data.length === 0) && (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {t('recentSessions.empty')}
-          </div>
-        )}
-        {data?.map((s) => {
-          const active = s.id === activeSessionId;
-          return (
-            <DropdownMenuItem
-              key={s.id}
-              onClick={() => onSelect(s.project_id, s.id)}
-              className={cn('flex flex-col items-start gap-0.5 text-xs', active && 'bg-accent')}
-            >
-              <span className="font-medium truncate w-full">{s.title}</span>
-              <span className="text-[10px] text-muted-foreground truncate w-full">
-                {s.project_name}
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

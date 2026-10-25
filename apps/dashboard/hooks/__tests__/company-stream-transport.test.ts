@@ -8,22 +8,6 @@ import {
 } from '../useCompanyStream.js';
 
 describe('resolveCompanyStreamTransport', () => {
-  it('routes the App surface exclusively through its App-owned facade', () => {
-    const companySessionId = '0000005a-0000-4000-8000-000000000000';
-    const appSessionId = '00000007-0000-4000-8000-000000000000';
-    expect(resolveCompanyStreamTransport(companySessionId, {
-      kind: 'app_studio',
-      appSessionId,
-    })).toEqual({
-      basePath: `/api/app-studio/apps/${appSessionId}/team/commands`,
-      statePath: '/state',
-      includeKanban: false,
-      allowDirectAgentControls: false,
-      allowRuntimeSwitch: false,
-      keepAttachedWhileOrchestratorLive: true,
-    });
-  });
-
   it('preserves the generic Company transport for Company mode', () => {
     const companySessionId = '0000005a-0000-4000-8000-000000000000';
     expect(resolveCompanyStreamTransport(companySessionId)).toEqual({
@@ -36,7 +20,7 @@ describe('resolveCompanyStreamTransport', () => {
     });
   });
 
-  it('invalidates and aborts an App stream when its rail unmounts', () => {
+  it('invalidates and aborts a Company stream when its rail unmounts', () => {
     const abort = vi.fn();
     const lifecycle = { current: 4 };
     const controller: { current: AbortController | null } = {

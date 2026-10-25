@@ -37,17 +37,13 @@ import type { NotificationSourceContext } from '../features/notifications/index.
 // Re-export client state types so legacy consumers keep their imports.
 export type { AgentStreamState, BoardMessage } from '../state/company/types.js';
 
-type CompanyStreamSurface =
-  | { kind: 'company' }
-  | { kind: 'app_studio'; appSessionId: string };
-
 interface CompanyStreamTransport {
   basePath: string;
   statePath: string;
   includeKanban: boolean;
   allowDirectAgentControls: boolean;
   allowRuntimeSwitch: boolean;
-  /** App scheduler/specialists remain live even while the Master is dormant. */
+  /** Whether transport remains attached while the orchestrator is live. */
   keepAttachedWhileOrchestratorLive: boolean;
 }
 
@@ -174,24 +170,11 @@ export function disposeCompanyStreamLifecycle(
   abortRef.current = null;
 }
 
-/** Pure transport resolver kept exported so route selection can be asserted
- * without mounting React. App Studio is keyed by its App id; the linked
- * Company id remains an internal server concern. */
+/** Pure transport resolver for Company sessions. */
 export function resolveCompanyStreamTransport(
   companySessionId: string | null,
-  surface: CompanyStreamSurface = { kind: 'company' },
 ): CompanyStreamTransport | null {
   if (companySessionId == null) return null;
-  if (surface.kind === 'app_studio') {
-    return {
-      basePath: `/api/app-studio/apps/${surface.appSessionId}/team/commands`,
-      statePath: '/state',
-      includeKanban: false,
-      allowDirectAgentControls: false,
-      allowRuntimeSwitch: false,
-      keepAttachedWhileOrchestratorLive: true,
-    };
-  }
   return {
     basePath: `/api/company/sessions/${companySessionId}`,
     statePath: '',
@@ -228,9 +211,8 @@ function isLiveMasterStatus(status: AgentStatusPayload['status']): boolean {
 export function useCompanyStream(
   companySessionId: string | null,
   _notificationContext?: NotificationSourceContext,
-  surface: CompanyStreamSurface = { kind: 'company' },
 ) {
-  const transport = resolveCompanyStreamTransport(companySessionId, surface);
+  const transport = resolveCompanyStreamTransport(companySessionId);
   const routeUrl = useCallback(
     (suffix = '') => transport ? `${apiBaseUrl()}${transport.basePath}${suffix}` : '',
     [transport?.basePath],

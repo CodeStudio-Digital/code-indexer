@@ -14,7 +14,6 @@ export interface ActiveView {
     | 'admin'
     | 'telemetry'
     | 'docs'
-    | 'apps'
     | 'other';
   projectId: number | null;
   sessionId: string | null;
@@ -44,7 +43,6 @@ export function parseView(pathname: string, search: string): ActiveView {
     return { page: 'global', projectId: null, sessionId: sessionIdRaw || null };
   }
   if (pathname.startsWith('/admin')) return { page: 'admin', projectId: null, sessionId: null };
-  if (pathname.startsWith('/apps')) return { page: 'apps', projectId: null, sessionId: null };
   if (pathname.startsWith('/telemetry')) return { page: 'telemetry', projectId: null, sessionId: null };
   if (pathname.startsWith('/docs')) return { page: 'docs', projectId: null, sessionId: null };
   return { page: 'other', projectId: null, sessionId: null };

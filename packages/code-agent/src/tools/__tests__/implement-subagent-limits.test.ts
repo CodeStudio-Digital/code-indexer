@@ -59,7 +59,7 @@ function hangingProvider(): ChatProvider {
  * calls and still complete on its own — used to prove an uncapped subagent
  * isn't killed by the tool-call watchdog.
  */
-function finishingProvider(toolCallsBeforeDone: number): ChatProvider {
+function finishingProvider(toolCallsBeforeDone: number, identicalArgs = false): ChatProvider {
   let call = 0;
   return {
     name: 'mock',
@@ -73,7 +73,7 @@ function finishingProvider(toolCallsBeforeDone: number): ChatProvider {
         return;
       }
       yield { type: 'tool_call_start', id: `tu_${call}`, name: 'mock_tool' };
-      yield { type: 'tool_call_end', id: `tu_${call}`, name: 'mock_tool', input: { call } };
+      yield { type: 'tool_call_end', id: `tu_${call}`, name: 'mock_tool', input: identicalArgs ? {} : { call } };
       yield { type: 'done', stop_reason: 'tool_use' };
     },
   };
@@ -191,23 +191,26 @@ describe('runSubagent limits', () => {
     expect(result.finalText).not.toContain('task tool limit reached');
   });
 
-  it('stops an unlimited subagent that repeats one stable operation without progress', async () => {
+  it('observes repeated stable results and allows the subagent to finish', async () => {
     const progress: string[] = [];
-    const result = await runSubagent(parent(toolCallingProvider()), {
+    let calls = 0;
+    const result = await runSubagent(parent(finishingProvider(12, true)), {
       systemPrompt: 'You are a test subagent.',
       allowlist: null,
-      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'repeat forever' }] }],
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'check status twelve times' }] }],
       maxTurns: 0,
       limits: { maxToolCalls: 0, timeoutMs: 0, stallMs: 5_000 },
       sameOperationMax: 3,
       onProgress: (event) => {
         if (event.note) progress.push(event.note);
+        calls = Math.max(calls, event.toolCallCount);
       },
     });
 
-    expect(result.reason).toBe('error');
-    expect(result.failureDetail).toContain('subagent_convergence_watchdog');
-    expect(progress.some((note) => note.includes('made no progress 3 consecutive times'))).toBe(true);
+    expect(result.reason).toBe('completed');
+    expect(calls).toBe(12);
+    expect(result.failureDetail).toBeUndefined();
+    expect(progress.some((note) => note.includes('execution continues'))).toBe(true);
   });
 
   it('nudges synthesis after a soft target without cutting the run or marking it partial', async () => {

@@ -112,7 +112,7 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.results[0].refusalKind).toBe('task-mode');
   });
 
-  it("tuple-hash dedup refusal → 'dedup' (and only on the refused call)", async () => {
+  it('repeated authorized mutations are not tagged as refusals', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool', { mutates: true, executionClass: 'write' }));
     const dupCalls = new Map<string, DupCallEntry>();
@@ -126,8 +126,8 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     }));
     expect(r.results[0].refusalKind).toBeUndefined();
     expect(r.results[1].refusalKind).toBeUndefined(); // reminder still delivers content
-    expect(r.results[2].isError).toBe(true);
-    expect(r.results[2].refusalKind).toBe('dedup');
+    expect(r.results[2].isError).toBe(false);
+    expect(r.results[2].refusalKind).toBeUndefined();
   });
 
   it("permission-gate denial → 'user_denied' (matches classifyToolRefusal's tag)", async () => {
@@ -146,7 +146,7 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.results[0].refusalKind).toBe('user_denied');
   });
 
-  it("failure-streak refuse → 'failure-streak' (replaces a real error at the threshold)", async () => {
+  it('preserves the original error after the failure observation threshold', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool', {
       handler: async () => ({ content: 'boom', isError: true }),
@@ -160,11 +160,12 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     };
     const r = await dispatchTools(baseArgs(registry, { failureStreakState, turn: 5 }));
     expect(r.results[0].isError).toBe(true);
-    expect(r.results[0].refusalKind).toBe('failure-streak');
-    expect(r.loopGuard).toBe('failure-streak');
+    expect(r.results[0].content).toBe('boom');
+    expect(r.results[0].refusalKind).toBeUndefined();
+    expect(r.toolLoopDetected).toBe(false);
   });
 
-  it("unchanged poll result → 'polling-stuck' without entering failure streak", async () => {
+  it('unchanged successful polls remain successful without entering failure streak', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool', { repeatPolicy: 'pollable' }));
     const failureStreakState: FailureStreakState = { streaks: new Map() };
@@ -174,10 +175,10 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     }));
 
     expect(r.results[0]).toMatchObject({
-      isError: true,
-      refusalKind: 'polling-stuck',
+      isError: false,
+      content: 'ok',
       guardVerdict: {
-        action: 'block',
+        action: 'shadow',
         reason: 'polling-stuck',
         affectsFailureStreak: false,
       },

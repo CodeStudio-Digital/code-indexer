@@ -136,10 +136,9 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     const session = await operationalSessionFiles.getCompanySession(id);
     if (!session) return notFound(c);
     if (session.runtime_kind === 'app_studio') {
-      const appSession = await deps.appStudioStore.getSessionByCompanySessionId(id);
       return c.json({
-        error: 'This team is owned by App Studio. Delete the App so its workflow, team and project are removed together.',
-        app_session_id: appSession?.id ?? null,
+        error: 'This archived team belongs to the retired App Studio feature. Its saved project and history are preserved.',
+        app_session_id: id,
       }, 409);
     }
     return c.json(await buildSessionDeletePlan(id));
@@ -150,10 +149,9 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     const session = await operationalSessionFiles.getCompanySession(id);
     if (!session) return notFound(c);
     if (session.runtime_kind === 'app_studio') {
-      const appSession = await deps.appStudioStore.getSessionByCompanySessionId(id);
       return c.json({
-        error: 'App Studio owns this team. Delete it from the App Studio surface to avoid orphaning workflow state.',
-        app_session_id: appSession?.id ?? null,
+        error: 'This archived team belongs to the retired App Studio feature. Its saved project and history are preserved.',
+        app_session_id: id,
       }, 409);
     }
     const deleteBody = (await c.req.json().catch(() => ({}))) as {

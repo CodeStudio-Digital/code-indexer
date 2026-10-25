@@ -143,3 +143,4 @@ export interface Api {
  * Purely a documentation type — has no runtime effect.
  */
 export type ApiNamespace = keyof Api;
+export type { CoderWorktree, CoderWorktrees } from './coder-worktrees.js';

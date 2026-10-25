@@ -33,7 +33,6 @@ export type AgentId =
   | 'build'
   | 'admin'
   | 'spec'
-  | 'app_orchestrator'
   | 'app_db'
   | 'builder'
   | 'api'
@@ -125,14 +124,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     profile: 'bootstrap',
     planMode: false,
     defaultTemperature: 0.2,
-  },
-  app_orchestrator: {
-    id: 'app_orchestrator',
-    label: 'App Coordinator',
-    description: 'Persistent App Studio coordinator. Keeps scope, blueprint, adaptive Kanban workers and release evidence in one continuous session.',
-    profile: 'navigate',
-    planMode: false,
-    defaultTemperature: 0.25,
   },
   app_db: {
     id: 'app_db',

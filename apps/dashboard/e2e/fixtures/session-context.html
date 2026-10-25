@@ -1,0 +1,30 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Session context integration</title></head>
+<body><div id="root"></div><script type="module">
+import React, { useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Composer } from '/features/chat/composer/Composer.tsx';
+import { SessionContextPanel } from '/features/chat/right-panel/SessionContextPanel.tsx';
+import { TooltipProvider } from '/components/ui/tooltip.tsx';
+import { DialogProvider } from '/components/ui/dialog-provider.tsx';
+import { i18nReady } from '/i18n/index.ts';
+import '/index.css';
+await i18nReady;
+const h=React.createElement, noop=()=>{};
+function Fixture(){
+  const [session,setSession]=useState('11111111-1111-4111-8111-111111111111');
+  const [sent,setSent]=useState(null), [streaming,setStreaming]=useState(false);
+  return h('main',{className:'flex h-screen bg-background text-foreground'},
+    h('div',{className:'flex-1 min-w-0 flex flex-col p-6'},
+      h('div',{className:'space-x-3'},h('button',{onClick:()=>setSession('22222222-2222-4222-8222-222222222222')},'Outra sessão'),
+        h('button',{onClick:()=>setStreaming(!streaming)},'Alternar execução')),
+      h('pre',{'data-testid':'sent',className:'flex-1 whitespace-pre-wrap'},JSON.stringify(sent)),
+      h(Composer,{sessionId:session,agent:'explore',setAgent:noop,provider:'openai',model:'fixture',setModel:noop,onSwitchProvider:noop,
+        providerOptions:[],currentProviderModels:[],maxTurns:null,setMaxTurns:noop,maxAutoContinues:0,setMaxAutoContinues:noop,
+        temperature:null,setTemperature:noop,streaming,queueable:true,
+        onSend:(text,attachments,skills)=>setSent({text,attachments,skills}),onAbort:noop,
+        onQueue:(text,mode,attachments,skills)=>setSent({text,mode,attachments,skills})})),
+    h('aside',{className:'w-[360px] border-l flex flex-col'}, h('h2',{className:'p-3 border-b font-medium'},'Contexto'),
+      h(SessionContextPanel,{key:session,sessionId:session,projectId:null,showChapters:false,filePicks:[],onTogglePick:noop,onSetManyPicks:noop})));
+}
+createRoot(document.getElementById('root')).render(h(DialogProvider,null,h(TooltipProvider,null,h(Fixture))));
+</script></body></html>

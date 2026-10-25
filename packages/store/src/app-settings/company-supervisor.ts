@@ -30,16 +30,6 @@ export const COMPANY_SUPERVISOR_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
-    key: 'MCP_SUPERVISOR_PERSISTENCE',
-    label: 'Supervisor persistence (ghost cleanup on boot)',
-    description:
-      'Persists supervisor state to agent_supervision so a restart can detect agents whose process died mid-run and mark them terminal. Set 0 to keep the supervisor in-memory only. Only relevant when the supervisor is enabled.',
-    type: 'bool',
-    category: 'company',
-    default: '1',
-    advanced: true,
-  },
-  {
     key: 'MCP_AGENT_WATCHDOG_MS',
     label: 'Stall threshold (ms)',
     description:

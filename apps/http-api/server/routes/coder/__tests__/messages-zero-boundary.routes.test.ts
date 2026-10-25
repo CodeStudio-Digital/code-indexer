@@ -16,6 +16,26 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
 }));
 
 describe('coder archived message pagination', () => {
+  it('rejects the retired recent-sessions path before accessing storage and keeps globals available', async () => {
+    const loadSessionWithMessages = vi.fn();
+    const listGlobalSessions = vi.fn(async () => [{ id: SESSION_ID }]);
+    const app = new Hono();
+    mountCoderSessionsRoutes(
+      app,
+      { sessionStore: { loadSessionWithMessages, listGlobalSessions }, providerStore: {} } as unknown as ServerDeps,
+      { activeRuns: new Map() } as unknown as CoderRuntime,
+    );
+
+    const retired = await app.request('/api/coder/sessions/recent?limit=10');
+    expect(retired.status).toBe(400);
+    expect(loadSessionWithMessages).not.toHaveBeenCalled();
+    expect(listGlobalSessions).not.toHaveBeenCalled();
+
+    const globals = await app.request('/api/coder/sessions/global');
+    expect(globals.status).toBe(200);
+    expect(await globals.json()).toEqual([{ id: SESSION_ID }]);
+  });
+
   it('anchors after maxMessageSeq when no visible row can supply before_seq', async () => {
     const calls: unknown[][] = [];
     const sessionStore = {
@@ -26,7 +46,6 @@ describe('coder archived message pagination', () => {
         calls.push(args);
         return { messages: [], message_rows: [], next_cursor: 17 };
       },
-      listRecentSessionsGlobal: () => [],
     };
     const app = new Hono();
     mountCoderSessionsRoutes(
@@ -61,7 +80,6 @@ describe('coder archived message pagination', () => {
       getMessageCount: () => 1,
       getArchivedMessageCount: () => 19,
       previousUserMessageSeq: (_sessionId: SessionId, beforeSeq: number) => beforeSeq === 20 ? 11 : null,
-      listRecentSessionsGlobal: () => [],
     };
     const app = new Hono();
     mountCoderSessionsRoutes(

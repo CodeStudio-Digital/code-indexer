@@ -608,7 +608,7 @@ export interface RunnerEvents {
         window: number;
         /** Whether this fired in "refused" mode (just blocked the call) or
          *  "aborted" mode (terminated the whole run). */
-        severity: 'refused' | 'aborted';
+        severity: 'informational' | 'refused' | 'aborted';
         /** Snapshot of the three guard arrays so the dashboard can show
          *  WHY the other guards didn't fire. */
         snapshot: {

@@ -31,6 +31,8 @@
   "chrome.title": "Configurações",
   "chrome.unset": "não definido",
   "error.fetch": "Falha ao carregar as configurações.",
+  "error.invalidSetting": "Valor inválido ou configurações incompatíveis: {{key}}. Nenhuma alteração foi salva.",
+  "error.invalidStored": "Este valor salvo é inválido e está sendo ignorado. Corrija ou limpe o campo.",
   "item.ANTHROPIC_DEFAULT_OPUS_MODEL.description": "Sobrescreve o id padrão do modelo `claude-opus-*`.",
   "item.ANTHROPIC_DEFAULT_OPUS_MODEL.label": "Id do modelo Opus da Anthropic",
   "item.ANTHROPIC_DEFAULT_SONNET_MODEL.description": "Sobrescreve o id padrão do modelo `claude-sonnet-*` usado por sessões via Anthropic.",
@@ -195,8 +197,6 @@
   "item.MCP_SUBORDINATE_MASTER_WAIT_MS.label": "Timeout de espera Subordinado → Master (ms)",
   "item.MCP_SUPERVISOR_ENABLED.description": "Detecta agentes company travados e os recupera (resume / ressuscitar master / abortar), com circuit breakers para limitar retries. A maior proteção contra uma sessão company congelada. Vale para sessões iniciadas após você ativar; acompanhe os incidentes em Admin → Supervisor.",
   "item.MCP_SUPERVISOR_ENABLED.label": "Supervisor de agentes (auto-recupera travados)",
-  "item.MCP_SUPERVISOR_PERSISTENCE.description": "Persiste o estado do supervisor em agent_supervision para que um reinício detecte agentes cujo processo morreu no meio do run e os marque como terminais. Defina 0 para manter o supervisor só em memória. Só relevante quando o supervisor está ligado.",
-  "item.MCP_SUPERVISOR_PERSISTENCE.label": "Persistência do supervisor (limpeza de fantasmas no boot)",
   "item.MCP_SUPERVISOR_RECOVERY_MODE.description": "How the supervisor reacts to a stuck tool call. \"inject\" (default) unwedges the single call with a synthetic error so the run continues; \"abort\" terminates the whole runner instead; \"read_only\" detects + logs incidents but never acts; \"off\" disables recovery (detection only). Only relevant when the supervisor is enabled.",
   "item.MCP_SUPERVISOR_RECOVERY_MODE.label": "Supervisor recovery mode",
   "item.MCP_WATCH_DEBOUNCE_MS.description": "Quanto tempo agrupar rajadas de mudanças (git checkout, formatadores) antes de re-indexar.",
@@ -236,6 +236,6 @@
   "toast.restartingDesc": "O host vai criar um processo de backend novo em instantes.",
   "toast.saveFailed": "Falha ao salvar",
   "toast.saved": "{{count}} configuração(ões) salva(s)",
-  "toast.savedApplied": "Mudanças aplicadas imediatamente.",
+  "toast.savedApplied": "Mudanças válidas para novas operações e execuções do agente.",
   "toast.savedRestart": "Algumas mudanças exigem reinício do backend para fazer efeito."
 }

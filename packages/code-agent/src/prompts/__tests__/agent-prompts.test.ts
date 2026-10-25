@@ -122,29 +122,9 @@ describe('capability-aligned composition', () => {
     os: 'win32',
     providerFamily: 'zai',
     profile: 'navigate',
-    agentId: 'app_orchestrator',
-    availableTools: new Set(['app_get_workflow', 'app_request_decision', 'app_dispatch_ready_work', 'execute_tasks']),
+    agentId: 'build',
+    availableTools: new Set(['read_file', 'execute_tasks']),
   };
-
-  it('advertises the coordinator identity and its durable workflow tools', () => {
-    const prompt = buildSystemPrompt(BASE_CTX);
-    expect(prompt).toContain('# App Studio Coordinator mode is ACTIVE');
-    expect(prompt).toContain('A tool result is a continuation');
-    expect(prompt).not.toMatch(/start every turn from `app_get_workflow`/i);
-    expect(prompt).toContain('`execute_tasks`');
-  });
-
-  it('scopes workflow reads to user requests instead of provider continuations', () => {
-    const workspacePrompt = loadPrompt('app-studio');
-    expect(workspacePrompt).toContain('call `app_get_workflow` once');
-    expect(workspacePrompt).toContain('MUST NOT trigger another workflow read');
-    expect(workspacePrompt).not.toMatch(/start every turn/i);
-  });
-
-  it('loads the coordinator identity exactly once', () => {
-    const prompt = buildSystemPrompt(BASE_CTX);
-    expect(prompt.split('# App Studio Coordinator mode is ACTIVE')).toHaveLength(2);
-  });
 
   it('inserts session-fixed extensions before the dynamic boundary', () => {
     const prompt = appendStaticPromptSection(buildSystemPrompt(BASE_CTX), '# Fixed extension');

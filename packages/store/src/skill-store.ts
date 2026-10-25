@@ -349,6 +349,22 @@ export class SkillStore {
     return row ? hydrate(row) : null;
   }
 
+  /** Composer suggestions never read prompt bodies, and only search allowed scopes. */
+  listComposerSkills(scopes: readonly string[], query: string, slashOnly = false) {
+    const unique = [...new Set(scopes)];
+    if (!unique.length) return [];
+    const needle = query.trim().toLowerCase().slice(0, 100);
+    return this.db.prepare(`SELECT id, name, substr(description, 1, 300) AS description,
+      slash_command AS command FROM skill_definitions
+      WHERE enabled = 1 AND scope IN (${unique.map(() => '?').join(',')})
+      ${slashOnly ? "AND slash_command IS NOT NULL AND slash_command != ''" : ''}
+      AND (? = '' OR instr(lower(id), ?) > 0 OR instr(lower(name), ?) > 0
+        OR instr(lower(coalesce(slash_command, '')), ?) > 0 OR instr(lower(description), ?) > 0)
+      ORDER BY sort_order, name, id LIMIT 50`).all(...unique, needle, needle, needle, needle, needle) as Array<{
+        id: string; name: string; description: string; command: string | null;
+      }>;
+  }
+
   getSkillBySlashCommand(cmd: string): SkillDefinition | null {
     const row = this.db
       .prepare('SELECT * FROM skill_definitions WHERE slash_command = ?')

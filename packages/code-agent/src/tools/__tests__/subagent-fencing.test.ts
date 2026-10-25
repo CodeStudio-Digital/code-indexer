@@ -129,9 +129,10 @@ describe('subagent execution fencing', () => {
     expect(sideEffects).toBe(1);
   });
 
-  it('aborts before any provider call when enforced fence creation fails', async () => {
+  it.each([undefined, '0', '1'])('aborts before any provider call when fence creation fails with retired flag %s', async (flag) => {
     const sessionId = newSessionId();
-    process.env.CODER_AGENT_RUN_STORE_ENFORCE = '1';
+    if (flag === undefined) delete process.env.CODER_AGENT_RUN_STORE_ENFORCE;
+    else process.env.CODER_AGENT_RUN_STORE_ENFORCE = flag;
     let physicalCalls = 0;
     const provider: ChatProvider = {
       name: 'fake',

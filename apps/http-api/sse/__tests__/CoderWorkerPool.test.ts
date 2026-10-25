@@ -26,7 +26,6 @@ import {
 } from '@mcp/store/control-plane/index.js';
 import type { ControlPlaneAuthority } from '../../file-control-plane-store.js';
 import {
-  coderControlPlaneShadowEnabled,
   drainLocalCoderShadowWrites,
   resetCoderControlPlaneShadowMetricsForTests,
   snapshotCoderControlPlaneShadowMetrics,
@@ -694,32 +693,6 @@ describe('CoderWorkerPool', () => {
     };
   }
 
-  it('enables the root projection when child AgentRun shadow or enforcement is selected', () => {
-    const previousRoot = process.env.CODER_CONTROL_PLANE_SHADOW;
-    const previousChild = process.env.CODER_AGENT_RUN_STORE_SHADOW;
-    const previousEnforce = process.env.CODER_AGENT_RUN_STORE_ENFORCE;
-    try {
-      delete process.env.CODER_CONTROL_PLANE_SHADOW;
-      delete process.env.CODER_AGENT_RUN_STORE_SHADOW;
-      delete process.env.CODER_AGENT_RUN_STORE_ENFORCE;
-      expect(coderControlPlaneShadowEnabled()).toBe(false);
-
-      process.env.CODER_AGENT_RUN_STORE_SHADOW = '1';
-      expect(coderControlPlaneShadowEnabled()).toBe(true);
-
-      delete process.env.CODER_AGENT_RUN_STORE_SHADOW;
-      process.env.CODER_AGENT_RUN_STORE_ENFORCE = '1';
-      expect(coderControlPlaneShadowEnabled()).toBe(true);
-    } finally {
-      if (previousRoot === undefined) delete process.env.CODER_CONTROL_PLANE_SHADOW;
-      else process.env.CODER_CONTROL_PLANE_SHADOW = previousRoot;
-      if (previousChild === undefined) delete process.env.CODER_AGENT_RUN_STORE_SHADOW;
-      else process.env.CODER_AGENT_RUN_STORE_SHADOW = previousChild;
-      if (previousEnforce === undefined) delete process.env.CODER_AGENT_RUN_STORE_ENFORCE;
-      else process.env.CODER_AGENT_RUN_STORE_ENFORCE = previousEnforce;
-    }
-  });
-
   it('reuses the same worker but creates a fresh mirrored bus after run end', async () => {
     const p = createPool();
 
@@ -1263,7 +1236,7 @@ describe('CoderWorkerPool', () => {
     }
   });
 
-  it('keeps accepted run authority terminalizable when observational flags flip off', async () => {
+  it('keeps authority and redacted journal active when retired rollout flags flip off', async () => {
     const previousControlPlane = process.env.CODER_CONTROL_PLANE_SHADOW;
     const previousJournal = process.env.CODER_RUNTIME_JOURNAL_SHADOW;
     process.env.CODER_CONTROL_PLANE_SHADOW = '1';
@@ -1285,6 +1258,7 @@ describe('CoderWorkerPool', () => {
       const runId = getRunId(bus);
 
       process.env.CODER_CONTROL_PLANE_SHADOW = '0';
+      process.env.CODER_RUNTIME_JOURNAL_SHADOW = '0';
 
       host.bridge.emitToPool('bus.event', { runId, event: 'run_started', data: { runId: 'runner-16' } });
       host.bridge.emitToPool('bus.event', { runId, event: 'tool_call_start', data: { id: 't-1', name: 'edit_file', input: {} } });
@@ -1292,8 +1266,9 @@ describe('CoderWorkerPool', () => {
       host.bridge.emitToPool('bus.end', { runId, event: 'done', data: { reason: 'completed' } });
 
       expect(storeSpies.markRunStarted).toHaveBeenCalledTimes(1);
-      expect(storeSpies.appendToolBoundary).not.toHaveBeenCalled();
-      expect(journalAppend).not.toHaveBeenCalled();
+      await drainLocalCoderShadowWrites();
+      expect(storeSpies.appendToolBoundary).toHaveBeenCalledTimes(1);
+      expect(journalAppend).toHaveBeenCalled();
       expect(storeSpies.terminalizeRun).toHaveBeenCalledTimes(1);
     } finally {
       if (previousControlPlane === undefined) delete process.env.CODER_CONTROL_PLANE_SHADOW;

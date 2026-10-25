@@ -30,7 +30,6 @@
  * the runner, filter, and promotion logic work generically with any tier name.
  */
 import {
-  APP_STUDIO_TOOLS,
   COMPANY_TOOLS,
   QA_TOOLS,
   SANDBOX_TOOLS,
@@ -40,7 +39,6 @@ import {
 // this file focused on tiering logic; re-exported so tiers.ts stays the single
 // public entry point for tier data.
 export {
-  APP_STUDIO_TOOLS,
   COMPANY_TOOLS,
   QA_TOOLS,
   SANDBOX_TOOLS,
@@ -58,8 +56,7 @@ export type CoreTier =
   | 'db'
   | 'company'
   | 'sandbox'
-  | 'qa'
-  | 'app';
+  | 'qa';
 export type ToolTier = string;
 
 /** The set of built-in core tier names. Custom tiers must not collide. */
@@ -76,7 +73,6 @@ export const CORE_TIER_NAMES: ReadonlySet<string> = new Set<CoreTier>([
   'company',
   'sandbox',
   'qa',
-  'app',
 ]);
 
 /**
@@ -181,7 +177,7 @@ export type CoderProfile = 'bootstrap' | 'navigate' | 'full';
 /**
  * Tier 0 — bootstrap. Always visible: the minimal read/interaction core plus
  * orchestration discovery (expand_toolset/find_tools/spawn_agent). Company,
- * App, QA and sandbox tools have contextual tiers. Cold tools
+ * QA and sandbox tools have contextual tiers. Cold tools
  * (≤12 calls in 12k turns) were demoted to navigate — see "Phase B" markers.
  *
  * Exported for test access so regression tests can keep the global bootstrap
@@ -208,7 +204,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // each across 12k turns. Subordinates run profile 'navigate'+ and masters
   // 'full', so they still see them; only solo bootstrap sessions defer them
   // until expand_toolset('navigate').
-  // Company collaboration, App Studio, QA, sandbox and other
+  // Company collaboration, QA, sandbox and other
   // product capabilities live in dedicated contextual tiers. runCoder
   // auto-activates those tiers only when the matching runtime is present.
   'expand_toolset',
@@ -222,6 +218,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // (background job wait + failed-agent relaunch). Same tier so the model
   // can always await/retry a delegation it started.
   'read_chat_changes', 'integrate_chat_changes',
+  'list_project_chats', 'read_chat', 'create_chat', 'create_chat_trigger',
   'list_chats', 'send_chat_message', 'reply_chat_message',
   'read_chat_messages', 'wait_chat_response', 'cancel_chat_request', 'resume_chat',
   'collect_agents',
@@ -532,7 +529,6 @@ export function getToolTier(
   if (COMPANY_TOOLS.has(name)) return 'company';
   if (SANDBOX_TOOLS.has(name)) return 'sandbox';
   if (QA_TOOLS.has(name)) return 'qa';
-  if (APP_STUDIO_TOOLS.has(name)) return 'app';
   // Unlisted — no explicit tier.
   if (opts?.strict) {
     throw new Error(
@@ -559,7 +555,6 @@ export function allTieredToolNames(): Set<string> {
     ...COMPANY_TOOLS,
     ...SANDBOX_TOOLS,
     ...QA_TOOLS,
-    ...APP_STUDIO_TOOLS,
   ]);
 }
 
@@ -580,7 +575,6 @@ export interface ContextualToolTierContext {
   company?: boolean;
   sandbox?: boolean;
   qa?: boolean;
-  app?: boolean;
   isMaster?: boolean;
   previewAvailable?: boolean;
   browserAvailable?: boolean;
@@ -604,7 +598,6 @@ export function contextualTiersForRuntime(
   if (context.company) tiers.add('company');
   if (context.sandbox) tiers.add('sandbox');
   if (context.qa) tiers.add('qa');
-  if (context.app) tiers.add('app');
   if (context.isMaster) tiers.add('master');
   if (
     context.previewAvailable
@@ -870,18 +863,6 @@ const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
   qa_publish_result: 'Publish a structured QA result to the Company work graph',
   qa_start_run: 'Start a tracked Company QA test run',
 
-  // App Studio v6
-  app_get_state: 'Read the current App Studio v6 workflow state',
-  app_get_plan: 'Read the active App Studio v6 plan revision',
-  app_update_plan: 'Validate and save a new App Studio v6 plan revision',
-  app_upsert_work_items: 'Create or update App Studio v6 work items',
-  app_request_decision: 'Request a durable product decision for the App workflow',
-  app_request_plan_approval: 'Request user approval of the active App plan',
-  app_dispatch_ready_work: 'Dispatch ready App work to its persistent specialist roles',
-  app_record_work_evidence: 'Record implementation or verification evidence for App work',
-  app_get_db_state: 'Read the database state linked to this App',
-  app_update_database: 'Apply an App database state update or migration',
-  app_run_checks: 'Run the checks owned by an App specialist role',
 
   // Company master
   spawn_subordinate_agent: 'Spawn a persistent Company subordinate for a role and task',
@@ -949,7 +930,6 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
   push('company', COMPANY_TOOLS);
   push('sandbox', SANDBOX_TOOLS);
   push('qa', QA_TOOLS);
-  push('app', APP_STUDIO_TOOLS);
   return result;
 }
 
@@ -967,5 +947,4 @@ export const TIER_COUNTS = {
   company: COMPANY_TOOLS.size,
   sandbox: SANDBOX_TOOLS.size,
   qa: QA_TOOLS.size,
-  app: APP_STUDIO_TOOLS.size,
 } as const;

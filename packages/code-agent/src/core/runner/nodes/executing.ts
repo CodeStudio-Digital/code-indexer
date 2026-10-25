@@ -1214,6 +1214,7 @@ export class ExecutingNode implements BehaviorNode {
     for (const text of result.textBlocks) {
       if (text) assistantContent.push({ type: 'text', text });
     }
+    assistantContent.push(...result.generatedImages);
     for (const tu of result.toolUses) {
       assistantContent.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
     }
@@ -1562,11 +1563,8 @@ export class ExecutingNode implements BehaviorNode {
           count: payload.count,
           firstFailureTurn: payload.firstFailureTurn,
           lastError: payload.lastError,
-          severity: payload.kind === 'refuse' ? 'refused' : 'informational',
-          reason:
-            payload.kind === 'refuse'
-              ? `Tool '${payload.toolName}' failed ${payload.count}x in a row — forcing planning turn.`
-              : `Tool '${payload.toolName}' has failed ${payload.count}x in a row — reminder injected.`,
+          severity: 'informational',
+          reason: `Tool '${payload.toolName}' has failed ${payload.count}x in a row; original error preserved.`,
         });
       },
     });
@@ -1634,15 +1632,12 @@ export class ExecutingNode implements BehaviorNode {
           count: perTurnLoop.count,
           threshold: perTurnLoop.threshold,
           window: perTurnLoop.window,
-          severity: 'refused',
+          severity: 'informational',
           snapshot: perTurnLoop.snapshot,
           reason: perTurnLoop.reason,
         });
-        return events.toolLoopDetected({
-          guard: perTurnLoop.guard,
-          toolName: perTurnLoop.toolName,
-          count: perTurnLoop.count,
-        });
+        // Different, productive operations may share a tool name (notably code_exec).
+        // Keep the diagnostic; resource budgets and health checks govern termination.
       }
     }
 

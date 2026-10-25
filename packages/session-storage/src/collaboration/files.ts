@@ -10,7 +10,7 @@ export const keyOf = (value: string): string => createHash('sha256').update(valu
 export class CollaborationFiles {
   constructor(readonly root: string) {}
   async init(): Promise<void> {
-    for (const name of ['participants', 'messages', 'receipts', 'links', 'waits', 'policies', 'checkpoints']) {
+    for (const name of ['participants', 'messages', 'receipts', 'links', 'waits', 'policies', 'checkpoints', 'networks', 'triggers', 'completions', 'spawn-slots', 'wake-slots']) {
       await mkdir(join(this.root, name), { recursive: true });
     }
   }
@@ -56,7 +56,7 @@ export class CollaborationFiles {
     return records;
   }
   subscribe(listener: () => void): () => void {
-    const watchers = ['messages', 'receipts'].map(kind => {
+    const watchers = ['messages', 'receipts', 'participants', 'links', 'completions', 'triggers', 'networks'].map(kind => {
       const watcher = watch(join(this.root, kind), { persistent: false }, listener);
       watcher.on('error', listener);
       return watcher;

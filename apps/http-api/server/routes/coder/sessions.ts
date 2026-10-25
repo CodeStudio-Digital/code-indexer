@@ -1,4 +1,5 @@
 import { registerSessionImageRoutes } from './session-images.js';
+import { resolveProjectWorktree } from '@mcp/code-agent/tools/project-worktrees.js';
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
@@ -329,6 +330,7 @@ interface CreateGlobalSessionBody {
 }
 
 interface CreateSessionBody {
+  worktree_path?: string | null;
   project_id: number;
   title: string;
   provider?: CoderProviderName;
@@ -485,20 +487,9 @@ export function mountCoderSessionsRoutes(
   };
 
   /**
-   * Global recent sessions, cross-project. Powers the main app sidebar
-   * "Recent" list. NOTE: this route must be registered BEFORE the
-   * /api/coder/sessions/:id routes so Hono doesn't interpret "recent" as
-   * an id parameter.
-   */
-  app.get('/api/coder/sessions/recent', async (c) => {
-    const limit = Math.max(1, Math.min(50, parseIntQuery(c, 'limit', 10)));
-    return c.json(await sessionStore.listRecentSessionsGlobal(limit));
-  });
-
-  /**
    * Global (multi-project) sessions list — powers the "Sessões Globais" menu.
-   * MUST be registered BEFORE the /api/coder/sessions/:id routes (same reason
-   * as /recent: Hono would otherwise read "global" as an id).
+   * MUST be registered BEFORE /api/coder/sessions/:id so Hono does not
+   * interpret "global" as a session id.
    */
   app.get('/api/coder/sessions/global', async (c) => {
     const archivedQ = c.req.query('archived');
@@ -1210,7 +1201,18 @@ export function mountCoderSessionsRoutes(
     // Builder projects (projects.builder_json set) default the chat agent to
     // `builder` (persona + scope) unless the caller passed an explicit agent.
     const isBuilderProject = !!deps.db.getProject(body.project_id)?.builder_json;
+    let worktreePath: string | null = null;
+    if (body.worktree_path != null) {
+      const project = deps.db.getProject(body.project_id);
+      if (!project || project.is_synthetic) return c.json({ error: 'Project not found' }, 404);
+      try {
+        worktreePath = await resolveProjectWorktree(project.root_path, body.worktree_path);
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+    }
     const session = await sessionStore.createSession({
+      worktree_path: worktreePath,
       project_id: body.project_id,
       title: body.title,
       provider,
@@ -1221,7 +1223,7 @@ export function mountCoderSessionsRoutes(
       thinking_enabled: body.thinking_enabled === true,
       max_turns: runLimits.maxTurns,
       max_auto_continues: runLimits.maxAutoContinues,
-      metadata: body.metadata,
+      metadata: { ...body.metadata, worktree_workspace: worktreePath != null },
     });
     // Best-effort base_commit_sha capture for Camada 4's reviewer subagent.
     // We need the project workdir to run `git rev-parse HEAD`. If the project
@@ -1236,7 +1238,7 @@ export function mountCoderSessionsRoutes(
       void (async () => {
         try {
           const project = (deps as { projectStore?: { getProject?: (id: number) => { workdir?: string | null } | null } }).projectStore?.getProject?.(body.project_id);
-          const workdir = project?.workdir;
+          const workdir = worktreePath ?? project?.workdir;
           if (workdir) {
             // Base-commit discovery is useful for later review, but it is not
             // part of publishing a new session. Keep process startup and Git's

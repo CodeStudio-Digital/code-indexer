@@ -22,7 +22,6 @@ import { describe, expect, it } from 'vitest';
 import {
   getToolTier,
   allTieredToolNames,
-  APP_STUDIO_TOOLS,
   BOOTSTRAP_TOOLS,
   COMPANY_TOOLS,
   contextualTiersForRuntime,
@@ -65,7 +64,6 @@ import { followupTaskTools } from '@mcp/code-agent/tools/followup-task.js';
 import { worktreeTools } from '@mcp/code-agent/tools/worktree.js';
 import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 import { dbTools } from '@mcp/code-agent/tools/db/index.js';
-import { buildAppStudioTools } from '@mcp/company/tools/app-studio/index.js';
 
 // ── Static tool arrays (@mcp/company — builder mode) ───────────────────────
 import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
@@ -190,7 +188,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
     expect(getToolTier('docs_write')).toBe('sandbox');
     expect(getToolTier('service_restart')).toBe('sandbox');
     expect(getToolTier('qa_start_run')).toBe('qa');
-    expect(getToolTier('app_get_state')).toBe('app');
   });
 
   it('keeps every functional family out of the global bootstrap tier', () => {
@@ -198,44 +195,22 @@ describe('tier contract — Phase A/B placements are locked', () => {
       ...COMPANY_TOOLS,
       ...SANDBOX_TOOLS,
       ...QA_TOOLS,
-      ...APP_STUDIO_TOOLS,
       ...MASTER_TOOLS,
     ]);
     expect([...BOOTSTRAP_TOOLS].filter((name) => contextual.has(name))).toEqual([]);
   });
 
-  it('App Studio catalog is exactly the 11 v6 tools (no legacy ghosts)', () => {
-    expect([...APP_STUDIO_TOOLS].sort()).toEqual([
-      'app_dispatch_ready_work',
-      'app_get_db_state',
-      'app_get_plan',
-      'app_get_state',
-      'app_record_work_evidence',
-      'app_request_decision',
-      'app_request_plan_approval',
-      'app_run_checks',
-      'app_update_database',
-      'app_update_plan',
-      'app_upsert_work_items',
-    ]);
-    for (const legacy of [
-      'app_get_context',
-      'app_get_spec',
-      'app_get_architecture',
-      'app_get_ux',
-      'app_get_wireframe',
-      'app_run_test_cycle',
-    ]) {
-      expect(() => getToolTier(legacy, undefined, { strict: true }), legacy).toThrow();
+  it('does not advertise or tier retired App Studio tools', () => {
+    const retired = ['app_get_state', 'app_get_plan', 'app_update_plan',
+      'app_upsert_work_items', 'app_request_decision', 'app_request_plan_approval',
+      'app_dispatch_ready_work', 'app_record_work_evidence', 'app_get_db_state',
+      'app_update_database', 'app_run_checks'];
+    const catalog = new Set(getAllKnownToolsMeta().map(tool => tool.name));
+    for (const name of retired) {
+      expect(allTieredToolNames().has(name)).toBe(false);
+      expect(catalog.has(name)).toBe(false);
+      expect(() => getToolTier(name, undefined, { strict: true })).toThrow();
     }
-  });
-
-  it('static functional catalogs match the tools their runtime factories register', () => {
-    const names = (tools: readonly NamedTool[]) => tools.map((tool) => tool.name).sort();
-    expect(names(buildAppStudioTools(1, {
-      audience: 'company-master',
-      appSessionId: '11111111-1111-4111-8111-111111111111',
-    }))).toEqual([...APP_STUDIO_TOOLS].sort());
   });
 
   it('db_* v2 tools live in the dedicated db tier (moved out of BUILDER_TOOLS)', () => {
@@ -268,7 +243,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
       ...COMPANY_TOOLS,
       ...SANDBOX_TOOLS,
       ...QA_TOOLS,
-      ...APP_STUDIO_TOOLS,
       ...MASTER_TOOLS,
     ]);
     for (const name of functionalTools) {
@@ -278,7 +252,6 @@ describe('tier contract — Phase A/B placements are locked', () => {
       company: COMPANY_TOOLS.size,
       sandbox: SANDBOX_TOOLS.size,
       qa: QA_TOOLS.size,
-      app: APP_STUDIO_TOOLS.size,
     });
   });
 
@@ -294,10 +267,8 @@ describe('contextual tier activation', () => {
       company: true,
       sandbox: true,
       qa: true,
-      app: true,
       isMaster: true,
     })].sort()).toEqual([
-      'app',
       'company',
       'master',
       'qa',

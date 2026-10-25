@@ -21,7 +21,6 @@ import {
 import type { RoleConfig } from './role-config.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
-import { buildAppStudioMasterRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
 
 interface MasterOrchestratorHooks {
   provisionSandboxIfNeeded?: (signal?: AbortSignal) => Promise<SandboxBinding | null>;
@@ -139,10 +138,6 @@ export async function buildMasterPromptInputs(
     ),
     runtimeKind: ctx.capabilities.promptProfile,
   });
-
-  if (ctx.runtimeKind === 'app_studio' && ctx.appStudioSessionId != null) {
-    promptBlock += `\n\n${buildAppStudioMasterRuntimeBlock(ctx.appStudioSessionId)}`;
-  }
 
   promptBlock = appendMasterRoleInstructions(
     promptBlock,
