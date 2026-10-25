@@ -124,6 +124,7 @@ export const ChatRightRail = memo(function ChatRightRail({
         kind: 'panel',
         badge: unreadNotifications,
       },
+      { id: 'collaboration', icon: Bot, labelKey: 'collaboration.title', kind: 'panel' },
       { id: 'insights', icon: ChartNoAxesCombined, labelKey: 'rightRail.insights', kind: 'panel' },
       { id: 'worker-log', icon: ScrollText, labelKey: 'rightRail.workerLog', kind: 'panel' },
       {

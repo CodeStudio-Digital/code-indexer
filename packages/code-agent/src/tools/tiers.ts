@@ -221,6 +221,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // collect_agents / resume_agent — the async companions of spawn_agent
   // (background job wait + failed-agent relaunch). Same tier so the model
   // can always await/retry a delegation it started.
+  'read_chat_changes', 'integrate_chat_changes',
+  'list_chats', 'send_chat_message', 'reply_chat_message',
+  'read_chat_messages', 'wait_chat_response', 'cancel_chat_request', 'resume_chat',
   'collect_agents',
   'resume_agent',
   // read_agent_transcript — observability companion (audit a finished

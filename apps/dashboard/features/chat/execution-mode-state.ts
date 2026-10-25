@@ -95,7 +95,8 @@ export function ultraManagesThinking(
   executionMode: ExecutionMode,
   canReason: boolean,
 ): boolean {
-  return executionMode === 'ultra' && canReason;
+  void executionMode; void canReason;
+  return false;
 }
 
 export function executionModeChangeLocked(

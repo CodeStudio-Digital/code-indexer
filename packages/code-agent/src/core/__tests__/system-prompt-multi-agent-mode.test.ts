@@ -22,12 +22,10 @@ describe('system prompt — multi-agent execution mode', () => {
     const prompt = buildSystemPrompt(baseCtx({ multiAgentMode: 'proactive' }));
     const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
 
-    expect(prefix).toContain('# Multi-agent mode (Ultra)');
-    expect(prefix).toContain('only when independent read-only work materially improves speed or coverage');
-    expect(prefix).toContain('at most three `investigator` or `reviewer` children');
-    expect(prefix).toContain('keep writes in root');
-    expect(prefix).toContain('retain all normal permission gates');
-    expect(prefix).toContain('Children do not delegate further');
+    expect(prefix).toContain('# Ultra collaboration');
+    expect(prefix).toContain('Keep simple work in one agent');
+    expect(prefix).toContain('Preserve Explore/Plan');
+    expect(prefix).toContain('reply_chat_message');
     expect(suffix).not.toContain('Multi-agent mode');
   });
 

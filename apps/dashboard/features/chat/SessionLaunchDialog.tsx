@@ -333,7 +333,7 @@ export function SessionLaunchDialog({
                   id="session-launch-effort"
                   className="h-9 flex-1 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
                   value={value.reasoningEffort ?? ''}
-                  disabled={reasoningLevels.length === 0 || value.executionMode === 'ultra'}
+                  disabled={reasoningLevels.length === 0}
                   onChange={(event) => patch({ reasoningEffort: event.target.value || null })}
                 >
                   <option value="">{t('chat:sessionLaunch.automatic')}</option>

@@ -1,5 +1,12 @@
 /** Fast behavioral gate. Exhaustive coverage remains in `test:workspace`. */
 export const criticalPaths = [
+  'packages/session-storage/src/collaboration/__tests__/collaboration.test.ts',
+  'packages/code-agent/src/runtime/__tests__/chat-collaboration.test.ts',
+  'packages/code-agent/src/runtime/__tests__/ultra-workspace.test.ts',
+  'packages/code-agent/src/sessions/__tests__/execution-mode.test.ts',
+  'packages/code-agent/src/tools/__tests__/subagent-provider-resolver.test.ts',
+  'packages/code-agent/src/core/__tests__/system-prompt-multi-agent-mode.test.ts',
+  'apps/http-api/server/routes/coder/__tests__/chat-collaboration-wake.test.ts',
   'packages/code-agent/src/core/runner/nodes/__tests__',
   'packages/code-agent/src/core/__tests__/permission-gate',
   'packages/code-agent/src/core/__tests__/vision-context.test.ts',

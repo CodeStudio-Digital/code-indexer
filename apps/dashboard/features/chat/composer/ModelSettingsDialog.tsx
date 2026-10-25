@@ -223,7 +223,7 @@ function ModelSettingsDialogBody({
                   </label>
                   <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                     {t('chat:ultra.description', {
-                      defaultValue: 'Uses the strongest compatible reasoning and proactively delegates useful read-only research and review.',
+                      defaultValue: 'Coordinates complex tasks with collaborating agents to implement, test and review. Keeps your chosen reasoning and permissions.',
                     })}
                   </p>
                   {executionModeLocked && (
@@ -344,7 +344,7 @@ function ModelSettingsDialogBody({
                   aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
                   className="h-7 flex-1 rounded border bg-background px-1.5 text-xs"
                   value={reasoningEffort ?? ''}
-                  disabled={executionMode === 'ultra'}
+                  disabled={false}
                   onChange={(e) => setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
                 >
                   <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>

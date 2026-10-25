@@ -163,7 +163,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
               aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
               className="h-7 rounded border bg-background px-1.5 text-xs"
               value={props.reasoningEffort ?? ''}
-              disabled={props.executionMode === 'ultra'}
+              disabled={false}
               onChange={(e) => props.setReasoningEffort?.(e.target.value === '' ? null : e.target.value)}
             >
               <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>

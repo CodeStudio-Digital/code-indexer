@@ -155,10 +155,11 @@ export function limitsOverrideForProfile(
   return deps.resolveLimitsForProfile?.(id);
 }
 
-/** Ultra dominates stored per-profile efforts across heterogeneous children. */
+/** Keep role-specific effort independent of orchestration mode. */
 export function resolveSubagentExecutionEffort(
   ultraEnabled: boolean,
   configuredEffort: string | undefined,
 ): string | undefined {
-  return ultraEnabled ? 'ultra' : configuredEffort;
+  void ultraEnabled;
+  return configuredEffort;
 }

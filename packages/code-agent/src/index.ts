@@ -1,3 +1,9 @@
+import { UltraAgentBudget } from './runtime/ultra-budget.js';
+import { chatChangesTools } from './tools/chat-changes.js';
+import { buildResumeChatTool } from './tools/chat-resume.js';
+import { resolveUltraPreset } from './sessions/ultra-policy.js';
+import { chatCollaborationTools } from './tools/chat-collaboration.js';
+import { createRootCollaboration, attachChatMailbox } from './runtime/chat-collaboration.js';
 import { resolve as resolvePath, join as joinPath, relative as relativePath, isAbsolute as isAbsolutePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -520,9 +526,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     executionResolution.policy.ultraEnabled,
   );
   const ultraExecutionEnabled = executionResolution.policy.ultraEnabled || turnUltraTriggered;
-  const effectiveReasoningEffort = ultraExecutionEnabled
-    ? 'ultra'
-    : executionResolution.policy.reasoningEffort;
+  const effectiveReasoningEffort = executionResolution.policy.reasoningEffort;
   if (turnUltraTriggered) {
     console.log(`[coder s=${session.id}] ultracode keyword — Ultra posture for this run only`);
   }
@@ -672,6 +676,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Tool registry: native tools + bridged MCP tools
   const registry = new ToolRegistry();
+  registry.registerAll(chatCollaborationTools);
+  registry.registerAll(chatChangesTools);
   // Mutable by design: code_exec/find_tools capture this map before external
   // MCP and plugin tools are registered, then observe the completed catalog
   // at invocation time.
@@ -1095,6 +1101,12 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // for filtering. Disabled via CODER_DISABLE_SUBAGENTS=1. Also DISABLED for
   // company Master (it must use spawn_subordinate_agent instead — ephemeral
   // subagents don't fit the orchestration role).
+  const ultraPreset = resolveUltraPreset({
+    enabled: ultraExecutionEnabled, effort: effectiveReasoningEffort,
+    canDelegate: opts.runtimePolicy?.subagents.enabled,
+    maxParallel: opts.runtimePolicy?.subagents.maxParallel,
+    readOnly: effectiveAgentId === 'explore' || effectiveAgentId === 'plan',
+  });
   let subagentDeps: SubagentDeps | null = null;
   if (shouldEnableEphemeralSubagents(
     opts.companyContext,
@@ -1154,7 +1166,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       resolveLimitsForProfile,
       toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
       externalToolTiers: runtimeToolTiers,
-      maxParallel: opts.runtimePolicy?.subagents.maxParallel,
+      maxParallel: ultraPreset.effective.parallelism.maxAgents,
     };
   }
 
@@ -1235,6 +1247,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       import('@mcp/code-agent/tools/read-agent-transcript.js'),
     ]);
     registry.register(buildResumeAgentTool(subagentDeps));
+    registry.register(buildResumeChatTool(subagentDeps));
     registry.register(buildCollectAgentsTool(subagentDeps));
     // P1 (ultra-agent parity): read-only audit of a finished subagent's
     // retained transcript — the observability half of spawn_agent.
@@ -1506,7 +1519,14 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   };
 
+  const collaboration = !opts.companyContext
+    ? await createRootCollaboration(store.locator.dataDir, session.id, session.title || 'Chat')
+    : undefined;
   const toolContext: ToolContext = {
+    collaboration,
+    ultraPolicy: ultraPreset,
+    ultraBudget: ultraExecutionEnabled ? new UltraAgentBudget(ultraPreset.effective.parallelism.maxAgents,
+      ultraPreset.effective.parallelism.maxAgents * (ultraPreset.effective.parallelism.maxWaves ?? 8)) : undefined,
     cwd: effectiveCwd,
     projectName: workspace.displayName,
     globalWorkspace: session.is_global
@@ -2672,12 +2692,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   let compactionProvider: ChatProvider = provider;
   const compactionSummaryOptions: NonNullable<
     import('@mcp/code-agent/core/runner/types.js').RunnerOptions['compactionSummaryOptions']
-  > = ultraExecutionEnabled
-    // Upstream Codex applies the Ultra->native-max boundary to compaction as
-    // well as ordinary turns. Keep the same default here; a deliberately
-    // configured compaction pipeline effort remains authoritative below.
-    ? { reasoningEffort: 'ultra' }
-    : {};
+  > = {};
   try {
     const resolver = new PipelineProviderResolver(
       new PipelineProviderBindingsStore(db.raw()),
@@ -2934,13 +2949,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ?? (session.plan_depth_override as 'simple' | 'normal' | 'complex' | null)
       ?? 'normal',
     specMode: opts.specMode ?? (effectiveAgentId === 'spec'),
-    // Ultra turns on generic thinking only for models explicitly marked as
-    // reasoning-capable. Unknown metadata is not treated as permission to
-    // force a vendor-specific thinking flag; an explicit caller choice keeps
-    // its existing behaviour.
-    thinking: ultraExecutionEnabled && sessionModelCanReason === true
-      ? true
-      : opts.thinking,
+    // Orchestration is independent of the user's provider reasoning controls.
+    thinking: opts.thinking,
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
     modelSupportsVision: opts.modelSupportsVision,
     describeImages: opts.describeImages,
@@ -3859,6 +3869,10 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // the earlier promise.
   void transcriptFlushed.catch(() => undefined);
 
+  if (collaboration) await collaboration.store.files.put('policies', session.id, ultraPreset);
+  const closeChatMailbox = collaboration
+    ? await attachChatMailbox(collaboration.store, collaboration.participant, runner)
+    : undefined;
   const donePromise = Promise.resolve()
     .then(async () => {
       if (worktreePreparationError) throw worktreePreparationError;
@@ -3938,6 +3952,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       throw terminalError;
     })
     .finally(async () => {
+      await closeChatMailbox?.();
       await toolOutputStore.drain();
       await mcpServerManager.closeAll();
       await bridge.close();

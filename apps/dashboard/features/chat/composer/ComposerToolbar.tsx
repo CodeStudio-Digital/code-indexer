@@ -80,7 +80,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
             aria-label={t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}
             className="h-7 rounded border bg-background px-1.5 text-xs"
             value={reasoningEffort ?? ''}
-            disabled={executionMode === 'ultra'}
+            disabled={false}
             onChange={(e) => setReasoningEffort(e.target.value === '' ? null : e.target.value)}
           >
             <option value="">{t('chat:toolbar.effortAuto', { defaultValue: 'auto' })}</option>

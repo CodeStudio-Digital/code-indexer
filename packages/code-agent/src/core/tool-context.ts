@@ -1,4 +1,11 @@
 export interface ToolContextServices {
+  ultraBudget?: import('../runtime/ultra-budget.js').UltraAgentBudget;
+  ultraPolicy?: import('@mcp/agent-runtime-contracts').PresetResolution;
+  /** Session/peer mailbox independent of Company orchestration. */
+  collaboration?: {
+    actor: string;
+    store: import('@mcp/session-storage/collaboration/store.js').ChatCollaborationStore;
+  };
   /** Project root path of the PRIMARY project. Native fs operations default here
    *  and must stay inside SOME known root (primary or a linked `roots` entry). */
   cwd: string;

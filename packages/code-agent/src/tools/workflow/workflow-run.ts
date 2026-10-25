@@ -155,6 +155,11 @@ export async function executeWorkflow(
           return dep?.status === 'completed' || dep?.status === 'partial';
         }));
       if (ready.length === 0) break;
+      const waveCap = ctx.ultraPolicy?.presetId === 'ultra' ? ctx.ultraPolicy.effective.parallelism.maxWaves : undefined;
+      if (waveCap != null && ready.some(step => step.wave > waveCap)) {
+        for (const step of ready) { step.status = 'failed'; step.error = 'Ultra workflow wave budget reached; finish with existing results'; emitStepUpdate(ctx, record, step); }
+        break;
+      }
 
       waveNo++;
       const groupId = `wf${record.runCount}-${record.id}-w${waveNo}`;

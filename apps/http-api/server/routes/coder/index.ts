@@ -1,3 +1,4 @@
+import { mountChatCollaborationRoutes } from './chat-collaboration.js';
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { createCoderRuntime } from './state.js';
@@ -29,6 +30,7 @@ import { mountCompanyRoutes } from '../company/index.js';
 export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountConversationFormatGuard(app, deps);
   const runtime = createCoderRuntime(deps.sessionStore);
+  mountChatCollaborationRoutes(app, deps, runtime);
   mountCoderProvidersRoutes(app, deps);
   mountSessionWorkbenchRoutes(app, deps);
   mountCoderSessionsRoutes(app, deps, runtime);

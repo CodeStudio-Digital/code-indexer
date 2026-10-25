@@ -21,6 +21,7 @@ interface AcceptLocalCoderCommandInput {
   requestedPreset?: string;
   requestedCapabilityProfile: string;
   requestedAt?: string;
+  actor?: SessionCommand['actor'];
 }
 
 export interface LocalCoderShadowAcceptance {
@@ -58,7 +59,7 @@ export async function acceptLocalCoderCommand(
   const correlationId = asCorrelationId(
     stableUuid(`correlation:coder:${identity.digest}`),
   );
-  const actor = {
+  const actor = input.actor ?? {
     actorId: 'local-user',
     actorType: 'user' as const,
     source: 'http' as const,

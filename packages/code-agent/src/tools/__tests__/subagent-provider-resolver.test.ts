@@ -118,9 +118,9 @@ describe('createSubagentProviderResolver', () => {
     expect(resolver.effortFor('implement')).toBeUndefined();
   });
 
-  it('lets Ultra dominate per-profile effort while Standard preserves it', () => {
-    expect(resolveSubagentExecutionEffort(true, 'low')).toBe('ultra');
-    expect(resolveSubagentExecutionEffort(true, undefined)).toBe('ultra');
+  it('preserves profile efforts independently of Ultra orchestration', () => {
+    expect(resolveSubagentExecutionEffort(true, 'low')).toBe('low');
+    expect(resolveSubagentExecutionEffort(true, undefined)).toBeUndefined();
     expect(resolveSubagentExecutionEffort(false, 'low')).toBe('low');
     expect(resolveSubagentExecutionEffort(false, undefined)).toBeUndefined();
   });

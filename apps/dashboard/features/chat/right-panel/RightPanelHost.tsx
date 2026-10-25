@@ -53,6 +53,7 @@ const WorkerLogPanel = lazy(() =>
 const NotificationsPanel = lazy(() =>
   import('../notifications/NotificationsPanel.js').then((m) => ({ default: m.NotificationsPanel })),
 );
+const ChatCollaborationPanel = lazy(() => import('./ChatCollaborationPanel.js').then(m => ({ default: m.ChatCollaborationPanel })));
 const SubagentsPanel = lazy(() =>
   import('./SubagentsPanel.js').then((m) => ({ default: m.SubagentsPanel })),
 );
@@ -213,6 +214,10 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
           </PanelBody>
         </PanelChrome>
       );
+    case 'collaboration':
+      return <PanelChrome title={t('chat:collaboration.title')} icon={Bot} onClose={onClose} bodyClassName="overflow-hidden">
+        <PanelBody><ChatCollaborationPanel key={sessionId} sessionId={sessionId} /></PanelBody>
+      </PanelChrome>;
     case 'subagents':
       return (
         <PanelChrome

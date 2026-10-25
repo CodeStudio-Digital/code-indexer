@@ -1,3 +1,4 @@
+import { ultraCoordinationPrompt } from '../sessions/ultra-policy.js';
 /**
  * System prompt for the coder agent.
  *
@@ -436,14 +437,7 @@ function multiAgentModeSection(
 Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.`;
   }
 
-  const workflowLine = toolAvailable(available, 'workflow')
-    ? `
-- Prefer one \`workflow\` DAG when dependent parallel steps need orchestration.`
-    : '';
-  return `
-
-# Multi-agent mode (Ultra)
-Proactive delegation is allowed only when independent read-only work materially improves speed or coverage. Use at most three \`investigator\` or \`reviewer\` children; keep writes in root and retain all normal permission gates. Children do not delegate further.${workflowLine}`;
+  return ultraCoordinationPrompt(3);
 }
 
 /** Insert a session-fixed extension immediately before the cache boundary. */

@@ -1,3 +1,9 @@
+import { prepareUltraWorkspace, captureUltraWorkspace, isolatedChildTool, confinedWorkspaceFilesystem, type UltraWorkspace } from '../runtime/ultra-workspace.js';
+import { randomUUID } from 'node:crypto';
+import { isAbsolute, relative } from 'node:path';
+import { CHAT_TOOL_NAMES } from './chat-collaboration.js';
+import { attachChatMailbox } from '../runtime/chat-collaboration.js';
+import { childChatId } from '@mcp/session-storage/collaboration/types.js';
 import type { SubagentCollected } from './subagent-collected.js';
 export type { SubagentCollected } from './subagent-collected.js';
 /**
@@ -72,6 +78,8 @@ export interface SubagentSpec {
   /** Soft scope/sufficiency contract. It can request synthesis but never aborts the run. */
   researchPolicy?: SubagentResearchPolicy;
   spawnId?: string;
+  /** Stable per-child address, distinct from the group telemetry identifier. */
+  chatKey?: string;
   pushTimeCap?: number;
   limits?: SubagentLimits;
   /** Explicit convergence cutoff for this run; defaults to the product invariant. */
@@ -350,6 +358,35 @@ export interface SubagentParent {
  * `<result>` block, never to the user directly.
  */
 export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): Promise<SubagentRunResult> {
+  spec = { ...spec, spawnId: spec.spawnId ?? randomUUID() };
+  const release = await parent.ctx.ultraBudget?.acquire(spec.signal ?? parent.ctx.signal);
+  try {
+    const writing = spec.profile === 'implement' || spec.profile === 'full';
+    if (parent.ctx.ultraPolicy?.presetId !== 'ultra' || !writing) return await runSubagentTurn(parent, spec);
+    if (parent.ctx.ultraPolicy.effective.isolation === 'shared_read') throw new Error('This session is read-only; Ultra does not grant implementation permission');
+    const spawnId = spec.spawnId ?? randomUUID();
+    const actor = childChatId(String(parent.sessionId), spec.chatKey ?? spawnId);
+    const retained = await parent.ctx.collaboration?.store.files.get<UltraWorkspace>('checkpoints', 'workspace:' + actor);
+    const workspace = retained && !retained.integrated ? retained : await prepareUltraWorkspace(parent.ctx, spec.chatKey ?? spawnId);
+    await parent.ctx.collaboration!.store.files.put('checkpoints', 'workspace:' + actor, workspace);
+    const isolated = { ...parent, tools: parent.tools.filter(isolatedChildTool), ctx: {
+      ...parent.ctx, cwd: workspace.path, roots: undefined, externalRoots: undefined, globalWorkspace: undefined,
+      overlay: undefined, overlayByRoot: undefined, ports: { fs: confinedWorkspaceFilesystem(workspace.path) },
+    } };
+    const out = await runSubagentTurn(isolated, { ...spec, spawnId,
+      pathScope: spec.pathScope?.map(file => isAbsolute(file) ? relative(parent.ctx.cwd, file) : file),
+      systemPrompt: spec.systemPrompt + '\nYou are editing an isolated checkout of the current workspace, including uncommitted changes. Use native file tools. Shell execution and external mutations belong to the coordinator, who will integrate your changes and run checks. Do not claim those checks ran here.',
+    });
+    const captured = await captureUltraWorkspace(workspace);
+    await parent.ctx.collaboration!.store.files.put('checkpoints', 'workspace:' + actor, captured);
+    const checkpoint = await parent.ctx.collaboration!.store.files.get<Record<string, unknown>>('checkpoints', actor);
+    if (checkpoint) await parent.ctx.collaboration!.store.files.put('checkpoints', actor, { ...checkpoint, cwd: parent.ctx.cwd, workspaceReady: true });
+    return { ...out, finalText: out.finalText + '\n\nIsolated changes for ' + actor + ': ' + captured.files.join(', ')
+      + '\nCoordinator: review with read_chat_changes, then integrate_chat_changes, then run relevant checks. Changes are not yet in the main workspace.' };
+  } finally { release?.(); }
+}
+
+async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Promise<SubagentRunResult> {
 
   const sandboxViolations: string[] = [];
   const limits = withDefaultLimits(spec.limits);
@@ -468,7 +505,8 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   // (so we mirror the successful tool_result regardless of scope).
   const subRegistry = new ToolRegistry();
   for (const tool of parent.tools) {
-    if (!isAllowed(spec.allowlist, tool)) continue;
+    if (['spawn_agent', 'workflow', 'execute_tasks', 'resume_agent', 'resume_chat'].includes(tool.name)) continue;
+    if (!CHAT_TOOL_NAMES.has(tool.name) && !isAllowed(spec.allowlist, tool)) continue;
     let wrapped = spec.pathScope
       ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations, spec.pathScopeMode)
       : tool;
@@ -497,7 +535,12 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     }
   }
 
+  const parentChat = parent.ctx.collaboration;
+  const collaboration = parentChat && parent.sessionId && spec.spawnId
+    ? { store: parentChat.store, actor: childChatId(parent.sessionId, spec.chatKey ?? spec.spawnId) }
+    : undefined;
   const subContext: ToolContext = {
+    collaboration,
     cwd: parent.ctx.cwd,
     projectName: parent.ctx.projectName,
     globalWorkspace: parent.ctx.globalWorkspace,
@@ -524,7 +567,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     // execute_tasks block) — subagent tool calls have no blocks of their own.
     approvalAnchorId: parent.ctx.approvalAnchorId ?? parent.ctx.currentToolUseId,
     // Intentionally NO `runner` — interactive tools fail inside the subagent.
-    planMode: false,
+    planMode: parent.ctx.planMode,
     // Frente C — collector receives memos / snapshots / board posts from
     // the sub. The parent reads `collector.snapshot()` after the sub
     // finishes and appends it to the tool_result text.
@@ -1097,6 +1140,13 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         throw error;
       }
     }
+    if (collaboration && spec.spawnId) {
+      await collaboration.store.files.put('checkpoints', collaboration.actor, {
+        actor: collaboration.actor, spawnId: spec.spawnId, chatKey: spec.chatKey, profile: spec.profile || 'explore',
+        label: spec.label || 'Agent', cwd: parent.ctx.cwd, transcript: out.transcript,
+        files: spec.pathScope, outcomeUnknown: out.effectOutcome === 'unknown', phase: 'complete',
+      });
+    }
     return out;
   };
 
@@ -1105,12 +1155,33 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     watchdog.fail(message, phase);
   }
 
+  if (collaboration && spec.spawnId) {
+    await collaboration.store.files.put('checkpoints', collaboration.actor, {
+      actor: collaboration.actor, spawnId: spec.spawnId, chatKey: spec.chatKey, profile: spec.profile || 'explore',
+      label: spec.label || 'Agent', cwd: parent.ctx.cwd, transcript: subRunner.messages.slice(),
+      files: spec.pathScope, phase: 'running', ownerPid: process.pid, outcomeUnknown: true,
+    });
+  }
+  const closeChatMailbox = collaboration
+    ? await attachChatMailbox(collaboration.store, {
+      id: collaboration.actor, sessionId: String(parent.sessionId), parentId: parentChat!.actor,
+      label: spec.label || 'Agent', profile: spec.profile || 'explore', state: 'running',
+    }, subRunner)
+    : undefined;
   try {
     const runPromise = subRunner.run();
     runPromise.catch(() => {
       /* consumed by the race below or intentionally ignored after watchdog abort */
     });
     result = await Promise.race([runPromise, watchdog.promise]);
+    return await finishTelemetry({
+      reason: result.reason,
+      finalText: extractLastAssistantText(subRunner.messages),
+      usage: result.totalUsage,
+      sandboxViolations,
+      collected: collector.snapshot(),
+      transcript: subRunner.messages.slice(),
+    });
   } catch (e) {
     const collected = collector.snapshot();
     // Budget cutoffs ('limit' → tool_budget) and aborts are benign stops, not
@@ -1149,6 +1220,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
       failureDetail: e instanceof Error ? e.message : String(e),
     });
   } finally {
+    await closeChatMailbox?.();
     stopMutationFenceMonitor();
     watchdog.cleanup();
     if (parent.ctx.signal) parent.ctx.signal.removeEventListener('abort', parentAbort);
@@ -1157,14 +1229,6 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     if (spec.signal) spec.signal.removeEventListener('abort', abortRunner);
   }
 
-  return await finishTelemetry({
-    reason: result.reason,
-    finalText: extractLastAssistantText(subRunner.messages),
-    usage: result.totalUsage,
-    sandboxViolations,
-    collected: collector.snapshot(),
-    transcript: subRunner.messages.slice(),
-  });
 }
 
 /**
@@ -1759,6 +1823,7 @@ export async function runParallelAgents(
     concurrency ?? parent.maxParallel ?? DEFAULT_PARALLEL_AGENT_MAX,
   );
   const results: ParallelAgentResult[] = new Array(agents.length);
+  const collaborationGroup = randomUUID();
 
   const tasks = agents.map((spec, agentIndex) => async () => {
     onProgress({
@@ -1785,6 +1850,7 @@ export async function runParallelAgents(
         reasoningEffort: spec.reasoningEffort,
         researchPolicy: spec.researchPolicy,
         spawnId: spec.spawnId,
+        chatKey: `${spec.spawnId ?? collaborationGroup}:${agentIndex}`,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,
         pathScopeMode: spec.pathScopeMode,

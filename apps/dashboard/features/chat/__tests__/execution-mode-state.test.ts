@@ -161,7 +161,7 @@ describe('execution-mode dashboard state', () => {
     expect(modelCanReason('test', providers, 'variant')).toBe(false);
     expect(modelCanReason('test', providers, 'variant::deep')).toBe(true);
     expect(modelCanReason('test', providers, 'variant::missing')).toBe(false);
-    expect(ultraManagesThinking('ultra', true)).toBe(true);
+    expect(ultraManagesThinking('ultra', true)).toBe(false);
     expect(ultraManagesThinking('standard', true)).toBe(false);
   });
 

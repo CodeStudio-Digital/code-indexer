@@ -1,3 +1,4 @@
+import { ChatCollaborationStore } from '@mcp/session-storage/collaboration/store.js';
 import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -99,6 +100,8 @@ export function mountCoderInteractionRoutes(
   app.post('/api/coder/sessions/:id/abort', async (c) => {
     const id = parseSessionIdParam(c);
     try {
+      const mailbox = new ChatCollaborationStore(deps.sessionStore.locator.dataDir);
+      await mailbox.init(); await mailbox.stopSession(id);
       await workerPool.abort(id);
       return c.json({ ok: true });
     } catch (err) {

@@ -1,0 +1,23 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Ultra collaboration acceptance</title></head>
+<body><div id="root"></div><script type="module">
+import React, {useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {ChatCollaborationPanel} from '/features/chat/right-panel/ChatCollaborationPanel.tsx';
+import {ModelSettingsDialog} from '/features/chat/composer/ModelSettingsDialog.tsx';
+import {TooltipProvider} from '/components/ui/tooltip.tsx';
+import i18n, {i18nReady} from '/i18n/index.ts';
+import '/index.css';
+await i18nReady;
+await i18n.changeLanguage('pt-BR');
+const h=React.createElement, noop=()=>{};
+function Fixture(){
+ const [open,setOpen]=useState(false),[effort,setEffort]=useState('high'),[mode,setMode]=useState('ultra');
+ return h(TooltipProvider,null,h('main',{className:'flex h-screen bg-background text-foreground'},
+  h('div',{className:'flex-1 p-8'},h('h1',{className:'text-xl font-semibold'},'Ultra · Colaboração entre chats'),h('button',{className:'mt-4 rounded border p-2',onClick:()=>setOpen(true)},'Configurar modelo'),h('output',{'data-testid':'effort',className:'block mt-4'},effort)),
+  h('aside',{className:'w-[430px] border-l'},h(ChatCollaborationPanel,{sessionId:'one'})),
+  h(ModelSettingsDialog,{open,onOpenChange:setOpen,showAgent:true,agent:'build',setAgent:noop,autoSuggestText:'',provider:'openai',model:'gpt-test',setModel:noop,onSwitchProvider:noop,
+   providerOptions:[{id:'openai',label:'OpenAI'}],currentProviderModels:[{model_id:'gpt-test',label:'Test model'}],maxTurns:null,setMaxTurns:noop,maxAutoContinues:3,setMaxAutoContinues:noop,temperature:null,setTemperature:noop,
+   reasoningEffort:effort,setReasoningEffort:setEffort,reasoningLevels:['low','medium','high'],executionMode:mode,setExecutionMode:setMode,fallbackProvider:null,fallbackModel:null,onFallbackChange:noop,getModelsForProvider:()=>[]})));
+}
+createRoot(document.getElementById('root')).render(h(Fixture));
+</script></body></html>
