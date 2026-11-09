@@ -116,6 +116,14 @@ async function readSubmodules(
   mainRoot: string,
 ): Promise<{ absPath: string }[]> {
   const gmFile = path.join(mainRoot, '.gitmodules');
+  // Most repositories have no submodules. Do not launch git merely to learn
+  // that the config file is absent on every discovery-cache expiration.
+  try {
+    await fs.access(gmFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    // Preserve Git's existing handling of permission errors and unusual paths.
+  }
   const r = await runGit(mainRoot, ['config', '--file', gmFile, '--get-regexp', 'path'], {
     timeoutMs: SUMMARY_TIMEOUT_MS,
   });

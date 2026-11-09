@@ -518,7 +518,7 @@ export const INTERNAL_MCP_CATALOG: readonly InternalMcpCatalogTool[] = [
   },
   {
     "name": "grep_code",
-    "description": "Textual search across project files with language/glob filters. Results capped at max_results (default 20). Use literal=true for exact string matching.",
+    "description": "Search file contents with language/glob filters. Empty content results may include separately labeled filename hints. Results capped at max_results (default 20). Use literal=true for exact strings.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -962,7 +962,9 @@ export const INTERNAL_MCP_CATALOG: readonly InternalMcpCatalogTool[] = [
           "type": "string"
         },
         "query": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
         },
         "mode": {
           "type": "string",
@@ -983,7 +985,9 @@ export const INTERNAL_MCP_CATALOG: readonly InternalMcpCatalogTool[] = [
           ]
         },
         "limit": {
-          "type": "number"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
         }
       },
       "required": [

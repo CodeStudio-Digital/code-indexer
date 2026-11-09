@@ -426,7 +426,7 @@ describe('dispatchTools — finalize hook', () => {
       contentFormat: 'markdown',
       structuredOutputChars: JSON.stringify({ id: 'a', status: 'ready', secret: 'hidden-object-only' }).length,
     });
-    expect(res.results[0]).not.toHaveProperty('structuredData');
+    expect(res.results[0].structuredData).toEqual({ id: 'a', status: 'ready', secret: 'hidden-object-only' });
     const providerMessage = buildToolMessage(res.results);
     expect(JSON.stringify(providerMessage)).toContain('# Visible');
     expect(JSON.stringify(providerMessage)).not.toContain('hidden-object-only');

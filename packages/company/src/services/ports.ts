@@ -31,6 +31,7 @@ export interface IBoardPoster {
     kind: BoardKind,
     content: string,
     mentions?: string[],
+    attachments?: BoardEntry['attachments'],
   ): void;
   read(opts?: { sinceSeq?: number; limit?: number; mentionsRole?: string }): BoardEntry[];
   /** Watermark: last sequence the master is known to have seen. */

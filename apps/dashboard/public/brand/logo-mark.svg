@@ -30,25 +30,13 @@
     </filter>
   </defs>
   <style>
-    .cs-logo-outline { stroke-dasharray: 24 13; animation: cs-logo-flow 11s linear infinite; }
-    .cs-logo-fold { stroke-dasharray: 62; stroke-dashoffset: 62; animation: cs-logo-draw 5.4s ease-in-out infinite alternate; }
-    .cs-logo-fold:nth-of-type(2n) { animation-delay: .45s; }
-    .cs-logo-fold:nth-of-type(3n) { animation-delay: .9s; }
-    .cs-logo-line { stroke-dasharray: 3 8; animation: cs-logo-flow 5.8s linear infinite; }
-    .cs-logo-ray { stroke-dasharray: 42; stroke-dashoffset: 42; animation: cs-logo-spark 3s ease-in-out infinite; }
-    .cs-logo-ray:nth-of-type(2n) { animation-delay: .28s; }
-    .cs-logo-ray:nth-of-type(3n) { animation-delay: .56s; }
-    .cs-logo-core { transform-box: fill-box; transform-origin: center; animation: cs-logo-breathe 3.2s ease-in-out infinite; }
-    .cs-logo-node { transform-box: fill-box; transform-origin: center; animation: cs-logo-pulse 3.1s ease-in-out infinite; }
-    .cs-logo-node:nth-of-type(3n) { animation-delay: .36s; }
-    .cs-logo-node:nth-of-type(3n + 1) { animation-delay: .72s; }
-    .cs-logo-node:nth-of-type(3n + 2) { animation-delay: 1.08s; }
-    @keyframes cs-logo-flow { to { stroke-dashoffset: -92; } }
-    @keyframes cs-logo-draw { to { stroke-dashoffset: 0; } }
-    @keyframes cs-logo-spark { 0%, 100% { stroke-dashoffset: 42; opacity: .18; } 42%, 62% { stroke-dashoffset: 0; opacity: .92; } }
-    @keyframes cs-logo-breathe { 0%, 100% { transform: scale(.82); opacity: .48; } 50% { transform: scale(1.12); opacity: .94; } }
-    @keyframes cs-logo-pulse { 0%, 100% { transform: scale(.9); opacity: .72; } 50% { transform: scale(1.18); opacity: 1; } }
-    @media (prefers-reduced-motion: reduce) { .cs-logo-outline, .cs-logo-fold, .cs-logo-line, .cs-logo-ray, .cs-logo-core, .cs-logo-node { animation: none; } }
+    /* Persistent app chrome must not repaint continuously while the app is idle. */
+    .cs-logo-outline { stroke-dasharray: 24 13; }
+    .cs-logo-fold { stroke-dasharray: none; stroke-dashoffset: 0; }
+    .cs-logo-line { stroke-dasharray: 3 8; }
+    .cs-logo-ray { stroke-dasharray: none; stroke-dashoffset: 0; opacity: .92; }
+    .cs-logo-core { opacity: .72; }
+    .cs-logo-node { opacity: .9; }
   </style>
   <g transform="translate(1.4 8.9) scale(.34)">
 

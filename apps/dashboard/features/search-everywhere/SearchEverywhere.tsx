@@ -1,3 +1,4 @@
+import type { FilePathPage } from '@mcp/api-bus';
 /**
  * Search Everywhere (Shift Shift) — IntelliJ's hub, five tabs:
  *   All | Files | Symbols | Text | Commands      (Tab cycles)
@@ -103,6 +104,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
   const { open, tab, initialQuery, close, setTab, consumeInitialQuery } = useSeStore();
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Item[]>([]);
+  const [pathPartial, setPathPartial] = useState(false);
   const [semanticNotice, setSemanticNotice] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
   const lexicalSeq = useRef(0);
@@ -142,6 +144,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
     const wantCommands = activeTab === 'all' || activeTab === 'commands';
 
     const out: Item[] = [];
+    if (!signal.aborted) setPathPartial(false);
     if (!trimmed && wantFiles) {
       out.push(...recentFiles(projectId).slice(0, 15).map<Item>((path) => ({ kind: 'recent', path })));
     }
@@ -154,24 +157,26 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
       if (activeTab === 'commands') out.push(...cmds);
       else if (trimmed) out.push(...cmds);
     }
+    const pending: Array<Promise<Item[]>> = [];
     if (wantFiles && trimmed) {
-      const ranked = await apiCall<Array<{ path: string }>>('files.searchPaths', {
+      pending.push(apiCall<FilePathPage>('files.searchPathsPage', {
         projectId, query: trimmed, limit: activeTab === 'files' ? 50 : 10,
-      }, { signal }).catch(() => []);
-      out.push(...ranked.map<Item>((r) => ({ kind: 'file', path: r.path })));
+      }, { signal }).catch(() => ({ items: [], completeness: 'partial' })).then(ranked => {
+        if (!signal.aborted) setPathPartial(ranked.completeness === 'partial');
+        return ranked.items.map<Item>((r) => ({ kind: 'file', path: r.path }));
+      }));
     }
     if (wantSymbols) {
-      const hits = await apiCall<SymbolHitDTO[]>('search.symbols', {
+      pending.push(apiCall<SymbolHitDTO[]>('search.symbols', {
         projectId, query: trimmed, limit: activeTab === 'symbols' ? 50 : 10,
-      }, { signal }).catch(() => []);
-      out.push(...hits.map<Item>((hit) => ({ kind: 'symbol', hit })));
+      }, { signal }).catch(() => []).then(hits => hits.map<Item>((hit) => ({ kind: 'symbol', hit }))));
     }
     if (wantText) {
-      const hits = await apiCall<Array<{ path: string }>>('search.text', {
+      pending.push(apiCall<Array<{ path: string }>>('search.text', {
         projectId, query: trimmed, limit: 50,
-      }, { signal }).catch(() => []);
-      out.push(...hits.map<Item>((h) => ({ kind: 'text', path: h.path })));
+      }, { signal }).catch(() => []).then(hits => hits.map<Item>((h) => ({ kind: 'text', path: h.path }))));
     }
+    for (const group of await Promise.all(pending)) out.push(...group);
     return out;
   }, [projectId]);
 
@@ -349,6 +354,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
               : 'Type to search files, symbols, text and actions…'}
             className="h-8 text-[12.5px]"
           />
+          {pathPartial && <p role="status" className="px-1 pt-1.5 text-[10.5px] text-amber-500/90">{t('everywhere.pathsPartial', { defaultValue: 'Partial indexed paths. Refine the query; missing results do not prove absence.' })}</p>}
           {(tab === 'semantic' || tab === 'all') && semanticNotice && (
             <p className="px-1 pt-1.5 text-[10.5px] text-amber-500/90">{semanticNotice}</p>
           )}

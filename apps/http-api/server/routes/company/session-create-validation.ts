@@ -16,6 +16,7 @@ export interface CreateSessionBody {
   master_provider: string;
   master_model: string;
   role_assignments?: CompanyRoleConfig[];
+  qa_executor?: 'preview' | 'playwright';
   /**
    * Curated pool of `(provider, model)` tuples the master is allowed
    * to spawn subordinates with. When present (length > 0), the master's

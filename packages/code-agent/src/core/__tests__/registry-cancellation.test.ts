@@ -24,13 +24,13 @@ describe('tool dispatch cancellation boundary', () => {
   it('preserves a confirmed result when cancellation arrives after the effect started', async () => {
     const f = fixture();
     f.handler.mockImplementationOnce(async () => { f.abort.abort(); return { content: 'effect finished' }; });
-    await expect(f.registry.invoke('effect', {}, f.ctx)).resolves.toEqual({ content: 'effect finished' });
+    await expect(f.registry.invoke('effect', {}, f.ctx)).resolves.toMatchObject({ content: 'effect finished', evidence: { version: 2, state: 'succeeded', effect: 'confirmed' } });
     expect(f.handler).toHaveBeenCalledOnce();
   });
 
   it('does not treat an IPC-cloned signal-shaped object as cancellation', async () => {
     const f = fixture(); f.ctx.signal = { aborted: true } as AbortSignal;
-    await expect(f.registry.invoke('effect', {}, f.ctx)).resolves.toEqual({ content: 'effect finished' });
+    await expect(f.registry.invoke('effect', {}, f.ctx)).resolves.toMatchObject({ content: 'effect finished', evidence: { version: 2, state: 'succeeded', effect: 'confirmed' } });
     expect(f.handler).toHaveBeenCalledOnce();
   });
 });

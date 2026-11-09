@@ -46,7 +46,9 @@ it('recovers old pending work behind recent history and does not wake on notific
   const request = await store.send({ from: 'chat:00000000-0000-4000-8000-000000000001', to: 'chat:00000000-0000-4000-8000-000000000002', kind: 'question', body: 'Old pending question', idempotencyKey: 'old' });
   await Promise.all(Array.from({ length: 505 }, (_, index) => store.files.put('messages', `history-${index}`, { ...request, id: `history-${index}`, kind: 'notify', createdAt: request.createdAt + index + 1 })));
   const wake = vi.fn(async message => { await store.acknowledge(message.to, message.id); return true; });
+  const project = vi.spyOn(store, 'project');
   const stop = await startCollaborationWakeService(store, wake); cleanups.push(stop);
   await vi.waitFor(() => expect(wake).toHaveBeenCalledWith(expect.objectContaining({ id: request.id })), { timeout: 5000 });
   expect(wake).toHaveBeenCalledTimes(1);
+  expect(project.mock.calls.some(([message]) => message.kind === 'notify')).toBe(false);
 }, 15_000);

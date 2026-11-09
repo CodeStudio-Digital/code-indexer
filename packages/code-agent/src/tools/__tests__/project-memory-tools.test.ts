@@ -9,6 +9,19 @@ const context = (overrides: Partial<ToolContext>): ToolContext => ({
 } as ToolContext);
 
 describe('project memory write tools', () => {
+  it('reads and lists global preferences without enabling project memory', async () => {
+    const recall = vi.fn().mockResolvedValue([{ id: '1', title: 'Language', content: 'Portuguese' }]);
+    const list = vi.fn().mockResolvedValue([{ name: 'Language', description: 'Portuguese', type: 'preference' }]);
+    const ctx = context({ userMemory: { save: vi.fn(), recall, list } });
+    const result = await recallMemoryTool.handler({ scope: 'user', query: 'language' }, ctx);
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('Portuguese');
+    expect(recall).toHaveBeenCalledWith('language', 5, undefined);
+    const index = await recallMemoryTool.handler({ scope: 'user', mode: 'list' }, ctx);
+    expect(index.content).toContain('Language');
+    expect(list).toHaveBeenCalledOnce();
+    expect((await recallMemoryTool.handler({ scope: 'wrong', query: 'x' }, ctx)).isError).toBe(true);
+  });
   it('passes cancellation to explicit recall and never reports an aborted result as empty memory', async () => {
     const ctrl = new AbortController();
     const recall = vi.fn(async (_query, _limit, signal: AbortSignal) => { ctrl.abort(); signal.throwIfAborted(); return []; });

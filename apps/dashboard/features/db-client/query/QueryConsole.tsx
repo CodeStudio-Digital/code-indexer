@@ -78,7 +78,10 @@ export function QueryConsole({
   const [activeIdx, setActiveIdx] = useState(0);
   const [timeoutSeconds, setTimeoutSeconds] = useState(String(DEFAULT_QUERY_TIMEOUT_SECONDS));
   const [transactional, setTransactional] = useState(true);
+  const [catalogCursor, setCatalogCursor] = useState<string | undefined>();
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogNames, setCatalogNames] = useState<string[]>([]);
+  const catalogRequest = useRef<AbortController | null>(null);
   const queryIdRef = useRef<string | null>(null);
   const runningRef = useRef(false);
   const onSqlChangeRef = useRef(onSqlChange);
@@ -95,13 +98,30 @@ export function QueryConsole({
   }, [sql]);
 
   useEffect(() => {
-    if (connectionId == null || engine === 'mongodb' || engine === 'redis') return;
-    let cancelled = false;
-    void api.catalog(connKey ?? String(connectionId)).then((snapshot) => {
-      if (!cancelled) setCatalogNames(snapshot.objects.filter((object) => object.kind === 'table' || object.kind === 'view').map((object) => object.name));
-    }).catch(() => void 0);
-    return () => { cancelled = true; };
-  }, [connectionId, connKey, engine]);
+    const controller = new AbortController();
+    catalogRequest.current = controller;
+    setCatalogNames([]); setCatalogCursor(undefined);
+    setCatalogLoading(false);
+    if (connectionId != null && engine !== 'mongodb' && engine !== 'redis') {
+      void api.catalog(connKey ?? api.connectionKey(projectId, connectionId), false, { schema, limit: 300 }, controller.signal).then((snapshot) => {
+        if (!controller.signal.aborted) { setCatalogNames(snapshot.objects.filter((object) => object.kind === 'table' || object.kind === 'view').map((object) => object.name)); setCatalogCursor(snapshot.nextCursor); }
+      }).catch(() => void 0);
+    }
+    return () => { controller.abort(); };
+  }, [connectionId, connKey, engine, projectId, schema]);
+
+  const loadCatalogPage = async () => {
+    if (!catalogCursor || catalogLoading || connectionId == null) return;
+    const controller = catalogRequest.current;
+    if (!controller || controller.signal.aborted) return;
+    setCatalogLoading(true);
+    try {
+      const page = await api.catalog(connKey ?? api.connectionKey(projectId, connectionId), false, { schema, limit: 300, cursor: catalogCursor }, controller.signal);
+      if (controller.signal.aborted) return;
+      setCatalogNames(current => [...new Set([...current, ...page.objects.map(object => object.name)])].slice(0, 5000));
+      setCatalogCursor(page.nextCursor);
+    } finally { if (!controller.signal.aborted) setCatalogLoading(false); }
+  };
 
   const run = useCallback(
     async (text: string) => {
@@ -109,6 +129,7 @@ export function QueryConsole({
       const statements = splitStatements(text);
       if (statements.length === 0) return;
       const safetyDiagnostics = analyzeSql(text, allSuggestions).filter((item) =>
+
         item.code === 'write-without-where' || item.code === 'destructive-ddl',
       );
       if (safetyDiagnostics.length > 0 && !(await confirm({
@@ -135,7 +156,7 @@ export function QueryConsole({
       }
       runningRef.current = true;
       setRunning(true);
-      const cid = connKey ?? String(connectionId);
+      const cid = connKey ?? api.connectionKey(projectId, connectionId);
       const out: ResultSet[] = [];
       const started = Date.now();
       let totalRows = 0;
@@ -198,15 +219,15 @@ export function QueryConsole({
     if (connectionId == null) return [];
     const fallbackSchema = engine === 'mssql' ? 'dbo' : engine === 'postgres' ? 'public' : '';
     const info = await api.describeTable(
-      connKey ?? String(connectionId),
+      connKey ?? api.connectionKey(projectId, connectionId),
       reference.schema ?? schema ?? fallbackSchema,
       reference.table,
     );
     return info.columns;
-  }, [connectionId, connKey, engine, schema]);
+  }, [connectionId, connKey, engine, projectId, schema]);
 
   const cancel = useCallback(() => {
-    if (connectionId != null && queryIdRef.current) void api.cancelQuery(connKey ?? String(connectionId), queryIdRef.current);
+    if (connectionId != null && queryIdRef.current) void api.cancelQuery(connKey ?? api.connectionKey(projectId, connectionId), queryIdRef.current);
   }, [connectionId, connKey]);
 
   const format = useCallback(() => setSql((s) => formatSql(s)), []);
@@ -216,7 +237,7 @@ export function QueryConsole({
     runningRef.current = true;
     setRunning(true);
     try {
-      const res = await api.explain(connKey ?? String(connectionId), sql);
+      const res = await api.explain(connKey ?? api.connectionKey(projectId, connectionId), sql);
       setResults([{ sql, result: res, kind: 'plan' }]);
     } catch (e) {
       setResults([{ sql, error: e instanceof Error ? e.message : String(e) }]);
@@ -248,6 +269,10 @@ export function QueryConsole({
 
   return (
     <div className="flex h-full flex-col">
+      {catalogCursor && <div role="status" className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
+        {t('query.catalogPartial')}
+        <button type="button" disabled={catalogLoading || catalogNames.length >= 5000} onClick={() => void loadCatalogPage().catch(() => undefined)}>{t('query.loadCatalogPage')}</button>
+      </div>}
       <div className="flex items-center gap-2 border-b px-2 py-1">
         {running ? (
           <Button size="sm" variant="outline" onClick={cancel}>

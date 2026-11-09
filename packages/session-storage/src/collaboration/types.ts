@@ -12,6 +12,11 @@ export interface ChatParticipant {
 }
 
 export interface ChatMessage {
+  schemaVersion?: 2;
+  origin?: 'agent' | 'schedule' | 'human';
+  sourceEpoch?: number;
+  targetEpoch?: number;
+  correlationId?: string;
   id: string;
   from: string;
   to: string;

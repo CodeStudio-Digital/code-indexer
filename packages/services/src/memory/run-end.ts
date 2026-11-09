@@ -65,6 +65,8 @@ export interface RunEndMemoryResult {
 }
 
 export interface RunEndMemory {
+  /** Main-process truth, including extractions whose worker-side wait timed out. */
+  hasPending?(sessionId: SessionId): boolean;
   extractAndPersist(
     projectId: number,
     projectName: string,
@@ -171,7 +173,8 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
     else console.log(line);
   };
 
-  return {
+  const pending = new Map<SessionId, number>();
+  const orchestrator: RunEndMemory = {
     async isConfigured() {
       if (!resolver) return false;
       const binding = await resolver
@@ -321,6 +324,21 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
         /* diagnostics must never affect the pass */
       }
       return { ...totals, hadError: lastError != null };
+    },
+  };
+  return {
+    isConfigured: () => orchestrator.isConfigured(),
+    hasPending: sessionId => (pending.get(sessionId) ?? 0) > 0,
+    async extractAndPersist(projectId, projectName, input) {
+      const id = input.sessionId;
+      if (id) pending.set(id, (pending.get(id) ?? 0) + 1);
+      try { return await orchestrator.extractAndPersist(projectId, projectName, input); }
+      finally {
+        if (id) {
+          const remaining = (pending.get(id) ?? 1) - 1;
+          if (remaining > 0) pending.set(id, remaining); else pending.delete(id);
+        }
+      }
     },
   };
 }

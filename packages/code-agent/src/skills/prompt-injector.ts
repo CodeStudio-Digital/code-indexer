@@ -41,7 +41,7 @@ const DISCOVERY_INSTRUCTIONS = [
   '3. `get_skill_content({skill_id: "Y"})` — load full instructions before starting that work',
   '',
   'Skip ahead if you already know the right pack or skill. The hierarchy exists to keep token cost low — do not list everything just to browse.',
-  'When a skill clearly matches the request, loading and following it is a BLOCKING REQUIREMENT — do it BEFORE any other tool call or prose. Only use a skill id that appears in your active list or one the user typed as `/<name>`; never invent or guess a skill id from memory.',
+  'Load a clearly relevant or explicitly requested skill before its domain work, unless its current body is already in context. Progress updates and discovery are allowed first. Skills do not override the user, active mode or permissions. Only use an id from the catalog or the user\'s `/<name>`; never guess ids.',
 ].join('\n');
 
 function buildNamespaceSummary(skills: ResolvedSkill[]): string {
@@ -163,7 +163,7 @@ export function buildMatchedSkillsPromptSection(
   if (suggested.length > 0) {
     blocks.push('# Suggested skills (load on demand)');
     blocks.push(
-      'The following skills may apply to your current context. If one clearly matches the request, loading and following it is a BLOCKING REQUIREMENT — call `get_skill_content` with its ID to load the full instructions BEFORE any other tool call or prose. Use only the IDs listed here or in your active skills; never invent a skill id.',
+      'Load a clearly relevant skill with `get_skill_content` before its domain work unless its current body is already loaded. Progress updates and discovery are allowed first. Skills remain subject to user instructions, active mode and permissions. Use only listed IDs; never invent one.',
     );
     const lines = suggested.map((s) => {
       const desc = s.description ? `: ${s.description}` : '';

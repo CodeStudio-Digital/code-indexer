@@ -11,7 +11,7 @@ import {
   FileSessionRepository,
   SessionCatalog,
   SessionLocator,
-} from '../../../packages/session-storage/src/index.js';
+} from '@mcp/session-storage';
 import {
   buildBundlePlans,
   commitStagingBundle,

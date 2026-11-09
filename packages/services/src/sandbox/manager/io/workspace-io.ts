@@ -23,10 +23,10 @@ export class WorkspaceIO {
     sessionId: string,
     relPath: string,
   ): { driver: ISandboxDriver; sb: Sandbox; abs: string } {
-    const driver = this.getDriver();
-    if (!driver) throw new Error('SandboxManager has no driver wired');
     const sb = this.registry.getPrimary(sessionId);
     if (!sb) throw new Error(`No sandbox for session ${sessionId}`);
+    const driver = this.getDriver();
+    if (!driver) throw new Error('SandboxManager has no driver wired');
     return { driver, sb, abs: this.absPath(sb, relPath) };
   }
 
@@ -35,10 +35,10 @@ export class WorkspaceIO {
     serviceId: string,
     relPath: string,
   ): { driver: ISandboxDriver; sb: Sandbox; abs: string } {
-    const driver = this.getDriver();
-    if (!driver) throw new Error('SandboxManager has no driver wired');
     const sb = this.registry.getService(sessionId, serviceId);
     if (!sb) throw new Error(`No sandbox for session ${sessionId} service ${serviceId}`);
+    const driver = this.getDriver();
+    if (!driver) throw new Error('SandboxManager has no driver wired');
     return { driver, sb, abs: this.absPath(sb, relPath) };
   }
 
@@ -97,6 +97,11 @@ export class WorkspaceIO {
   /** Write a workspace-relative text file (creates parents). */
   async writeText(sessionId: string, relPath: string, data: string): Promise<void> {
     const { driver, sb, abs } = this.resolvePrimary(sessionId, relPath);
+    await driver.writeFile(sb.containerId, abs, data, { recursive: true });
+  }
+
+  async writeTextOnService(sessionId: string, serviceId: string | undefined, relPath: string, data: string): Promise<void> {
+    const { driver, sb, abs } = this.resolve(sessionId, serviceId, relPath);
     await driver.writeFile(sb.containerId, abs, data, { recursive: true });
   }
 

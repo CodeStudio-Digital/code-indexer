@@ -1,6 +1,13 @@
 export type CompanySessionStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error';
 export type CompanyRuntimeKind = 'company' | 'app_studio';
 
+export interface CompanySessionIdentity {
+  company_id: string;
+  session_id: string;
+  scope: { workspace: 'shared'; resources: 'company'; conversation: 'session'; write_policy: 'serialized_mutations' };
+  configuration: { mode: 'snapshot'; revision: string; inherited_from: string | null; inherited_revision: string | null };
+}
+
 /**
  * Server-resolved runtime surface. Persist only `runtime_kind`; the remaining
  * fields are derived so clients and workers cannot widen a session's powers by
@@ -20,7 +27,7 @@ export interface CompanySessionCapabilities {
   allowFreeSubordinateSpawn: boolean;
 }
 
-export interface CompanySession {
+export interface CompanySession extends Partial<CompanySessionIdentity> {
   id: string;
   template_id: number | null;
   /** Selects the server-owned orchestration capability for this session. */

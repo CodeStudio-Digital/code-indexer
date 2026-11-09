@@ -13,6 +13,7 @@ import { Input } from '../../../components/ui/input.js';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../../components/ui/select.js';
 import { findHostByKey, sshHostKey, tunnelList, tunnelStart, tunnelStop, resolveSpecFromHost } from '../api.js';
 import type { SshHost, SshIdentity } from '../types.js';
+import { startTunnelPolling } from './tunnel-polling.js';
 
 interface TunnelsPanelProps {
   hosts: SshHost[];
@@ -21,10 +22,6 @@ interface TunnelsPanelProps {
 
 const FIELD = 'flex flex-col gap-1';
 const LABEL = 'text-[10px] uppercase tracking-wide text-muted-foreground/70';
-
-/** Poll cadence while traffic is moving, and once the counters go quiet. */
-const FAST_POLL_MS = 1500;
-const SLOW_POLL_MS = 5000;
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -83,31 +80,7 @@ export function TunnelsPanel({ hosts, identities }: TunnelsPanelProps) {
    * counters are unchanged so an idle tunnel costs almost nothing.
    */
   const tunnelCount = tunnels.length;
-  useEffect(() => {
-    refresh();
-    if (tunnelCount === 0) return;
-    let timer: ReturnType<typeof setTimeout>;
-    let delay = FAST_POLL_MS;
-    let lastSignature = '';
-
-    const tick = async (): Promise<void> => {
-      if (document.visibilityState === 'visible') {
-        try {
-          const list = await tunnelList();
-          setTunnels(list);
-          const signature = list.map((x) => `${x.id}:${x.bytesUp}:${x.bytesDown}`).join('|');
-          delay = signature === lastSignature ? SLOW_POLL_MS : FAST_POLL_MS;
-          lastSignature = signature;
-        } catch {
-          delay = SLOW_POLL_MS;
-        }
-      }
-      timer = setTimeout(() => void tick(), delay);
-    };
-
-    timer = setTimeout(() => void tick(), delay);
-    return () => clearTimeout(timer);
-  }, [refresh, tunnelCount]);
+  useEffect(() => startTunnelPolling(tunnelList, setTunnels, tunnelCount > 0), [tunnelCount]);
 
   async function start(): Promise<void> {
     setError(null);

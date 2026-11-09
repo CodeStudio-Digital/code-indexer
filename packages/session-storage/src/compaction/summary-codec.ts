@@ -107,7 +107,6 @@ export function capCompactionSummaryV3(summary: CompactionSummaryV3): Compaction
       constraints: capList(summary.resume.constraints, 4, 180),
       pending_tasks: capList(summary.resume.pending_tasks, 6, 180),
       next_step: capString(summary.resume.next_step, 300),
-      ...(summary.resume.active_goal ? { active_goal: capString(summary.resume.active_goal, 300) } : {}),
     },
     ...(summary.metrics ? { metrics: summary.metrics } : {}),
   };

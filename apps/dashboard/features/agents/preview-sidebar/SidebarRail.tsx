@@ -14,7 +14,7 @@
  * the selection bar just hugs the right (inner) edge.
  */
 import { useEffect, useState } from 'react';
-import { Building2, ChevronDown, ChevronUp, Database, Inbox, KeyRound, Puzzle, ShieldOff } from 'lucide-react';
+import { Building2, ChevronDown, ChevronUp, Database, Inbox, KeyRound, Puzzle, Activity } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { RailButton, RailContainer, RailSeparator } from '../../../components/chrome/index.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
@@ -49,10 +49,10 @@ interface RailIcon {
 // when joining a session. Inbox/Env are operational peeks. Supervisor
 // and Databases are advanced: valuable when needed, noise otherwise.
 const BASE_ICONS: RailIcon[] = [
-  { id: 'company-config', Icon: Building2, title: 'Configuração da Empresa' },
-  { id: 'inbox', Icon: Inbox, title: 'Inbox' },
-  { id: 'env', Icon: KeyRound, title: 'Env' },
-  { id: 'supervisor', Icon: ShieldOff, title: 'Agent Supervisor', advanced: true },
+  { id: 'company-config', Icon: Building2, title: 'Equipe e configuração' },
+  { id: 'inbox', Icon: Inbox, title: 'Comunicação entre agentes' },
+  { id: 'supervisor', Icon: Activity, title: 'Saúde da execução' },
+  { id: 'env', Icon: KeyRound, title: 'Ambiente e conexões', advanced: true },
   { id: 'databases', Icon: Database, title: 'Databases', advanced: true },
 ];
 

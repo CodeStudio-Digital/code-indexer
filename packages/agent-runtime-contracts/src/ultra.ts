@@ -8,7 +8,6 @@ export interface UltraPreset {
   orchestration: 'off' | 'manual' | 'suggest' | 'dynamic';
   parallelism: { maxAgents: number; maxWaves?: number };
   maxDepth: number;
-  verification: 'off' | 'selective' | 'required';
   backgroundPolicy: 'foreground_only' | 'allowed' | 'preferred';
   durability: 'ephemeral' | 'durable';
   isolation: 'shared_read' | 'exclusive_worktree' | 'sandbox';

@@ -161,7 +161,7 @@ export class TsLanguageService {
   }
 
   private loadCompilerOptions(): ts.CompilerOptions {
-    const configPath = ts.findConfigFile(this.projectRoot, ts.sys.fileExists, 'tsconfig.json');
+    const configPath = this.projectConfigPath();
     if (!configPath) {
       // Sensible defaults if the project has no tsconfig — unusual but possible.
       return {
@@ -175,6 +175,15 @@ export class TsLanguageService {
       };
     }
     return this.loadAndExpandConfig(configPath);
+  }
+
+  /** Discovery belongs to the registered project. TypeScript's findConfigFile
+   * walks parents and can silently load an unrelated monorepo when a small
+   * nested project has no config. Explicit extends/references still work. */
+  private projectConfigPath(): string | undefined {
+    return ['tsconfig.json', 'jsconfig.json']
+      .map(name => join(this.projectRoot, name))
+      .find(candidate => ts.sys.fileExists(candidate));
   }
 
   /**
@@ -307,7 +316,7 @@ export class TsLanguageService {
       failedLookupLocationsSample: string[];
     } | null;
   } {
-    const configPath = ts.findConfigFile(this.projectRoot, ts.sys.fileExists, 'tsconfig.json');
+    const configPath = this.projectConfigPath();
     const nodeModules = `${this.projectRoot}/node_modules`;
     const angularCore = `${nodeModules}/@angular/core`;
     const sampleFile = file

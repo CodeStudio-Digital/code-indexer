@@ -75,6 +75,12 @@ export class SqliteVecDatabase {
         const physical = process.versions.electron
           ? location.replace(/([\\/][^\\/]+\.asar)(?=[\\/])/, '$1.unpacked') : location;
         this.db.loadExtension(physical);
+      }).catch((cause: unknown) => {
+        // A repaired native installation must be retryable in this process.
+        // The coordinator owns cooldowns; caching a rejected promise here
+        // would make even an explicit repair fail forever without a restart.
+        this.extLoad = null;
+        throw new Error(`sqlite-vec native extension unavailable: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
       });
     }
     return this.extLoad;
@@ -104,6 +110,9 @@ export class SqliteVecDatabase {
           }`);
         }
         console.warn('[sqlite-vec] discarded pre-generation vectors table; semantic backfill required.');
+      }).catch((error: unknown) => {
+        this.legacyDefaultTableReset = null;
+        throw error;
       });
     }
     return this.legacyDefaultTableReset;
@@ -257,7 +266,9 @@ export class SqliteVecVectorStore implements VectorStore {
     queryVector: number[],
     options?: VectorSearchOptions,
   ): Promise<VectorMatch[]> {
+    options?.signal?.throwIfAborted();
     await this.loadExt();
+    options?.signal?.throwIfAborted();
     if (!this.tableExists() || this.isLegacySchema()) return [];
     const topK = options?.topK ?? 20;
     const filter = options?.filter ?? {};

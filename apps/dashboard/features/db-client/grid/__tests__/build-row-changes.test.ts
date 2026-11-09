@@ -22,14 +22,14 @@ describe('buildRowChanges — relation', () => {
   it('carries schema + table on an update', () => {
     const state: ChangeSetState = { ...empty, edited: { [rowKeyOf(rows[0], PK)]: { name: 'Ada' } } };
     expect(buildRowChanges(state, rows, PK, 'public', 'users')).toEqual([
-      { op: 'update', schema: 'public', table: 'users', pk: { id: 1 }, values: { name: 'Ada' } },
+      { op: 'update', schema: 'public', table: 'users', pk: { id: 1 }, values: { name: 'Ada' }, original: rows[0] },
     ]);
   });
 
   it('carries schema + table on a delete', () => {
     const state: ChangeSetState = { ...empty, deleted: new Set([rowKeyOf(rows[1], PK)]) };
     expect(buildRowChanges(state, rows, PK, 'public', 'users')).toEqual([
-      { op: 'delete', schema: 'public', table: 'users', pk: { id: 2 } },
+      { op: 'delete', schema: 'public', table: 'users', pk: { id: 2 }, original: rows[1] },
     ]);
   });
 
@@ -59,7 +59,7 @@ describe('buildRowChanges — what it refuses to send', () => {
   it('drops a column typed back to its stored value', () => {
     const state: ChangeSetState = { ...empty, edited: { [rowKeyOf(rows[0], PK)]: { name: 'ada', score: 99 } } };
     expect(buildRowChanges(state, rows, PK, undefined, 'users')).toEqual([
-      { op: 'update', schema: undefined, table: 'users', pk: { id: 1 }, values: { score: 99 } },
+      { op: 'update', schema: undefined, table: 'users', pk: { id: 1 }, values: { score: 99 }, original: rows[0] },
     ]);
   });
 
@@ -72,7 +72,7 @@ describe('buildRowChanges — what it refuses to send', () => {
     const key = rowKeyOf(rows[0], PK);
     const state: ChangeSetState = { ...empty, edited: { [key]: { name: 'Ada' } }, deleted: new Set([key]) };
     expect(buildRowChanges(state, rows, PK, undefined, 'users')).toEqual([
-      { op: 'delete', schema: undefined, table: 'users', pk: { id: 1 } },
+      { op: 'delete', schema: undefined, table: 'users', pk: { id: 1 }, original: rows[0] },
     ]);
   });
 

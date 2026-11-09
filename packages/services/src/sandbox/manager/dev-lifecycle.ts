@@ -53,7 +53,7 @@ export interface DevLifecycleDeps {
     status: PersistedSandboxStatus,
   ) => void;
   syncManagedEnvs: (sessionId: string) => Promise<void>;
-  syncEnvsToAllContainers: (sessionId: string) => Promise<void>;
+  syncEnvsToAllContainers: (sessionId: string) => Promise<unknown>;
   unpauseRuntimeContainer: (sessionId: string, serviceId: string) => Promise<Sandbox>;
   /** Deps for `startExternalNodeDevServer` — usually `{ appendLog, recordStep }`. */
   externalNodeRuntimeDeps: ExternalNodeRuntimeDeps;

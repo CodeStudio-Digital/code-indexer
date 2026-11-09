@@ -226,6 +226,19 @@ describe('DirtyQueue', () => {
     const batch = q.takeBatch(1, 10);
     expect(batch.deletes).toEqual(['a.ts']);
     expect(batch.upserts).toEqual(['b.ts']);
+    expect(q.size(1)).toBe(2);
+    q.ack(1, batch);
+    expect(q.size(1)).toBe(0);
+  });
+  it('retains unacknowledged work and never acknowledges a newer event', () => {
+    const q = new DirtyQueue();
+    q.add(1, [{ path: 'a.ts', kind: 'upsert' }, { path: 'b.ts', kind: 'delete' }]);
+    const batch = q.takeBatch(1, 10);
+    expect(q.takeBatch(1, 10)).toEqual(batch);
+    q.add(1, [{ path: 'a.ts', kind: 'delete' }]);
+    q.ack(1, batch, ['b.ts']);
+    expect(q.takeBatch(1, 10).deletes).toEqual(['a.ts', 'b.ts']);
+    q.ack(1, q.takeBatch(1, 10));
     expect(q.size(1)).toBe(0);
   });
 });
@@ -498,19 +511,20 @@ describe('ProjectIndexService', () => {
     await svc.dispose();
   });
 
-  it('markDirty drains deletes then upserts, serialized with the run', async () => {
+  it('markDirty reconciles deletes and upserts against current disk state, serialized with the run', async () => {
     const exec = new FakeExecutor();
     exec.delayMs = 30;
     const svc = makeService(exec);
     svc.ensureFresh(1, 'open');                       // takes the lock first
+    await sleep(5);                                  // scan is in flight
     svc.markDirty(1, [
       { path: 'src/x.ts', kind: 'upsert' },
       { path: 'src/y.ts', kind: 'delete' },
     ]);
     expect(svc.getStatus(1).dirtyPending).toBe(2);    // buffered during the run
     await sleep(150);
-    expect(exec.removeCalls).toEqual([['src/y.ts']]);
-    expect(exec.indexCalls).toEqual([['src/x.ts']]);
+    expect(exec.removeCalls).toEqual([]);
+    expect(exec.indexCalls).toEqual([['src/x.ts', 'src/y.ts']]);
     expect(svc.getStatus(1).dirtyPending).toBe(0);
     await svc.dispose();
   });
@@ -715,7 +729,7 @@ describe('ProjectIndexService', () => {
     // the drain never gets a chance to parse the burst file-by-file).
     svc.ensureFresh(1, 'branch');
     expect(fileWatcher.suspendCalls).toContain(1);
-    expect(svc.getStatus(1).dirtyPending).toBe(0); // burst discarded — superseded by the scan
+    expect(svc.getStatus(1).dirtyPending).toBe(5); // retained until reconcile commits
     await sleep(80);
     expect(exec.runs).toBe(1);
     expect(fileWatcher.resumeCalls).toContain(1);
@@ -741,7 +755,7 @@ describe('ProjectIndexService', () => {
     svc.markDirty(1, [{ path: 'src/burst.ts', kind: 'upsert' }]);
     svc.ensureFresh(1, 'branch');
     expect(fileWatcher.suspendCalls).toContain(1);
-    expect(svc.getStatus(1).dirtyPending).toBe(0);
+    expect(svc.getStatus(1).dirtyPending).toBe(1);
     await sleep(140);
     expect(exec.runs).toBe(2); // open + queued branch follow-up
     expect(fileWatcher.resumeCalls).toContain(1);

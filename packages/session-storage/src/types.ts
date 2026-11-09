@@ -110,7 +110,6 @@ export interface SessionState {
   status: string;
   updated_at: string;
   archived_at: string | null;
-  goal: JsonValue | null;
   todos: readonly JsonValue[];
   permissions: Readonly<Record<string, JsonValue>>;
   tools: Readonly<Record<string, JsonValue>>;

@@ -22,6 +22,7 @@ import type { FsTurnTelemetrySink } from '@mcp/session-storage/fs-store/turn-tel
  * trail. Mirrors claude-code's `state.transition.reason` watermark.
  */
 export type TransitionKind =
+  | 'provider-transport-retry'
   | 'compact-pre-turn'
   | 'compact-auto-continue'
   | 'provider-400-retry'
@@ -219,12 +220,6 @@ export interface RunnerOptions {
   */
   preflightHint?: string;
   sessionToolCap?: number;
-  /**
-   * Whether this objective must establish and close a durable session goal
-   * even before the current-run tool ledger becomes substantive. Derived from
-   * validated fresh preflight or a still-pending cached objective on resume.
-   */
-  goalLifecycleIntent?: import('./goal-lifecycle-intent.js').GoalLifecycleIntent;
   /** Compact Agent Decision Engine guidance for this task/turn, when enabled by the host. */
   agentDecisionGuidance?: AgentDecisionGuidance | null;
   /** Compact Agent Decision Engine telemetry for recommendation-vs-outcome logging. */
@@ -325,6 +320,8 @@ export interface RunnerOptions {
     taskText: string,
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
+  /** Receipt for memory bodies included in successfully assembled input (not proof of model use). */
+  onMemoryInjected?: (ids: readonly string[]) => void | Promise<void>;
   /**
    * Mem C — optional LLM synthesizer that rewrites a meta/continuation message
    * into a real memory-recall query from the conversation tail. Returns null
@@ -336,13 +333,12 @@ export interface RunnerOptions {
   ) => Promise<string | null>;
   /**
    * Session State Block data — host-provided sync read of the session's
-   * persisted state (goal, active plan, todos, notes, changed files,
+   * persisted state (active plan, todos, notes, changed files,
    * investigation count). The Executing node renders + injects it per the
    * window-scaled policy (`assembly/injection-policy.ts`) so continuity never
    * depends on summarization alone. Unset (company sessions, tests) = off.
    */
   getSessionStateData?: () => {
-    goal: { text: string; status: string } | null;
     activePlan: { text: string; status: string } | null;
     todos: ReadonlyArray<{ status: string; label: string }>;
     notes: ReadonlyArray<{ id: string; title: string; body: string; kind: string; pinned: boolean }>;
@@ -405,20 +401,9 @@ export interface RunnerOptions {
     | null
     | Promise<import('@mcp/code-agent/core/review-evidence.js').VerifyEvidence | null>;
   /**
-   * Independent goal-completion reviewer (host-built closure). The bridge
-   * schedules it after update_goal(complete) is durable. Its verdict is audit
-   * data only and null means inconclusive.
-   */
-  verifyGoalCompletion?: (
-    evidence?: import('./nodes/executing-verification-gate.js').VerificationReadiness,
-  ) => Promise<{
-    goalMet: boolean;
-    gaps: ReadonlyArray<{ description: string; severity: string }>;
-  } | null>;
-  /**
    * Host-owned durability barrier at an Executing turn boundary. The runner
    * emits `turn_start` first so the host can enqueue the previous turn's
-   * transcript/goal transaction, then awaits this callback before invoking
+   * transcript transaction, then awaits this callback before invoking
    * the provider. A rejection is execution authority: the BT fails closed and
    * no provider or tool from the new turn may run.
    */

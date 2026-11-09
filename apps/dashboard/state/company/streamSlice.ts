@@ -166,7 +166,9 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
         if (!slot.subordinateStates.has(agentRunId)) return slot;
         const subs = new Map(slot.subordinateStates);
         subs.delete(agentRunId);
-        return { ...slot, subordinateStates: subs };
+        const agentTextPreviews = new Map(slot.agentTextPreviews);
+        agentTextPreviews.delete(agentRunId);
+        return { ...slot, subordinateStates: subs, agentTextPreviews };
       }),
     })),
 

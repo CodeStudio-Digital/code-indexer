@@ -43,6 +43,7 @@ export interface CompanyRunEndInput {
 
 export interface CompanyMemoryPorts {
   memoryRetriever: {
+    recordInjected?(ids: readonly string[]): void | Promise<void>;
     retrieve(
       projectId: number,
       projectName: string,

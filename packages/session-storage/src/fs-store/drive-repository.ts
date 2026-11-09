@@ -11,7 +11,6 @@ import {
   FsSessionEntityFiles,
   type FsEntityEnvelope,
 } from './entity-files.js';
-import { FsGoalRepository } from './goal-repository.js';
 import { entityWindow } from './entity-window.js';
 import { FsPlanningRepository } from './planning-repository.js';
 import { FsSessionDirectory } from './session-directory.js';
@@ -97,7 +96,6 @@ export class FsDriveRepository {
     private readonly entities: FsSessionEntityFiles,
     private readonly planning: FsPlanningRepository,
     private readonly tasks: FsTaskRepository,
-    private readonly goals: FsGoalRepository,
   ) {}
   async remember(
     sessionId: SessionId | string,
@@ -462,9 +460,8 @@ export class FsDriveRepository {
   async getSessionStateData(
     sessionId: SessionId | string,
   ): Promise<FsSessionStateData> {
-    const [goal, plans, tasks, notes, fileMap, investigations] =
+    const [plans, tasks, notes, fileMap, investigations] =
       await Promise.all([
-        this.goals.get(sessionId),
         this.planning.listPlans(sessionId),
         this.tasks.getState(sessionId),
         this.memoryForState(sessionId, { limit: 6, autoLimit: 2 }),
@@ -476,7 +473,6 @@ export class FsDriveRepository {
         ),
       ]);
     return {
-      goal: goal ? { text: goal.text, status: goal.status } : null,
       activePlan: plans[0]
         ? { text: plans[0].plan_text, status: plans[0].status }
         : null,

@@ -245,6 +245,8 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const timer of this.drainRetries.values()) clearTimeout(timer);
+    this.drainRetries.clear();
     for (const projectId of this.interactivePriorityDepth.keys()) {
       this.setInteractivePriority(projectId, false);
     }
@@ -316,16 +318,14 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
   }
 
   /**
-   * Bulk-op suppression: discard the watcher's buffered burst AND the queued
-   * per-file drain work — both are superseded by the stat-first reconcile that
-   * the bulk reason (branch/workspace) is about to run. Clearing the dirty
-   * queue also makes an in-flight drain loop exit at its next takeBatch.
+   * Suspend burst delivery. Acknowledge the durable queue only after a successful
+   * reconcile, preserving recovery when the worker or process fails.
    */
   protected suppressBulkBurst(projectId: number): void {
     const watcher = this.watcher as FileWatcherService & { suspend?: (id: number) => void };
     watcher.suspend?.(projectId);
-    this.dirty.clear(projectId);
-    this.status.setDirtyPending(projectId, 0);
+    // A bulk reconcile may fail or the process may restart: keep pending deltas.
+    this.status.setDirtyPending(projectId, this.dirty.size(projectId));
   }
 
   /** End bulk-op suppression (no-op when not suspended). */

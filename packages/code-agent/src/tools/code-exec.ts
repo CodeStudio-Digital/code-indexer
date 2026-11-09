@@ -24,7 +24,8 @@
  * the tool's text content, or thrown Error when the tool reports isError.
  */
 import { Buffer } from 'node:buffer';
-import { runInNewContext, type Context } from 'node:vm';
+import type { Context } from 'node:vm';
+import { superviseCodeExec } from './code-exec-supervisor.js';
 import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
@@ -101,12 +102,12 @@ const CODE_EXEC_DESC =
   '  - `stash.set(key, value)` / `stash.get(key)` / `stash.keys()` / `stash.delete(key)` — key-value store that PERSISTS across code_exec calls for the whole session (~2 MB, JSON values). Carry file content or intermediate results into a later script through the stash instead of printing them or re-reading files.\n' +
   '  - `change.*` — THIS SESSION\'s pending edits as a queryable object (reviewing your own work): `await change.files()` (shape-classified summary), `change.hunks(path)`, `change.raw(path)` → {before, after}, `change.symbol(path, name)` → before/after body, `change.callers(symbolName)`, `change.dependents(path)`, `change.search(regex, {side:"before"|"after"})`, `change.absences()` → untouched references of contract-changed symbols. Prefer these over re-reading files to audit what you changed.\n' +
   '  - `JSON`, `Math`, `String`, `Number`, `Boolean`, `Array`, `Object`, `Promise`, `Set`, `Map` are available.\n' +
-  '  - The snippet runs as an async IIFE; use top-level `await` and `return` the result.\n' +
-  '  - NO Node runtime: `require`/`import`/`process`/`fs`/`path`/`Buffer` are NOT available (this is a node:vm sandbox, not Node). For file I/O call the registered `write_file`/`create_file` tools; for shell, `exec_command`.\n' +
+  '  - The snippet runs as an async IIFE; await every tool promise and return the result. Never launch fire-and-forget calls.\n' +
+  '  - No Node APIs: `require`/`import`/`process`/`fs`/`path`/`Buffer` are unavailable in the isolated evaluator. Use registered filesystem and shell tools.\n' +
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
-  'Mutating tools (write_file, edit_file, multi_edit, create_file, manage_path, apply_patch, git_add/commit/branch) work only when the plan is approved (or the active task scope unlocks the touched paths). ' +
-  'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and lifecycle tools (create_goal, get_goal, update_goal, task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
+  'Mutations must satisfy active mode, permission and task-scope gates. When Plan/Spec is active, obtain its required approval first; ordinary action mode does not create a new plan requirement. ' +
+  'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and lifecycle tools (task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
   'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, at most ' + MAX_PARALLEL_TOOL_CALLS + ' independent read calls at once; writes, commands and unknown classifications form sequential barriers, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
   '\n' +
@@ -119,7 +120,7 @@ const CODE_EXEC_DESC =
   'return {file, symbol};\n' +
   '```\n' +
   '\n' +
-  'Example — exploration + batched edit (after plan approval):\n' +
+  'Example — exploration + sequential edits (when authorized by the active mode):\n' +
   '```\n' +
   'const grep = await tools.mcp__grep_code({ pattern: "from \\"@old/ui\\"", literal: true, max_results: 50 });\n' +
   'const files = [...new Set(grep.split("\\n").map(l => l.split(":")[0]).filter(Boolean))];\n' +
@@ -133,6 +134,7 @@ const CODE_EXEC_DESC =
   '\n' +
   "USE: when an exploration would otherwise need 3+ sequential tool calls with simple logic between them.\n" +
   "USE: wrap only uncertain read/probe calls with attempt(...); keep required calls fail-fast.\n" +
+  "RECOVERY: a failed batch may have completed earlier calls. Inspect results and reconcile unknown effects before retrying; never replay the whole batch blindly.\n" +
   "USE: when a refactor touches many files in the same way — one script beats N edit_file rounds.\n" +
   "DON'T: write large programs here — this is batched orchestration, not implementation. For complex logic, call tools directly across multiple turns.\n" +
   "DON'T: try to bypass plan-mode by calling mutating tools from inside code_exec — the policy applies the same way as direct calls.\n" +
@@ -162,9 +164,6 @@ function isSafeTool(tool: CoderTool): boolean {
     tool.name === 'resume_agent' ||
     tool.name === 'code_exec' ||
     tool.name.startsWith('spawn_') ||
-    tool.name === 'create_goal' ||
-    tool.name === 'get_goal' ||
-    tool.name === 'update_goal' ||
     tool.name === 'execute_task' ||
     tool.name === 'task_complete' ||
     tool.name === 'expand_toolset' ||
@@ -325,6 +324,7 @@ export function buildCodeExecTool(
 
       const code = String(args.code ?? '');
       if (!code.trim()) {
+        ctx.toolOutcomeScope?.markEvaluatorClosed();
         // PR 5 — guide the model towards the right tool when `code` is
         // missing. A bare "code cannot be empty" message in session 798
         // produced a 3ms failure with no clue what to do next.
@@ -380,7 +380,7 @@ export function buildCodeExecTool(
         count: number;
       }>();
       const activeToolPromises = new Set<Promise<unknown>>();
-      const activeControllers = new Set<AbortController>();
+      const activeControllers = new Map<AbortController, number>();
       const nestedOutcomes: NestedOutcome[] = [];
       const nestedBlocks = new Map<number, NonNullable<ToolResult['extraUserBlocks']>>();
       // One shared FIFO lane per runner. Lightweight/standalone tests get an
@@ -420,9 +420,9 @@ export function buildCodeExecTool(
         }
       };
 
-      const appendCapturedLog = (level: 'log' | 'warn' | 'error', parts: unknown[]): void => {
+      const appendCapturedLog = (level: 'log' | 'warn' | 'error', parts: unknown[], observedBytes?: number): void => {
         const line = formatLogLine(parts);
-        const lineBytes = Buffer.byteLength(`${line}\n`, 'utf8');
+        const lineBytes = observedBytes === undefined ? Buffer.byteLength(`${line}\n`, 'utf8') : observedBytes + 1;
         emittedLogBytes += lineBytes;
         if (retainedLogBytes + lineBytes <= effectiveMaxOutput) {
           logBuffer.push(line);
@@ -514,6 +514,7 @@ export function buildCodeExecTool(
         rejectTimeout = reject;
       });
       let wallTimer: ReturnType<typeof setTimeout> | null = null;
+      const wallDeadline = Date.now() + WALL_TIMEOUT_MS;
       const wallTimeoutError = (): Error => Object.assign(
         new Error(`code_exec: wall-clock limit exceeded after ${WALL_TIMEOUT_MS} ms`),
         { code: 'CODE_EXEC_WALL_TIMEOUT' },
@@ -543,6 +544,8 @@ export function buildCodeExecTool(
       };
 
       const toolsProxy: Record<string, (a: unknown) => Promise<string>> = {};
+      const structuredRequests = new WeakSet<object>();
+      const structuredResults = new WeakMap<object, ToolResult>();
       for (const t of safe) {
         const impl = async (rawArgs: unknown): Promise<string> => {
           if (executionClosing) {
@@ -581,6 +584,7 @@ export function buildCodeExecTool(
             durationMs: number;
           } | undefined;
           const recordNestedOutcome = (input: {
+            effectOutcome?: 'unknown';
             content: string;
             isError: boolean;
             durationMs: number;
@@ -612,6 +616,7 @@ export function buildCodeExecTool(
               repeatPolicy: metadata.repeatPolicy,
             });
             observer?.afterNestedCall({
+              ...(input.effectOutcome ? { effectOutcome: input.effectOutcome } : {}),
               invocationId: attemptOrigin,
               name: t.name,
               args: argObj,
@@ -809,6 +814,7 @@ export function buildCodeExecTool(
           try {
             if (ctx.permissionGate && !nestedAuthority?.invoke) {
               const decision = await ctx.permissionGate.check({
+                outcomeRecovery: ctx.outcomeRecovery,
                 toolUseId: nestedToolUseId,
                 toolName: t.name,
                 input: argObj,
@@ -872,7 +878,7 @@ export function buildCodeExecTool(
               !metadata.mutates &&
               metadata.parallelSafe &&
               !forceReread;
-            const stableKey = eligibleStableRead
+            const stableKey = eligibleStableRead && !structuredRequests.has(rawArgObj)
               ? `${t.name}|epoch:${callEpoch}|${stableArgsKey(argObj)}`
               : null;
             const cached = stableKey ? stableCalls.get(stableKey) : undefined;
@@ -908,7 +914,8 @@ export function buildCodeExecTool(
             }
 
             const invokePhysical = async (): Promise<string> => {
-              const perToolMs = resolveToolTimeoutMs(t, argObj);
+              const perToolMs = Math.min(resolveToolTimeoutMs(t, argObj),
+                ctx.deadlineAtEpochMs === undefined ? Infinity : Math.max(1, ctx.deadlineAtEpochMs - Date.now()));
               let toolTimer: ReturnType<typeof setTimeout> | null = null;
               let releaseCapacity: (() => void) | undefined;
               let releaseLane: (() => void) | undefined;
@@ -923,7 +930,7 @@ export function buildCodeExecTool(
               // acquisition. A queued call can therefore time out/cancel
               // without waiting forever behind an uncooperative prior owner.
               const callAbort = new AbortController();
-              activeControllers.add(callAbort);
+              activeControllers.set(callAbort, Math.min(started + perToolMs, wallDeadline));
               const parentAbort = (): void => {
                 const reason = ctx.signal?.reason;
                 try {
@@ -982,6 +989,7 @@ export function buildCodeExecTool(
                   parentToolUseId:
                     ctx.currentToolUseId ?? ctx.parentToolUseId ?? ctx.approvalAnchorId,
                   signal: callAbort.signal,
+                  deadlineAtEpochMs: Number.isFinite(perToolMs) ? Math.min(ctx.deadlineAtEpochMs ?? Infinity, started + perToolMs) : ctx.deadlineAtEpochMs,
                 };
                 const invocation = nestedAuthority?.invoke
                   ? nestedAuthority.invoke(t.name, argObj, nestedContext, () => { dispatched = true; })
@@ -1002,6 +1010,7 @@ export function buildCodeExecTool(
                   ...(timedOut ? [timedOut] : []),
                 ]);
                 const result = await guarded;
+                if (structuredRequests.has(rawArgObj)) structuredResults.set(rawArgObj, result);
                 resultReceived = true;
                 if (result.extraUserBlocks?.length) nestedBlocks.set(invocationIndex, result.extraUserBlocks);
                 let nestedContent = result.content;
@@ -1015,6 +1024,7 @@ export function buildCodeExecTool(
                 }
                 recordNestedOutcome({
                   content: nestedContent,
+                  ...(result.effectOutcome ? { effectOutcome: result.effectOutcome } : {}),
                   isError: !!result.isError,
                   durationMs: Date.now() - started,
                   structuredData: result.structuredData,
@@ -1056,6 +1066,7 @@ export function buildCodeExecTool(
                   : inferToolErrorInfo(t.name, errorText);
                 recordNestedOutcome({
                   content: errorText,
+                  ...(dispatched && !resultReceived && mayHaveEffects ? { effectOutcome: 'unknown' as const } : {}),
                   isError: true,
                   durationMs: Date.now() - started,
                   ...(refusalKind ? { refusalKind } : {}),
@@ -1328,12 +1339,12 @@ export function buildCodeExecTool(
         const abortReason = reason instanceof Error
           ? reason
           : new Error(reason === undefined ? 'code_exec finished' : String(reason));
-        for (const controller of activeControllers) {
+        for (const controller of activeControllers.keys()) {
           try { controller.abort(abortReason); } catch { /* ignore */ }
         }
       };
 
-      const closeAndSettle = async (reason?: unknown, abortActive = false): Promise<boolean> => {
+      const closeAndSettle = async (reason?: unknown, abortActive = false, drainMs = DRAIN_TIMEOUT_MS): Promise<boolean> => {
         executionClosing = true;
         pauseClock();
         if (clockTimer) {
@@ -1346,7 +1357,7 @@ export function buildCodeExecTool(
         // sibling settles. Refuse late calls (executionClosing) and drain until
         // the set is genuinely empty, but never let an uncooperative nested
         // invocation pin the parent tool forever.
-        const drained = await settleActiveWithin(DRAIN_TIMEOUT_MS);
+        const drained = await settleActiveWithin(drainMs);
         if (drained) return true;
         if (!abortActive) abortActiveCalls(reason ?? new Error('code_exec nested-call drain timed out'));
         await settleActiveWithin(ABORT_DRAIN_GRACE_MS);
@@ -1439,16 +1450,54 @@ export function buildCodeExecTool(
       // `impl` above), so it only fires on the script's own JS work — not on
       // time spent awaiting tools. The sync `timeout` option covers synchronous
       // infinite loops, which never reach an await.
-      armClock();
+      let evaluator: ReturnType<typeof superviseCodeExec> | undefined;
       let scriptPromise: Promise<unknown>;
       try {
         {
-          scriptPromise = runInNewContext(wrapped, sandbox, {
-            timeout: timeout, // legacy synchronous loop protection
-            filename: 'code_exec.js',
-          }) as Promise<unknown>;
+          const stashApi = sandbox.stash as ReturnType<typeof buildStashSandboxApi>;
+          evaluator = superviseCodeExec({
+            code: wrapped, timeoutMs: timeout, maxOutputBytes: effectiveMaxOutput,
+            priorityErrorBytes: MAX_PRIORITY_ERROR_LOG_BYTES,
+            tools: exposedNames, blocked: Object.keys(blockedToolGlobals),
+            schemas: allNames.map(toolSchema), listing: listTools(),
+            changes: Object.keys(sandbox.change ?? {}),
+            stash: (stashApi.keys as () => string[])().map(key => [key, (stashApi.get as (k: string) => unknown)(key)]),
+            stashMaxBytes: ctx.codeExecStash?.maxBytes?.() ?? 2_000_000,
+          }, {
+            ready: armClock,
+            log: (level, parts, inputBytes) => appendCapturedLog(level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log', parts, inputBytes),
+            logOmission: (lines, bytes) => { omittedLogLines += lines; omittedLogBytes += bytes; emittedLogBytes += bytes; },
+            stash: (op, key, value) => {
+              if (op === 'set') (stashApi.set as (k: string, v: unknown) => void)(key, value);
+              else if (op === 'delete') (stashApi.delete as (k: string) => void)(key);
+              else throw new Error('Invalid stash operation');
+            },
+            invoke: async (kind, name, input) => {
+              if (executionClosing) throw new Error('code_exec execution is closing');
+              if (kind === 'change') {
+                const fn = sandbox.change?.[name];
+                if (typeof fn !== 'function' || !Array.isArray(input)) throw new Error('Invalid change operation');
+                return fn(...input);
+              }
+              if (kind !== 'tool' && kind !== 'structured') throw new Error('Invalid invocation kind');
+              const fn = sandbox.tools[name] as (args: unknown) => Promise<string>;
+              const args = input && typeof input === 'object' ? input : {};
+              if (kind === 'structured') structuredRequests.add(args);
+              const text = await fn(args);
+              if (kind !== 'structured') return text;
+              const result = structuredResults.get(args);
+              return { text: result?.content ?? text, data: result?.structuredData, evidence: result?.evidence,
+                isError: result?.isError ?? false, error: result?.error, effectOutcome: result?.effectOutcome,
+                completeness: result?.sourceTruncations?.length ? 'partial' : 'complete',
+                sourceTruncations: result?.sourceTruncations,
+                extraUserBlocks: result?.extraUserBlocks };
+            },
+          });
+          scriptPromise = evaluator.promise;
         }
       } catch (e) {
+        await evaluator?.close();
+        ctx.toolOutcomeScope?.markEvaluatorClosed();
         await closeAndSettle(e, true);
         if (wallTimer) clearTimeout(wallTimer);
         const msg = e instanceof Error ? e.message : String(e);
@@ -1468,10 +1517,29 @@ export function buildCodeExecTool(
         returnValue = await Promise.race([scriptPromise, timeoutPromise, wallTimeoutPromise]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        // Once the script has failed it cannot consume any sibling result.
-        // Cancel cooperative work, then settle every proxy before returning;
-        // already-completed siblings remain available in nestedOutcomes.
-        await closeAndSettle(e, true);
+        // Close admission before waiting for the evaluator to exit. A queued
+        // sibling must not start just because the failed call released its lane.
+        executionClosing = true;
+        executionAborting = true;
+        await evaluator?.close();
+        // A known tool error (e.g. a diagnostic command exiting 1) is not a
+        // cancellation of another command that already started. Drain that
+        // command first: aborting it here used to manufacture an unknown effect
+        // and permanently block an otherwise recoverable conversation.
+        // Explicit cancellation/deadlines/unknown effects still abort promptly;
+        // remaining siblings retain their original tool deadlines, capped by
+        // the batch wall limit. The short fire-and-forget drain must not cut a
+        // legitimate command's already-admitted timeout to five seconds.
+        const failureCode = (e as { code?: unknown })?.code;
+        const cancelImmediately = ctx.signal?.aborted === true
+          || !!unsafeLedger.outcomeUnknownTool
+          || failureCode === 'CODE_EXEC_WALL_TIMEOUT'
+          || failureCode === 'CODE_EXEC_JS_TIMEOUT';
+        const drainMs = cancelImmediately ? DRAIN_TIMEOUT_MS : Math.max(0, Math.min(
+          wallDeadline - Date.now(),
+          Math.max(Date.now(), ...activeControllers.values()) - Date.now() + ABORT_DRAIN_GRACE_MS,
+        ));
+        await closeAndSettle(e, cancelImmediately, drainMs);
         // Defense-in-depth hints (wrong call shape, control tool, absent Node
         // builtin, import, nested-failure try/catch) — see code-exec-hints.ts.
         // Matching is on message text, never instanceof: errors thrown inside
@@ -1504,7 +1572,7 @@ export function buildCodeExecTool(
               suggestedAction: 'Inspect the script error and change the failing operation before retrying.',
             };
         const result: ToolResult = {
-          content: `code_exec failed: ${msg}${hint}${stderr}${batch.note}`,
+          content: `code_exec ${(e as Error)?.name === 'SyntaxError' ? 'parse/sync error' : 'failed'}: ${msg}${hint}${stderr}${batch.note}`,
           isError: true,
           error: errorInfo,
           structuredData: {
@@ -1524,6 +1592,8 @@ export function buildCodeExecTool(
         if (isNestedRefusal(e)) result.guardVerdict = e.guardVerdict;
         return withLogTruncation(result);
       } finally {
+        await evaluator?.close();
+        ctx.toolOutcomeScope?.markEvaluatorClosed();
         if (clockTimer) clearTimeout(clockTimer);
         if (wallTimer) clearTimeout(wallTimer);
       }

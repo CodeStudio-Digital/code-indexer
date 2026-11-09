@@ -710,6 +710,14 @@ describe('writer ordering and fencing', () => {
     await contender.close();
   });
 
+  it('treats an isolate that exited before creating its events directory as having no lease', async () => {
+    const { base } = await fixture();
+    const bundlePath = join(base, 'unfinished');
+    await mkdir(bundlePath);
+    await expect(releaseSessionWriterLeaseForOwner({ bundlePath, ownerId: 'exited-before-open' })).resolves.toBe(false);
+    expect(await readdir(bundlePath)).toEqual([]);
+  });
+
   it('reclaims only the lease owned by the coordinator-confirmed dead isolate', async () => {
     const ownerId = 'coder-worker:test-owner';
     const { repository, locator } = await fixture({ writerOwnerId: ownerId });

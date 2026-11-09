@@ -195,6 +195,7 @@ async function runBackgroundJob(
       const terminal = classifySubagentTerminal(result.reason, result.finalText ?? '');
       manager.patchAgent(job, i, {
         status: terminal.status,
+        result: result.workResult,
         toolCallCount: result.toolCallCount,
       });
     }

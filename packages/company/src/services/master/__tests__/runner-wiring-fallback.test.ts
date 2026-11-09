@@ -41,6 +41,14 @@ function fixture(result: Promise<unknown>) {
 }
 
 describe('Master completion explicit fallback', () => {
+  it('preserves an explicit pause when the aborted runner rejects during shutdown', async () => {
+    const f = fixture(Promise.reject(new Error('transport closed during pause')));
+    const tryExplicitFallback = vi.fn(async () => true);
+    attachMasterCompletionHandler(f.handle, AGENT_RUN_ID, { ...f.deps, ctx: { ...f.deps.ctx, isAborted: true }, tryExplicitFallback } as never);
+    await vi.waitFor(() => expect(f.state.setEnded).toHaveBeenCalledWith(true));
+    expect(f.companyFiles.updateAgentRunStatus).not.toHaveBeenCalled();
+    expect(tryExplicitFallback).not.toHaveBeenCalled();
+  });
   it('keeps the agent_run alive when a transient failure starts the configured fallback', async () => {
     const f = fixture(Promise.resolve({ reason: 'error', error: 'HTTP 429 rate limit' }));
     const tryExplicitFallback = vi.fn(async () => true);

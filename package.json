@@ -1,6 +1,6 @@
 {
   "name": "mcp-code-indexer",
-  "version": "3.15.1",
+  "version": "3.16.16",
   "packageManager": "pnpm@10.22.0",
   "description": "Codebase indexing platform powered by LLMs with hybrid search, MCP Server, and web dashboard",
   "repository": {
@@ -10,7 +10,7 @@
   "type": "module",
   "main": "dist/apps/electron/main.js",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "bin": {
     "mcp-code-indexer": "./dist/apps/cli/index.js",
@@ -44,8 +44,10 @@
     "check:loc": "tsx scripts/check-loc-cap.ts",
     "check:cycles": "tsx scripts/check-circular-imports.ts",
     "check:boundaries": "tsx scripts/check-repository-boundaries.ts",
+    "check:react": "node scripts/check-react-hooks.mjs",
+    "lint:react": "eslint apps/dashboard --max-warnings 0",
     "check:deadcode": "knip",
-    "check:arch": "npm run check:loc && npm run check:cycles && npm run check:deadcode",
+    "check:arch": "npm run check:react && npm run check:loc && npm run check:cycles && npm run check:deadcode",
     "agent:host:test": "vitest run packages/agent-runtime-contracts packages/agent-runtime-host",
     "audit:env": "tsx scripts/audit-env-vars.ts",
     "audit:env:check": "tsx scripts/audit-env-vars.ts --check",
@@ -99,9 +101,12 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "commander": "^13.1.0",
+    "decode-named-character-reference": "1.3.0",
     "dotenv": "^17.4.0",
     "ffmpeg-static": "5.2.0",
     "glob": "^11.0.1",
+    "hast-util-to-jsx-runtime": "2.3.6",
+    "html-url-attributes": "3.0.1",
     "google-auth-library": "^10.6.2",
     "hono": "^4.7.5",
     "https-proxy-agent": "^7.0.1",
@@ -120,6 +125,7 @@
     "officeparser": "^7.2.1",
     "openai": "^4.85.4",
     "pg": "^8.13.1",
+    "pg-cursor": "2.22.1",
     "playwright-core": "1.61.1",
     "postcss": "^8.5.3",
     "quickjs-emscripten": "0.32.0",
@@ -129,6 +135,8 @@
     "react-resizable-panels": "^2.1.7",
     "react-router-dom": "^7.10.0",
     "remark-gfm": "^4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
     "sharp": "0.34.5",
     "shiki": "^4.0.2",
     "sqlite-vec": "^0.1.9",
@@ -141,6 +149,7 @@
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.8.2",
     "undici": "^7.25.0",
+    "unified": "11.0.5",
     "unpdf": "^1.6.2",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2",
@@ -160,6 +169,7 @@
     "@mcp/api-handlers": "workspace:*",
     "@mcp/code-agent": "workspace:*",
     "@mcp/company": "workspace:*",
+    "@mcp/db-drivers": "workspace:*",
     "@mcp/docs-agent": "workspace:*",
     "@mcp/indexer": "workspace:*",
     "@mcp/orchestrator-host": "workspace:*",
@@ -172,6 +182,7 @@
     "@tailwindcss/typography": "^0.5.19",
     "@types/adm-zip": "^0.5.8",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/hast": "3.0.4",
     "@types/node": "^22.13.10",
     "@types/pg": "^8.11.10",
     "@types/react": "^19.0.12",
@@ -179,12 +190,15 @@
     "@types/ssh2": "^1.15.5",
     "@types/turndown": "^5.0.6",
     "@types/ws": "^8.5.13",
+    "@typescript-eslint/parser": "8.72.1",
     "@vitejs/plugin-react": "^6.0.0",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.1.2",
     "electron": "^42.5.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.0",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
     "knip": "^5.64.4",
     "rcedit": "^5.0.2",
     "react": "^19.0.0",
@@ -214,7 +228,9 @@
     ],
     "overrides": {
       "electron-builder-squirrel-windows": "26.15.3",
-      "@tanstack/react-virtual>@tanstack/virtual-core": "3.17.0"
+      "@tanstack/react-virtual>@tanstack/virtual-core": "3.17.0",
+      "shell-quote": "1.11.0",
+      "proxy-addr": "2.0.8"
     }
   }
 }

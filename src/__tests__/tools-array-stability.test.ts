@@ -65,47 +65,6 @@ describe('tools array — bit-stable ordering', () => {
   });
 });
 
-describe('buildTools — create_goal stays in the surface across goal lifecycle', () => {
-  // Regression: create_goal used to be removed from the tool array once a
-  // goal was in_progress. Tool membership is the first segment of the
-  // provider prompt-cache prefix, so that removal invalidated the whole
-  // prefix on the turn after goal creation (a full re-write, every round).
-  // create_goal must now stay visible regardless of goal status.
-  function makeArgs(goalStatus: 'in_progress' | 'complete' | null) {
-    const reg = new ToolRegistry();
-    reg.registerAll([
-      makeTool('create_goal'), makeTool('get_goal'), makeTool('update_goal'),
-      makeTool('read_file'), makeTool('edit_file'),
-    ]);
-    return {
-      registry: reg,
-      activeTiers: null,
-      toolContext: {
-        cwd: tmpdir(),
-        projectName: 'test',
-        getGoalState: goalStatus ? () => ({ text: 'objective', status: goalStatus }) : undefined,
-      } as unknown as ToolContext,
-      provider: { name: 'anthropic', model: 'sonnet' } as unknown as Parameters<typeof buildTools>[0]['provider'],
-    };
-  }
-
-  it('emits create_goal whether or not a goal is in_progress', () => {
-    const none = buildTools(makeArgs(null)).tools.map((t) => t.name);
-    const active = buildTools(makeArgs('in_progress')).tools.map((t) => t.name);
-    expect(none).toContain('create_goal');
-    expect(active).toContain('create_goal');
-    expect(active).toEqual(none);
-  });
-
-  it('serialized tools array is byte-identical across goal status (cache prefix)', () => {
-    const a = JSON.stringify(buildTools(makeArgs(null)).tools);
-    const b = JSON.stringify(buildTools(makeArgs('in_progress')).tools);
-    const c = JSON.stringify(buildTools(makeArgs('complete')).tools);
-    expect(b).toEqual(a);
-    expect(c).toEqual(a);
-  });
-});
-
 describe('terseDescription — pure transform for bootstrap profile', () => {
   it('passes through short descriptions unchanged', () => {
     const short = 'Read a file from disk.';

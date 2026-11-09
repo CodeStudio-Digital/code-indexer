@@ -1,21 +1,21 @@
 # Ferramentas e tipos de agentes do CodeStudio
 
-Inventário de nomes conferido no checkpoint anterior à remoção do runtime, em 23/10/2026. A execução atual é TypeScript; a contagem abaixo é o snapshot funcional dessa data. Escopo: definições do produto; não consulta credenciais nem presume quais agentes personalizados, plugins ou servidores externos estão habilitados no perfil do usuário.
+Inventário de nomes conferido no checkpoint anterior à remoção do runtime, em 23/10/2026. A execução atual é TypeScript; as contagens foram ajustadas em 27/10/2026 para a remoção da funcionalidade Meta. Escopo: definições do produto; não consulta credenciais nem presume quais agentes personalizados, plugins ou servidores externos estão habilitados no perfil do usuário.
 
-O catálogo principal possui **247 nomes** em **248 definições**. Nomes de compatibilidade e superfícies diferentes são contados separadamente. A definição de `respond_to_inbox` aparece em dois papéis Company, mas conta como um nome.
+O catálogo principal possui **244 nomes** em **245 definições**. Nomes de compatibilidade e superfícies diferentes são contados separadamente. A definição de `respond_to_inbox` aparece em dois papéis Company, mas conta como um nome.
 
 ## Separação por superfície
 
 | Superfície | Nomes |
 | --- | ---: |
-| Coder | 127 |
+| Coder | 124 |
 | Company e App Studio | 77 |
 | DocsAgent | 6 |
 | MCP interno/público | 33 |
 | Skills | 4 |
-| **Total** | **247** |
+| **Total** | **244** |
 
-A composição efetivamente disponível depende do preset, perfil de ferramentas, permissões, capacidades registradas e contexto da sessão. Não se fornecem automaticamente as 247 ferramentas a todos os agentes.
+A composição efetivamente disponível depende do preset, perfil de ferramentas, permissões, capacidades registradas e contexto da sessão. Não se fornecem automaticamente as 244 ferramentas a todos os agentes.
 
 ## Todas as ferramentas do catálogo principal, por função
 
@@ -68,10 +68,6 @@ A composição efetivamente disponível depende do preset, perfil de ferramentas
 **Interação, planos e especificações (5).** Perguntas, decisões e submissão/leitura de planos e especificações.
 
 `ask_user`, `decision_gate`, `submit_plan`, `submit_spec`, `read_plan`.
-
-**Objetivos (3).** Criar, consultar e atualizar o objetivo da execução.
-
-`create_goal`, `get_goal`, `update_goal`.
 
 **Tarefas (10).** Listas e itens de trabalho, atualização, cancelamento, arquivo e conclusão.
 
@@ -296,7 +292,6 @@ Esses bindings escolhem providers para funções específicas. Não correspondem
 | `memory_extraction` | `distiller` | Extrair memória durável |
 | `memory_recall` | `reranker` | Filtrar lembranças pertinentes |
 | `memory_query` | `query_writer` | Gerar consulta de memória |
-| `goal_verification` | `reviewer` | Verificação consultiva da conclusão |
 | `code-agent` | `vision`, `transcription`, `preflight`, `compaction` | Etapas auxiliares do Coder |
 | `editor` | `autocomplete` | Sugestões de código |
 
@@ -304,7 +299,7 @@ Fonte: [catálogo de pipelines](../../packages/services/src/pipelines/catalog.ts
 
 ## Catálogos dinâmicos e extensões do checkout
 
-MCPs externos, plugins e agentes personalizados variam conforme configuração e permissões. Seus catálogos efetivos não podem ser deduzidos apenas do inventário fixo de 247 nomes. Recursos e prompts MCP também não são contados como tools.
+MCPs externos, plugins e agentes personalizados variam conforme configuração e permissões. Seus catálogos efetivos não podem ser deduzidos apenas do inventário fixo de 244 nomes. Recursos e prompts MCP também não são contados como tools.
 
 <!-- EXTENSION_CATALOG -->
 
@@ -315,4 +310,4 @@ MCPs externos, plugins e agentes personalizados variam conforme configuração e
 - [Definições MCP](../../apps/mcp-server/tools/).
 
 
-A classificação funcional foi conferida por igualdade de conjuntos: os 247 nomes aparecem exatamente uma vez na seção principal e pertencem à superfície declarada. Nenhum aplicativo ou provider foi iniciado para este levantamento.
+A classificação funcional foi conferida por igualdade de conjuntos: os 244 nomes aparecem exatamente uma vez na seção principal e pertencem à superfície declarada. Nenhum aplicativo ou provider foi iniciado para este levantamento.

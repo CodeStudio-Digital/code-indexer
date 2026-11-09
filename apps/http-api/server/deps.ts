@@ -68,6 +68,7 @@ import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory
 import { LlmRecallFilter } from '@mcp/services/memory/recall-filter.js';
 import { LlmMemoryQuerySynthesizer, type ConversationTail } from '@mcp/services/memory/query-synthesizer.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
+import { recordMemoryAccess } from '@mcp/services/memory/access-telemetry.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
 import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
@@ -254,6 +255,7 @@ export interface SearchDeps {
   /** Mem C — project-memory retrieval over agent_memory (relevance × importance).
    *  Structural port the runner consumes (project scope, no `setRecallFilter`). */
   memoryRetriever: {
+    recordInjected?(ids: readonly string[]): void | Promise<void>;
     retrieve(
       projectId: number,
       projectName: string,
@@ -935,12 +937,13 @@ export function createDeps(): ServerDeps {
     log: (event, data) => console.debug(`[memory] retriever ${event}`, data),
   });
   const memoryRetriever = {
+    recordInjected: (ids: readonly string[]) => recordMemoryAccess(db, ids, 'injected'),
     // projectId 0 = global user memory (scope 'user'); any real id = that
     // project (scope 'project') — the same convention as the write path.
     retrieve: async (projectId: number, _projectName: string, taskText: string) => {
       const scope = projectId === 0 ? 'user' : 'project';
       const rows = await agentMemoryRetriever.retrieve(scope, projectId, taskText);
-      // WS10 telemetry — proves proactive recall is firing (and how often it's empty).
+      // Historical 'recall' means retrieval, never a prompt/application receipt.
       try {
         db.withBusyTimeout(0, () =>
           db.recordAgentMemoryEvent({ eventType: 'recall', scope, projectId, kept: rows.length }));
@@ -1245,6 +1248,7 @@ export function createDeps(): ServerDeps {
   // handler calls THIS instance). Inert for ordinary projects (id unchanged).
   const runEndMemory: RunEndMemory = {
     isConfigured: () => runEndMemoryRaw.isConfigured(),
+    hasPending: sessionId => runEndMemoryRaw.hasPending?.(sessionId) ?? false,
     extractAndPersist: (projectId, projectName, input) => {
       const tgt = db.resolveMemoryWriteProject(projectId);
       return tgt.id === projectId
@@ -1291,8 +1295,9 @@ export function createDeps(): ServerDeps {
             eventType: 'remember',
             scope: projectId === 0 ? 'user' : 'project',
             projectId,
-            kept: res.created,
+            kept: res.created + res.merged,
             dropped: res.skipped,
+            meta: { tool: 'remember', created: res.created, merged: res.merged },
           });
         });
       } catch { /* diagnostics are best-effort */ }

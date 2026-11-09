@@ -21,6 +21,9 @@ export async function copyText(text: string): Promise<boolean> {
     }
   }
   if (typeof document === 'undefined') return false;
+  const focused = document.activeElement as HTMLElement | null;
+  const selection = document.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.setAttribute('readonly', '');
@@ -39,5 +42,16 @@ export async function copyText(text: string): Promise<boolean> {
     ok = false;
   }
   document.body.removeChild(ta);
+  focused?.focus({ preventScroll: true });
+  if (selection) {
+    selection.removeAllRanges();
+    for (const range of ranges) selection.addRange(range);
+  }
   return ok;
+}
+
+export async function readClipboardText(): Promise<string> {
+  if (typeof navigator === 'undefined') return '';
+  try { return await navigator.clipboard?.readText?.() ?? ''; }
+  catch { return ''; }
 }

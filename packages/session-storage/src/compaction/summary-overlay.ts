@@ -1,10 +1,10 @@
 import type { CompactionSummaryV3, CompactionLiveStateV3 } from './summary-types.js';
 import { capCompactionSummaryV3 } from './summary-codec.js';
 
-function formatGoal(goal: CompactionLiveStateV3['goal']): string | undefined {
-  if (!goal) return undefined;
-  if (typeof goal === 'string') return goal;
-  return goal.status ? `${goal.text} (status=${goal.status})` : goal.text;
+function formatPlan(plan: CompactionLiveStateV3['activePlan']): string | undefined {
+  if (!plan) return undefined;
+  if (typeof plan === 'string') return plan;
+  return plan.status ? `${plan.text} (status=${plan.status})` : plan.text;
 }
 
 /** Persisted tasks are the source of truth; model inference is used only when absent. */
@@ -24,8 +24,7 @@ export function overlayLiveStateV3(
       .map((item) => `[${item.status}] ${item.step ?? item.content ?? ''}`.trim())
       .filter(Boolean);
   }
-  const goal = formatGoal(liveState.goal);
-  const activePlan = formatGoal(liveState.activePlan);
+  const activePlan = formatPlan(liveState.activePlan);
   return capCompactionSummaryV3({
     ...summary,
     resume: {
@@ -36,7 +35,6 @@ export function overlayLiveStateV3(
           ?? structuredTasks[0]
           ?? '',
       } : {}),
-      ...(goal ? { active_goal: goal } : {}),
       ...(activePlan ? {
         constraints: [
           ...summary.resume.constraints,

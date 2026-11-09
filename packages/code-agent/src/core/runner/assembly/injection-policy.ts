@@ -45,7 +45,7 @@ export function resolveInjectionPolicy(
   model: string,
   opts: {
     /** True when `<active-context>` (Agent Loop v2) already carries
-     *  goal/todos every turn — the state block then omits them. */
+     *  todos every turn — the state block then omits them. */
     liveStateCovered?: boolean;
   } = {},
 ): InjectionPolicy {
@@ -59,7 +59,7 @@ export function resolveInjectionPolicy(
       enabled,
       stateEveryTurn: true,
       budget: {
-        planChars: 120, goalChars: 160, noteSlots: 1, noteChars: 120,
+        planChars: 120, noteSlots: 1, noteChars: 120,
         todoLines: 3, fileSlots: 0, includeLiveState,
       },
       memoryIndexChars: 0,
@@ -74,7 +74,7 @@ export function resolveInjectionPolicy(
       enabled,
       stateEveryTurn: true,
       budget: {
-        planChars: 280, goalChars: 200, noteSlots: 2, noteChars: 160,
+        planChars: 280, noteSlots: 2, noteChars: 160,
         todoLines: 5, fileSlots: 3, includeLiveState,
       },
       memoryIndexChars: 400,
@@ -88,7 +88,7 @@ export function resolveInjectionPolicy(
     enabled,
     stateEveryTurn: false,
     budget: {
-      planChars: 700, goalChars: 300, noteSlots: 4, noteChars: 280,
+      planChars: 700, noteSlots: 4, noteChars: 280,
       todoLines: 8, fileSlots: 6, includeLiveState,
     },
     memoryIndexChars: 1200,

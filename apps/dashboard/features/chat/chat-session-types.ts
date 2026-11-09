@@ -90,6 +90,8 @@ export interface CoderSession {
   /** Added by migration 006. '' when provider doesn't distinguish modes. */
   model_mode?: string;
   status: string;
+  runtime_active?: boolean;
+  runtime_bus_id?: string | null;
   total_input_tokens: number;
   total_output_tokens: number;
   total_cache_read_tokens: number;

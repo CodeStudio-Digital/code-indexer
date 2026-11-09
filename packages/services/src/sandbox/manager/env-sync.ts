@@ -26,6 +26,13 @@ export interface EnvSyncTarget {
   workdir: string;
 }
 
+export interface EnvSyncReport {
+  state: 'applied' | 'partial' | 'failed' | 'stored';
+  applied: string[];
+  failed: Array<{ serviceId: string; reason: string }>;
+  restartRequired: boolean;
+}
+
 /**
  * Filter the sandboxes (primary + services) that the env body should be
  * written to. Pure function — easy to assert against.
@@ -54,15 +61,24 @@ export function collectEnvSyncTargets(
  */
 export async function pushEnvsToContainers(
   targets: readonly EnvSyncTarget[],
-  bodyFor: (serviceId: string) => string,
+  bodyFor: (serviceId: string) => string | Promise<string>,
   driver: ISandboxDriver | null,
-): Promise<void> {
-  if (targets.length === 0 || !driver) return;
-  await Promise.allSettled(
-    targets.map((t) =>
-      driver.writeFile(t.containerId, `${t.workdir}/.env`, bodyFor(t.serviceId), {
+): Promise<EnvSyncReport> {
+  if (targets.length === 0 || !driver) return { state: 'stored', applied: [], failed: [], restartRequired: false };
+  const results = await Promise.allSettled(
+    targets.map(async (t) =>
+      driver.writeFile(t.containerId, `${t.workdir}/.env`, await bodyFor(t.serviceId), {
         recursive: true,
       }),
     ),
   );
+  const applied: string[] = [];
+  const failed: EnvSyncReport['failed'] = [];
+  results.forEach((result, index) => {
+    const serviceId = targets[index]!.serviceId;
+    if (result.status === 'fulfilled') applied.push(serviceId);
+    // Driver errors may contain command/env content. Never expose their raw text.
+    else failed.push({ serviceId, reason: 'environment_write_failed' });
+  });
+  return { state: failed.length ? (applied.length ? 'partial' : 'failed') : 'applied', applied, failed, restartRequired: applied.length > 0 };
 }

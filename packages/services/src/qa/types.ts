@@ -55,6 +55,10 @@ export type QaPlanGate = 'approved' | 'auto' | 'skipped';
  * the QA agent runs. Transitions: `running → completed | aborted | error`.
  */
 export interface QaRun {
+  /** Legacy runs use Playwright. New desktop QA uses the native preview. */
+  executor?: 'preview' | 'playwright';
+  target_url?: string | null;
+  criteria?: QaPreviewCriterion[];
   id: string;
   /** Monotonic order within the owning Company bundle. */
   seq: number;
@@ -177,6 +181,9 @@ export interface QaTestResult {
 
 /** Input to `QaTestRunStore.startRun` — caller supplies what it knows. */
 export interface QaRunInsert {
+  executor?: 'preview' | 'playwright';
+  target_url?: string | null;
+  criteria?: QaPreviewCriterion[];
   company_session_id: string;
   agent_run_id: string | null;
   suite: string;
@@ -195,6 +202,25 @@ export interface QaRunInsert {
    * `skipped`). Omitted/null for callers the gate doesn't apply to.
    */
   plan_gate?: QaPlanGate | null;
+}
+
+/** Declarative assertions evaluated by CodeStudio against the real page. */
+export interface QaPreviewCriterion {
+  name: string;
+  selector: string;
+  text?: string;
+  visible?: boolean;
+}
+
+/** Session/service-scoped plan, independent of a container for preview runs. */
+export interface QaTestPlan {
+  exists: boolean;
+  content: string;
+  source: 'preview' | 'sandbox' | 'none';
+  run_id?: string;
+  title?: string;
+  target_url?: string | null;
+  criteria?: QaPreviewCriterion[];
 }
 
 /**

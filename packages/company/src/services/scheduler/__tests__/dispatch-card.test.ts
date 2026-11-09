@@ -9,6 +9,7 @@
  *   - skip paths (no role / spawn failure / missing card).
  */
 import { describe, expect, it, vi } from 'vitest';
+import { fakeDispatchClaims } from './fake-dispatch-claims.js';
 import {
   dispatchCard,
   extractRoleHint,
@@ -48,6 +49,7 @@ function makeDeps(opts: {
   const deps = {
     sessionId: SESSION_ID,
     kanban: {
+      dispatchClaims: fakeDispatchClaims(AGENT_RUN_ID),
       getCard: () => (opts.card === undefined ? makeCard() : opts.card),
       assignAgent,
       moveCard,
@@ -165,15 +167,15 @@ describe('dispatchCard', () => {
     expect(result).toMatchObject({ ok: false, reason: 'recommend_failed' });
   });
 
-  it('maps a spawn throw to spawn_failed with the error message', async () => {
+  it('retains ownership when a spawn rejects without confirming its outcome', async () => {
     const { deps, published } = makeDeps({
       spawnImpl: async () => { throw new Error('over cap'); },
     });
     const result = await dispatchCard(deps, CARD_ID, { role: 'frontend' });
-    expect(result).toMatchObject({ ok: false, reason: 'spawn_failed', error: 'over cap' });
+    expect(result).toMatchObject({ ok: false, reason: 'spawn_outcome_unknown', error: 'over cap' });
     expect(published).toContainEqual({
       event: 'scheduler_skipped',
-      data: { cardId: CARD_ID, reason: 'spawn_failed' },
+      data: { cardId: CARD_ID, reason: 'spawn_outcome_unknown', agentRunId: AGENT_RUN_ID },
     });
   });
 

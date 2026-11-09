@@ -11,45 +11,6 @@ function setup() {
 }
 
 describe('wireAgentToolOutput', () => {
-  it('keeps successful goal tools provisional until the durable acknowledgement', () => {
-    const { runner, chunks } = setup();
-
-    runner.emit(
-      'tool_call_result',
-      'goal-1',
-      'create_goal',
-      { content: 'Goal created.', isError: false },
-      12,
-    );
-
-    expect(chunks.join('')).toContain('awaiting durable goal commit');
-    expect(chunks.join('')).not.toContain('✓');
-
-    runner.emit('goal_mutations_persisted', { toolUseIds: ['goal-1'] });
-
-    expect(chunks.join('')).toContain('✓ create_goal committed');
-  });
-
-  it('renders an explicit compensating failure when persistence rejects', () => {
-    const { runner, chunks } = setup();
-
-    runner.emit(
-      'tool_call_result',
-      'goal-2',
-      'update_goal',
-      { content: 'Goal completed.', isError: false },
-      8,
-    );
-    runner.emit('goal_mutations_persistence_failed', {
-      toolUseIds: ['goal-2'],
-      message: 'stale goal generation',
-    });
-
-    expect(chunks.join('')).toContain(
-      '✖ update_goal persistence failed: stale goal generation',
-    );
-    expect(chunks.join('')).not.toContain('✓');
-  });
 
   it('continues to render non-goal results immediately', () => {
     const { runner, chunks } = setup();

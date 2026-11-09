@@ -234,8 +234,8 @@
   "mcpServer.transportHttp": "Streamable HTTP",
   "mcpServer.command": "Comando",
   "mcpServer.commandPlaceholder": "npx",
-  "mcpServer.args": "Argumentos (separados por espaço)",
-  "mcpServer.argsPlaceholder": "-y @modelcontextprotocol/server-github",
+  "mcpServer.args": "Argumentos (array JSON)",
+  "mcpServer.argsPlaceholder": "[\"-y\", \"@example/mcp-server\"]",
   "mcpServer.envVars": "Variáveis de ambiente (JSON)",
   "mcpServer.envVarsPlaceholder": "{\"GITHUB_PERSONAL_ACCESS_TOKEN\": \"ghp_...\"}",
   "mcpServer.url": "URL",
@@ -264,7 +264,7 @@
   "mcpServer.oauth.waiting": "Aguardando consentimento…",
   "mcpServer.oauth.disconnect": "Desconectar",
   "mcpServer.oauth.close": "Fechar",
-  "mcpServer.oauth.connected": "Conectado com sucesso.",
+  "mcpServer.oauth.connected": "MCP conectado e ferramentas disponíveis.",
   "mcpServer.oauth.popupBlocked": "Não foi possível abrir a janela de login. Libere pop-ups para este app e tente novamente.",
   "mcpServer.oauth.popupHint": "Abrimos seu navegador para concluir o login. Conclua o consentimento lá — este diálogo atualiza sozinho.",
   "mcpServer.oauth.loopbackError": "Não foi possível iniciar o listener local de login (porta ocupada). Feche o que estiver usando e tente novamente.",
@@ -1002,5 +1002,12 @@
   "mcpHttp.toolAllowlistPlaceholder": "search, read_file, start_agent_run",
   "lspServers.profileCount_one": "{{count}} perfil",
   "lspServers.profileCount_other": "{{count}} perfis",
-  "lspServers.legacy": "legado"
+  "lspServers.legacy": "legado",
+  "mcpServer.oauth.finishConnection": "Conectar com a autorização salva",
+  "mcpServer.oauth.connecting": "Conectando ao MCP e carregando ferramentas…",
+  "mcpServer.stdioJsonError": "Use um array JSON de textos para os argumentos e um objeto JSON de textos para as variáveis de ambiente.",
+  "hygiene.purgeResult": "{{count}} projeto(s) apagado(s), {{vectors}} vetores locais removidos.",
+  "hygiene.clearResult": "{{count}} projeto(s) limpo(s), {{vectors}} vetores locais removidos. Re-indexe quando quiser.",
+  "hygiene.projectError": "{{project}}: {{error}}",
+  "hygiene.diskError": "Não foi possível verificar a pasta: {{error}}"
 }

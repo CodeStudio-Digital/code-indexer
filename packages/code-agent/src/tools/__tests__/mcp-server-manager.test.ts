@@ -23,6 +23,51 @@ function serverConfig(id = 'unity'): McpServerConfig {
 }
 
 describe('McpServerManager tool catalogue isolation', () => {
+  it('omits an oversized contract without corrupting it or hiding healthy siblings', async () => {
+    const manager = new McpServerManager();
+    const inputSchema = { type: 'object', properties: { x: { const: 'x'.repeat(70_000) } } };
+    (manager as unknown as { connections: Map<string, unknown> }).connections.set('unity', {
+      state: 'connected', config: serverConfig(), client: {
+        listTools: async () => ({ tools: [
+          { name: 'oversized', inputSchema },
+          { name: 'healthy', inputSchema: { type: 'object', properties: {} } },
+        ] }),
+      },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const listed = await manager.listAllTools();
+      expect(listed.tools.map(tool => tool.name)).toEqual(['ext_unity__healthy']);
+      expect(manager.connectedCount).toBe(1);
+      expect(inputSchema.properties.x.const).toHaveLength(70_000);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('omitted tool "ext_unity__oversized"'));
+    } finally { warn.mockRestore(); }
+  });
+
+  it('refreshes source B without closing or replaying an in-flight call on A', async () => {
+    const manager = new McpServerManager();
+    let finish!: (value: unknown) => void;
+    const callTool = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const a = serverConfig('a'), b = serverConfig('b');
+    const connectionA = { state: 'connected', config: a, client: { callTool } };
+    const internal = manager as unknown as {
+      connections: Map<string, unknown>;
+      createHandler(id: string, name: string, key: string): (args: Record<string, unknown>, ctx: ToolContext) => Promise<unknown>;
+    };
+    internal.connections.set('a', connectionA);
+    internal.connections.set('b', { state: 'connected', config: b, client: {} });
+    const connect = vi.spyOn(manager, 'connectAll').mockResolvedValue();
+    const close = vi.spyOn(manager, 'closeServer').mockResolvedValue();
+    // A real pending physical client call remains owned by the same connection.
+    const pending = callTool();
+    await manager.refreshAll([a, { ...b, url: 'http://127.0.0.1:8766/mcp/' }]);
+    expect(internal.connections.get('a')).toBe(connectionA);
+    expect(close).not.toHaveBeenCalledWith('a');
+    expect(connect).toHaveBeenCalledWith([expect.objectContaining({ id: 'b' })]);
+    finish({ content: [{ type: 'text', text: 'once' }] });
+    await pending;
+    expect(callTool).toHaveBeenCalledOnce();
+  });
   it.each(['ECONNRESET after commit', 'HTTP 401 after commit', 'socket hang up'])('never replays a dispatched mutation after %s', async (failure) => {
     let effects = 0;
     const callTool = vi.fn(async () => { effects++; throw new Error(failure); });
@@ -113,6 +158,7 @@ describe('McpServerManager tool catalogue isolation', () => {
       expect(request).toHaveBeenCalledWith(
         { method: 'tools/list' },
         expect.anything(),
+        expect.objectContaining({ timeout: expect.any(Number) }),
       );
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('skipped 1 invalid tool definition(s): broken_tool'),

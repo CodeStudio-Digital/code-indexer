@@ -142,7 +142,6 @@ function readLiveState(ctx: RunContext): Parameters<typeof compactWithLLM>[0]['l
     const state = ctx.bridge?.getSessionStateData?.() ?? null;
     if (!state) return undefined;
     return {
-      goal: state.goal,
       activePlan: state.activePlan,
       todos: state.todos.map((todo) => ({
         content: todo.label,

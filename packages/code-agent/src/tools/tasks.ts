@@ -34,7 +34,7 @@ import { todoWrite, updateTodo } from '@mcp/code-agent/tools/todo.js';
 
 // ─── Burst guard for submit_tasks ───────────────────────────────
 //
-// Mirrors the create_goal / todo_write burst guards. When the agent
+// Mirrors the todo_write burst guard. When the agent
 // reissues `submit_tasks` with the same logical task list 3+ times in 90s
 // without anything changing in between, refuse hard and point at
 // update_task. The signature includes the summary plus sorted title/body

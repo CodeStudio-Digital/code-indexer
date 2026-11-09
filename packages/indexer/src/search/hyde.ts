@@ -48,13 +48,16 @@ export class HyDEService {
   async generate(
     query: string,
     projectContext?: { language?: string; concepts?: string[] },
+    signal?: AbortSignal,
   ): Promise<string> {
+    signal?.throwIfAborted();
     const key = query.trim();
     if (!key || !this.resolver) return query;
 
     // No implicit default provider/model. The pipeline binding is the single
     // source of truth and its absence is the explicit "HyDE disabled" state.
     const chain = await this.resolver.resolveChain('indexer_search', 'hyde', {});
+    signal?.throwIfAborted();
     if (chain.length === 0) return query;
 
     // Include the resolved chain in the cache key so changing provider/model
@@ -71,6 +74,7 @@ export class HyDEService {
       (binding) => {
         const chat = this.options.chat ?? callConfiguredChat;
         return chat(binding, messages, {
+          signal,
           temperature: finiteNumber(binding.config.temperature) ?? 0.2,
           maxTokens: finiteNumber(binding.config.max_tokens) ?? 180,
           timeoutMs:
@@ -79,8 +83,9 @@ export class HyDEService {
             ?? 20_000,
         });
       },
-      { label: 'HyDE query expansion', codePrefix: 'hyde' },
+      { label: 'HyDE query expansion', codePrefix: 'hyde', signal },
     );
+    signal?.throwIfAborted();
 
     if (result.errorBody) {
       console.warn(`[hyde] generation unavailable: ${result.errorBody}`);

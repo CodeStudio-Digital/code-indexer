@@ -6,5 +6,6 @@ export interface SchedulerSpawn {
     task: string;
     projectId?: number;
     dispatchSource?: RoleDispatchSource;
+    reservedAgentRunId?: string;
   }): Promise<{ agentRunId: string; coderSessionId: string }>;
 }

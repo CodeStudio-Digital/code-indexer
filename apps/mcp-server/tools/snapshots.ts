@@ -49,6 +49,13 @@ const save_memory = defineTool({
       new AgentMemoryDedupeSearch(agentMemoryService, signal),
     );
     const res = await literal.extractAndPersist(project.id, project.name, 'agent', {});
+    try {
+      db.withBusyTimeout(0, () => db.recordAgentMemoryEvent({
+        eventType: 'remember', scope: 'project', projectId: project.id,
+        kept: res.created + res.merged, dropped: res.skipped,
+        meta: { tool: 'save_memory', created: res.created, merged: res.merged },
+      }));
+    } catch { /* The committed write must not fail because of diagnostics. */ }
     signal?.throwIfAborted();
     const what = res.merged > 0 ? 'merged into existing memory' : res.created > 0 ? 'saved' : 'skipped';
     return `Memory "${entry.title}" ${what} (created=${res.created} merged=${res.merged}).`;

@@ -181,7 +181,7 @@ describe('preflightBrowser — chrome_service source (main process)', () => {
 
 describe('preflightBrowser — env_probe source (worker: ChromeService null)', () => {
   const envStore = {
-    list: (_sessionId: string) => [
+    listAsync: async (_sessionId: string) => [
       { key: 'PLAYWRIGHT_WS_ENDPOINT', value: 'ws://host.containers.internal:9223/' },
     ],
   } as never;
@@ -205,7 +205,7 @@ describe('preflightBrowser — env_probe source (worker: ChromeService null)', (
     const result = await preflightBrowser({
       sessionId: sessionId(6),
       getChromeService: () => null,
-      envStore: { list: () => [] } as never,
+      envStore: { listAsync: async () => [] } as never,
       now: () => 0,
     });
     expect(result.ok).toBe(false);

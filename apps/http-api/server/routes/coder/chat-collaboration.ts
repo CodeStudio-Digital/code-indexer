@@ -9,6 +9,9 @@ import { SessionNetwork } from '@mcp/code-agent/runtime/session-network.js';
 import { deliverNetworkTriggers } from '@mcp/code-agent/runtime/session-network-events.js';
 import type { ChatTrigger } from '@mcp/session-storage/collaboration/network-types.js';
 import { mountSessionNetworkRoutes } from './session-network-routes.js';
+import { ChatScheduler } from '@mcp/code-agent/runtime/chat-scheduler.js';
+import { mountUltraFollowupRoutes } from './ultra-followups.js';
+import type { ChatNetworkSnapshot } from '@mcp/agent-runtime-contracts/chat-network.js';
 
 export function mountChatCollaborationRoutes(app: Hono, deps: ServerDeps, runtime: CoderRuntime): void {
   const mailbox = new ChatCollaborationStore(deps.sessionStore.locator.dataDir);
@@ -19,9 +22,12 @@ export function mountChatCollaborationRoutes(app: Hono, deps: ServerDeps, runtim
         .some(row => `${row.model_id}${row.mode ? `::${row.mode}` : ''}` === model)) throw new Error('Unknown or disabled provider/model');
     } });
   mountSessionNetworkRoutes(app, deps, network, ready);
-  const service = ready.then(() => startCollaborationWakeService(mailbox, message => wakeCollaboratingChat(deps, runtime, mailbox, message, network), async () => {
+  const scheduler = new ChatScheduler(mailbox);
+  mountUltraFollowupRoutes(app, network, scheduler, ready);
+  const service = ready.then(() => startCollaborationWakeService(mailbox, message => wakeCollaboratingChat(deps, runtime, mailbox, message, network, scheduler), async () => {
     await network.synchronize();
     await deliverNetworkTriggers(network);
+    await scheduler.tick();
   }));
   void service.catch(error => console.error('[chat-collaboration] startup failed:', error));
   registerShutdownTask('chat-collaboration', async () => { const stop = await service; await stop(); });
@@ -49,11 +55,11 @@ export function mountChatCollaborationRoutes(app: Hono, deps: ServerDeps, runtim
       const project = deps.db.getProject(pid);
       return project && !project.is_synthetic ? [{ id: pid, name: project.name }] : [];
     });
-    return c.json({ self: actor, peers, messages: messages.slice(0, 100),
+    return c.json({ self: actor, stopped: (await mailbox.participant(actor))?.state === 'stopped', peers, messages: messages.slice(0, 100),
       candidates: candidates.filter(candidate => candidate.id !== id).map(candidate => ({ id: candidate.id, title: candidate.title })),
       config, links, triggers, wakeCount, rootBudget: root.maxWakeups, chats, projects,
-      policy: await mailbox.files.get('policies', id),
-    });
+      policy: await mailbox.files.get<ChatNetworkSnapshot['policy']>('policies', id),
+    } satisfies ChatNetworkSnapshot);
   });
   app.put('/api/coder/sessions/:id/collaboration/links', async c => {
     await ready;

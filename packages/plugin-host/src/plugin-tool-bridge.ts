@@ -66,6 +66,10 @@ export function buildPluginTools(
         decl.description,
         toJsonSchema(decl.parameters),
       );
+      if (sanitized.schemaError) {
+        console.warn(`[plugin] omitted tool "${plugin.namespace}/${decl.name}": ${sanitized.schemaError}`);
+        continue;
+      }
       out.push({
         name: `plugin__${plugin.namespace}__${decl.name}`,
         description: sanitized.description,

@@ -7,7 +7,7 @@ import {
   resolveSessionProjectAuthority,
   type FsCoderSession,
 } from '@mcp/session-storage/fs-store/index.js';
-import { unresolvedToolOutcome, uncertainToolOutcomeError, isUncertainToolOutcomeError } from '@mcp/code-agent/core/uncertain-tool-outcome.js';
+import { isUncertainToolOutcomeError } from '@mcp/code-agent/core/uncertain-tool-outcome.js';
 import { isWorkspaceRuntimeConflict } from '@mcp/code-agent/runtime/workspace-runtime-error.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
 import {
@@ -19,7 +19,6 @@ import { hashControlPlanePayload } from '@mcp/store/control-plane/index.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
-import { markGoalLifecycleIntentCache } from '@mcp/code-agent/core/runner/goal-lifecycle-intent.js';
 import {
   normalizeSessionMaxAutoContinues,
   normalizeSessionMaxTurns,
@@ -761,18 +760,8 @@ export function mountCoderStreamRoutes(
           const cached = JSON.parse(session.preflight_seed_json) as {
             h?: string;
             seed?: PreflightSeed;
-            goalLifecycleIntentVersion?: number;
           };
           if (cached && cached.seed && cached.h === cacheHash) {
-            const markedCache = markGoalLifecycleIntentCache(
-              session.preflight_seed_json,
-              cached.seed.taskKind,
-            );
-            if (markedCache !== session.preflight_seed_json) {
-              try {
-                await sessionStore.setSessionPreflightSeed(id, markedCache);
-              } catch { /* best-effort */ }
-            }
             await applyGeneratedSessionTitle(id, cached.seed.sessionTitle);
             return cached.seed;
           }
@@ -825,10 +814,7 @@ export function mountCoderStreamRoutes(
         try {
           await sessionStore.setSessionPreflightSeed(
             id,
-            markGoalLifecycleIntentCache(
-              JSON.stringify({ h: cacheHash, seed: result.seed }),
-              result.seed.taskKind,
-            ),
+            JSON.stringify({ h: cacheHash, seed: result.seed }),
           );
         } catch { /* cache is best-effort */ }
       }
@@ -1370,11 +1356,8 @@ export function mountCoderStreamRoutes(
 
     const data = await sessionStore.loadSessionWithMessages(id);
     if (!data) return notFound(c);
-    const unresolved = unresolvedToolOutcome(data.messages);
-    if (unresolved) {
-      const error = uncertainToolOutcomeError(unresolved);
-      return c.json({ error: error.message, code: 'TOOL_OUTCOME_UNKNOWN', retryable: false }, 409);
-    }
+    // Bootstrap restores unresolved outcomes as recovery restrictions. Refusing
+    // here made even an explicit Continue permanently unable to inspect them.
     const last = data.messages[data.messages.length - 1];
     if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);

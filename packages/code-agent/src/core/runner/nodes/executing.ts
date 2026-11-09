@@ -1,3 +1,7 @@
+import { toolProjectionReceipt } from '../../tool-projection.js';
+import { outcomeRecoveryPrompt } from '../../uncertain-tool-outcome.js';
+import { synchronizeOutcomeRecovery } from '../outcome-recovery.js';
+import { rejectedProviderTools, toolSchemaRecoveryPrompt } from '../provider-schema-recovery.js';
 import { toolExtraUserMessages } from '../../tool-extra-user-messages.js';
 import { projectVisionContext } from '../../vision-context.js';
 import { BoundaryPreparation } from '../boundary-preparation.js';
@@ -29,16 +33,11 @@ import type { AgentRunId } from '@mcp/agent-runtime-contracts';
 import { promptTokensTotal } from '@mcp/code-agent/core/messages.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { events } from '../machine/events.js';
-import { accumulateUsage } from '../machine/context.js';
+import { accumulateUsage, resetProviderRetrySequence } from '../machine/context.js';
+import { providerTransportError } from '@mcp/provider-sdk/transport-error.js';
 import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
-import {
-  buildTools,
-  buildToolsCacheKey,
-  enforceAtomicGoalToolPair,
-  fingerprintToolsJson,
-  type BuildToolsResult,
-} from '../assembly/tools.js';
+import { buildTools, buildToolsCacheKey, fingerprintToolsJson, type BuildToolsResult } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
 import { resolveProviderCapabilityProjection } from '@mcp/code-agent/core/capability-catalog.js';
@@ -71,13 +70,9 @@ import {
   planMemoryRecall,
   buildConversationTail,
 } from '../memory-query.js';
-import { maybePlanNudge, scheduleGoalCompletionAdvisory } from './executing-plan-gate.js';
-import {
-  buildGoalCompletionAdvisory,
-  evaluateVerificationReadinessAtFinish,
-  maybeVerificationNudge,
-} from './executing-verification-gate.js';
-import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
+import { maybePlanNudge } from './executing-plan-gate.js';
+import { evaluateVerificationReadinessAtFinish, maybeVerificationNudge } from './executing-verification-gate.js';
+import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage, type DispatchedToolResult } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
 import { evaluatePerTurnLoops } from './executing-loop-guards.js';
@@ -144,7 +139,8 @@ function fallbackAttemptErrorMeta(error: unknown, fallbackCode: string): {
     const value = (record.headers as Record<string, unknown>)[name];
     return typeof value === 'string' && value.length > 0 ? value : null;
   };
-  const rawCode = typeof record.code === 'string' ? record.code : fallbackCode;
+  const transport = providerTransportError(error);
+  const rawCode = transport?.code ?? (typeof record.code === 'string' ? record.code : fallbackCode);
   const safeCode = rawCode.replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 128);
   return {
     status,
@@ -161,10 +157,9 @@ function fallbackAttemptErrorMeta(error: unknown, fallbackCode: string): {
         ? record.responseMeta.response.retry_after
         : header('retry-after'),
     errorCode: safeCode || fallbackCode,
-    // Never persist a provider message here: SDK errors may echo prompts,
-    // signed URLs or credentials. The class is sufficient for diagnosis while
-    // adapter-owned telemetry may add an opaque correlation hash.
-    errorMessage: error instanceof Error ? error.name : 'UnknownError',
+    // Only our allowlisted transport diagnostic is safe to persist; arbitrary
+    // SDK messages may contain prompts, signed URLs or credentials.
+    errorMessage: transport?.message ?? (error instanceof Error ? error.name : 'UnknownError'),
   };
 }
 
@@ -191,7 +186,7 @@ export class ExecutingNode implements BehaviorNode {
     // preceding assistant/tool turn. Do not let a new provider call — and thus
     // no new tool side effect — overtake that transaction. Rejections bubble to
     // the orchestrator, which emits a terminal error instead of continuing on
-    // state that failed its goal CAS/durability boundary.
+    // transcript state that failed to persist.
     await ctx.bridge?.awaitTurnPersistence?.();
     // Drain any messages queued via `runner.pushUserMessage` (master →
     // subordinate forward, SSE-side push from the dashboard, etc.) so
@@ -361,7 +356,7 @@ export class ExecutingNode implements BehaviorNode {
       // pending changes and hard-stops after a cap / explicit user decline,
       // instead of every turn while any snapshot is pending (the doom-loop).
       const selfReviewNudge = selfReviewNudgeForTurn;
-      // Session State Block — the always-alive structured state (goal/plan/
+      // Session State Block — the always-alive structured state (plan/
       // todos/notes/files/recall) rendered from persisted data, sized and
       // paced by the window-scaled policy. Replaces the old per-field drive
       // injection. Short windows inject it EVERY turn; standard windows on
@@ -502,6 +497,12 @@ export class ExecutingNode implements BehaviorNode {
       }
       for (const mid of injectionToCommit.includedMemoryIds) {
         ctx.injectionState.lastInjectedMemoryIds.add(mid);
+      }
+      if (injectionToCommit.includedMemoryIds.length) {
+        try {
+          void Promise.resolve(ctx.bridge?.onMemoryInjected?.(injectionToCommit.includedMemoryIds))
+            .catch(error => dbg('memory injection receipt failed', String(error)));
+        } catch (error) { dbg('memory injection receipt failed', String(error)); }
       }
       for (const chapterId of injectionToCommit.includedConversationChapterIds) {
         ctx.injectionState.lastInjectedConversationChapterIds.add(chapterId);
@@ -645,12 +646,8 @@ export class ExecutingNode implements BehaviorNode {
         console.warn(`[coder] tool-selection failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    // Custom/relevance selectors run after buildTools, but lifecycle tools are
-    // protected capabilities rather than ordinary relevance candidates.
-    // Restore the pair from the authoritative post-policy surface if a buggy
-    // selector omitted either/both; roles/disabled sets lacking the pair stay
-    // pairless and fail open.
-    toolsForModel = enforceAtomicGoalToolPair(toolsForModel, availableTools);
+    const rejectedSchemas = rejectedProviderTools(ctx);
+    if (rejectedSchemas.size) toolsForModel = toolsForModel.filter(tool => !rejectedSchemas.has(tool.name));
     let capabilitySetDigest: string | null = null;
     let projectionDigest: string | null = null;
     try {
@@ -684,12 +681,15 @@ export class ExecutingNode implements BehaviorNode {
       | {
           visibleToolNames?: ReadonlySet<string> | null;
           promoteTool?: (name: string) => string[];
+          requestedToolNames?: ReadonlySet<string>;
+          projectionReceipt?: import('../../tool-projection.js').ToolProjectionReceipt | null;
         }
       | undefined;
-    if (runnerToolState) runnerToolState.visibleToolNames = effectiveToolNames;
     dbg(`tools=${toolsForModel.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
 
-    const systemPrompt = ctx.opts.systemPrompt;
+    const systemPrompt = ctx.opts.systemPrompt + outcomeRecoveryPrompt(ctx.opts.toolContext.outcomeRecovery,
+      ctx.opts.toolContext.permissionGate?.getMode?.() ?? ctx.opts.toolPermissionMode ?? 'auto')
+      + toolSchemaRecoveryPrompt(ctx);
 
     // PR-F pre-emit gate (Kimi-style). Estimate the size of the request
     // we're about to make BEFORE actually sending it. If projected to
@@ -893,6 +893,7 @@ export class ExecutingNode implements BehaviorNode {
     // One transport scope per physical provider turn. A timeout cancels the
     // old HTTP stream before recovery may try another provider request.
     const providerRequest = new AbortController();
+    let lastTransportActivityAt: number | undefined;
     const parentSignal = ctx.opts.toolContext.signal;
     const relayProviderAbort = () => providerRequest.abort(parentSignal?.reason);
     parentSignal?.addEventListener?.('abort', relayProviderAbort, { once: true });
@@ -901,6 +902,16 @@ export class ExecutingNode implements BehaviorNode {
     let stream: AsyncIterable<ChatDelta>;
     try {
       dbg(`calling provider.chat() model=${ctx.opts.provider.model}`);
+      const verifiedLimits = ctx.opts.provider.toolLimits;
+      if (verifiedLimits?.maxCount !== undefined && toolsForModel.length > verifiedLimits.maxCount) throw new Error('Final tool projection exceeds the verified provider limit');
+      if (verifiedLimits?.maxSchemaBytes !== undefined && Buffer.byteLength(JSON.stringify(toolsForModel)) > verifiedLimits.maxSchemaBytes) throw new Error('Final tool projection exceeds the verified provider schema byte limit');
+      if (verifiedLimits?.maxNameChars !== undefined && toolsForModel.some(tool => tool.name.length > verifiedLimits.maxNameChars!)) throw new Error('Final tool projection exceeds the verified provider function name limit');
+      if (runnerToolState) {
+        runnerToolState.visibleToolNames = effectiveToolNames;
+        runnerToolState.projectionReceipt = toolProjectionReceipt(runnerToolState.requestedToolNames ?? [], effectiveToolNames,
+          new Set(toolsBuilt.authorizedTools.map(t => t.name)), projectionDigest, capabilitySetDigest, rejectedSchemas);
+      }
+      ctx.lastProviderToolNames = effectiveToolNames;
       ctx.operations.progress(providerOpId, { phase: 'provider.chat' });
       stream = ctx.opts.provider.chat({
         system: systemPrompt,
@@ -913,6 +924,7 @@ export class ExecutingNode implements BehaviorNode {
           : {}),
         sessionId: ctx.opts.sessionId,
         onAttempt: recordProviderAttempt,
+        onTransportActivity: () => { lastTransportActivityAt = performance.now(); },
         signal: providerRequest.signal,
         ...(tempResolution && typeof tempResolution.temperature === 'number'
           ? { inference: { temperature: tempResolution.temperature } }
@@ -983,14 +995,7 @@ export class ExecutingNode implements BehaviorNode {
         stream,
         signal: ctx.opts.toolContext.signal,
         cancelStream: (reason) => providerRequest.abort(reason),
-        // Scale the thinking-only watchdog by reasoning effort and by how many
-        // thinking-timeouts already fired this run, so a retry gets a strictly
-        // larger budget than the attempt that just timed out (a same-budget
-        // retry of the same prompt re-times-out identically and burns the cap).
-        thinkingOnlyTimeoutMs: thinkingOnlyBudgetMs(
-          ctx.opts.reasoningEffort,
-          ctx.recovery.get('provider-thinking-timeout') ?? 0,
-        ),
+        lastTransportActivityAt: () => lastTransportActivityAt,
         onTextDelta: (text, meta) => {
           // Keep operation liveness accurate without mirroring every token as
           // a second `operation_progress` event. The 10s stream heartbeat
@@ -1106,7 +1111,7 @@ export class ExecutingNode implements BehaviorNode {
     accumulateUsage(ctx, result.usage);
     // A successful provider response ends the retry sequence for this logical
     // call, regardless of whether the model now requests tools.
-    ctx.transientRetriesThisTurn = 0;
+    resetProviderRetrySequence(ctx);
 
     const cacheObservation = observePromptCache(
       ctx.opts.provider.name,
@@ -1347,6 +1352,9 @@ export class ExecutingNode implements BehaviorNode {
         r.name,
         {
           content: r.content,
+          evidence: r.evidence,
+          structuredData: r.structuredData,
+          structuredDataOmitted: r.structuredDataOmitted,
           isError: r.isError,
           effectOutcome: r.effectOutcome,
           rawChars: r.rawChars,
@@ -1372,7 +1380,8 @@ export class ExecutingNode implements BehaviorNode {
       toolUses: result.toolUses,
       retrievalBatch: { taskText: memoryTaskText ?? undefined },
       registry: ctx.opts.registry,
-      toolContext: ctx.opts.toolContext,
+      // RAW invocations retain this branch even if recovery advances the host.
+      toolContext: { ...ctx.opts.toolContext },
       turn: ctx.turn,
       dupCalls: ctx.dupCalls,
       noProgressTracker: ctx.noProgressTracker,
@@ -1403,18 +1412,7 @@ export class ExecutingNode implements BehaviorNode {
         if (ctx.opts.sessionDisabledTools?.has(name)) {
           return `[tool-disabled] '${name}' is disabled for this session — pick another tool (find_tools lists alternatives).`;
         }
-        if (
-          (name === 'create_goal' || name === 'update_goal')
-          && (
-            !effectiveToolNames.has('create_goal')
-            || !effectiveToolNames.has('update_goal')
-          )
-        ) {
-          return (
-            `[goal-lifecycle-disabled] '${name}' is unavailable because create_goal and ` +
-            'update_goal must be exposed together; continue without session-goal lifecycle tools.'
-          );
-        }
+
         return null;
       },
       toolGate: async (name, input) => {
@@ -1469,45 +1467,7 @@ export class ExecutingNode implements BehaviorNode {
           isError = bridged.isError ?? isError;
         }
 
-        const persistedCompletion =
-          args.name === 'update_goal'
-          && !isError
-          && args.input.status === 'complete'
-          && args.rawContent.startsWith('Goal marked complete');
-        if (!persistedCompletion) {
-          return bridged ? { content, isError } : null;
-        }
-
-        const readiness = await evaluateVerificationReadinessAtFinish(ctx);
-        const advisory = buildGoalCompletionAdvisory(readiness);
-        if (ctx.opts.sessionId != null) {
-          try {
-            await ctx.opts.sessionStore?.recordSessionInput({
-              session_id: ctx.opts.sessionId,
-              kind: 'system_reminder',
-              source_label: 'advisory:goal-completion',
-              content: advisory.text,
-              meta: {
-                health: advisory.health,
-                evidence_status: readiness.status,
-                source: readiness.source,
-                changed_files: readiness.changedFiles.length,
-                validation_signals: readiness.validationSignals,
-                turn: ctx.turn,
-              },
-            });
-          } catch {
-            // Completion is already durable; advisory persistence is best-effort.
-          }
-        }
-        const reviewScheduled = scheduleGoalCompletionAdvisory(ctx, readiness);
-        const reviewText = reviewScheduled
-          ? ' Independent completion review was scheduled asynchronously and cannot revoke completion.'
-          : '';
-        return {
-          content: `${content}\n\n${advisory.text}${reviewText}`,
-          isError,
-        };
+        return bridged ? { content, isError } : null;
       },
       detectPollingStuck: ctx.bridge?.detectPollingStuck,
       onToolCallStart: (id, name, input) => {
@@ -1587,9 +1547,13 @@ export class ExecutingNode implements BehaviorNode {
     runPersistTelemetry(toolResultBlocks);
 
     if (dispatch.outcomeUnknown) {
-      ctx.stopReason = 'error';
-      ctx.error = new Error('TOOL_OUTCOME_UNKNOWN: a tool may have taken effect but its result was not confirmed. Reconcile before retrying.');
-      return events.toolOutcomeUnknown();
+      // Stop only the precomputed batch. Feed its actual results to the model
+      // so it can inspect state in the SAME chat without replaying the effect.
+      // Registration must complete before a fresh branch can admit any calls.
+      await ctx.opts.toolContext.commitToolOutcomeRecovery?.();
+      await synchronizeOutcomeRecovery(ctx, dispatch.results
+        .filter(r => r.effectOutcome === 'unknown').map(r => r.toolUseId));
+      ctx.opts.toolContext.toolCallLedger = ctx.opts.toolContext.toolCallLedger?.continueAfterOutcomeRegistration();
     }
 
     // Fix B — advance loop-aware compaction signals every turn, BEFORE any
@@ -1641,7 +1605,7 @@ export class ExecutingNode implements BehaviorNode {
       }
     }
 
-    if (dispatch.toolLoopDetected) {
+    if (dispatch.toolLoopDetected && !dispatch.outcomeUnknown) {
       return events.toolLoopDetected({
         guard: dispatch.loopGuard ?? 'tuple-hash',
         ...(dispatch.loopDetail ?? {}),

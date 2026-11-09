@@ -2,19 +2,25 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { watch } from 'node:fs';
+import type { FSWatcher } from 'node:fs';
 import { atomicWriteFile, fsyncDirectory } from '../atomic-file.js';
 
 export const keyOf = (value: string): string => createHash('sha256').update(value).digest('hex');
+const subscriptions = new Map<string, { listeners: Set<() => void>; watchers: FSWatcher[] }>();
 
 /** Immutable publication is atomic and never replaces another writer's record. */
 export class CollaborationFiles {
   constructor(readonly root: string) {}
   async init(): Promise<void> {
-    for (const name of ['participants', 'messages', 'receipts', 'links', 'waits', 'policies', 'checkpoints', 'networks', 'triggers', 'completions', 'spawn-slots', 'wake-slots']) {
+    for (const name of ['participants', 'messages', 'receipts', 'links', 'waits', 'policies', 'checkpoints', 'networks', 'triggers', 'completions', 'completion-events', 'completion-order', 'spawn-slots', 'wake-slots', 'budgets', 'proposals', 'schedules', 'occurrences', 'epochs']) {
       await mkdir(join(this.root, name), { recursive: true });
     }
   }
   path(kind: string, key: string): string { return join(this.root, kind, `${keyOf(key)}.json`); }
+  async ensure(kind: string): Promise<void> {
+    if (!/^[a-z0-9-]+(?:\/[a-z0-9-]+)*$/.test(kind)) throw new Error('Invalid collaboration namespace');
+    await mkdir(join(this.root, kind), { recursive: true });
+  }
   async get<T>(kind: string, key: string): Promise<T | null> {
     return this.read<T>(this.path(kind, key));
   }
@@ -56,11 +62,24 @@ export class CollaborationFiles {
     return records;
   }
   subscribe(listener: () => void): () => void {
-    const watchers = ['messages', 'receipts', 'participants', 'links', 'completions', 'triggers', 'networks'].map(kind => {
-      const watcher = watch(join(this.root, kind), { persistent: false }, listener);
-      watcher.on('error', listener);
-      return watcher;
-    });
-    return () => watchers.forEach(watcher => watcher.close());
+    let shared = subscriptions.get(this.root);
+    if (!shared) {
+      const listeners = new Set<() => void>();
+      const notify = () => { for (const callback of listeners) callback(); };
+      const watchers: FSWatcher[] = [];
+      try {
+        for (const kind of ['messages', 'receipts', 'participants', 'links', 'waits', 'completion-events', 'completion-order', 'completions', 'triggers', 'networks', 'schedules']) {
+          const watcher = watch(join(this.root, kind), { persistent: false }, notify);
+          watcher.on('error', notify); watchers.push(watcher);
+        }
+      } catch (error) { for (const watcher of watchers) watcher.close(); throw error; }
+      shared = { listeners, watchers }; subscriptions.set(this.root, shared);
+    }
+    // Each subscription has its own identity even when callbacks are reused.
+    const callback = () => listener(); shared.listeners.add(callback);
+    return () => {
+      shared!.listeners.delete(callback);
+      if (!shared!.listeners.size) { shared!.watchers.forEach(watcher => watcher.close()); subscriptions.delete(this.root); }
+    };
   }
 }

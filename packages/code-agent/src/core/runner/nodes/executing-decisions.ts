@@ -9,6 +9,8 @@ import type { BehaviorEvent, RunContext } from '../machine/types.js';
 import { events } from '../machine/events.js';
 import { isTimeoutError } from './executing-abort.js';
 import { checkMaxTurns, maxAutoContinues } from '../guards/max-turns.js';
+import { providerTransportError } from '@mcp/provider-sdk/transport-error.js';
+import { isToolSchemaRejection } from '../provider-schema-recovery.js';
 
 const DEBUG = process.env.CODER_BT_DEBUG === '1';
 
@@ -110,14 +112,16 @@ const FATAL_SIGNATURES = [
  * `CODER_BT_DEBUG`), and classifies retryability.
  *
  * Status-less errors get the sentinel `status: 0`, routed by `recovering.ts`
- * to the low-cap `provider-unknown-retry` path — UNLESS the message matches a
+ * to the transport or unknown recovery path — UNLESS the message matches a
  * fatal signature, in which case it's marked non-retryable so the run aborts
  * immediately with the real message instead of looping ~30× / ~5min.
  */
 export function providerErrorEvent(e: unknown): BehaviorEvent {
   const status = extractStatus(e);
-  const message = extractMessage(e);
-  const code = extractCode(e);
+  const transport = status === undefined || status === 0 || isTimeoutError(e)
+    ? providerTransportError(e) : null;
+  const message = transport?.message ?? extractMessage(e);
+  const code = transport?.code ?? extractCode(e);
 
   // Single-line, truncated, always-on. This is the line that finally tells
   // the user WHAT the provider rejected.
@@ -126,13 +130,14 @@ export function providerErrorEvent(e: unknown): BehaviorEvent {
       `${code ? ` code=${code}` : ''} message=${JSON.stringify(truncate(message, 500))}`,
   );
 
-  // Our own stream idle / first-byte timeout (TimeoutError, status 504): retrying
-  // a deterministic slow time-to-first-byte rarely helps, so route it to the
-  // low-cap `provider-unknown-retry` path (status 0 sentinel) instead of the
-  // 30-deep transient bucket. The real message/code stays in the warn log above.
-  // The thinking-only variant (marked `reason: 'thinking-only'` in
-  // executing-stream.ts) gets its OWN code so Recovering routes it to the
-  // dedicated `provider-thinking-timeout` bucket with budget-doubling retries.
+  // Stream idle / first-byte timeouts use bounded consecutive transport retries,
+  // while preserving the shared run budget. The diagnostic remains secret-free.
+  // Preserve classification of legacy provider/plugin thinking timeouts.
+  // The host no longer produces these while reasoning is still active.
+  if (isToolSchemaRejection(message, code)) {
+    return events.providerError({ retryable: false, status: status ?? 0, message, ...(code ? { code } : {}) });
+  }
+
   if (isTimeoutError(e)) {
     const thinkingOnly = (e as { reason?: string }).reason === 'thinking-only';
     return events.providerError({

@@ -121,6 +121,26 @@ describe('ProjectDb (schema reuse)', () => {
     }
   });
 
+  it('upgrades a project trimmed before OAuth migration 274 without losing indexed files', () => {
+    withProjectDbTrim(() => {
+      const root = freshDir();
+      const loc = resolveProjectDbLocation(74, root);
+      const old = new ProjectDb(74, loc.dbPath);
+      try {
+        old.raw().prepare('INSERT INTO projects (id, name, root_path) VALUES (?, ?, ?)').run(74, 'Upgrade fixture', root);
+        old.raw().prepare('INSERT INTO files (project_id, path, content_hash) VALUES (?, ?, ?)').run(74, 'src/keep.ts', 'fixture-hash');
+        old.raw().prepare('DELETE FROM schema_version WHERE version >= ?').run(274);
+        expect(old.raw().prepare("SELECT name FROM sqlite_master WHERE name = 'mcp_oauth_registrations'").get()).toBeUndefined();
+      } finally { old.close(); }
+      const upgraded = new ProjectDb(74, loc.dbPath);
+      try {
+        expect(upgraded.raw().prepare('SELECT path, content_hash FROM files').all()).toEqual([{ path: 'src/keep.ts', content_hash: 'fixture-hash' }]);
+        expect(upgraded.raw().prepare('SELECT version FROM schema_version WHERE version = 274').get()).toEqual({ version: 274 });
+        expect(upgraded.raw().prepare("SELECT name FROM sqlite_master WHERE name = 'mcp_oauth_registrations'").get()).toBeUndefined();
+      } finally { upgraded.close(); }
+    });
+  });
+
   it('applies pending migrations when reopening an already-trimmed project DB', () => {
     withProjectDbTrim(() => {
       const root = freshDir();

@@ -337,7 +337,7 @@ bridge.handle('vectors.search', async (payload) => {
     queryVector: number[];
     options: VectorSearchOptions & { namespace: string };
   };
-  return trackOperation(() => vectors.search(input.queryVector, input.options));
+  return inferenceRequest(payload, signal => vectors.search(input.queryVector, { ...input.options, signal }));
 });
 bridge.handle('vectors.deleteByIds', async (payload) => {
   const input = payload as { ids: string[]; namespace: string; writeTarget?: VectorWriteTarget };

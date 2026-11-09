@@ -39,6 +39,7 @@ export interface IndexFilesStructuralResult {
   /** Paths that turned out missing/oversized on disk and were removed. */
   removed: number;
   errors: number;
+  failedPaths: string[];
 }
 
 function yieldToEventLoop(): Promise<void> {
@@ -62,7 +63,7 @@ export async function indexFilesStructural(
   const maxBytes = (opts.maxFileSizeKB ?? 200) * 1024;
 
   const result: IndexFilesStructuralResult = {
-    indexed: 0, skippedUnchanged: 0, skippedIgnored: 0, removed: 0, errors: 0,
+    indexed: 0, skippedUnchanged: 0, skippedIgnored: 0, removed: 0, errors: 0, failedPaths: [],
   };
   const candidates: ScannedFile[] = [];
   const removals: string[] = [];
@@ -102,6 +103,7 @@ export async function indexFilesStructural(
       });
     } catch (err) {
       result.errors++;
+      result.failedPaths.push(rel);
       console.warn(`[structural-incremental] ${rel}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -134,6 +136,7 @@ export async function indexFilesStructural(
             }
           } catch (error) {
             waveErrors++;
+            result.failedPaths.push(item.path);
             console.warn(
               `[structural-incremental] ${item.path}: ${error instanceof Error ? error.message : String(error)}`,
             );
@@ -146,6 +149,7 @@ export async function indexFilesStructural(
     } catch (error) {
       // Commit failure rolls back the whole wave, including successful items.
       result.errors += wave.length;
+      result.failedPaths.push(...wave.map((item) => item.path));
       console.warn(
         `[structural-incremental] maintenance wave: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -181,6 +185,7 @@ export async function indexFilesStructural(
           for (const outcome of outcomes) {
             if (outcome.error || !outcome.prepared) {
               waveErrors++;
+              result.failedPaths.push(outcome.file.relativePath);
               console.warn(
                 `[structural-incremental] ${outcome.file.relativePath}: ` +
                 `${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`,
@@ -188,10 +193,12 @@ export async function indexFilesStructural(
               continue;
             }
             try {
-              persistPreparedFileStructural(db, projectId, outcome.prepared);
+              // A failed file must not leave half its symbols/FTS committed in the wave.
+              db.indexTransaction(projectId, () => persistPreparedFileStructural(db, projectId, outcome.prepared!));
               waveIndexed++;
             } catch (error) {
               waveErrors++;
+              result.failedPaths.push(outcome.file.relativePath);
               console.warn(
                 `[structural-incremental] ${outcome.file.relativePath}: ` +
                 `${error instanceof Error ? error.message : String(error)}`,
@@ -204,6 +211,7 @@ export async function indexFilesStructural(
       } catch (error) {
         // Every prepared item was rolled back; parse failures still count once.
         result.errors += outcomes.length;
+        result.failedPaths.push(...outcomes.map((outcome) => outcome.file.relativePath));
         console.warn(
           `[structural-incremental] write wave: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -213,6 +221,7 @@ export async function indexFilesStructural(
   } finally {
     treeSitter.dispose();
   }
+  result.failedPaths = [...new Set(result.failedPaths)];
   return result;
 }
 

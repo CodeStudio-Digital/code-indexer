@@ -21,11 +21,11 @@ export interface RefreshOutput {
 /**
  * Uses the stored refresh token to obtain a new access+refresh pair.
  *
- * Reuse detection: if the refresh_token presented differs from what we
- * currently have (i.e., older one being replayed), we assume theft and
- * revoke everything for that server by deleting the tokens row.
+ * Concurrent refreshes share one request. Late results cannot overwrite a
+ * newer login or restore credentials after disconnect.
  */
 export class RefreshMcpAccessToken {
+  private readonly inFlight = new Map<string, Promise<Result<RefreshOutput>>>();
   constructor(
     private readonly registrations: McpOAuthRegistrationReaderRepo,
     private readonly tokensReader: McpOAuthTokensReaderRepo,
@@ -36,6 +36,15 @@ export class RefreshMcpAccessToken {
   ) {}
 
   async execute(input: RefreshInput): Promise<Result<RefreshOutput>> {
+    const active = this.inFlight.get(input.serverId);
+    if (active) return active;
+    const task = this.refreshOnce(input);
+    this.inFlight.set(input.serverId, task);
+    try { return await task; }
+    finally { if (this.inFlight.get(input.serverId) === task) this.inFlight.delete(input.serverId); }
+  }
+
+  private async refreshOnce(input: RefreshInput): Promise<Result<RefreshOutput>> {
     const reg = this.registrations.findByServerId(input.serverId);
     if (!reg) return err({ kind: 'registration_not_found', serverId: input.serverId });
 
@@ -49,10 +58,17 @@ export class RefreshMcpAccessToken {
         tokenEndpoint: reg.tokenEndpoint,
         clientId: reg.clientId,
         clientSecret: reg.clientSecret,
+        resourceUrl: reg.resourceUrl,
+        tokenEndpointAuthMethod: reg.tokenEndpointAuthMethod,
         refreshToken: existing.refreshRaw,
       });
 
       const now = this.clock.now();
+      // Disconnect/re-authentication may have won during the network request.
+      if (this.tokensReader.findByServerId(input.serverId)?.accessToken !== existing.accessToken
+        || this.registrations.findByServerId(input.serverId)?.clientId !== reg.clientId) {
+        return err({ kind: 'tokens_not_found', serverId: input.serverId });
+      }
       const accessExpiresAt =
         response.expiresInSec !== null ? now + response.expiresInSec * 1000 : null;
 
@@ -78,10 +94,12 @@ export class RefreshMcpAccessToken {
       return ok({ accessToken: response.accessToken, expiresAt: accessExpiresAt });
     } catch (e) {
       const match = /^HTTP (\d+):\s*(.*)$/s.exec(e instanceof Error ? e.message : String(e));
-      // AS rejected the refresh — the most common cause in a healthy system
-      // is the refresh token having been revoked or rotated elsewhere.
-      // We purge our state so the user is forced to re-auth via UI.
-      this.tokensAdmin.delete(input.serverId);
+      let invalidGrant = false;
+      try { invalidGrant = !!match && JSON.parse(match[2]).error === 'invalid_grant'; } catch { /* non-JSON error */ }
+      // Preserve credentials on network errors, timeout, rate limits and 5xx.
+      if (invalidGrant && this.tokensReader.findByServerId(input.serverId)?.accessToken === existing.accessToken) {
+        this.tokensAdmin.delete(input.serverId);
+      }
       if (match) return err({ kind: 'refresh_failed', status: Number(match[1]), body: match[2] });
       return err({
         kind: 'refresh_failed',

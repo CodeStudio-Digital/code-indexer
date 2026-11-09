@@ -2,7 +2,7 @@
  * Compaction-time memory harvest — pure input assembly + orchestration gates.
  * No sqlite, no LLM: store and runEndMemory are structural fakes.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { CompactionSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import {
   buildHarvestInput,
@@ -123,7 +123,7 @@ describe('harvestCompactionMemory', () => {
     await harvestCompactionMemory({
       ...baseArgs({ store }),
       runEndMemory: {
-        extractAndPersist: async (_p, _n, input) => { calls.push(input); },
+        extractAndPersist: async (_p, _n, input) => { calls.push(input); return { created: 1, merged: 0, skipped: 0 }; },
         isConfigured: async () => true,
       },
     });
@@ -144,6 +144,57 @@ describe('harvestCompactionMemory', () => {
     });
     expect(extracted).toBe(0);
     expect(store.marks).toEqual([]); // untouched — nothing was covered
+  });
+
+  it.each([true, false])('leaves timeout pending and settles only a late success (hadError=%s)', async hadError => {
+    vi.useFakeTimers();
+    try {
+      const store = storeFixture();
+      let finish!: (value: { created: number; merged: number; skipped: number; hadError: boolean }) => void;
+      const extraction = new Promise<{ created: number; merged: number; skipped: number; hadError: boolean }>(resolve => { finish = resolve; });
+      const extractAndPersist = vi.fn(() => extraction);
+      const args = { ...baseArgs({ store }), runEndMemory: { isConfigured: async () => true, extractAndPersist } };
+      const first = harvestCompactionMemory(args);
+      await vi.advanceTimersByTimeAsync(30_001);
+      await first;
+      expect(store.marks).toEqual([]);
+      const second = harvestCompactionMemory(args);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(extractAndPersist).toHaveBeenCalledOnce();
+      finish({ created: hadError ? 0 : 1, merged: 0, skipped: 0, hadError });
+      await second;
+      expect(store.marks).toEqual(hadError ? [] : [77]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not consume a span without a persistence receipt', async () => {
+    const store = storeFixture();
+    await harvestCompactionMemory({ ...baseArgs({ store }), runEndMemory: {
+      isConfigured: async () => true, extractAndPersist: async () => undefined,
+    } });
+    expect(store.marks).toEqual([]);
+  });
+
+  it('serializes boundaries, preserves a failed earlier span and skips committed replays', async () => {
+    let boundary = 0;
+    const store = storeFixture({ getMemoryDistilledBoundary: async () => boundary,
+      setMemoryDistilledBoundary: async (_id, seq) => { boundary = Math.max(boundary, seq); } });
+    let finish!: (value: { created: number; merged: number; skipped: number; hadError: boolean }) => void;
+    const firstPass = new Promise<{ created: number; merged: number; skipped: number; hadError: boolean }>(resolve => { finish = resolve; });
+    const extractAndPersist = vi.fn().mockReturnValueOnce(firstPass).mockResolvedValue({ created: 1, merged: 0, skipped: 0 });
+    const common = { ...baseArgs({ store }), runEndMemory: { isConfigured: async () => true, extractAndPersist } };
+    const first = harvestCompactionMemory({ ...common, sourceStartSeq: 1 });
+    const second = harvestCompactionMemory({ ...common, sourceStartSeq: 78, boundaryId: 100 });
+    await vi.waitFor(() => expect(extractAndPersist).toHaveBeenCalledTimes(1));
+    finish({ created: 0, merged: 0, skipped: 0, hadError: true });
+    await Promise.all([first, second]);
+    expect(boundary).toBe(0); expect(extractAndPersist).toHaveBeenCalledTimes(1);
+    boundary = 77; // Idle sweep has recovered the earlier contiguous span.
+    await harvestCompactionMemory({ ...common, sourceStartSeq: 78, boundaryId: 100 });
+    expect(boundary).toBe(100); expect(extractAndPersist).toHaveBeenCalledTimes(2);
+    await harvestCompactionMemory({ ...common, sourceStartSeq: 78, boundaryId: 100 });
+    expect(extractAndPersist).toHaveBeenCalledTimes(2);
   });
 
   it('skips when no distiller resolves (isConfigured=false)', async () => {

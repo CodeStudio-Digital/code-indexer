@@ -22,6 +22,8 @@ import {
 } from '../../../sse/companyOrchestrator.js';
 import { recommendRolesForSession } from './recommend-core.js';
 import { companySurfaceConflict } from './runtime-capabilities.js';
+import { mountCompanyKanbanDispatchReviewRoutes } from './kanban-dispatch-review.js';
+import { withSessionLock } from '../coder/sessionLock.js';
 
 const MAX_SUGGESTIONS = 5;
 
@@ -78,6 +80,8 @@ export function mountCompanyKanbanDispatchRoutes(
     };
   };
 
+  mountCompanyKanbanDispatchReviewRoutes(app, deps, resolveSession);
+
   app.post(
     '/api/company/sessions/:id/kanban/cards/:cardId/dispatch',
     async (c) => {
@@ -100,6 +104,7 @@ export function mountCompanyKanbanDispatchRoutes(
           ? body.role.trim()
           : undefined;
 
+      return withSessionLock(resolved.requestedId, async () => {
       const { orchestrator } = await getOrSpawnCompanyOrchestrator(
         resolved.requestedId,
       );
@@ -133,6 +138,7 @@ export function mountCompanyKanbanDispatchRoutes(
         { ok: false, reason: result.reason, error: result.error },
         409,
       );
+      });
     },
   );
 

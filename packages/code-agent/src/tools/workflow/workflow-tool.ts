@@ -1,3 +1,4 @@
+import { WORKFLOW_DESC, workflowSchema } from './workflow-schema.js';
 /**
  * workflow — Ultra's standing declarative orchestrator (P0 of the
  * ultra-agent parity plan). The model authors a DAG of typed subagent
@@ -8,7 +9,7 @@
  * the `ultracode` turn keyword fired) — see index.ts registration.
  */
 import { randomUUID } from 'node:crypto';
-import type { CoderTool, ToolContext, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
@@ -18,7 +19,6 @@ import {
   resolveMicroAgentProfile,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import {
-  WORKFLOW_MAX_STEPS,
   assignWaveIndexes,
   countWorkflowOutcomes,
   validateWorkflowSteps,
@@ -29,6 +29,7 @@ import {
   type WorkflowStepState,
 } from './workflow-types.js';
 import { executeWorkflow } from './workflow-run.js';
+import { workflowTemplate } from './workflow-templates.js';
 import { emitSubagentEvent } from '../subagent-events.js';
 type WorkflowStepReconciliation = { outcome: 'terminal' | 'outcome_unknown'; stepStatus?: 'completed' | 'partial' | 'failed'; reason?: string; resultRef?: string; summary?: string; detail: string };
 import {
@@ -38,57 +39,6 @@ import {
   saveWorkflow,
   tryAcquireWorkflowRun,
 } from './workflow-registry.js';
-
-const WORKFLOW_DESC =
-  'Run a declarative DAG of subagent steps (Ultra mode). Steps with satisfied `depends_on` run IN PARALLEL; ' +
-  'dependents receive bounded digests of their prerequisites’ results. Per-step `profile` picks the toolset ' +
-  '(explore/verify/review read-only, implement writes scoped to `files`, full unfiltered).\n' +
-  'USE: for multi-step work with a real dependency structure — e.g. N parallel investigations feeding one implementation, then a verify step.\n' +
-  'USE: `workflow({resume_workflow_id, retry_failed:true})` to relaunch failed/skipped steps of a previous run without redoing completed ones.\n' +
-  "DON'T: wrap a single task — use spawn_agent.\n" +
-  "DON'T: mirror an approved task list — execute_tasks already orchestrates it.\n" +
-  'Token cost of every step IS billed to this session. Steps are capped at ' +
-  `${WORKFLOW_MAX_STEPS}; results stream live to the Workflow card.`;
-
-const workflowSchema: JsonSchema = {
-  type: 'object',
-  properties: {
-    name: { type: 'string', description: 'Short workflow name shown in the UI (3-6 words).' },
-    steps: {
-      type: 'array',
-      minItems: 1,
-      maxItems: WORKFLOW_MAX_STEPS,
-      description: 'DAG steps. Order does not matter — `depends_on` decides the waves.',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Stable step id ([a-zA-Z0-9_-], max 40 chars).' },
-          title: { type: 'string', description: 'Short visible step title.' },
-          prompt: { type: 'string', description: 'Complete, self-contained subagent instructions.' },
-          profile: {
-            type: 'string',
-            enum: MICRO_AGENT_PROFILE_NAMES,
-            description: 'Micro-agent profile for this step (default explore).',
-          },
-          depends_on: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Ids of prerequisite steps. Their result digests are injected into this prompt.',
-          },
-          files: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Implement profile: paths this step may write to.',
-          },
-        },
-        required: ['id', 'prompt'],
-      },
-    },
-    resume_workflow_id: { type: 'string', description: 'Existing workflow id to resume instead of creating a new one.' },
-    retry_failed: { type: 'boolean', description: 'With resume: reset failed/skipped steps to pending before running.' },
-  },
-  additionalProperties: false,
-} as unknown as JsonSchema;
 
 function normalizeSteps(raw: WorkflowStepInput[]): WorkflowStepState[] | string {
   const issues = validateWorkflowSteps(raw);
@@ -107,6 +57,8 @@ function normalizeSteps(raw: WorkflowStepInput[]): WorkflowStepState[] | string 
       prompt: input.prompt.trim(),
       profileId: profile.id,
       dependsOn: [...new Set(input.depends_on ?? [])],
+      acceptPartial: [...new Set(input.accept_partial ?? [])],
+      acceptance: input.acceptance?.slice(0, 12),
       files: Array.isArray(input.files)
         ? input.files.filter((f): f is string => typeof f === 'string' && f.length > 0)
         : undefined,
@@ -141,12 +93,16 @@ function renderWorkflowResult(record: WorkflowRecord): string {
   // into the last step's body.
   const hint = record.steps.some(workflowStepNeedsReconciliation)
     ? '\n\n---\n\n[An effect is uncertain. Reconcile the existing child execution before retrying.]'
+    : record.steps.some(step => step.integration?.state === 'pending')
+    ? '\n\n---\n\n[Review and integrate child changes before resuming: ' + record.steps.filter(step => step.integration?.state === 'pending').map(step => step.integration!.chatId).join(', ') + ']'
     : counts.failed > 0 || counts.skipped > 0
     ? `\n\n---\n\n[${counts.failed + counts.skipped} step(s) did not complete — ` +
       `workflow({resume_workflow_id:"${record.id}", retry_failed:true}) relaunches them ` +
       `reusing completed results.]`
     : '';
-  return header + bodies.join('\n\n---\n\n') + hint;
+  const integrationIds = record.steps.filter(step => step.integration?.state === 'pending').map(step => step.integration!.chatId);
+  const integrationHeader = integrationIds.length ? '\nPending integrations — use these exact chat_id values:\n' + integrationIds.join('\n') + '\n\n' : '';
+  return header + integrationHeader + bodies.join('\n\n---\n\n') + hint;
 }
 
 function workflowToolResult(
@@ -155,13 +111,17 @@ function workflowToolResult(
   includeUsage = false,
 ): ToolResult {
   const counts = countWorkflowOutcomes(record);
+  const waitingForIntegration = record.status === 'partial' && counts.failed === 0 && counts.partial === 0
+    && record.steps.some(step => step.integration?.state === 'pending');
   return {
-    ...(record.status === 'completed' ? ok(content) : err(content)),
+    ...(record.status === 'completed' || waitingForIntegration ? ok(content) : err(content)),
     ...(record.steps.some(workflowStepNeedsReconciliation) ? { effectOutcome: 'unknown' as const } : {}),
     structuredData: {
       kind: 'workflow_result',
       status: record.status,
       workflowId: record.id,
+      planRevision: record.planRevision ?? 1,
+      steps: record.steps.map(step => ({ id: step.id, status: step.status, result: step.result, effectOutcome: step.effectOutcome, integration: step.integration })),
       stepCount: record.steps.length,
       completedCount: counts.completed,
       partialCount: counts.partial,
@@ -235,6 +195,12 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           if ((record.runtimeGeneration ?? 'legacy_ts') !== runtimeGeneration) {
             return err('workflow: this saved workflow belongs to an unavailable runtime and cannot be resumed.');
           }
+          // Observe only the receipt written by the normal authorized integration tool.
+          // The workflow never invokes a mutating tool behind the dispatcher's back.
+          for (const step of record.steps) if (step.integration?.state === 'pending' && ctx.collaboration) {
+            const receipt = await ctx.collaboration.store.files.get<{ integrated?: boolean }>('checkpoints', 'workspace:' + step.integration.chatId);
+            if (receipt?.integrated) step.integration.state = 'integrated';
+          }
           // A model-authored retry flag cannot authorize repeating an uncertain
           // effect. Reconcile such children on every resume until durable
           // evidence establishes a terminal outcome.
@@ -262,6 +228,18 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
             if (reconciliation.outcome === 'terminal' && !/outcome[_ ]unknown/i.test(reconciliation.reason ?? '')) {
               step.effectOutcome = undefined;
               step.status = reconciliation.stepStatus ?? 'failed';
+              if (step.childChatId && ctx.collaboration) {
+                const files = ctx.collaboration.store.files;
+                const checkpoint = await files.get<{ result?: WorkflowStepState['result']; workspaceReady?: boolean }>('checkpoints', step.childChatId);
+                const workspace = await files.get<{ integrated: boolean; files: string[] }>('checkpoints', 'workspace:' + step.childChatId);
+                if (workspace && !checkpoint?.workspaceReady) {
+                  step.status = 'failed'; step.effectOutcome = 'unknown';
+                  step.error = 'outcome_unknown: child terminated before isolated changes were captured. Reconcile its existing workspace.';
+                  continue;
+                }
+                if (checkpoint?.result) step.result = checkpoint.result;
+                if (workspace?.files.length) step.integration = { chatId: step.childChatId, state: workspace.integrated ? 'integrated' : 'pending' };
+              }
               const reference = reconciliation.resultRef
                 ? ` Result reference: ${reconciliation.resultRef}.`
                 : '';
@@ -295,7 +273,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
               step.summary = undefined;
             }
           }
-          if (!record.steps.some((s) => s.status === 'pending')) {
+          if (!record.steps.some((s) => s.status === 'pending') && args.steps === undefined) {
             record.status = workflowStatusFromSteps(record);
             if (
               sessionId != null &&
@@ -314,16 +292,15 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
               '\n\n' + renderWorkflowResult(record);
             return workflowToolResult(record, content);
           }
-          record.runCount += 1;
-          record.status = 'running';
         } else {
-          const normalized = normalizeSteps((args.steps ?? []) as WorkflowStepInput[]);
+          const normalized = normalizeSteps((args.steps ?? (args.template ? workflowTemplate(String(args.template), String(args.task ?? ''), args.files as string[] | undefined) : [])) as WorkflowStepInput[]);
           if (typeof normalized === 'string') return err(normalized);
           record = {
             id: `wf_${randomUUID().slice(0, 8)}`,
             name: String(args.name ?? 'workflow').trim().slice(0, 100) || 'workflow',
             sessionId,
             runtimeGeneration,
+            planRevision: 1,
             status: 'running',
             steps: normalized,
             totalUsage: { input_tokens: 0, output_tokens: 0 },
@@ -333,6 +310,27 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           };
         }
 
+        if (resumeId && args.steps !== undefined) {
+          if (args.expected_plan_revision !== (record.planRevision ?? 1)) return err('revision_conflict: reload the saved workflow before changing its plan');
+          const revised = normalizeSteps(args.steps as WorkflowStepInput[]);
+          if (typeof revised === 'string') return err(revised);
+          for (const previous of record.steps) {
+            const next = revised.find(step => step.id === previous.id);
+            if (previous.status === 'running' || workflowStepNeedsReconciliation(previous)) return err('effect_unknown: reconcile running steps before revising the plan');
+            if (previous.status === 'completed' || previous.status === 'partial') {
+              if (!next || next.prompt !== previous.prompt || next.profileId !== previous.profileId
+                || JSON.stringify(next.dependsOn) !== JSON.stringify(previous.dependsOn)
+                || JSON.stringify(next.files) !== JSON.stringify(previous.files)
+                || JSON.stringify(next.acceptance ?? []) !== JSON.stringify(previous.acceptance ?? [])
+                || JSON.stringify(next.acceptPartial ?? []) !== JSON.stringify(previous.acceptPartial ?? [])) return err('Completed work is immutable; add a successor step instead');
+              Object.assign(next, previous);
+            }
+          }
+          record.planHistory = [...(record.planHistory ?? []), { revision: record.planRevision ?? 1, at: Date.now(), stepIds: record.steps.map(step => step.id) }].slice(-16);
+          record.steps = revised;
+          record.planRevision = (record.planRevision ?? 1) + 1;
+        }
+        if (resumeId) { record.runCount += 1; record.status = 'running'; }
         let totalWaves: number;
         try {
           totalWaves = assignWaveIndexes(record.steps);
@@ -398,6 +396,12 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           `steps=${record.steps.length} waves=${totalWaves}`,
         );
         await executeWorkflow(deps, ctx, record);
+        if (record.steps.some(step => step.integration?.state === 'pending')) {
+          // Request the next two schemas; ordinary projection/dispatch still
+          // decides visibility and authorization. This never executes either tool.
+          ctx.runner?.promoteTool?.('read_chat_changes');
+          ctx.runner?.promoteTool?.('integrate_chat_changes');
+        }
         return workflowToolResult(record, renderWorkflowResult(record), true);
       } catch (error) {
         // Once the workflow id exists, convert fatal execution failures into a

@@ -20,6 +20,7 @@ import type {
   FsToolCallSummaryPage,
 } from './operational-types.js';
 import type { FsToolCallRecord } from './types.js';
+import { MemoryCallProjection } from './memory-call-projection.js';
 
 function strings(value: unknown): string[] {
   return Array.isArray(value)
@@ -100,6 +101,7 @@ function emptyStats(): FsToolCallStats {
 }
 
 export class FsToolStateRepository {
+  private readonly memoryCalls = new MemoryCallProjection();
   constructor(
     private readonly directory: FsSessionDirectory,
     private readonly entities: FsSessionEntityFiles,
@@ -249,6 +251,12 @@ export class FsToolStateRepository {
     return projectConversation(
       this.directory.repository.readConversationSync(entry.location),
     ).toolCalls;
+  }
+
+  /** Small async projection for memory KPIs; never hydrates the full transcript. */
+  async listMemoryCalls(id: SessionId | string): Promise<Array<{ tool_name: string; created_at: string }>> {
+    const entry = await this.directory.requireEntry(id);
+    return (await this.memoryCalls.read(join(entry.location.bundle_path, 'conversation.jsonl'))).calls;
   }
 
   /**

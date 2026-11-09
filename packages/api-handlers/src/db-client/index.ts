@@ -1,3 +1,7 @@
+import { exportTableRows } from './export.js';
+import { readCatalogPage } from './catalog.js';
+import { applyCheckedRowEdits } from './checked-row-edits.js';
+import { beginDatabaseJob, readDatabaseJob, cancelDatabaseJob } from './jobs.js';
 /**
  * Handlers for the `dbClient` namespace — the embedded database client.
  *
@@ -14,6 +18,7 @@
 import { ApiError, type DbCatalogSnapshot, type DbClientApi, type DbConnectSpec, type DbDdlOp, type DbDdlSpec, type DbEngineKind, type DbQueryResult, type DbTableInfo } from '@mcp/api-bus';
 import {
   buildDdl,
+  DbBatchError,
   buildDml,
   buildExplainStatement,
   buildSelectTemplate,
@@ -59,6 +64,7 @@ function keyFor(connectionId: string): string {
  */
 const inflight = new Map<string, AbortController>();
 const catalogCache = new Map<string, DbCatalogSnapshot>();
+const catalogRevisions = new Map<string, number>();
 /**
  * In-flight catalog builds, so concurrent callers share ONE crawl. Building a
  * catalog is `listSchemas` + three list calls per schema; the tree search fires
@@ -72,8 +78,9 @@ const CATALOG_TTL_MS = 5 * 60_000;
 
 /** Forget everything cached for a connection (disconnect / reconnect / DDL). */
 function dropCaches(key: string): void {
-  catalogCache.delete(key);
-  catalogInflight.delete(key);
+  catalogRevisions.set(key, (catalogRevisions.get(key) ?? 0) + 1);
+  for (const cacheKey of catalogCache.keys()) if (cacheKey.startsWith(key + '\0')) catalogCache.delete(cacheKey);
+  for (const cacheKey of catalogInflight.keys()) if (cacheKey.startsWith(key + '\0')) catalogInflight.delete(cacheKey);
 }
 
 async function mapConcurrent<T, R>(values: T[], concurrency: number, map: (value: T, index: number) => Promise<R>): Promise<R[]> {
@@ -159,41 +166,25 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
     }
   }
 
-  async function buildCatalog(connectionId: string): Promise<DbCatalogSnapshot> {
-    const driver = requireDriver(connectionId);
-    const schemas = await driver.listSchemas();
-    const objects: DbCatalogSnapshot['objects'] = schemas.map((name) => ({ kind: 'schema', name }));
-    const groups = await mapConcurrent(schemas, 4, async (schema) => {
-      const [tables, functions, sequences] = await Promise.all([
-        driver.listTables(schema),
-        driver.listObjects('functions', schema).catch(() => []),
-        driver.listObjects('sequences', schema).catch(() => []),
-      ]);
-      return { schema, tables, functions, sequences };
-    });
-    for (const { schema, tables, functions, sequences } of groups) {
-      objects.push(...tables.map((table) => ({ kind: table.kind, name: table.name, schema } as const)));
-      objects.push(...functions.map((name) => ({ kind: 'function' as const, name, schema })));
-      objects.push(...sequences.map((name) => ({ kind: 'sequence' as const, name, schema })));
-    }
-    return { objects, refreshedAt: Date.now() };
-  }
-
-  async function loadCatalog(connectionId: string, force = false): Promise<DbCatalogSnapshot> {
-    const key = keyFor(connectionId);
+  async function loadCatalog(connectionId: string, opts: { force?: boolean; schema?: string; query?: string; cursor?: string; limit?: number } = {}, signal?: AbortSignal): Promise<DbCatalogSnapshot> {
+    const base = keyFor(connectionId);
+    if (opts.force) dropCaches(base);
+    const revision = catalogRevisions.get(base) ?? 0;
+    const key = base + '\0' + JSON.stringify([revision, opts.schema, opts.query, opts.cursor, opts.limit]);
+    signal?.throwIfAborted();
     const cached = catalogCache.get(key);
-    if (!force && cached && Date.now() - cached.refreshedAt < CATALOG_TTL_MS) return cached;
-    // Join an in-flight crawl rather than starting a second one. A forced
-    // refresh still joins: a build that started microseconds ago is fresh.
-    const running = catalogInflight.get(key);
+    if (cached && Date.now() - cached.refreshedAt < CATALOG_TTL_MS) return cached;
+    // Cancellable consumers own their work: cancellation cannot abort a sibling.
+    const running = !signal && catalogInflight.get(key);
     if (running) return running;
-    const pending = buildCatalog(connectionId)
-      .then((snapshot) => {
+    const pending = readCatalogPage(requireDriver(connectionId), requireEngine(connectionId), base + ':' + revision, opts, signal).then(snapshot => {
+      if ((catalogRevisions.get(base) ?? 0) === revision) {
+        if (catalogCache.size >= 256) catalogCache.delete(catalogCache.keys().next().value!);
         catalogCache.set(key, snapshot);
-        return snapshot;
-      })
-      .finally(() => catalogInflight.delete(key));
-    catalogInflight.set(key, pending);
+      }
+      return snapshot;
+    }).finally(() => { if (catalogInflight.get(key) === pending) catalogInflight.delete(key); });
+    if (!signal) catalogInflight.set(key, pending);
     return pending;
   }
 
@@ -326,16 +317,16 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return { schemas: await driver.listSchemas(database), tables: [] };
     },
 
-    async catalog({ connectionId, force }) {
+    async catalog({ connectionId, ...opts }, ctx) {
       assertRelational(connectionId, 'catalog');
-      return loadCatalog(connectionId, force);
+      return loadCatalog(connectionId, opts, ctx.signal);
     },
 
-    async searchCatalog({ connectionId, query, limit }) {
+    async searchCatalog({ connectionId, query, limit }, ctx) {
       assertRelational(connectionId, 'searchCatalog');
       const normalized = query.trim().toLocaleLowerCase();
       if (!normalized) return [];
-      const snapshot = await loadCatalog(connectionId);
+      const snapshot = await loadCatalog(connectionId, { query, limit }, ctx.signal);
       const max = Math.min(Math.max(limit ?? 100, 1), 500);
       return snapshot.objects
         .filter((object) => `${object.schema ?? ''}.${object.name}`.toLocaleLowerCase().includes(normalized))
@@ -419,7 +410,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return { sql: buildDdl(engine, 'create', { create: { schema: effSchema, table, columns } }).join(';\n') + ';' };
     },
 
-    async query({ connectionId, sql, params, maxRows: requestedMaxRows, timeoutMs: requestedTimeoutMs, queryId, schema }) {
+    async query({ connectionId, sql, params, maxRows: requestedMaxRows, timeoutMs: requestedTimeoutMs, queryId, schema }, ctx) {
       const driver = requireDriver(connectionId);
       const maxRows = clampMaxRows(requestedMaxRows);
       if (mgr.getMeta(keyFor(connectionId))?.readOnly && !isReadStatement(sql)) {
@@ -427,8 +418,12 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       }
       const timeoutMs = parseQueryTimeoutMs(requestedTimeoutMs);
       const controller = new AbortController();
-      const inflightKey = queryId ? `${connectionId}:${queryId}` : null;
+      ctx.signal?.throwIfAborted();
+      const inflightKey = queryId ? JSON.stringify([connectionId, queryId]) : null;
+      if (inflightKey && inflight.has(inflightKey)) throw new ApiError('db_query_already_running', 409, 'This queryId is already running on this connection.');
       if (inflightKey) inflight.set(inflightKey, controller);
+      const abort = () => controller.abort(ctx.signal.reason);
+      ctx.signal?.addEventListener('abort', abort, { once: true });
       const started = Date.now();
       let timedOut = false;
       const timeout = timeoutMs == null
@@ -442,16 +437,19 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
         return { ...result, durationMs: Date.now() - started };
       } catch (err) {
         if (timedOut) {
-          throw new ApiError('db_query_timeout', 408, `Query timed out after ${timeoutMs}ms.`);
+          throw new ApiError('db_query_timeout', 408, `Query timed out after ${timeoutMs}ms.`, { effectOutcome: isReadStatement(sql) ? 'not_started' : 'unknown' });
         }
+        if (controller.signal.aborted) throw new ApiError('db_query_cancelled', 499, 'Query cancellation completed.', { effectOutcome: isReadStatement(sql) ? 'not_started' : 'unknown' });
+        if ((err as { effectOutcome?: string })?.effectOutcome === 'unknown') throw new ApiError('db_query_outcome_unknown', 422, 'The database did not confirm the result. Reconcile before retrying.', { effectOutcome: 'unknown' });
         throw err;
       } finally {
+        ctx.signal?.removeEventListener('abort', abort);
         if (timeout) clearTimeout(timeout);
         if (inflightKey) inflight.delete(inflightKey);
       }
     },
 
-    async queryBatch({ connectionId, statements, maxRows: requestedMaxRows, timeoutMs: requestedTimeoutMs, queryId, schema }) {
+    async queryBatch({ connectionId, statements, maxRows: requestedMaxRows, timeoutMs: requestedTimeoutMs, queryId, schema }, ctx) {
       assertRelational(connectionId, 'queryBatch');
       if (statements.length === 0) return { results: [], durationMs: 0 };
       const maxRows = clampMaxRows(requestedMaxRows);
@@ -463,68 +461,74 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       const engine = requireEngine(connectionId);
       const timeoutMs = parseQueryTimeoutMs(requestedTimeoutMs);
       const controller = new AbortController();
-      const inflightKey = queryId ? `${connectionId}:${queryId}` : null;
+      ctx.signal?.throwIfAborted();
+      const inflightKey = queryId ? JSON.stringify([connectionId, queryId]) : null;
+      if (inflightKey && inflight.has(inflightKey)) throw new ApiError('db_query_already_running', 409, 'This queryId is already running on this connection.');
       if (inflightKey) inflight.set(inflightKey, controller);
+      const abort = () => controller.abort(ctx.signal.reason);
+      ctx.signal?.addEventListener('abort', abort, { once: true });
       let timedOut = false;
       const timeout = timeoutMs == null ? undefined : setTimeout(() => {
         timedOut = true;
         controller.abort(new Error(`query timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-      const scopeSql = schema
-        ? engine === 'postgres'
-          ? `SET LOCAL search_path TO ${quoteIdent(engine, schema)}`
-          : engine === 'mysql' || engine === 'mariadb'
-            ? `USE ${quoteIdent(engine, schema)}`
-            : engine === 'oracle'
-              ? `ALTER SESSION SET CURRENT_SCHEMA = ${quoteIdent(engine, schema)}`
-              : null
-        : null;
-      const scoped = scopeSql ? [{ sql: scopeSql }, ...statements] : statements;
-      const scopeOffset = scopeSql ? 1 : 0;
       const results: DbQueryResult[] = [];
       const started = Date.now();
       try {
-        if (driver.runBatch && !readOnly) {
-          await driver.runBatch(scoped, {
+        let outcome;
+        if (driver.runBatch) {
+          const last = await driver.runBatch(statements, {
             signal: controller.signal,
             maxRows,
-            onResult: (item, index) => {
-              if (index >= scopeOffset) results.push(item as DbQueryResult);
+            timeoutMs,
+            schema,
+            onResult: (item) => {
+              results.push(item as DbQueryResult);
             },
           });
+          outcome = last.batchOutcome;
         } else {
-          // Read-only wrappers intentionally reject runBatch. Reads still execute
-          // safely; they only lose the atomic/pinned guarantee because no writes exist.
-          for (const statement of scoped) {
+          if (!readOnly) throw new ApiError('db_batch_unsupported', 422, 'Driver cannot execute a pinned transaction batch.');
+          for (const statement of statements) {
+            controller.signal.throwIfAborted();
             const item = await driver.runQuery(statement.sql, {
               params: statement.params,
               maxRows,
               timeoutMs,
               signal: controller.signal,
+              schema,
             });
-            if (statement !== scoped[0] || scopeOffset === 0) results.push(item as DbQueryResult);
+            results.push(item as DbQueryResult);
           }
+          outcome = { state: 'completed' as const, effect: 'not_started' as const, atomicity: 'best_effort' as const, completedStatements: results.length };
         }
         const durationMs = Date.now() - started;
         return {
           results: results.map((result) => ({ ...result, durationMs })),
           durationMs,
+          outcome,
         };
       } catch (err) {
-        if (timedOut) throw new ApiError('db_query_timeout', 408, `Query batch timed out after ${timeoutMs}ms.`);
+        const outcome = err instanceof DbBatchError ? err.outcome : {
+          state: controller.signal.aborted ? 'cancelled' : 'failed', effect: 'unknown',
+          atomicity: 'best_effort', completedStatements: results.length,
+        };
+        if (timedOut) throw new ApiError('db_query_timeout', 408, `Query batch timed out after ${timeoutMs}ms. Effect: ${outcome.effect}.`, { outcome });
         throw new ApiError(
           'db_query_batch_failed',
           422,
-          `Statement ${Math.min(results.length + 1, statements.length)} failed; the transaction was rolled back. ${err instanceof Error ? err.message : String(err)}`,
+          `Statement ${Math.min(results.length + 1, statements.length)} failed. Effect: ${outcome.effect.replaceAll('_', ' ')}. ${err instanceof Error ? err.message : String(err)}`,
+          { outcome },
         );
       } finally {
+        ctx.signal?.removeEventListener('abort', abort);
         if (timeout) clearTimeout(timeout);
         if (inflightKey) inflight.delete(inflightKey);
       }
     },
 
     async cancel({ connectionId, queryId }) {
-      inflight.get(`${connectionId}:${queryId}`)?.abort();
+      inflight.get(JSON.stringify([connectionId, queryId]))?.abort();
     },
 
     async explain({ connectionId, sql }) {
@@ -557,42 +561,16 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return { ...res, durationMs: Date.now() - started };
     },
 
-    async editRow({ connectionId, op, schema, table, pk, values, dryRun }) {
+    async editRow({ connectionId, op, schema, table, pk, values, original, dryRun }) {
       assertWritable(connectionId);
       assertRelational(connectionId, 'editRow');
-      const engine = requireEngine(connectionId);
-      const change: RowChange = { op, schema, table, pk, values };
-      const built = buildDml(engine, change);
-      if (dryRun) return { sql: built.display };
-      const result = await requireDriver(connectionId).runQuery(built.sql, { params: built.params });
-      return { sql: built.display, result };
+      return applyCheckedRowEdits(requireDriver(connectionId), requireEngine(connectionId), [{ op, schema, table, pk, values, original }], dryRun);
     },
 
     async editRows({ connectionId, changes, dryRun }) {
       assertWritable(connectionId);
       assertRelational(connectionId, 'editRows');
-      if (changes.length === 0) return { sql: '', applied: 0, results: [] };
-      const engine = requireEngine(connectionId);
-      const driver = requireDriver(connectionId);
-      const built = changes.map((change) => buildDml(engine, change));
-      const sql = built.map((statement) => statement.display).join(';\n') + ';';
-      if (dryRun) return { sql, applied: 0 };
-      const results: DbQueryResult[] = [];
-      let result;
-      if (driver.runBatch) {
-        result = await driver.runBatch(
-          built.map((statement) => ({ sql: statement.sql, params: statement.params })),
-          { onResult: (item) => results.push(item as DbQueryResult) },
-        );
-      } else {
-        // All bundled relational drivers implement runBatch. Keep a safe fallback
-        // for third-party drivers while preserving parameterization.
-        for (const statement of built) {
-          result = await driver.runQuery(statement.sql, { params: statement.params });
-          results.push(result as DbQueryResult);
-        }
-      }
-      return { sql, result, results, applied: changes.length };
+      return applyCheckedRowEdits(requireDriver(connectionId), requireEngine(connectionId), changes, dryRun);
     },
 
     async ddl({ connectionId, op, spec, dryRun }) {
@@ -642,47 +620,46 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return { sql, result, applied: changes.length, atomic };
     },
 
-    async *exportStream({ connectionId, schema, table, batchRows }) {
+    async jobStatus({ connectionId, jobId }) {
+      return readDatabaseJob(keyFor(connectionId), jobId);
+    },
+    async cancelJob({ connectionId, jobId }) {
+      return cancelDatabaseJob(keyFor(connectionId), jobId);
+    },
+    async *exportStream({ connectionId, schema, table, batchRows, jobId }, ctx) {
       assertRelational(connectionId, 'exportStream');
       const driver = requireDriver(connectionId);
-      // Page with the engine-correct, quoted SELECT * (tablePreview); the client
-      // formats + writes each batch, so a huge table never lands in memory whole.
-      const page = Math.min(Math.max(batchRows ?? 1000, 100), 10_000);
-      // OFFSET paging without a stable ORDER BY can skip/duplicate rows across
-      // pages — order by the primary key (fallback: first column).
-      const info = await driver.describeTable(schema ?? '', table).catch(() => null);
-      const pkCol = info?.columns.find((c) => c.isPrimaryKey)?.name ?? info?.columns[0]?.name;
-      const orderBy = pkCol ? ({ column: pkCol, dir: 'asc' as const }) : undefined;
-      let offset = 0;
-      let total = 0;
-      let columns: string[] = [];
-      for (;;) {
-        const res = await driver.tablePreview(schema ?? '', table, { limit: page, offset, orderBy });
-        if (columns.length === 0) {
-          columns = res.fields.length > 0 ? res.fields.map((f) => f.name) : res.rows[0] ? Object.keys(res.rows[0]) : [];
+      const job = beginDatabaseJob(keyFor(connectionId), 'export', jobId, ctx.signal);
+      let terminal = false;
+      try {
+        for await (const frame of exportTableRows(driver, requireEngine(connectionId), schema, table, batchRows, job.signal)) {
+          job.update({ completed: frame.total });
+          if (frame.done) { job.finish({ state: 'completed', total: frame.total }); terminal = true; }
+          yield { ...frame, jobId: job.id };
         }
-        total += res.rows.length;
-        offset += res.rows.length;
-        // tablePreview fetches limit+1 internally, so `truncated` means more rows.
-        const done = !res.truncated;
-        yield { columns, rows: res.rows, total, done };
-        if (done) break;
-      }
+      } catch (error) {
+        terminal = true; job.finish({ state: job.signal.aborted ? 'cancelled' : 'failed' }); throw error;
+      } finally { if (!terminal) job.finish({ state: 'cancelled' }); }
     },
 
-    async *dumpStream({ connectionId, schema, tables, includeData, batchRows }) {
+    async *dumpStream({ connectionId, schema, tables, includeData, batchRows, jobId }, ctx) {
       assertRelational(connectionId, 'dumpStream');
       const engine = requireEngine(connectionId);
       const driver = requireDriver(connectionId);
+      const job = beginDatabaseJob(keyFor(connectionId), 'export', jobId, ctx.signal);
+      let terminal = false;
+      try {
       const effSchema = schema ?? defaultSchemaFor(engine);
+      job.signal?.throwIfAborted();
       // Selected tables, or every base table in the schema (skip views).
       const list = tables && tables.length
         ? tables
         : (await driver.listTables(effSchema)).filter((t) => t.kind === 'table').map((t) => t.name);
       const page = Math.min(Math.max(batchRows ?? 1000, 100), 10_000);
       let total = 0;
-      yield { sql: `-- Dump of ${effSchema ?? 'database'} — ${list.length} table(s)\n`, total, done: false };
+      yield { sql: `-- Dump of ${effSchema ?? 'database'} — ${list.length} table(s)\n-- Consistency: best_effort. Concurrent changes are not a snapshot.\n`, total, done: false, consistency: 'best_effort' };
       for (const table of list) {
+        job.signal?.throwIfAborted();
         const info = await driver.describeTable(effSchema ?? '', table);
         const columns: ColumnSpec[] = info.columns.map((c) => ({
           name: c.name, type: c.dataType, nullable: c.nullable,
@@ -692,39 +669,48 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
         yield { sql: `\n-- Table: ${table}\n${createSql}`, table, total, done: false };
         if (includeData === false) continue;
         const colNames = info.columns.map((c) => c.name);
-        // Stable ORDER BY (PK, else first column) so OFFSET paging can't skip/dupe.
-        const pkCol = info.columns.find((c) => c.isPrimaryKey)?.name ?? info.columns[0]?.name;
-        const orderBy = pkCol ? ({ column: pkCol, dir: 'asc' as const }) : undefined;
-        let offset = 0;
-        for (;;) {
-          const res = await driver.tablePreview(effSchema ?? '', table, { limit: page, offset, orderBy });
-          if (res.rows.length > 0) {
-            total += res.rows.length;
-            yield { sql: insertLiteral(engine, effSchema, table, colNames, res.rows) + '\n', table, total, done: false };
+        for await (const frame of exportTableRows(driver, engine, effSchema, table, page, job.signal)) {
+          if (frame.rows.length) {
+            total += frame.rows.length; job.update({ completed: total });
+            yield { sql: insertLiteral(engine, effSchema, table, colNames, frame.rows) + '\n', table, total, done: false, consistency: 'best_effort' };
           }
-          offset += res.rows.length;
-          if (!res.truncated) break; // tablePreview fetches limit+1 → truncated = more rows
         }
       }
+      job.finish({ state: 'completed', total, completed: total }); terminal = true;
       yield { sql: '', total, done: true };
+      } catch (error) { terminal = true; job.finish({ state: job.signal.aborted ? 'cancelled' : 'failed' }); throw error; }
+      finally { if (!terminal) job.finish({ state: 'cancelled' }); }
     },
 
-    async runScript({ connectionId, statements }) {
+    async runScript({ connectionId, statements, jobId }, ctx) {
       assertRelational(connectionId, 'runScript');
       const driver = requireDriver(connectionId);
       if (mgr.getMeta(keyFor(connectionId))?.readOnly) {
         throw new ApiError('db_read_only', 403, 'Connection is read-only — cannot run a restore script.');
       }
-      const toRun = statements.filter((s) => s && s.trim() && !/^\s*--/.test(s));
+      const toRun = statements.filter(s => s && s.trim());
+      if (toRun.length > 10_000 || Buffer.byteLength(toRun.join('\n')) > 16 * 1024 * 1024) throw new ApiError('db_import_budget', 413, 'Import exceeds 10000 statements or 16 MiB. Split the import into reviewed batches.');
+      ctx.signal?.throwIfAborted();
       if (toRun.length === 0) return { rows: [], rowCount: 0, fields: [] };
       // One pinned connection + transaction where the engine allows DDL rollback.
-      if (driver.runBatch) return driver.runBatch(toRun);
-      let result = { rows: [], rowCount: 0, fields: [] } as Awaited<ReturnType<typeof driver.runQuery>>;
-      for (const stmt of toRun) result = await driver.runQuery(stmt);
-      return result;
+      if (!driver.runBatch) throw new ApiError('db_batch_unsupported', 422, 'This driver cannot execute a pinned restore batch.');
+      const job = beginDatabaseJob(keyFor(connectionId), 'import', jobId, ctx.signal);
+      job.update({ total: toRun.length });
+      try {
+        const result = await driver.runBatch(toRun, { signal: job.signal, timeoutMs: 60_000,
+          onResult: (_result, index) => job.update({ completed: index + 1, effect: 'unknown' }) });
+        job.finish({ state: 'completed', effect: 'confirmed', completed: toRun.length });
+        return { ...result, jobId: job.id };
+      }
+      catch (error) {
+        const effect = error instanceof DbBatchError && (error.outcome.effect === 'rolled_back' || error.outcome.effect === 'not_started') ? 'none' : 'unknown';
+        job.finish({ state: job.signal.aborted ? 'cancelled' : 'failed', effect });
+        if (error instanceof DbBatchError) throw new ApiError('db_import_failed', 422, error.message, { outcome: error.outcome, jobId: job.id });
+        throw error;
+      } finally { dropCaches(keyFor(connectionId)); }
     },
 
-    async runCommand({ connectionId, command, maxRows: requestedMaxRows }) {
+    async runCommand({ connectionId, command, maxRows: requestedMaxRows }, ctx) {
       const driver = requireDriver(connectionId);
       const maxRows = clampMaxRows(requestedMaxRows);
       if (!driver.runCommand) {
@@ -734,7 +720,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       if (mgr.getMeta(keyFor(connectionId))?.readOnly && isWriteCommand(command)) {
         throw new ApiError('db_read_only', 403, 'Connection is read-only — write commands are blocked.');
       }
-      return driver.runCommand(command, { maxRows });
+      return driver.runCommand(command, { maxRows, signal: ctx.signal, timeoutMs: 30_000 });
     },
 
     async driverStatus() {

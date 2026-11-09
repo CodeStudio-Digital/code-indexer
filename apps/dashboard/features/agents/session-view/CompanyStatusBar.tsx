@@ -46,7 +46,6 @@ type Phase = 'running' | 'starting' | 'idle_pending' | 'idle_paused' | 'error';
 
 function derivePhase(p: Props): Phase {
   if (p.error) return 'error';
-  if (p.started && !p.masterState) return 'starting';
   if (p.masterAlive) return 'running';
   if (p.pendingMasterInboxCount > 0) return 'idle_pending';
   return 'idle_paused';

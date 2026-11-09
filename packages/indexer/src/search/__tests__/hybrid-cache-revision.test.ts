@@ -24,6 +24,58 @@ afterEach(() => {
 });
 
 describe('HybridSearch semantic cache revisions', () => {
+  it.each(['vector', 'hybrid'] as const)('stops %s after a cancelled embedding without vector dispatch or caching', async mode => {
+    const controller = new AbortController();
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const embedQueryForNamespace = vi.fn(async (_ns, _q, options) => {
+      expect(options.signal).toBe(controller.signal);
+      expect(options.supersessionKey).toBe('search:embed:0');
+      enter();
+      await new Promise<void>(resolve => { release = resolve; });
+      return { vector: [1], tokens: 0, generationId: 17 };
+    });
+    const embedding = { embedQueryForNamespace } as unknown as EmbeddingService;
+    const vectors = { search: vi.fn(async () => []) } as unknown as VectorStore;
+    const db = database();
+    const hybrid = new HybridSearch(db, vectors, embedding);
+    const pending = hybrid.searchWithDiag(7, 'demo', 'processEmbeddings', { mode, signal: controller.signal, supersessionKey: 'search' });
+    const rejected = expect(pending).rejects.toThrow('superseded');
+    await entered;
+    controller.abort(new Error('superseded')); release();
+    await rejected;
+    expect(vectors.search).not.toHaveBeenCalled();
+    if (mode === 'vector') expect(db.searchFiles).not.toHaveBeenCalled();
+  });
+
+  it('reports a revision change during retrieval and refuses to cache mixed observations', async () => {
+    const db = database();
+    let revision = 'before';
+    db.getStructuralRevision = () => revision;
+    const hybrid = new HybridSearch(db, { search: vi.fn(async () => { revision = 'after'; return []; }) } as unknown as VectorStore,
+      { embedQuery: vi.fn(async () => ({ vector: [1], tokens: 0 })) } as unknown as EmbeddingService);
+    const response = await hybrid.searchWithDiag(7, 'demo', 'processEmbeddings', { mode: 'vector' });
+    expect(response.diagnostics).toMatchObject({ structuralRevision: 'before', structuralRevisionAfter: 'after', structuralRevisionStable: false });
+    revision = 'before';
+    expect((await hybrid.searchWithDiag(7, 'demo', 'processEmbeddings', { mode: 'vector' })).diagnostics.cacheHit).toBe(false);
+  });
+  it('invalidates cached lexical results only after this project revision changes', async () => {
+    const db = database();
+    let revision = 'generation:1';
+    db.getStructuralRevision = () => revision;
+    const hybrid = new HybridSearch(db, null, {
+      embed: vi.fn(async () => ({ vectors: [], tokens: 0 })),
+      embedQuery: vi.fn(async () => ({ vector: [], tokens: 0 })),
+    });
+    const options = { mode: 'fts' as const, type: 'files' as const, limit: 5 };
+    await hybrid.search(7, 'project-seven', 'cache', options);
+    await hybrid.search(7, 'project-seven', 'cache', options);
+    expect(db.searchFiles).toHaveBeenCalledTimes(1);
+    revision = 'generation:2';
+    await hybrid.search(7, 'project-seven', 'cache', options);
+    expect(db.searchFiles).toHaveBeenCalledTimes(2);
+  });
   it('enforces one public top-K after merging file and symbol FTS rows', async () => {
     const files = Array.from({ length: 4 }, (_, index) => ({
       id: index + 1,

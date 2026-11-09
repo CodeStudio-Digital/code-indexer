@@ -17,6 +17,7 @@ export class CompanyAgentRunFiles {
   ): Promise<CompanyAgentRunFileRow> {
     const coderSessionId = asSessionId(String(input.coder_session_id));
     const record = await this.context.entities.createAgentRun({
+      ...(input.id ? { id: asAgentRunId(input.id) } : {}),
       relations: { coder_session_id: coderSessionId },
       data: {
         role: input.role,

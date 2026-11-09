@@ -5,6 +5,40 @@ import { join } from 'node:path';
 import { collectEnvReads, collectSettingReferences } from './ast-collector.js';
 
 describe('settings source inventory', () => {
+  it('expands inline const allowlists and preserves mixed-case OS environment names', () => {
+    const root = mkdtempSync(join(tmpdir(), 'env-literal-loop-'));
+    try {
+      mkdirSync(join(root, 'src'));
+      writeFileSync(join(root, 'src', 'runtime.ts'), `
+        for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP']) {
+          if (process.env[key]) env[key] = process.env[key];
+        }
+        const direct = process.env.SystemRoot;
+      `);
+      const result = collectEnvReads(root, ['src']);
+      expect(result.dynamicConsumers).toEqual([]);
+      expect([...result.hits.keys()].sort()).toEqual(['SystemRoot', 'TEMP', 'TMP', 'WINDIR']);
+      expect(result.hits.get('SystemRoot')?.consumers).toHaveLength(3);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    "for (let key of ['CODER_ONE']) { key = input; use(process.env[key]); }",
+    'for (const key of runtimeKeys) use(process.env[key]);',
+    "for (const key of ['CODER_ONE']) { { const key = input; use(process.env[key]); } }",
+    "for (const key of ['CODER_ONE']) { function read(key) { use(process.env[key]); } }",
+    "for (const $key of ['CODER_ONE']) { { const $key = input; use(process.env[$key]); } }",
+  ])('keeps unproven loop accesses dynamic: %s', (source) => {
+    const root = mkdtempSync(join(tmpdir(), 'env-dynamic-loop-'));
+    try {
+      mkdirSync(join(root, 'src'));
+      writeFileSync(join(root, 'src', 'runtime.ts'), source);
+      const result = collectEnvReads(root, ['src']);
+      expect(result.dynamicConsumers).toHaveLength(1);
+      expect([...result.hits.keys()]).toEqual([]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('distinguishes direct reads, indirect references and obsolete declarations without test/comment matches', () => {
     const root = mkdtempSync(join(tmpdir(), 'settings-inventory-'));
     try {

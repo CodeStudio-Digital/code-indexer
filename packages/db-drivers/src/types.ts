@@ -68,6 +68,10 @@ export interface QueryField {
 }
 
 export interface QueryResult {
+  timings?: { version: 1; totalMs: number; queueMs?: number; acquireMs?: number; executeFetchMs?: number; unmeasured: string[] };
+  /** Origin acquisition evidence, before renderer/inline reduction. */
+  acquisition?: { mode: 'stream' | 'cursor'; observedRows: number; returnedRows: number; retainedBytes: number; maxBytes: number; maxCellBytes: number; cellsTruncated: number; observedRowsExact: boolean };
+  batchOutcome?: import('./batch-outcome.js').BatchOutcome;
   rows: Array<Record<string, unknown>>;
   /** Affected/observed rows. With truncated=true, this may be a lower bound. */
   rowCount: number;
@@ -154,6 +158,7 @@ export interface TableRef {
 }
 
 export interface RunQueryOptions {
+  deadlineAtEpochMs?: number;
   params?: unknown[];
   /** Hard cap on rows returned to the client. Excess rows set `truncated`. */
   maxRows?: number;
@@ -172,6 +177,10 @@ export interface RunQueryOptions {
 }
 
 export interface RunBatchOptions {
+  deadlineAtEpochMs?: number;
+  beforeDispatch?: () => void;
+  timeoutMs?: number;
+  schema?: string;
   /** Abort signal — the driver cancels the in-flight batch when it fires. */
   signal?: AbortSignal;
   /** Hard cap on rows for any statement in the batch that returns rows. */
@@ -202,6 +211,11 @@ export interface DbCommand {
 }
 
 export interface DatabaseDriver {
+  catalogPage?(options: { schema?: string; query?: string; cursor?: string; limit?: number; signal?: AbortSignal }): Promise<{
+    objects: Array<{ schema: string; name: string; kind: 'table' | 'view' | 'function' | 'sequence' }>;
+    complete: boolean;
+    nextCursor?: string;
+  }>;
   /** Engine category — drives capability gating in the handler/UI. Undefined ⇒ relational. */
   readonly kind?: DbEngineKind;
   /** Open + ping; returns the server version. Throws on failure. */

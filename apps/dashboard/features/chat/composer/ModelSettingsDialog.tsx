@@ -172,7 +172,10 @@ function ModelSettingsDialogBody({
             <label className="text-xs text-muted-foreground">{t('chat:toolbar.provider')}</label>
             <Combobox
               value={provider}
-              onChange={(v) => onSwitchProvider(v, '')}
+              onChange={(v) => {
+                const first = getModelsForProvider(v)[0];
+                onSwitchProvider(v, first ? (first.mode ? `${first.id}::${first.mode}` : first.id) : '');
+              }}
               options={providerComboboxOptions}
               placeholder={t('chat:toolbar.provider')}
               searchPlaceholder={t('chat:toolbar.searchProvider')}

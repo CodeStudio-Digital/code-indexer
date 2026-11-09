@@ -24,6 +24,7 @@ import { WorkerMemoryReads } from './worker-memory-reads.js';
 export interface WorkerMemoryDeps {
   /** Structural project-memory retrieval port (agent_memory-backed in deps.ts). */
   memoryRetriever?: {
+    recordInjected?(ids: readonly string[]): void | Promise<void>;
     retrieve(
       projectId: number,
       projectName: string,
@@ -234,6 +235,11 @@ export function registerWorkerMemoryHandlers(
     return timeCall('worker-rpc:memoryRetrieve', () =>
       retriever.retrieve(projectId, projectName, taskText));
   });
+  const offInjected = bridge.handle('memoryInjected', async payload => {
+    const ids = (payload as { ids?: unknown })?.ids;
+    if (!Array.isArray(ids) || ids.length > 100 || ids.some(id => typeof id !== 'string' || !/^[1-9]\d*$/.test(id))) return;
+    await getDeps()?.memoryRetriever?.recordInjected?.(ids);
+  });
 
   const offQuerySynth = bridge.handle('memoryQuerySynth', async (payload) => {
     const synth = getDeps()?.memoryQuerySynthesizer;
@@ -359,6 +365,7 @@ export function registerWorkerMemoryHandlers(
     reads.close();
     offReadCancel();
     try { offRetrieve(); } catch { /* best-effort */ }
+    try { offInjected(); } catch { /* best-effort */ }
     try { offQuerySynth(); } catch { /* best-effort */ }
     try { offExtract(); } catch { /* best-effort */ }
     try { offIsConfigured(); } catch { /* best-effort */ }

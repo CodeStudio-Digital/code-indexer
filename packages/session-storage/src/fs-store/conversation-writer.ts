@@ -17,11 +17,6 @@ import {
 } from './conversation-codec.js';
 import { FsSessionDirectory } from './session-directory.js';
 import {
-  prepareTurnGoalMutations,
-  advanceGoalProjection,
-  type FsGoalProjection,
-} from './goal-repository.js';
-import {
   buildToolCallRecord,
   buildToolResultMessage,
 } from './tool-codec.js';
@@ -72,16 +67,8 @@ function toolMetadata(
   return toJsonValue(metadata) as Readonly<Record<string, JsonValue>>;
 }
 
-class WriteProjection extends ConversationProjection {
-  readonly goal: FsGoalProjection = { goal: null, mutationSeq: 0 };
-  override apply(commit: ConversationCommit): void {
-    super.apply(commit);
-    advanceGoalProjection(this.goal, commit);
-  }
-}
-
-const writeProjection: WriterProjection<WriteProjection> = {
-  create: () => new WriteProjection(),
+const writeProjection: WriterProjection<ConversationProjection> = {
+  create: () => new ConversationProjection(),
   apply: (state, commit) => state.apply(commit),
 };
 
@@ -141,7 +128,6 @@ export class FsConversationWriter {
         messages: [message],
         message_patches: [],
         tool_calls: [],
-        goal_mutations: [],
       };
       const commit = await this.directory.repository.commitTurn(entry.location, {
         operation_id: operation,
@@ -216,7 +202,6 @@ export class FsConversationWriter {
         messages: [],
         message_patches: [],
         tool_calls: [call],
-        goal_mutations: [],
       };
       const commit = await this.directory.repository.commitTurn(entry.location, {
         operation_id: operation,
@@ -249,8 +234,10 @@ export class FsConversationWriter {
         tool_calls: input.tool_calls,
         nested_tool_calls: input.nested_tool_calls ?? [],
         existing_message_seq: input.existing_message_seq ?? null,
-        goal_mutations: input.goal_mutations ?? [],
-        goal_noop_tool_use_ids: input.goal_noop_tool_use_ids ?? [],
+        // Keep the neutral v1 request fingerprint stable when retrying a
+        // pre-removal turn. These retired fields never enter the new payload.
+        goal_mutations: [],
+        goal_noop_tool_use_ids: [],
       });
       const projection = await this.directory.repository.readWriterProjection(entry.location, writeProjection);
       const replay = this.replay(projection, operation, key);
@@ -284,15 +271,6 @@ export class FsConversationWriter {
       if (new Set(ids).size !== ids.length) {
         throw new TypeError('Assistant turn contains duplicate tool_use_id values');
       }
-      const goalProjection = projection.goal;
-      const goalMutations = prepareTurnGoalMutations(
-        goalProjection.goal,
-        allInputs,
-        input.goal_mutations ?? [],
-        new Set(input.goal_noop_tool_use_ids ?? []),
-        goalProjection.mutationSeq,
-      );
-
       const outputs = await Promise.all(
         allInputs.map((call) => this.persistToolOutput(entry.location, call)),
       );
@@ -342,7 +320,6 @@ export class FsConversationWriter {
         messages,
         message_patches: patches,
         tool_calls: toolCalls,
-        goal_mutations: goalMutations.map(toJsonValue),
       };
       const commit = await this.directory.repository.commitTurn(entry.location, {
         operation_id: operation,

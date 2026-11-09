@@ -29,7 +29,7 @@ describe('resolveInjectionPolicy', () => {
     expect(short).toEqual(standard);
   });
 
-  it('liveStateCovered (agentLoopV2 active-context) omits goal/todos from the block', () => {
+  it('liveStateCovered (agentLoopV2 active-context) omits todos from the block', () => {
     const p = resolveInjectionPolicy(BIG_MODEL, { liveStateCovered: true });
     expect(p.budget.includeLiveState).toBe(false);
   });

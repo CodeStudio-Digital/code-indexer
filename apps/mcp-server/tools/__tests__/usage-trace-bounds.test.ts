@@ -81,7 +81,9 @@ it('keeps imports out of the call graph and recovers call-only pages with the sa
 
 it('preserves old reference rows as unknown through migration instead of fabricating call classification', async () => {
   const { db, project, refs, read, ctx } = fixture(); refs([{ name: 'A', line: 12 }]);
-  db.raw().exec('DROP INDEX idx_symbol_refs_project_name_kind; ALTER TABLE symbol_references DROP COLUMN reference_kind');
+  // Recreate the old schema before replaying migration 269. Newer update
+  // triggers reference the column that this historical fixture removes.
+  db.raw().exec('DROP TRIGGER IF EXISTS structural_revision_symbol_references_update; DROP INDEX idx_symbol_refs_project_name_kind; ALTER TABLE symbol_references DROP COLUMN reference_kind');
   symbolReferenceKind269.up(db.raw()); symbolReferenceKind269.up(db.raw());
   const graph = (await read()).value;
   expect(graph.callers).toEqual([]);

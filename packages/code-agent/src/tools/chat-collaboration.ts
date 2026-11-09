@@ -1,4 +1,5 @@
-import { err, ok, type CoderTool, type ToolContext } from '../core/tool.js';
+import { err, type CoderTool, type ToolContext } from '../core/tool.js';
+import { okStructured } from '../core/model-output.js';
 import type { ChatMessageKind } from '@mcp/session-storage/collaboration/types.js';
 
 export const CHAT_TOOL_NAMES = new Set(['list_chats', 'send_chat_message', 'reply_chat_message', 'read_chat_messages', 'wait_chat_response', 'cancel_chat_request']);
@@ -12,7 +13,7 @@ function tool(name: string, description: string, properties: Record<string, obje
     parameters: { type: 'object', properties, required, additionalProperties: false },
     handler: async (args, ctx) => {
       if (!ctx.collaboration) return err('Chat collaboration is unavailable in this execution');
-      try { return ok(JSON.stringify(await execute(args, ctx))); }
+      try { return okStructured(await execute(args, ctx)); }
       catch (error) { return err(error instanceof Error ? error.message : String(error)); }
     },
   };
@@ -49,7 +50,7 @@ export const chatCollaborationTools: CoderTool[] = [
     request_id: string, timeout_s: { type: 'number', minimum: 0, maximum: 60 },
   }, ['request_id'], async (args, ctx) => {
     const { store, actor } = ctx.collaboration!;
-    return store.wait(actor, String(args.request_id), (typeof args.timeout_s === 'number' ? args.timeout_s : 60) * 1000, ctx.signal);
+    return store.waitResult(actor, String(args.request_id), (typeof args.timeout_s === 'number' ? args.timeout_s : 60) * 1000, ctx.signal);
   }),
   tool('cancel_chat_request', 'Cancel one of your pending requests. Cancellation does not undo already completed changes.', { request_id: string }, ['request_id'], async (args, ctx) => {
     await ctx.collaboration!.store.cancel(ctx.collaboration!.actor, String(args.request_id));

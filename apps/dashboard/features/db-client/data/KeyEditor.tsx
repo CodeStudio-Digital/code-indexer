@@ -63,11 +63,13 @@ export function KeyEditor({
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState('');
+  const [partial, setPartial] = useState(!isNew);
 
   const load = useCallback(async () => {
     if (isNew) return;
     const res = await api.runCommand(connKey, { kind: 'keyvalue', op: 'get', payload: { db, key: keyName } });
     const row = res.rows[0] ?? {};
+    setPartial(res.truncated === true);
     const ty = String(row.type ?? 'string');
     setType(ty);
     if (ty === 'string') setValue(String(row.value ?? ''));
@@ -91,6 +93,7 @@ export function KeyEditor({
   /** Fire one element op then reload the value. */
   const elementOp = useCallback(
     async (op: KvOp, payload: Record<string, unknown>) => {
+      if (partial) return;
       setBusy(true);
       try {
         await api.runCommand(connKey, { kind: 'keyvalue', op, payload: { db, key, ...payload } });
@@ -101,7 +104,7 @@ export function KeyEditor({
         setBusy(false);
       }
     },
-    [connKey, db, key, load, t],
+    [connKey, db, key, load, partial, t],
   );
 
   const isString = isNew || type === 'string';
@@ -115,7 +118,7 @@ export function KeyEditor({
   }
 
   async function saveString(): Promise<void> {
-    if (!key.trim()) return;
+    if (partial || !key.trim()) return;
     const ttlNum = parseTtl();
     if (ttlNum === null) return;
     setBusy(true);
@@ -202,6 +205,7 @@ export function KeyEditor({
           <div className="flex h-32 items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
         ) : (
           <div className="flex flex-col gap-2">
+            {partial && <p role="status" className="text-xs text-amber-500">{t('kv.partialPreview')}</p>}
             {isNew && (
               <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('kv.keyPlaceholder')} className="font-mono" />
             )}
@@ -209,12 +213,13 @@ export function KeyEditor({
               <textarea
                 className="h-48 w-full resize-none rounded border bg-background p-2 font-mono text-xs outline-none"
                 value={value}
+                readOnly={partial}
                 onChange={(e) => setValue(e.target.value)}
                 spellCheck={false}
                 placeholder={t('kv.valuePlaceholder')}
               />
             ) : (
-              <ElementsEditor type={type} elements={elements} busy={busy} t={t} onOp={elementOp} />
+              <ElementsEditor type={type} elements={elements} busy={busy || partial} t={t} onOp={elementOp} />
             )}
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               {t('kv.ttl')}
@@ -237,7 +242,7 @@ export function KeyEditor({
             {t('edit.cancel')}
           </Button>
           {isString && (
-            <Button size="sm" onClick={() => void saveString()} disabled={busy || loading || (isNew && !key.trim())}>
+            <Button size="sm" onClick={() => void saveString()} disabled={busy || loading || partial || (isNew && !key.trim())}>
               {busy && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
               {t('kv.save')}
             </Button>

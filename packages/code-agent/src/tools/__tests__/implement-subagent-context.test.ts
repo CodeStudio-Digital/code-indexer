@@ -4,7 +4,7 @@ import { asAgentRunId, newSessionId } from '@mcp/session-storage';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import { runSubagent } from '../implement-subagent.js';
+import { runSubagent, runParallelAgents } from '../implement-subagent.js';
 import { buildExpandTools } from '../expand.js';
 
 const PARENT_RUN_ID = asAgentRunId(
@@ -32,6 +32,64 @@ function captureProvider(): ChatProvider {
 }
 
 describe('runSubagent context inheritance', () => {
+  it('inherits scoped memory and confirms only bodies included in the child prompt', async () => {
+    const requests: ChatRequest[] = [];
+    const onMemoryInjected = vi.fn();
+    const getRelevantProjectMemory = vi.fn(async () => Array.from({ length: 5 }, (_, i) => ({
+      id: String(i + 1), title: `Inherited fact ${i}`, content: `Verified memory body ${i}`,
+    })));
+    const provider: ChatProvider = { name: 'fixture', model: 'mock-model', setModel() {}, async *chat(request) {
+      requests.push(request);
+      yield { type: 'text_delta', text: 'Inspection complete' };
+      yield { type: 'done', stop_reason: 'end_turn' };
+    } };
+    const result = await runSubagent({ provider, tools: [], ctx: { cwd: process.cwd(), projectName: 'test', runner: {
+      runId: PARENT_RUN_ID, emit: vi.fn(), getMemoryContext: () => ({ getRelevantProjectMemory, onMemoryInjected,
+        getUserMemoryIndex: () => [{ title: 'Global language', excerpt: 'Use Portuguese' }] }),
+    } } as unknown as ToolContext }, { systemPrompt: 'Inspect the assigned project', profile: 'explore', allowlist: null,
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'Inspect the cache invalidation behavior' }] }], maxTurns: 2 });
+    expect(result.reason).toBe('completed');
+    expect(getRelevantProjectMemory).toHaveBeenCalled();
+    expect(onMemoryInjected).toHaveBeenCalledExactlyOnceWith(['1', '2', '3']);
+    const input = JSON.stringify(requests[0]?.messages);
+    expect(input).toContain('Verified memory body 0');
+    expect(input).not.toContain('Verified memory body 3');
+    expect(input).toContain('Use Portuguese');
+  });
+  it('supplies opaque evidence references in tool bodies and accepts only the observed receipt', async () => {
+    let turn = 0;
+    const provider: ChatProvider = { name: 'fixture', model: 'fixture', setModel() {}, async *chat(request) {
+      if (++turn === 1) {
+        yield { type: 'tool_call_start', id: 'opaque-call-123', name: 'capture_context' };
+        yield { type: 'tool_call_end', id: 'opaque-call-123', name: 'capture_context', input: {} };
+        yield { type: 'done', stop_reason: 'tool_use' }; return;
+      }
+      const block = request.messages.flatMap(message => message.content).find(block => block.type === 'tool_result');
+      if (!block || block.type !== 'tool_result') throw new Error('missing observed result');
+      const reference = JSON.parse(block.content.split('\n')[0]).evidenceReference;
+      expect(reference).toBe('tool:opaque-call-123');
+      yield { type: 'text_delta', text: JSON.stringify({ schemaVersion: 1, status: 'completed', summary: 'Captured', artifacts: [],
+        evidence: [{ kind: 'inspection', reference, outcome: 'passed' }], acceptance: 'accepted', effectOutcome: 'confirmed',
+        criteria: [{ text: 'Captured the fixture', status: 'met', evidence: [reference] }] }) };
+      yield { type: 'done', stop_reason: 'end_turn' };
+    } };
+    const tool: CoderTool = { name: 'capture_context', source: 'native', description: 'Capture fixture', parameters: { type: 'object', properties: {} },
+      mutates: false, handler: async () => ({ content: 'Fixture captured' }) };
+    const result = await runSubagent({ provider, tools: [tool], ctx: { cwd: process.cwd(), projectName: 'test' } as ToolContext },
+      { systemPrompt: 'Inspect', initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'Capture fixture' }] }],
+        profile: 'explore', allowlist: null, maxTurns: 3, acceptance: ['Captured the fixture'] });
+    expect(result.workResult?.acceptance).toBe('accepted');
+  });
+  it('keeps typed results and execution snapshots through the parallel adapter', async () => {
+    const provider: ChatProvider = { name: 'fixture', model: 'fixture', setModel() {}, async *chat() {
+      yield { type: 'text_delta', text: 'Inspection complete' };
+      yield { type: 'done', stop_reason: 'end_turn' };
+    } };
+    const result = await runParallelAgents({ provider, tools: [], ctx: { cwd: process.cwd(), projectName: 'test' } as ToolContext },
+      [{ task: 'Inspect only', label: 'inspect', maxTurns: 7, profile: 'explore', reasoningEffort: 'high' }], 'Inspect only', null, () => {});
+    expect(result.results[0].execution).toMatchObject({ provider: 'fixture', model: 'fixture', effort: 'high', maxTurns: 7 });
+    expect(result.results[0].workResult).toMatchObject({ schemaVersion: 1, status: 'completed', acceptance: 'unverified' });
+  });
   it('keeps plugin tools in their own tier and inherits smart selection', async () => {
     const seenCatalogs: string[][] = [];
     let turn = 0;
@@ -141,6 +199,7 @@ describe('runSubagent context inheritance', () => {
       description: 'capture context',
       parameters: { type: 'object', properties: {} },
       source: 'native',
+      mutates: false,
       handler: async (_args, ctx) => {
         seenContext = ctx;
         return { content: 'captured' };
@@ -172,6 +231,7 @@ describe('runSubagent context inheritance', () => {
     };
 
     const parentContext = {
+      outcomeRecovery: { toolUseIds: ['parent-uncertain-call'] },
       cwd: '/repo/backend',
       projectName: 'Backend Loyalty',
       globalWorkspace,
@@ -211,6 +271,7 @@ describe('runSubagent context inheritance', () => {
     expect(seenContext?.runtimeEnv).toBe(runtimeEnv);
     expect(seenContext?.ports).toBe(ports);
     expect(seenContext?.sessionId).toBe(sessionId);
+    expect(seenContext?.outcomeRecovery?.toolUseIds).toEqual(['parent-uncertain-call']);
   });
 
   it.each([false, true])('persists child turns and the durable terminal classification, uncertain=%s', async uncertain => {

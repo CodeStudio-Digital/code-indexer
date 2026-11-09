@@ -33,7 +33,6 @@ function session(): FsCoderSession {
       status: 'idle',
       updated_at: '2026-01-01T00:00:10.000Z',
       archived_at: null,
-      goal: null,
       todos: [],
       permissions: {},
       tools: { active_skills: ['skill-a'] },

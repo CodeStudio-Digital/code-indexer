@@ -60,6 +60,73 @@ export function moduleSpecifiers(source) {
   visit(tree); return [...found];
 }
 
+const STARTUP_IMPORTER = 'dist/apps/http-api/server/database-startup.js';
+const STARTUP_WORKER = 'dist/apps/http-api/workers/database-startup-worker.js';
+const SQLITE_IMPORTER = 'dist/packages/db-drivers/src/sqlite-process.js';
+const SQLITE_WORKER = 'dist/packages/db-drivers/src/sqlite-process-entry.js';
+
+/** A packaged startup always selects its compiled worker. Only omit the dev
+ * loader when its actual AST branch and the archived worker prove that fact. */
+export function compiledRuntimeWorker(importer, source, archiveFiles) {
+  const sqlite = importer === SQLITE_IMPORTER;
+  const worker = sqlite ? SQLITE_WORKER : STARTUP_WORKER;
+  const pathName = sqlite ? 'entry' : 'built', conditionName = sqlite ? 'source' : 'compiled';
+  if ((!sqlite && importer !== STARTUP_IMPORTER) || !archiveFiles.has(worker)) return null;
+  const tree = ts.createSourceFile('startup.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const declarations = [], lookups = [];
+  let importsExistsSync = false, unconditionalTsx = false;
+  const visit = node => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+      && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === 'tsx') unconditionalTsx = true;
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === 'node:fs') {
+      const bindings = node.importClause?.namedBindings;
+      importsExistsSync ||= !!bindings && ts.isNamedImports(bindings)
+        && bindings.elements.some(item => item.name.text === 'existsSync' && !item.propertyName);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && [pathName, conditionName].includes(node.name.text)) declarations.push(node);
+    if (ts.isCallExpression(node) && node.arguments[0] && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'tsx') {
+      if (ts.isPropertyAccessExpression(node.expression) && node.expression.getText(tree) === 'require.resolve') lookups.push(node);
+      else if (['require', 'module.require', 'import'].includes(node.expression.getText(tree))) unconditionalTsx = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  const built = declarations.filter(node => node.name.text === pathName);
+  const compiled = declarations.filter(node => node.name.text === conditionName);
+  if (unconditionalTsx || (!sqlite && !importsExistsSync) || built.length !== 1 || compiled.length !== 1 || lookups.length === 0) return null;
+  if (![built[0], compiled[0]].every(node => node.parent.flags & ts.NodeFlags.Const)) return null;
+  let url = built[0].initializer;
+  const check = compiled[0].initializer;
+  if (sqlite) {
+    if (!url || !ts.isCallExpression(url) || url.expression.getText(tree) !== 'fileURLToPath' || url.arguments.length !== 1) return null;
+    url = url.arguments[0];
+    if (!check || !ts.isCallExpression(check) || check.expression.getText(tree) !== 'import.meta.url.endsWith'
+      || check.arguments.length !== 1 || !ts.isStringLiteral(check.arguments[0]) || check.arguments[0].text !== '.ts') return null;
+  }
+  if (!url || !ts.isNewExpression(url) || url.expression.getText(tree) !== 'URL'
+    || !url.arguments?.[0]
+    || url.arguments[1]?.getText(tree) !== 'import.meta.url') return null;
+  const workerPath = url.arguments[0];
+  if (sqlite) {
+    if (!ts.isConditionalExpression(workerPath) || workerPath.condition.getText(tree) !== 'source'
+      || !ts.isStringLiteral(workerPath.whenFalse) || workerPath.whenFalse.text !== './sqlite-process-entry.js') return null;
+  } else {
+    if (!ts.isStringLiteral(workerPath) || workerPath.text !== '../workers/database-startup-worker.js') return null;
+    if (!check || !ts.isCallExpression(check) || check.expression.getText(tree) !== 'existsSync'
+      || check.arguments.length !== 1 || check.arguments[0].getText(tree) !== 'built') return null;
+  }
+  for (const lookup of lookups) {
+    const enclosingFunction = node => { while (node && !ts.isFunctionLike(node)) node = node.parent; return node; };
+    if (enclosingFunction(lookup) !== enclosingFunction(built[0]) || enclosingFunction(lookup) !== enclosingFunction(compiled[0])) return null;
+    let branch = lookup;
+    while (branch.parent && !ts.isConditionalExpression(branch.parent)) branch = branch.parent;
+    const conditional = branch.parent;
+    if (!conditional || !ts.isConditionalExpression(conditional)
+      || conditional.condition.getText(tree) !== conditionName || (sqlite ? conditional.whenTrue : conditional.whenFalse) !== branch) return null;
+  }
+  return worker;
+}
+
 export function checkAsarClosure(root, asarPath, entries) {
   const asar = loadAsar(root);
   const listed = asar
@@ -115,8 +182,11 @@ export function checkAsarClosure(root, asarPath, entries) {
     visited.add(current);
     const raw = read(current);
     if (raw == null) continue;
+    const compiledWorker = compiledRuntimeWorker(current, raw, files);
+    if (compiledWorker && !visited.has(compiledWorker)) queue.push(compiledWorker);
     for (const spec of moduleSpecifiers(raw)) {
       if (!spec) continue;
+      if (spec === 'tsx' && compiledWorker) continue;
       if (spec.startsWith('.')) {
         const resolved = resolveRelative(current, spec);
         if (resolved == null) {

@@ -10,12 +10,15 @@ export class FetchDcrClient implements DcrClient {
       client_name: request.clientName,
       redirect_uris: request.redirectUris,
       grant_types: request.grantTypes,
+      response_types: ['code'],
       scope: request.scopes.join(' '),
       token_endpoint_auth_method: request.tokenEndpointAuthMethod,
     };
 
     const res = await fetch(registrationEndpoint, {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
+      redirect: 'error',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),
     });
@@ -27,6 +30,8 @@ export class FetchDcrClient implements DcrClient {
     if (!clientId) throw new Error('HTTP 200: response missing client_id');
     const clientSecret =
       typeof parsed.client_secret === 'string' ? parsed.client_secret : null;
-    return { clientId, clientSecret };
+    const method = typeof parsed.token_endpoint_auth_method === 'string' ? parsed.token_endpoint_auth_method : request.tokenEndpointAuthMethod;
+    if (!['none', 'client_secret_post', 'client_secret_basic'].includes(method)) throw new Error('Unsupported token endpoint authentication method');
+    return { clientId, clientSecret, tokenEndpointAuthMethod: method };
   }
 }

@@ -31,10 +31,11 @@ import { RefreshMcpAccessToken } from './use-cases/refresh-mcp-access-token.js';
 import { ResolveMcpBearer } from './use-cases/resolve-mcp-bearer.js';
 import { RevokeMcpAuthorization } from './use-cases/revoke-mcp-authorization.js';
 
-import type { McpOAuthRegistrationAdminRepo } from './ports/oauth-registration-repository.js';
+import type { McpOAuthRegistrationAdminRepo, McpOAuthRegistrationReaderRepo } from './ports/oauth-registration-repository.js';
 import type { McpOAuthTokensReaderRepo } from './ports/oauth-tokens-repository.js';
 
 export interface McpClientAuthBundle {
+  close(): void;
   discover: DiscoverAuthorizationServer;
   registerDynamic: RegisterDynamicClient;
   registerManual: RegisterManualClient;
@@ -44,6 +45,7 @@ export interface McpClientAuthBundle {
   resolveBearer: ResolveMcpBearer;
   revoke: RevokeMcpAuthorization;
   registrationAdminRepo: McpOAuthRegistrationAdminRepo;
+  registrationReaderRepo: McpOAuthRegistrationReaderRepo;
   /**
    * Read-only token lookup, surfaced so the status route can report
    * whether a server has completed consent (the dashboard polls this
@@ -82,6 +84,7 @@ export function composeMcpClientAuth(dbPath: string): McpClientAuthBundle {
   );
 
   return {
+    close: () => { regRepo.close(); tokensRepo.close(); pendingRepo.close(); },
     discover,
     registerDynamic,
     registerManual,
@@ -91,6 +94,7 @@ export function composeMcpClientAuth(dbPath: string): McpClientAuthBundle {
     resolveBearer,
     revoke,
     registrationAdminRepo: regRepo,
+    registrationReaderRepo: regRepo,
     tokensReaderRepo: tokensRepo,
   };
 }

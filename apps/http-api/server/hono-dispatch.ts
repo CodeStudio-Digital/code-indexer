@@ -280,12 +280,17 @@ export async function* dispatchStreaming(
   if (!body) return;
 
   const reader = body.getReader();
+  const onAbort = () => { void reader.cancel(signal?.reason).catch(() => undefined); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
   const decoder = new TextDecoder('utf-8');
   let buf = '';
+  let completed = false;
   try {
-    while (true) {
+    while (!signal?.aborted) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) { completed = true; break; }
+      if (signal?.aborted) break;
       buf += decoder.decode(value, { stream: true });
       // SSE events are delimited by a blank line.
       let nl = buf.indexOf('\n\n');
@@ -299,13 +304,14 @@ export async function* dispatchStreaming(
     }
     // Flush trailing event without terminating blank line (rare, but
     // pumpBusToSSE has occasionally emitted one).
-    if (buf.trim().length > 0) {
+    if (!signal?.aborted && buf.trim().length > 0) {
       const frame = parseSseBlock(buf);
       if (frame !== undefined) yield frame;
     }
   } finally {
-    if (signal?.aborted) {
-      await reader.cancel(signal.reason).catch(() => undefined);
+    signal?.removeEventListener('abort', onAbort);
+    if (!completed) {
+      await reader.cancel(signal?.reason).catch(() => undefined);
     }
     reader.releaseLock();
   }

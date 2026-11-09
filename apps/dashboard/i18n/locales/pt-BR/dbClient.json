@@ -21,7 +21,8 @@
     "newQuery": "Nova consulta",
     "deleteTitle": "Excluir conexão?",
     "deleteBody": "Isso remove a conexão salva e o histórico de consultas dela.",
-    "connecting": "Conectando…"
+    "connecting": "Conectando…",
+    "partialSearch": "Busca incompleta: algumas conexões não responderam."
   },
   "dialog": {
     "titleNew": "Nova conexão",
@@ -123,7 +124,9 @@
       "join-without-on": "JOIN sem ON pode produzir um produto cartesiano.",
       "unresolved-table": "Tabela ou view não encontrada no catálogo carregado."
     },
-    "timeoutInvalid": "Informe um timeout inteiro entre {{min}} e {{max}} segundos."
+    "timeoutInvalid": "Informe um timeout inteiro entre {{min}} e {{max}} segundos.",
+    "catalogPartial": "As sugestões mostram um catálogo parcial.",
+    "loadCatalogPage": "Carregar mais sugestões"
   },
   "aux": {
     "history": "Histórico",
@@ -335,6 +338,8 @@
     "removeElementConfirm": "Remover este elemento da chave?",
     "console": "Console de comandos",
     "consolePlaceholder": "Comando RESP, ex.: GET chave",
+    "consoleAcquisition": "Comandos livres carregam a resposta antes do limite de exibição. Use SCAN e intervalos limitados para coleções grandes.",
+    "partialPreview": "Prévia parcial (até 200 elementos / 64 KiB). A edição do valor está desabilitada. Use comandos limitados para consultar o restante.",
     "badTtl": "TTL deve ser um número (segundos)"
   },
   "filter": {
@@ -355,7 +360,8 @@
     "pageSize": "Linhas/página",
     "runSql": "Executar",
     "resetSql": "Voltar ao SELECT *",
-    "empty": "Nenhuma linha nesta página"
+    "empty": "Nenhuma linha nesta página",
+    "incompleteCells": "Algumas células excederam o limite de tamanho. A edição está desabilitada nesta página para preservar os valores completos."
   },
   "edit": {
     "editRow": "Editar linha",
@@ -412,5 +418,15 @@
   "edit.primaryKey": "PK",
   "edit.null": "NULO",
   "edit.true": "verdadeiro",
-  "edit.false": "falso"
+  "edit.false": "falso",
+  "jobs": {
+    "running": "Em andamento",
+    "cancelling": "Cancelamento solicitado",
+    "completed": "Concluído",
+    "failed": "Interrompido; confira o resultado",
+    "cancel": "Cancelar",
+    "settling": "Aguardando confirmação final do servidor",
+    "cancelled": "Cancelado pelo servidor",
+    "unknown": "Resultado não confirmado; confira antes de repetir"
+  }
 }

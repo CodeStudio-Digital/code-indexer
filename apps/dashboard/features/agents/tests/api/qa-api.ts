@@ -17,18 +17,20 @@ export async function fetchRuns(opts: {
   serviceId?: string;
   limit?: number;
   offset?: number;
+  signal?: AbortSignal;
 }): Promise<{ runs: QaRun[] }> {
   const url = new URL(`${BASE}/${opts.sessionId}/qa/runs`, window.location.origin);
   if (opts.serviceId) url.searchParams.set('service', opts.serviceId);
   if (opts.limit !== undefined) url.searchParams.set('limit', String(opts.limit));
   if (opts.offset !== undefined) url.searchParams.set('offset', String(opts.offset));
-  return getJson(url.pathname + url.search);
+  return getJson(url.pathname + url.search, opts.signal);
 }
 
 /** Currently active run for a session, with its inflight results. */
 export async function fetchActiveRun(opts: {
   sessionId: string;
   serviceId?: string;
+  signal?: AbortSignal;
 }): Promise<{
   run: QaRun | null;
   results?: QaTestResultWithUrls[];
@@ -38,19 +40,20 @@ export async function fetchActiveRun(opts: {
     window.location.origin,
   );
   if (opts.serviceId) url.searchParams.set('service', opts.serviceId);
-  return getJson(url.pathname + url.search);
+  return getJson(url.pathname + url.search, opts.signal);
 }
 
 /** Detail of a single past run (with all its result rows + report URL). */
 export async function fetchRunDetail(opts: {
   sessionId: string;
   runId: string;
+  signal?: AbortSignal;
 }): Promise<{
   run: QaRun;
   results: QaTestResultWithUrls[];
   report_url: string;
 }> {
-  return getJson(`${BASE}/${opts.sessionId}/qa/runs/${opts.runId}`);
+  return getJson(`${BASE}/${opts.sessionId}/qa/runs/${opts.runId}`, opts.signal);
 }
 
 /** Pure: build the URL of an arbitrary workspace artifact (used in places that don't go through `enrichResultsWithUrls`). */
@@ -131,8 +134,8 @@ export async function fetchQaDiagnostics(opts: {
   return getJson(`${BASE}/${opts.sessionId}/qa/diagnostics`);
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(path, { signal });
   if (!res.ok) throw new Error(await safeText(res));
   return res.json() as Promise<T>;
 }

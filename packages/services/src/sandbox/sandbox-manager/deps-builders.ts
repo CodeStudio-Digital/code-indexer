@@ -34,7 +34,7 @@ export interface ManagerHooks {
   reservePort: (port: number) => Promise<void>;
   destroyInternal: (sessionId: string, reason: string) => Promise<void>;
   syncManagedEnvs: (sessionId: string) => Promise<void>;
-  syncEnvsToAllContainers: (sessionId: string) => Promise<void>;
+  syncEnvsToAllContainers: (sessionId: string) => Promise<unknown>;
   resumeSandbox: (sessionId: string) => Promise<Sandbox>;
   unpauseRuntimeContainer: (sessionId: string, serviceId?: string | null) => Promise<Sandbox>;
   listServices: (sessionId: string) => Sandbox[];

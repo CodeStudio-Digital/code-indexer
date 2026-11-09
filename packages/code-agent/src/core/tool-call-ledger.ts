@@ -24,20 +24,15 @@ export interface ToolCallLedgerEntry {
   coverageNovel: boolean;
   /** Allowlisted validation command/tool label; never a raw command line. */
   validationSignal?: string;
+  validationOutcome?: 'passed' | 'failed' | 'pending';
+  /** First dispatch sequence; edits while an async check runs invalidate it. */
+  validationStartedSeq?: number;
   /**
    * Hashed, allowlisted recovery identity for resumable orchestration.
    * This lets `resume_agent` / resumed `workflow` success resolve the exact
    * earlier partial operation without retaining raw prompts or tool input.
    */
   recoveryOperationId?: string;
-  /**
-   * Structured user authority emitted only when the selected ask_user option
-   * explicitly accepts already-observed validation drift as out of scope.
-   * The ledger never retains the question, option text, or answer itself.
-   */
-  goalLifecycleResolution?:
-    | 'accept_out_of_scope_validation'
-    | 'supersede_previous_goal';
 }
 
 const CONTINUATION_KEYS = new Set([
@@ -71,18 +66,39 @@ export function logicalOperationId(name: string, args: unknown): string {
   return `${name}:${fnv1a(stableArgsKey(logicalArgs(name, args)))}`;
 }
 
+class ToolCallAccounting {
+  readonly terminalValidations = new Map<string, { signal: string; startedSeq: number }>();
+  seq = 0;
+  readonly entries: ToolCallLedgerEntry[] = [];
+  readonly resultsByOperation = new Map<string, Set<string>>();
+  readonly noProgressByOperation = new Map<string, number>();
+  readonly coverage = new Set<string>();
+  unsafeLane: Promise<void> = Promise.resolve();
+}
+
 export class ToolCallLedger {
-  private seq = 0;
-  private readonly entries: ToolCallLedgerEntry[] = [];
-  private readonly resultsByOperation = new Map<string, Set<string>>();
-  private readonly noProgressByOperation = new Map<string, number>();
-  private readonly coverage = new Set<string>();
-  private unsafeLane: Promise<void> = Promise.resolve();
+  constructor(private readonly accounting = new ToolCallAccounting()) {}
+  private get terminalValidations() { return this.accounting.terminalValidations; }
+  private get seq() { return this.accounting.seq; }
+  private set seq(value: number) { this.accounting.seq = value; }
+  private get entries() { return this.accounting.entries; }
+  private get resultsByOperation() { return this.accounting.resultsByOperation; }
+  private get noProgressByOperation() { return this.accounting.noProgressByOperation; }
+  private get coverage() { return this.accounting.coverage; }
+  private get unsafeLane() { return this.accounting.unsafeLane; }
+  private set unsafeLane(value: Promise<void>) { this.accounting.unsafeLane = value; }
   private uncertainTool: string | undefined;
 
-  /** Sticky for the entire attempt, including nested code_exec calls. */
+  /** Sticky for this dispatch branch, including all still-running RAW descendants. */
   markOutcomeUnknown(toolName: string): void { this.uncertainTool ??= toolName; }
   get outcomeUnknownTool(): string | undefined { return this.uncertainTool; }
+
+  /**
+   * Only the host may advance after registering the incident in recovery state.
+   * Keep accounting and unsafe-lane ownership: a timed-out RAW write still owns
+   * its lane, and late callbacks keep their old branch fenced permanently.
+   */
+  continueAfterOutcomeRegistration(): ToolCallLedger { return new ToolCallLedger(this.accounting); }
 
   /**
    * Shared FIFO lane for mutations and other non-parallel-safe operations.
@@ -205,17 +221,42 @@ export class ToolCallLedger {
         : input.refusalKind
           ? 'refusal'
           : input.isError ? 'tool_error' : 'success';
-    const validationSignal = extractValidationSignal(input.name, argRecord);
+    let validationSignal = extractValidationSignal(input.name, argRecord);
+    let validationStartedSeq = this.seq + 1;
+    let validationOutcome: ToolCallLedgerEntry['validationOutcome'];
+    const terminalTool = ['exec_command', 'write_stdin', 'poll_session'].includes(input.name);
+    const result = input.structuredData && typeof input.structuredData === 'object'
+      ? input.structuredData as Record<string, unknown> : {};
+    const sessionId = typeof result.sessionId === 'string' ? result.sessionId
+      : typeof argRecord.session_id === 'string' ? argRecord.session_id : undefined;
+    if (terminalTool && sessionId) {
+      if (input.name === 'exec_command' && validationSignal) {
+        this.terminalValidations.set(sessionId, { signal: validationSignal, startedSeq: validationStartedSeq });
+      } else if (input.name !== 'exec_command') {
+        // Interactive input changes what the shell executes; only empty polls
+        // may complete the original check's receipt.
+        if (typeof argRecord.chars === 'string' && argRecord.chars.length > 0) {
+          this.terminalValidations.delete(sessionId);
+        }
+        const pending = this.terminalValidations.get(sessionId);
+        validationSignal = pending?.signal;
+        validationStartedSeq = pending?.startedSeq ?? validationStartedSeq;
+      }
+    }
+    if (validationSignal) {
+      validationOutcome = outcome !== 'success' ? 'failed'
+        : terminalTool ? result.state === 'exited'
+          ? result.exitCode === 0 ? 'passed' : 'failed'
+          : 'pending'
+        : 'passed';
+      if (sessionId && validationOutcome !== 'pending') this.terminalValidations.delete(sessionId);
+    }
+    // Bound abandoned sessions independently from the retained ledger window.
+    if (this.terminalValidations.size > 500) this.terminalValidations.delete(this.terminalValidations.keys().next().value!);
     const recoveryOperationId = extractRecoveryOperationId(
       input.name,
       argRecord,
       input.structuredData,
-    );
-    const goalLifecycleResolution = extractGoalLifecycleResolution(
-      input.name,
-      argRecord,
-      input.content,
-      outcome,
     );
     const entry: ToolCallLedgerEntry = {
       seq: ++this.seq,
@@ -235,9 +276,8 @@ export class ToolCallLedger {
       ...(readCoverage ? { readCoverage } : {}),
       resultNovel: novel,
       coverageNovel,
-      ...(validationSignal ? { validationSignal } : {}),
+      ...(validationSignal ? { validationSignal, validationOutcome, validationStartedSeq } : {}),
       ...(recoveryOperationId ? { recoveryOperationId } : {}),
-      ...(goalLifecycleResolution ? { goalLifecycleResolution } : {}),
     };
     this.entries.push(entry);
     while (this.entries.length > 500) this.entries.shift();
@@ -281,7 +321,7 @@ function cleanCommandToken(token: string): string {
 }
 
 function extractPackageValidationSignal(normalized: string): string | undefined {
-  const packageManager = normalized.match(/\b(npm|pnpm|yarn|bun)\b/);
+  const packageManager = normalized.match(/^(npm|pnpm|yarn|bun)(?:\.cmd|\.exe)?\b/);
   if (!packageManager) return undefined;
   const manager = packageManager[1]!;
   const invocation = normalized.slice(packageManager.index! + packageManager[0].length);
@@ -361,14 +401,26 @@ function extractRecoveryOperationId(
   return undefined;
 }
 
-function extractValidationSignal(name: string, args: Record<string, unknown>): string | undefined {
+/** Conservative recognition of a direct invocation, never a substring in echoed text.
+ * Composite shell programs need a structured per-command receipt before they can
+ * count as verification. Missing evidence must not turn into a success claim. */
+export function extractValidationSignal(name: string, args: Record<string, unknown>): string | undefined {
+  if (!['run_command', 'exec_command', 'shell_command'].includes(name)) return undefined;
   const command = [args.command, args.cmd, args.script].find((value): value is string => typeof value === 'string');
   if (command) {
+    // Reject chaining, piping, substitution and redirection: exit zero for the
+    // whole shell is not evidence that the validation command ran/passed.
+    if (/[;&|<>`\r\n$#]/.test(command)) return undefined;
     const normalized = command.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (/(?:^|\s)(?:--help|-h|--version|--dry-run|--list(?:tests)?|--collect-only|--showconfig|--show-config)(?:[=\s]|$)/.test(normalized)) return undefined;
+    if (/^(?:npm|pnpm|yarn|bun)\b/.test(normalized)
+      && /(?:^|\s)(?:--cwd|--dir|--prefix|-c)(?:[=\s]+)(?!\.(?:\s|$))/.test(normalized)) return undefined;
+    if (/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?tsc\b/.test(normalized)
+      && /(?:^|\s)-v(?:\s|$)/.test(normalized)) return undefined;
     const packageValidation = extractPackageValidationSignal(normalized);
     if (packageValidation) return packageValidation;
     if (
-      /\bphp(?:\.exe)?\s+(?:-d\s+\S+\s+)*(?:-l|--syntax-check)\b/.test(normalized)
+      /^php(?:\.exe)?\s+(?:-d\s+\S+\s+)*(?:-l|--syntax-check)\b/.test(normalized)
     ) {
       // Keep the exact validation script (for example check:loc vs.
       // audit:env:check), or the PHP lint operation, without retaining flags,
@@ -376,64 +428,21 @@ function extractValidationSignal(name: string, args: Record<string, unknown>): s
       return 'php -l';
     }
     const patterns: Array<[RegExp, string]> = [
-      [/\bgit diff --check\b/, 'git diff --check'],
-      [/\bvitest(?: run)?\b/, 'vitest run'],
-      [/\bjest\b/, 'jest'],
-      [/\bpytest\b/, 'pytest'],
-      [/\bcargo (?:test|check|clippy|build)\b/, 'cargo validation'],
-      [/\bgo (?:test|vet|build)\b/, 'go validation'],
-      [/\bdotnet (?:test|build)\b/, 'dotnet validation'],
-      [/\b(?:mvn|gradle|gradlew) (?:test|verify|check|build)\b/, 'jvm validation'],
-      [/\btsc(?: --noemit)?\b/, 'tsc --noEmit'],
-      [/\b(?:eslint|biome check|ruff check|vite build)\b/, 'static validation'],
+      [/^git diff --check\b/, 'git diff --check'],
+      [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?vitest(?: run)?\b/, 'vitest run'],
+      [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?jest\b/, 'jest'],
+      [/^(?:(?:python|python3) -m )?pytest\b/, 'pytest'],
+      [/^cargo (?:test|check|clippy|build)\b/, 'cargo validation'],
+      [/^go (?:test|vet|build)\b/, 'go validation'],
+      [/^dotnet (?:test|build)\b/, 'dotnet validation'],
+      [/^(?:mvn|gradle|gradlew) (?:test|verify|check|build)\b/, 'jvm validation'],
+      [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?tsc(?: --noemit)?\b/, 'tsc --noEmit'],
+      [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?(?:eslint|biome check|ruff check|vite build)\b/, 'static validation'],
     ];
     for (const [pattern, label] of patterns) {
       const match = normalized.match(pattern);
       if (match) return label;
     }
   }
-  if (/(?:^|[_-])(?:test|typecheck|lint|diagnostic|build)(?:$|[_-])/i.test(name)) return name;
   return undefined;
-}
-
-function extractGoalLifecycleResolution(
-  name: string,
-  args: Record<string, unknown>,
-  content: string,
-  outcome: ToolCallLedgerEntry['outcome'],
-): ToolCallLedgerEntry['goalLifecycleResolution'] {
-  if (
-    name === 'update_goal'
-    && outcome === 'success'
-    && args.status === 'superseded'
-  ) {
-    return 'supersede_previous_goal';
-  }
-  if (name !== 'ask_user' || outcome !== 'success') return undefined;
-  const prefix = 'User answered: ';
-  if (!content.startsWith(prefix)) return undefined;
-  const answer = content.slice(prefix.length).split(/\r?\n/, 1)[0]?.trim();
-  if (!answer || !Array.isArray(args.options)) return undefined;
-
-  const selected = args.options.find((candidate) => {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
-    return String((candidate as Record<string, unknown>).value ?? '') === answer;
-  });
-  if (!selected || typeof selected !== 'object' || Array.isArray(selected)) return undefined;
-  const option = selected as Record<string, unknown>;
-  if (option.goal_lifecycle_resolution === 'accept_out_of_scope_validation') {
-    return 'accept_out_of_scope_validation';
-  }
-
-  // Backward compatibility for the option value already used by released
-  // agents before the structured field existed. Require visible scope wording
-  // so an unrelated option with the same value cannot silently waive a gate.
-  if (answer !== 'complete_out_of_scope') return undefined;
-  const visibleText = `${String(args.question ?? '')} ${String(option.label ?? '')}`
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase();
-  return /\b(?:out[- ]of[- ]scope|fora (?:do|de) escopo)\b/.test(visibleText)
-    ? 'accept_out_of_scope_validation'
-    : undefined;
 }

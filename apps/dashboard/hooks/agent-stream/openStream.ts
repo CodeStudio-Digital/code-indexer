@@ -161,6 +161,7 @@ export async function openStream(
   // drain loop below, strictly in arrival order — never straight from the
   // transport.
   const processEvent = (ev: SSEEvent): void => {
+    if (ctrl.signal.aborted || abortMap.get(sid) !== ctrl) return;
     // Transport-level preamble sent once per (re)connection, before any
     // replay: identifies the bus instance so the worker-log store can
     // dedup by (busId, seq). Never logged and never fed to handlers.
@@ -259,6 +260,9 @@ export async function openStream(
     }
     projector.dispatch(ev.event, data);
     commitCursor();
+    if ((ev.event === 'done' || ev.event === 'error') && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+    }
   };
 
   // Chunked event pump. A reattach replay bursts the whole ring buffer into
@@ -316,6 +320,9 @@ export async function openStream(
     method: opts.method,
     body: opts.body,
     signal: ctrl.signal,
+    // Server pings every 20s even during long thinking/tools. Reconnect only
+    // a silent connection, preserving the request's idempotency key/cursor.
+    idleTimeoutMs: 45_000,
     getLastEventId: () => lastSeenSeq,
     getLastEventBusId: () => lastSeenBusId,
     // Never reconnect over a stale cursor: `lastSeenSeq` advances at
@@ -345,7 +352,7 @@ export async function openStream(
       await drainDone;
     }
   } catch (e) {
-    if ((e as Error).name !== 'AbortError') {
+    if ((e as Error).name !== 'AbortError' && abortMap.get(sid) === ctrl && !ctrl.signal.aborted) {
       // Special case: server returned 409 INTERACTION_PENDING because the
       // runner was blocked inside an interactive tool. Surface as a
       // structured handshake state instead of a raw error so the UI can

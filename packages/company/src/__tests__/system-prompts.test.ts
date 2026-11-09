@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
+import { buildMasterCompanyBlock, buildQaTeamBlock, buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
+
+describe('Company autonomous lifecycle contract', () => {
+  it('finishes authorized work without artificial user questions and respects unknown outcomes', () => {
+    const prompt = buildMasterCompanyBlock({ roster: [], projects: [] });
+    expect(prompt).not.toContain('Every phase ends with');
+    expect(prompt).not.toContain('only after user confirmation');
+    expect(prompt).toContain('wait_for_subordinates');
+    expect(prompt).toContain('configured autonomy limits and approval policy');
+    expect(prompt).toContain('reconcile the original result first');
+    expect(prompt).toContain('docs_list/docs_search');
+  });
+  it('describes executable preview QA even when no legacy Playwright role exists', () => {
+    const prompt = buildQaTeamBlock([]);
+    expect(prompt).toContain('executor="preview"');
+    expect(prompt).toContain('qa_check_preview');
+    expect(prompt).toContain('persistent run_id');
+    expect(prompt).toContain('A model summary is not a test result');
+    expect(prompt).toContain('executor="playwright" only');
+  });
+});
 
 describe('buildSubordinateCompanyBlock', () => {
   it('keeps memory advisory and never lets it delay the deliverable', () => {

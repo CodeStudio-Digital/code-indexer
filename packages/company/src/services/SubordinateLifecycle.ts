@@ -230,7 +230,16 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     coderSessionId: string;
     status: AgentRunStatus;
   }> {
-    return spawnSubordinate(spec, this.buildSpawnDeps());
+    let executionStarted = false;
+    try {
+      return await spawnSubordinate(spec, { ...this.buildSpawnDeps(), onExecutionStarting: () => { executionStarted = true; } });
+    } catch (error) {
+      if (!executionStarted) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        throw Object.assign(failure, { code: 'SPAWN_NOT_STARTED' as const });
+      }
+      throw error;
+    }
   }
 
   // ─── Resume ─────────────────────────────────────────────────────

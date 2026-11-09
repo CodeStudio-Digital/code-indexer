@@ -96,7 +96,7 @@ describe('qa_start_run — plan gate', () => {
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
     const tool = qaStartRun(makeOrchestrator(null), 'qa', QA_RUN_ID);
-    const result = await tool.handler({ suite: 'login' }, CTX);
+    const result = await tool.handler({ executor: 'playwright', suite: 'login' }, CTX);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('submit_plan_to_master');
     expect(startRun).not.toHaveBeenCalled();
@@ -111,7 +111,7 @@ describe('qa_start_run — plan gate', () => {
       'qa',
       QA_RUN_ID,
     );
-    const result = await tool.handler({ suite: 'login' }, CTX);
+    const result = await tool.handler({ executor: 'playwright', suite: 'login' }, CTX);
     expect(result.isError).toBeUndefined();
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ plan_gate: 'auto' }));
   });
@@ -124,7 +124,7 @@ describe('qa_start_run — plan gate', () => {
       'qa',
       QA_RUN_ID,
     );
-    await tool.handler({ suite: 'login' }, CTX);
+    await tool.handler({ executor: 'playwright', suite: 'login' }, CTX);
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ plan_gate: 'approved' }));
   });
 
@@ -133,7 +133,7 @@ describe('qa_start_run — plan gate', () => {
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
     const tool = qaStartRun(makeOrchestrator(null), 'qa', QA_RUN_ID);
-    const result = await tool.handler({ suite: 'login' }, CTX);
+    const result = await tool.handler({ executor: 'playwright', suite: 'login' }, CTX);
     expect(result.isError).toBeUndefined();
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ plan_gate: 'skipped' }));
   });
@@ -142,7 +142,7 @@ describe('qa_start_run — plan gate', () => {
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
     const tool = qaStartRun(makeOrchestrator(null), 'master', null);
-    const result = await tool.handler({ suite: 'smoke' }, CTX);
+    const result = await tool.handler({ executor: 'playwright', suite: 'smoke' }, CTX);
     expect(result.isError).toBeUndefined();
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ plan_gate: null }));
   });
@@ -158,7 +158,7 @@ describe('qa_start_run — config + preflight gates (no orphan rows)', () => {
       'qa',
       QA_RUN_ID,
     );
-    const result = await tool.handler({ suite: 'login' }, CTX);
+    const result = await tool.handler({ executor: 'playwright', suite: 'login' }, CTX);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('config_invalid');
     expect(startRun).not.toHaveBeenCalled();
@@ -179,7 +179,7 @@ describe('qa_start_run — config + preflight gates (no orphan rows)', () => {
       'qa',
       QA_RUN_ID,
     );
-    const result = await tool.handler({ suite: 'login' }, CTX);
+    const result = await tool.handler({ executor: 'playwright', suite: 'login' }, CTX);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('sidecar_down');
     expect(startRun).not.toHaveBeenCalled();

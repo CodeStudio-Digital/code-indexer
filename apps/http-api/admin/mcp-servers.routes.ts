@@ -12,6 +12,7 @@ import { maskKey } from './shared/mask.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import type { ToolMeta } from '@mcp/code-agent/tools/tiers.js';
 import { getGlobalMcpExternalPool } from '../sse/McpExternalPool.js';
+import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 
 interface ExternalToolInfo {
   name: string;
@@ -22,9 +23,12 @@ interface ExternalToolInfo {
 }
 
 /** Keep the process-wide catalogue in lockstep with persisted admin changes. */
-export async function refreshGlobalMcpExternalPool(): Promise<void> {
+export async function refreshGlobalMcpExternalPool(serverId?: string): Promise<void> {
   const pool = getGlobalMcpExternalPool();
-  if (pool) await pool.refresh();
+  if (pool) {
+    if (serverId) await pool.refreshServer(serverId);
+    else await pool.refresh();
+  }
 }
 
 export function brokerRouteReadiness(status: unknown): {
@@ -121,12 +125,13 @@ function publicServer(s: McpServerConfig) {
   };
 }
 
-export function mcpServersRouter(): Hono {
+export interface McpAdminRuntime { dbPath?: string; bearerResolver?: ResolveMcpBearer; }
+
+export function mcpServersRouter(runtime: McpAdminRuntime = {}): Hono {
   const app = new Hono();
 
   function getStore() {
-    const config = loadConfig();
-    return new McpServerStore(config.dbPath);
+    return new McpServerStore(runtime.dbPath ?? loadConfig().dbPath);
   }
 
   app.get('/mcp-servers', (c) => {
@@ -180,7 +185,7 @@ export function mcpServersRouter(): Hono {
     } finally {
       store.close();
     }
-    await refreshGlobalMcpExternalPool();
+    await refreshGlobalMcpExternalPool(server.id).catch(() => undefined);
     return c.json(publicServer(server), 201);
   });
 
@@ -227,7 +232,7 @@ export function mcpServersRouter(): Hono {
     } finally {
       store.close();
     }
-    await refreshGlobalMcpExternalPool();
+    await refreshGlobalMcpExternalPool(server.id).catch(() => undefined);
     return c.json(publicServer(server));
   });
 
@@ -238,7 +243,7 @@ export function mcpServersRouter(): Hono {
     } finally {
       store.close();
     }
-    await refreshGlobalMcpExternalPool();
+    await refreshGlobalMcpExternalPool(c.req.param('id'));
     return c.json({ ok: true });
   });
 
@@ -252,11 +257,32 @@ export function mcpServersRouter(): Hono {
       const server = store.getServer(c.req.param('id'));
       if (!server) return c.json({ error: 'not found' }, 404);
 
-      const manager = new McpServerManager();
+      const pool = getGlobalMcpExternalPool();
+      if (pool && server.enabled) {
+        const start = Date.now();
+        try {
+          const snapshot = await pool.refreshServer(server.id);
+          const tools = snapshot.tools.filter(t => t.serverId === server.id)
+            .map(t => ({ name: t.toolName, description: t.description }));
+          if (tools.some(t => t.name === 'broker_get_status')) {
+            const status = await pool.callTool(server.id, 'broker_get_status', {});
+            const readiness = status.ok ? brokerRouteReadiness(status.result.structuredData) : { ready: false, error: status.text };
+            if (!readiness.ready) return c.json({ ok: false, tools, toolCount: tools.length, latencyMs: Date.now() - start, error: readiness.error });
+          }
+          store.replaceServerTools(server.id, tools);
+          return c.json({ ok: true, transportReady: true, tools, toolCount: tools.length, latencyMs: Date.now() - start });
+        } catch (e) {
+          return c.json({ ok: false, error: e instanceof Error ? e.message : String(e), latencyMs: Date.now() - start });
+        }
+      }
+
+      const manager = new McpServerManager(runtime.bearerResolver ?? null);
       const start = Date.now();
       try {
         await manager.connectServer(server);
         const { tools } = await manager.listAllTools();
+        const state = manager.getConnectionStates().get(server.id);
+        if (state?.state !== 'connected') throw new Error(state?.error ?? 'MCP tool discovery failed');
         // Strip the ext_<id>__ prefix for raw tool names
         const prefix = `ext_${server.id}__`;
         const toolList = tools.map((t) => ({
@@ -282,7 +308,7 @@ export function mcpServersRouter(): Hono {
           }
         }
         await manager.closeAll();
-        await refreshGlobalMcpExternalPool();
+        if (server.enabled) await refreshGlobalMcpExternalPool(server.id);
         return c.json({
           ok: true,
           transportReady: true,
@@ -313,10 +339,12 @@ export function mcpServersRouter(): Hono {
       const server = store.getServer(c.req.param('id'));
       if (!server) return c.json({ error: 'not found' }, 404);
 
-      const manager = new McpServerManager();
+      const manager = new McpServerManager(runtime.bearerResolver ?? null);
       try {
         await manager.connectServer(server);
         const { tools } = await manager.listAllTools();
+        const state = manager.getConnectionStates().get(server.id);
+        if (state?.state !== 'connected') throw new Error(state?.error ?? 'MCP tool discovery failed');
         const toolList = tools.map((t) => ({
           name: t.name,
           description: t.description,

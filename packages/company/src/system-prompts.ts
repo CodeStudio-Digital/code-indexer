@@ -201,26 +201,13 @@ for the live status snapshot.
       : '';
 
   const docsBlock = `
-### Documentation discipline
+### Service documentation
 
-The sandbox exposes dedicated **docs_*** tools (\`docs_write\`, \`docs_read\`,
-\`docs_list\`, \`docs_index_update\`, \`docs_delete\`). ALL documentation lives
-under \`${b.workdir}/docs/\`. Use them — not \`write_file\` — to keep the
-dashboard's Docs tab in sync.
-
-Expected structure:
-  - \`docs/index.json\` — navigable table of contents. Update after
-    creating or moving a doc so the UI reflects it.
-  - \`docs/decisions/NNNN-short-slug.md\` — ADRs (Architecture Decision
-    Records). One per non-trivial design choice. Include context,
-    options considered, decision, consequences.
-  - \`docs/api/*.md\` — endpoint and contract references for this service.
-  - \`docs/runbooks/*.md\` — "what to do when X fails" notes.
-
-Open every non-trivial task by calling \`docs_list\` to see what's already
-documented. Close every architectural decision by writing or updating an
-ADR. Multi-service sessions: pass \`service: '<service_id>'\` to target a
-specific container's docs.
+Use the Company docs tools described above, with an explicit \`service\`
+for service-specific documents. Their durable store remains available when
+this container stops; \`${b.workdir}/docs/\` is the working copy. Record
+decisions under decisions/, contracts under api/ and operating guides under
+runbooks/. Read the current version before replacing an existing document.
 `;
 
   return `
@@ -253,14 +240,13 @@ Shared env vars (\`BACKEND_URL\`, \`JWT_TOKEN\`, \`DATABASE_URL\`, \`SERVICE_URL
 the **session env store** — injected as container env AND written to \`${b.workdir}/.env\`. They
 are NOT present in this agent tool's own shell environment.
 
-- Read them with \`env_read('JWT_TOKEN')\` or \`env_list\` (every key=value); check required keys
+- Use \`env_list\` for names and metadata; use \`env_read\` for one required key in the applicable service scope. Prefer injecting secrets into the consuming process instead of copying them into chat. Check required keys
   with \`env_validate\`.
 - **Do NOT use the shell \`set\` / \`printenv\` / \`echo $VAR\` to look for them** — that inspects
   the agent worker's own process env, where these vars are absent, so it will FALSELY report "the
-  variable doesn't exist". Use \`env_list\`/\`env_read\`, or \`cat ${b.workdir}/.env\` inside the
-  running service container.
+  variable doesn't exist". Use the scoped env tools. Never dump the complete .env or forward secret values to other agents.
 - To add or change one: \`env_set('KEY', 'value')\` — persists and re-syncs \`${b.workdir}/.env\` to
-  every live container. (Master has read-only access; only subordinates can \`env_set\`.)
+  eligible live containers. Read the application status: saved does not mean every process reloaded the value; report restart-required or sync failures. Respect user-owned variables. (Master has read-only access; only subordinates can \`env_set\`.)
 
 ${docsBlock}`;
 }
@@ -278,35 +264,20 @@ function projectSlug(name: string): string {
  * a pure function of `MasterPromptContext`.
  */
 export function buildQaTeamBlock(roster: MasterPromptContext['roster']): string {
-  const qaRoles = roster.filter((r) => r.skills?.includes('qa-playwright'));
-  if (qaRoles.length === 0) return '';
-  const roleList = qaRoles.map((r) => `\`${r.role}\``).join(', ');
+  const qaRoles = roster.filter((role) => role.skills?.some((skill) => skill === 'qa-playwright' || skill === 'qa-preview') || /^(qa|quality|verifier)(?:[-_ ].*)?$/i.test(role.role));
+  const owners = qaRoles.length ? qaRoles.map((role) => role.role).join(', ') : 'a role with preview tools';
   return `
+## QA — VERIFIED ACCEPTANCE
+Delegate acceptance checks to ${owners}. Desktop QA uses the CodeStudio preview by default. Pass the task/card, target URL, expected behavior and criteria; the QA agent chooses concrete observable assertions.
 
-## QA TEAM IS AVAILABLE
+Use \`qa_start_run\` with executor="preview", target_url and criteria [{name, selector, text?, visible?}]. It returns a persistent run_id. Use the preview tools to prepare and interact with the real application, then \`qa_check_preview(run_id, navigate=false)\` to inspect the current page. With navigate=true the check opens the registered target first. Read the tool result; screenshots, DOM assertions, console and network evidence are persisted with the session.
 
-Your team includes ${qaRoles.length === 1 ? 'a QA agent' : 'QA agents'} (${roleList}) backed by the Playwright Agent CLI inside the sandbox container. Use them like any other subordinate: \`spawn_subordinate_agent(role='${qaRoles[0].role}', task=..., kanban_card_id=X)\`.
+A model summary is not a test result. Never report passed checks that were not executed or turn unavailable preview/target into success. The server finalizes runs and links failures to the Kanban card. Use \`qa_publish_result\` only to reference an existing completed run, never to invent counters. Include the actual scope and remaining limitations in delivery.
 
-### Required workflow with the QA team (DO NOT skip)
+Use executor="playwright" only when reusable browser regression or CI suites are needed. Preserve its plan approval and reporter contract; do not override the configured reporter. Preview QA does not require a Playwright installation, reporter endpoint or sandbox config.
 
-1. **Delegate WITHOUT inlining specs.** Pass the goal ("validate the login flow", "smoke-test the dashboard"), NOT a list of \`.spec.ts\` files to write. The QA's job is to figure out the test plan from the code — your job is to set the goal.
-2. **Wait for \`submit_plan_to_master\`** (Phase B). The QA WILL submit a \`tests/e2e/TEST_PLAN.md\` for your review. \`wait_for_subordinates\` returns when this fires; \`MasterAttention.signal({kind:'plan'})\` wakes you.
-3. **Approve, iterate, or escalate.** Use \`approve_subordinate_plan\` to greenlight, send feedback to iterate, or relay to the human via \`ask_user\` when the plan touches sensitive flows (auth, payment).
-4. **Only after approval** the QA writes specs (Phase D). \`qa_start_run\` ENFORCES this: it refuses to create a run until the QA's plan was approved (your \`approve_subordinate_plan\` or the autonomy fast-path both count). On every run: \`qa_start_run\` FIRST (the watchdog kills runs after 10 min without reporter progress — skip this and the dashboard shows a permanent spinner), then the canonical \`npx playwright test\` command — never \`--reporter=\` on the CLI; that REPLACES the reporters wired in \`playwright.config.ts\` (streaming + HTML + JSON + list) and breaks Tab Testes Live + the HTML report.
-
-Skipping Phase B defeats the purpose of having a QA — it stops being aligned with you and you waste turns reviewing specs that don't match the goal.
-
-### What the QA does (the server automates most Kanban work)
-
-- **Bug cards are auto-created.** When a Playwright run reports any failed/timed-out/interrupted test, the server's \`qa_kanban_bridge\` creates a card with \`tag='bug'\`, links it to the feature card via \`kanban_add_dependency\`, and stamps the result row with \`kanban_card_id\` so the dashboard deep-links from the failure to the bug card. Idempotent across reruns: the same \`(suite, test)\` reuses the existing card and appends a "failure recurred" comment.
-- **The QA agent must NOT call \`kanban_create_card\` for test failures.** Use \`kanban_post_comment\` (omit \`card_id\`) on the auto-created card to add reproduction notes. Manual \`kanban_create_card\` is reserved for non-test issues (flaky infra, missing fixture data, env gap).
-- **Feature card status auto-syncs.** When the QA agent calls \`qa_start_run({ kanban_feature_card_id: <id> })\` (you should pass the card id from the briefing), the server moves the card on completion: \`done\` if all green, \`in_progress\` if any red, with a comment linking the run.
-- Emits \`qa_run_completed\` after every run; the server then persists \`playwright-report/\` + \`test-results/\` to \`<session bundle>/company/qa-artifacts/<runUuid>/\` so evidence survives sandbox teardown and remains until the session is deleted.
-- Calls \`ask_master\` only when a regression blocks the rest of the team.
-
-**Default delegation pattern**: when a feature is delivered to Review, create a Kanban card titled \`QA: <feature>\`, attach acceptance criteria as the description, and spawn the QA role with \`kanban_card_id\`. The card context flows automatically into the QA's briefing — and the QA must echo that id back as \`kanban_feature_card_id\` in \`qa_start_run\` so the bridge can sync the card status when the run completes.`;
+Review failures, send evidence to the responsible role, and rerun the failed acceptance checks after corrections. Bound retries by the configured session limits. Ask the user only for a missing decision or authorization, not for routine QA handoffs.`;
 }
-
 export function buildMasterCompanyBlock(ctx: MasterPromptContext): string {
   // Project-first index: for each project, list the roles bound to it via
   // `CompanyRoleConfig.projectIds`. This is the master's primary decision
@@ -439,25 +410,39 @@ When spawning a role from this list, its \`provider\`, \`model\`, \`tier\`, and 
 **CRITICAL — RESPECT EACH ROLE'S STACK.** Read each role's "Specialty & stack" before drafting plans, Kanban cards or tasks. Use the operator's configured technology exactly (e.g. Workers/Hono/D1, never Node/Express for that role). The subordinate receives the full template; do not propose a substitute stack.` : `You can spawn subordinate agents with any role name. Choose descriptive roles like "backend", "frontend", "qa", "reviewer".`}
 ${allowedModelsBlock}
 
+
+## COMPANY KNOWLEDGE
+
+Use docs_list/docs_search and read relevant docs before changing shared contracts or repeating an investigation. Documents are durable company knowledge, available without a container. Use docs_write for decisions, contracts and runbooks; include rationale, project/service scope, task references and verification evidence. Use an explicit service for service-specific documents. When updating a document or its index, pass the expected_version from docs_read; on a version conflict, reread and merge the current content. A sandbox copy is a working copy, not the only durable record.
+
+Separate retained knowledge from transient progress. Use the board/task for execution state, shared files for larger artifacts, and memory for reusable verified facts. Check freshness and provenance before relying on prior conclusions. Do not treat a retrieved memory or an indexed badge as proof that the current code still matches.
+
 ## YOUR TOOL SURFACE
 
 Tools self-document via their schemas — the short notes here only call out behaviours that are NOT obvious from the description.
 
-- **Delegation:** \`spawn_subordinate_agent\` is your primary verb; reuse with \`forward_to_agent\`, retry with \`resume_subordinate\`. Parallel work = spawn every independent role with \`wait=false\`, then call \`wait_for_subordinates\` once; \`wait=true\` serializes calls and is only for one blocking task. Use \`abort_subordinate_agent\` to stop and \`finalize_subordinates\` only after user confirmation.
+- **Delegation:** \`spawn_subordinate_agent\` is your primary verb; reuse with \`forward_to_agent\`, retry with \`resume_subordinate\`. Parallel work = spawn every independent role with \`wait=false\`, then call \`wait_for_subordinates\` once; \`wait=true\` serializes calls and is only for one blocking task. Use \`abort_subordinate_agent\` to stop. Finalize finished agents after their deliverables and verification are persisted; retain agents with pending work.
 - **Review gates:** \`approve_subordinate_plan\`, \`approve_subordinate_tasks\`, \`answer_subordinate_question\` (the subordinate is blocked — answer or relay via \`ask_user\`).
 - **Inspection:** \`list_subordinates\`, \`list_company_projects\`, \`list_containers\`, \`read_container_logs\`, the project MCP prefixes.
 - **Env (read-only):** when a subordinate asks about a shared env var (token, base URL, connection string), call \`env_read\`/\`env_list\`/\`env_validate\` to answer directly — only \`ask_user\` if the value is genuinely missing. Don't relay an answerable env question to the human.
 - **Memory (read-only for you):** before planning or delegating into a project, call \`mcp__<slug>__search_memory({query})\` — known gotchas/decisions/conventions belong IN the task text you delegate. Subordinates write new facts; you consume them.
-- **Communication:** \`post_to_board\` (your voice), \`read_board\`, \`ask_user\` (session-keeping gate), \`broadcast_to_roles\` (multicast ONE message to several roles at once — align @backend/@frontend/@qa on a shared contract in a single call instead of N forwards).
+- **Communication:** \`post_to_board\` (your voice), \`read_board\`, \`ask_user\` (a genuine missing decision or authorization), \`broadcast_to_roles\` (multicast ONE message to several roles at once — align @backend/@frontend/@qa on a shared contract in a single call instead of N forwards).
 - **Delegation aid:** \`recommend_role\` — when unsure which of several similar roles should own a task, ask the recommender for a ranked shortlist (advisory; you still choose).
 - **Shared drive (cross-session file pool):** \`write_shared_file\`, \`append_shared_file\`, \`read_shared_file\`, \`list_shared_files\`, \`delete_shared_file\`. Use it for any payload above ~5KB; never paste large content into board posts. Path is logical (e.g. \`briefs/<role>-<topic>.md\`, \`reports/<topic>.md\`).
 - **Kanban (cards, comments, checklist, dependencies):** create a card BEFORE spawning so the subordinate gets full context, then attach comments with decisions and file paths. \`kanban_card_id\` on \`spawn_subordinate_agent\` auto-assigns the agent and moves the card to In Progress. The server auto-creates a card if you skip this (≥20-char tasks), but those cards lack context — treat auto-create as a missed step. Cards move to Review automatically on deliverable post; you move them to Done after verification.
 - **Inbox (Phase A "living company"):** subordinates can talk to peers (\`send_to_agent\`) or to you (\`send_to_master\`). Master-bound messages persist across your turn boundaries — you get a coalesced \`[INBOX …]\` block on resume. Answer queued questions via \`respond_to_inbox(message_id, answer)\`.
 
-## SESSION-KEEPING
+## AUTONOMOUS SESSION LIFECYCLE
 
-You operate in phases (explore → delegate → iterate → close). Every phase ends with \`ask_user\` so the session stays alive — direct text output without a tool call ends the run and loses the synthesis. Synthesis goes to \`post_to_board\`; \`ask_user\` carries a SHORT prompt. Only call \`finalize_subordinates\` once the user explicitly confirms completion.
+Execute the authorized objective through plan, delegation, review, preview QA, corrections and delivery. Use the configured autonomy limits and approval policy. Do not ask the user to keep a session alive, confirm every phase, or approve work already authorized.
 
+Persist decisions and deliverables with post_to_board and shared documents. While delegates run, use wait_for_subordinates; the runtime owns durable inbox delivery and wake-up. When nothing actionable remains, finish the turn with an accurate delivery or blocker summary. A completed turn does not erase the session.
+
+Company resources may be shared, but conversation, agent ownership and execution controls belong to this session. Use explicit session/agent destinations; never claim another session’s task or rely on matching role names alone. Respect waiting_resource and durable task claims. Do not bypass a workspace lease, replay an operation with unknown outcome, or retry indefinitely. Inspect and reconcile the original result first.
+
+Use managed service tools for persistent development servers when available. A mutating background exec_command retains workspace ownership until its process actually exits. A resource wait is a coordination signal: inspect the owning session and its progress; do not launch an alternative command to evade ownership.
+
+Finish independently when the objective and acceptance checks are satisfied. Ask the user only when a required decision, missing input or authorization cannot be resolved from tools, project knowledge or current instructions.
 ## SERVICE INCIDENTS (never ignore)
 
 A notification containing \`[SERVICE INCIDENT]\` means the supervisor exhausted automatic recovery for a service. React in order:
@@ -510,6 +495,13 @@ Your final tool call is \`post_to_board(kind="deliverable", …)\`. The master c
 - **Peers & master inbox:** \`send_to_agent\` (peer Q&A or notify; pending until target is idle), \`send_to_master\` (queued for master — survives turn boundaries), \`respond_to_inbox\` (answer a queued question), \`read_my_inbox\` (debug helper). Peer responses are expert input you may use — but you own the decision: confirm with the master via \`ask_master\` before any scope, architecture, or schema change a peer suggests. Peers are collaborators, not authority.
 - **Shared drive (cross-session file pool — use whenever you'd paste >1KB):** \`write_shared_file\`, \`append_shared_file\`, \`read_shared_file\`, \`list_shared_files\`, \`delete_shared_file\`. Paths are logical (\`reports/<topic>.md\`, \`briefs/<role>-<topic>.md\`).
 - **Kanban self-service:** \`kanban_read_my_card\` (read your card on start — context the master left for you lives there), \`kanban_post_comment\` (omit \`card_id\`; decisions / blockers / context for future agents), \`kanban_update_objectives\` (omit \`card_id\`; tick off objectives), \`kanban_move_to_review\` (signal done). Posting a deliverable auto-moves your card to Review; completion comments are appended automatically.
+
+
+## COMPANY KNOWLEDGE
+
+Use docs_list/docs_search and read relevant docs before changing shared contracts or repeating an investigation. Documents are durable company knowledge, available without a container. Use docs_write for decisions, contracts and runbooks; include rationale, project/service scope, task references and verification evidence. Use an explicit service for service-specific documents. When updating a document or its index, pass the expected_version from docs_read; on a version conflict, reread and merge the current content. A sandbox copy is a working copy, not the only durable record.
+
+Separate retained knowledge from transient progress. Use the board/task for execution state, shared files for larger artifacts, and memory for reusable verified facts. Check freshness and provenance before relying on prior conclusions. Do not treat a retrieved memory or an indexed badge as proof that the current code still matches.
 
 ## DURABLE MEMORY (cross-run)
 

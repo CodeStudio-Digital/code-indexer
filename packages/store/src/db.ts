@@ -1,4 +1,5 @@
 import { runMigrations, getSchemaVersion } from './migrations/index.js';
+import { readStructuralRevision, structuralJournal } from './db/structural-state.js';
 import type {
   Project, DBFile, DBSymbol, IndexRun, CostSummary, ContextSnapshot, Webhook,
   ProjectStats, DiscoveredModel, SnapshotCategory,
@@ -92,6 +93,8 @@ export interface EmbeddingCoverage {
 }
 
 export class CodeIndexDB {
+  structuralJournal() { return structuralJournal(this.db); }
+  getStructuralRevision(projectId: number): string { return readStructuralRevision(this.idx(projectId), projectId); }
   private db: DB;
   /** Central DB file path (for ATTACH + backup during the split). */
   private readonly centralDbPath: string;
@@ -103,6 +106,7 @@ export class CodeIndexDB {
   private readonly projectPool: ProjectDbPool;
   /** Cache of the routing decision per project id (avoids a SELECT per call). */
   private readonly routeCache = new Map<number, boolean>();
+  private routeDataVersion: number | undefined;
   /** Short-TTL read cache for the main-thread-freezing hot reads (getStats,
    *  listProjects). Invalidated on the centralized write methods below. */
   private readonly readCache = new ReadCache();
@@ -324,6 +328,15 @@ export class CodeIndexDB {
     // full projectId-threading is complete + verified, the engine copies project
     // DBs but the app keeps reading/writing central (no bare-id breakage).
     if (!this.pdbFlags.enabled || !this.pdbFlags.route || projectId === 0) return false;
+    // A worker or another connection may commit the split after this handle
+    // cached a central route. SQLite data_version detects those commits on
+    // this connection; local mutations keep their explicit invalidation below.
+    // No TTL: the first read after the commit must see the published index.
+    const version = this.db.pragma('data_version', { simple: true }) as number;
+    if (version !== this.routeDataVersion) {
+      this.routeCache.clear();
+      this.routeDataVersion = version;
+    }
     const cached = this.routeCache.get(projectId);
     if (cached !== undefined) return cached;
     const row = this.db.prepare(
@@ -657,6 +670,7 @@ export class CodeIndexDB {
     this.readCache.invalidateKey('projects:list'); // loose hides from the list
   }
   deleteProject(id: number): void {
+    if (id === 0) throw new Error('Cannot delete the reserved user-memory project');
     // Tiered-hybrid: remove the per-project DB files (app-layer cascade — the
     // FK cascade can't cross DB files), then the central catalog row. Best-effort
     // file removal so a missing DB is harmless.
@@ -671,6 +685,7 @@ export class CodeIndexDB {
   }
   /** Wipe a project's data (index/sessions/snapshots/runs/costs) but KEEP its row. */
   clearProjectData(id: number): void {
+    if (id === 0) throw new Error('Cannot clear the reserved user-memory project');
     if (this.useProjectDb(id)) {
       // Clear the project DB's data tables IN PLACE (keeps its catalog row so
       // the FK stays satisfied), then reset the central denormalized counters
@@ -730,6 +745,7 @@ export class CodeIndexDB {
   getFileById(id: number, projectId?: number): DBFile | undefined { return files.getById(this.idx(projectId), id); }
   getFileByPath(projectId: number, path: string): DBFile | undefined { return files.get(this.idx(projectId), projectId, path); }
   listFiles(projectId: number, language?: string): DBFile[] { return files.list(this.idx(projectId), projectId, language); }
+  listFilePathsBounded(projectId: number, language?: string, limit = 5000) { return files.listPathsBounded(this.idx(projectId), projectId, language, limit); }
   listAgentIndexFiles(projectId: number, page: agentIndexReads.IndexPage & { order?: 'path' | 'updated' } = {}) {
     return agentIndexReads.filePage(this.idx(projectId), projectId, page);
   }
@@ -826,10 +842,18 @@ export class CodeIndexDB {
   // ─── Snapshots ──────────────────────────────────────────────────
   createSnapshot(projectId: number, data: snapshots.CreateSnapshotData): ContextSnapshot { return snapshots.create(this.db, projectId, data); }
   markSnapshotAccessed(ids: number[]): void { snapshots.markAccessed(this.db, ids); }
-  createAgentMemory(data: agentMemory.CreateAgentMemoryData): AgentMemoryRow { return agentMemory.create(this.db, data); }
+  private agentMemoryFileIndex(data: agentMemory.CreateAgentMemoryData): DB | null {
+    if (data.scope === 'user' || data.referencedFileSnapshots !== undefined || !data.referencedFiles?.length) return null;
+    try { return this.idx(data.projectId ?? 0); } catch { return null; }
+  }
+  createAgentMemory(data: agentMemory.CreateAgentMemoryData): AgentMemoryRow {
+    return agentMemory.create(this.db, data, this.agentMemoryFileIndex(data));
+  }
   archiveAgentMemory(id: number, reason = 'forgotten'): void { agentMemory.archive(this.db, id, reason); }
   restoreAgentMemory(id: number): boolean { return agentMemory.restore(this.db, id); }
-  replaceAgentMemory(id: number, data: agentMemory.CreateAgentMemoryData): AgentMemoryRow { return agentMemory.replace(this.db, id, data); }
+  replaceAgentMemory(id: number, data: agentMemory.CreateAgentMemoryData): AgentMemoryRow {
+    return agentMemory.replace(this.db, id, data, this.agentMemoryFileIndex(data));
+  }
   listAgentMemoryLive(scope: AgentMemoryScope, projectId: number, opts: { includeArchived?: boolean; limit?: number } = {}): AgentMemoryRow[] { return agentMemory.listLive(this.db, scope, projectId, opts); }
   getAgentMemoryById(id: number): AgentMemoryRow | undefined { return agentMemory.getById(this.db, id); }
   /** Batched hydration; unspecified row order — see agentMemory.getByIds. */
@@ -848,7 +872,9 @@ export class CodeIndexDB {
   findAgentMemoryBySourceSnapshot(snapshotId: number): AgentMemoryRow | undefined { return agentMemory.findBySourceSnapshot(this.db, snapshotId); }
   recordAgentMemoryEvent(event: agentMemory.AgentMemoryEvent): void { agentMemory.recordEvent(this.db, event); }
   pruneAgentMemoryEvents(maxAgeDays = 30, maxRows = 50_000): number { return agentMemory.pruneEvents(this.db, maxAgeDays, maxRows); }
-  getAgentMemoryStaleBatch(ids: number[]): Map<number, { stale: string[]; total: number }> { return agentMemory.getStaleBatch(this.db, ids); }
+  getAgentMemoryStaleBatch(ids: number[]): Map<number, { stale: string[]; total: number; unknown?: number }> {
+    return agentMemory.getStaleBatch(this.db, ids, (projectId) => this.idx(projectId));
+  }
   setAgentMemoryImportance(id: number, importance: number): void { agentMemory.setImportance(this.db, id, importance); }
   /** Read-only guard that keeps no-op hygiene passes from creating semantic jobs. */
   hasAgentMemoryHygieneCandidates(scope: AgentMemoryScope, projectId: number): boolean { return agentMemoryConsolidation.hasHygieneCandidates(this.db, scope, projectId); }

@@ -35,6 +35,8 @@ import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 
 export interface ScanOptions {
   maxFiles?: number;
+  /** Rebuild derived structure even when source bytes have not changed. */
+  forceReparse?: boolean;
   /** Yield background disk work while an interactive operation has priority. */
   waitForInteractivePriority?: () => Promise<void>;
   /**
@@ -173,7 +175,7 @@ export class FileScanner {
       const mtimeMs = Math.trunc(st.mtimeMs);
 
       // Stat-first shortcut: stored mtime+size match → unchanged, zero reads.
-      if (!paranoid && meta && meta.content_hash
+      if (!opts.forceReparse && !paranoid && meta && meta.content_hash
           && meta.mtime_ms === mtimeMs && meta.size === st.size) {
         stats.statOnly++;
         unchanged.push(normalizedPath);
@@ -189,7 +191,7 @@ export class FileScanner {
       stats.hashed++;
 
       const hash = hashContent(content);
-      if (meta && meta.content_hash === hash) {
+      if (!opts.forceReparse && meta && meta.content_hash === hash) {
         // mtime moved but content didn't (git checkout, touch) — stamp the
         // fresh mtime so the next scan is stat-only again.
         db.touchFileMtime(projectId, normalizedPath, mtimeMs);

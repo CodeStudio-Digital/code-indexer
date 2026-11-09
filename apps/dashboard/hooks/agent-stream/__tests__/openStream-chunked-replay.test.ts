@@ -194,15 +194,15 @@ describe('openStream chunked replay pump', () => {
   });
 
   it('discards the pending queue when the stream is aborted before the drain runs', async () => {
-    let ctl: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const cancelled = vi.fn();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        ctl = controller;
         const frames = [busInfoFrame('bus-a')];
         for (let i = 0; i < 10; i++) frames.push(workerLogFrame(i, `e${i}`));
         controller.enqueue(enc.encode(frames.join('')));
         // Stream intentionally left open — the run is still live.
       },
+      cancel: cancelled,
     });
     vi.stubGlobal('fetch', vi.fn(async () =>
       new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })));
@@ -217,7 +217,7 @@ describe('openStream chunked replay pump', () => {
     expect(peekWorkerLog(SESSION_ID)).toHaveLength(0);
     expect(d.lastSeenSeqMap.size).toBe(0);
 
-    ctl!.close(); // let the transport read loop end so openStream settles
     await p;
+    expect(cancelled).toHaveBeenCalledOnce();
   });
 });

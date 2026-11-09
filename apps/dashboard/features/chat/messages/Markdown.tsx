@@ -1,12 +1,18 @@
-import { isValidElement, memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { isValidElement, memo, useEffect, useRef, useState, type ReactNode, type ComponentProps } from 'react';
 import { Check, Copy, Maximize2, Minimize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { RootContent } from 'hast';
+import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
+import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import { useThrottledValue } from '../../../hooks/useThrottledValue.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
+import { codePreview } from './code-preview.js';
+import { highlightMarkdownCode, MAX_HIGHLIGHT_CHARS } from './markdown-highlight.js';
+import { LargeMarkdown } from './LargeMarkdown.js';
 
 interface MarkdownProps {
   text: string;
@@ -23,21 +29,53 @@ const defaultClasses =
 // every render, and fresh plugin/component literals meant a new array + object
 // allocation per streamed frame on top of that. Module constants are free.
 const REMARK_PLUGINS = [remarkGfm];
-const MARKDOWN_COMPONENTS = { pre: CodeBlock };
+const MARKDOWN_COMPONENTS = { pre: CodeBlock, a: MarkdownLink };
+export const LARGE_MARKDOWN_CHARS = 12_000;
+const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
+  return <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{text}</ReactMarkdown>;
+});
+function renderMarkdownNode(node: RootContent) {
+  return toJsxRuntime(node, { Fragment, jsx, jsxs, components: MARKDOWN_COMPONENTS,
+    ignoreInvalidStyle: true, passKeys: true, passNode: true });
+}
+
+function MarkdownLink({ href, children, title }: ComponentProps<'a'>) {
+  const external = /^(?:https?:|mailto:)/i.test(href ?? '');
+  return <a href={href} title={title} target={external ? '_blank' : undefined}
+    rel={external ? 'noopener noreferrer' : undefined}
+    onClick={event => {
+      if (external && href && window.electronAPI?.openExternal) {
+        event.preventDefault();
+        window.electronAPI.openExternal(href);
+      }
+    }}>{children}</a>;
+}
 
 export const Markdown = memo(function Markdown({ text, className }: MarkdownProps) {
+  const fence = text.length > LARGE_MARKDOWN_CHARS ? singleFence(text) : null;
   return (
     <div data-text-selectable className={cn(baseClasses, !className && defaultClasses, className)}>
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-        {text}
-      </ReactMarkdown>
+      {fence ? <CodeBlock><code className={`language-${fence.lang}`}>{fence.code}</code></CodeBlock>
+        : text.length > LARGE_MARKDOWN_CHARS
+        ? <LargeMarkdown text={text} renderNode={renderMarkdownNode}
+          preview={<pre className="whitespace-pre-wrap break-words">{text.slice(0, 4_000)}</pre>} />
+        : <MarkdownContent text={text} />}
     </div>
   );
 });
 
-const MAX_HIGHLIGHT_BYTES = 200_000;
-const COLLAPSED_CODE_MAX_LINES = 24;
-const COLLAPSED_CODE_MAX_CHARS = 3_500;
+/** A standalone fence needs no Markdown AST. Keep the full code for copy while
+ * the existing code preview/highlight budgets bound its initial render. */
+function singleFence(text: string): { lang: string; code: string } | null {
+  const opening = /^(`{3,}|~{3,})([^\n]*)\r?\n/.exec(text);
+  if (!opening || (opening[1][0] === '`' && opening[2].includes('`'))) return null;
+  const body = text.slice(opening[0].length);
+  const closing = new RegExp(`(?:^|\\n) {0,3}${opening[1][0]}{${opening[1].length},}[\\t ]*(?:\\r?\\n|$)`).exec(body);
+  if (closing && body.slice(closing.index + closing[0].length).trim()) return null;
+  return { lang: opening[2].trim().split(/\s+/)[0] || 'text',
+    code: closing ? body.slice(0, closing.index + (closing[0].startsWith('\n') ? 1 : 0)) : body };
+}
+
 
 /** Render fenced and indented code with syntax highlighting and per-block copy. */
 function CodeBlock({ children }: { children?: ReactNode }) {
@@ -46,9 +84,8 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lineCount = code.split(/\r?\n/).length;
-  const collapsible = lineCount > COLLAPSED_CODE_MAX_LINES
-    || (lineCount > 12 && code.length > COLLAPSED_CODE_MAX_CHARS);
+  const preview = codePreview(code);
+  const collapsible = preview.truncated;
   const collapsed = collapsible && !expanded;
 
   useEffect(() => () => {
@@ -96,7 +133,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         </div>
       </div>
       <div className={cn('relative', collapsed && 'max-h-80 overflow-hidden')}>
-        <HighlightedCode code={code} lang={lang} />
+        <HighlightedCode code={collapsed ? preview.text : code} lang={lang} />
         {collapsed && (
           <div
             aria-hidden
@@ -126,14 +163,14 @@ function HighlightedCode({ code, lang }: { code: string; lang: string }) {
   const theme = dark ? 'github-dark' : 'github-light';
   const [highlight, setHighlight] = useState<Highlight | null>(null);
   const throttledCode = useThrottledValue(code, HIGHLIGHT_INTERVAL_MS);
-  const tooLarge = throttledCode.length > MAX_HIGHLIGHT_BYTES;
+  const tooLarge = code.length > MAX_HIGHLIGHT_CHARS;
 
   useEffect(() => {
     if (tooLarge || lang === 'text') {
       setHighlight(null);
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     // Deliberately NOT clearing the previous highlight here. Dropping to the
     // plain <pre> while the next one computed made every streamed frame flash
     // unstyled and forced two renders per update; the guard below decides
@@ -142,18 +179,14 @@ function HighlightedCode({ code, lang }: { code: string; lang: string }) {
       try {
         // The highlighter is initialized only for language-tagged code fences,
         // keeping ordinary streaming messages on the lightweight path.
-        const { ensureLang, getHighlighter } = await import('../../builder/preview/files/viewer/shiki-client.js');
-        const resolvedLang = await ensureLang(lang);
-        if (resolvedLang === 'text') return;
-        const highlighter = await getHighlighter();
-        const html = highlighter.codeToHtml(throttledCode, { lang: resolvedLang, theme });
-        if (!cancelled) setHighlight({ source: throttledCode, html });
+        const html = await highlightMarkdownCode(throttledCode, lang, theme, controller.signal);
+        if (!controller.signal.aborted) setHighlight(html === null ? null : { source: throttledCode, html });
       } catch {
-        if (!cancelled) setHighlight(null);
+        if (!controller.signal.aborted) setHighlight(null);
       }
     })();
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [throttledCode, lang, theme, tooLarge]);
 
@@ -163,7 +196,7 @@ function HighlightedCode({ code, lang }: { code: string; lang: string }) {
   // the plain/highlighted flicker. Anything else (the component reused for a
   // different fence, or an edited block) is stale and must fall back to the
   // plain <pre>, which always shows the exact current text.
-  const usable = highlight && code.startsWith(highlight.source);
+  const usable = !tooLarge && highlight && code.startsWith(highlight.source);
   if (!usable) {
     return (
       <pre className="m-0 overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre">

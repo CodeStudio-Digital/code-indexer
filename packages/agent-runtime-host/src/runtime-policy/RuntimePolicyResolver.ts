@@ -29,7 +29,8 @@ const VALIDATORS: Readonly<Record<string, Validator>> = Object.freeze({
   productPreset: (v) => typeof v === 'string' && v.length > 0,
   'provider.firstByteTimeoutMs': positiveInt,
   'provider.idleTimeoutMs': positiveInt,
-  'provider.thinkingOnlyTimeoutMs': positiveInt,
+  // V1 snapshots may still carry the retired timeout. The runner ignores it.
+  'provider.thinkingOnlyTimeoutMs': nonNegativeInt,
   'provider.transientRetriesPerTurn': nonNegativeInt,
   'provider.transientRetriesPerRun': nonNegativeInt,
   'provider.streamHeartbeatMs': positiveInt,

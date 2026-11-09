@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CompanyBottomPanel, type CompanyBottomTab } from './CompanyBottomPanel.js';
 import { useSandboxStatus } from '../builder/useSandboxStatus.js';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi.js';
+import { toast } from '../../components/ui/prompt-dialog.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
 import { useCompanySiblings } from '../../hooks/useCompanySiblings.js';
 import { useProviders } from '../../hooks/useProviders.js';
@@ -13,7 +14,7 @@ import type { AgentAttachment } from '../../hooks/agent-stream/types.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
 import { MasterComposer } from './MasterComposer.js';
-import { FrontTabsBar } from './FrontTabsBar.js';
+import { CompanySessionsSidebar } from './CompanySessionsSidebar.js';
 import { ResetSessionDialog } from './ResetSessionDialog.js';
 import { ReestablishMasterDialog } from './ReestablishMasterDialog.js';
 import type { RoleConfig, SkillDef } from './RoleEditModal.js';
@@ -45,14 +46,6 @@ interface CompanySessionViewProps {
   sessionId: string;
   sessionName: string;
   sessionStatus: string;
-  /**
-   * Outer-app sessions-list sidebar toggle (owned by `AgentsTab`).
-   * When provided, `SessionHeader` renders a button that controls it
-   * — letting us merge the AgentsTab top bar into SessionHeader and
-   * show only one bar.
-   */
-  sessionsListOpen?: boolean;
-  onToggleSessionsList?: () => void;
   workbenchSlots?: CompanySessionWorkbenchSlots;
   runtimeKind?: 'company' | 'app_studio';
 }
@@ -72,6 +65,7 @@ interface SessionFullData {
   projects: SessionProject[];
   agentRuns: PersistedAgentRun[];
   recentBoard: Array<{
+    attachments?: import('@mcp/company-contracts').BoardAttachment[];
     id: string;
     seq: number;
     author_role: string;
@@ -91,24 +85,55 @@ interface SessionFullData {
   masterPrompts?: MasterPrompt[];
 }
 
-export function CompanySessionView({
+export function CompanySessionView(props: CompanySessionViewProps) {
+  const siblings = useCompanySiblings(props.sessionId);
+  // Navigation belongs to the company, while the keyed execution subtree
+  // still isolates each session's streams, requests and composer.
+  const [sessionsOpen, setSessionsOpen] = useState(true);
+  const [sessionQuery, setSessionQuery] = useState('');
+  // Never initialize a runtime from an unverified root/front URL pair. The
+  // execution subtree is keyed by the validated member, not the route text.
+  if (!siblings.parent) return <div role={siblings.error ? 'alert' : 'status'} className="p-6 text-sm text-muted-foreground">
+    {siblings.error ? `Não foi possível carregar a empresa: ${siblings.error}` : 'Carregando sessões…'}
+    {siblings.error && <button type="button" className="ml-2 text-primary" onClick={() => void siblings.refresh()}>Tentar novamente</button>}
+  </div>;
+  return <CompanySessionWorkspace
+    key={siblings.activeSessionId ?? props.sessionId}
+    {...props}
+    siblings={siblings}
+    sessionNavigation={{ open: sessionsOpen, setOpen: setSessionsOpen, query: sessionQuery, setQuery: setSessionQuery }}
+  />;
+}
+
+function CompanySessionWorkspace({
   sessionId,
   sessionName,
   sessionStatus,
-  sessionsListOpen,
-  onToggleSessionsList,
   workbenchSlots,
   runtimeKind = 'company',
-}: CompanySessionViewProps) {
+  siblings,
+  sessionNavigation,
+}: CompanySessionViewProps & {
+  siblings: ReturnType<typeof useCompanySiblings>;
+  sessionNavigation: { open: boolean; setOpen: (open: boolean) => void; query: string; setQuery: (query: string) => void };
+}) {
   const { t } = useTranslation('agents');
   const contribWindows = useContributions((s) => s.toolWindows);
+  const catalogOpen = workbenchSlots?.catalog.open ?? false;
+  const toggleSessions = () => {
+    if (catalogOpen) {
+      workbenchSlots?.catalog.onOpenChange(false);
+      sessionNavigation.setOpen(true);
+    } else {
+      sessionNavigation.setOpen(!sessionNavigation.open);
+    }
+  };
 
   // Multi-front (migration 067): the URL identifies the ROOT session
   // (parent of the tab tree). The active tab can be the parent itself
   // ("Main") or any non-archived child. `useCompanyStream` is mounted
   // on the active id, so switching tabs gives us a clean stream of
   // that sub-session's board / agents / prompts.
-  const siblings = useCompanySiblings(sessionId);
   const activeSessionId = siblings.activeSessionId ?? sessionId;
   // URL drives zone + tab + active front. `parseAgentsParams` falls back
   // to safe defaults when the URL is incomplete or malformed.
@@ -138,9 +163,19 @@ export function CompanySessionView({
     };
   }, [activeFrontId, activeSessionId, sessionId, sessionName]);
   const stream = useCompanyStream(activeSessionId, notificationContext);
-  const { data: sessionData, refetch } = useApi<SessionFullData>(
+  const { data: sessionData, refetch: refetchDetails } = useApi<SessionFullData>(
     `/company/sessions/${activeSessionId}`,
   );
+  const refreshSiblings = siblings.refresh;
+  const refetch = useCallback(() => {
+    refetchDetails();
+    void refreshSiblings();
+  }, [refetchDetails, refreshSiblings]);
+  useEffect(() => {
+    if (stream.teamRevision === 0) return;
+    const timer = setTimeout(refetch, 300);
+    return () => clearTimeout(timer);
+  }, [stream.teamRevision, refetch]);
 
   const handleZoneTabChange = (nextZone: Zone, nextTab: string) => {
     navigate(buildAgentsUrl(sessionId, activeFrontId, nextZone, nextTab));
@@ -157,9 +192,9 @@ export function CompanySessionView({
       // the Main tab (frontId = 'main' / company sessionId). Navigate
       // there so the user lands on the new master view; the SSE stream
       // for that session id picks up the newly-running master.
-      navigate(buildAgentsUrl(sessionId, 'main', 'work', 'chat'));
+      navigate(buildAgentsUrl(sessionId, activeSessionId, 'work', 'board'));
     },
-    [sessionId, navigate],
+    [sessionId, activeSessionId, navigate],
   );
 
   // Right-rail panel selection: `null` collapses the panel and shows
@@ -168,7 +203,7 @@ export function CompanySessionView({
   // `company-config` so the first visit shows roles + projects + agents
   // in context — same affordance the old left-rail AgentsSidebar gave
   // for free, now on the right.
-  const [sidePanel, setSidePanel] = useState<SidePanel | null>('company-config');
+  const [sidePanel, setSidePanel] = useState<SidePanel | null>(null);
   const DATABASE_PROJECT_KEY = `mcp-ide:agents.databaseProject.${sessionId}`;
   const [selectedDatabaseProjectId, setSelectedDatabaseProjectId] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -193,7 +228,7 @@ export function CompanySessionView({
   // Sandbox status — drives the "Sandbox" target option in the
   // terminal spawn menu. Hook is cached per sessionId so cost is
   // amortised even when the terminal stays closed.
-  const sandboxStatus = useSandboxStatus(sessionId);
+  const sandboxStatus = useSandboxStatus(activeSessionId);
   const hasSandboxForTerminal = !!sandboxStatus.data?.sandbox?.containerId;
 
   const persistBottom = useCallback((next: CompanyBottomTab | null) => {
@@ -313,17 +348,12 @@ export function CompanySessionView({
   // We intentionally do NOT put stream.connected in the dep array —
   // it would create an infinite loop (reattach → 404 → connected=false
   // → effect fires → …).
-  const reattachAttemptedRef = useRef(false);
+  const reattachStream = stream.reattach;
   useEffect(() => {
-    reattachAttemptedRef.current = false;
-    if ((sessionStatus === 'running' || sessionStatus === 'paused') && !stream.connected) {
-      reattachAttemptedRef.current = true;
-      stream.reattach();
-    }
-    return () => {
-      reattachAttemptedRef.current = false;
-    };
-  }, [sessionId, sessionStatus]);
+    // Snapshot is authoritative even for an idle session. Attaching observes
+    // this session only; it never starts a model or resumes a paused run.
+    void reattachStream();
+  }, [activeSessionId, reattachStream]);
 
   // Merge persisted agent runs with the live subordinate stream so agents
   // from a recovered session / prior turn stay listed (and clickable) even
@@ -333,7 +363,13 @@ export function CompanySessionView({
     () => mergeSubordinates(sessionData?.agentRuns ?? [], stream.subordinateStates),
     [sessionData?.agentRuns, stream.subordinateStates],
   );
-  const config = sessionData ? parseConfig(sessionData.session.config_json) : null;
+  const activeSession = sessionData?.session.id === activeSessionId ? sessionData.session :
+    [siblings.parent, ...siblings.children].find((item) => item?.id === activeSessionId);
+  const activeSessionName = activeSessionId === sessionId && runtimeKind === 'company'
+    ? t('fronts.main', 'Main') : activeSession?.name ?? sessionName;
+  const activeSessionStatus = activeSession?.status ?? (activeSessionId === sessionId ? sessionStatus : 'idle');
+  const configJson = activeSession?.config_json;
+  const config = useMemo(() => configJson ? parseConfig(configJson) : null, [configJson]);
   const masterProvider = (config?.master_provider as string | undefined) ?? null;
   const masterModel = (config?.master_model as string | undefined) ?? null;
   const masterSupportsThinking = providerSupportsThinking(masterProvider, providerOptions, masterModel);
@@ -341,14 +377,17 @@ export function CompanySessionView({
   const masterReasoningEffort = (config?.master_reasoning_effort as string | undefined) ?? null;
   const handleMasterEffortChange = async (next: string | null) => {
     try {
-      await fetch(`/api/company/sessions/${activeSessionId}/config`, {
+      const response = await fetch(`/api/company/sessions/${activeSessionId}/config`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ master_reasoning_effort: next }),
       });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
       refetch();
-    } catch {
-      /* optimistic — server is source of truth on next refetch */
+    } catch (error) {
+      toast.error(t('company.saveFailed', 'Could not save configuration'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
     }
   };
   const builderMode = !!(
@@ -379,10 +418,10 @@ export function CompanySessionView({
 
   // Session already has a run if status is not idle/draft — use sendMessage, not start.
   const sessionAlreadyRan =
-    sessionStatus === 'running' ||
-    sessionStatus === 'completed' ||
-    sessionStatus === 'paused' ||
-    sessionStatus === 'error';
+    activeSessionStatus === 'running' ||
+    activeSessionStatus === 'completed' ||
+    activeSessionStatus === 'paused' ||
+    activeSessionStatus === 'error';
 
   async function handleSend(
     text: string,
@@ -434,6 +473,7 @@ export function CompanySessionView({
           agent_run_id: b.agent_run_id,
           kind: b.kind,
           content: b.content,
+          attachments: b.attachments,
           mentions: b.mentions,
           created_at: b.created_at,
         })),
@@ -463,21 +503,36 @@ export function CompanySessionView({
           <PanelGroup direction="vertical" autoSaveId={`mcp-agents-vert-${sessionId}`}>
             <Panel id="company-main" order={1} minSize={28} className="min-h-0">
               <PanelGroup direction="horizontal" autoSaveId={`mcp-agents-horiz-${sessionId}`}>
-                {runtimeKind === 'company' && workbenchSlots?.catalog.open && (
+                {runtimeKind === 'company' && (catalogOpen || sessionNavigation.open) && (
                   <>
                     <Panel
-                      id="company-catalog-dock"
+                      id="company-navigation-dock"
                       order={1}
                       defaultSize={22}
                       minSize={16}
                       maxSize={34}
                       collapsible
                       collapsedSize={0}
-                      onCollapse={() => workbenchSlots.catalog.onOpenChange(false)}
-                      onExpand={() => workbenchSlots.catalog.onOpenChange(true)}
+                      onCollapse={() => {
+                        workbenchSlots?.catalog.onOpenChange(false);
+                        sessionNavigation.setOpen(false);
+                      }}
                       className="min-w-0"
                     >
-                      {workbenchSlots.catalogPanel}
+                      {catalogOpen ? workbenchSlots?.catalogPanel : siblings.parent && (
+                        <CompanySessionsSidebar
+                          parent={siblings.parent}
+                          children={siblings.children}
+                          activeSessionId={siblings.activeSessionId}
+                          query={sessionNavigation.query}
+                          onQueryChange={sessionNavigation.setQuery}
+                          onClose={() => sessionNavigation.setOpen(false)}
+                          onSelect={siblings.setActiveSessionId}
+                          onCreate={siblings.createChild}
+                          onArchive={siblings.archiveChild}
+                          onRename={siblings.renameChild}
+                        />
+                      )}
                     </Panel>
                     <WorkbenchResizeHandle direction="horizontal" />
                   </>
@@ -490,15 +545,16 @@ export function CompanySessionView({
                         of creating a full-width band above the right dock and
                         activity rail. */}
                     <SessionHeader
-                      sessionName={sessionName}
-                      sessionStatus={sessionStatus}
-                      reportedStatus={sessionData?.session.status}
+                      companyName={runtimeKind === 'company' ? sessionName : undefined}
+                      sessionName={activeSessionName}
+                      sessionStatus={activeSessionStatus}
+                      reportedStatus={activeSessionStatus}
                       stream={stream}
-                      sessionsListOpen={sessionsListOpen}
-                      onToggleSessionsList={onToggleSessionsList}
                       recoveredAt={sessionData?.session.recovered_at ?? null}
                       recoveredReason={sessionData?.session.recovered_reason ?? null}
                       allowAbort={runtimeKind === 'company'}
+                      onPause={() => { void stream.pause().then((ok) => { if (ok) refetch(); }); }}
+                      onResume={() => { void stream.resume(t('company.resumeInstruction', 'Continue the session objective from its saved state.')).finally(refetch); }}
                       onResetClick={runtimeKind === 'company' ? () => setResetDialogOpen(true) : undefined}
                       onReestablishMasterClick={runtimeKind === 'company' ? () => setReestablishMasterOpen(true) : undefined}
                     />
@@ -507,20 +563,6 @@ export function CompanySessionView({
                       sessionId={activeSessionId}
                       readOnly={runtimeKind === 'app_studio'}
                     />
-
-                    {/* Front tabs — visible across every zone so the user always
-                        has a way to switch between Main and child fronts. */}
-                    {runtimeKind === 'company' && siblings.parent && (
-                      <FrontTabsBar
-                        parent={siblings.parent}
-                        children={siblings.children}
-                        activeSessionId={siblings.activeSessionId}
-                        onSelect={siblings.setActiveSessionId}
-                        onCreate={siblings.createChild}
-                        onArchive={siblings.archiveChild}
-                        onRename={siblings.renameChild}
-                      />
-                    )}
 
                     {/* Company content and the embedded database editor coexist.
                         The inactive surface is hidden, never unmounted, so board
@@ -531,8 +573,8 @@ export function CompanySessionView({
                         className={`absolute inset-0 flex min-h-0 ${databaseMode ? 'invisible pointer-events-none' : ''}`}
                       >
                         <ZoneLayout
-                          sessionId={sessionId}
-                          sessionName={sessionName}
+                          sessionId={activeSessionId}
+                          sessionName={activeSessionName}
                           zone={zone}
                           tab={tab}
                           onZoneTabChange={handleWorkbenchZoneTabChange}
@@ -541,6 +583,7 @@ export function CompanySessionView({
                           bottomOpen={activeBottom !== null}
                           onToggleBottom={() => toggleBottom('terminal')}
                           workbenchSlots={workbenchSlots}
+                          sessions={{ open: sessionNavigation.open && !catalogOpen, onToggle: toggleSessions }}
                           runtimeKind={runtimeKind}
                           composer={runtimeKind === 'company' ? (
                             <MasterComposer
@@ -575,7 +618,8 @@ export function CompanySessionView({
                     <Panel id="company-right-dock" order={3} defaultSize={26} minSize={20} maxSize={46} className="min-w-0">
                       <WorkbenchSurface className="flex h-full flex-col bg-[var(--workbench-surface)]">
                         <SidebarPanels
-                          sessionId={sessionId}
+                          companyId={sessionId}
+                          sessionId={activeSessionId}
                           active={visibleSidePanel}
                           databaseSlot={
                             <CompanyDbConnectionsPanel
@@ -587,7 +631,9 @@ export function CompanySessionView({
                           }
                           companyConfigSlot={
                             <AgentsSidebar
-                              sessionId={sessionId}
+                              companyId={sessionId}
+                              executionFamily={siblings}
+                              sessionId={activeSessionId}
                               open={true}
                               config={config}
                               projects={sessionData?.projects ?? []}
@@ -624,7 +670,7 @@ export function CompanySessionView({
                 <Panel id="company-bottom-dock" order={2} defaultSize={28} minSize={12} maxSize={62} className="min-h-0">
                   <WorkbenchSurface className="h-full bg-[var(--workbench-surface)]">
                     <CompanyBottomPanel
-                      companySessionId={sessionId}
+                      companySessionId={activeSessionId}
                       projects={sessionData?.projects ?? []}
                       hasSandbox={hasSandboxForTerminal}
                       activeTab={activeBottom}
@@ -680,8 +726,8 @@ export function CompanySessionView({
 
       {runtimeKind === 'company' && resetDialogOpen && (
         <ResetSessionDialog
-          sessionId={sessionId}
-          sessionName={sessionName}
+          sessionId={activeSessionId}
+          sessionName={activeSessionName}
           builderMode={builderMode}
           onClose={() => setResetDialogOpen(false)}
           onResetDone={() => {
@@ -693,8 +739,8 @@ export function CompanySessionView({
 
       {runtimeKind === 'company' && reestablishMasterOpen && (
         <ReestablishMasterDialog
-          sessionId={sessionId}
-          sessionName={sessionName}
+          sessionId={activeSessionId}
+          sessionName={activeSessionName}
           onClose={() => setReestablishMasterOpen(false)}
           onSpawned={handleReestablishSpawned}
         />
@@ -702,7 +748,7 @@ export function CompanySessionView({
 
       {runtimeKind === 'company' && roleDialog && config && (
         <RoleDialog
-          sessionId={sessionId}
+          sessionId={activeSessionId}
           config={config}
           initialDraft={roleDialog.draft}
           editIdx={roleDialog.editIdx}

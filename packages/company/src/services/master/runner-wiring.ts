@@ -165,11 +165,11 @@ export function attachMasterCompletionHandler(
       const { reason, error } = await handle.done;
       deps.state.setRunnerExited(true);
       const detail = error ? ` — ${error}` : '';
-      if (reason !== 'completed') {
+      if (reason !== 'completed' && !deps.ctx.isAborted) {
         continuedWithFallback = await tryFallback(error ?? `${reason}${detail}`);
         if (continuedWithFallback) return;
       }
-      await deps.ctx.companyFiles.updateAgentRunStatus(
+      if (!deps.ctx.isAborted) await deps.ctx.companyFiles.updateAgentRunStatus(
         runId,
         reason === 'completed' ? 'completed' : 'error',
         reason !== 'completed' ? `${reason}${detail}` : undefined,
@@ -183,9 +183,9 @@ export function attachMasterCompletionHandler(
     } catch (err) {
       deps.state.setRunnerExited(true);
       const errMessage = err instanceof Error ? err.message : String(err);
-      continuedWithFallback = await tryFallback(errMessage);
+      continuedWithFallback = !deps.ctx.isAborted && await tryFallback(errMessage);
       if (continuedWithFallback) return;
-      await deps.ctx.companyFiles
+      if (!deps.ctx.isAborted) await deps.ctx.companyFiles
         .updateAgentRunStatus(runId, 'error')
         .catch(() => undefined);
       deps.state.setEndedWithError(errMessage);

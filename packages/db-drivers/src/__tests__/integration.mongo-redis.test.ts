@@ -142,6 +142,28 @@ describe.skipIf(!MONGO_URL)('mongodb (document) integration', () => {
     const del = await run({ kind: 'document', op: 'deleteOne', collection, payload: { filter: { _id: 'abc' } } });
     expect(del.rowCount).toBe(1);
   });
+
+  it('bounds a real cursor page and large document cells, then accepts another query', async () => {
+    const boundedCollection = `${collection}_bounded`;
+    const run = (command: DbCommand) => driver.runCommand!(command);
+    await run({ kind: 'document', op: 'insertMany', collection: boundedCollection,
+      payload: { documents: Array.from({ length: 12 }, (_, index) => ({ index, value: 'x'.repeat(80_000) })) } });
+    try {
+      const page = await driver.runCommand!({ kind: 'document', op: 'find', collection: boundedCollection,
+        payload: { filter: {} } }, { maxRows: 2 });
+      expect(page.rows).toHaveLength(2);
+      expect(page.truncated).toBe(true);
+      expect(page.acquisition).toMatchObject({ mode: 'cursor', observedRows: 3, returnedRows: 2, cellsTruncated: 2 });
+      expect(page.acquisition!.retainedBytes).toBeLessThan(150_000);
+      const count = await run({ kind: 'document', op: 'countDocuments', collection: boundedCollection, payload: { filter: {} } });
+      expect(count.rowCount).toBe(12);
+      const abort = new AbortController(); abort.abort(new Error('integration cancelled'));
+      await expect(driver.runCommand!({ kind: 'document', op: 'find', collection: boundedCollection }, { signal: abort.signal }))
+        .rejects.toThrow('integration cancelled');
+    } finally {
+      for (let index = 0; index < 12; index++) await run({ kind: 'document', op: 'deleteOne', collection: boundedCollection, payload: { filter: { index } } });
+    }
+  });
 });
 
 describe.skipIf(!REDIS_URL)('redis (keyvalue) integration', () => {
@@ -214,6 +236,50 @@ describe.skipIf(!REDIS_URL)('redis (keyvalue) integration', () => {
     // get after del → type 'none' (key gone).
     const gone = await run({ kind: 'keyvalue', op: 'get', payload: { key } });
     expect((gone.rows[0] as { type: string }).type).toBe('none');
+  });
+
+  it('keeps simultaneous logical databases separate and rejects an invalid SELECT before writing', async () => {
+    const scopedKey = `${prefix}:scope`;
+    const run = (op: string, db: number, value?: string) => driver.runCommand!({
+      kind: 'keyvalue', op, payload: { db, key: scopedKey, ...(value === undefined ? {} : { value }) },
+    });
+    try {
+      await Promise.all([run('set', 1, 'one'), run('set', 2, 'two')]);
+      const values = await Promise.all([run('get', 1), run('get', 2)]);
+      expect(values.map(result => (result.rows[0] as { value: string }).value)).toEqual(['one', 'two']);
+      await expect(run('set', 999, 'wrong database')).rejects.toThrow(/DB index|out of range/i);
+      expect((await run('get', 2)).rows[0]).toMatchObject({ value: 'two' });
+    } finally { await run('del', 1); await run('del', 2); }
+  });
+
+  it('bounds previews before RESP delivery for strings and all supported collections', async () => {
+    const keys = ['string', 'list', 'hash', 'set', 'zset'].map(type => `${prefix}:bounded:${type}`);
+    const raw = (args: string[]) => driver.runCommand!({ kind: 'keyvalue', op: 'raw', args });
+    const get = (key: string, maxRows = 2) => driver.runCommand!({ kind: 'keyvalue', op: 'get', payload: { key } }, { maxRows });
+    try {
+      await raw(['SET', keys[0], '🙂'.repeat(40_000)]);
+      await raw(['RPUSH', keys[1], ...Array.from({ length: 800 }, (_, index) => `item-${index}`)]);
+      await raw(['HSET', keys[2], 'small', 'ok', 'large', 'x'.repeat(80_000)]);
+      await raw(['SADD', keys[3], ...Array.from({ length: 800 }, (_, index) => `member-${index}`)]);
+      await raw(['ZADD', keys[4], ...Array.from({ length: 800 }, (_, index) => [String(index), `member-${index}`]).flat()]);
+      const string = await get(keys[0]);
+      expect(string.truncated).toBe(true);
+      expect(Buffer.byteLength(String(string.rows[0].value))).toBeLessThanOrEqual(65_536);
+      const list = await get(keys[1]);
+      expect(list).toMatchObject({ truncated: true, rows: [{ value: ['item-0', 'item-1'] }] });
+      const hash = await get(keys[2], 200);
+      expect(hash.truncated).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(hash.rows))).toBeLessThan(70_000);
+      const set = await get(keys[3]);
+      expect(set.truncated).toBe(true); expect((set.rows[0].value as unknown[]).length).toBeLessThanOrEqual(2);
+      const sorted = await get(keys[4]);
+      expect(sorted).toMatchObject({ truncated: true, rows: [{ value: ['member-0', '0', 'member-1', '1'] }] });
+      // Preview never modifies the source or disguises an omitted tail as complete.
+      expect((await raw(['LLEN', keys[1]])).rows[0].value).toBe(800);
+      expect((await raw(['STRLEN', keys[0]])).rows[0].value).toBe(160_000);
+      await raw(['SET', keys[0], 'complete']);
+      expect(await get(keys[0])).toMatchObject({ truncated: false, rows: [{ value: 'complete' }] });
+    } finally { await raw(['DEL', ...keys]); }
   });
 });
 

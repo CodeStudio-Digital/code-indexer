@@ -20,6 +20,7 @@ export interface ResolvedFieldProvenanceV1 {
 export interface ProviderRuntimePolicyV1 {
   firstByteTimeoutMs: number;
   idleTimeoutMs: number;
+  /** @deprecated Retained for serialized V1 compatibility; active reasoning has no wall-clock cutoff. */
   thinkingOnlyTimeoutMs: number;
   transientRetriesPerTurn: number;
   transientRetriesPerRun: number;

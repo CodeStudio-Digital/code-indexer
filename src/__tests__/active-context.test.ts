@@ -12,15 +12,6 @@ describe('buildActiveContextBlock', () => {
     expect(block).toBeNull();
   });
 
-  it('renders goal alone', () => {
-    const block = buildActiveContextBlock({
-      goal: { text: 'Fix login bug', status: 'in_progress' },
-    });
-    expect(block).toContain('<active-context>');
-    expect(block).toContain('goal: Fix login bug (status=in_progress)');
-    expect(block).toContain('</active-context>');
-  });
-
   it('renders todos with status markers and uses activeForm for in_progress', () => {
     const block = buildActiveContextBlock({
       todos: [

@@ -13,6 +13,8 @@ export interface McpOAuthRegistrationRow {
   scopes: string;                        // JSON array
   redirect_uri: string;
   created_at: string;
+  resource_url?: string | null;
+  token_endpoint_auth_method?: string | null;
 }
 
 /**
@@ -33,6 +35,8 @@ export class McpOAuthRegistration {
     readonly scopes: readonly string[],
     readonly redirectUri: string,
     readonly createdAt: number,
+    readonly resourceUrl: string | null,
+    readonly tokenEndpointAuthMethod: string,
   ) {}
 
   static create(params: {
@@ -48,6 +52,8 @@ export class McpOAuthRegistration {
     scopes: readonly string[];
     redirectUri: string;
     now: number;
+    resourceUrl?: string | null;
+    tokenEndpointAuthMethod?: string;
   }): McpOAuthRegistration {
     if (!params.clientId) throw new Error('clientId is required');
     if (!params.redirectUri) throw new Error('redirectUri is required');
@@ -64,6 +70,8 @@ export class McpOAuthRegistration {
       params.scopes,
       params.redirectUri,
       params.now,
+      params.resourceUrl ?? null,
+      params.tokenEndpointAuthMethod ?? (params.clientSecret ? 'client_secret_post' : 'none'),
     );
   }
 
@@ -81,6 +89,8 @@ export class McpOAuthRegistration {
       JSON.parse(row.scopes) as string[],
       row.redirect_uri,
       Date.parse(row.created_at),
+      row.resource_url ?? null,
+      row.token_endpoint_auth_method ?? (row.client_secret ? 'client_secret_post' : 'none'),
     );
   }
 

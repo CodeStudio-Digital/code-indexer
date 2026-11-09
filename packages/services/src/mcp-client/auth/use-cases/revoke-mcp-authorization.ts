@@ -30,12 +30,16 @@ export class RevokeMcpAuthorization {
     const reg = this.regReader.findByServerId(serverId);
     const tokens = this.tokensReader.findByServerId(serverId);
 
+    this.tokensAdmin.delete(serverId);
+    this.regAdmin.delete(serverId);
+
     if (reg?.revocationEndpoint && tokens?.refreshRaw) {
       try {
         await this.exchange.revoke({
           revocationEndpoint: reg.revocationEndpoint,
           clientId: reg.clientId,
           clientSecret: reg.clientSecret,
+          tokenEndpointAuthMethod: reg.tokenEndpointAuthMethod,
           token: tokens.refreshRaw,
           tokenTypeHint: 'refresh_token',
         });
@@ -44,7 +48,5 @@ export class RevokeMcpAuthorization {
       }
     }
 
-    this.tokensAdmin.delete(serverId);
-    this.regAdmin.delete(serverId);
   }
 }

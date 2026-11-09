@@ -1,6 +1,6 @@
 /**
  * Session State Block — the "always alive" structured state of a session,
- * derived from PERSISTED data (goal, plan, todos, notes, file map), never
+ * derived from PERSISTED data (plan, todos, notes, file map), never
  * from LLM summarization. Injected as a `<session-state>` tail block so a
  * model — especially a short-window one — keeps its bearings regardless of
  * how aggressively older turns were compacted.
@@ -13,7 +13,6 @@ import { createHash } from 'node:crypto';
 
 /** Structural shape produced by `SessionStore.getSessionStateData`. */
 export interface SessionStateData {
-  goal: { text: string; status: string } | null;
   activePlan: { text: string; status: string } | null;
   todos: ReadonlyArray<{ status: string; label: string }>;
   notes: ReadonlyArray<{ id: string; title: string; body: string; kind: string; pinned: boolean }>;
@@ -24,8 +23,6 @@ export interface SessionStateData {
 export interface SessionStateBudget {
   /** Plan excerpt chars (0 hides the plan line). */
   planChars: number;
-  /** Goal excerpt chars (0 hides; also hidden when includeLiveState=false). */
-  goalChars: number;
   /** Max notes shown. */
   noteSlots: number;
   /** Chars per note body. */
@@ -36,7 +33,7 @@ export interface SessionStateBudget {
   fileSlots: number;
   /**
    * False when the `<active-context>` block (Agent Loop v2) already carries
-   * goal/todos every turn — the state block then omits them to avoid double
+   * todos every turn — the state block then omits them to avoid double
    * injection and keeps only plan/notes/files/recall.
    */
   includeLiveState: boolean;
@@ -58,10 +55,6 @@ export function renderSessionStateBlock(
   budget: SessionStateBudget,
 ): string | null {
   const lines: string[] = [];
-
-  if (budget.includeLiveState && budget.goalChars > 0 && data.goal?.text) {
-    lines.push(`goal: ${excerpt(data.goal.text, budget.goalChars)} (status=${data.goal.status})`);
-  }
 
   if (budget.planChars > 0 && data.activePlan?.text) {
     lines.push(
@@ -179,16 +172,20 @@ export function renderUserMemoryBlock(
   maxChars: number,
 ): string | null {
   if (maxChars <= 0 || entries.length === 0) return null;
-  const header =
-    'user preferences (global — who this user is and how they want you to work; apply across all projects):';
+  const open = '<user-preferences>\n';
+  const close = '\n</user-preferences>';
+  const budget = maxChars - open.length - close.length;
+  const header = 'user preferences (global; recall_memory with scope:"user" for details):';
+  if (budget <= header.length + 4) return null;
   const lines: string[] = [header];
   let used = header.length;
   for (const e of entries) {
     const detail = e.excerpt ? `: ${excerpt(e.excerpt, 160)}` : '';
-    const line = `- ${excerpt(e.title, 90)}${detail}`;
-    if (used + line.length + 1 > maxChars) break;
+    const remaining = budget - used - 1;
+    if (remaining < 5) break;
+    const line = excerpt(`- ${excerpt(e.title, 90)}${detail}`, remaining - 1);
     lines.push(line);
     used += line.length + 1;
   }
-  return lines.length > 1 ? `<user-preferences>\n${lines.join('\n')}\n</user-preferences>` : null;
+  return lines.length > 1 ? `${open}${lines.join('\n')}${close}` : null;
 }

@@ -1,3 +1,4 @@
+import type { FilePathPage } from '@mcp/api-bus';
 /**
  * Explorer (IntelliJ model): lazy directories, virtualized rows (22px),
  * persisted expansion, auto-reveal of the active file, live updates from
@@ -55,6 +56,7 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filtered, setFiltered] = useState<string[]>([]);
+  const [filterPartial, setFilterPartial] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
   const [gitStatus, setGitStatus] = useState<Map<string, GitFileStatus>>(() => new Map());
   // Repo flag + root (do mesmo poll de status) → habilita "Git ▸" e o caminho repo-relative.
@@ -152,14 +154,15 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
   // Debounced, bounded path-only results. Cancel on query/project changes.
   useEffect(() => {
     setFiltered([]);
+    setFilterPartial(false);
     setFilterLoading(active && !!search.trim());
     if (!active || !search.trim()) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void apiCall<Array<{ path: string }>>('files.searchPaths', {
+      void apiCall<FilePathPage>('files.searchPathsPage', {
         projectId, query: search, limit: 300, fuzzy: false,
       }, { signal: controller.signal })
-        .then((rows) => { if (!controller.signal.aborted) setFiltered(rows.map((r) => r.path)); })
+        .then((page) => { if (!controller.signal.aborted) { setFiltered(page.items.map((r) => r.path)); setFilterPartial(page.completeness === 'partial'); } })
         .catch(() => { if (!controller.signal.aborted) setFiltered([]); })
         .finally(() => { if (!controller.signal.aborted) setFilterLoading(false); });
     }, 120);
@@ -257,6 +260,7 @@ export function FileTreeView({ projectId, active, activePath, projectRoot, onOpe
       </div>
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto py-1 px-0.5">
         {error && <div className="text-[11px] text-destructive px-3 py-2">{error}</div>}
+        {filterActive && filterPartial && <p role="status" className="px-2 text-xs text-amber-500">{t('fileTree.pathsPartial', { defaultValue: 'Partial indexed paths. Refine your search.' })}</p>}
         {filterActive && !filterLoading && filtered.length === 0 && (
           <div className="text-[11px] text-muted-foreground px-3 py-2">No files match &quot;{search}&quot;.</div>
         )}

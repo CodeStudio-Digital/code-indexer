@@ -35,7 +35,7 @@ function recreateOne(db: DB, table: string, origSql: string, refs: string[]): vo
   const cols = (db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[])
     .map((c) => `"${c.name}"`).join(', ');
   const indexes = (db.prepare(
-    `SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL`,
+    `SELECT sql FROM sqlite_master WHERE type IN ('index','trigger') AND tbl_name=? AND sql IS NOT NULL`,
   ).all(table) as { sql: string }[]).map((r) => r.sql);
 
   const tmp = `${table}__trim`;

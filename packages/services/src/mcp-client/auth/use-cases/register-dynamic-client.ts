@@ -9,6 +9,7 @@ import { err, ok, type Result } from './result.js';
 
 export interface RegisterInput {
   serverId: string;
+  resourceUrl?: string;
   asMetadata: AuthorizationServerMetadata;
   clientName: string;
   redirectUri: string;
@@ -33,7 +34,9 @@ export class RegisterDynamicClient {
   async execute(input: RegisterInput): Promise<Result<McpOAuthRegistration>> {
     if (!asSupportsDcr(input.asMetadata)) return err({ kind: 'dcr_not_supported' });
 
-    const tokenEndpointAuthMethod = input.tokenEndpointAuthMethod ?? 'none';
+    const methods = input.asMetadata.tokenEndpointAuthMethodsSupported;
+    const tokenEndpointAuthMethod = input.tokenEndpointAuthMethod ?? (methods.includes('none') || methods.length === 0
+      ? 'none' : methods.includes('client_secret_basic') ? 'client_secret_basic' : 'client_secret_post');
 
     const request: DcrRequest = {
       clientName: input.clientName,
@@ -47,6 +50,8 @@ export class RegisterDynamicClient {
       const response = await this.dcr.register(input.asMetadata.registrationEndpoint!, request);
       const registration = McpOAuthRegistration.create({
         serverId: input.serverId,
+        resourceUrl: input.resourceUrl,
+        tokenEndpointAuthMethod: response.tokenEndpointAuthMethod ?? tokenEndpointAuthMethod,
         issuer: input.asMetadata.issuer,
         authorizationEndpoint: input.asMetadata.authorizationEndpoint,
         tokenEndpoint: input.asMetadata.tokenEndpoint,

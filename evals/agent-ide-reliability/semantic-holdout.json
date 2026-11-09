@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "purpose": "Independent query holdout authored after implementation freeze. Behavioral targets from authored fixture source, never inferred from search results. Freeze hash before first run; do not tune these queries after inspecting results.",
+  "entries": [
+    [
+      "SessionPolicy",
+      "Which function compares the session expiry timestamp to the current clock?",
+      "Onde a sessão compara o tempo atual com a expiração?"
+    ],
+    [
+      "TokenService",
+      "Where are the subject and expiration attached to a newly issued token?",
+      "Onde emite um token com usuário e expiração?"
+    ],
+    [
+      "LoginPolicy",
+      "How does authentication reject further attempts after too many failures?",
+      "Onde a autenticação rejeita novas tentativas após erros repetidos?"
+    ],
+    [
+      "InvoiceTotal",
+      "Which calculation sums invoice rows and rounds after applying the discount?",
+      "Onde soma os itens da fatura e arredonda depois do desconto?"
+    ],
+    [
+      "StatusBadge",
+      "Where is a running or failed task represented by a colored indicator?",
+      "Onde um indicador colorido mostra a tarefa em execução ou com falha?"
+    ],
+    [
+      "ProjectIndex",
+      "Which scanner extracts source declarations into the structural index?",
+      "Onde a indexação extrai declarações de arquivos para o banco estrutural?"
+    ],
+    [
+      "DirtyQueue",
+      "Where are changed paths persisted until the exact processed version is acknowledged?",
+      "Onde preserva caminhos alterados até confirmar a versão processada?"
+    ],
+    [
+      "StructuralRevision",
+      "What increments the project revision in the transaction updating source records?",
+      "Onde a transação de alteração do índice incrementa a revisão do projeto?"
+    ],
+    [
+      "SemanticCache",
+      "Where does the retrieval cache include both generation and source revision?",
+      "Onde o cache de busca inclui geração e revisão para evitar respostas antigas?"
+    ],
+    [
+      "PathCandidates",
+      "How are prefix and trigram lookups used to avoid scanning all file paths?",
+      "Onde a busca por prefixo e trigrama evita varrer todos os caminhos?"
+    ],
+    [
+      "SymbolLookup",
+      "Which lookup returns the file and lines containing a function declaration?",
+      "Onde a busca de uma declaração retorna arquivo e linhas da função?"
+    ],
+    [
+      "CallerGraph",
+      "How are reference edges followed to locate a function's callers?",
+      "Onde segue referências para encontrar funções que chamam outra função?"
+    ],
+    [
+      "ToolDiscovery",
+      "Where are tool descriptions and argument aliases ranked for Portuguese requests?",
+      "Onde ordena ferramentas por descrições e parâmetros em português?"
+    ],
+    [
+      "ToolProjection",
+      "How is a tool confirmed visible from the schemas in the next model payload?",
+      "Onde confirma que o schema da ferramenta foi enviado ao modelo?"
+    ],
+    [
+      "McpCatalog",
+      "Where does remote tool listing reject a cursor that appeared on an earlier page?",
+      "Onde a listagem de ferramentas remotas rejeita um cursor de página repetido?"
+    ],
+    [
+      "McpRefresh",
+      "How can one remote server reconnect without interrupting other server operations?",
+      "Onde atualiza uma conexão remota sem interromper operações em outras conexões?"
+    ],
+    [
+      "McpResult",
+      "Which adapter retains image blocks alongside a remote tool's JSON object?",
+      "Onde preserva blocos de imagem e JSON retornados por uma ferramenta remota?"
+    ],
+    [
+      "InvocationOwner",
+      "Where does a nested tool call retain session, attempt and parent identifiers?",
+      "Onde a chamada de ferramenta preserva sessão, tentativa e chamada responsável?"
+    ],
+    [
+      "CommandSpec",
+      "How are literal executable arguments kept separate from shell code?",
+      "Onde separa argumentos literais do processo e código de shell?"
+    ],
+    [
+      "ProcessOutput",
+      "Where can stdout and stderr be retrieved through signed continuation pages?",
+      "Onde guarda stdout e stderr com cursor para consultar as próximas páginas?"
+    ],
+    [
+      "ProcessCleanup",
+      "How does process termination wait for the final output from owned descendants?",
+      "Onde encerra os processos filhos e aguarda a saída final?"
+    ],
+    [
+      "SqlClassifier",
+      "Which SQL analysis detects a write embedded in a common table expression?",
+      "Onde a análise SQL detecta escrita escondida numa expressão WITH?"
+    ],
+    [
+      "PoolLease",
+      "How are database connections kept available until in-flight operations finish?",
+      "Onde mantém a conexão do banco enquanto a consulta ativa não termina?"
+    ],
+    [
+      "QueryDeadline",
+      "Where is one operation deadline shared by connection acquisition and SQL execution?",
+      "Onde o mesmo prazo vale para aquisição da conexão e execução SQL?"
+    ],
+    [
+      "RowWindow",
+      "Which fetch path caps both retained rows and oversized individual cells?",
+      "Onde limita linhas, bytes e tamanho da célula durante a leitura da consulta?"
+    ],
+    [
+      "CatalogPage",
+      "How does table listing paginate without loading every table's columns?",
+      "Onde lista tabelas em páginas sem carregar todas as colunas do banco?"
+    ],
+    [
+      "OptimisticEdit",
+      "Where does an update compare original column values to detect a concurrent edit?",
+      "Onde a edição verifica valores originais e chave primária para detectar conflito?"
+    ],
+    [
+      "ExportKeyset",
+      "Which table export advances by a composite primary key instead of an offset?",
+      "Onde exporta a tabela avançando pela chave primária composta?"
+    ],
+    [
+      "ImportReceipt",
+      "Where is an import's uncertain commit recorded so it cannot be replayed?",
+      "Onde registra o resultado da importação para não repetir um commit incerto?"
+    ],
+    [
+      "ConnectionScope",
+      "How does connection identity include its project and selected database?",
+      "Onde a identidade da conexão inclui projeto e banco selecionado?"
+    ],
+    [
+      "UnicodeOutput",
+      "Where does UTF-8 decoding preserve emoji arriving in separate byte chunks?",
+      "Onde a saída UTF-8 preserva emoji dividido entre blocos de bytes?"
+    ],
+    [
+      "CursorSignature",
+      "Which check rejects an expired or modified signed pagination cursor?",
+      "Onde valida a assinatura do cursor de paginação e rejeita tokens expirados?"
+    ],
+    [
+      "RetryPolicy",
+      "How is exponential read retry backoff capped without retrying uncertain writes?",
+      "Onde limita backoff de leitura sem repetir escrita com resultado desconhecido?"
+    ],
+    [
+      "CapabilitySchema",
+      "Which validation checks tool parameter schemas against the provider's limits?",
+      "Onde valida o schema de parâmetros da ferramenta e os limites do provider?"
+    ],
+    [
+      "Cancellation",
+      "Where is abort forwarded to physical execution and termination awaited?",
+      "Onde o cancelamento chega à execução física e espera o término?"
+    ],
+    [
+      "MigrationJournal",
+      "How does restart skip schema migrations that already committed successfully?",
+      "Onde registra migrações do banco concluídas para não reaplicar após reinício?"
+    ],
+    [
+      "WorkspacePath",
+      "Where is traversal outside a workspace root rejected when resolving a path?",
+      "Onde rejeita um caminho de arquivo que escapa da pasta do projeto?"
+    ],
+    [
+      "QueryHistory",
+      "Where are the duration and success of previous SQL executions stored?",
+      "Onde guarda duração e sucesso das consultas SQL anteriores?"
+    ],
+    [
+      "ReadOnlyGuard",
+      "What prevents a read-only database connection from dispatching modifying SQL?",
+      "Onde uma conexão de leitura rejeita SQL que altera dados?"
+    ],
+    [
+      "GenerationSwap",
+      "How is a completed index generation published atomically while a failed rebuild keeps the old one?",
+      "Onde publica a geração do índice atomicamente e preserva a anterior se houver falha?"
+    ]
+  ]
+}

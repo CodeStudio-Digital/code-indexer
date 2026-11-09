@@ -61,7 +61,9 @@ function reasonToStatus(reason: StopReason): 'completed' | 'partial' | 'aborted'
 }
 
 function profileFor(state: ResumableAgentState): MicroAgentProfile {
-  return resolveMicroAgentProfile(state.profileId) ?? MICRO_AGENT_PROFILES.explore;
+  const profile = resolveMicroAgentProfile(state.profileId);
+  if (!profile) throw new Error('configuration_changed: retained profile is unavailable');
+  return profile;
 }
 
 function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidance?: string): ParallelAgentSpec {
@@ -81,7 +83,7 @@ function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidanc
   return {
     task: state.task,
     label: state.label,
-    maxTurns: state.maxTurns,
+    maxTurns: state.execution?.maxTurns ?? state.maxTurns,
     systemPrompt: appendResearchContract(profile.systemPrompt, state.researchPolicy),
     researchPolicy: state.researchPolicy,
     profile: profile.id,
@@ -112,6 +114,14 @@ async function relaunchResumedAgentsOwned(
   const targetIdx = new Set(targets.map((t) => t.agentIndex));
   // Per-target provider resolved from each retained agent's profile (memoized).
   const targetProviders = await Promise.all(profiles.map((p) => providerForProfile(deps, p)));
+  const epoch = ctx.collaboration ? await ctx.collaboration.store.epoch(sessionId) : 0;
+  for (const [index, state] of targets.entries()) {
+    if (!state.execution && ctx.ultraPolicy?.presetVersion === '3') throw new Error('legacy_checkpoint: reconcile the original execution configuration before resuming');
+    if (!state.execution) continue;
+    if (state.execution.epoch !== epoch) throw new Error('target_generation_changed: saved child belongs to a stopped generation');
+    if (targetProviders[index].name !== state.execution.provider || targetProviders[index].model !== state.execution.model)
+      throw new Error(`configuration_changed: restore ${state.execution.provider}/${state.execution.model} or explicitly migrate the retained child`);
+  }
   const agentInfos = targetProviders.map((p) => describeProvider(p));
   const providerByIndex = new Map<number, { provider: string; model: string }>();
   targets.forEach((t, i) => providerByIndex.set(t.agentIndex, agentInfos[i]));
@@ -156,7 +166,7 @@ async function relaunchResumedAgentsOwned(
     ...specFor(state, profiles[i], guidance),
     spawnId: `resume:${group.spawnId}:${state.agentIndex}:${state.attempt + 1}`,
     provider: targetProviders[i],
-    reasoningEffort: effortForProfile(deps, profiles[i]),
+    reasoningEffort: state.execution ? state.execution.effort : effortForProfile(deps, profiles[i]),
     signal: controllers[i].signal,
   }));
   await assertResumeLease(
@@ -215,6 +225,7 @@ async function relaunchResumedAgentsOwned(
       const nextTranscript = r.transcript ?? state.transcript;
       const persisted = await replaceAgentState(sessionId, group.spawnId, {
         ...state,
+        execution: r.execution ?? state.execution, workResult: r.workResult,
         reason: r.reason,
         effectOutcome: r.effectOutcome,
         failureNote: r.reason !== 'completed' ? (r.failureDetail || r.finalText).slice(0, 500) : undefined,

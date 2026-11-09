@@ -22,6 +22,8 @@ import {
 import type { SessionId } from '@mcp/session-storage';
 
 export interface SpawnRetentionAgent {
+  execution?: import('@mcp/agent-runtime-contracts').ExecutionSnapshot;
+  workResult?: import('@mcp/agent-runtime-contracts').AgentWorkResult;
   index: number;
   label: string;
   task: string;
@@ -84,6 +86,7 @@ export async function retainSpawnGroup(args: {
     createdAt: now,
     lastTouchedAt: now,
     agents: args.agents.map((a) => ({
+      execution: a.execution, workResult: a.workResult,
       agentIndex: a.index,
       label: a.label,
       task: a.task,

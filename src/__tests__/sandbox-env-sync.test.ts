@@ -142,7 +142,7 @@ describe('pushEnvsToContainers', () => {
         () => 'FOO=bar\n',
         null,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ state: 'stored' });
   });
 
   it('does not throw when one target fails (Promise.allSettled semantics)', async () => {
@@ -160,7 +160,7 @@ describe('pushEnvsToContainers', () => {
         () => 'FOO=bar\n',
         driver,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ state: 'partial', applied: ['api'], failed: [{ serviceId: 'main', reason: 'environment_write_failed' }] });
     expect(writeFile).toHaveBeenCalledTimes(2);
   });
 });

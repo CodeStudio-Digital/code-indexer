@@ -200,7 +200,6 @@ export function validateSessionWorkbenchBootstrap(value: unknown): SessionWorkbe
     throw new SessionWorkbenchResponseValidationError('$.summary.sessionId', 'must match $.sessionId');
   }
   positiveRevision(summary.revision, '$.summary.revision');
-  if (summary.goal !== null) string(summary.goal, '$.summary.goal');
   array(summary.tasks, '$.summary.tasks').forEach((value, index) => {
     const task = object(value, `$.summary.tasks[${index}]`);
     string(task.id, `$.summary.tasks[${index}].id`);
@@ -434,7 +433,6 @@ function validateEvent(value: unknown, path: string, pageSessionId: string): Ses
 
   if (type === 'summary.changed') {
     oneOf(event.resource, ['summary'], `${path}.resource`);
-    boolean(data.goalChanged, `${path}.data.goalChanged`);
     boolean(data.tasksChanged, `${path}.data.tasksChanged`);
     boolean(data.processesChanged, `${path}.data.processesChanged`);
   } else if (type === 'context.changed') {

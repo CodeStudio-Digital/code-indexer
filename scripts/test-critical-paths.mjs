@@ -23,4 +23,7 @@ export const criticalPaths = [
   'apps/http-api/workers/__tests__/coder-agent-transition.test.ts',
   'apps/dashboard/features/chat/__tests__',
   'apps/dashboard/features/chat/messages/__tests__',
+  'apps/dashboard/lib/__tests__/surface-visibility.test.ts',
+  'apps/dashboard/hooks/__tests__/polling-controller.test.ts',
+  'apps/dashboard/state/company/stream-handlers/__tests__/agent-preview.test.ts',
 ];

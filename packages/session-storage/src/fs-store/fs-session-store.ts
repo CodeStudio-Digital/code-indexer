@@ -18,6 +18,9 @@ import { FsSessionDirectory, type FsSessionDirectoryOptions } from './session-di
 import { FsSessionMutations } from './session-mutations.js';
 import { queryMcpRunMetadata, type FsMcpRunQuery } from './mcp-run-query.js';
 import { FsToolOutputReader } from './tool-output-reader.js';
+import { FsToolOutcomeRepository } from './tool-outcome-repository.js';
+import type { FsResolveToolOutcomeInput, FsResolveToolOutcomeResult, FsToolOutcomeState,
+  FsRecordToolOutcomeIncidentInput, FsRecordToolOutcomeIncidentResult } from './tool-outcome-types.js';
 import { FsSessionEntityFiles } from './entity-files.js';
 import { recordStandaloneSubagentUsage } from './standalone-usage-metric.js';
 import { installSessionOperationsApi, type FsSessionOperationsApi } from './session-operations-api.js';
@@ -78,12 +81,14 @@ export class FsSessionStore {
   readonly #writer: FsConversationWriter;
   readonly #reader: FsConversationReader;
   readonly #toolOutputs: FsToolOutputReader;
+  readonly #toolOutcomes: FsToolOutcomeRepository;
   constructor(options: FsSessionStoreOptions) {
     this.#directory = new FsSessionDirectory(options);
     this.#mutations = new FsSessionMutations(this.#directory);
     this.#writer = new FsConversationWriter(this.#directory);
     this.#reader = new FsConversationReader(this.#directory);
     this.#toolOutputs = new FsToolOutputReader(this.#directory);
+    this.#toolOutcomes = new FsToolOutcomeRepository(this.#directory);
     const entities = new FsSessionEntityFiles(this.#directory);
     installOrchestrationSubagentApi(this, this.#directory, entities);
     installOperationalSessionApi(this, new FsOperationalSessionStore(this.#directory));
@@ -107,6 +112,15 @@ export class FsSessionStore {
   get locator(): SessionLocator { return this.#directory.locator; }
   get repository(): FileSessionRepository { return this.#directory.repository; }
   get catalog(): SessionCatalog { return this.#directory.catalog; }
+  getToolOutcomeState(id: SessionId | string): Promise<FsToolOutcomeState> {
+    return this.#toolOutcomes.getToolOutcomeState(id);
+  }
+  recordToolOutcomeIncident(input: FsRecordToolOutcomeIncidentInput): Promise<FsRecordToolOutcomeIncidentResult> {
+    return this.#toolOutcomes.recordToolOutcomeIncident(input);
+  }
+  resolveToolOutcome(input: FsResolveToolOutcomeInput): Promise<FsResolveToolOutcomeResult> {
+    return this.#toolOutcomes.resolveToolOutcome(input);
+  }
   refresh(): Promise<void> { return this.#directory.refresh(); }
 
   /** Lazily prime the in-memory catalog without forcing a rescan per caller. */

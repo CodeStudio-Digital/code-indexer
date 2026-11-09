@@ -1,5 +1,6 @@
 import type { UseProvidersResult } from '../../../hooks/useProviders.js';
 import { useState } from 'react';
+import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 import { useTranslation } from 'react-i18next';
 import { RoleEditModal, type RoleConfig, type SkillDef } from '../RoleEditModal.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
@@ -99,7 +100,7 @@ export function RoleDialog({
       }
     }
 
-    const cleaned = { ...draft, role: roleName };
+    const cleaned = isEdit ? { ...draft, role: roleName } : withDefaultQaSkill({ ...draft, role: roleName });
     const updatedRoles = isEdit
       ? existing.map((r, i) => (i === editIdx ? cleaned : r))
       : [...existing, cleaned];
@@ -160,7 +161,7 @@ export function RoleDialog({
         onClose={() => void commit()}
         inheritedToolTiers={[
           'company',
-          ...(draft.role === 'qa' || draft.skills?.includes('qa-playwright') ? ['qa'] : []),
+          ...(draft.role === 'qa' || draft.skills?.some((skill) => skill === 'qa-playwright' || skill === 'qa-preview') ? ['qa'] : []),
           ...(['qa', 'frontend', 'ux', 'fullstack'].includes(draft.role) ? ['preview'] : []),
           ...(draft.role === 'database' ? ['db'] : []),
         ]}

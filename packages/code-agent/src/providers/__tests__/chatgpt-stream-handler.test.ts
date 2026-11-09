@@ -41,6 +41,32 @@ async function collect(events: Array<Record<string, unknown>>): Promise<ChatDelt
 describe('ChatGPTCodexProvider reasoning stream', () => {
   beforeEach(() => mockCreate.mockReset());
 
+  it('closes the upstream iterator at response.completed without awaiting trailing socket bytes', async () => {
+    const cleaned = vi.fn();
+    mockCreate.mockResolvedValueOnce((async function* () {
+      try {
+        yield { type: 'response.output_text.delta', delta: 'complete' };
+        yield { type: 'response.completed', response: { status: 'completed' } };
+        throw new TypeError('terminated');
+      } finally { cleaned(); }
+    })());
+    const provider = new ChatGPTCodexProvider({ apiKey: 'test', baseURL: 'https://example.test', model: 'test' });
+    const deltas: ChatDelta[] = [];
+    for await (const delta of provider.chat(request())) deltas.push(delta);
+    expect(deltas.at(-1)?.type).toBe('done');
+    expect(cleaned).toHaveBeenCalledOnce();
+  });
+
+  it.each(['response.failed', 'error'])('preserves the structured code for %s', async (type) => {
+    await expect(collect([{ type, error: { code: 'context_length_exceeded', message: 'Context too large' } }]))
+      .rejects.toMatchObject({ code: 'context_length_exceeded' });
+  });
+
+  it('does not turn response.incomplete into a completed or blindly retryable response', async () => {
+    await expect(collect([{ type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } }]))
+      .rejects.toMatchObject({ code: 'max_output_tokens', status: 400 });
+  });
+
   it('preserves a paragraph boundary between distinct reasoning summary parts', async () => {
     const deltas = await collect([
       { type: 'response.reasoning_summary_text.delta', delta: '**Inspecting**' },

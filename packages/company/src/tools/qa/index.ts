@@ -8,6 +8,7 @@ import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/compan
 import { qaPublishResult } from '@mcp/company/tools/qa/qa-publish-result.js';
 import { qaStartRun } from '@mcp/company/tools/qa/qa-start-run.js';
 import { qaGetBrowserEndpoint } from '@mcp/company/tools/qa/qa-get-browser-endpoint.js';
+import { qaCheckPreview } from './qa-check-preview.js';
 
 export { qaPublishResult } from '@mcp/company/tools/qa/qa-publish-result.js';
 export { qaStartRun, setQaTestRunStore } from '@mcp/company/tools/qa/qa-start-run.js';
@@ -43,6 +44,7 @@ export function buildQaTools(
 ): CoderTool[] {
   return [
     qaStartRun(orchestrator, agentRole, agentRunId),
+    qaCheckPreview(orchestrator, agentRole, agentRunId),
     qaPublishResult(orchestrator, agentRole, agentRunId),
     qaGetBrowserEndpoint(orchestrator, agentRole, agentRunId),
   ];

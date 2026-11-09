@@ -87,7 +87,7 @@ describe('pushEnvsToContainers — per-service bodies', () => {
         () => '',
         null,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ state: 'stored' });
   });
 
   it('one failing container does not block the rest (allSettled)', async () => {
@@ -104,7 +104,7 @@ describe('pushEnvsToContainers — per-service bodies', () => {
         () => 'body',
         driver,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ state: 'partial', applied: ['api'], failed: [{ serviceId: 'main', reason: 'environment_write_failed' }], restartRequired: true });
     expect(writeFile).toHaveBeenCalledTimes(2);
   });
 });

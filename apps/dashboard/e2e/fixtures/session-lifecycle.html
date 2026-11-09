@@ -1,0 +1,52 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Chat lifecycle fixture</title></head>
+<body><div id="root" style="height:100vh"></div>
+<script type="module">
+import React,{useState,useEffect} from 'react';
+import {createRoot} from 'react-dom/client';
+import {SessionSidebar} from '/features/chat/SessionSidebar.tsx';
+import {ChatHeader} from '/features/chat/ChatHeader.tsx';
+import {StuckBanner} from '/features/chat/StuckBanner.tsx';
+import {useAgentStream} from '/hooks/useAgentStream.ts';
+import {deleteChats} from '/features/chat/delete-chats.ts';
+import {useDeletedSession} from '/features/chat/useDeletedSession.ts';
+import {setDraft,getDraft} from '/features/chat/composer/composer-draft-store.ts';
+import {DialogProvider,useConfirm} from '/components/ui/dialog-provider.tsx';
+import {TooltipProvider} from '/components/ui/tooltip.tsx';
+import i18n,{i18nReady} from '/i18n/index.ts';
+import '/index.css';
+const id='11111111-1111-4111-8111-111111111111', second='22222222-2222-4222-8222-222222222222';
+const rows=[id,second].map((id,i)=>({id,project_id:7,title:i?'Outra conversa':'Conversa de teste',provider:'fixture',model:'fixture',
+  status:'in_progress',runtime_active:false,runtime_bus_id:'bus-a',created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
+  group_id:null,total_input_tokens:0,total_output_tokens:0,total_cache_read_tokens:0,total_cache_creation_tokens:0,last_turn_input_tokens:0}));
+const originalFetch=window.fetch.bind(window); let ctl;
+const enc=new TextEncoder(); const emit=(event,data)=>ctl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+window.fetch=(url,init)=>String(url).endsWith('/messages')?Promise.resolve(new Response(new ReadableStream({
+  start(controller){ctl=controller;emit('bus_info',{bus_id:'bus-a'});emit('text',{text:'Trabalhando'});},
+  cancel(){return new Promise(()=>{});}
+}),{headers:{'content-type':'text/event-stream'}})):originalFetch(url,init);
+const noop=()=>{};
+function Fixture(){
+  const [sessions,setSessions]=useState(rows); const [selected,setSelected]=useState(id); const [error,setError]=useState('');
+  const stream=useAgentStream(selected); const confirm=useConfirm(); useDeletedSession(selected,setSelected);
+  useEffect(()=>{const deleted=e=>setSessions(list=>list.filter(s=>!e.detail.ids.includes(s.id)));
+    window.addEventListener('coder:sessions-deleted',deleted);return()=>window.removeEventListener('coder:sessions-deleted',deleted);},[]);
+  const remove=async ids=>{if(!await confirm({title:'Apagar conversa?',description:'Apagar permanentemente mensagens, anexos, logs e snapshots. Preservar os arquivos do projeto.',variant:'destructive',confirmLabel:'Apagar'}))return;
+    try{await deleteChats(ids);}catch(e){setError(e.message);}};
+  window.lifecycle={emit,getDraft:()=>getDraft('coder:'+id),stage:()=>setDraft('coder:'+id,{text:'rascunho privado',attachments:[{name:'imagem.png',base64:'AQ==',mediaType:'image/png'}]}),
+    remoteChanged:()=>window.dispatchEvent(new CustomEvent('coder:sessions-changed'))};
+  return React.createElement('div',{style:{display:'flex',height:'100%',gap:12}},
+    React.createElement('div',{style:{width:320}},React.createElement(SessionSidebar,{sessions,groups:[],selectedId:selected,view:'active',onViewChange:noop,onSelect:setSelected,onNew:noop,
+      onDelete:id=>remove([id]),onBatchDelete:remove,onDeleteAll:()=>remove(sessions.map(s=>s.id)),onRename:noop,onDuplicate:noop,onArchive:noop,onFavorite:noop,
+      onBatchArchive:noop,onMoveToGroup:noop,onBatchMoveToGroup:noop,onCreateGroup:noop,onRenameGroup:noop,onDeleteGroup:noop,projectName:'Projeto isolado',docked:true})),
+    React.createElement('main',{style:{flex:1}},selected?React.createElement(ChatHeader,{session:sessions.find(s=>s.id===selected),streaming:stream.streaming,runDelta:stream.runDelta,
+      lastUsage:null,stats:null,contextStatus:null,indexStatus:null,onOpenDetails:noop}):React.createElement('p',{'data-testid':'no-chat'},'Nenhuma conversa selecionada'),
+      React.createElement(StuckBanner,{streaming:stream.streaming,lastEventAt:stream.lastEventAt,onOpenLog:noop}),
+      React.createElement('button',{onClick:()=>void stream.sendMessage('teste')},'Iniciar execução'),
+      React.createElement('button',{onClick:()=>remove([selected]),disabled:!selected},'Excluir conversa'),
+      React.createElement('button',{onClick:()=>remove(sessions.map(s=>s.id))},'Excluir todas'),
+      error&&React.createElement('p',{role:'alert'},error)));
+}
+await i18nReady;
+await i18n.changeLanguage('pt-BR');
+createRoot(document.getElementById('root')).render(React.createElement(TooltipProvider,null,React.createElement(DialogProvider,null,React.createElement(Fixture))));
+</script></body></html>

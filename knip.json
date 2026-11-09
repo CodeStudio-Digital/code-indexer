@@ -13,7 +13,8 @@
         "quickjs-emscripten",
         "turndown",
         "turndown-plugin-gfm",
-        "original-fs"
+        "original-fs",
+        "pg-cursor"
       ],
       "entry": [
         "apps/cli/index.ts",
@@ -28,6 +29,7 @@
         "apps/dashboard/main.tsx",
         "apps/dashboard/vite.config.ts",
         "apps/dashboard/lib/radix-presence-react19.tsx",
+        "apps/dashboard/performance/markdown/fixture.tsx",
         "apps/dashboard/performance/renderer/fixture.tsx",
         "apps/dashboard/performance/stream-projector.ts",
         "scripts/**/*.{ts,mjs}",

@@ -11,6 +11,7 @@
  * replaceable by generation.
  */
 import { join } from 'node:path';
+import { StructuralGeneration } from './structural-generation.js';
 import { readFileSync, statSync } from 'node:fs';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { mergeIndexIgnorePatterns, projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
@@ -57,6 +58,8 @@ export interface StructuralIndexOptions {
   waitForInteractivePriority?: () => Promise<void>;
   /** Candidate-count gate: above this the run bails with `aborted: 'too_large'` (project untouched). */
   maxFiles?: number;
+  /** Explicit repair of derived rows from older indexer versions. */
+  forceReparse?: boolean;
   /**
    * Escape hatch for the empty-scan anti-wipe guard (manual reindex only):
    * a scan that finds ZERO files but would remove existing rows is treated
@@ -126,6 +129,7 @@ export async function runStructuralIndex(
   const scanStarted = Date.now();
   const scan = await scanner.scan(db, projectId, {
     maxFiles: opts.maxFiles,
+    forceReparse: opts.forceReparse,
     waitForInteractivePriority: opts.waitForInteractivePriority,
     // Keep the "Scanning…" chip alive during the walk (total unknown → 0).
     onScanProgress: (scanned, total) =>
@@ -226,17 +230,7 @@ export async function runStructuralIndex(
   );
 
   let removed = 0;
-  for (let offset = 0; offset < scan.toRemove.length; offset += pipelineSchedule.writeBatchSize) {
-    await opts.waitForInteractivePriority?.();
-    const chunk = scan.toRemove.slice(offset, offset + pipelineSchedule.writeBatchSize);
-    const writeStarted = Date.now();
-    db.indexTransaction(projectId, () => {
-      removed += removeFilesStructural(db, projectId, chunk).removed;
-    });
-    phaseTimings.writeMs += Date.now() - writeStarted;
-    sampleRss();
-    if ((offset + chunk.length) % pipelineSchedule.yieldEvery === 0) await yieldToEventLoop();
-  }
+  const generation = new StructuralGeneration(db, projectId);
   const runId = db.startRun(projectId);
 
   let indexed = 0;
@@ -294,7 +288,7 @@ export async function runStructuralIndex(
                 continue;
               }
               try {
-                persistPreparedFileStructural(db, projectId, outcome.prepared);
+                generation.stage(outcome.prepared);
                 waveIndexed++;
               } catch (error) {
                 waveErrors++;
@@ -331,10 +325,23 @@ export async function runStructuralIndex(
     }
   }
 
+  if (!aborted && errorCount === 0) {
+    try {
+      const published = generation.publish(scan.toRemove, opts.signal);
+      indexed = published.indexed;
+      removed = published.removed;
+    } catch (error) {
+      errorCount++;
+      indexed = 0;
+      console.error('[structural] Generation publication failed; prior index retained:', error);
+    }
+  } else indexed = 0;
+  generation.discard();
+
   await opts.waitForInteractivePriority?.();
   const sweepStarted = Date.now();
   try {
-    const sweep = sweepContentCoverage(db, projectId, project.root_path);
+    const sweep = !aborted && errorCount === 0 ? sweepContentCoverage(db, projectId, project.root_path) : { added: 0, skipped: 0 };
     if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
   } catch (err) {
     errorCount++;
@@ -357,7 +364,7 @@ export async function runStructuralIndex(
     file_count: stats.file_count,
     symbol_count: stats.symbol_count,
     structural_last_checked_at: checkedAt,
-    ...(status !== 'failed' && indexed + scan.unchanged.length > 0
+    ...(status === 'completed' && indexed + scan.unchanged.length > 0
       ? { structural_indexed_at: checkedAt }
       : {}),
     // last_indexed untouched — it keeps meaning "semantic index".

@@ -44,7 +44,7 @@ export interface DestroyServiceDeps {
   servicesStore: CompanySandboxServicesStore | null;
   emit: (event: SandboxEvent) => void;
   syncManagedEnvs: (sessionId: string) => Promise<void>;
-  syncEnvsToAllContainers: (sessionId: string) => Promise<void>;
+  syncEnvsToAllContainers: (sessionId: string) => Promise<unknown>;
   destroySessionNetwork: (sessionId: string) => Promise<void>;
 }
 

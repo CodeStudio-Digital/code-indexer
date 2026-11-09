@@ -8,7 +8,9 @@ const __dirname = path.dirname(__filename);
 
 export const APP_IDENTITY = {
   displayName: 'CodeStudio',
-  userModelId: 'CodeStudio',
+  // Must match electron-builder's appId and the installer shortcuts so pinned
+  // launchers, running windows and notifications share one Windows identity.
+  userModelId: 'studio.codestudio.app',
 } as const;
 
 export function resolveAppIconPath(): string | undefined {

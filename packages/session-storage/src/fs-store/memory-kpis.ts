@@ -3,11 +3,15 @@ import type {
   ProjectId,
 } from '@mcp/session-storage';
 import type { FsSessionStore } from './fs-session-store.js';
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const EXPLICIT_MEMORY_TOOLS = new Set([
   'recall_memory',
   'remember',
   'forget_memory',
+  'search_memory',
+  'save_memory',
 ]);
 
 export interface FsSessionMemoryKpis {
@@ -23,7 +27,49 @@ type MemoryKpiSessionStore = Pick<
   | 'catalog'
   | 'listSessionEvents'
   | 'listSessionToolCalls'
->;
+> & Partial<Pick<FsSessionStore, 'listSessionMemoryToolCalls'>>;
+
+interface BundleSignals {
+  learned: Array<{ at: number; projectId: number | null }>;
+  calls: Array<{ at: number; name: string }>;
+  incomplete?: boolean;
+}
+interface KpiCache {
+  bundles: Map<string, { signature: string; signals: Promise<BundleSignals> }>;
+  requests: Map<string, { expires: number; result: Promise<FsSessionMemoryKpis> }>;
+}
+const caches = new WeakMap<object, KpiCache>();
+
+async function bundleSignature(entry: CatalogEntry): Promise<string> {
+  const paths = ['events', 'conversation.jsonl'];
+  const signatures = await Promise.all(paths.map(async path => {
+    try { const info = await stat(join(entry.location.bundle_path, path)); return `${info.dev}:${info.ino}:${info.birthtimeMs}:${info.mtimeMs}:${info.ctimeMs}:${info.size}`; }
+    catch { return 'unavailable'; }
+  }));
+  return `${entry.session.updated_at}:${signatures.join('|')}`;
+}
+
+async function readSignals(sessions: MemoryKpiSessionStore, entry: CatalogEntry): Promise<BundleSignals> {
+  const [eventsResult, callsResult] = await Promise.allSettled([
+    sessions.listSessionEvents(entry.session.id, 'memory_distill'),
+    sessions.listSessionMemoryToolCalls
+      ? sessions.listSessionMemoryToolCalls(entry.session.id)
+      : sessions.listSessionToolCalls(entry.session.id).then(calls => calls.map(call => ({ tool_name: call.tool_name, created_at: call.output.created_at }))),
+  ]);
+  const events = eventsResult.status === 'fulfilled' ? eventsResult.value : [];
+  const calls = callsResult.status === 'fulfilled' ? callsResult.value : [];
+  return {
+    incomplete: eventsResult.status === 'rejected' || callsResult.status === 'rejected',
+    learned: events.filter(event => {
+      const payload = objectRecord(event.payload);
+      return nonNegativeNumber(payload.created) + nonNegativeNumber(payload.merged) > 0;
+    }).map(event => ({ at: Date.parse(event.created_at), projectId: payloadProjectId(event.payload) })),
+    calls: calls.flatMap(call => {
+      const name = call.tool_name.replace(/^mcp__/, '');
+      return EXPLICIT_MEMORY_TOOLS.has(name) ? [{ at: Date.parse(call.created_at), name }] : [];
+    }),
+  };
+}
 
 function objectRecord(value: unknown): Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value)
@@ -70,6 +116,25 @@ export async function readFsSessionMemoryKpis(
     now?: number;
   } = {},
 ): Promise<FsSessionMemoryKpis> {
+  let cache = caches.get(sessions);
+  if (!cache) { cache = { bundles: new Map(), requests: new Map() }; caches.set(sessions, cache); }
+  const key = `${projectId}:${options.windowDays ?? 30}:${options.now ?? 'live'}`;
+  const previous = cache.requests.get(key);
+  if (previous && previous.expires > Date.now()) return previous.result;
+  // Coalesce polling clients; unchanged bundles retain compact signals, never transcripts.
+  const result = readUncached(sessions, projectId, options, cache);
+  const request = { expires: Number.POSITIVE_INFINITY, result };
+  cache.requests.set(key, request);
+  try { const value = await result; request.expires = Date.now() + 5_000; return value; }
+  catch (error) { cache.requests.delete(key); throw error; }
+}
+
+async function readUncached(
+  sessions: MemoryKpiSessionStore,
+  projectId: ProjectId,
+  options: { windowDays?: number; now?: number },
+  cache: KpiCache,
+): Promise<FsSessionMemoryKpis> {
   const windowDays = Math.max(
     1,
     Math.floor(options.windowDays ?? 30),
@@ -80,6 +145,9 @@ export async function readFsSessionMemoryKpis(
   const relevant = sessions.catalog
     .list()
     .filter((entry) => sessionEntryIncludesProject(entry, projectId));
+  const catalogPaths = new Set(sessions.catalog.list().map(entry => entry.location.bundle_path));
+  for (const path of cache.bundles.keys()) if (!catalogPaths.has(path)) cache.bundles.delete(path);
+  for (const [key, value] of cache.requests) if (value.expires < Date.now()) cache.requests.delete(key);
 
   let sessionsInWindow = 0;
   const learned = new Set<string>();
@@ -92,50 +160,24 @@ export async function readFsSessionMemoryKpis(
     if (createdInWindow) sessionsInWindow += 1;
 
     try {
-      const events = await sessions.listSessionEvents(
-        entry.session.id,
-        'memory_distill',
-      );
-      if (
-        createdInWindow &&
-        events.some((event) => {
-          const created = Date.parse(event.created_at);
-          if (
-            !Number.isFinite(created) ||
-            created < cutoff ||
-            created > now ||
-            payloadProjectId(event.payload) !== projectId
-          ) {
-            return false;
-          }
-          const payload = objectRecord(event.payload);
-          return (
-            nonNegativeNumber(payload.created) +
-            nonNegativeNumber(payload.merged)
-          ) > 0;
-        })
-      ) {
+      const path = entry.location.bundle_path;
+      const signature = await bundleSignature(entry);
+      let cached = cache.bundles.get(path);
+      if (!cached || cached.signature !== signature) {
+        cached = { signature, signals: readSignals(sessions, entry) };
+        cache.bundles.set(path, cached);
+      }
+      let signals: BundleSignals;
+      try { signals = await cached.signals; }
+      catch (error) { cache.bundles.delete(path); throw error; }
+      if (signals.incomplete) cache.bundles.delete(path);
+      if (createdInWindow && signals.learned.some(event =>
+        event.at >= cutoff && event.at <= now && event.projectId === projectId)) {
         learned.add(String(entry.session.id));
       }
-    } catch {
-      // One unreadable bundle must not hide the remaining project metrics.
-    }
-
-    try {
-      for (const call of await sessions.listSessionToolCalls(
-        entry.session.id,
-      )) {
-        if (!EXPLICIT_MEMORY_TOOLS.has(call.tool_name)) continue;
-        const created = Date.parse(call.output.created_at);
-        if (
-          !Number.isFinite(created) ||
-          created < cutoff ||
-          created > now
-        ) {
-          continue;
-        }
-        explicitCalls[call.tool_name] =
-          (explicitCalls[call.tool_name] ?? 0) + 1;
+      for (const call of signals.calls) {
+        if (!(call.at >= cutoff && call.at <= now)) continue;
+        explicitCalls[call.name] = (explicitCalls[call.name] ?? 0) + 1;
       }
     } catch {
       // Keep the KPI endpoint best-effort per bundle.

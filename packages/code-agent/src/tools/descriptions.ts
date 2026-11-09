@@ -129,7 +129,9 @@ export const RUN_COMMAND_DESC =
   "DON'T: use find/ls for exploration — use mcp__list_directory or mcp__search.\n" +
   "DON'T: use sed/awk to edit files — use edit_file.\n" +
   "DON'T: run interactive commands that expect stdin from the user (nano, vim, prompts). They'll hang and time out. The `stdin` parameter is for batch payloads (script bodies), not interactive sessions.\n" +
-  "DON'T: run long-running servers in foreground (npm run dev). They'll block for 120s then abort.";
+  'For servers, watchers and lengthy work, use exec_command with a short yield_time_ms, then write_stdin to poll the returned session_id. A yield is not a command deadline.\n' +
+  'Do not hide a server behind Start-Process, start /b, nohup or & inside run_command: use the tracked persistent session so logs, status and cancellation stay available.\n' +
+  'If a command times out, inspect partial output, files and process status before retrying; timeout does not prove that nothing ran.';
 
 // ---------- interaction (src/core/coder/tools/interaction.ts) ----------
 
@@ -140,7 +142,6 @@ export const ASK_USER_DESC =
   'PREFER: 2–8 mutually-exclusive `options` so the user clicks instead of types. Buttons render in a 2-column grid. Free-form is for open answers only.\n' +
   'MULTI: set `multi_select: true` when several options can legitimately be combined ("select all that apply" — e.g. which screens, what data to store, which login methods). The answer returns the chosen values joined by ", ".\n' +
   'PREFER: if one option is your recommendation, list it FIRST and end its label with " (Recommended)" so the user sees the default at a glance.\n' +
-  'AUTHORITY: when a known failed validation is unrelated baseline drift and only the user can accept it as out of scope, set `goal_lifecycle_resolution: "accept_out_of_scope_validation"` on that approval option only. Never set it on retry, repair, or stop options.\n' +
   "DON'T: ask things you can verify yourself (file existence, type signatures, config values — READ them).\n" +
   "DON'T: ask for confirmation of obvious next steps ('should I now run the tests?'). Just do it.\n" +
   "DON'T: ask multiple small questions in sequence. Batch them into one question with options or a multi-line prompt.\n" +

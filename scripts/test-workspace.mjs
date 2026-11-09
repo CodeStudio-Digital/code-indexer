@@ -60,6 +60,7 @@ const scriptResult = spawnSync(process.execPath, ['--test',
   'scripts/__tests__/resolve-build-aliases.test.mjs',
   'scripts/prune-build-output.test.mjs',
   'scripts/release/asar-closure.test.mjs',
+  'scripts/__tests__/react-hooks-baseline.test.mjs',
 ], { cwd: root, stdio: 'inherit', env, windowsHide: true });
 if (scriptResult.error) console.error(scriptResult.error.message);
 process.exitCode = desktopPassed && nodePassed && scriptResult.status === 0 ? 0 : 1;

@@ -45,6 +45,17 @@ function resolverWith(chain: ResolvedBinding[]) {
 }
 
 describe('HyDEService pipeline binding', () => {
+  it('aborts the provider and prevents failover and cache writes after cancellation', async () => {
+    const controller = new AbortController();
+    const { resolver } = resolverWith([binding(), binding({ bindingId: 8 })]);
+    const chat = vi.fn<ChatFn>(async (_binding, _messages, options) => {
+      expect(options?.signal).toBe(controller.signal);
+      controller.abort(new Error('superseded'));
+      return { content: 'function staleExpansion() {}', latencyMs: 1 };
+    });
+    await expect(new HyDEService(resolver, { chat }).generate('how are retries handled?', undefined, controller.signal)).rejects.toThrow('superseded');
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
   it('is disabled when no indexer_search/hyde binding exists', async () => {
     const { resolver, resolveChain } = resolverWith([]);
     const chat = vi.fn() as unknown as ChatFn;

@@ -11,16 +11,14 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { GitRunResult } from '@mcp/api-bus';
 import { apiCall } from '../../../../lib/api-client.js';
 import { prompt, toast } from '../../../../components/ui/prompt-dialog.js';
 import type { BranchRowData } from './branch-popover-rows.js';
 import { openProjectPushDialog } from '../../../git-push/push-dialog-store.js';
-
-interface GitRunResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-}
+import { requestGitReload } from '../../editor/conflict-registry.js';
+import { showGitUpdateResult } from '../tool-windows/git/update-feedback.js';
 
 interface UseBranchActions {
   projectId: number;
@@ -31,50 +29,30 @@ interface UseBranchActions {
 }
 
 export function useBranchActions({ projectId, repoPath, onMutated, onClose }: UseBranchActions) {
+  const { t } = useTranslation('workspace');
   // `busyAction` doubles as "currently running" indicator and matches
   // against either an action label ("Update Project") or a per-branch
   // key ("Switch feature/foo") so the corresponding row can spin.
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
-  const runRemoteOp = async (
-    label: string,
-    method: 'projectGit.fetch' | 'projectGit.pull',
-    payload: object,
-  ): Promise<boolean> => {
-    setBusyAction(label);
+  const onUpdateProject = async () => {
+    setBusyAction('Update Project');
     try {
-      const r = await apiCall<GitRunResult>(method, { projectId, repoPath, ...payload });
-      if (r.ok) {
-        toast.success(`${label} OK`, {
-          description:
-            r.stdout.trim().split('\n').slice(-3).join('\n') ||
-            r.stderr.trim().split('\n').slice(-3).join('\n') ||
-            'No output.',
-        });
-        onMutated();
-        return true;
-      }
-      toast.error(`${label} failed`, {
-        description: r.stderr.trim().slice(0, 320) || r.stdout.trim().slice(0, 320),
+      // Pull already fetches; one operation keeps the busy state through restoration.
+      const r = await apiCall<GitRunResult>('projectGit.pull', { projectId, repoPath, rebase: true });
+      showGitUpdateResult(r, {
+        projectId, repoPath, successTitle: t('git.branch.projectUpdated'), t,
       });
-      return false;
+      if (r.updateActionRequired === 'conflicts') onClose();
     } catch (e) {
-      toast.error(`${label} failed`, {
+      toast.error(t('git.branch.updateFailed'), {
         description: e instanceof Error ? e.message : String(e),
       });
-      return false;
     } finally {
       setBusyAction(null);
+      onMutated();
+      requestGitReload();
     }
-  };
-
-  // IntelliJ's "Update Project" = fetch then pull --rebase. We chain
-  // them so the user gets one click → both succeed / fail with their
-  // own toasts. If fetch fails, we still attempt pull (it often
-  // succeeds via cached refs).
-  const onUpdateProject = async () => {
-    await runRemoteOp('Update Project', 'projectGit.fetch', { prune: true });
-    await runRemoteOp('Pull (rebase)', 'projectGit.pull', { rebase: true });
   };
 
   const onPush = (currentHasUpstream: boolean) => {

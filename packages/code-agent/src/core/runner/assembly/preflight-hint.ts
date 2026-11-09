@@ -21,9 +21,6 @@ export function renderPreflightHint(
 
   if (seed.taskKind) {
     lines.push(`task_kind: ${seed.taskKind}`);
-    lines.push(
-      'goal_lifecycle: optional durable context and telemetry only; it never authorizes tools or blocks completion. Use create_goal when cross-turn continuity is useful. update_goal completion persists immediately and any verification health is advisory.',
-    );
     if (seed.taskKind === 'bugfix' && options.bugWorkflow !== false) {
       lines.push(
         'bug_workflow: reproduce the defect BEFORE touching production code. ' +

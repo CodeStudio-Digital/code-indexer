@@ -26,6 +26,15 @@ function extractSessionId(content: string): string {
   return m[1];
 }
 
+async function collectUntil(content: string, expected: string, ctx: ToolContext): Promise<string> {
+  const deadline = Date.now() + 10_000;
+  const sessionId = extractSessionId(content);
+  while (!content.includes(expected) && Date.now() < deadline) {
+    content += (await writeStdin.handler({ session_id: sessionId, yield_time_ms: 250 }, ctx)).content;
+  }
+  return content;
+}
+
 // stdin echo: reads stdin, writes "echo:<input>" to stdout for every chunk.
 // Unbuffered so the parent sees output without waiting for a newline batch.
 const ECHO_STDIN_SCRIPT = `
@@ -52,8 +61,8 @@ afterAll(() => {
   }
 });
 
-afterEach(() => {
-  __testing.disposeAll();
+afterEach(async () => {
+  await __testing.disposeAll();
 });
 
 describe('exec_command + write_stdin', () => {
@@ -101,7 +110,7 @@ describe('exec_command + write_stdin', () => {
     expect(r1.content).toContain('status=running');
     // The script prints `ready\n` on startup — should be captured in the
     // first yield window.
-    expect(r1.content).toContain('ready');
+    expect(await collectUntil(r1.content, 'ready', makeCtx())).toContain('ready');
     const sid = extractSessionId(r1.content);
     expect(__testing.sessions.has(sid)).toBe(true);
   });
@@ -118,7 +127,7 @@ describe('exec_command + write_stdin', () => {
       makeCtx(),
     );
     expect(r2.isError).toBeFalsy();
-    expect(r2.content).toContain('echo:hi');
+    expect(await collectUntil(r2.content, 'echo:hi', makeCtx())).toContain('echo:hi');
     expect(r2.content).toContain('status=running');
 
     // Second write — confirm the same session keeps working.
@@ -249,7 +258,7 @@ describe('exec_command + write_stdin', () => {
       toolOutputStore: { put },
     } as unknown as ToolContext;
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 5000, max_output_tokens: 1000 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 5000, max_output_chars: 1000 },
       storeCtx,
     );
     const sid = extractSessionId(r1.content);
@@ -290,12 +299,34 @@ describe('exec_command + write_stdin', () => {
       expect.objectContaining({
         technique: 'bounded-stream-cap',
         unit: 'chars',
-        recoverable: false,
+        recoverable: true,
         outputSize: body.length,
       }),
     ]);
     expect(r2.sourceTruncations![0]!.inputSize).toBe(totalPending);
     expect(r2.sourceTruncations![0]!.outputId).toBeUndefined();
     expect(put).not.toHaveBeenCalled();
+  });
+});
+
+describe('disposeExecCommandSessions', () => {
+  it('finishes even when a session transport never closes', async () => {
+    // A descendant that inherits stdio can keep `close` from ever firing. Worker
+    // shutdown awaits this disposal before its remaining cleanup, so it must end.
+    const dispose = vi.fn();
+    __testing.sessions.set('stuck', { id: 'stuck', dispose, exitedPromise: new Promise<void>(() => {}) } as never);
+    vi.useFakeTimers();
+    try {
+      const disposal = __testing.disposeAll().then(() => 'settled');
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+      const pending = new Promise((resolve) => setTimeout(() => resolve('pending'), 250));
+      await expect(Promise.race([disposal, pending])).resolves.toBe('settled');
+      expect(dispose).toHaveBeenCalledWith('test-reset');
+      expect(__testing.sessions.has('stuck')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      __testing.sessions.delete('stuck');
+    }
   });
 });

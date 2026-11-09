@@ -598,17 +598,14 @@ export class MasterLifecycle implements IMasterNotifier {
    */
   sendUserMessage(
     message: string,
-    options: { interject?: boolean; attachments?: CoderAttachment[]; thinking?: boolean } = {},
+    options: { interject?: boolean; attachments?: CoderAttachment[]; boardAttachments?: import('@mcp/company-contracts').BoardAttachment[]; thinking?: boolean } = {},
   ): { ok: boolean; pending?: 'interactive_wait' } {
     const attachments = options.attachments;
     if (options.thinking !== undefined) {
       this._runtimeSnapshot = { ...this._runtimeSnapshot, thinking: options.thinking };
     }
     this._lastUserAttachments = attachments ?? [];
-    const boardMessage = attachments && attachments.length > 0
-      ? `${message}\n\n_[${attachments.length} ${attachments.length === 1 ? 'attachment' : 'attachments'}]_`
-      : message;
-    this.deps.board.post('human', null, 'message', boardMessage);
+    this.deps.board.post('human', null, 'message', message, undefined, options.boardAttachments);
     this.notifyIdleUserMessage();
 
     if (!this._ended && this._handle?.runner) {

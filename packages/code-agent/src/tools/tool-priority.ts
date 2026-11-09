@@ -30,8 +30,7 @@ import {
  * Tools that must NEVER be trimmed by the model cap. The discovery core
  * (find_tools/expand_toolset/code_exec), the minimal read/write pairs, the
  * interaction/lifecycle tools a session cannot function without, and both
- * optional goal-state transitions. Keeping create/update together preserves a
- * coherent telemetry surface under small model catalog caps.
+ * core session controls.
  *
  * `task_list` is the ONE always-on task/checklist tool (the todos+tasks
  * merge — see BOOTSTRAP_TOOLS in tiers.ts). The pre-merge solo aliases
@@ -68,8 +67,6 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   'task_list',
   'submit_plan_to_master',
   'submit_tasks_to_master',
-  'create_goal',
-  'update_goal',
   // Agent Memory (migration 181) — the ONE durable write + read must survive the
   // catalog cap so weak models always have memory on turn 1. (The proactive
   // injection + run-end distiller cover the rest passively, model-independent.)

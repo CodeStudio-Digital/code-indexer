@@ -22,6 +22,20 @@ import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-st
  */
 export class CompanySessionFiles extends CompanySessionFileBase {
 
+  /** Family-wide projection; unknown owners remain protected by reconciliation.
+   * Read session metadata from disk so cached catalog status is not authority. */
+  listCompanyAgentRunsSync(): CompanyAgentRunFileRow[] {
+    const companyId = this.getSession().parent_session_id ?? this.companySessionId;
+    const runs: CompanyAgentRunFileRow[] = [];
+    for (const entry of this.sessionStore.catalog.entriesSnapshot()) {
+      if (entry.session.kind !== 'company') continue;
+      const files = new CompanySessionFiles({ companySessionId: entry.session.id, sessionStore: this.sessionStore });
+      const session = files.getSession();
+      if ((session.parent_session_id ?? session.id) === companyId) runs.push(...files.listAgentRunsSync());
+    }
+    return runs;
+  }
+
   countActiveSubordinatesAcrossCatalog(): number {
     let active = 0;
     for (const entry of this.sessionStore.catalog.list()) {
@@ -60,6 +74,7 @@ export class CompanySessionFiles extends CompanySessionFileBase {
   moveAgentRunToTrash = this.agentRuns.moveAgentRunToTrash.bind(this.agentRuns);
   private readonly board = new CompanyBoardFiles(this, this.agentRuns);
   createBoardEntry = this.board.createBoardEntry.bind(this.board);
+  getBoardEntrySync = this.board.getBoardEntrySync.bind(this.board);
   listBoardEntriesSync = this.board.listBoardEntriesSync.bind(this.board);
   getAgentBoardWatermarkSync = this.board.getAgentBoardWatermarkSync.bind(this.board);
   setAgentBoardWatermark = this.board.setAgentBoardWatermark.bind(this.board);
@@ -128,6 +143,7 @@ export function listCompanySessionsWithPendingMasterInbox(
       companySessionId: entry.session.id,
       sessionStore,
     });
+    if (files.getSession().status === 'paused' || files.getSession().archived_at) continue;
     if (
       files.listInboxMessagesSync({
         status: 'pending',

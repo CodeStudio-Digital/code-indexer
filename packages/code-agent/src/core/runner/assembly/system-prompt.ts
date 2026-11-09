@@ -11,8 +11,6 @@
 // `update_task` promoted to BOOTSTRAP_TOOLS. Old fingerprints must
 // invalidate so PR-D's skip-stale gate re-runs anything that depended
 // on the old tool surface.
-// P1 bump — goal tools (create_goal/get_goal/update_goal) + update_todo
-// promoted from silent bootstrap fallback to explicit BOOTSTRAP_TOOLS.
 // 2026-06-05.2 bump — prompt accuracy/consistency pass: product name (MCP IDE),
 // memory via save_memory (navigate), execute_tasks flow, current kanban tool
 // names, master-vs-subordinate builder scoping, refreshed bootstrap tier-hint
@@ -104,4 +102,6 @@
 // and independent review are advisory instead of execution gates.
 // 2026-08-02.1 bump — restore public progress commentary around substantial
 // tool work and distinguish it from reasoning summaries and the final answer.
-export const SYSTEM_PROMPT_VERSION = '20260802.1';
+// Configuration investigations must prove consumers/overrides before concluding.
+// Session Meta removed from the tool catalog and prompt.
+export const SYSTEM_PROMPT_VERSION = '20261104.intent-safe-recovery';

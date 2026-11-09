@@ -45,6 +45,6 @@ describe('dormant App Master config refresh', () => {
       thinking: undefined,
     }));
     expect((lifecycle as unknown as { handle: unknown }).handle).toBeNull();
-    expect(board.post).toHaveBeenCalledWith('human', null, 'message', 'Use the edited team config');
+    expect(board.post).toHaveBeenCalledWith('human', null, 'message', 'Use the edited team config', undefined, undefined);
   });
 });

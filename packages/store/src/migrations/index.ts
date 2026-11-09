@@ -271,6 +271,10 @@ import { retireSpriteAndDesignSystem267 } from './267_retire_sprite_and_design_s
 import { semanticJobLookup268 } from './268_semantic_job_lookup.js';
 import { symbolReferenceKind269 } from './269_symbol_reference_kind.js';
 import { retireAppStudioSkill270 } from './270_retire_app_studio_skill.js';
+import { structuralState271 } from './271-structural-state.js';
+import { pathCandidates272 } from './272-path-candidates.js';
+import { structuralBuild273 } from './273-structural-build.js';
+import { mcpOAuthResource274 } from './274_mcp_oauth_resource.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -541,6 +545,10 @@ export const MIGRATIONS: Migration[] = [
   semanticJobLookup268,
   symbolReferenceKind269,
   retireAppStudioSkill270,
+  structuralState271,
+  pathCandidates272,
+  structuralBuild273,
+  mcpOAuthResource274,
 ];
 
 /**

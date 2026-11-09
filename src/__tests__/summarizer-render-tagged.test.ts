@@ -23,14 +23,12 @@ const sampleSummary: CompactionSummaryV2 = {
   pending_tasks: ['add a test', 'update docs'],
   current_work: 'wiring the token into the request header',
   next_step: 'run the e2e suite',
-  active_goal: 'Ship secure login flow (status=in_progress)',
 };
 
 describe('renderSummaryV2 — tagged sections', () => {
   it('emits <tag>...</tag> blocks for each present field', () => {
     const out = renderSummaryV2(sampleSummary);
     for (const tag of [
-      'active_goal',
       'primary_request',
       'current_focus',
       'environment',
@@ -90,25 +88,14 @@ describe('renderSummaryV2 — tagged sections', () => {
     expect(m![1]).toContain('files:');
   });
 
-  it('active_goal appears at the top of the summary body', () => {
-    const out = renderSummaryV2(sampleSummary);
-    const goalIdx = out.indexOf('<active_goal>');
-    const requestIdx = out.indexOf('<primary_request>');
-    expect(goalIdx).toBeGreaterThan(0);
-    expect(requestIdx).toBeGreaterThan(goalIdx);
-  });
-
   it('still surfaces overlaid live state via overlayLiveState', () => {
     const overlaid = overlayLiveState(
       sampleSummary,
       [
         { content: 'Add the test', activeForm: 'Adding the test', status: 'in_progress' },
       ],
-      { text: 'Updated goal', status: 'in_progress' },
     );
     const out = renderSummaryV2(overlaid);
-    expect(out).toContain('<active_goal>');
-    expect(out).toContain('Updated goal');
     expect(out).toContain('<pending_tasks>');
     expect(out).toContain('Add the test');
   });

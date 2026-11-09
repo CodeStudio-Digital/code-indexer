@@ -1,7 +1,7 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { randomUUID } from 'node:crypto';
 import type { VectorStore } from '@mcp/store/vectors.js';
-import { buildFtsMatch, ftsTokens } from '@mcp/store/db/fts-query.js';
+import { ftsTokens } from '@mcp/store/db/fts-query.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import {
   embedQueryForNamespace,
@@ -10,6 +10,7 @@ import {
 import type { HyDEService } from '@mcp/indexer/search/hyde.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { planQuery } from '@mcp/indexer/search/planner.js';
+import { buildConceptFtsMatch } from './lexical-concepts.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '@mcp/shared/types.js';
@@ -32,6 +33,10 @@ import type {
 
 /** Diagnostic info returned alongside search results. */
 export interface SearchDiagnostics {
+  /** Observed at retrieval boundaries; not a transaction snapshot. */
+  structuralRevision?: string;
+  structuralRevisionAfter?: string;
+  structuralRevisionStable?: boolean;
   vectorAvailable: boolean;
   embeddingAvailable: boolean;
   requestedMode?: SearchMode;
@@ -79,6 +84,7 @@ export interface SearchDiagnostics {
   rerankerReturned?: number;
   /** Reranker error when the pipeline preserved the RRF ordering. */
   rerankerError?: string;
+  rerankerSkippedReason?: string;
   /** Correlates this response with privacy-safe project telemetry/outcomes. */
   telemetryRequestId?: string;
 }
@@ -128,32 +134,11 @@ function classifyQuery(
   return 'concept';
 }
 
-/**
- * Build 2-3 query variants for pseudo-HyDE expansion. The template phrases
- * nudge the embedding model toward code-space rather than question-space,
- * which measurably improves recall for NL questions on code corpora.
- */
+/** Preserve the user's semantic intent. Generic English template prefixes
+ * add inference work and bias multilingual queries toward boilerplate. */
 function buildQueryVariants(query: string): string[] {
-  const trimmed = query.trim();
-  const variants = new Set<string>();
-  variants.add(trimmed);
-
-  // Strip common interrogative prefixes to get the topic.
-  const topic = trimmed
-    .replace(/^(how\s+(?:does|do|is|are|can|to)|what\s+(?:is|does|are)|where\s+(?:is|does|are)|why\s+(?:is|does|are))\s+/i, '')
-    .replace(/\?+\s*$/, '')
-    .trim();
-
-  if (topic && topic !== trimmed) {
-    variants.add(`implementation of ${topic}`);
-    variants.add(`function class ${topic}`);
-  } else {
-    variants.add(`${trimmed} implementation`);
-  }
-
-  return Array.from(variants).slice(0, 3);
+  return [query.trim()];
 }
-
 export class HybridSearch {
   private reranker: RerankerService;
   private memoryEmbeddingService: EmbeddingService;
@@ -273,6 +258,7 @@ export class HybridSearch {
     if (pipelineQuery.diag.rerankerApplied !== undefined) diagAccum.rerankerApplied = pipelineQuery.diag.rerankerApplied;
     if (pipelineQuery.diag.rerankerCandidates !== undefined) diagAccum.rerankerCandidates = pipelineQuery.diag.rerankerCandidates;
     if (pipelineQuery.diag.rerankerReturned !== undefined) diagAccum.rerankerReturned = pipelineQuery.diag.rerankerReturned;
+    if (pipelineQuery.diag.rerankerSkippedReason !== undefined) diagAccum.rerankerSkippedReason = pipelineQuery.diag.rerankerSkippedReason;
     if (pipelineQuery.diag.rerankerError !== undefined) {
       diagAccum.rerankerError = pipelineQuery.diag.rerankerError;
       diagAccum.fallback = true;
@@ -307,6 +293,7 @@ export class HybridSearch {
 
     const worker = async (): Promise<void> => {
       while (cursor < projects.length) {
+        options?.signal?.throwIfAborted();
         const project = projects[cursor++];
         let results: HybridSearchResult[];
         if (mode === 'hybrid') {
@@ -327,6 +314,7 @@ export class HybridSearch {
           );
         } else {
           results = await this.search(project.id, project.name, query, {
+            ...options,
             mode,
             type,
             limit: rerankDepth,
@@ -348,7 +336,7 @@ export class HybridSearch {
 
     const candidates = gathered.slice(0, Math.min(gathered.length, rerankDepth));
     let finalCandidates = candidates;
-    if (mode === 'hybrid' && candidates.length > 0 && this.reranker.name !== 'null') {
+    if (mode === 'hybrid' && candidates.length > 0 && this.reranker.name !== 'null' && !this.reranker.queryBlockReason?.(query)) {
       const rerankInput = candidates.map((candidate) => ({
         id: `${candidate.projectId}:${candidate.result.type}:${candidate.result.id}`,
         text: rerankDocumentText(candidate.result, this.db, candidate.projectId),
@@ -443,6 +431,7 @@ export class HybridSearch {
       return JSON.stringify([
         projectId,
         query,
+        this.db.getStructuralRevision?.(projectId) ?? 'legacy',
         mode,
         type,
         limit,
@@ -471,6 +460,7 @@ export class HybridSearch {
     query: string,
     options?: HybridSearchOptions,
   ): Promise<{ results: HybridSearchResult[]; diagnostics: SearchDiagnostics }> {
+    options?.signal?.throwIfAborted();
     const startedAt = performance.now();
     const requestedMode = options?.mode ?? 'auto';
     const type = options?.type ?? 'all';
@@ -530,6 +520,7 @@ export class HybridSearch {
 
     // Check cache (key includes resolved mode so `auto` and `hybrid`
     // share a result row when the planner picks `hybrid`).
+    const structuralRevision = this.db.getStructuralRevision?.(projectId);
     const cacheKey = options?.bypassCache
       ? null
       : this.queryCacheKey(projectId, query, mode, type, limit);
@@ -553,6 +544,7 @@ export class HybridSearch {
     }
 
     const diag: SearchDiagnostics = {
+      structuralRevision,
       vectorAvailable: !!this.vectorStore,
       embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService),
       requestedMode,
@@ -572,6 +564,10 @@ export class HybridSearch {
     };
 
     const cacheAndReturn = (r: { results: HybridSearchResult[]; diagnostics: SearchDiagnostics }) => {
+      options?.signal?.throwIfAborted();
+      const after = this.db.getStructuralRevision?.(projectId);
+      r.diagnostics.structuralRevisionAfter = after;
+      r.diagnostics.structuralRevisionStable = structuralRevision !== undefined && structuralRevision === after;
       r.diagnostics.totalTimeMs = performance.now() - startedAt;
       // A transient semantic failure must not pin an FTS-only fallback for the
       // full cache TTL. No-active/disabled namespace-aware services surface
@@ -579,7 +575,7 @@ export class HybridSearch {
       // becomes available again.
       const degradedSemanticResult = mode !== 'fts'
         && (!!r.diagnostics.vectorError || r.diagnostics.fallback === true);
-      if (cacheKey && !degradedSemanticResult) {
+      if (cacheKey && !degradedSemanticResult && structuralRevision === after) {
         // Evict oldest if full
         if (this.queryCache.size >= this.queryCacheMax) {
           const oldest = [...this.queryCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
@@ -593,6 +589,7 @@ export class HybridSearch {
 
     if (mode === 'fts') {
       const results = await this.ftsSearch(projectId, query, type, limit);
+      options?.signal?.throwIfAborted();
       diag.ftsCount = results.length;
       // Top-up from the raw-content index so identifier queries that live in
       // code bodies are available from the structural baseline alone.
@@ -610,7 +607,7 @@ export class HybridSearch {
     }
 
     if (mode === 'vector') {
-      const results = await this.vectorSearchExpanded(projectId, projectName, query, type, limit, diag);
+      const results = await this.vectorSearchExpanded(projectId, projectName, query, type, limit, diag, options);
       if (results.length === 0 && diag.vectorError) {
         const fallback = await this.ftsSearch(projectId, query, type, limit);
         diag.ftsCount = fallback.length;
@@ -748,7 +745,9 @@ export class HybridSearch {
     type: SearchType,
     limit: number,
     diag: SearchDiagnostics,
+    options?: HybridSearchOptions,
   ): Promise<HybridSearchResult[]> {
+    options?.signal?.throwIfAborted();
     const namespace = codeNamespace(projectId);
     const blocked = this.embeddingService.queryBlockReasonForNamespace?.(namespace) ?? null;
     if (blocked) {
@@ -777,6 +776,7 @@ export class HybridSearch {
         const hypothetical = await this.hydeService.generate(
           query,
           semanticProjectContext(this.db, projectId, projectName),
+          options?.signal,
         );
         variants =
           hypothetical && hypothetical !== query
@@ -786,6 +786,7 @@ export class HybridSearch {
         variants = buildQueryVariants(query);
       }
       diag.queryVariants = variants;
+      options?.signal?.throwIfAborted();
 
       // Project isolation rides on the namespace now; `type` stays a metadata
       // filter to pick files vs symbols within the project.
@@ -800,15 +801,24 @@ export class HybridSearch {
 
       // Run each variant in parallel
       const runs = await Promise.all(
-        variants.map(async (v) => {
-          const { vector, generationId } = await embedQueryForNamespace(this.embeddingService, namespace, v);
+        variants.map(async (v, index) => {
+          const { vector, generationId } = await embedQueryForNamespace(this.embeddingService, namespace, v, {
+            signal: options?.signal, supersessionKey: options?.supersessionKey ? `${options.supersessionKey}:embed:${index}` : undefined,
+          });
+          options?.signal?.throwIfAborted();
+          if (diag.generationUsed !== undefined && diag.generationUsed !== generationId) {
+            throw new Error(`query variants resolved different semantic generations (${diag.generationUsed}, ${generationId})`);
+          }
+          diag.generationUsed = generationId;
           if (vector.length === 0) return [];
           const matches = await this.vectorStore!.search(vector, {
             topK: perVariant,
             filter,
             namespace,
             generationId,
+            signal: options?.signal,
           });
+          options?.signal?.throwIfAborted();
           totalRawMatches += matches.length;
           return this.rehydrateVectorMatches(matches, projectId);
         }),
@@ -843,6 +853,7 @@ export class HybridSearch {
       diag.vectorRehydrated = results.length;
       return results;
     } catch (err) {
+      options?.signal?.throwIfAborted();
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[hybrid-search] Vector search failed:', msg);
       diag.vectorError = msg;
@@ -1054,6 +1065,6 @@ export class HybridSearch {
    * Delegates to the canonical quote-per-token builder in @mcp/store.
    */
   private sanitizeFtsQuery(query: string, connector: 'AND' | 'OR' = 'AND'): string {
-    return buildFtsMatch(query, connector);
+    return buildConceptFtsMatch(query, connector);
   }
 }

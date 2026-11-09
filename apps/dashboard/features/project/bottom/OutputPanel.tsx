@@ -21,6 +21,7 @@ import {
   type ExecutionOutputEntry,
 } from '../../../state/execution-output.js';
 import { xtermTheme, TERMINAL_SURFACE_BG } from '../../shared/terminal/SingleTerminal.js';
+import { installTerminalClipboard } from '../../shared/terminal/terminal-clipboard.js';
 import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 import { Button } from '../../../components/ui/button.js';
 import {
@@ -151,6 +152,7 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+    const disposeClipboard = installTerminalClipboard(term, host, true);
     fit.fit();
     termRef.current = term;
     renderedStaticRef.current = '';
@@ -193,6 +195,7 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
       if (raf) cancelAnimationFrame(raf);
       resize.disconnect();
       void iterator?.return?.();
+      disposeClipboard();
       term.dispose();
       termRef.current = null;
       renderedStaticRef.current = '';

@@ -54,7 +54,6 @@ export function mergeSubordinates(
       role: run.role,
       agentRunId: run.id,
       coderSessionId: run.coder_session_id,
-      textChunks: [],
       toolCalls: [],
       status: run.status as AgentRunStatus,
     });

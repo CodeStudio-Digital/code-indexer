@@ -16,6 +16,8 @@ export interface RowChange {
   pk?: Record<string, unknown>;
   /** Column → new value, for insert/update. */
   values?: Record<string, unknown>;
+  /** Values observed when the row was loaded. Compared atomically with the PK. */
+  original?: Record<string, unknown>;
 }
 
 export interface BuiltDml {
@@ -25,14 +27,26 @@ export interface BuiltDml {
 }
 
 export function buildDml(engine: DbEngine, change: RowChange): BuiltDml {
+  let built: BuiltDml;
   switch (change.op) {
     case 'insert':
       return buildInsert(engine, change);
     case 'update':
-      return buildUpdate(engine, change);
+      built = buildUpdate(engine, change); break;
     case 'delete':
-      return buildDelete(engine, change);
+      built = buildDelete(engine, change); break;
   }
+  if (change.original) {
+    for (const [column, value] of Object.entries(change.original)) {
+      if (value !== null && typeof value === 'object') throw new Error('Optimistic editing requires comparable scalar original values. Use an explicit SQL transaction for complex cells.');
+      const name = quoteIdent(engine, column);
+      const predicate = value == null ? `${name} IS NULL` : `${name} = ${placeholder(engine, built.params.length)}`;
+      built.sql += ` AND ${predicate}`;
+      built.display += ` AND ${value == null ? `${name} IS NULL` : `${name} = ${renderLiteral(value)}`}`;
+      if (value != null) built.params.push(value);
+    }
+  }
+  return built;
 }
 
 function buildInsert(engine: DbEngine, change: RowChange): BuiltDml {

@@ -6,8 +6,7 @@
  * debugging. The preload nonce bridge is registered in both modes, but returns
  * no nonce in dev. In a packaged build we:
  *   - never let DevTools open (programmatically or via keyboard shortcut),
- *   - strip the application menu (kills the View→Toggle DevTools / reload roles),
- *   - swallow the right-click "Inspect Element" context menu,
+ *   - keep only the Edit menu (native clipboard/undo accelerators),
  *   - install a Content-Security-Policy on the renderer's file:// origin.
  *
  * Escape hatch: CODESTUDIO_DEBUG_DEVTOOLS=1 re-enables DevTools in a packaged
@@ -17,9 +16,11 @@
  * The `mcp://` scheme is registered bypassCSP (see main.ts), so the in-process
  * backend is unaffected; the CSP only governs what the file:// document loads.
  */
-import { app, ipcMain, Menu, session, type BrowserWindow } from 'electron';
+import { app, ipcMain, session, type BrowserWindow } from 'electron';
+import { installEditMenu } from './edit-menu.js';
 import { randomBytes } from 'node:crypto';
 import { buildRendererCsp } from './security-csp.js';
+import { isAppDocument } from './window-navigation.js';
 
 const DEVTOOLS_DEBUG = process.env.CODESTUDIO_DEBUG_DEVTOOLS === '1';
 const RENDERER_CSP_NONCE = randomBytes(18).toString('base64');
@@ -53,14 +54,22 @@ function installRendererNonceBridge(): void {
 
 /**
  * App-wide hardening — call once after `app.whenReady()` and before the first
- * window loads. Strips the menu and installs the CSP header on the default
- * session. In dev this only registers the nonce bridge, which returns null.
+ * window loads. Installs the Edit menu and CSP header for the dashboard
+ * document. In dev this only registers the nonce bridge, which returns null.
  */
-export function installGlobalHardening(): void {
+export function installGlobalHardening(rendererDocumentUrl: string): void {
   installRendererNonceBridge();
   if (!app.isPackaged) return; // menu + CSP always off in dev
-  Menu.setApplicationMenu(null);
+  installEditMenu();
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // The default session also hosts project-preview iframes. Applying the
+    // IDE's nonce policy to those HTTP documents blocks their bootstrap/JIT
+    // scripts and replaces their own CSP. Only the trusted dashboard owns
+    // this policy; sandboxed srcDoc plugin panels inherit it naturally.
+    if (details.resourceType !== 'mainFrame' || !isAppDocument(details.url, rendererDocumentUrl)) {
+      callback({});
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -83,16 +92,15 @@ export function applyProductionHardening(win: BrowserWindow): void {
   wc.on('before-input-event', (event, input) => {
     if (isDevtoolsChord(input)) event.preventDefault();
   });
-  // Kill the right-click "Inspect Element" entry.
-  wc.on('context-menu', (event) => event.preventDefault());
 }
 
-function isDevtoolsChord(input: Electron.Input): boolean {
+export function isDevtoolsChord(input: Electron.Input): boolean {
   if (input.type !== 'keyDown') return false;
   const key = (input.key ?? '').toLowerCase();
   if (key === 'f12') return true; // bare F12
-  // Ctrl+Shift+{I,J,C} (Win/Linux) and Cmd+Opt+{I,J,C} (macOS).
+  // Leave Ctrl+Shift+C to terminal copy. The devtools-opened guard still
+  // closes an inspector opened by any other path.
   const primary = input.control || input.meta;
   const secondary = input.shift || input.alt;
-  return primary && secondary && (key === 'i' || key === 'j' || key === 'c');
+  return primary && secondary && (key === 'i' || key === 'j');
 }

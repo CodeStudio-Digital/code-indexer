@@ -37,6 +37,8 @@ import { electronWindowsPtyOptions } from '@mcp/shared/utils/windows-pty.js';
 import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
 import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
+import { commandSpec, commandLaunch, commandDisplay, type CommandSpec } from './command-spec.js';
+import { ProcessOutput, readProcessOutput } from './process-output.js';
 
 // ─── Tunables ──────────────────────────────────────────────────────
 
@@ -82,7 +84,10 @@ interface NodePtyProcess {
 }
 
 interface SessionRecord {
+  output: ProcessOutput;
   id: string;
+  owner: string;
+  closing?: boolean;
   cmd: string;
   cwd: string;
   mode: 'pipe' | 'pty';
@@ -113,6 +118,9 @@ interface SessionRecord {
 }
 
 const sessions = new Map<string, SessionRecord>();
+let admissionReservations = 0;
+let sweeper: ReturnType<typeof setInterval> | undefined;
+function sessionOwner(ctx: ToolContext): string { return ctx.sessionId ?? `legacy:${ctx.projectName}:${ctx.cwd}`; }
 
 let cachedPty: NodePtyModule | null | undefined = undefined;
 
@@ -140,6 +148,7 @@ function reapIdleSessions(): void {
       rec.dispose('idle-ttl');
     }
   }
+  if (sessions.size === 0 && sweeper) { clearInterval(sweeper); sweeper = undefined; }
 }
 
 function enforceMaxOpen(): void {
@@ -152,16 +161,12 @@ function enforceMaxOpen(): void {
       rec.dispose('max-open-evict-exited');
     }
   }
-  // Still over? Force-kill the oldest running session.
-  while (sessions.size > MAX_OPEN_SESSIONS) {
-    const oldest = [...sessions.values()].sort((a, b) => a.lastTouchMs - b.lastTouchMs)[0];
-    if (!oldest) break;
-    oldest.dispose('max-open-evict-running');
-  }
+  // Running sessions are never evicted to admit unrelated work.
 }
 
 function appendOutput(rec: SessionRecord, chunk: string, maxChars: number): void {
   if (!chunk) return;
+  rec.output.append(chunk);
   rec.pendingTotalChars += chunk.length;
 
   if (!rec.truncated) {
@@ -312,6 +317,7 @@ function describeResult(
   const header = [
     `session_id=${rec.id}`,
     `status=${rec.status}`,
+    `output_ref=${rec.output.id}`,
     rec.status === 'exited' ? `exit=${rec.exitCode ?? 'signal'}` : null,
     drained.truncated ? 'output_truncated=true' : null,
     drained.truncated ? `output_omitted_chars=${drained.omittedChars}` : null,
@@ -327,12 +333,11 @@ function resultForDrain(
   drained: { output: string; truncated: boolean; omittedChars: number; inputChars: number },
 ): ToolResult {
   const content = describeResult(rec, drained);
-  // appendOutput() discards the middle incrementally once the bounded capture
-  // overflows. ToolOutputStore only accepts a complete materialized string,
-  // so there is no truthful snapshot to persist after drain: do not attach an
-  // outputId or claim recoverability until the store supports stream spooling.
+  // Inline reduction and source loss are distinct. The spool can recover the
+  // former only while its own acquisition remained complete.
   return {
     content,
+    structuredData: { sessionId: rec.id, state: rec.closing && rec.status !== 'exited' ? 'stopping' : rec.status, exitCode: rec.exitCode, output: rec.output.evidence() },
     ...(drained.truncated
       ? {
           sourceTruncations: [{
@@ -340,7 +345,7 @@ function resultForDrain(
             inputSize: drained.inputChars,
             outputSize: drained.output.length,
             unit: 'chars' as const,
-            recoverable: false,
+            recoverable: rec.output.evidence().complete,
           }],
         }
       : {}),
@@ -362,6 +367,8 @@ function cleanEnv(): NodeJS.ProcessEnv {
 // ─── Spawn helpers ─────────────────────────────────────────────────
 
 async function spawnSession(opts: {
+  owner: string;
+  command: CommandSpec;
   cmd: string;
   cwd: string;
   mode: 'pipe' | 'pty';
@@ -380,7 +387,9 @@ async function spawnSession(opts: {
   const exitedPromise = new Promise<void>((res) => {
     resolveExit = res;
   });
-
+  const output = new ProcessOutput(opts.owner);
+  const launch = commandLaunch(opts.command);
+  try {
   if (opts.mode === 'pty') {
     const pty = await loadNodePty();
     if (!pty) {
@@ -391,7 +400,7 @@ async function spawnSession(opts: {
       );
     }
     opts.assertFence?.();
-    proc = pty.spawn(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32' ? ['/d', '/s', '/c', opts.cmd] : ['-c', opts.cmd], {
+    proc = pty.spawn(launch.executable, launch.args, {
       name: 'xterm-color',
       cols: opts.cols,
       rows: opts.rows,
@@ -402,7 +411,7 @@ async function spawnSession(opts: {
   } else {
     const isWindows = process.platform === 'win32';
     opts.assertFence?.();
-    proc = nodeSpawn(isWindows ? 'cmd.exe' : '/bin/sh', isWindows ? ['/d', '/s', '/c', opts.cmd] : ['-c', opts.cmd], {
+    proc = nodeSpawn(launch.executable, launch.args, {
       cwd: opts.cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -410,11 +419,14 @@ async function spawnSession(opts: {
       windowsHide: true,
     });
   }
+  } catch (error) { output.finish(); throw error; }
 
   const untrackProcess = trackProcessTree(proc.pid);
 
   const rec: SessionRecord = {
+    output,
     id,
+    owner: opts.owner,
     cmd: opts.cmd,
     cwd: opts.cwd,
     mode: opts.mode,
@@ -430,26 +442,22 @@ async function spawnSession(opts: {
     lastTouchMs: nowMs(),
     exitedPromise,
     markExited: (code) => {
+      if (rec.status === 'exited') return;
+      output.finish();
       untrackProcess();
       rec.status = 'exited';
       rec.exitCode = code;
       resolveExit();
     },
     dispose: (_reason) => {
-      untrackProcess();
-      // Idle reap and explicit session disposal are normal background paths.
-      // The shutdown-only disposer below retains process-tree termination.
-      try {
-        if (opts.mode === 'pty') {
-          (proc as NodePtyProcess).kill();
-        } else {
-          (proc as ChildProcess).kill('SIGTERM');
-        }
-      } catch {
-        /* ignore */
-      }
-      if (rec.status === 'running') rec.markExited(null);
-      sessions.delete(id);
+      if (rec.closing) return;
+      rec.closing = true;
+      if (rec.status === 'exited') { sessions.delete(id); return; }
+      void killProcessTree(proc.pid, 'SIGKILL').finally(() => {
+        // Never manufacture an exit receipt before the transport has drained.
+        try { if (rec.status === 'running') proc.kill(); } catch { /* already closed */ }
+        void rec.exitedPromise.then(() => sessions.delete(id));
+      });
     },
   };
 
@@ -474,7 +482,7 @@ async function spawnSession(opts: {
       // channel would double the response shape complexity.
       appendOutput(rec, chunk.toString(), opts.maxChars);
     });
-    childProc.on('exit', (code, signal) => {
+    childProc.on('close', (code, signal) => {
       rec.markExited(code ?? (signal ? -1 : null));
     });
     childProc.on('error', (e) => {
@@ -484,6 +492,7 @@ async function spawnSession(opts: {
   }
 
   sessions.set(id, rec);
+  if (!sweeper) { sweeper = setInterval(reapIdleSessions, 30_000); sweeper.unref(); }
   enforceMaxOpen();
   return rec;
 }
@@ -500,20 +509,19 @@ function writeToSession(rec: SessionRecord, chars: string): void {
 
 async function awaitYield(rec: SessionRecord, yieldMs: number, signal?: AbortSignal): Promise<void> {
   if (yieldMs <= 0) return;
-  await Promise.race([
-    rec.exitedPromise,
-    new Promise<void>((res) => {
-      const t = setTimeout(res, yieldMs);
-      if (signal) {
-        const onAbort = () => {
-          clearTimeout(t);
-          res();
-        };
-        if (signal.aborted) onAbort();
-        else signal.addEventListener('abort', onAbort, { once: true });
-      }
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([rec.exitedPromise, new Promise<void>(resolve => {
+      timer = setTimeout(resolve, yieldMs);
+      onAbort = () => resolve();
+      if (signal?.aborted) resolve();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+    })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
+  }
 }
 
 // ─── Tool: exec_command ────────────────────────────────────────────
@@ -547,6 +555,8 @@ export const execCommand: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
+      command: { type: 'object', description: 'Explicit CommandSpec: {kind:"argv",executable,args} bypasses shell quoting; {kind:"shell",script,shell} selects cmd, powershell, pwsh, sh or bash.',
+        properties: { kind: { type: 'string', enum: ['argv','shell'] }, executable: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, script: { type: 'string' }, shell: { type: 'string', enum: ['cmd','powershell','pwsh','sh','bash'] } }, required: ['kind'], additionalProperties: false },
       cmd: {
         type: 'string',
         description: 'Shell command line. Passed to /bin/sh -c (or cmd.exe /c on Windows).',
@@ -565,14 +575,17 @@ export const execCommand: CoderTool = {
       },
       cols: { type: 'number', description: 'PTY columns. Defaults to 120.' },
       rows: { type: 'number', description: 'PTY rows. Defaults to 30.' },
+      max_output_chars: { type: 'integer', minimum: 1000, maximum: HARD_MAX_OUTPUT_CHARS, description: 'Maximum inline characters per drain.' },
+      max_output_tokens: { type: 'integer', minimum: 250, description: 'Deprecated approximate alias: each requested token reserves 4 characters.' },
     },
-    required: ['cmd'],
+    required: [],
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     reapIdleSessions();
-    const cmd = String(args.cmd ?? '').trim();
-    if (!cmd) return err('exec_command: cmd cannot be empty');
+    let command: CommandSpec;
+    try { command = commandSpec(args.command, args.cmd); } catch (error) { return err(String(error)); }
+    const cmd = commandDisplay(command);
 
     const unsafeProcessCommand = unsafeProcessCommandRefusal(cmd);
     if (unsafeProcessCommand) return err(unsafeProcessCommand);
@@ -582,25 +595,33 @@ export const execCommand: CoderTool = {
     const cwd = workdir.cwd;
     const mode: 'pipe' | 'pty' = args.tty === true ? 'pty' : 'pipe';
     const yieldMs = clampYield(args.yield_time_ms, DEFAULT_EXEC_YIELD_MS);
-    const maxChars = clampMaxChars(args.max_output_tokens);
+    const maxChars = clampMaxChars(args.max_output_chars ?? (typeof args.max_output_tokens === 'number' ? args.max_output_tokens * 4 : undefined));
     const cols = typeof args.cols === 'number' && Number.isFinite(args.cols) ? args.cols : 120;
     const rows = typeof args.rows === 'number' && Number.isFinite(args.rows) ? args.rows : 30;
 
     if (ctx.ports?.commands) {
+      if (ctx.retainWorkspaceMutationUntil && !ctx.ports.commands.supportsWorkspaceExitReceipts) return err('Persistent command adapter cannot retain shared workspace ownership until physical process exit');
+      if (args.command !== undefined && !ctx.ports.commands.commandSpecSupported) return err('Persistent adapter does not support CommandSpec');
       if (ctx.ports.commands.mutationFenceAttested !== true) return err('Persistent command adapter lacks physical ownership');
-      return ctx.ports.commands.start({ command: cmd, cwd, tty: mode === 'pty', yieldMs, columns: cols, rows,
-        maxOutputBytes: Math.min(800_000, maxChars * 4), runtimeEnv: ctx.runtimeEnv, signal: ctx.signal,
+      return ctx.ports.commands.start({ command: cmd, commandSpec: command, cwd, tty: mode === 'pty', yieldMs, columns: cols, rows,
+        maxOutputBytes: Math.min(800_000, maxChars * 4), runtimeEnv: ctx.runtimeEnv, signal: ctx.signal, onProcessExit: ctx.retainWorkspaceMutationUntil,
         assertFence: () => assertMutationFence(ctx.mutationFence, { kind: 'shell', operation: 'exec', resource: cmd }) });
     }
 
     let rec: SessionRecord;
+    let reserved = false;
     try {
+      if (sessions.size + admissionReservations >= MAX_OPEN_SESSIONS) return err(`exec_command: session quota (${MAX_OPEN_SESSIONS}) reached; stop or drain an existing session first.`);
+      admissionReservations++;
+      reserved = true;
       assertMutationFence(ctx.mutationFence, {
         kind: 'shell',
         operation: 'exec',
         resource: cmd,
       });
       rec = await spawnSession({
+        owner: sessionOwner(ctx),
+        command,
         cmd,
         cwd,
         mode,
@@ -616,13 +637,17 @@ export const execCommand: CoderTool = {
       });
     } catch (e) {
       return err(`exec_command: spawn failed — ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      if (reserved) admissionReservations--;
     }
 
     // Surface abort to the session.
+    ctx.retainWorkspaceMutationUntil?.(rec.exitedPromise);
     const onAbort = () => rec.dispose('runner-abort');
     if (ctx.signal) {
       if (ctx.signal.aborted) onAbort();
       else ctx.signal.addEventListener('abort', onAbort, { once: true });
+      void rec.exitedPromise.then(() => ctx.signal?.removeEventListener('abort', onAbort));
     }
 
     await awaitYield(rec, yieldMs, ctx.signal);
@@ -711,9 +736,9 @@ interface SessionSnapshot {
   idleStr: string;
 }
 
-function snapshotSessions(): SessionSnapshot[] {
+function snapshotSessions(owner?: string): SessionSnapshot[] {
   const now = nowMs();
-  return [...sessions.values()].map((rec) => ({
+  return [...sessions.values()].filter(rec => !owner || rec.owner === owner).map((rec) => ({
     id: rec.id,
     cmd: rec.cmd,
     cwd: rec.cwd,
@@ -750,7 +775,7 @@ export const listSessions: CoderTool = {
   handler: async (_args, ctx): Promise<ToolResult> => {
     if (ctx.ports?.commands) return ctx.ports.commands.list();
     reapIdleSessions();
-    const snap = snapshotSessions();
+    const snap = snapshotSessions(sessionOwner(ctx));
     if (snap.length === 0) {
       return ok('(no active sessions; spawn one with exec_command first)');
     }
@@ -803,12 +828,12 @@ export const writeStdin: CoderTool = {
         assertFence: () => assertMutationFence(ctx.mutationFence, { kind: 'control', operation: 'write_stdin', resource: id }) });
     }
     const rec = sessions.get(id);
-    if (!rec) {
+    if (!rec || rec.owner !== sessionOwner(ctx)) {
       // PR 5 — rich error payload: list the IDs that ARE active so the
       // model can immediately self-correct instead of rotating
       // session_ids blindly. The failure-streak guard still escalates
       // if the model ignores the list and keeps retrying.
-      const snap = snapshotSessions();
+      const snap = snapshotSessions(sessionOwner(ctx));
       const activeStr = snap.length === 0
         ? '  (no active sessions — use `exec_command` to spawn one)'
         : snap.map((s) =>
@@ -859,13 +884,26 @@ export const writeStdin: CoderTool = {
   },
 };
 
+/** Upper bound on waiting for owned transports to close during disposal. A
+ * descendant that inherits stdio can keep `close` from ever firing, and worker
+ * shutdown awaits this before its remaining cleanup. The timer stays referenced
+ * so an awaited disposal settles even in a standalone host. */
+const DISPOSE_DRAIN_TIMEOUT_MS = 10_000;
+
 /** Kill every persistent exec/write_stdin process tree in this JS realm. */
-export function disposeExecCommandSessions(reason = 'shutdown'): void {
-  for (const rec of [...sessions.values()]) {
-    killProcessTree(rec.proc.pid, 'SIGKILL');
+export async function disposeExecCommandSessions(reason = 'shutdown'): Promise<void> {
+  if (sweeper) { clearInterval(sweeper); sweeper = undefined; }
+  const owned = [...sessions.values()];
+  for (const rec of owned) {
     rec.dispose(reason);
   }
-  sessions.clear();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.all(owned.map(rec => rec.exitedPromise)),
+    new Promise<void>(resolve => { deadline = setTimeout(resolve, DISPOSE_DRAIN_TIMEOUT_MS); }),
+  ]);
+  clearTimeout(deadline);
+  for (const rec of owned) sessions.delete(rec.id);
 }
 
 // ─── Test hooks ────────────────────────────────────────────────────
@@ -875,9 +913,47 @@ export function disposeExecCommandSessions(reason = 'shutdown'): void {
 export const __testing = {
   sessions,
   reapIdleSessions,
-  disposeAll(): void {
-    disposeExecCommandSessions('test-reset');
+  disposeAll(): Promise<void> {
+    return disposeExecCommandSessions('test-reset');
   },
 };
 
-export const execCommandTools: CoderTool[] = [execCommand, writeStdin, listSessions];
+export const pollSession: CoderTool = {
+  name: 'poll_session', source: 'native', mutates: false, parallelSafe: false, repeatPolicy: 'pollable', riskLevel: 'read',
+  description: 'Collect new output from an owned command session without writing stdin.',
+  parameters: { type: 'object', properties: { session_id: { type: 'string' }, yield_time_ms: { type: 'integer', minimum: 0, maximum: MAX_YIELD_MS } }, required: ['session_id'], additionalProperties: false },
+  handler: (args, ctx) => writeStdin.handler({ ...args, chars: '' }, ctx),
+};
+export const stopSession: CoderTool = {
+  name: 'stop_session', source: 'native', effectBoundary: 'control', mutates: true, parallelSafe: false, riskLevel: 'execute',
+  description: 'Stop one owned command process tree and collect its final output. A stopping receipt means physical cleanup is still pending.',
+  parameters: { type: 'object', properties: { session_id: { type: 'string' } }, required: ['session_id'], additionalProperties: false },
+  handler: async (args, ctx) => {
+    const id = String(args.session_id ?? '');
+    const assertFence = () => assertMutationFence(ctx.mutationFence, { kind: 'control', operation: 'stop_session', resource: id });
+    if (ctx.ports?.commands) return ctx.ports.commands.stop
+      ? ctx.ports.commands.stop({ sessionId: id, yieldMs: 2000, signal: ctx.signal, assertFence })
+      : err('Persistent adapter does not support explicit stop');
+    const record = sessions.get(id);
+    if (!record || record.owner !== sessionOwner(ctx)) return err('Command session not found for this owner');
+    assertFence();
+    record.dispose('explicit-stop');
+    await awaitYield(record, 2000);
+    return resultForDrain(record, drainPending(record));
+  },
+};
+export const readSessionOutput: CoderTool = {
+  name: 'read_process_output', source: 'native', mutates: false, parallelSafe: true, riskLevel: 'read',
+  description: 'Read retained command output using output_ref. A cursor continues the same byte snapshot; omitted bytes beyond the spool quota are unrecoverable.',
+  parameters: { type: 'object', properties: { output_ref: { type: 'string' }, cursor: { type: 'string' }, max_bytes: { type: 'integer', minimum: 4, maximum: 65536 } }, required: ['output_ref'], additionalProperties: false },
+  handler: async (args, ctx) => {
+    const input = { outputRef: String(args.output_ref), cursor: typeof args.cursor === 'string' ? args.cursor : undefined, limit: typeof args.max_bytes === 'number' ? args.max_bytes : undefined };
+    if (ctx.ports?.commands) return ctx.ports.commands.readOutput ? ctx.ports.commands.readOutput(input) : err('Persistent adapter does not expose retained output');
+    try {
+      const page = await readProcessOutput(sessionOwner(ctx), input.outputRef, input.cursor, input.limit);
+      return { content: page.text + `\n[next_cursor=${page.nextCursor ?? 'end'}; complete_source=${page.complete}]`, structuredData: page,
+        ...(!page.complete ? { sourceTruncations: [{ technique: 'process-spool-quota', inputSize: page.observedBytes, outputSize: page.retainedBytes, unit: 'bytes' as const, recoverable: false }] } : {}) };
+    } catch (error) { return err(error instanceof Error ? error.message : String(error)); }
+  },
+};
+export const execCommandTools: CoderTool[] = [execCommand, writeStdin, listSessions, pollSession, stopSession, readSessionOutput];

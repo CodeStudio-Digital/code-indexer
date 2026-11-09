@@ -1,7 +1,20 @@
 import type { Hono } from 'hono';
 import { stat } from 'node:fs/promises';
+import { createProjectsHandlers } from '@mcp/api-handlers/projects/index.js';
+import { createContext } from '@mcp/api-handlers/context.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
+
+async function inspectRoot(rootPath: string): Promise<{ missing_on_disk: boolean; disk_error: string | null }> {
+  if (!rootPath.trim()) return { missing_on_disk: false, disk_error: 'Project directory is not configured' };
+  try {
+    return { missing_on_disk: !(await stat(rootPath)).isDirectory(), disk_error: null };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { missing_on_disk: true, disk_error: null };
+    return { missing_on_disk: false, disk_error: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 /**
  * Hygiene routes — surface the index health that hides in SQLite and
@@ -15,7 +28,8 @@ import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
  * without duplicating queries.
  */
 export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
-  const { db, vectorStore, semanticCoordinator } = deps;
+  const { db, vectorStore } = deps;
+  const projectsHandler = createProjectsHandlers(deps);
 
   /** Snapshot of per-project counters used by the Hygiene panel. */
   app.get('/api/hygiene/status', async (c) => {
@@ -32,15 +46,9 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
     // Electron main loop and overlap them with the vector-worker health check.
     const [enriched, vectorStoreAvailable] = await Promise.all([
       Promise.all(projects.map(async (p) => {
-        let missingOnDisk = false;
-        try {
-          missingOnDisk = !(await stat(p.root_path)).isDirectory();
-        } catch {
-          missingOnDisk = true;
-        }
         return {
           ...p,
-          missing_on_disk: missingOnDisk,
+          ...await inspectRoot(p.root_path),
           tiers: tiersByProject.get(p.id) ?? {},
         };
       })),
@@ -61,7 +69,7 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/hygiene/projects/:id/cleanup', async (c) => {
     const id = parseIdParam(c);
     const project = db.getProject(id);
-    if (!project) return notFound(c);
+    if (!project || !db.getProjectsHygiene().some(row => row.id === id)) return notFound(c);
 
     const orphans = db.getOrphanSemanticItems(id);
     let vectorsDeletedLocal = 0;
@@ -105,14 +113,22 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
    */
   app.post('/api/hygiene/projects/purge', async (c) => {
     const body = await parseJsonBody<{ projectIds: number[]; confirm: boolean }>(c);
-    if (!body.confirm) {
+    if (body?.confirm !== true) {
       return c.json({ error: 'confirm flag required' }, 400);
     }
-    const ids = Array.isArray(body.projectIds) ? body.projectIds : [];
-    if (ids.length === 0) return c.json({ ok: true, purged: 0 });
+    if (!Array.isArray(body.projectIds)
+      || body.projectIds.some(id => !Number.isSafeInteger(id) || id <= 0)) {
+      return c.json({ error: 'projectIds must contain only positive project IDs' }, 400);
+    }
+    const ids = [...new Set(body.projectIds)];
+    if (ids.length === 0) return c.json({ ok: true, purged: 0, summaries: [] });
+    const eligible = new Map(db.getProjectsHygiene().map(row => [row.id, row]));
+    let purged = 0;
 
     const summaries: Array<{
       project_id: number;
+      project_name?: string;
+      purged: boolean;
       vectors_known: number;
       vectors_deleted: number;
       vector_error: string | null;
@@ -120,35 +136,42 @@ export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
 
     for (const id of ids) {
       const project = db.getProject(id);
-      if (!project) {
+      if (!project || !eligible.has(id)) {
         summaries.push({
           project_id: id,
+          purged: false,
           vectors_known: 0,
           vectors_deleted: 0,
-          vector_error: 'project not found',
+          vector_error: 'Project is not available for hygiene cleanup',
         });
         continue;
       }
-      const known = db.getProjectsHygiene().find((row) => row.id === id)?.vector_count ?? 0;
+      const known = eligible.get(id)?.vector_count ?? 0;
       let vectorsDeleted = 0;
       let vectorError: string | null = null;
       try {
-        await semanticCoordinator.removeProject(id, {
-          finalize: () => db.deleteProject(id),
-        });
-        vectorsDeleted = known;
+        // Recheck after confirmation: a restored or inaccessible directory must
+        // not be treated as an absent project from an old panel snapshot.
+        const root = await inspectRoot(project.root_path);
+        if (root.disk_error) throw new Error(root.disk_error);
+        if (!root.missing_on_disk) throw new Error('Project directory exists; refresh the hygiene panel');
+        const result = await projectsHandler.delete({ id }, createContext());
+        vectorsDeleted = result.vectors_deleted;
+        purged++;
       } catch (err) {
         vectorError = err instanceof Error ? err.message : String(err);
       }
       summaries.push({
         project_id: id,
+        project_name: project.name,
+        purged: vectorError === null,
         vectors_known: known,
         vectors_deleted: vectorsDeleted,
         vector_error: vectorError,
       });
     }
 
-    return c.json({ ok: true, purged: summaries.length, summaries });
+    return c.json({ ok: purged === ids.length, purged, summaries });
   });
 
   /**

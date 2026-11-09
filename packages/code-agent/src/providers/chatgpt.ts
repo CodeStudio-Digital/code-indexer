@@ -725,15 +725,25 @@ export class ChatGPTCodexProvider implements ChatProvider {
           };
         }
         yield { type: 'done', stop_reason: response?.status ?? 'completed' };
-        continue;
+        // The protocol has committed this response. Do not wait for socket EOF
+        // (or a proxy's late teardown) and turn a complete result into a retry.
+        // AsyncIteratorClose releases the SDK stream on return.
+        return;
       }
 
       // Failure modes surface as response.error or response.failed.
-      if (type === 'response.error' || type === 'response.failed') {
+      if (type === 'error' || type === 'response.error' || type === 'response.failed' || type === 'response.incomplete') {
         const err = (evt.error ?? (evt.response as { error?: unknown })?.error) as
-          | { message?: string }
+          | { message?: string; code?: string }
           | undefined;
-        throw new Error(`${this.name} responses error: ${err?.message ?? JSON.stringify(evt)}`);
+        const incomplete = (evt.response as { incomplete_details?: { reason?: string } })?.incomplete_details?.reason;
+        const code = err?.code ?? (typeof evt.code === 'string' ? evt.code : undefined) ?? incomplete ?? type;
+        const message = err?.message ?? (typeof evt.message === 'string' ? evt.message : undefined) ?? `Response did not complete (${code})`;
+        throw Object.assign(new Error(`${this.name} responses error: ${message}`), {
+          code,
+          // Incomplete output requires a changed request, not an identical retry.
+          ...(type === 'response.incomplete' ? { status: 400 } : {}),
+        });
       }
     }
   }

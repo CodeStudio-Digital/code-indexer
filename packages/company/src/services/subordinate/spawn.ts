@@ -235,6 +235,7 @@ export async function spawnSubordinate(
   }
 
   const agentRun = await ctx.companyFiles.createAgentRun({
+    id: spec.reservedAgentRunId,
     role: spec.role,
     coder_session_id: subSession.id,
     project_ids: allowedProjectIds,
@@ -246,6 +247,8 @@ export async function spawnSubordinate(
     fallback_reason: null,
   });
   const companyContext: CompanyContext = {
+    workspaceMutationGate: ctx.workspaceMutationGate,
+    sessionMessenger: ctx.sessionMessenger,
     orchestrator: deps.orchestratorRef as never,
     companySessionId: ctx.companySessionId,
     runtimeKind: ctx.runtimeKind,
@@ -329,6 +332,7 @@ export async function spawnSubordinate(
   // so what this subordinate learns reaches every future session.
   const memoryPorts = getCompanyMemoryPorts();
 
+  deps.onExecutionStarting?.();
   const handle = await runCoder({
         hostTools: getReadyDocsResearchTools(),
     session: { id: subSession.id },

@@ -126,6 +126,16 @@ export class SemanticProfileRuntime {
     const cached = this.rerankerProxies.get(proxyKey);
     if (cached) return cached;
     const resolve = (): RerankerService => this.resolveReranker(purpose);
+    const queryBlockReason = (query: string): string | null => {
+      const target = this.currentRerankerTarget(purpose);
+      // The code retrieval ablation did not justify automatic local reranking:
+      // it reduced conceptual recall and exceeded the interactive time budget.
+      // Explicit model selections and other semantic purposes remain eligible.
+      if (purpose === 'code' && target.kind === 'onnx' && target.model === 'auto') {
+        return 'code_auto_reranker_not_promoted';
+      }
+      return resolve().queryBlockReason?.(query) ?? null;
+    };
     const proxy: RerankerService = {
       get name() { return resolve().name; },
       cacheRevision: () => {
@@ -133,9 +143,10 @@ export class SemanticProfileRuntime {
         // Strictness changes failure handling, not successful ranking
         // semantics. Keep the revision identical for the same target so
         // result caches are invalidated only by model/provider changes.
-        return `semantic:${purpose}:reranker:${key(target, this.providerStore)}`;
+        return `semantic:${purpose}:reranker:policy-v2:${key(target, this.providerStore)}`;
       },
       diagnostics: () => resolve().diagnostics?.() ?? null,
+      queryBlockReason,
       candidatePoolSize: (topK) =>
         resolve().candidatePoolSize?.(topK) ?? Math.max(topK, topK * 2),
       rerank: async (
@@ -144,6 +155,9 @@ export class SemanticProfileRuntime {
         topK = 10,
         rerankOptions?: RerankRequestOptions,
       ): Promise<RerankResult[]> => {
+        if (queryBlockReason(query)) return candidates.slice(0, topK).map(candidate => ({
+          id: candidate.id, score: candidate.originalScore, originalScore: candidate.originalScore,
+        }));
         const service = resolve();
         if (strict) return service.rerank(query, candidates, topK, rerankOptions);
         try {

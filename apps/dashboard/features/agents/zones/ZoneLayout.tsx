@@ -1,11 +1,8 @@
 /**
  * Container for the company-mode content area.
  *
- * Layout: a vertical icon rail (`LeftTabRail`) on the left listing
- * every Work / Build / Data sub-tab, grouped by zone with a thin
- * separator between groups; the active tab's body fills the rest.
- * The old top-of-page tab strip (3 zone tabs + each zone's inner
- * TabsList) is gone — the rail is the single selector.
+ * CompanyNavigation groups the session into five primary areas.
+ * LeftTabRail keeps catalog and terminal controls outside those areas.
  *
  * Routing is unchanged: `:zone/:tab` from the URL still drives the
  * active selection; this component is purely presentational.
@@ -18,7 +15,8 @@ import { WorkZone } from './work/WorkZone.js';
 import { BuildZone } from './build/BuildZone.js';
 import { DataZone } from './data/DataZone.js';
 import { LeftTabRail } from './LeftTabRail.js';
-import type { CompanySessionWorkbenchSlots } from '../company-workbench-slots.js';
+import { CompanyNavigation } from './CompanyNavigation.js';
+import type { CompanySessionsRail, CompanySessionWorkbenchSlots } from '../company-workbench-slots.js';
 import {
   DEFAULT_TAB_FOR_ZONE,
   isValidTab,
@@ -46,6 +44,7 @@ interface ZoneLayoutProps {
   bottomOpen: boolean;
   onToggleBottom: () => void;
   workbenchSlots?: CompanySessionWorkbenchSlots;
+  sessions?: CompanySessionsRail;
   runtimeKind?: 'company' | 'app_studio';
 }
 
@@ -61,6 +60,7 @@ export function ZoneLayout({
   bottomOpen,
   onToggleBottom,
   workbenchSlots,
+  sessions,
   runtimeKind = 'company',
 }: ZoneLayoutProps) {
   const appTabUnavailable = runtimeKind === 'app_studio'
@@ -85,10 +85,12 @@ export function ZoneLayout({
       bottomOpen={bottomOpen}
       onToggleBottom={onToggleBottom}
       catalog={runtimeKind === 'company' ? workbenchSlots?.catalog : undefined}
+      sessions={runtimeKind === 'company' ? sessions : undefined}
       hiddenTabs={runtimeKind === 'app_studio'
         ? ['kanban', 'memory', 'files', 'git', 'drive', 'docs', 'tests', 'api', 'snapshots', 'archived']
         : undefined}
       showTerminal={runtimeKind === 'company'}
+      navigationInContent={runtimeKind === 'company'}
     />
   );
 
@@ -99,6 +101,7 @@ export function ZoneLayout({
         : rail}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {runtimeKind === 'company' && <CompanyNavigation tab={effectiveTab} onChange={handleChange} />}
         {effectiveZone === 'work' && (
           <WorkZone
             sessionId={sessionId}

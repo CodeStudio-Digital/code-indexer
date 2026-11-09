@@ -67,7 +67,7 @@ export interface ConsumeStreamArgs {
    * Maximum ms to wait between consecutive deltas. When the provider stalls
    * past this threshold the consumer throws — Executing turns it into a
    * retryable ProviderError so Recovering can back off and try again.
-   * Default 90s; override via `CODER_STREAM_IDLE_TIMEOUT_MS`.
+   * Default 90s. Real transport activity also renews this inactivity window.
    */
   idleTimeoutMs?: number;
   /**
@@ -76,50 +76,14 @@ export interface ConsumeStreamArgs {
    * can stay completely silent far longer than the inter-delta `idleTimeoutMs`
    * before the first token — a flat idle timeout kills them mid-think. Applies
    * ONLY until the first delta arrives; after that `idleTimeoutMs` governs the
-   * gaps. Default 240s; override via `CODER_STREAM_FIRST_BYTE_TIMEOUT_MS`.
+   * gaps. Default 240s.
    */
   firstByteTimeoutMs?: number;
-  /** Max ms a stream may emit only thinking deltas without text/tool progress. */
-  thinkingOnlyTimeoutMs?: number;
-}
-
-/**
- * Timeout defaults are resolved at CALL time (not frozen at import) so a
- * `process.env` override applied after this module loads still takes effect —
- * same contract as `recoveryCap` in recovery-config.ts. Tests that stub the
- * env post-import depend on this.
- */
-/**
- * Base thinking-only budget. Bumped 120s→240s to match the first-byte budget:
- * reasoning models (GLM-5/glm-5.2) on heavy plan-mode prompts legitimately
- * emit only thinking deltas for well over two minutes before the first
- * text/tool block. The old 120s killed that productive thinking and — because
- * the retry re-sent the SAME prompt — looped straight into the recovery cap.
- * Effort/attempt scaling lives in `thinkingOnlyBudgetMs`.
- */
-function resolveThinkingOnlyTimeoutMs(): number {
-  return 240_000;
-}
-
-/**
- * Effective thinking-only budget for a reasoning effort + retry attempt.
- *
- * Two adjustments over the flat base:
- *   - effort scale: high/xhigh reasoning legitimately thinks longer.
- *   - attempt scale: a retry of the SAME prompt only helps if it gets MORE
- *     time than the attempt that just timed out — otherwise it re-times-out
- *     identically and burns the recovery cap for nothing. Doubled per prior
- *     attempt, bounded at 4× so a genuinely degenerate reasoning loop still
- *     dies in bounded wall-clock instead of stalling the run for ~an hour.
- *
- * `attempts` is the count of thinking-timeouts ALREADY recorded this run
- * (0 on the first turn).
- */
-export function thinkingOnlyBudgetMs(effort: string | undefined, attempts: number): number {
-  const base = resolveThinkingOnlyTimeoutMs();
-  const effortScale = effort === 'xhigh' ? 2 : effort === 'high' ? 1.5 : 1;
-  const attemptScale = Math.min(2 ** Math.max(0, attempts), 4);
-  return Math.round(base * effortScale * attemptScale);
+  /** Monotonic time of real received transport data (performance.now()).
+   * SDKs can consume pings or encrypted thinking without yielding a ChatDelta.
+   * Local UI heartbeats must never update this timestamp.
+   */
+  lastTransportActivityAt?: () => number | undefined;
 }
 
 export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResult> {
@@ -140,7 +104,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   const idleMs = args.idleTimeoutMs ?? 90_000;
   const firstByteMs =
     args.firstByteTimeoutMs ?? 240_000;
-  const thinkingOnlyMs = args.thinkingOnlyTimeoutMs ?? resolveThinkingOnlyTimeoutMs();
   const iterator = args.stream[Symbol.asyncIterator]();
   const stopStream = (reason: unknown) => {
     try { args.cancelStream?.(reason); } catch { /* Preserve the original stop reason. */ }
@@ -148,7 +111,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     // ignores cancellation must never hold the user's stop/timeout hostage.
     try { void Promise.resolve(iterator.return?.()).catch(() => undefined); } catch { /* best-effort */ }
   };
-  let lastNonThinkingAt = Date.now();
   // Until the first delta arrives, use the generous first-byte budget; after
   // that, the tighter inter-delta idle budget governs gaps.
   let receivedAny = false;
@@ -169,12 +131,11 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
         iterator.next(),
         receivedAny ? idleMs : firstByteMs,
         args.signal,
-        receivedAny
-          ? undefined
-          : {
-              label: 'provider produced no first byte within',
-              tuneEnv: 'CODER_STREAM_FIRST_BYTE_TIMEOUT_MS',
-            },
+        {
+          label: receivedAny ? 'provider stream idle' : 'provider produced no first byte within',
+          lastTransportActivityAt: args.lastTransportActivityAt,
+          idleTimeoutMs: idleMs,
+        },
       );
     } catch (e) {
       const error = args.signal?.aborted ? new AbortError('consumeStream aborted by signal') : e;
@@ -187,7 +148,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
 
     switch (delta.type) {
       case 'text_delta':
-        lastNonThinkingAt = Date.now();
         currentText += delta.text;
         if (delta.phase) messagePhases.add(delta.phase);
         args.onTextDelta?.(delta.text, {
@@ -197,25 +157,13 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
         break;
 
       case 'thinking_delta':
-        if (thinkingOnlyMs > 0 && Date.now() - lastNonThinkingAt > thinkingOnlyMs) {
-          const err = new TimeoutError(thinkingOnlyMs, 'provider thinking-only stream');
-          err.message =
-            `provider thinking-only stream exceeded ${thinkingOnlyMs}ms — aborting turn. ` +
-            `Tune CODER_STREAM_THINKING_ONLY_TIMEOUT_MS.`;
-          (err as { status?: number }).status = 504;
-          // Distinct marker so `providerErrorEvent` tags this as THINKING_TIMEOUT
-          // and Recovering routes it to its own low-cap bucket instead of
-          // sharing `provider-unknown-retry` with connection/mid-stream drops.
-          (err as { reason?: string }).reason = 'thinking-only';
-          stopStream(err);
-          throw err;
-        }
+        // Reasoning is productive stream activity, regardless of its duration.
+        // Retrying a live response discards that work and repeats its cost.
         currentThinking += delta.text;
         args.onThinkingDelta?.(delta.text);
         break;
 
       case 'tool_call_start': {
-        lastNonThinkingAt = Date.now();
         // Flush any accumulated text BEFORE this tool_use boundary —
         // well-formed streams emit `[text, tool_use, text?, ...]`.
         // We do NOT allocate the ToolUseAccumulated here: providers like
@@ -239,7 +187,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
       }
 
       case 'tool_call_end': {
-        lastNonThinkingAt = Date.now();
         // Authoritative: create the tool_use block here with the final id
         // and parsed input. Dedup by id in case a misbehaving provider
         // emits `end` more than once for the same call.
@@ -256,7 +203,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
       }
 
       case 'usage':
-        lastNonThinkingAt = Date.now();
         usage = delta.usage;
         break;
 
@@ -266,7 +212,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
         break;
 
       case 'done':
-        lastNonThinkingAt = Date.now();
         receivedTerminal = true;
         stopReason = delta.stop_reason ?? 'unknown';
         break;
@@ -279,7 +224,6 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
         break;
 
       case 'image_generated': {
-        lastNonThinkingAt = Date.now();
         const extension = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' } as Record<string, string>)[delta.mediaType] ?? 'bin';
         imagesById.set(delta.id, {
           type: 'image', mediaType: delta.mediaType, base64: delta.base64,
@@ -375,20 +319,36 @@ async function raceWithTimeoutAndSignal<T>(
   p: Promise<T>,
   ms: number,
   signal?: AbortSignal,
-  opts?: { label?: string; tuneEnv?: string },
+  opts?: { label?: string; lastTransportActivityAt?: () => number | undefined; idleTimeoutMs?: number },
 ): Promise<T> {
   const label = opts?.label ?? 'provider stream idle';
-  const tuneEnv = opts?.tuneEnv ?? 'CODER_STREAM_IDLE_TIMEOUT_MS';
+  const startedAt = performance.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   try {
     return await new Promise<T>((resolve, reject) => {
-      timer = setTimeout(() => {
-        const err = new TimeoutError(ms, label);
-        err.message = `${label} ${ms}ms — aborting turn. Tune ${tuneEnv}.`;
+      // iterator.next() can synchronously abort before returning its promise.
+      // Subscribe before any early return so its rejection is always observed.
+      p.then(resolve, reject);
+      const checkIdle = () => {
+        const now = performance.now();
+        const transportAt = opts?.lastTransportActivityAt?.();
+        const hasTransportActivity = typeof transportAt === 'number' && Number.isFinite(transportAt)
+          && transportAt >= startedAt && transportAt <= now;
+        const timeoutMs = hasTransportActivity ? (opts?.idleTimeoutMs ?? ms) : ms;
+        const remaining = timeoutMs - (now - (hasTransportActivity ? transportAt : startedAt));
+        if (remaining > 0) {
+          // One timer per outstanding next(), not one timer per network chunk.
+          timer = setTimeout(checkIdle, remaining);
+          return;
+        }
+        const timeoutLabel = hasTransportActivity ? 'provider stream idle' : label;
+        const err = new TimeoutError(timeoutMs, timeoutLabel);
+        err.message = `${timeoutLabel} ${timeoutMs}ms without received activity — cancelling the stalled request.`;
         (err as { status?: number }).status = 504; // gateway-timeout-ish so Recovering treats as retryable
         reject(err);
-      }, ms);
+      };
+      timer = setTimeout(checkIdle, ms);
       if (signal) {
         if (signal.aborted) {
           reject(new AbortError('consumeStream aborted by signal'));
@@ -402,7 +362,6 @@ async function raceWithTimeoutAndSignal<T>(
           signal.addEventListener('abort', onAbort, { once: true });
         }
       }
-      p.then(resolve, reject);
     });
   } finally {
     if (timer) clearTimeout(timer);

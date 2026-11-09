@@ -12,6 +12,7 @@
  * live server — exercise with a real instance before trusting writes.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { ResultWindow } from './result-window.js';
 import { assertDatabaseDispatch } from './dispatch.js';
 import { resolveDriverEntry } from './driver-registry.js';
 import { quoteRelation } from './sql/identifiers.js';
@@ -21,16 +22,18 @@ import type {
 } from './types.js';
 
 interface OraResult {
+  resultSet?: { getRows(count: number): Promise<Array<Record<string, unknown>>>; close(): Promise<void> };
   rows?: Array<Record<string, unknown>>;
   metaData?: Array<{ name: string }>;
   rowsAffected?: number;
 }
 interface OraConn {
+  callTimeout?: number;
   execute(sql: string, binds?: unknown[], opts?: Record<string, unknown>): Promise<OraResult>;
   commit(): Promise<void>;
   rollback(): Promise<void>;
   break(): Promise<void>;
-  close(): Promise<void>;
+  close(options?: { drop: boolean }): Promise<void>;
 }
 interface OraPool {
   getConnection(): Promise<OraConn>;
@@ -76,6 +79,8 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
     let readOnlyTxn = false;
     try {
       assertDatabaseDispatch(opts);
+      if (opts.timeoutMs != null) conn.callTimeout = opts.timeoutMs;
+      if (opts.schema) await conn.execute(`ALTER SESSION SET CURRENT_SCHEMA = ${quoteIdent('oracle', opts.schema)}`, [], {});
       if (config.readOnly) {
         // Must be the first SQL statement in the Oracle transaction.
         await conn.execute('SET TRANSACTION READ ONLY');
@@ -89,19 +94,22 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
       assertDatabaseDispatch(opts);
       const res = await conn.execute(sql, opts.params ?? [], {
         maxRows: max + 1,
+        resultSet: true, fetchArraySize: Math.min(128, max + 1), prefetchRows: 0,
         outFormat: oracledb.OUT_FORMAT_OBJECT,
         autoCommit: !config.readOnly,
       });
-      return shapeOracleResult(res, max);
+      return await shapeOracleResult(res, max, opts);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
       if (readOnlyTxn) await conn.rollback().catch(() => undefined);
-      await conn.close().catch(() => undefined);
+      await conn.close(opts.schema || opts.signal?.aborted ? { drop: true } : undefined).catch(() => undefined);
     }
   }
 
   async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
-    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
+    validateBatch(statements, config.readOnly);
+    const tracker = new BatchTracker('best_effort', opts);
+    tracker.dispatch();
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pooled connection with autoCommit OFF for the whole batch, so the list
     // shares a session (a runQuery loop opens a fresh autoCommit connection per
@@ -111,33 +119,46 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
     let onAbort: (() => void) | null = null;
     let committed = false;
     try {
+      if (opts.timeoutMs != null) conn.callTimeout = opts.timeoutMs;
       if (opts.signal) {
         if (opts.signal.aborted) throw new Error('query cancelled');
         onAbort = (): void => void conn.break().catch(() => undefined);
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
+      if (opts.schema) await conn.execute(`ALTER SESSION SET CURRENT_SCHEMA = ${quoteIdent('oracle', opts.schema)}`, [], {});
+      if (config.readOnly) await conn.execute('SET TRANSACTION READ ONLY', [], {});
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
       for (let index = 0; index < statements.length; index += 1) {
+        tracker.dispatch();
+        tracker.started = true;
         const stmt = statements[index];
         const res = await conn.execute(
           typeof stmt === 'string' ? stmt : stmt.sql,
           typeof stmt === 'string' ? [] : (stmt.params ?? []),
           {
           maxRows: max + 1,
+          resultSet: true, fetchArraySize: Math.min(128, max + 1), prefetchRows: 0,
           outFormat: oracledb.OUT_FORMAT_OBJECT,
           autoCommit: false,
           },
         );
-        last = shapeOracleResult(res, max);
+        last = await shapeOracleResult(res, max, opts);
         opts.onResult?.(last, index);
+        tracker.completed++;
       }
+      tracker.dispatch();
+      tracker.committing = true;
       await conn.commit();
       committed = true;
-      return last;
+      return { ...last, batchOutcome: tracker.success() };
+    } catch (err) {
+      let rolledBack = false;
+      await conn.rollback().then(() => { rolledBack = true; }, () => void 0);
+      throw tracker.failure(err, rolledBack);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
       if (!committed) await conn.rollback().catch(() => undefined);
-      await conn.close().catch(() => undefined);
+      await conn.close(opts.schema || opts.signal?.aborted ? { drop: true } : undefined).catch(() => undefined);
     }
   }
 
@@ -314,15 +335,28 @@ export async function createOracleDriver(config: DbConnectConfig): Promise<Datab
 }
 
 /** Shape an oracledb execute result into a capped QueryResult. */
-function shapeOracleResult(res: OraResult, max: number): QueryResult {
-  const rows = res.rows ?? [];
+async function shapeOracleResult(res: OraResult, max: number, opts: RunQueryOptions): Promise<QueryResult> {
+  const window = new ResultWindow(max);
+  let complete = true;
+  if (res.resultSet) {
+    try {
+      for (;;) {
+        assertDatabaseDispatch(opts);
+        const rows = await res.resultSet.getRows(Math.min(128, window.max + 1 - window.observed));
+        for (const row of rows) window.push(row);
+        if (!rows.length) break;
+        if (window.observed > window.max || window.bytes >= window.maxBytes) { complete = false; break; }
+      }
+    } finally { await res.resultSet.close(); }
+  } else for (const row of res.rows ?? []) window.push(row);
+  const rows = window.rows;
   if (rows.length > 0 || (res.metaData?.length ?? 0) > 0) {
-    const truncated = rows.length > max;
     return {
-      rows: truncated ? rows.slice(0, max) : rows,
-      rowCount: rows.length,
+      rows,
+      rowCount: window.observed,
       fields: (res.metaData ?? []).map((m) => ({ name: m.name })),
-      truncated,
+      truncated: window.truncated || !complete,
+      acquisition: { ...window.acquisition, mode: 'cursor', observedRowsExact: complete },
     };
   }
   return { rows: [], rowCount: res.rowsAffected ?? 0, fields: [], command: 'OK' };
@@ -364,3 +398,5 @@ function groupForeignKeys(rows: Array<{ CONSTRAINT_NAME: string; COLUMN_NAME: st
   }
   return [...map.values()];
 }
+import { BatchTracker, validateBatch } from './batch-outcome.js';
+import { quoteIdent } from './sql/identifiers.js';

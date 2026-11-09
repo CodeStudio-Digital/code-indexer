@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
-import { MASTER_TOOLS } from '@mcp/code-agent/tools/tiers.js';
+import { MASTER_TOOLS, getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { isMasterAllowed } from '../master-filter.js';
 
 const native = (name: string): CoderTool =>
@@ -21,6 +21,12 @@ const external = (name: string, metadata: Partial<CoderTool> = {}): CoderTool =>
   ({ ...native(name), source: 'mcp_external', ...metadata }) as CoderTool;
 
 describe('isMasterAllowed — service tools (B5)', () => {
+  it.each(['docs_list', 'docs_search', 'docs_read', 'docs_write', 'docs_index_update', 'docs_delete'])(
+    'offers durable knowledge %s in Company even without a sandbox', (name) => {
+      expect(isMasterAllowed(native(name))).toBe(true);
+      expect(getToolTier(name)).toBe('company');
+    },
+  );
   it.each(['service_logs', 'service_restart', 'service_start', 'service_stop'])(
     'keeps %s via the service_ company prefix',
     (name) => {

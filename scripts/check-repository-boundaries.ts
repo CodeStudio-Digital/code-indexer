@@ -74,6 +74,23 @@ export interface BoundaryComparison {
 
 const toRepoPath = (value: string): string => value.split(sep).join('/').replace(/^\.\//, '');
 
+// These executable integration fixtures intentionally mount the real desktop
+// surfaces. Permit only their audited source/target pairs, never production
+// imports or arbitrary helpers added under scripts/fixtures.
+const isIntegrationFixtureImport = (file: string, target: string): boolean => {
+  if (file === 'scripts/testing/collaboration-e2e-backend.ts') {
+    return /^apps\/http-api\/server\/(?:routes\/coder\/chat-collaboration|shutdown-tasks)\.js$/.test(target);
+  }
+  if (file === 'scripts/fixtures/desktop-interactions/main.ts') {
+    return /^apps\/electron\/src\/(?:edit-menu|renderer-permissions|security-hardening|window-navigation)\.js$/.test(target);
+  }
+  if (file === 'scripts/fixtures/desktop-interactions/renderer.tsx') {
+    return /^apps\/dashboard\/(?:features\/chat\/messages\/Markdown|features\/shared\/terminal\/terminal-clipboard|lib\/(?:clipboard|monaco-clipboard-service))\.js$/.test(target);
+  }
+  return file === 'scripts/fixtures/desktop-interactions/mcp-catalog-benchmark.ts'
+    && target === 'packages/code-agent/src/tools/deferred-mcp-validator.js';
+};
+
 const packageName = (specifier: string): string => {
   const parts = specifier.split('/');
   return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
@@ -321,7 +338,8 @@ export const analyzeRepository = (
         }
         const targetDomain = domainForPath(target, config);
         const targetUnit = unitForPath(target);
-        if (targetDomain && targetDomain !== sourceDomain) {
+        const integrationFixture = isIntegrationFixtureImport(file, target);
+        if (targetDomain && targetDomain !== sourceDomain && !integrationFixture) {
           addIssue(issues, {
             kind: 'cross-domain-relative-import',
             file,
@@ -331,7 +349,7 @@ export const analyzeRepository = (
           });
         }
         const publicEntrypoint = targetDomain === sourceDomain && config.unitEntrypoints?.includes(target);
-        if (targetDomain && targetUnit !== sourceUnit && !publicEntrypoint) {
+        if (targetDomain && targetUnit !== sourceUnit && !publicEntrypoint && !integrationFixture) {
           addIssue(issues, {
             kind: 'cross-unit-relative-import',
             file,

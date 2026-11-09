@@ -438,14 +438,14 @@ export class SnapshotService {
   static renderGrouped(snaps: ContextSnapshot[], heading = '# Project Context'): string {
     if (snaps.length === 0) return '';
     const grouped = new Map<string, ContextSnapshot[]>();
-    const categoryOrder: SnapshotCategory[] = ['architecture', 'decision', 'convention', 'pattern', 'todo', 'note'];
+    const categoryOrder: string[] = ['architecture', 'decision', 'convention', 'pattern', 'todo', 'note', 'gotcha', 'procedure', 'user', 'feedback'];
     for (const snap of snaps) {
       const list = grouped.get(snap.category) ?? [];
       list.push(snap);
       grouped.set(snap.category, list);
     }
     const sections: string[] = [`${heading}\n`];
-    for (const category of categoryOrder) {
+    for (const category of [...categoryOrder, ...[...grouped.keys()].filter(key => !categoryOrder.includes(key)).sort()]) {
       const items = grouped.get(category);
       if (!items || items.length === 0) continue;
       sections.push(`## ${category.charAt(0).toUpperCase() + category.slice(1)}s\n`);

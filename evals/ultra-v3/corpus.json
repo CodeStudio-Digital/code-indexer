@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "version": "ultra-v3-quality-1",
+  "createdAt": "2026-10-26",
+  "status": "frozen_tasks_not_comparative_results",
+  "provider": "zai",
+  "model": "glm-5.3",
+  "effort": "high",
+  "repetitions": 3,
+  "variants": [
+    "standard",
+    "ultra_baseline_checkout",
+    "ultra_v3"
+  ],
+  "cases": [
+    {
+      "id": "UV3-01",
+      "split": "development",
+      "category": "simple",
+      "prompt": "Corrigir um erro de digitação em README sem alterar código.",
+      "oracle": "Diff contém somente a correção solicitada."
+    },
+    {
+      "id": "UV3-02",
+      "split": "development",
+      "category": "simple",
+      "prompt": "Adicionar documentação de uma opção existente com exemplo executável.",
+      "oracle": "Exemplo corresponde à API; nenhuma tool de escrita fora da documentação."
+    },
+    {
+      "id": "UV3-03",
+      "split": "holdout",
+      "category": "simple",
+      "prompt": "Gerar somente o instalador de uma fixture já compilável.",
+      "oracle": "Artefato e integridade entregues; sem benchmark ou revisão de UI não solicitados."
+    },
+    {
+      "id": "UV3-04",
+      "split": "development",
+      "category": "simple",
+      "prompt": "Corrigir o limite inclusivo de expiração de sessão.",
+      "oracle": "Testes de fronteira passam; apenas o arquivo autorizado muda."
+    },
+    {
+      "id": "UV3-05",
+      "split": "development",
+      "category": "simple",
+      "prompt": "Explain the configured retry limit without editing files.",
+      "oracle": "Resposta cita símbolo e valor corretos; árvore intacta."
+    },
+    {
+      "id": "UV3-06",
+      "split": "holdout",
+      "category": "simple",
+      "prompt": "Parar testes opcionais e entregar o artefato já pronto após steering humano.",
+      "oracle": "Sem novo filho opcional; processos próprios encerrados; artefato preservado."
+    },
+    {
+      "id": "UV3-07",
+      "split": "development",
+      "category": "implementation",
+      "prompt": "Corrigir arredondamento de faturas e badge paused com dois donos independentes.",
+      "oracle": "Dois diffs isolados integrados; testes existentes passam."
+    },
+    {
+      "id": "UV3-08",
+      "split": "development",
+      "category": "implementation",
+      "prompt": "Centralizar TTL entre configuração e serviço de tokens preservando a API.",
+      "oracle": "Configuração consumida; expiração na fronteira correta; sem edição dos oráculos."
+    },
+    {
+      "id": "UV3-09",
+      "split": "holdout",
+      "category": "implementation",
+      "prompt": "Propagar estado cancelado da API ao componente de progresso.",
+      "oracle": "Contrato e interface concordam; resposta tardia não restaura running."
+    },
+    {
+      "id": "UV3-10",
+      "split": "development",
+      "category": "implementation",
+      "prompt": "Adicionar paginação ao catálogo com cursor estável e consumo na interface.",
+      "oracle": "Sem duplicação/perda entre páginas; metadados de cobertura corretos."
+    },
+    {
+      "id": "UV3-11",
+      "split": "development",
+      "category": "implementation",
+      "prompt": "Migrate a local settings schema while keeping existing saved sessions readable.",
+      "oracle": "Versão, backup e migração idempotente; restart não duplica registros."
+    },
+    {
+      "id": "UV3-12",
+      "split": "development",
+      "category": "implementation",
+      "prompt": "Corrigir autoridade de uma chamada aninhada em code_exec.",
+      "oracle": "Chamada direta e aninhada têm a mesma decisão de autorização."
+    },
+    {
+      "id": "UV3-13",
+      "split": "development",
+      "category": "implementation",
+      "prompt": "Separar aprovação de proposta e início de execução em serviço e UI.",
+      "oracle": "Preparação não envia mensagem; started depende de recibo real."
+    },
+    {
+      "id": "UV3-14",
+      "split": "holdout",
+      "category": "implementation",
+      "prompt": "Adicionar um campo opcional a um resultado e preservar adapters antigos.",
+      "oracle": "Serialização e retomada conservam o campo sem inventar valores legados."
+    },
+    {
+      "id": "UV3-15",
+      "split": "development",
+      "category": "investigation",
+      "prompt": "Investigar por que dois fins de execução geram somente uma notificação.",
+      "oracle": "Identifica overwrite da projeção; indica journal e caso de regressão."
+    },
+    {
+      "id": "UV3-16",
+      "split": "development",
+      "category": "investigation",
+      "prompt": "Identify why a verifier ran against the old checkout.",
+      "oracle": "Identifica integração pendente; demonstra a dependência correta."
+    },
+    {
+      "id": "UV3-17",
+      "split": "holdout",
+      "category": "investigation",
+      "prompt": "Investigar falso tool unavailable durante conexão MCP.",
+      "oracle": "Distingue pending, ausência e bloqueio de política com evidência."
+    },
+    {
+      "id": "UV3-18",
+      "split": "development",
+      "category": "investigation",
+      "prompt": "Diagnosticar custo subestimado quando o provider faz retry.",
+      "oracle": "Conta tentativas físicas sem duplicar callbacks; preço ausente permanece desconhecido."
+    },
+    {
+      "id": "UV3-19",
+      "split": "development",
+      "category": "recovery",
+      "prompt": "Recuperar filho após crash entre efeito e ACK sem repetir a mutação.",
+      "oracle": "Outcome desconhecido permanece bloqueado até recibo conciliável."
+    },
+    {
+      "id": "UV3-20",
+      "split": "holdout",
+      "category": "recovery",
+      "prompt": "Dois coordenadores disputam a última vaga de agentes.",
+      "oracle": "Uma reserva ganha; saldo persiste após restart."
+    },
+    {
+      "id": "UV3-21",
+      "split": "development",
+      "category": "recovery",
+      "prompt": "Retomar checkpoint após provider e política terem mudado.",
+      "oracle": "Configuração original identificada; permissão atual revalidada; sem fallback silencioso."
+    },
+    {
+      "id": "UV3-22",
+      "split": "holdout",
+      "category": "recovery",
+      "prompt": "Stop humano seguido de timer e conclusão atrasados.",
+      "oracle": "Geração antiga não inicia novo run; resultado retido para inspeção."
+    },
+    {
+      "id": "UV3-23",
+      "split": "development",
+      "category": "tools",
+      "prompt": "Descobrir tool cujo nome é igual mas schema foi atualizado.",
+      "oracle": "Digest/cache invalidados e schema efetivo confirmado."
+    },
+    {
+      "id": "UV3-24",
+      "split": "development",
+      "category": "tools",
+      "prompt": "Aguardar MCP longo após timeout da espera inicial.",
+      "oracle": "Mesma invocation; resultado único; nenhuma segunda chamada."
+    },
+    {
+      "id": "UV3-25",
+      "split": "holdout",
+      "category": "tools",
+      "prompt": "Compor duas leituras em code_exec e cancelar a espera.",
+      "oracle": "Saídas identificáveis; cancelamento não duplica nem mata alvo estranho."
+    },
+    {
+      "id": "UV3-26",
+      "split": "development",
+      "category": "tools",
+      "prompt": "Esperar ANY e ALL em chats com cursor, ciclo e abort.",
+      "oracle": "Razões tipadas, sem listeners órfãos ou polling LLM."
+    },
+    {
+      "id": "UV3-27",
+      "split": "holdout",
+      "category": "followups",
+      "prompt": "Dispensar sugestão e receber sua resposta atrasada.",
+      "oracle": "Composer intacto; dispensa persiste; nenhuma execução."
+    },
+    {
+      "id": "UV3-28",
+      "split": "development",
+      "category": "followups",
+      "prompt": "Aceitar a mesma proposta duas vezes com crash após criar o chat.",
+      "oracle": "Um único target; mesmo claim retorna o ID anterior."
+    },
+    {
+      "id": "UV3-29",
+      "split": "development",
+      "category": "followups",
+      "prompt": "Agendar rotina em timezone com transição DST e sleep do host.",
+      "oracle": "Misfire explícito, sem avalanche; intervalo repetido deduplicado."
+    },
+    {
+      "id": "UV3-30",
+      "split": "holdout",
+      "category": "followups",
+      "prompt": "Recuperar ocorrência cujo ACK de admissão foi perdido.",
+      "oracle": "Consulta run original e concilia; sem novo efeito antes da confirmação."
+    }
+  ],
+  "notes": [
+    "Freeze before comparative model runs; do not tune against holdout outcomes.",
+    "Contract tests and the two live harness smokes are separate from this balanced quality corpus.",
+    "Automating every task fixture and its grader is progressive B11 work; no result or superiority is inferred from this manifest."
+  ]
+}

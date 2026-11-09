@@ -36,12 +36,12 @@ export interface PromptPermissions {
 function approvalLine(mode: PromptApprovalMode): string {
   switch (mode) {
     case 'ask':
-      return 'Mutating and shell tools PAUSE for the user\'s approval before they run. Batch independent actions so one approval covers them, and never assume a write happened until the tool returns a result.';
+      return 'Mutating and shell tools PAUSE for required approval unless a saved grant applies. The runner presents each approval; do not duplicate it with ask_user. Never assume a write happened before its result.';
     case 'auto':
-      return 'File writes/edits run without prompting; only higher-risk actions (destructive shell, git history rewrites) may pause. Proceed on reversible edits without asking.';
+      return 'Ordinary file writes/edits run without prompting; shell/execute and admin actions require approval unless a saved grant applies. Proceed on authorized reversible edits without asking.';
     case 'unrestricted':
     default:
-      return 'No approval prompts — every tool runs immediately. You are fully responsible for destructive actions; reach for `ask_user` only before a genuinely irreversible step (delete/reset/force-push/deploy).';
+      return 'Standard tool approvals are disabled; scope, Plan/Spec and filesystem restrictions still apply. Ask only for authority or a material user decision that is actually missing.';
   }
 }
 
@@ -67,5 +67,8 @@ export function permissionsSection(p?: PromptPermissions): string {
 - Paths inside the project remain project-relative. Explicitly listed external roots use absolute paths and do not become project/configuration roots.
 - Local shell commands start inside the project root but execute on the host unless a container sandbox is attached. Shell cwd stays project-scoped; use native filesystem tools for external roots.
 - External access is granted per saved path (an authorized directory or an exact attached-file reference), never by inferring permission from prose.${requestLine}
-- Tool approval mode: **${p.approvalMode}**. ${approvalLine(p.approvalMode)}`;
+- Tool approval mode: **${p.approvalMode}**. ${approvalLine(p.approvalMode)}
+- Database writes require their explicit approval or a saved tool grant. ${p.approvalMode === 'unrestricted'
+  ? 'Historical unknown outcomes do not revoke unrestricted permission for new work. Continue new authorized edits and commands without another approval. Exact replay of an uncertain operation remains separately guarded.'
+  : 'Pending unknown outcomes require recovery approval for new effects until the host records a terminal receipt or an explicit user review.'} Review is not proof of success and does not authorize blindly replaying the original uncertain action. Required recovery decisions are presented by the harness; do not duplicate them with prose permission questions.`;
 }

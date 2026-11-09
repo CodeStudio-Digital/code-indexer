@@ -41,6 +41,36 @@ afterEach(async () => {
 });
 
 describe('repository boundary analysis', () => {
+  it('allows only audited desktop fixture imports and still rejects production or extra fixture targets', () => {
+    const root = fixture();
+    put(root, 'package.json', JSON.stringify({ name: 'fixture' }));
+    const allowed = 'scripts/fixtures/desktop-interactions/main.ts';
+    const extra = 'scripts/fixtures/desktop-interactions/extra.ts';
+    const production = 'scripts/production.ts';
+    const backend = 'scripts/testing/collaboration-e2e-backend.ts';
+    put(root, allowed, [
+      "import '../../../apps/electron/src/edit-menu.js';",
+      "import '../../../apps/electron/src/unreviewed-internal.js';",
+    ].join('\n'));
+    put(root, extra, "import '../../../apps/electron/src/edit-menu.js';");
+    put(root, production, "import '../apps/electron/src/edit-menu.js';");
+    put(root, backend, [
+      "import '../../apps/http-api/server/routes/coder/chat-collaboration.js';",
+      "import '../../apps/http-api/server/shutdown-tasks.js';",
+      "import '../../apps/http-api/server/unreviewed-internal.js';",
+    ].join('\n'));
+    const result = analyzeRepository(root, config({ domains: [
+      { name: 'core', roots: ['scripts'] }, { name: 'desktop', roots: ['apps/electron'] },
+      { name: 'api', roots: ['apps/http-api'] },
+    ] }), ['package.json', allowed, extra, production, backend]);
+    expect(result.issues.filter(issue => issue.file === allowed && issue.specifier?.endsWith('/edit-menu.js'))).toEqual([]);
+    for (const file of [allowed, extra, production, backend]) {
+      expect(result.issues.filter(issue => issue.file === file).map(issue => issue.kind).sort()).toEqual([
+        'cross-domain-relative-import', 'cross-unit-relative-import',
+      ]);
+    }
+  });
+
   it('ignores tracked files deleted from the working tree without staging', () => {
     const root = fixture();
     put(root, 'package.json', JSON.stringify({ name: 'fixture' }));

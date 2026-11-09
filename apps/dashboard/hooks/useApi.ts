@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiBaseUrl } from '../lib/api-client.js';
 import { getCached, dedupe, writeThrough, invalidateAll } from '../lib/api-cache.js';
+import { useSurfaceVisible } from '../lib/surface-visibility.js';
 import {
   recordUseApiCacheHit,
   startUseApiRouteSpan,
@@ -23,6 +24,7 @@ interface UseApiResult<T> {
 }
 
 export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
+  const visible = useSurfaceVisible();
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +47,9 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
   }, [url]);
 
   useEffect(() => {
+    // Retained panes preserve their last data and revalidate on reveal. This
+    // only releases this consumer; another view may own the same deduped GET.
+    if (!visible) return;
     if (!url) {
       setData(null);
       setLoading(false);
@@ -113,7 +118,7 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
       .catch(err => { if (!cancelled) { setError(errorMessage(err)); setLoading(false); } });
 
     return () => { cancelled = true; };
-  }, [url, tick, options]);
+  }, [url, tick, options, visible]);
 
   return { data, loading, error, refetch, update };
 }

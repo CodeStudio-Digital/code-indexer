@@ -19,6 +19,15 @@ export type ProjectFileSummary = unknown;
 export type FileSymbol = unknown;
 export type FileDetail = unknown;
 
+export interface FilePathPage {
+  items: Array<{ path: string }>;
+  completeness: 'complete' | 'partial';
+  source: 'structural_index';
+  revision: string;
+  candidateLimit: number;
+  reason?: 'candidate_or_result_budget';
+}
+
 export interface ManifestInfo {
   manifest: unknown;
   dockerfile: unknown;
@@ -82,6 +91,7 @@ export interface HistoryRevision {
 export interface FilesApi {
   list(input: { projectId: number }, ctx: ApiContext): Promise<unknown[]>;
   searchPaths(input: { projectId: number; query: string; limit?: number; fuzzy?: boolean }, ctx: ApiContext): Promise<Array<{ path: string }>>;
+  searchPathsPage(input: { projectId: number; query: string; limit?: number; fuzzy?: boolean }, ctx: ApiContext): Promise<FilePathPage>;
   manifest(input: { projectId: number }, ctx: ApiContext): Promise<ManifestInfo>;
   get(input: { projectId: number; path: string }, ctx: ApiContext): Promise<unknown>;
 

@@ -43,7 +43,6 @@ export async function buildSubagentSalvageSummary(args: SalvageSummaryArgs): Pro
       }),
       signal: abort.signal,
       idleTimeoutMs: timeoutMs,
-      thinkingOnlyTimeoutMs: timeoutMs,
     });
     consumePromise.catch(() => undefined);
     const result = await Promise.race([

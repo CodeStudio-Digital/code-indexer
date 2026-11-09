@@ -13,21 +13,24 @@ import { TestPlanView } from './plan/TestPlanView.js';
 import { LiveRunView } from './live/LiveRunView.js';
 import { RunHistoryTable } from './history/RunHistoryTable.js';
 import { ServiceSwitcher } from './shared/ServiceSwitcher.js';
-import { UrlsDrawer } from './shared/UrlsDrawer.js';
-import { RestoreQaConfigButton } from './shared/RestoreQaConfigButton.js';
+import { QaAdvancedTools } from './shared/QaAdvancedTools.js';
 
 interface Props {
   sessionId: string;
 }
 
 export function TestsTab({ sessionId }: Props) {
+  return <SessionTestsTab key={sessionId} sessionId={sessionId} />;
+}
+
+function SessionTestsTab({ sessionId }: Props) {
   const [serviceId, setServiceId] = useState<string>('main');
 
   return (
     <Tabs defaultValue="live" className="flex flex-col h-full">
       <div className="flex items-center justify-between px-3 mt-2">
         <TabsList className="w-fit">
-          <TabsTrigger value="live" className="text-xs">Live</TabsTrigger>
+          <TabsTrigger value="live" className="text-xs">Preview e QA</TabsTrigger>
           <TabsTrigger value="history" className="text-xs">Histórico</TabsTrigger>
           <TabsTrigger value="plan" className="text-xs">Plano</TabsTrigger>
         </TabsList>
@@ -37,8 +40,6 @@ export function TestsTab({ sessionId }: Props) {
             value={serviceId}
             onChange={setServiceId}
           />
-          <RestoreQaConfigButton sessionId={sessionId} />
-          <UrlsDrawer sessionId={sessionId} />
         </div>
       </div>
       <TabsContent value="live" className="flex-1 overflow-hidden mt-0">
@@ -48,8 +49,9 @@ export function TestsTab({ sessionId }: Props) {
         <RunHistoryTable sessionId={sessionId} serviceId={serviceId} />
       </TabsContent>
       <TabsContent value="plan" className="flex-1 overflow-hidden mt-0">
-        <TestPlanView sessionId={sessionId} />
+        <TestPlanView key={serviceId} sessionId={sessionId} serviceId={serviceId} />
       </TabsContent>
+      <QaAdvancedTools sessionId={sessionId} />
     </Tabs>
   );
 }

@@ -1,6 +1,18 @@
-import type { AgentMessage } from '@mcp/provider-sdk';
+import type { AgentMessage, ContentBlock } from '@mcp/provider-sdk';
 import type { FsCoderMessageRow } from './types.js';
 import type { ProjectedStoredMessage } from './conversation-codec.js';
+
+export function extractText(message: AgentMessage): string | null {
+  const text = message.content
+    .filter(
+      (block): block is Extract<ContentBlock, { type: 'text' }> =>
+        block.type === 'text',
+    )
+    .map((block) => block.text)
+    .join('\n')
+    .trim();
+  return text || null;
+}
 
 export function messageRow(
   sessionId: FsCoderMessageRow['session_id'],

@@ -1,3 +1,4 @@
+import { persistBoardAttachments } from '@mcp/company/services/board-attachments.js';
 import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -569,6 +570,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const settleCommandFailure = async (
       reason: string,
       code?: string,
+      error?: string,
     ): Promise<void> => {
       if (commandSettled) return;
       commandSettled = true;
@@ -579,7 +581,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       if (dedupeKey) {
         recentMessageKeys.recordTerminal(id, dedupeKey, {
           event: 'error',
-          data: { reason, ...(code ? { code } : {}), duplicate: false },
+          data: { reason, ...(code ? { code } : {}), ...(error ? { error } : {}), duplicate: false },
         }, -1, claimGuard);
       }
     };
@@ -588,20 +590,22 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     try {
       attachmentOpts = await masterAttachmentOpts(id);
     } catch (error) {
-      await settleCommandFailure('master-runtime-invalid');
+      await settleCommandFailure('master-runtime-invalid', 'MASTER_RUNTIME_INVALID', error instanceof Error ? error.message : String(error));
       return c.json({
         error: error instanceof Error ? error.message : String(error),
         code: 'MASTER_RUNTIME_INVALID',
       }, 409);
     }
+    let boardAttachments: import('@mcp/company-contracts').BoardAttachment[] | undefined;
     let attachments: AttachmentBody[] | undefined;
     try {
       attachments = await normalizeAttachmentsForModel(
         attachmentsCheck.value,
         attachmentOpts,
       );
+      if (attachmentsCheck.value?.length) boardAttachments = await persistBoardAttachments(await companyFilesFor(id), attachmentsCheck.value);
     } catch (error) {
-      await settleCommandFailure('attachment-normalization-failed');
+      await settleCommandFailure('attachment-normalization-failed', undefined, error instanceof Error ? error.message : String(error));
       throw error;
     }
 
@@ -693,6 +697,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           maxTurns: maxTurnsRequested ?? 100,
           roleConfigs,
           attachments,
+          boardAttachments,
           thinking: body.thinking ?? masterRuntime.thinking,
           thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
           temperature: masterRuntime.temperature,
@@ -734,6 +739,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           ? 'outcome_unknown'
           : decision.status === 409 ? 'company-command-conflict' : 'company-start-failed',
         decision.body.code,
+        decision.body.error,
       );
       return c.json(decision.body, decision.status);
     }
@@ -752,7 +758,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     commandSettled = true;
     return response;
     } catch (error) {
-      await settleCommandFailure('company-start-setup-failed');
+      await settleCommandFailure('company-start-setup-failed', undefined, error instanceof Error ? error.message : String(error));
       throw error;
     }
   });
@@ -850,6 +856,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const settleResumeFailure = async (
       reason: string,
       code?: string,
+      error?: string,
     ): Promise<void> => {
       if (commandSettled) return;
       commandSettled = true;
@@ -860,7 +867,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       if (dedupeKey) {
         recentMessageKeys.recordTerminal(id, dedupeKey, {
           event: 'error',
-          data: { reason, ...(code ? { code } : {}), duplicate: false },
+          data: { reason, ...(code ? { code } : {}), ...(error ? { error } : {}), duplicate: false },
         }, -1, claimGuard);
       }
     };
@@ -869,20 +876,22 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     try {
       attachmentOpts = await masterAttachmentOpts(id);
     } catch (error) {
-      await settleResumeFailure('master-runtime-invalid');
+      await settleResumeFailure('master-runtime-invalid', 'MASTER_RUNTIME_INVALID', error instanceof Error ? error.message : String(error));
       return c.json({
         error: error instanceof Error ? error.message : String(error),
         code: 'MASTER_RUNTIME_INVALID',
       }, 409);
     }
+    let boardAttachments: import('@mcp/company-contracts').BoardAttachment[] | undefined;
     let attachments: AttachmentBody[] | undefined;
     try {
       attachments = await normalizeAttachmentsForModel(
         attachmentsCheck.value,
         attachmentOpts,
       );
+      if (attachmentsCheck.value?.length) boardAttachments = await persistBoardAttachments(await companyFilesFor(id), attachmentsCheck.value);
     } catch (error) {
-      await settleResumeFailure('attachment-normalization-failed');
+      await settleResumeFailure('attachment-normalization-failed', undefined, error instanceof Error ? error.message : String(error));
       throw error;
     }
 
@@ -919,6 +928,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         try {
           delivery = await existing.sendMessageToMaster(message, {
             attachments,
+            boardAttachments,
             thinking: body.thinking,
           });
         } catch (error) {
@@ -1027,6 +1037,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           maxTurns: 100,
           roleConfigs,
           attachments,
+          boardAttachments,
           thinking: body.thinking ?? masterRuntime.thinking,
           thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
           temperature: masterRuntime.temperature,
@@ -1076,6 +1087,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
             ? 'company-resume-setup-failed'
           : decision.status === 409 ? 'company-command-conflict' : 'company-resume-failed',
         decision.body.code,
+        decision.body.error,
       );
       return c.json(decision.body, decision.status);
     }
@@ -1100,7 +1112,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     commandSettled = true;
     return response;
     } catch (error) {
-      await settleResumeFailure('company-resume-setup-failed');
+      await settleResumeFailure('company-resume-setup-failed', undefined, error instanceof Error ? error.message : String(error));
       throw error;
     }
   });
@@ -1108,7 +1120,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   /**
    * Abort the entire company session — stops all runners.
   */
-  app.post('/api/company/sessions/:id/abort', async (c) => {
+  app.on('POST', ['/api/company/sessions/:id/abort', '/api/company/sessions/:id/pause'], async (c) => {
     const id = parseCompanySessionIdParam(c);
     let files: CompanySessionFiles;
     try {
@@ -1119,14 +1131,19 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     if (files.getSession().runtime_kind === 'app_studio') {
       return appOwnedControlPlaneConflict(c, 'session abort');
     }
-    const result = await abortCompanyRuntime(id);
+    const pausing = c.req.path.endsWith('/pause');
+    const result = await abortCompanyRuntime(id, pausing ? { finalStatus: 'paused' } : {});
     if (!result.ok) {
       if (result.reason === 'outcome_unknown') {
         return c.json({ error: result.error, code: result.code }, 500);
       }
+      if (pausing) {
+        await files.updateSessionStatus('paused');
+        return c.json({ ok: true, status: 'paused' });
+      }
       return c.json({ error: 'No active orchestrator' }, 404);
     }
-    return c.json({ ok: true });
+    return c.json({ ok: true, ...(pausing ? { status: 'paused' } : {}) });
   });
 
   /**
@@ -1445,6 +1462,9 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       : (attachments?.length ? DEFAULT_ATTACHMENT_PROMPT : '');
     if (!message) return c.json({ error: 'message required' }, 400);
 
+    const boardAttachments = attachmentsCheck.value?.length
+      ? await persistBoardAttachments(await companyFilesFor(id), attachmentsCheck.value) : undefined;
+
     // Live path.
     const orchestrator = getCompanyOrchestrator(id);
     if (orchestrator) {
@@ -1456,6 +1476,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         result = await orchestrator.sendMessageToMaster(message, {
           interject: body.interject,
           attachments,
+          boardAttachments,
           thinking: body.thinking,
         });
       } catch (error) {
@@ -1496,6 +1517,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const res = await ensureCompanyMasterLive(id, deps, {
       message,
       attachments,
+      boardAttachments,
       interject: body.interject,
       thinking: body.thinking,
     });

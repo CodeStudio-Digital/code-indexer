@@ -87,6 +87,7 @@ function disposeAppProcessHandles(): void {
 /** Non-blocking process cleanup for the normal graceful-shutdown path. */
 async function disposeAppProcessResources(): Promise<void> {
   disposeAppProcessHandles();
+  await disposeProjectGitProcesses();
   await disposeTrackedProcessTrees();
 }
 

@@ -1,11 +1,14 @@
-import type { AgentAttachment, DecisionAnswers, SessionId, SessionState, StreamTask, StreamTaskExecutionMode } from './types.js';
+import type { AgentAttachment, DecisionAnswers, SessionId, SessionState, StreamTask, StreamTaskExecutionMode, ToolApprovalVerdict } from './types.js';
 import type { NotificationSourceContext } from '../../features/notifications/index.js';
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { useVisibleExternalStore } from '../../lib/surface-visibility.js';
 import { agentStreamAbortFallbackTimerMap, agentStreamAbortMap, agentStreamAbortRequestMap, agentStreamLastSeenBusIdMap, agentStreamLastSeenSeqMap, agentStreamOwnership, getAgentSessionSnapshot, readAgentStreamCursor, subscribeAgentSession, updateAgentSession } from './session-stream-store.js';
 import { openStream } from './openStream.js';
 import type { AgentPreset, IdeContextInput } from '@mcp/api-bus';
 import { createAbortedSessionPatch } from './abort-state.js';
 import { ABORT_TERMINAL_EVENT_GRACE_MS } from './use-agent-current-turn.js';
+import { toolApprovalResponseBody } from './tool-approval-response.js';
+import { sessionProviderSwitches, switchSessionProvider } from './provider-switch.js';
 
 /**
  * Streams a coder session message via SSE (POST /api/coder/sessions/:id/messages).
@@ -41,9 +44,8 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
     () => getAgentSessionSnapshot(sessionId),
     [sessionId],
   );
-  const active: SessionState = useSyncExternalStore(
+  const active: SessionState = useVisibleExternalStore(
     subscribe,
-    getSnapshot,
     getSnapshot,
   );
   const updateSession = updateAgentSession;
@@ -129,6 +131,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
     ) => {
       if (!sessionId) return;
       const sid = sessionId;
+      await sessionProviderSwitches.wait(sid);
       // Clear any prior 409 handshake — a successful send or a fresh attempt
       // both reset the slot. The catch path in openStream re-populates it
       // when the server responds with INTERACTION_PENDING again.
@@ -283,6 +286,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
       body: Record<string, unknown>,
       resumeBody: Record<string, unknown>,
       onMessageComplete?: () => void,
+      onAccepted?: () => void,
     ) => {
       if (!sessionId) return;
       const sid = sessionId;
@@ -301,6 +305,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
         resumed_via_worker?: boolean;
       };
       if (!res.ok) throw new Error(json.error ?? `Interaction response failed: HTTP ${res.status}`);
+      onAccepted?.();
       if (json.resumed) {
         await runStream(
           sid,
@@ -417,30 +422,30 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
 
   /**
    * Resolve a PermissionGate approval (tool paused before execution).
-   * Optimistically drops the request from `pendingApprovals` — the
-   * authoritative `tool_approval_resolved` event follows over SSE.
+   * Retains the request if persistence or submission fails; the authoritative
+   * `tool_approval_resolved` event can clear it before the HTTP response.
    * `postAndResume` covers the dead-runner fallback (the server sealed
    * the dangling tool_use in the DB and asked us to resume).
    */
   const respondToToolApproval = useCallback(
-    (
+    async (
       toolUseId: string,
-      verdict: { approved: boolean; note?: string; alwaysAllow?: boolean },
+      verdict: ToolApprovalVerdict,
     ) => {
-      if (sessionId) {
-        updateSession(sessionId, (s) => ({
-          pendingApprovals: s.pendingApprovals.filter((a) => a.toolUseId !== toolUseId),
-        }));
-      }
-      return postAndResume(
+      const pending = getAgentSessionSnapshot(sessionId).pendingApprovals.find((a) => a.toolUseId === toolUseId);
+      await postAndResume(
         `/api/coder/sessions/${sessionId}/tool-approval`,
-        {
-          tool_use_id: toolUseId,
-          approved: verdict.approved,
-          note: verdict.note,
-          always_allow: verdict.alwaysAllow,
-        },
+        toolApprovalResponseBody(toolUseId, verdict),
         {},
+        undefined,
+        () => {
+          if (sessionId && pending) {
+            updateSession(sessionId, (s) => ({
+              // A newer incident set can arrive while this response is in flight.
+              pendingApprovals: s.pendingApprovals.filter((a) => a !== pending),
+            }));
+          }
+        },
       );
     },
     [sessionId, postAndResume, updateSession],
@@ -449,11 +454,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
   const switchProvider = useCallback(
     async (provider: string, model?: string) => {
       if (!sessionId) return;
-      await fetch(`/api/coder/sessions/${sessionId}/switch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, model }),
-      });
+      return switchSessionProvider(sessionId, provider, model);
     },
     [sessionId],
   );

@@ -49,7 +49,7 @@ function makeReconciler(opts: {
   // The gate under test is private; the public tick() drags master/subordinate
   // reconciliation (heavy fixtures) along, so we call the sweep directly.
   const sweep = () =>
-    (reconciler as unknown as { reconcileOrphanedCards: () => void })
+    (reconciler as unknown as { reconcileOrphanedCards: () => Promise<void> })
       .reconcileOrphanedCards();
   return { sweep, moveCard, unassignAgent };
 }
@@ -58,37 +58,37 @@ describe('RuntimeReconciler — C2 orphanReset autonomy gate', () => {
   beforeEach(() => { vi.stubEnv('MCP_COMPANY_SCHEDULER', ''); });
   afterEach(() => { vi.unstubAllEnvs(); });
 
-  it('default ON: no env, no provider → orphaned card is unassigned and reset to todo', () => {
+  it('default ON: no env, no provider → orphaned card is unassigned and reset to todo', async () => {
     const { sweep, moveCard, unassignAgent } = makeReconciler({});
-    sweep();
+    await sweep();
     expect(unassignAgent).toHaveBeenCalledWith(CARD_ID, DEAD_RUN_ID);
     expect(moveCard).toHaveBeenCalledWith(CARD_ID, 'todo');
   });
 
-  it("env MCP_COMPANY_SCHEDULER='0' kills the sweep (no provider → env fallback)", () => {
+  it("env MCP_COMPANY_SCHEDULER='0' kills the sweep (no provider → env fallback)", async () => {
     vi.stubEnv('MCP_COMPANY_SCHEDULER', '0');
     const { sweep, moveCard } = makeReconciler({});
-    sweep();
+    await sweep();
     expect(moveCard).not.toHaveBeenCalled();
   });
 
-  it('session autonomy.orphanReset=false disables via provider', () => {
+  it('session autonomy.orphanReset=false disables via provider', async () => {
     const { sweep, moveCard } = makeReconciler({
       autonomy: fakeAutonomy({ orphanReset: false }),
     });
-    sweep();
+    await sweep();
     expect(moveCard).not.toHaveBeenCalled();
   });
 
-  it('freeze kills the sweep even with orphanReset=true', () => {
+  it('freeze kills the sweep even with orphanReset=true', async () => {
     const { sweep, moveCard } = makeReconciler({
       autonomy: fakeAutonomy({ orphanReset: true, freeze: true }),
     });
-    sweep();
+    await sweep();
     expect(moveCard).not.toHaveBeenCalled();
   });
 
-  it('gate is consulted LIVE — flipping the provider config between sweeps flips behavior', () => {
+  it('gate is consulted LIVE — flipping the provider config between sweeps flips behavior', async () => {
     let frozen = true;
     const { sweep, moveCard } = makeReconciler({
       autonomy: {
@@ -98,10 +98,10 @@ describe('RuntimeReconciler — C2 orphanReset autonomy gate', () => {
         ),
       },
     });
-    sweep();
+    await sweep();
     expect(moveCard).not.toHaveBeenCalled();
     frozen = false; // e.g. PATCH /config lifted the freeze → provider re-reads
-    sweep();
+    await sweep();
     expect(moveCard).toHaveBeenCalledWith(CARD_ID, 'todo');
   });
 });

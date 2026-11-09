@@ -32,8 +32,8 @@ import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
  *   - `refresh()` rebuilds connections when the operator enables /
  *     disables / edits a server in the admin UI.
  */
-import { createHash, randomUUID } from 'node:crypto';
 import { type McpExternalSnapshot, HEALTH_CHECK_INTERVAL_MS } from './mcp-external-pool-types.js';
+import { McpCatalogueRevisions } from './mcp-catalogue-revisions.js';
 
 /**
  * The pool itself implements `IMcpServerManager` for non-worker consumers.
@@ -51,7 +51,7 @@ export class McpExternalPool implements IMcpServerManager {
   private readonly loadEnabledServers: () => McpServerConfig[];
   private snapshot: McpExternalSnapshot | null = null;
   private liveTools = new Map<string, CoderTool>();
-  private toolRevisions = new Map<string, { definition: string; revision: string }>();
+  private readonly toolRevisions = new McpCatalogueRevisions();
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   private configFingerprint = '';
   private lifecycleTail: Promise<void> = Promise.resolve();
@@ -92,15 +92,39 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   /**
-   * Reload server list from the DB and reconcile. Tearing down and
-   * rebuilding all connections is the simplest correct behaviour;
-   * the optimization (diff old vs new and only reconnect changed
-   * servers) can come later if boot becomes a bottleneck.
+   * Reload server list from the DB and reconcile changed/failed sources.
+   * Healthy integrations and their in-flight calls stay connected.
    */
   async refresh(): Promise<void> {
     await this.runLifecycle(async () => {
       if (this.shuttingDown) return;
       await this.rebuild(this.loadEnabledServers(), true);
+    });
+  }
+
+  /** Reconcile one integration without interrupting unrelated tool calls. */
+  async refreshServer(serverId: string): Promise<McpExternalSnapshot> {
+    return this.runLifecycle(async () => {
+      if (this.shuttingDown) throw new Error('MCP pool is shutting down');
+      const configs = this.loadEnabledServers();
+      this.toolRevisions.reconcileConfigurations(configs);
+      const config = configs.find(c => c.id === serverId);
+      const prefix = `ext_${serverId}__`;
+      for (const name of this.liveTools.keys()) {
+        if (name.startsWith(prefix)) this.liveTools.delete(name);
+      }
+      await this.manager.closeServer(serverId);
+      let failure: unknown;
+      try { if (config) await this.manager.connectServer(config); }
+      catch (e) { failure = e; }
+      this.snapshot = await this.buildSnapshot(configs, serverId);
+      this.configFingerprint = this.fingerprint(configs);
+      this.scheduleHealthCheck();
+      if (failure) throw failure;
+      if (config && this.manager.getConnectionStates().get(serverId)?.state !== 'connected') {
+        throw new Error(this.manager.getConnectionStates().get(serverId)?.error ?? 'MCP tool discovery failed');
+      }
+      return this.snapshot;
     });
   }
 
@@ -135,20 +159,44 @@ export class McpExternalPool implements IMcpServerManager {
   /** Dispatch through the cached catalogue; discovery never runs per invocation. */
   async callTool(serverId: string, toolName: string, args: Record<string, unknown>,
     signal?: AbortSignal, catalogueRevision?: string, assertDispatch?: () => void): Promise<{ ok: boolean; text: string; result: ToolResult }> {
-    const tool = this.liveTools.get(`ext_${serverId}__${toolName}`);
+    if (signal?.aborted) {
+      const result = err('External MCP call cancelled before dispatch.');
+      return { ok: false, text: result.content, result };
+    }
+    const name = `ext_${serverId}__${toolName}`;
+    let tool = this.liveTools.get(name);
+    // A known, unchanged admission can survive a temporary broker outage.
+    // Reconcile before its FIRST wire dispatch; never replay a sent call.
+    const connectionLost = this.manager.getConnectionStates().get(serverId)?.state !== 'connected';
+    if ((!tool || connectionLost) && !this.shuttingDown && this.toolRevisions.get(name)
+      && (catalogueRevision === undefined || this.toolRevisions.get(name)?.revision === catalogueRevision)) {
+      try { await this.getReadySnapshot(); }
+      catch (error) {
+        const result = err(`External MCP recovery failed before dispatch: ${error instanceof Error ? error.message : String(error)}`,
+          { code: 'MCP_UNAVAILABLE', kind: 'network', retryable: true,
+            suggestedAction: 'Retry when the server is ready; this call was not sent.' });
+        return { ok: false, text: result.content, result };
+      }
+      tool = this.liveTools.get(name);
+    }
     const admittedRevision = catalogueRevision ?? this.toolRevisions.get(tool?.name ?? '')?.revision;
     const assertWireDispatch = () => {
-      if (this.shuttingDown || !admittedRevision || this.toolRevisions.get(tool?.name ?? '')?.revision !== admittedRevision) {
+      if (this.shuttingDown || !this.liveTools.has(name) || !admittedRevision
+        || this.toolRevisions.get(name)?.revision !== admittedRevision) {
         throw new Error('External MCP catalogue retired before wire dispatch');
       }
       signal?.throwIfAborted();
       assertDispatch?.();
     };
     const stale = catalogueRevision !== undefined
-      && this.toolRevisions.get(`ext_${serverId}__${toolName}`)?.revision !== catalogueRevision;
-    const result = stale ? err('External MCP catalogue changed; start with a refreshed catalogue before dispatch.')
+      && this.toolRevisions.get(name)?.revision !== catalogueRevision;
+    const result = stale ? err(`External MCP contract changed for "${name}"; this call was not dispatched. Other tools remain available.`,
+      { code: 'MCP_CATALOGUE_CHANGED', kind: 'conflict', retryable: false,
+        suggestedAction: 'Continue with available tools. The next run in this chat loads the updated contract.' })
       : !tool || this.shuttingDown
-      ? err(`External MCP server "${serverId}" or tool "${toolName}" not found in the live pool.`)
+      ? err(`External MCP server "${serverId}" or tool "${toolName}" is temporarily unavailable; this call was not dispatched.`,
+        { code: 'MCP_UNAVAILABLE', kind: 'network', retryable: !this.shuttingDown,
+          suggestedAction: 'Wait for the server to become ready and retry; a new chat is not required.' })
       : signal?.aborted ? err('External MCP call cancelled before dispatch.')
       : await tool.handler(args, { signal, assertExternalMcpDispatch: assertWireDispatch } as ToolContext);
     // Keep the legacy envelope while carrying the full result through new workers.
@@ -297,11 +345,14 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   private async rebuild(configs: McpServerConfig[], closeExisting: boolean): Promise<void> {
+    this.toolRevisions.reconcileConfigurations(configs);
     if (closeExisting) {
-      this.liveTools.clear();
-      this.toolRevisions.clear();
-      this.booted = false;
-      await this.manager.closeAll();
+      // Retire changed/disabled admissions synchronously, but do not close
+      // every healthy MCP (and lose other sessions' in-flight responses).
+      for (const name of this.liveTools.keys()) {
+        if (!this.toolRevisions.get(name)) this.liveTools.delete(name);
+      }
+      await this.manager.refreshAll(configs);
     }
     if (this.shuttingDown) return;
 
@@ -321,7 +372,7 @@ export class McpExternalPool implements IMcpServerManager {
         .map((server) => server.id)
         .join(', ')}`,
     );
-    await this.manager.connectAll(configs);
+    if (!closeExisting) await this.manager.connectAll(configs);
     if (this.shuttingDown) {
       await this.manager.closeAll();
       return;
@@ -337,21 +388,16 @@ export class McpExternalPool implements IMcpServerManager {
     );
   }
 
-  private async buildSnapshot(configs: McpServerConfig[]): Promise<McpExternalSnapshot> {
-    const { tools, tierMap } = await this.manager.listAllTools();
-    const revisions = new Map<string, { definition: string; revision: string }>();
-    for (const tool of tools) {
-      const config = tool.capabilityProvenance?.serverId
-        ? configs.find(c => c.id === tool.capabilityProvenance!.serverId)
-        : [...configs].sort((a, b) => b.id.length - a.id.length).find(c => tool.name.startsWith('ext_' + c.id + '__'));
-      const definition = createHash('sha256').update(JSON.stringify([
-        config ? mcpServerConfigurationKey(config) : '', tool.name, tool.description, tool.parameters,
-        tool.repeatPolicy, tool.mutates, tool.riskLevel,
-      ])).digest('hex');
-      const previous = this.toolRevisions.get(tool.name);
-      revisions.set(tool.name, previous?.definition === definition ? previous : { definition, revision: randomUUID() });
+  private async buildSnapshot(configs: McpServerConfig[], serverId?: string): Promise<McpExternalSnapshot> {
+    const { tools, tierMap } = await this.manager.listAllTools(serverId ? { serverId } : undefined);
+    if (serverId) {
+      const prefix = `ext_${serverId}__`;
+      tools.push(...[...this.liveTools.values()].filter(t => !t.name.startsWith(prefix)));
+      for (const [name, tier] of this.snapshot?.tierMap ?? []) {
+        if (!name.startsWith(prefix)) tierMap.set(name, tier);
+      }
     }
-    this.toolRevisions = revisions;
+    this.toolRevisions.update(tools, configs, this.manager.getConnectionStates());
     this.liveTools = new Map(tools.map((tool) => [tool.name, tool]));
     const states = [...this.manager.getConnectionStates().entries()] as Array<
       [string, { state: 'connected' | 'disconnected' | 'error'; error?: string }]

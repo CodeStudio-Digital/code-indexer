@@ -8,6 +8,53 @@ import { stripSqlNoise, hasMultipleStatements, WRITE_KW, isReadStatement } from 
  */
 
 describe('isReadStatement', () => {
+  it.each([
+    "SELECT '--'; DELETE FROM audit_fixture",
+    "SELECT '/*'; DELETE FROM audit_fixture; SELECT '*/'",
+    'SELECT 1--2; DELETE FROM audit_fixture',
+    'SELECT 1 /*!; DELETE FROM audit_fixture */',
+    'SELECT 1 /*M!; DELETE FROM audit_fixture */',
+    "SELECT 'unterminated",
+    'SELECT 1 /* unterminated',
+    'SELECT 1 /* outer /* inner */ ; DELETE FROM audit_fixture */',
+  ])('rejects ambiguous or mutating SQL before dispatch: %s', (sql) => {
+    expect(isReadStatement(sql)).toBe(false);
+  });
+
+  it.each(["SELECT '--'", "SELECT '/*'", "SELECT '*/'", 'SELECT $$hello world$$', 'SELECT [delete] FROM t'])('recognizes literal boundaries: %s', (sql) => {
+    expect(isReadStatement(sql)).toBe(true);
+    expect(hasMultipleStatements(sql)).toBe(false);
+  });
+
+  it('does not hide statement separators following comment-shaped strings', () => {
+    expect(hasMultipleStatements("SELECT '--'; DELETE FROM audit_fixture")).toBe(true);
+    expect(hasMultipleStatements("SELECT '/*'; DELETE FROM audit_fixture; SELECT '*/'")).toBe(true);
+  });
+
+  it('does not let a dollar-quoted region hide a statement from dialects without dollar quoting', () => {
+    // PostgreSQL reads `a$$` as part of an identifier; MySQL, SQLite and SQL Server
+    // have no dollar quoting at all. Without a negotiated dialect, `$$…$$` must not
+    // hide a separator, a quote or a comment marker from those engines.
+    for (const sql of [
+      'SELECT 1 AS a$$; DELETE FROM audit_fixture; SELECT 1 AS b$$',
+      'SELECT $$; DELETE FROM audit_fixture; SELECT $$',
+      "SELECT $$'; -- DELETE$$",
+    ]) {
+      expect(isReadStatement(sql), sql).toBe(false);
+      expect(hasMultipleStatements(sql), sql).toBe(true);
+    }
+  });
+
+  it('treats a MySQL # line comment as a comment when admitting reads', () => {
+    // `#` starts a comment on MySQL/MariaDB, so the text after it is real SQL there.
+    expect(isReadStatement("SELECT * FROM users # '\n INTO OUTFILE '/tmp/x' -- '")).toBe(false);
+    const hiddenStatement = "SELECT 1 # '\n; DELETE FROM audit_fixture -- '";
+    expect(isReadStatement(hiddenStatement)).toBe(false);
+    expect(hasMultipleStatements(hiddenStatement)).toBe(true);
+    // A `#` that is only an operator or a SQL Server temp-table name stays a read.
+    expect(isReadStatement('SELECT 5 # 3')).toBe(true);
+    expect(isReadStatement('SELECT * FROM #recent_orders')).toBe(true);
+  });
   it('accepts plain reads', () => {
     expect(isReadStatement('SELECT * FROM users')).toBe(true);
     expect(isReadStatement('select 1')).toBe(true);

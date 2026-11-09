@@ -5,6 +5,7 @@ import type { SnapshotCategory } from '@mcp/shared/types.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam } from './_helpers.js';
 import { getMemoryConsolidator } from '../../sse/memory-consolidator.js';
+import { memoryCurationTotals } from '@mcp/store/db/agent-memory-curation.js';
 
 function mapApiError(c: Context, err: unknown) {
   if (err instanceof ApiError) {
@@ -55,9 +56,8 @@ export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  // Memory health — feeds the project Memory tab's diagnostics card: when
-  // the project last distilled (and with what result), plus memory totals
-  // by category and provenance. Read-only over memory_distill_log (mig 136).
+  // Current memory stock. Historical distillation logs remain explicitly
+  // labelled diagnostics; they are not evidence that a row was injected.
   app.get('/api/projects/:id/memory/health', (c) => {
     const projectId = parseIdParam(c);
     const project = deps.db.getProject(projectId);
@@ -66,12 +66,9 @@ export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
       memory_enabled: deps.db.getProjectMemoryEnabled(projectId),
       last: deps.db.latestMemoryDistill(projectId),
       recent: deps.db.recentMemoryDistills(projectId, 10),
-      totals: {
-        total: deps.db.countSnapshots(projectId),
-        byCategory: deps.db.countMemoryByCategory(projectId),
-        bySource: deps.db.countMemoryBySource(projectId),
-        archived: deps.db.countArchivedSnapshots(projectId),
-      },
+      store: 'agent_memory',
+      diagnostics_source: 'historical_distill_log',
+      totals: memoryCurationTotals(deps.db.raw(), projectId === 0 ? 'user' : 'project', projectId),
     });
   });
 

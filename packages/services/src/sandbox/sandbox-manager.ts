@@ -159,6 +159,7 @@ export class SandboxManager {
   // ─── Workspace I/O ─────────────────────────────────────────────
   async readWorkspaceFile(sessionId: string, relPath: string): Promise<string | null> { return this.workspaceIO.readText(sessionId, relPath); }
   async writeWorkspaceFile(sessionId: string, relPath: string, data: string): Promise<void> { return this.workspaceIO.writeText(sessionId, relPath, data); }
+  async writeWorkspaceFileOnService(sessionId: string, serviceId: string | undefined, relPath: string, data: string): Promise<void> { return this.workspaceIO.writeTextOnService(sessionId, serviceId, relPath, data); }
   async readWorkspaceFileBuffer(sessionId: string, relPath: string, opts?: { maxBytes?: number }): Promise<Buffer> { return this.workspaceIO.readBuffer(sessionId, relPath, opts); }
   async readWorkspaceFileBufferOnService(sessionId: string, serviceId: string | undefined, relPath: string, opts?: { maxBytes?: number }): Promise<Buffer> { return this.workspaceIO.readBufferOnService(sessionId, serviceId, relPath, opts); }
   async listWorkspaceFilesOnService(sessionId: string, serviceId: string | undefined, relDir: string): Promise<string[]> { return this.workspaceIO.listFilesOnService(sessionId, serviceId, relDir); }
@@ -185,11 +186,11 @@ export class SandboxManager {
       buildSyncManagedEnvsDeps(this.hooks, getResolvedRuntime()),
     );
   }
-  async syncEnvsToAllContainers(sessionId: string): Promise<void> {
+  async syncEnvsToAllContainers(sessionId: string): Promise<import('@mcp/services/sandbox/manager/env-sync.js').EnvSyncReport> {
     // D1: each container gets a body rendered for ITS service id, so
     // `service_scope` vars only land where they belong ('main' = primary).
     const targets = collectEnvSyncTargets(this.sandboxes.get(sessionId), this.listServicesWithIds(sessionId));
-    await pushEnvsToContainers(targets, (serviceId) => renderDotEnv(resolveSessionEnvs(sessionId, serviceId)), this.driver);
+    return pushEnvsToContainers(targets, async (serviceId) => renderDotEnv(await resolveSessionEnvs(sessionId, serviceId)), this.driver);
   }
   async destroyService(sessionId: string, serviceId: string, reason = 'explicit'): Promise<void> {
     return executeServiceDestroy(sessionId, serviceId, reason, buildDestroyServiceDeps(this.hooks));

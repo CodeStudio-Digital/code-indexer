@@ -1,6 +1,8 @@
 import { useCallback } from 'react';
-import { apiDelete, apiPatch, apiPost } from '../../../hooks/useApi.js';
+import { apiPatch, apiPost } from '../../../hooks/useApi.js';
 import type { CoderSession, CoderSessionGroup } from '../../chat/types.js';
+import { deleteChats } from '../../chat/delete-chats.js';
+import { useDeletedSession } from '../../chat/useDeletedSession.js';
 interface Options {
   projectId: number;
   selectedId: string | null;
@@ -9,6 +11,7 @@ interface Options {
   refetchGroups: () => void;
 }
 export function useEditorSessionCatalogActions({ projectId, selectedId, setSelectedId, refetchSessions, refetchGroups }: Options) {
+  useDeletedSession(selectedId, setSelectedId);
   const archiveSession = useCallback(async (id: string, archived = true) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
     if (selectedId === id) setSelectedId(null);
@@ -17,7 +20,7 @@ export function useEditorSessionCatalogActions({ projectId, selectedId, setSelec
   }, [selectedId, refetchSessions]);
 
   const deleteSession = useCallback(async (id: string) => {
-    await apiDelete(`/coder/sessions/${id}`);
+    await deleteChats([id]);
     if (selectedId === id) setSelectedId(null);
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));

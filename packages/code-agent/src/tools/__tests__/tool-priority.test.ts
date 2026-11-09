@@ -32,7 +32,7 @@ const named = (n: string) => ({
 
 const BOOTSTRAP_SET = [
   'read_file', 'list_directory', 'glob', 'todo_write', 'code_exec', 'expand_toolset',
-  'find_tools', 'ask_user', 'submit_plan', 'task_list', 'submit_tasks', 'update_goal', 'create_goal',
+  'find_tools', 'ask_user', 'submit_plan', 'task_list', 'submit_tasks',
   'save_note', 'recall_investigations', 'get_tool_output', 'invoke_skill',
   'rag_search_docs', 'rag_read_doc', 'get_skills_list', 'get_skill_content',
   'list_skill_namespaces', 'mcp__get_project_pulse', 'mcp__search', 'mcp__grep_code',
@@ -42,7 +42,7 @@ const BOOTSTRAP_SET = [
 const NAVIGATE_SET = [
   'write_file', 'edit_file', 'multi_edit', 'create_file', 'run_command', 'get_diagnostics',
   'git_status', 'git_diff', 'git_log', 'web_fetch', 'web_search', 'task_complete',
-  'decision_gate', 'list_tasks', 'read_plan', 'list_notes', 'get_goal', 'mcp__find_references', 'mcp__save_memory',
+  'decision_gate', 'list_tasks', 'read_plan', 'list_notes', 'mcp__find_references', 'mcp__save_memory',
   'mcp__get_file_skeleton',
 ];
 const ADMIN_SET = ['git_add', 'git_commit', 'git_branch'];
@@ -150,10 +150,6 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     // Regression: task_list is the ONE always-on task tool (todos+tasks merge);
     // the cap must never drop it, even at the most aggressive default cap.
     expect(names).toContain('task_list');
-    // Both visible goal transitions are a lifecycle pair: create_goal must be
-    // available before work, and update_goal must remain available at finish.
-    expect(names).toContain('create_goal');
-    expect(names).toContain('update_goal');
     // plan.txt requires decision_gate for genuine multi-option forks, so a
     // compact catalog must keep the direct interactive tool available.
     expect(names).toContain('decision_gate');
@@ -191,8 +187,6 @@ describe('buildTools — priority trim at a weak-model cap', () => {
       if (![...BOOTSTRAP_SET, ...NAVIGATE_SET].includes(n)) continue;
       expect(names, `NEVER_TRIM tool ${n} must survive the default cap`).toContain(n);
     }
-    expect(names).toContain('create_goal');
-    expect(names).toContain('update_goal');
   });
 
   it('keeps the minimal edit pair when a large plugin catalog exhausts the cap', () => {
@@ -472,7 +466,6 @@ describe('buildTools — session tool cap (task preflight)', () => {
     const byName = new Map(tools.map((t) => [t.name, t.description]));
     expect(byName.get('mcp__search')).toBe('mcp__search description.');
     expect(byName.get('read_file')).toBe('read_file description.');
-    expect(byName.get('create_goal')).toBe('create_goal description.');
   });
 
   it('an explicit session cap ABOVE 64 keeps full descriptions (not a compact catalog)', () => {
@@ -491,7 +484,6 @@ describe('buildTools — terse descriptions for compact-catalog models', () => {
     expect(byName.get('mcp__search')).toBe('mcp__search description.');
     expect(byName.get('read_file')).toBe('read_file description.');
     expect(byName.get('code_exec')).toBe('code_exec description.');
-    expect(byName.get('create_goal')).toBe('create_goal description.');
   });
 
   it('retired tool-cap env cannot restore the large legacy catalog', () => {

@@ -48,16 +48,6 @@ describe('buildAutoCapture', () => {
     expect(store.saved).toHaveLength(0);
   });
 
-  it('captures goal COMPLETION only (creation is structural)', () => {
-    const { store, ac } = capture();
-    ac.onGoalUpserted({ text: 'ship it', status: 'in_progress' });
-    expect(store.saved).toHaveLength(0);
-    ac.onGoalUpserted({ text: 'ship it', status: 'complete', completionNote: 'all green' });
-    expect(store.saved).toHaveLength(1);
-    expect(store.saved[0]).toMatchObject({ title: 'Goal completed', kind: 'auto:goal' });
-    expect(store.saved[0].body).toContain('all green');
-  });
-
   it('captures task closures that carry a summary, skipping silent ones', () => {
     const { store, ac } = capture();
     ac.onTaskStatus('tsk_1', { status: 'in_progress' });
@@ -112,7 +102,6 @@ describe('buildAutoCapture', () => {
   it('enabled=false is a total no-op', () => {
     const { store, ac } = capture({ enabled: false });
     ac.onPlanResolved('approved', 'plan');
-    ac.onGoalUpserted({ text: 'g', status: 'complete' });
     ac.onTaskStatus('t', { status: 'done', result: { summary: 's' } });
     for (let i = 0; i < 4; i++) ac.onToolResult('x', true, 'e', i);
     ac.onToolResult('x', false, '', 5);

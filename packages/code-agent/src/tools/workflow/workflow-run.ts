@@ -27,6 +27,9 @@ import {
   startWorkflowRunLeaseKeepalive,
 } from './workflow-registry.js';
 import { workflowStatusFromSteps, type WorkflowRecord, type WorkflowStepState } from './workflow-types.js';
+import { runReadyWorkflow } from './workflow-readiness.js';
+import { workResult } from '../../runtime/work-result.js';
+import { childChatId } from '@mcp/session-storage/collaboration/types.js';
 
 const DEP_DIGEST_CHARS = 3_500;
 const DEP_DIGEST_TOTAL_CHARS = 10_500;
@@ -54,7 +57,7 @@ export function buildDependencyContext(record: WorkflowRecord, step: WorkflowSte
 
 function toNormalizedAgent(step: WorkflowStepState, record: WorkflowRecord): NormalizedAgent {
   const profile = MICRO_AGENT_PROFILES[step.profileId];
-  const task = step.prompt + buildDependencyContext(record, step);
+  const task = step.prompt + (step.acceptance?.length ? '\nAcceptance criteria:\n' + step.acceptance.join('\n') : '') + buildDependencyContext(record, step);
   const researchPolicy = profile.capability === 'explore' || profile.capability === 'review'
     ? buildResearchPolicy({ task })
     : undefined;
@@ -104,7 +107,8 @@ function skipBlockedSteps(ctx: ToolContext, record: WorkflowRecord): void {
       if (step.status !== 'pending') continue;
       const bad = step.dependsOn.find((depId) => {
         const dep = record.steps.find((s) => s.id === depId);
-        return dep && (dep.status === 'failed' || dep.status === 'skipped');
+        return dep && (dep.status === 'failed' || dep.status === 'skipped'
+          || (dep.status === 'partial' && !step.acceptPartial?.includes(depId)));
       });
       if (!bad) continue;
       step.status = 'skipped';
@@ -122,6 +126,12 @@ export async function executeWorkflow(
 ): Promise<WorkflowRecord> {
   const parentSessionId = ctx.sessionId ?? ctx.runner?.sessionId;
   const activeControllers = new Set<AbortController>();
+  let saveQueue = Promise.resolve();
+  const checkpoint = () => {
+    const snapshot = structuredClone(record);
+    saveQueue = saveQueue.then(() => persist(deps, ctx, snapshot));
+    return saveQueue;
+  };
   const stopLeaseKeepalive = parentSessionId == null
     ? () => {}
     : startWorkflowRunLeaseKeepalive(
@@ -144,21 +154,12 @@ export async function executeWorkflow(
       );
     }
 
-    for (;;) {
-      if (record.steps.some(step => step.effectOutcome === 'unknown')) break;
-      if (ctx.signal?.aborted) { record.status = 'aborted'; break; }
-      skipBlockedSteps(ctx, record);
-      const ready = record.steps.filter((step) =>
-        step.status === 'pending'
-        && step.dependsOn.every((depId) => {
-          const dep = record.steps.find((s) => s.id === depId);
-          return dep?.status === 'completed' || dep?.status === 'partial';
-        }));
-      if (ready.length === 0) break;
+    await runReadyWorkflow(record, Math.min(deps.maxParallel ?? 3, ctx.ultraPolicy?.effective.parallelism.maxAgents ?? 3), async dispatched => {
+      const ready = [dispatched];
       const waveCap = ctx.ultraPolicy?.presetId === 'ultra' ? ctx.ultraPolicy.effective.parallelism.maxWaves : undefined;
       if (waveCap != null && ready.some(step => step.wave > waveCap)) {
         for (const step of ready) { step.status = 'failed'; step.error = 'Ultra workflow wave budget reached; finish with existing results'; emitStepUpdate(ctx, record, step); }
-        break;
+        return;
       }
 
       waveNo++;
@@ -179,11 +180,13 @@ export async function executeWorkflow(
       for (const step of ready) {
         step.status = 'running';
         step.groupId = groupId;
+        if (parentSessionId && ctx.collaboration) step.childChatId = childChatId(parentSessionId, `${groupId}:0`);
         emitStepUpdate(ctx, record, step);
       }
-      await persist(deps, ctx, record);
+      await checkpoint();
 
       const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
+        acceptance: ready[i].acceptance,
         task: taskWithWorkspaceBriefing(a.task, ctx),
         label: a.label,
         maxTurns: 0,
@@ -273,7 +276,9 @@ export async function executeWorkflow(
       for (let i = 0; i < ready.length; i++) {
         const step = ready[i];
         const result = results[i];
-        step.status = result.reason === 'completed'
+        step.result = result.workResult ?? workResult(result);
+        step.integration = result.integration;
+        step.status = result.workResult?.status === 'failed' ? 'failed' : result.workResult?.status === 'partial' ? 'partial' : result.reason === 'completed'
           ? 'completed'
           : isPartialSubagentReason(result.reason)
             ? 'partial'
@@ -290,7 +295,7 @@ export async function executeWorkflow(
         step.usage = result.usage;
         emitStepUpdate(ctx, record, step);
       }
-      await persist(deps, ctx, record);
+      await checkpoint();
 
       const outcomeCounts = countSubagentOutcomes(results);
       const resumableCount = await retainSpawnGroup({
@@ -312,7 +317,7 @@ export async function executeWorkflow(
         ...outcomeCounts,
         resumableCount,
       });
-    }
+    }, ctx.signal);
 
     if (parentSessionId != null) {
       await assertWorkflowRunLease(

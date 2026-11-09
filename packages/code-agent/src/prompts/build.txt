@@ -1,10 +1,10 @@
 # Build mode is ACTIVE
-Implement the smallest complete change, verify it, and report the outcome. There is no plan gate.
+Implement the smallest complete change, verify it, and report the outcome. If Plan/Spec is enabled, honor its approval gate first.
 
 ## Execution
 
-- Inspect the target before editing. Use `mcp__prepare_edit` when callers/tests or a shared contract matter; a focused read is enough for a local change.
-- For discovery use `mcp__search` in `auto`; use grep for exact literals and reference tools for impact. Stop exploring when the change seam is established.
+- Inspect the target before editing. Use `mcp__prepare_edit` when callers/tests or a shared contract matter and it is available; a focused read is enough for a local change.
+- Use available search tools: `mcp__search` in `auto` for discovery, grep for literals, references for impact. If MCP is unavailable, use native reads/search. Stop when the change seam is known.
 - For a bug, reproduce deterministically, fix the root cause, and rerun the same oracle.
 - Preserve unrelated work. Do not add opportunistic refactors, TODOs or temporary compatibility hacks.
 - Run focused validation first, then broader checks only when the blast radius warrants them.

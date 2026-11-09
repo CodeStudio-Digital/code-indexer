@@ -254,11 +254,13 @@ export async function releaseSessionWriterLeaseForOwner(options: {
     throw new TypeError('ownerId must be a non-empty opaque string of at most 256 characters');
   }
   const leasePath = join(options.bundlePath, 'events', 'writer.lease');
-  await assertPathHasNoLinks(options.bundlePath, dirname(leasePath));
 
   let identity: { readonly dev: number; readonly ino: number };
   let lease: WriterLeaseFile;
   try {
+    // An isolate may exit before opening its writer/events directory. There
+    // is no lease to reclaim in that case; still reject links when it exists.
+    await assertPathHasNoLinks(options.bundlePath, dirname(leasePath));
     const leaseStat = await lstat(leasePath);
     if (leaseStat.isSymbolicLink() || !leaseStat.isFile()) {
       throw new UnsafeSessionPathError(`Writer lease must be a regular file: ${leasePath}`);
@@ -272,9 +274,13 @@ export async function releaseSessionWriterLeaseForOwner(options: {
   if (lease.owner_id !== options.ownerId) return false;
 
   // Refuse to rename a lease that changed between validation and recovery.
-  const current = await lstat(leasePath);
+  const current = await lstat(leasePath).catch(error => {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    throw error;
+  });
   if (
-    current.isSymbolicLink()
+    !current
+    || current.isSymbolicLink()
     || !current.isFile()
     || current.dev !== identity.dev
     || current.ino !== identity.ino

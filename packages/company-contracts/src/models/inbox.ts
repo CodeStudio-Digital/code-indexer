@@ -16,6 +16,9 @@ export type InboxPriority = 'low' | 'normal' | 'urgent';
  * promise once the answer arrives.
  */
 export interface AgentInboxMessage {
+  from_session_id?: string;
+  to_session_id?: string;
+  origin?: 'agent' | 'operator';
   id: string;
   seq: number;
   company_session_id: string;

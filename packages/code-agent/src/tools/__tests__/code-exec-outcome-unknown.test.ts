@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../../core/registry.js';
 import { ToolCallLedger } from '../../core/tool-call-ledger.js';
-import { ok, unknownToolOutcome, type CoderTool, type ToolResult } from '../../core/tool.js';
+import { err, ok, unknownToolOutcome, type CoderTool, type ToolResult } from '../../core/tool.js';
 import { buildCodeExecTool } from '../code-exec.js';
 
 function deferred() {
@@ -67,4 +67,28 @@ it('retains uncertainty when cancellation races with an uncooperative mutation',
     cancel.abort(new Error('fixture cancelled'));
     expect(await pending).toMatchObject({ isError: true, effectOutcome: 'unknown', error: { retryable: false } });
   } finally { call.resolve(ok('late result')); }
+});
+
+it.each([200, 5200])('does not turn a known command failure into uncertainty by cancelling its running sibling (%sms)', async siblingMs => {
+  const registry = new ToolRegistry(); const ledger = new ToolCallLedger();
+  const started: number[] = []; const aborted: number[] = [];
+  registry.register({ name: 'run_command', description: 'Command fixture', source: 'native',
+    parameters: { type: 'object', properties: { step: { type: 'number' } } },
+    mutates: false, parallelSafe: false, riskLevel: 'execute', timeoutMs: 7000,
+    handler: async (args, ctx) => {
+      const step = Number(args.step); started.push(step);
+      ctx.signal?.addEventListener('abort', () => aborted.push(step), { once: true });
+      await new Promise(resolve => setTimeout(resolve, step === 1 ? 10 : siblingMs));
+      return step === 1 ? err('exit code: 1; optional analysis engine unavailable') : ok(`step ${step} completed`);
+    } });
+  const result = await buildCodeExecTool(registry).handler({ code:
+    'return await Promise.all([tools.run_command({step:1}), tools.run_command({step:2}), tools.run_command({step:3})]);',
+  }, { cwd: process.cwd(), projectName: 'fixture', toolCallLedger: ledger });
+  expect(result.isError).toBe(true);
+  expect(result.content).toContain('optional analysis engine unavailable');
+  expect(result.effectOutcome).toBeUndefined();
+  expect(ledger.outcomeUnknownTool).toBeUndefined();
+  expect(started).toContain(1);
+  expect(started).not.toContain(3);
+  for (const step of started) expect(aborted).not.toContain(step);
 });

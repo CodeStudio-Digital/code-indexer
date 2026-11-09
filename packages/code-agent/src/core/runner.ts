@@ -626,6 +626,8 @@ export class CoderRunner extends EventEmitter {
 
   /** Exact catalog sent on the latest provider turn (after cap + relevance). */
   public visibleToolNames: ReadonlySet<string> | null = null;
+  public projectionReceipt: import('./tool-projection.js').ToolProjectionReceipt | null = null;
+  public requestedToolNames = new Set<string>();
 
   /**
    * Last `response.id` returned by the Responses API (ChatGPT/Codex with
@@ -660,6 +662,13 @@ export class CoderRunner extends EventEmitter {
   }
   public getPolicyShadowScopeFactory(): RunnerOptions['policyShadowScopeFactory'] {
     return this.opts.policyShadowScopeFactory;
+  }
+
+  /** Read-only memory capabilities inherit scope/toggles, with child-local throttling. */
+  public getMemoryContext(): Pick<RunnerOptions,
+    'getRelevantProjectMemory' | 'onMemoryInjected' | 'getProjectMemoryIndex' | 'getUserMemoryIndex'> {
+    const { getRelevantProjectMemory, onMemoryInjected, getProjectMemoryIndex, getUserMemoryIndex } = this.opts;
+    return { getRelevantProjectMemory, onMemoryInjected, getProjectMemoryIndex, getUserMemoryIndex };
   }
 
   /** Public mirrors of opts.sessionId / opts.isSubagent so subagent factories can inherit them. */
@@ -863,18 +872,9 @@ export class CoderRunner extends EventEmitter {
    */
   private buildActiveContextBlockForTurn(): string | null {
     const ctx = this.opts.toolContext;
-    const goal = ctx.getGoalState ? ctx.getGoalState() : null;
     const tasksState = ctx.getTasksState ? ctx.getTasksState() : null;
     const base = buildActiveContextBlock({
       todos: this.currentTodos,
-      goal: goal
-        ? {
-            text: goal.text,
-            status: goal.status,
-            budgetTokens: goal.budgetTokens ?? null,
-            completionNote: goal.completionNote ?? null,
-          }
-        : null,
       tasksState: tasksState ?? null,
     });
     const docs = buildIndexedDocsBlock(ctx.projectId);
@@ -1265,7 +1265,18 @@ export class CoderRunner extends EventEmitter {
    * discovered schema on the very next turn; direct hidden calls retain the
    * dispatch fallback for providers that can emit an undeclared tool name.
    */
+  /** Discovery reports static exclusions; argument-dependent authority remains at dispatch. */
+  discoveryState(name: string): { authorization: 'blocked' | 'requires_dispatch_validation'; visible: boolean; reason?: string } {
+    const blocked = this.opts.globalDisabledTools?.has(name) || this.opts.sessionDisabledTools?.has(name)
+      || (name === 'submit_plan' && (!this.opts.planMode || this.opts.specMode));
+    return { authorization: blocked ? 'blocked' : 'requires_dispatch_validation',
+      visible: this.visibleToolNames?.has(name) ?? false,
+      ...(blocked ? { reason: 'disabled_or_mode_excluded' } : {}) };
+  }
+
   promoteTool(name: string): string[] {
+    if (this.discoveryState(name).authorization === 'blocked') return [];
+    this.requestedToolNames.add(name);
     const requiredPinnedTools = new Set(this.opts.requiredPinnedTools ?? []);
     const alreadyPinned = this.pinnedTools.has(name);
     const evicted = promoteDynamicToolPin(
@@ -1397,6 +1408,7 @@ export class CoderRunner extends EventEmitter {
   /** Switch the tool permission mode mid-run (PATCH endpoint / worker RPC). */
   setToolPermissionMode(mode: 'ask' | 'auto' | 'unrestricted'): void {
     this.opts = { ...this.opts, toolPermissionMode: mode };
+    this.opts.toolContext.permissionGate?.refreshPending?.();
   }
 
   /**
@@ -1527,11 +1539,11 @@ export class CoderRunner extends EventEmitter {
         buildActiveContextBlock: () =>
           this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
         getRelevantProjectMemory: this.opts.getRelevantProjectMemory,
+        onMemoryInjected: this.opts.onMemoryInjected,
         synthesizeMemoryQuery: this.opts.synthesizeMemoryQuery,
         getSessionStateData: this.opts.getSessionStateData,
-        // A1 — independent goal-completion verifier (host-built; undefined when off).
-        verifyGoalCompletion: this.opts.verifyGoalCompletion,
         getProjectMemoryIndex: this.opts.getProjectMemoryIndex,
+        getUserMemoryIndex: this.opts.getUserMemoryIndex,
         getConversationChapterIndex: this.opts.getConversationChapterIndex,
         getRelevantConversationChapters: this.opts.getRelevantConversationChapters,
         // Session-drive "guide files": surface the files this session has

@@ -36,8 +36,8 @@
   "everywhere.semanticPlaceholder": "Descreva o comportamento, responsabilidade ou código relacionado…",
   "everywhere.semanticFallback": "O índice semântico não está disponível para este projeto; exibindo o fallback FTS.",
   "everywhere.ftsFallback": "Fallback FTS",
-  "everywhere.semanticAction": "Buscar código semanticamente relacionado"
-  ,"keymap.replaceTitle": "Substituir atalho?",
+  "everywhere.semanticAction": "Buscar código semanticamente relacionado",
+  "keymap.replaceTitle": "Substituir atalho?",
   "keymap.replaceDescription": "O atalho {{binding}} já pertence a {{names}}. A outra ação perderá apenas esta combinação.",
   "keymap.replace": "Substituir",
   "keymap.cancel": "Cancelar",
@@ -55,5 +55,8 @@
   "keymap.pressKeys": "Pressione…",
   "keymap.shortcut": "Atalho",
   "keymap.resetToPreset": "Herdar do preset",
-  "keymap.noActions": "Nenhuma ação encontrada."
+  "keymap.noActions": "Nenhuma ação encontrada.",
+  "everywhere": {
+    "pathsPartial": "Caminhos indexados parciais. Refine a busca; resultados ausentes não comprovam inexistência."
+  }
 }

@@ -203,6 +203,8 @@ async function resumeSubordinateInner(
     ).getSandboxStackForService?.(resumeLabel) ?? 'react-ts';
 
   const companyContext: CompanyContext = {
+    workspaceMutationGate: ctx.workspaceMutationGate,
+    sessionMessenger: ctx.sessionMessenger,
     orchestrator: deps.orchestratorRef as never,
     companySessionId: ctx.companySessionId,
     runtimeKind: ctx.runtimeKind,

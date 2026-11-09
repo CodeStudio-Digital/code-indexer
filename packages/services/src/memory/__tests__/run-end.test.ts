@@ -22,6 +22,17 @@ const fakeDistiller = (out: MemoryCandidate[]): MemoryDistiller => ({ async dist
 const noop = fakeDistiller([]);
 
 describe('createRunEndMemory', () => {
+  it('exposes pending host extraction until actual settlement, including caller timeouts', async () => {
+    let finish!: (value: MemoryCandidate[]) => void;
+    const waiting = new Promise<MemoryCandidate[]>(resolve => { finish = resolve; });
+    const rem = createRunEndMemory({ writer: fakeWriter().writer, search: fakeSearch(),
+      distillers: { positive: { distill: () => waiting }, failure: noop, procedure: noop } });
+    const id = asSessionId('00000000-0000-4000-8000-000000000001');
+    const task = rem.extractAndPersist(1, 'proj', { sessionId: id, summary: 'signal' });
+    expect(rem.hasPending?.(id)).toBe(true);
+    finish([]); await task;
+    expect(rem.hasPending?.(id)).toBe(false);
+  });
   it('persists positive facts AND gotcha lessons with source=session', async () => {
     const w = fakeWriter();
     const rem = createRunEndMemory({

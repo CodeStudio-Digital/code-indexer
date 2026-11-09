@@ -22,6 +22,7 @@ import type {
   SemanticJobRow,
 } from '@mcp/store/semantic-store.js';
 import { localEmbeddingFingerprint } from '@mcp/indexer/search/local-embeddings.js';
+import { localRerankQueryBlockReason } from '@mcp/indexer/search/rerank-query-policy.js';
 import type { ProjectJobScope, ProjectJobsPageInput, ProjectJobsPage } from './semantic-job-query-port.js';
 
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -157,6 +158,7 @@ export class SemanticVectorWorkerClient implements VectorStore {
   ): RerankerService {
     return {
       name: 'semantic-worker-local',
+      queryBlockReason: query => localRerankQueryBlockReason(target.model, query),
       cacheRevision: () => `semantic-worker-reranker:${JSON.stringify({
         ...target,
         dtype: target.dtype ?? 'q8',
@@ -240,7 +242,8 @@ export class SemanticVectorWorkerClient implements VectorStore {
     options?: VectorSearchOptions,
   ): Promise<VectorMatch[]> {
     if (!options?.namespace) return Promise.resolve([]);
-    return this.request('vectors.search', { queryVector, options });
+    const { signal, ...wireOptions } = options;
+    return this.request('vectors.search', { queryVector, options: wireOptions }, signal);
   }
 
   deleteByIds(
@@ -353,7 +356,7 @@ export class SemanticVectorWorkerClient implements VectorStore {
     const host = await this.ensureHost();
     signal?.throwIfAborted();
     const bridge = host.requireBridge();
-    const inferenceRequestId = type.startsWith('inference.') ? randomUUID() : undefined;
+    const inferenceRequestId = type.startsWith('inference.') || type === 'vectors.search' ? randomUUID() : undefined;
     const cancel = () => {
       try {
         if (inferenceRequestId) bridge.emit('inference.cancel', { inferenceRequestId });

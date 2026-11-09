@@ -143,9 +143,9 @@ export function persistPreparedFileStructural(
         tsResult.analysis.external_deps ?? [],
       );
       const references = tsResult.analysis.references ?? [];
-      if (references.length > 0) {
-        db.upsertSymbolReferences(projectId, id, file.relativePath, enrichReferencesWithLines(references, content));
-      }
+      // Replacement must also clear the previous rows when the last call or
+      // import disappears. Keeping those rows makes a fresh index lie.
+      db.upsertSymbolReferences(projectId, id, file.relativePath, enrichReferencesWithLines(references, content));
     }
 
     db.upsertFileContent(id, content, sizeBytes, projectId);

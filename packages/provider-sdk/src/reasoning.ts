@@ -171,6 +171,14 @@ export function withReasoningCapabilities(
   const initialWireModel = parseRuntimeModelRef(activeModel).id;
   if (provider.model !== initialWireModel) provider.setModel(initialWireModel);
   return {
+    get reasoningCapabilities() {
+      const metadata = selectRuntimeModelMetadata(models, activeModel);
+      return metadata ? { canReason: metadata.can_reason, supportedLevels: metadata.supported_reasoning_levels,
+        defaultLevel: metadata.default_reasoning_level } : undefined;
+    },
+    get toolLimits() {
+      return provider.toolLimits;
+    },
     get name() {
       return provider.name;
     },

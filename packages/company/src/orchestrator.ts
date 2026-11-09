@@ -198,6 +198,7 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
   async startMaster(opts: {
     userMessage: string; provider: string; model: string; maxTurns?: number; signal?: AbortSignal;
     roleConfigs?: RoleConfig[]; attachments?: import('@mcp/code-agent/index.js').CoderAttachment[];
+    boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
     thinking?: boolean;
     thinkingBudgetTokens?: number;
     temperature?: number;
@@ -213,8 +214,10 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
   }
 
   async resumeExistingMaster(opts: {
+    recordUserMessage?: boolean;
     userMessage: string; maxTurns?: number; roleConfigs?: RoleConfig[];
     attachments?: import('@mcp/code-agent/index.js').CoderAttachment[]; thinking?: boolean;
+    boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
     provider?: string; model?: string;
     thinkingBudgetTokens?: number; temperature?: number;
     /** Sticky master reasoning-effort override (orthogonal to thinking). */
@@ -278,7 +281,7 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
 
   async sendMessageToMaster(
     message: string,
-    options: { interject?: boolean; attachments?: import('@mcp/code-agent/index.js').CoderAttachment[]; thinking?: boolean } = {},
+    options: { interject?: boolean; attachments?: import('@mcp/code-agent/index.js').CoderAttachment[]; boardAttachments?: import('@mcp/company-contracts').BoardAttachment[]; thinking?: boolean } = {},
   ): Promise<{ ok: boolean; pending?: 'interactive_wait' }> {
     // Lazy-start: sub-session's master is dormant until the first message.
     if (!this.master.isAlive && this.master.agentRunId == null) {
@@ -297,6 +300,7 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
         maxTurns: 100,
         roleConfigs: cfg.role_assignments ?? [],
         attachments: options.attachments,
+        boardAttachments: options.boardAttachments,
         thinking: options.thinking ?? runtime.thinking,
         thinkingBudgetTokens: runtime.thinkingBudgetTokens,
         temperature: runtime.temperature,
@@ -416,6 +420,9 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
     return ok;
   }
   getSubordinate(agentRunId: string): SubordinateHandle | undefined { return this.subordinates.get(agentRunId); }
+  getRunnerForSupervision(agentRunId: string) {
+    return this.master.agentRunId === agentRunId ? this.master.handle?.runner : this.subordinates.get(agentRunId)?.runner;
+  }
   getSubordinateStatus(agentRunId: string): AgentRunStatus | null { return this.subordinates.statusOf(agentRunId); }
   listSubordinates() { return this.subordinates.list(); }
   /** Capacity snapshot consumed by the App-owned scheduler/dispatcher. */
@@ -570,7 +577,7 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
 
   // ─── Shutdown ──────────────────────────────────────────────────
   async abortAll(
-    opts: { teardownSandbox?: boolean; finalStatus?: 'error' | 'idle' } = {},
+    opts: { teardownSandbox?: boolean; finalStatus?: 'error' | 'idle' | 'paused' } = {},
   ): Promise<void> {
     const teardownSandbox = opts.teardownSandbox ?? true;
     const finalStatus = opts.finalStatus ?? 'error';
@@ -580,8 +587,12 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
     this.reconciler.stop();
     this.serviceSupervisor.stop();
     this.scheduler?.stop();
-    this.subordinates.abortAll();
+    this.inbox.dispose();
+    if (finalStatus === 'paused') {
+      for (const run of this.subordinates.list()) if (run.isAlive) this.subordinates.pause(run.agentRunId);
+    } else this.subordinates.abortAll();
     this.master.abort();
+    if (finalStatus === 'paused' && this.master.agentRunId) await this.ctx.companyFiles.updateAgentRunStatus(this.master.agentRunId, 'paused', 'Paused by user');
     await this.humanInLoop.cancelPendingMasterPrompts().catch(() => undefined);
     await this.ctx.companyFiles.updateSessionStatus(finalStatus);
     // Sub-sessions don't own a sandbox — teardown would target the parent's

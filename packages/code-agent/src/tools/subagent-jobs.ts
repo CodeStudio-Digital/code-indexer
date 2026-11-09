@@ -21,6 +21,7 @@ export type JobStatus = 'running' | 'done' | 'aborted';
 export type JobDelivery = 'none' | 'notified' | 'collected';
 
 export interface BackgroundAgentSlot {
+  result?: import('@mcp/agent-runtime-contracts').AgentWorkResult;
   index: number;
   label: string;
   profileId: string;

@@ -43,6 +43,25 @@ const STOPWORDS = new Set([
   'para', 'com', 'sem',
 ]);
 
+const RETRIEVAL_STOPWORDS = new Set([
+  ...STOPWORDS, 'how', 'why', 'what', 'where', 'when', 'which', 'can', 'could',
+  'would', 'should', 'it', 'its', 'this', 'that', 'these', 'those', 'be', 'been',
+  'was', 'were', 'by', 'at', 'from', 'as', 'if', 'into', 'has', 'have', 'had',
+  'como', 'porque', 'por', 'onde', 'quando', 'qual', 'quais', 'o', 'os', 'as',
+  'a', 'e', 'é', 'são', 'se', 'um', 'uma', 'uns', 'umas', 'no', 'na', 'nos',
+  'nas', 'dos', 'das', 'pelo', 'pela', 'pelos', 'pelas', 'ao', 'aos', 'em',
+  'já', 'foi', 'ser', 'este', 'esta', 'esse', 'essa', 'isso', 'isto',
+]);
+
+/** Suppress grammar-only OR matches for prose, preserving literal/code queries. */
+export function lexicalQuery(query: string): string {
+  if (planQuery(query).mode !== 'hybrid') return query;
+  return query.split(/\s+/).filter(token => {
+    const word = token.replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, '').toLowerCase();
+    return word && !RETRIEVAL_STOPWORDS.has(word);
+  }).join(' ');
+}
+
 export function planQuery(rawQuery: string): RetrievalPlan {
   const query = rawQuery.trim();
   if (query.length === 0) {

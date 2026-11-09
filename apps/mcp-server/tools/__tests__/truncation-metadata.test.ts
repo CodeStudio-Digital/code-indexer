@@ -80,7 +80,7 @@ describe('MCP producer truncation metadata', () => {
     mkdirSync(join(root, 'src'), { recursive: true });
     writeFileSync(join(root, 'src', 'many.ts'), Array.from({ length: 8 }, (_, i) => `needle ${i}`).join('\n'));
     const ctx = context(root, {
-      listFiles: () => [{ path: 'src/many.ts' }],
+      listFilePathsBounded: () => ({ paths: ['src/many.ts'], truncated: false }),
       searchFileContents: () => [],
     });
     const tool = searchTools.find((entry) => entry.name === 'grep_code')!;
@@ -93,6 +93,23 @@ describe('MCP producer truncation metadata', () => {
     expect(result.sourceTruncations).toEqual([expect.objectContaining({
       technique: 'mcp-grep-result-cap', inputSize: 3, inputSizeExact: false, outputSize: 2,
     })]);
+  });
+
+  it('keeps capped filename hints separate from empty content matches', async () => {
+    const root = tempRoot();
+    mkdirSync(join(root, 'licenses'), { recursive: true });
+    const paths = Array.from({ length: 7 }, (_, index) => `licenses/entry-${index}.ts`);
+    for (const path of paths) writeFileSync(join(root, path), 'export const permitted = true;');
+    const ctx = context(root, {
+      listFilePathsBounded: () => ({ paths, truncated: false }),
+      searchFileContents: () => [],
+    });
+    const tool = searchTools.find(entry => entry.name === 'grep_code')!;
+    const result = normalized(await tool.handler({ project_name: 'demo', pattern: 'licenses', literal: true }, ctx));
+    expect(result.text).toContain('No content matches');
+    expect(result.text).toContain('navigation hints, not content hits; more omitted');
+    expect(result.structuredContent).toMatchObject({ hits: [], pathHints: paths.slice(0, 5), pathHintsTruncated: true,
+      absenceConclusive: false });
   });
 
   it('applies one global disk-scan cap across synthetic workspace sources', async () => {
@@ -111,7 +128,7 @@ describe('MCP producer truncation metadata', () => {
       { rootPath: second, prefix: 'second' },
     ], 4);
 
-    expect(scan).toMatchObject({ totalMatches: 6, truncated: true });
+    expect(scan).toMatchObject({ totalMatches: 5, totalMatchesExact: false, truncated: true });
     expect(scan.paths).toHaveLength(4);
     expect(scan.paths.filter((path) => path.startsWith('second/'))).toHaveLength(1);
   });

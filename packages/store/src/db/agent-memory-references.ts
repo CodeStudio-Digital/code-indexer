@@ -1,6 +1,7 @@
 import { BATCH_IDS } from './agent-memory-values.js';
 import type { ReferencedFileSnapshot } from './agent-memory-types.js';
 import type { DB } from './types.js';
+export interface MemoryReferenceState { stale: string[]; total: number; unknown?: number }
 /** False-stale guard: a project with NO rows in `files` (never indexed, or a
  *  trimmed per-project DB) cannot be judged — every lookup would miss and mark
  *  EVERYTHING stale (unfair 0.5 score discount + risky GC input). */
@@ -14,15 +15,16 @@ export function projectHasFileIndex(db: DB, projectId: number): boolean {
 
 /** Resolve current file hashes for the referenced paths (best-effort). */
 export function captureReferencedFiles(
-  db: DB,
+  db: DB | null,
   projectId: number,
   paths: string[],
 ): ReferencedFileSnapshot[] {
-  const stmt = db.prepare('SELECT content_hash FROM files WHERE project_id = ? AND path = ?');
+  let stmt: import('better-sqlite3').Statement<[number, string]> | undefined;
+  try { stmt = db?.prepare<[number, string]>('SELECT content_hash FROM files WHERE project_id = ? AND path = ?'); } catch { /* unavailable index */ }
   return paths.map((p) => {
     let hash: string | null = null;
     try {
-      const row = stmt.get(projectId, p) as { content_hash?: string } | undefined;
+      const row = stmt?.get(projectId, p) as { content_hash?: string } | undefined;
       hash = row?.content_hash ?? null;
     } catch {
       /* files table absent on a trimmed per-project DB — store path only */
@@ -75,16 +77,26 @@ export function getStaleReferencedFiles(db: DB, id: number): string[] {
 export function getStaleBatch(
   db: DB,
   ids: number[],
-): Map<number, { stale: string[]; total: number }> {
-  const map = new Map<number, { stale: string[]; total: number }>();
+  resolveFileIndex: (projectId: number) => DB = () => db,
+): Map<number, MemoryReferenceState> {
+  const map = new Map<number, MemoryReferenceState>();
   if (ids.length === 0) return map;
   // Was 1 + N statements per memory (one row lookup, then one `files` lookup per
   // referenced path). On a recall that is hundreds of synchronous queries on the
   // Electron main thread. Now: one row batch, then one `files` batch per project.
   const indexedCache = new Map<number, boolean>();
+  const indexes = new Map<number, DB>();
+  const fileIndex = (pid: number): DB => {
+    let handle = indexes.get(pid);
+    if (!handle) { handle = resolveFileIndex(pid); indexes.set(pid, handle); }
+    return handle;
+  };
   const indexed = (pid: number): boolean => {
     let v = indexedCache.get(pid);
-    if (v === undefined) { v = projectHasFileIndex(db, pid); indexedCache.set(pid, v); }
+    if (v === undefined) {
+      try { v = projectHasFileIndex(fileIndex(pid), pid); } catch { v = false; }
+      indexedCache.set(pid, v);
+    }
     return v;
   };
 
@@ -102,11 +114,11 @@ export function getStaleBatch(
   }
 
   // Pass 1 — parse, and collect the paths each project needs looked up.
-  const pending = new Map<number, { projectId: number; refs: ReferencedFileSnapshot[] }>();
+  const pending = new Map<number, { projectId: number; refs: ReferencedFileSnapshot[]; unknown: number }>();
   const wantedByProject = new Map<number, Set<string>>();
   for (const id of ids) {
     const row = rows.get(id);
-    if (!row?.referenced_files || !indexed(row.project_id)) {
+    if (!row?.referenced_files) {
       map.set(id, { stale: [], total: 0 });
       continue;
     }
@@ -117,13 +129,18 @@ export function getStaleBatch(
         map.set(id, { stale: [], total: 0 });
         continue;
       }
-      refs = parsed.map((r) => (typeof r === 'string' ? { path: r, hash: null } : r));
+      refs = parsed.map((r) => (typeof r === 'string' ? { path: r, hash: null } : r))
+        .filter((r) => r && typeof r.path === 'string');
     } catch {
       map.set(id, { stale: [], total: 0 });
       continue;
     }
     const withBaseline = refs.filter((r) => r.hash != null);
-    pending.set(id, { projectId: row.project_id, refs: withBaseline });
+    if (!indexed(row.project_id)) {
+      map.set(id, { stale: [], total: 0, ...(refs.length ? { unknown: refs.length } : {}) });
+      continue;
+    }
+    pending.set(id, { projectId: row.project_id, refs: withBaseline, unknown: refs.length - withBaseline.length });
     let wanted = wantedByProject.get(row.project_id);
     if (!wanted) { wanted = new Set(); wantedByProject.set(row.project_id, wanted); }
     for (const ref of withBaseline) wanted.add(ref.path);
@@ -137,7 +154,7 @@ export function getStaleBatch(
     for (let i = 0; i < paths.length; i += BATCH_IDS) {
       const chunk = paths.slice(i, i + BATCH_IDS);
       try {
-        const batch = db
+        const batch = fileIndex(projectId)
           .prepare(
             `SELECT path, content_hash
                FROM files
@@ -155,9 +172,10 @@ export function getStaleBatch(
   }
 
   // Pass 3 — compare.
-  for (const [id, { projectId, refs }] of pending) {
+  for (const [id, { projectId, refs, unknown }] of pending) {
     const hashes = hashesByProject.get(projectId);
     const stale: string[] = [];
+    let lookupUnknown = 0;
     for (const ref of refs) {
       if (!hashes || !hashes.has(ref.path)) {
         // Not present in `files` at all → the path vanished from the index.
@@ -165,10 +183,11 @@ export function getStaleBatch(
         continue;
       }
       const current = hashes.get(ref.path);
-      if (current === undefined) continue; // Lookup failed; cannot judge.
+      if (current === undefined) { lookupUnknown++; continue; } // Lookup failed; cannot judge.
       if (current === null || current !== ref.hash) stale.push(ref.path);
     }
-    map.set(id, { stale, total: refs.length });
+    const unverified = unknown + lookupUnknown;
+    map.set(id, { stale, total: refs.length - lookupUnknown, ...(unverified ? { unknown: unverified } : {}) });
   }
   return map;
 }

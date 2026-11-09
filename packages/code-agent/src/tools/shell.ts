@@ -1,5 +1,5 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import { RUN_COMMAND_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
   boundUtf8OutputDetailed,
@@ -263,8 +263,18 @@ const runCommandTool: CoderTool = {
 
     const headerLines = [
       `$ ${command}`,
-      `exit code: ${result.exitCode ?? 'killed'}${result.timedOut ? ' (timed out)' : ''}`,
+      `exit code: ${result.exitCode ?? (result.terminationUnconfirmed ? 'unconfirmed' : 'killed')}${result.timedOut ? ' (timed out)' : ''}`,
     ];
+    if (result.processId) headerLines.push(`command PID: ${result.processId}`);
+    if (result.outputDrainTimedOut) headerLines.push(
+      'The command exited; a descendant kept output handles open. Capture was closed after draining. Background processes may still be running; inspect the returned PID/logs before launching again.',
+    );
+    if (result.timedOut) headerLines.push(
+      'The command reached its requested deadline. Inspect partial output and current state before retrying. For servers, watchers, or work that must continue, use exec_command and poll its session with write_stdin.',
+    );
+    if (result.terminationUnconfirmed) headerLines.push(
+      `Termination could not be confirmed${result.processId ? ` (command PID ${result.processId})` : ''}. Inspect process state and outputs; do not launch a duplicate.`,
+    );
     const stdoutBounded = boundUtf8OutputDetailed(result.stdout, MAX_OUTPUT_BYTES);
     const stderrBounded = boundUtf8OutputDetailed(result.stderr, MAX_OUTPUT_BYTES);
     const localMaterializedGuardApplied = !!stdoutBounded.truncation || !!stderrBounded.truncation;
@@ -341,6 +351,7 @@ const runCommandTool: CoderTool = {
     }
     const out = lines.join('\n');
     return {
+      ...(result.terminationUnconfirmed ? unknownToolOutcome(out) : {}),
       content: out,
       ...(result.exitCode === 0 ? {} : { isError: true }),
       ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),

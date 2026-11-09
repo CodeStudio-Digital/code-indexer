@@ -49,6 +49,8 @@ export interface RerankerRuntimeDiagnostics {
 
 export interface RerankerService {
   readonly name: string;
+  /** Deterministic capability gate; does not load weights or perform I/O. */
+  queryBlockReason?(query: string): string | null;
   /**
    * Synchronous revision used by query-result caches. It should change when
    * the effective target, model, or provider credentials change.

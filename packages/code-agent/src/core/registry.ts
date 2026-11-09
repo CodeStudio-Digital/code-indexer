@@ -1,9 +1,9 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
-import { isUncertainToolOutcomeError } from './uncertain-tool-outcome.js';
+import { isUncertainToolOutcomeError, needsOutcomeRecoveryApproval } from './uncertain-tool-outcome.js';
 import { aliasNormalizationEnabled, normalizeToolArgs } from '@mcp/code-agent/core/tool-arg-aliases.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
-import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import { resolveToolMetadata, resolveToolInvocationMetadata } from '@mcp/code-agent/core/policy.js';
 import {
   combinedMutationSignal,
   MutationFenceError,
@@ -13,6 +13,8 @@ import { defaultLocalShellPort } from '@mcp/code-agent/ports/shell-port.js';
 import { toolSettlementNotifier } from './tool-settlement.js';
 import { asAbortSignal } from './abort-signal.js';
 import { runWithSnapshotInvocation } from '../ports/snapshot-invocation.js';
+import { beginInvocation, finishInvocation } from './invocation-evidence.js';
+import { createToolOutcomeScope } from './tool-outcome-observer.js';
 import {
   mutationFencedFilesystemPort,
   mutationFencedShellPort,
@@ -85,6 +87,39 @@ export class ToolRegistry {
   }
 
   async invoke(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+    const invocation = beginInvocation(name, ctx);
+    const started = performance.now();
+    const tool = this.tools.get(name);
+    const finalArgs = tool && aliasNormalizationEnabled() ? normalizeToolArgs(tool.parameters, args) : args;
+    let readOnly = !tool;
+    if (tool) {
+      const metadata = resolveToolInvocationMetadata(tool, finalArgs);
+      readOnly = !metadata.mutates && metadata.executionClass === 'read'
+        && metadata.riskLevel === 'read' && tool.effectBoundary !== 'control';
+    }
+    const invocationContext = { ...ctx, invocation };
+    const scope = createToolOutcomeScope(invocationContext, name, finalArgs,
+      tool?.source === 'native' && name === 'code_exec', !readOnly && tool?.effectBoundary !== 'nested');
+    if (ctx.toolOutcomeControl) ctx.toolOutcomeControl.scope = scope;
+    const execution: { dispatched: boolean; rawResult?: ToolResult } = { dispatched: false };
+    let result: ToolResult;
+    try {
+      result = await this.invokeInternal(name, finalArgs, {
+        ...invocationContext, toolOutcomeScope: scope, toolOutcomeControl: undefined,
+      }, execution);
+    } finally {
+      // The model-facing sticky guard can replace the result. Preserve the
+      // physical result for THIS invocation, including admission failures.
+      scope?.settle(execution.rawResult, readOnly, execution.dispatched);
+    }
+    return finishInvocation(result, invocation, started, readOnly,
+      tool?.source === 'mcp_external' || tool?.source === 'mcp' ? 'mcp' : tool?.source === 'native' ? 'native' : 'other', ctx);
+  }
+
+  private async invokeInternal(
+    name: string, args: Record<string, unknown>, ctx: ToolContext,
+    execution: { dispatched: boolean; rawResult?: ToolResult },
+  ): Promise<ToolResult> {
     if (ctx.toolCallLedger?.outcomeUnknownTool) {
       return unknownToolOutcome(`Dispatch blocked: the outcome of ${ctx.toolCallLedger.outcomeUnknownTool} is unresolved.`);
     }
@@ -121,7 +156,23 @@ export class ToolRegistry {
     // against the tool's own schema before dispatch. Invisible to the model;
     // see tool-arg-aliases.ts. This is the single chokepoint for ALL tool
     // calls — the runner loop, subagents, and code_exec's nested calls.
-    const finalArgs = aliasNormalizationEnabled() ? normalizeToolArgs(tool.parameters, args) : args;
+    const finalArgs = args;
+    const recoveryRequest = { toolUseId: ctx.currentToolUseId ?? name, toolName: name, input: finalArgs,
+      tool, outcomeRecovery: ctx.outcomeRecovery };
+    if ((ctx.permissionGate?.requiresOutcomeRecoveryApproval?.(recoveryRequest)
+      ?? needsOutcomeRecoveryApproval(ctx.outcomeRecovery, tool, finalArgs))
+      && !ctx.permissionGate?.consumeOutcomeRecoveryApproval({
+        toolUseId: ctx.currentToolUseId ?? name, toolName: name, input: finalArgs,
+        tool, outcomeRecovery: ctx.outcomeRecovery,
+      })) {
+      return {
+        content: 'Recovery allows inspection. This action was not dispatched: a previous tool outcome is still unconfirmed. Obtain explicit approval for this exact new action; do not repeat the original operation blindly.',
+        isError: true,
+        error: { code: 'TOOL_OUTCOME_RECOVERY_APPROVAL_REQUIRED', kind: 'permission', retryable: false },
+        guardVerdict: { action: 'block', reason: 'outcome-recovery', refusalKind: 'gate',
+          shouldReflect: false, affectsFailureStreak: false },
+      };
+    }
     let notify: ((result: Pick<ToolResult, 'isError'>) => void) | undefined;
     try {
       let invocationContext = ctx;
@@ -196,17 +247,38 @@ export class ToolRegistry {
         }
       }
       notify = toolSettlementNotifier(invocationContext, name, finalArgs);
+      const pendingWorkspaceEffects: Promise<void>[] = [];
+      if (ctx.companyContext?.workspaceMutationGate) invocationContext = {
+        ...invocationContext, retainWorkspaceMutationUntil: completion => { pendingWorkspaceEffects.push(completion); },
+      };
       const invoke = async () => {
         // Admission may have waited for another workspace owner. Cancellation
         // during that wait must not start a new effect when ownership arrives.
         if (asAbortSignal(invocationContext.signal)?.aborted) return cancelledBeforeDispatch(name);
+        execution.dispatched = true;
+        invocationContext.toolOutcomeScope?.markDispatched();
         return invocationContext.mutationFence ? await runWithMutationFence(
             invocationContext.mutationFence,
             () => tool.handler(finalArgs, invocationContext),
           )
         : await tool.handler(finalArgs, invocationContext);
       };
-      const result = await runWithSnapshotInvocation({ toolUseId: ctx.currentToolUseId, toolName: name }, invoke);
+      const runEffect = () => runWithSnapshotInvocation({ toolUseId: ctx.currentToolUseId, toolName: name }, invoke);
+      const company = ctx.companyContext;
+      const effectiveMetadata = resolveToolInvocationMetadata(tool, finalArgs);
+      const writesWorkspace = tool.effectBoundary !== 'nested' && tool.effectBoundary !== 'control'
+        && (effectiveMetadata.mutates || effectiveMetadata.riskLevel !== 'read' || effectiveMetadata.executionClass !== 'read');
+      const result = company?.workspaceMutationGate && writesWorkspace
+        ? await company.workspaceMutationGate.run({
+          sessionId: company.companySessionId, agentRunId: company.agentRunId ?? company.companySessionId,
+          toolUseId: ctx.currentToolUseId ?? name, toolName: name, signal: asAbortSignal(invocationContext.signal),
+          pendingEffects: () => pendingWorkspaceEffects,
+          onWaiting: waiting => ctx.reportProgress?.(waiting
+            ? 'waiting_resource: aguardando outra sessão concluir a alteração no workspace compartilhado'
+            : 'Workspace disponível; retomando a operação'),
+        }, runEffect, value => value.effectOutcome === 'unknown')
+        : await runEffect();
+      execution.rawResult = result;
       notify(result);
       if (result.effectOutcome === 'unknown') ctx.toolCallLedger?.markOutcomeUnknown(name);
       if (ctx.toolCallLedger?.outcomeUnknownTool && result.effectOutcome !== 'unknown') {

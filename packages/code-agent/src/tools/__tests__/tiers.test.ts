@@ -16,7 +16,6 @@ import {
   contextualTiersForRuntime,
 } from '@mcp/code-agent/tools/tiers.js';
 import { todoTools } from '@mcp/code-agent/tools/todo.js';
-import { goalTools } from '@mcp/code-agent/tools/goal.js';
 
 describe('tool tiers — persistent-shell session trio', () => {
   it('places exec_command / write_stdin / list_sessions in navigate, not bootstrap', () => {
@@ -51,27 +50,26 @@ describe('tool tiers — persistent-shell session trio', () => {
 });
 
 describe('tier contract — always-on state tools are explicitly tiered', () => {
-  // todoTools + goalTools register UNCONDITIONALLY for every session
-  // (index.ts:292,295). A member missing from every explicit tier set would
+  // todoTools register UNCONDITIONALLY for every session
+  // (index.ts). A member missing from every explicit tier set would
   // ship on turn 1 ONLY via getToolTier's bootstrap fallback — the silent
-  // gotcha that hid update_todo / create_goal / get_goal / update_goal for
-  // months. This locks them in so a future add to either module can't quietly
+  // gotcha that hid update_todo for
+  // months. This locks them in so a future addition can't quietly
   // ride the fallback.
   const explicit = new Set(getAllKnownToolsMeta().map((t) => t.name));
-  const alwaysOnStateTools = [...todoTools, ...goalTools].map((t) => t.name);
+  const alwaysOnStateTools = [...todoTools].map((t) => t.name);
 
   it.each(alwaysOnStateTools)('%s is in an explicit tier set (no silent fallback)', (name) => {
     expect(explicit.has(name)).toBe(true);
   });
 
-  it('the P1-promoted orphans live explicitly in bootstrap', () => {
-    // get_goal demoted to navigate in Phase B (12 calls / 12k turns); create_goal
-    // + update_goal stay in bootstrap so optional state can be set and closed
-    // without a tier unlock.
-    for (const name of ['create_goal', 'update_goal']) {
-      expect(BOOTSTRAP_TOOLS.has(name)).toBe(true);
+  it('keeps plans and tasks discoverable without exposing retired Meta tools', () => {
+    for (const name of ['task_list', 'update_task', 'submit_plan', 'read_plan']) {
+      expect(explicit.has(name)).toBe(true);
     }
-    expect(getToolTier('get_goal')).toBe('navigate');
+    for (const name of ['create_goal', 'get_goal', 'update_goal']) {
+      expect(explicit.has(name)).toBe(false);
+    }
   });
 
   it('task_list is the one bootstrap task tool; todo_write/update_todo/submit_tasks are navigate aliases', () => {

@@ -27,8 +27,7 @@ import { runSubagent } from '@mcp/code-agent/tools/implement-subagent.js';
 /**
  * Read-only allowlist for the reviewer. Strict subset of EXPLORE_ALLOWLIST —
  * the reviewer does not need to spawn nested agents and never writes. Shared
- * by other read-only subagents (verify-completion-subagent,
- * micro-agent-profiles), so it must stay execution-free; the probe-capable
+ * by other read-only subagents (micro-agent-profiles), so it must stay execution-free; the probe-capable
  * variant below is used ONLY by runReviewSubagent.
  */
 export const REVIEW_ALLOWLIST = new Set<string>([

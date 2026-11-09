@@ -14,6 +14,7 @@ import { getRegistryContextWindow } from '@mcp/code-agent/providers/capabilities
 import type { ProviderSpec } from '@mcp/provider-sdk';
 import { requestFetchHeaders } from '../wire-helpers/request.js';
 import { isOpenAIImageModelId, IMAGE_MODEL_MODE } from './image-model-ids.js';
+import { getOpenAIApiModelMetadata } from '@mcp/shared/providers/openai-api-models.js';
 
 export async function discoverOpenAIModels(
   spec: ProviderSpec,
@@ -42,6 +43,9 @@ export async function discoverOpenAIModels(
   const data = (await r.json()) as {
     data?: Array<{
       id?: string;
+      context_window?: number;
+      max_output_tokens?: number;
+      supported_reasoning_levels?: string[];
       capabilities?: Record<string, boolean | undefined>;
     }>;
   };
@@ -55,7 +59,12 @@ export async function discoverOpenAIModels(
     .map((m) => ({
       model_id: m.id!,
       name: m.id!,
-      context_window: getRegistryContextWindow(m.id!),
+      // Real endpoint metadata wins, then this provider's documented catalog.
+      // The generic registry includes Codex limits and must remain the last fallback.
+      context_window: positiveTokenLimit(m.context_window),
+      ...(positiveTokenLimit(m.max_output_tokens) != null ? { default_max_tokens: m.max_output_tokens } : {}),
+      ...(Array.isArray(m.supported_reasoning_levels) && m.supported_reasoning_levels.every(level => typeof level === 'string')
+        ? { supported_reasoning_levels: m.supported_reasoning_levels } : {}),
       source: 'live' as const,
       // Family-based tagging (gpt-image-*, dall-e-*) so image models surface
       // in the image-role pickers instead of masquerading as chat models.
@@ -76,7 +85,7 @@ export async function discoverOpenAIModels(
   const seed = spec.models;
   if (seed) {
     list = list.map((m) => {
-      const meta = seed[m.model_id];
+      const meta = seed[m.model_id] ?? (spec.kind === 'openai' ? getOpenAIApiModelMetadata(m.model_id) : undefined);
       if (!meta) return m;
       return {
         ...m,
@@ -94,6 +103,7 @@ export async function discoverOpenAIModels(
       };
     });
   }
+  list = list.map(m => ({ ...m, context_window: m.context_window ?? getRegistryContextWindow(m.model_id) }));
 
   // Legacy duplication (normal+coding variants) only when NO plan mode is
   // selected — preserves behavior for older zai rows that set the flag.
@@ -105,4 +115,8 @@ export async function discoverOpenAIModels(
   }
 
   return list;
+}
+
+function positiveTokenLimit(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
 }

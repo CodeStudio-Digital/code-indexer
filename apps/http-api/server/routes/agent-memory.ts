@@ -1,6 +1,8 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseIntQuery, notFound } from './_helpers.js';
+import { memoryPage, mountAgentMemoryCurationRoutes } from './agent-memory-curation.js';
+import { mountAgentMemorySemanticRoutes } from './agent-memory-semantic.js';
 
 /**
  * Agent-memory curation — the human feedback loop over the LIVE store
@@ -11,6 +13,8 @@ import { parseIdParam, parseIntQuery, notFound } from './_helpers.js';
  */
 export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
   const { db, agentMemoryService } = deps;
+  mountAgentMemoryCurationRoutes(app, deps);
+  mountAgentMemorySemanticRoutes(app, deps);
 
   /** Query endpoint for out-of-process agents. The http-api process owns the
    * memory embedder and vector worker; callers never open sqlite-vec. The
@@ -36,6 +40,11 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
     const project = db.getProject(projectId);
     if (!project) return notFound(c);
     const scope = projectId === 0 ? 'user' : 'project';
+    if (c.req.query('limit') !== undefined || c.req.query('offset') !== undefined) {
+      return c.json(memoryPage(deps, projectId, { offset: parseIntQuery(c, 'offset', 0), limit: parseIntQuery(c, 'limit', 40),
+        archived: c.req.query('archived') === 'true', query: c.req.query('q') }));
+    }
+    // Compatibility for older clients. Current UI requests bounded pages.
     return c.json(db.listAgentMemoryLive(scope, projectId, { includeArchived: true }));
   });
 
@@ -43,10 +52,11 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
     const id = parseIdParam(c);
     const row = db.getAgentMemoryById(id);
     if (!row) return notFound(c);
+    if (row.archived_at) return c.json({ error: 'Memory is archived; reload before pinning.' }, 409);
     const body = await c.req.json<{ importance: number }>();
     const importance = Math.max(0, Math.min(1, Number(body.importance)));
     if (!Number.isFinite(importance)) return c.json({ error: 'importance must be 0..1' }, 400);
-    db.setAgentMemoryImportance(id, importance);
+    await agentMemoryService.runRelationalWrite(() => db.setAgentMemoryImportance(id, importance));
     try {
       db.recordAgentMemoryEvent({
         eventType: 'pin', scope: row.scope, projectId: row.project_id, memoryId: id,
@@ -61,8 +71,7 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
     const row = db.getAgentMemoryById(id);
     if (!row) return notFound(c);
     if (row.archived_at) return c.json({ ok: true, alreadyArchived: true });
-    agentMemoryService.archive(id, 'forgotten:user');
-    await agentMemoryService.removeVectors(row.id, row.project_id).catch(() => undefined);
+    await agentMemoryService.runRelationalWrite(() => agentMemoryService.archive(id, 'forgotten:user'));
     try {
       db.recordAgentMemoryEvent({
         eventType: 'forget', scope: row.scope, projectId: row.project_id, memoryId: id,
@@ -73,11 +82,10 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/agent-memory/:id/restore', async (c) => {
     const id = parseIdParam(c);
-    const row = agentMemoryService.restore(id);
+    const row = await agentMemoryService.runRelationalWrite(() => agentMemoryService.restore(id));
     if (!row) {
       return c.json({ ok: false, error: 'not restorable (unknown, live, or a live row holds the same name)' }, 409);
     }
-    await agentMemoryService.embedAndUpsert(row).catch(() => undefined);
     try {
       db.recordAgentMemoryEvent({
         eventType: 'restore', scope: row.scope, projectId: row.project_id, memoryId: id,

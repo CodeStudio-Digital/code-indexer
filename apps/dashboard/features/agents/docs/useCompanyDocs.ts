@@ -6,7 +6,7 @@
  * every network payload is treated as untrusted — missing fields
  * degrade to the pre-D2 behavior (origin 'sandbox', no mtime).
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type DocOrigin = 'sandbox' | 'drive_mirror';
 
@@ -39,24 +39,35 @@ export function useDocsList(sessionId: string, service: string | null): {
   entries: DocEntry[];
   reload: () => void;
   loading: boolean;
+  error: string | null;
+  revision: number;
+  services: Array<{ service_id: string; name: string }>;
 } {
   const [entries, setEntries] = useState<DocEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [services, setServices] = useState<Array<{ service_id: string; name: string }>>([]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
+    setEntries([]);
     const url =
       `/api/company/sessions/${sessionId}/docs/list` +
       (service ? `?service=${encodeURIComponent(service)}` : '');
     fetch(url)
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((body: unknown) => {
-        if (!cancelled) setEntries(coerceEntries(body));
+        if (!cancelled) {
+          setEntries(coerceEntries(body));
+          const incoming = (body as { services?: Array<{ service_id: string; name: string }> }).services;
+          setServices(Array.isArray(incoming) ? incoming : []);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setEntries([]);
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -66,10 +77,11 @@ export function useDocsList(sessionId: string, service: string | null): {
     };
   }, [sessionId, service, nonce]);
 
-  return { entries, loading, reload: () => setNonce((n) => n + 1) };
+  return { entries, loading, error, services, revision: nonce, reload: () => setNonce((n) => n + 1) };
 }
 
 interface DocBody {
+  error: string | null;
   body: string;
   origin: DocOrigin | null;
   mtime: string | null;
@@ -85,7 +97,7 @@ export async function fetchDocBody(
   const qs = new URLSearchParams({ path });
   if (service) qs.set('service', service);
   const res = await fetch(`/api/company/sessions/${sessionId}/docs/read?${qs.toString()}`);
-  if (!res.ok) return { content: '', origin: null, mtime: null };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
   try {
     const json = JSON.parse(text) as { content?: unknown; origin?: unknown; mtime?: unknown };
@@ -102,40 +114,43 @@ export async function fetchDocBody(
   return { content: text, origin: null, mtime: null };
 }
 
-export function useDocBody(sessionId: string, service: string | null, path: string | null): DocBody {
-  const [state, setState] = useState<DocBody>({ body: '', origin: null, mtime: null, loading: false });
+export function useDocBody(sessionId: string, service: string | null, path: string | null, revision = 0): DocBody {
+  const [state, setState] = useState<DocBody>({ body: '', origin: null, mtime: null, loading: false, error: null });
   useEffect(() => {
     if (!path) {
-      setState({ body: '', origin: null, mtime: null, loading: false });
+      setState({ body: '', origin: null, mtime: null, loading: false, error: null });
       return;
     }
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true }));
+    setState({ body: '', origin: null, mtime: null, loading: true, error: null });
     fetchDocBody(sessionId, service, path)
       .then((r) => {
-        if (!cancelled) setState({ body: r.content, origin: r.origin, mtime: r.mtime, loading: false });
+        if (!cancelled) setState({ body: r.content, origin: r.origin, mtime: r.mtime, loading: false, error: null });
       })
-      .catch(() => {
-        if (!cancelled) setState({ body: '', origin: null, mtime: null, loading: false });
+      .catch((e: unknown) => {
+        if (!cancelled) setState({ body: '', origin: null, mtime: null, loading: false, error: e instanceof Error ? e.message : String(e) });
       });
     return () => {
       cancelled = true;
     };
-  }, [sessionId, service, path]);
+  }, [sessionId, service, path, revision]);
   return state;
 }
 
-type RagState = 'unknown' | 'not_indexed' | 'indexing' | 'indexed' | 'error';
+type RagState = 'stale' | 'unknown' | 'not_indexed' | 'indexing' | 'indexed' | 'error';
 
 /**
  * RAG status + trigger for the SELECTED doc. Optimistic: `index()`
  * flips to 'indexing' immediately and reverts on failure.
  */
-export function useDocsRag(sessionId: string, service: string | null, path: string | null): {
+export function useDocsRag(sessionId: string, service: string | null, path: string | null, revision = 0): {
   state: RagState;
   index: () => void;
 } {
   const [state, setState] = useState<RagState>('unknown');
+  const currentKey = `${sessionId}:${service}:${path}`;
+  const keyRef = useRef(currentKey);
+  useEffect(() => { keyRef.current = currentKey; }, [currentKey]);
 
   useEffect(() => {
     if (!path) {
@@ -147,11 +162,11 @@ export function useDocsRag(sessionId: string, service: string | null, path: stri
     const qs = new URLSearchParams({ path });
     if (service) qs.set('service', service);
     fetch(`/api/company/sessions/${sessionId}/docs/rag-status?${qs.toString()}`)
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((body: unknown) => {
         if (cancelled) return;
         const indexed = (body as { indexed?: unknown } | null)?.indexed === true;
-        setState(indexed ? 'indexed' : 'not_indexed');
+        setState(indexed ? 'indexed' : (body as { stale?: boolean })?.stale ? 'stale' : 'not_indexed');
       })
       .catch(() => {
         if (!cancelled) setState('unknown');
@@ -159,11 +174,11 @@ export function useDocsRag(sessionId: string, service: string | null, path: stri
     return () => {
       cancelled = true;
     };
-  }, [sessionId, service, path]);
+  }, [sessionId, service, path, revision]);
 
   const index = useCallback(() => {
     if (!path) return;
-    const prev = state;
+    const requestKey = currentKey;
     setState('indexing');
     fetch(`/api/company/sessions/${sessionId}/docs/index-rag`, {
       method: 'POST',
@@ -172,13 +187,13 @@ export function useDocsRag(sessionId: string, service: string | null, path: stri
     })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        setState('indexed');
+        if (keyRef.current === requestKey) setState('indexed');
       })
       .catch(() => {
         // Revert to whatever we knew before the optimistic flip.
-        setState(prev === 'indexed' ? 'indexed' : 'error');
+        if (keyRef.current === requestKey) setState('error');
       });
-  }, [sessionId, service, path, state]);
+  }, [sessionId, service, path, currentKey]);
 
   return { state, index };
 }

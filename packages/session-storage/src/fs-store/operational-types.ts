@@ -91,44 +91,6 @@ export interface FsSessionFilesystemRoot {
   updated_at: string;
 }
 
-export type FsGoalStatus = 'in_progress' | 'complete' | 'superseded';
-
-export interface FsGoalSnapshot {
-  id: string;
-  text: string;
-  status: FsGoalStatus;
-  budget_tokens: number | null;
-  completion_note: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface FsGoalMutation {
-  id: string;
-  seq: number;
-  source: 'tool' | 'admin';
-  tool_use_id: string | null;
-  tool_name: 'create_goal' | 'update_goal' | null;
-  expected: FsGoalSnapshot | null;
-  next: FsGoalSnapshot | null;
-}
-
-export interface FsSessionGoal extends FsGoalSnapshot {
-  revision: number;
-  mutation_seq: number;
-}
-
-export interface FsUpsertGoalInput {
-  text: string;
-  status: FsGoalStatus;
-  budgetTokens?: number | null;
-  completionNote?: string | null;
-  createdAt: string;
-  updatedAt: string;
-  expected_revision?: number;
-  operation_id?: string;
-}
-
 export interface FsPlanRow {
   id: string;
   seq: number;
@@ -233,7 +195,6 @@ export interface FsDriveInjectionPayload {
 }
 
 export interface FsSessionStateData {
-  goal: { text: string; status: string } | null;
   activePlan: { text: string; status: string } | null;
   todos: Array<{ status: string; label: string }>;
   notes: Array<{

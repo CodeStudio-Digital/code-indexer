@@ -22,6 +22,8 @@ import { HeaderRowsEditor, isReservedHeader } from './HeaderRowsEditor.js';
 import { McpOAuthConnectDialog } from './McpOAuthConnectDialog.js';
 
 interface McpServerEditDialogProps {
+  onConnected?: (result: import('./mcp-servers-api.js').McpServerTestResult) => void;
+  onDisconnected?: () => void;
   initial: Partial<AdminMcpServer>;
   isExisting: boolean;
   onClose: () => void;
@@ -59,7 +61,7 @@ const CORE_TIER_DESC_KEYS: Record<string, string> = {
 
 const CORE_TIER_NAMES = new Set(['bootstrap', 'navigate', 'admin']);
 
-export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: McpServerEditDialogProps) {
+export function McpServerEditDialog({ initial, isExisting, onClose, onSave, onConnected, onDisconnected }: McpServerEditDialogProps) {
   const { t } = useTranslation(['admin', 'common']);
   const isNew = !isExisting;
   const [form, setForm] = useState<Partial<AdminMcpServer> & { auth_token?: string }>({
@@ -85,12 +87,24 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
   );
   const [headerError, setHeaderError] = useState<string | null>(null);
   const [oauthDialogOpen, setOAuthDialogOpen] = useState(false);
+  const [argsText, setArgsText] = useState(() => JSON.stringify(initial.args ?? []));
+  const [envText, setEnvText] = useState(() => JSON.stringify(initial.env ?? {}));
 
   function update<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
   }
 
   function submit() {
+    let args: string[] = [], env: Record<string, string> = {};
+    if (form.transport === 'stdio') {
+      try {
+        args = JSON.parse(argsText); env = JSON.parse(envText);
+        if (!Array.isArray(args) || !args.every(a => typeof a === 'string')
+          || !env || Array.isArray(env) || typeof env !== 'object' || !Object.values(env).every(v => typeof v === 'string')) throw new Error('Invalid stdio configuration');
+      } catch {
+        setHeaderError(t('admin:mcpServer.stdioJsonError')); return;
+      }
+    }
     // Reject reserved header names at the boundary — matches the backend
     // validation that will happen on the route.
     const bad = Object.keys(headers).find(isReservedHeader);
@@ -122,8 +136,8 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
     // Transport-specific fields
     if (form.transport === 'stdio') {
       payload.command = form.command || null;
-      payload.args = form.args ?? [];
-      payload.env = form.env ?? {};
+      payload.args = args;
+      payload.env = env;
     } else {
       payload.url = form.url || null;
     }
@@ -200,22 +214,16 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
               <div>
                 <label className="text-xs font-medium">{t('admin:mcpServer.args')}</label>
                 <Input
-                  value={(form.args ?? []).join(' ')}
-                  onChange={(e) =>
-                    update('args', e.target.value.split(/\s+/).filter(Boolean) as unknown as string[])
-                  }
+                  value={argsText}
+                  onChange={(e) => setArgsText(e.target.value)}
                   placeholder={t('admin:mcpServer.argsPlaceholder')}
                 />
               </div>
               <div>
                 <label className="text-xs font-medium">{t('admin:mcpServer.envVars')}</label>
                 <Input
-                  value={JSON.stringify(form.env ?? {})}
-                  onChange={(e) => {
-                    try {
-                      update('env', JSON.parse(e.target.value));
-                    } catch { /* invalid JSON, ignore */ }
-                  }}
+                  value={envText}
+                  onChange={(e) => setEnvText(e.target.value)}
                   placeholder={t('admin:mcpServer.envVarsPlaceholder')}
                 />
               </div>
@@ -238,9 +246,6 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
                   {t('admin:mcpServer.headersHint')}
                 </p>
                 <HeaderRowsEditor value={headers} onChange={setHeaders} />
-                {headerError && (
-                  <p className="text-xs text-destructive mt-1">{headerError}</p>
-                )}
               </div>
             </>
           )}
@@ -288,6 +293,8 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
                 variant="outline"
                 size="sm"
                 onClick={() => setOAuthDialogOpen(true)}
+                disabled={form.url !== initial.url || form.auth_type !== initial.auth_type || form.transport !== initial.transport}
+                title={t('admin:mcpServer.oauth.saveFirst')}
               >
                 {t('admin:mcpServer.oauth.open')}
               </Button>
@@ -352,6 +359,7 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
           </div>
         </div>
         <DialogFooter>
+          {headerError && <p role="alert" className="text-xs text-destructive">{headerError}</p>}
           <Button variant="ghost" onClick={onClose}>
             {t('common:actions.cancel')}
           </Button>
@@ -365,6 +373,8 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave }: Mc
           serverId={form.id}
           serverUrl={form.url ?? ''}
           onClose={() => setOAuthDialogOpen(false)}
+          onConnected={(result) => { setOAuthDialogOpen(false); onConnected?.(result); onClose(); }}
+          onDisconnected={onDisconnected}
         />
       )}
     </Dialog>

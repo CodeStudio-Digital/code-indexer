@@ -47,7 +47,8 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/projects/:id/file-paths', async (c) => {
     try {
-      return c.json(await h.searchPaths({
+      const search = c.req.query('format') === 'page' ? h.searchPathsPage : h.searchPaths;
+      return c.json(await search({
         projectId: parseIdParam(c), query: c.req.query('query') ?? '',
         limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
         fuzzy: c.req.query('fuzzy') !== 'false',

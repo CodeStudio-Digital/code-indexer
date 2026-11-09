@@ -44,17 +44,13 @@ interface FallbackData {
 }
 
 interface TextDeltaData { text: string }
+/** One extra character records whether the 80-character label needs ellipsis. */
+export const AGENT_PREVIEW_LIMIT = 81;
 interface ToolCallStartData { id: string; name: string }
 interface ToolCallResultData {
   id: string;
   duration_ms?: number;
   status?: 'running' | 'done' | 'error';
-  persistence?: 'pending';
-}
-interface GoalMutationsPersistedData { toolUseIds?: unknown }
-interface GoalMutationsPersistenceFailedData {
-  toolUseIds?: unknown;
-  message?: unknown;
 }
 interface MessageCompleteData { usage?: AgentUsage }
 interface DoneData { reason: string; error?: string }
@@ -71,25 +67,41 @@ export function applyAgentEvent(prev: StreamState, ae: AgentEventEnvelope): Stre
   const seed: AgentStreamState = current ?? {
     role: ae.agent,
     agentRunId: ae.agentRunId,
-    textChunks: [],
     toolCalls: [],
     status: 'running',
   };
 
   const next = reduceInner(seed, ae);
-  if (next === seed) return prev;
+  if (next === seed && current === null && ae.event !== 'text_delta') return prev;
+  let agentTextPreviews = prev.agentTextPreviews;
+  const previewKey = isMaster ? 'master' : ae.agentRunId;
+  if (ae.event === 'text_delta') {
+    const text = (ae.data as TextDeltaData).text;
+    if (!text) return prev;
+    // Slice the incoming chunk first: even a huge single delta only copies a
+    // bounded tail. This projection never owns the canonical transcript.
+    const preview = ((agentTextPreviews.get(previewKey) ?? '') + text.slice(-AGENT_PREVIEW_LIMIT)).slice(-AGENT_PREVIEW_LIMIT);
+    if (preview !== agentTextPreviews.get(previewKey)) {
+      agentTextPreviews = new Map(agentTextPreviews);
+      agentTextPreviews.set(previewKey, preview);
+    }
+  } else if (ae.event === 'message_complete' && agentTextPreviews.has(previewKey)) {
+    agentTextPreviews = new Map(agentTextPreviews);
+    agentTextPreviews.delete(previewKey);
+  }
+  if (next === current && agentTextPreviews === prev.agentTextPreviews) return prev;
 
-  if (isMaster) return { ...prev, masterState: next };
+  if (isMaster) return { ...prev, masterState: next, agentTextPreviews };
 
-  const subs = new Map(prev.subordinateStates);
-  subs.set(ae.agentRunId, next);
-  return { ...prev, subordinateStates: subs };
+  const subs = next === current ? prev.subordinateStates : new Map(prev.subordinateStates);
+  if (next !== current) subs.set(ae.agentRunId, next);
+  return { ...prev, subordinateStates: subs, agentTextPreviews };
 }
 
 function reduceInner(state: AgentStreamState, ae: AgentEventEnvelope): AgentStreamState {
   switch (ae.event) {
     case 'text_delta':
-      return appendTextDelta(state, ae.data as TextDeltaData);
+      return state;
     case 'tool_call_start': {
       const d = ae.data as ToolCallStartData;
       const withTool = startToolCall(state, d);
@@ -98,29 +110,17 @@ function reduceInner(state: AgentStreamState, ae: AgentEventEnvelope): AgentStre
     case 'tool_call_result': {
       const d = ae.data as ToolCallResultData;
       const withTool = finishToolCall(state, d);
-      const pending = d.persistence === 'pending' || d.status === 'running';
+      const pending = d.status === 'running';
       return withActivityPatch(
         withTool,
         {
           id: d.id,
           status: pending ? 'running' : d.status === 'error' ? 'failed' : 'completed',
           elapsedMs: d.duration_ms,
-          ...(pending ? { note: 'awaiting durable goal commit' } : {}),
+          ...(pending ? { note: 'awaiting tool completion' } : {}),
         },
         !pending,
       );
-    }
-    case 'goal_mutations_persisted':
-      return settleGoalMutations(
-        state,
-        goalMutationIds((ae.data as GoalMutationsPersistedData).toolUseIds),
-      );
-    case 'goal_mutations_persistence_failed': {
-      const d = ae.data as GoalMutationsPersistenceFailedData;
-      const message = typeof d.message === 'string' && d.message.length > 0
-        ? d.message
-        : 'Goal state could not be persisted.';
-      return settleGoalMutations(state, goalMutationIds(d.toolUseIds), message);
     }
     case 'provider_call':
       return withActivityPatch(state, activityPatchFromProviderCall(ae.data as ProviderCallPayload));
@@ -161,11 +161,6 @@ function clearActivity(state: AgentStreamState): AgentStreamState {
   return { ...state, activity: null };
 }
 
-function appendTextDelta(state: AgentStreamState, d: TextDeltaData): AgentStreamState {
-  if (!d.text) return state;
-  return { ...state, textChunks: [...state.textChunks, d.text] };
-}
-
 function startToolCall(state: AgentStreamState, d: ToolCallStartData): AgentStreamState {
   // Dedup on replay so the same tool call doesn't appear twice.
   if (state.toolCalls.some((tc) => tc.id === d.id)) return state;
@@ -174,7 +169,7 @@ function startToolCall(state: AgentStreamState, d: ToolCallStartData): AgentStre
 }
 
 function finishToolCall(state: AgentStreamState, d: ToolCallResultData): AgentStreamState {
-  const pending = d.persistence === 'pending' || d.status === 'running';
+  const pending = d.status === 'running';
   let changed = false;
   const next = state.toolCalls.map((tc) => {
     if (tc.id !== d.id) return tc;
@@ -184,60 +179,14 @@ function finishToolCall(state: AgentStreamState, d: ToolCallResultData): AgentSt
       ...tc,
       status: (pending ? 'running' : d.status === 'error' ? 'error' : 'done') as ToolCallState['status'],
       durationMs: d.duration_ms,
-      awaitingPersistence: pending,
       error: undefined,
     };
   });
   return changed ? { ...state, toolCalls: next } : state;
 }
 
-function goalMutationIds(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((id): id is string => typeof id === 'string' && id.length > 0)
-    : [];
-}
-
-function settleGoalMutations(
-  state: AgentStreamState,
-  ids: string[],
-  failure?: string,
-): AgentStreamState {
-  if (ids.length === 0) return state;
-  const idSet = new Set(ids);
-  let changed = false;
-  const toolCalls = state.toolCalls.map((tool) => {
-    if (!idSet.has(tool.id) || !tool.awaitingPersistence) return tool;
-    changed = true;
-    return {
-      ...tool,
-      status: (failure ? 'error' : 'done') as ToolCallState['status'],
-      awaitingPersistence: false,
-      error: failure,
-    };
-  });
-  let next = changed
-    ? {
-        ...state,
-        toolCalls,
-        ...(failure ? { statusMessage: failure } : {}),
-      }
-    : state;
-  for (const id of ids) {
-    next = withActivityPatch(
-      next,
-      {
-        id,
-        status: failure ? 'failed' : 'completed',
-        ...(failure ? { note: failure } : {}),
-      },
-      true,
-    );
-  }
-  return next;
-}
-
 function completeMessage(state: AgentStreamState, d: MessageCompleteData): AgentStreamState {
-  return { ...state, textChunks: [], usage: d.usage ?? state.usage };
+  return { ...state, usage: d.usage ?? state.usage };
 }
 
 function markDone(state: AgentStreamState, d: DoneData): AgentStreamState {

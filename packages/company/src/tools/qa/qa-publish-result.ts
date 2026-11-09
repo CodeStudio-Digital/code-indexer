@@ -1,12 +1,6 @@
 /**
- * Tool: `qa_publish_result`. Called by a QA subordinate at the end of a
- * Playwright run to surface aggregate stats on the company stream. The
- * dashboard's QaRunBadge / TestsTab subscribe to `qa_run_completed`.
- *
- * The tool is a thin orchestrator: it validates input, publishes one
- * event on the meta bus, and returns. Persistence (bundle QA-run entity,
- * routes) lands in phase 2 — for now the badge re-derives state from
- * the live event stream + buffered SSE replay.
+ * Republish an existing completed run only after checking its stored
+ * results and evidence. Model-supplied counters never create a QA verdict.
  */
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
@@ -16,42 +10,17 @@ import type {
   QaFailingTest,
   QaRunCompletedPayload,
 } from '@mcp/company/tools/qa/qa-event-types.js';
+import { getQaStores } from './qa-start-run.js';
+import { realpath, stat } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
   properties: {
-    suite: {
-      type: 'string',
-      description:
-        'Suite identifier (typically the spec file or feature name, e.g. "login" or "tests/e2e/login.spec.ts").',
-    },
-    passed: { type: 'number', description: 'Tests that passed.' },
-    failed: { type: 'number', description: 'Tests that failed.' },
-    skipped: { type: 'number', description: 'Tests skipped (default 0).' },
-    duration_ms: {
-      type: 'number',
-      description: 'Total wall-clock duration of the run in milliseconds.',
-    },
-    trace_urls: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Relative paths (within the workspace) to .zip traces produced by Playwright.',
-    },
-    failing_tests: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name: { type: 'string' },
-          error: { type: 'string' },
-          trace_url: { type: 'string' },
-        },
-        required: ['name', 'error'],
-      },
-      description: 'Per-failure detail. Empty/omitted when the suite is green.',
-    },
+    run_id: { type: 'string', description: 'Persisted, completed QA run in this session. Counts are read from stored evidence; caller counts are ignored.' },
   },
-  required: ['suite', 'passed', 'failed'],
+  required: ['run_id'],
+  additionalProperties: false,
 };
 
 export function qaPublishResult(
@@ -62,12 +31,35 @@ export function qaPublishResult(
   return {
     name: 'qa_publish_result',
     description:
-      'Publish the result of a Playwright test run to the company stream. The dashboard picks this up to update the QA badge and test history.',
+      'Republish a completed, persisted QA run with real evidence. Requires run_id. Does not accept self-reported success: verdicts/counts come from recorded results and evidence files. Preview runs finish automatically via qa_check_preview; Playwright runs finish through the reporter.',
     parameters: PARAMETERS,
     source: 'native',
     handler: async (args) => {
       try {
-        const payload = coercePayload(args, agentRole, agentRunId);
+        const { runStore, resultStore } = getQaStores();
+        if (!runStore || !resultStore) return err('QA persistence is unavailable');
+        const run = await runStore.getRun(mustString(args.run_id, 'run_id'));
+        if (!run || run.company_session_id !== orchestrator.companySessionId) return err('QA run does not belong to this session');
+        if (agentRunId !== null && run.agent_run_id !== agentRunId) return err('QA run belongs to a different agent');
+        if (run.status !== 'completed') return err('Run is not completed. Execute preview checks or wait for the Playwright reporter; do not fabricate a result.');
+        const results = await resultStore.listResults(run.id);
+        if (!results.length || !run.report_persisted_path) return err('Run has no persisted QA evidence');
+        const root = await realpath(run.report_persisted_path);
+        for (const result of results.filter((item) => item.status !== 'skipped')) {
+          const artifacts = [result.screenshot_path, result.trace_path, result.summary_md_path].filter((path): path is string => !!path);
+          let verified = false;
+          for (const artifact of artifacts) {
+            const path = await realpath(resolve(root, artifact)).catch(() => '');
+            if (path.startsWith(root + sep) && (await stat(path)).isFile()) { verified = true; break; }
+          }
+          if (!verified) return err(`Missing persisted evidence for ${result.test_name}`);
+        }
+        const passed = results.filter((item) => item.status === 'passed').length;
+        const failed = results.filter((item) => ['failed', 'timed-out', 'interrupted'].includes(item.status)).length;
+        const skipped = results.filter((item) => item.status === 'skipped').length;
+        if (passed + failed === 0 || run.passed !== passed || run.failed !== failed || run.skipped !== skipped) return err('Persisted QA counts do not match executed evidence');
+        const payload: QaRunCompletedPayload = { agent_run_id: run.agent_run_id, agent_role: agentRole, suite: run.suite,
+          passed, failed, skipped, duration_ms: run.duration_ms ?? undefined };
         orchestrator.publishQaResult(payload);
         const summary = `passed=${payload.passed} failed=${payload.failed} skipped=${payload.skipped}`;
         return ok(`Published qa_run_completed for "${payload.suite}" — ${summary}`);

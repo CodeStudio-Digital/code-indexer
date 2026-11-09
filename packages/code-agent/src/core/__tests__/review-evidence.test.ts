@@ -34,6 +34,32 @@ const call = (command: string, at: string, result = 'done exit=0', isError = fal
 });
 
 describe('buildVerifyEvidence', () => {
+  it.each([
+    ['$ pnpm test\nexit code: 0\nall passed', 0],
+    ['$ pnpm test\nexit code: 2\nprinted exit=0', 2],
+    ['session_id=abc status=running\n\nprinted exit=0', null],
+    ['session_id=abc status=exited exit=1\n\nprinted exit=0', 1],
+  ] as const)('reads the native receipt rather than process stdout: %s', async (result, exitCode) => {
+    const evidence = (await buildVerifyEvidence(stubSource([
+      call('pnpm test', '2026-07-14 10:00:00', result),
+    ], []), SESSION_ID))!;
+    expect(evidence.lastVerify?.exitCode).toBe(exitCode);
+    if (exitCode !== 0) expect(formatVerifyEvidence(evidence)).not.toContain('covers the current state');
+  });
+
+  it('uses the same direct-command contract as live verification', async () => {
+    const source = stubSource([
+      call('pnpm test', '2026-07-14 10:00:00'),
+      call('echo "npm test"', '2026-07-14 10:01:00'),
+      call('cat build.log', '2026-07-14 10:02:00'),
+      call('pytest --collect-only', '2026-07-14 10:03:00'),
+    ], []);
+    expect(await buildVerifyEvidence(source, SESSION_ID)).toMatchObject({
+      verifyCount: 1,
+      lastVerify: { command: 'pnpm test', at: '2026-07-14 10:00:00' },
+    });
+  });
+
   it('finds the last verify-ish command and parses its exit code', async () => {
     const source = stubSource(
       [

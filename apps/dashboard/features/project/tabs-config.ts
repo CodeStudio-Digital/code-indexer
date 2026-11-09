@@ -53,7 +53,7 @@ export const PRIMARY_SURFACES: TabDef[] = [
   { id: 'api', label: 'API', icon: Webhook, kind: 'primary', group: 'core' },
   { id: 'ssh', label: 'SSH', icon: Server, kind: 'primary', group: 'core' },
   { id: 'diagrams', label: 'Diagrams', icon: Workflow, kind: 'primary', group: 'core' },
-  { id: 'snapshots', label: 'Snapshots', icon: BookOpen, kind: 'primary', group: 'analytics' },
+  { id: 'snapshots', label: 'Memória', icon: BookOpen, kind: 'primary', group: 'analytics' },
   { id: 'index', label: 'Index', icon: Database, kind: 'primary', group: 'analytics' },
   { id: 'preview', label: 'Preview', icon: Monitor, kind: 'primary', group: 'core' },
 ];

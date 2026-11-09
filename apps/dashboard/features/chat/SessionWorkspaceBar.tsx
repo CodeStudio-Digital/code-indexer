@@ -111,7 +111,7 @@ export function SessionWorkspaceBar(props: Props) {
             <label className="block space-y-1.5 text-sm">
               <span>{t('chat:worktrees.name')}</span>
               <Input autoFocus required maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}" value={name}
-                placeholder="feature-login" disabled={creating} onChange={(event) => setName(event.target.value)} />
+                placeholder={t('workspace.branchPlaceholder')} disabled={creating} onChange={(event) => setName(event.target.value)} />
             </label>
             <label className="block space-y-1.5 text-sm">
               <span>{t('chat:worktrees.branch')}</span>

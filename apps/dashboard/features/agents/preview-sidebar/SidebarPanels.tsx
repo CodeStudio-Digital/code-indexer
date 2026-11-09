@@ -17,6 +17,7 @@ import type { SidePanel } from './SidebarRail.js';
 
 interface SidebarPanelsProps {
   sessionId: string;
+  companyId?: string;
   active: SidePanel;
   /**
    * Pre-built `<AgentsSidebar />` element passed down from
@@ -35,7 +36,7 @@ interface SidebarPanelsProps {
   readOnly?: boolean;
 }
 
-export function SidebarPanels({ sessionId, active, companyConfigSlot, databaseSlot, pluginWindows = [], readOnly = false }: SidebarPanelsProps) {
+export function SidebarPanels({ sessionId, companyId, active, companyConfigSlot, databaseSlot, pluginWindows = [], readOnly = false }: SidebarPanelsProps) {
   if (readOnly && active !== 'company-config') return null;
   // Plugin-contributed tool window → its sandboxed webview fills the drawer.
   if (active.startsWith('plugin:')) {
@@ -53,7 +54,7 @@ export function SidebarPanels({ sessionId, active, companyConfigSlot, databaseSl
   }
 
   if (active === 'inbox') {
-    return <InboxPanel companySessionId={sessionId} />;
+    return <InboxPanel companySessionId={sessionId} companyId={companyId} />;
   }
 
   if (active === 'env') {

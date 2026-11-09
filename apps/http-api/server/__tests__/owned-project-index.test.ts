@@ -12,7 +12,7 @@ async function fixture() {
   const abort = new AbortController();
   const deps = {
     db: { getProject: vi.fn(() => ({ id: 7, root_path: root })) },
-    projectIndexService: { ensureFresh: vi.fn(), ensureStructuralReady: vi.fn(async (..._args: unknown[]) => ({ status: 'ready' })) },
+    projectIndexService: { ensureFresh: vi.fn(), reconcileStructural: vi.fn(async (..._args: unknown[]) => ({ status: 'ready' })) },
     semanticCoordinator: { enqueueCodeProjectReindex: vi.fn(() => ({ id: 19 })) },
   };
   const control = { signal: abort.signal, assertCurrent: vi.fn() };
@@ -22,8 +22,8 @@ it('indexes only the owner project and starts semantic work after readiness', as
   const f = await fixture();
   const result = await f.service.reconcile(7, { project_path: f.root, rebuild_semantic: true }, f.control);
   expect(result).toContain('rebuild job #19');
-  expect(f.deps.projectIndexService.ensureFresh).toHaveBeenCalledWith(7, 'manual');
-  expect(f.deps.projectIndexService.ensureStructuralReady).toHaveBeenCalledWith(7, 180000, f.abort.signal);
+  expect(f.deps.projectIndexService.ensureFresh).not.toHaveBeenCalled();
+  expect(f.deps.projectIndexService.reconcileStructural).toHaveBeenCalledWith(7, 180000, f.abort.signal, expect.any(Function));
   expect(f.deps.semanticCoordinator.enqueueCodeProjectReindex).toHaveBeenCalledWith(7, true);
 });
 it('rejects foreign paths and malformed inputs before scheduling any effect', async () => {
@@ -36,7 +36,7 @@ it('rejects foreign paths and malformed inputs before scheduling any effect', as
 });
 it.each(['cancel', 'lease'] as const)('fences semantic dispatch after %s while waiting for structural readiness', async cause => {
   const f = await fixture();
-  f.deps.projectIndexService.ensureStructuralReady.mockImplementationOnce(async () => {
+  f.deps.projectIndexService.reconcileStructural.mockImplementationOnce(async () => {
     if (cause === 'cancel') f.abort.abort(new Error('stopped'));
     else f.control.assertCurrent.mockImplementation(() => { throw new Error('lease lost'); });
     return { status: 'ready' };
@@ -45,7 +45,7 @@ it.each(['cancel', 'lease'] as const)('fences semantic dispatch after %s while w
   expect(f.deps.semanticCoordinator.enqueueCodeProjectReindex).not.toHaveBeenCalled();
 });
 it('reports unfinished structural work without issuing semantic work', async () => {
-  const f = await fixture(); f.deps.projectIndexService.ensureStructuralReady.mockResolvedValueOnce({ status: 'indexing' });
+  const f = await fixture(); f.deps.projectIndexService.reconcileStructural.mockResolvedValueOnce({ status: 'indexing' });
   expect(await f.service.reconcile(7, { project_path: f.root }, f.control)).toContain('semantic indexing was not requested');
   expect(f.deps.semanticCoordinator.enqueueCodeProjectReindex).not.toHaveBeenCalled();
 });

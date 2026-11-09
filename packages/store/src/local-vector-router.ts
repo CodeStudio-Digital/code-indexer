@@ -78,8 +78,9 @@ export class LocalVectorRouter extends LocalVectorRouteResolver {
     namespace: string,
     generationId: number,
     queryVector: number[],
-    options: { topK?: number; filter?: Record<string, string> } = {},
+    options: VectorSearchOptions = {},
   ): Promise<VectorMatch[]> {
+    options.signal?.throwIfAborted();
     const route = this.resolve(namespace, generationId);
     // A queued CLI removal preserves relational FTS while deliberately making
     // the derivable vector database non-serving. Most importantly this check
@@ -87,7 +88,10 @@ export class LocalVectorRouter extends LocalVectorRouteResolver {
     // by a late search from another process.
     if (this.projectAccessBlocked(route)) return Promise.resolve([]);
     return this.pool.read(route.dbPath, route.tableName,
-      (store) => store.search(queryVector, { ...options, namespace }));
+      (store) => {
+        options.signal?.throwIfAborted();
+        return store.search(queryVector, { ...options, namespace });
+      });
   }
 
   deleteByIds(
@@ -260,13 +264,14 @@ export class LocalVectorRouter extends LocalVectorRouteResolver {
   async searchMany(
     targets: Array<{ namespace: string; generationId: number }>,
     queryVector: number[],
-    options: { topK?: number; filter?: Record<string, string>; concurrency?: number } = {},
+    options: VectorSearchOptions & { concurrency?: number } = {},
   ): Promise<VectorMatch[]> {
     const concurrency = Math.max(1, Math.min(4, Math.floor(options.concurrency ?? 4)));
     const results: VectorMatch[][] = new Array(targets.length);
     let cursor = 0;
     const worker = async (): Promise<void> => {
       while (cursor < targets.length) {
+        options.signal?.throwIfAborted();
         const index = cursor++;
         const target = targets[index];
         results[index] = await this.search(target.namespace, target.generationId, queryVector, options);
@@ -327,6 +332,7 @@ export class LocalSemanticVectorStore implements VectorStore {
     queryVector: number[],
     options?: VectorSearchOptions,
   ): Promise<VectorMatch[]> {
+    options?.signal?.throwIfAborted();
     if (!options?.namespace) return [];
     if (options.generationId != null) {
       return this.router.search(

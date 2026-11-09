@@ -1,8 +1,10 @@
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import process from 'node:process';
+import { captureReliabilitySource } from './reliability-source-manifest.js';
+import { identifiesDisconnectedConfiguration } from '../evals/agent-effectiveness/disconnected-config.mjs';
 
 import type { AgentMessage, ChatUsage } from "@mcp/provider-sdk";
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
@@ -12,14 +14,13 @@ import { stableArgsKey } from '@mcp/code-agent/core/runner/dup-utils.js';
 import { runStructuralIndex } from '@mcp/indexer/indexer/structural.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
+import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
+import { CollaborationFiles } from '@mcp/session-storage/collaboration/files.js';
+import { CollaborationRevisions } from '@mcp/session-storage/collaboration/revisions.js';
+import type { BudgetState } from '@mcp/session-storage/collaboration/budget.js';
+import { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
 
-type CaseId =
-  | 'explore_session_expiry'
-  | 'plan_login_lockout'
-  | 'build_invoice_rounding'
-  | 'builder_paused_badge'
-  | 'admin_release_branch';
+type CaseId = string;
 
 interface BenchCase {
   id: CaseId;
@@ -70,6 +71,9 @@ interface CommandResult {
 }
 
 interface RunResult {
+  execution_mode: 'standard' | 'ultra';
+  requested_effort: string;
+  aggregate_budget: { tokens: number; costUsd: number | null; agentStarts: number; modelCalls: number; uncertain: number } | null;
   run_id: string;
   case_id: CaseId;
   agent: AgentId;
@@ -118,6 +122,15 @@ interface SemanticIndexResult {
 }
 
 const CASES: Record<CaseId, BenchCase> = {
+  ultra_parallel_integration: {
+    id: 'ultra_parallel_integration', agent: 'build', maxTurns: 18,
+    task: 'Este é um teste explícito de coordenação. Use workflow com dois implementadores independentes: um corrige calculateInvoice em src/billing/invoice.js para arredondar somente o total final; outro corrige src/ui/status-badge.js: paused deve ter modifier paused e label Pausado, mantendo role="status" e adicionando aria-live="polite" a todo badge. Preserve active. Declare esses donos de arquivos. Revise e integre as alterações isoladas pelos tools normais antes de verificar. Retome o mesmo workflow após integração: sua etapa verify depende dos dois implementadores e deve executar node --test. Preserve os testes existentes e finalize após essa verificação necessária.',
+    verify: ctx => verdict({ tests_pass: ctx.test.status === 0,
+      scoped_changes: sameSet(ctx.changedFiles, ['src/billing/invoice.js', 'src/ui/status-badge.js']),
+      workflow_used: ctx.tools.some(tool => tool.name === 'workflow' && tool.started),
+      workflow_resumed: ctx.tools.some(tool => tool.name === 'workflow' && tool.started && !tool.is_error && tool.input.resume_workflow_id),
+      integrations_observed: ctx.tools.filter(tool => tool.name === 'integrate_chat_changes' && tool.started && !tool.is_error).length === 2 }),
+  },
   explore_session_expiry: {
     id: 'explore_session_expiry',
     agent: 'explore',
@@ -127,7 +140,6 @@ const CASES: Record<CaseId, BenchCase> = {
       + 'como ela chega ao token e qual é a regra exata de expiração? Cite os arquivos e símbolos usados.',
     verify: (ctx) => {
       const answer = ctx.finalText.toLowerCase();
-      const normalized = answer.normalize('NFKD').replace(/\p{Diacritic}/gu, '');
       const checks = {
         no_changes: ctx.changedFiles.length === 0,
         cites_policy_file: answer.includes('session-policy.js'),
@@ -136,8 +148,7 @@ const CASES: Record<CaseId, BenchCase> = {
         identifies_ttl: answer.includes('session_ttl_ms') || answer.includes('sessionttlms'),
         identifies_expiry_field: answer.includes('expiresat'),
         explains_boundary: answer.includes('>=') || answer.includes('maior ou igual') || answer.includes('igual'),
-        identifies_disconnected_config:
-          /\b(orfao|orfa|unused|nao usada|nao consumida|nao participa|nao conectad|duplicad|duas fontes|segunda fonte|desconectad|independent|fonte paralela)/.test(normalized),
+        identifies_disconnected_config: identifiesDisconnectedConfiguration(answer),
       };
       return verdict(checks);
     },
@@ -225,18 +236,41 @@ const CASES: Record<CaseId, BenchCase> = {
   },
 };
 
+interface ReliabilityScenario { id: string; kind: 'fix' | 'inspect'; source: string; task: string; checks?: Array<[unknown[], unknown]>; expected?: unknown }
+const scenarios = (JSON.parse(readFileSync(resolve('evals/agent-effectiveness/reliability/scenarios.json'), 'utf8')) as { cases: ReliabilityScenario[] }).cases;
+const exactInspectReturn = process.argv.includes('--exact-inspect-return-v2');
+const executionMode = parseStringFlag('--execution-mode', 'standard');
+if (executionMode !== 'standard' && executionMode !== 'ultra') throw new Error('execution-mode must be standard or ultra');
+const reasoningEffort = parseStringFlag('--reasoning-effort', 'high');
+for (const scenario of scenarios) {
+  CASES[scenario.id] = {
+    id: scenario.id, agent: 'build', maxTurns: 10,
+    task: scenario.kind === 'fix'
+      ? `Corrija somente src/reliability/scenario.js. ${scenario.task} Preserve a API e execute os testes. Não altere os testes.`
+      : `Inspecione src/reliability/scenario.js. ${scenario.task} Escreva a resposta como um valor JSON em answer.json. ${exactInspectReturn ? 'Grave exatamente o valor retornado por scenario(), preservando tipo e estrutura. Não acrescente envelope, explicação ou campo answer. ' : ''}Não altere nenhum arquivo existente. Valide o JSON.`,
+    verify: ctx => {
+      let answer: unknown;
+      try { answer = JSON.parse(readFileSync(join(ctx.root, 'answer.json'), 'utf8')); } catch { /* verifier fails below */ }
+      return verdict({ tests_pass: ctx.test.status === 0,
+        scoped_changes: sameSet(ctx.changedFiles, [scenario.kind === 'fix' ? 'src/reliability/scenario.js' : 'answer.json']),
+        correct_answer: scenario.kind === 'fix' || JSON.stringify(answer) === JSON.stringify(scenario.expected) });
+    },
+  };
+}
+
 function verdict(checks: Record<string, boolean>, notes: string[] = []): Verification {
   return { passed: Object.values(checks).every(Boolean), checks, notes };
 }
 
 function toolCallLimit(caseId: CaseId): number {
-  return {
+  return ({
+    ultra_parallel_integration: 18,
     explore_session_expiry: 6,
     plan_login_lockout: 10,
     build_invoice_rounding: 8,
     builder_paused_badge: 6,
     admin_release_branch: 4,
-  }[caseId];
+  } as Record<string, number>)[caseId] ?? 10;
 }
 
 function sameSet(actual: string[], expected: string[]): boolean {
@@ -254,11 +288,13 @@ function run(command: string, args: string[], cwd: string): CommandResult {
     encoding: 'utf8',
     windowsHide: true,
     env: process.env,
+    timeout: 60_000,
+    maxBuffer: 2 * 1024 * 1024,
   });
   return {
     status: result.status,
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? (result.error?.message ?? ''),
+    stderr: [result.stderr, result.error?.message].filter(Boolean).join('\n'),
   };
 }
 
@@ -476,13 +512,21 @@ function freshProject(runId: string, caseId: CaseId): string {
   const root = resolve('.tmp/agent-effectiveness/runs', runId);
   mkdirSync(root, { recursive: true });
   cpSync(source, root, { recursive: true });
-  if (caseId === 'build_invoice_rounding') {
+  const scenario = scenarios.find(value => value.id === caseId);
+  if (scenario) {
+    mkdirSync(join(root, 'src/reliability'), { recursive: true });
+    writeFileSync(join(root, 'src/reliability/scenario.js'), scenario.source + '\n');
+    if (scenario.kind === 'fix') writeFileSync(join(root, 'test/reliability.test.js'),
+      `import { test } from 'node:test'; import assert from 'node:assert/strict'; import { scenario } from '../src/reliability/scenario.js';\n`
+      + `const checks = ${JSON.stringify(scenario.checks)}; for (const [args, expected] of checks) test(JSON.stringify(args), () => assert.deepEqual(scenario(...args), expected));\n`);
+  }
+  if (caseId === 'build_invoice_rounding' || caseId === 'ultra_parallel_integration') {
     cpSync(
       resolve('evals/agent-effectiveness/seeds/invoice.js'),
       join(root, 'src/billing/invoice.js'),
     );
   }
-  if (caseId === 'builder_paused_badge') {
+  if (caseId === 'builder_paused_badge' || caseId === 'ultra_parallel_integration') {
     cpSync(
       resolve('evals/agent-effectiveness/seeds/status-badge.js'),
       join(root, 'src/ui/status-badge.js'),
@@ -655,6 +699,8 @@ async function executeCase(
       },
       userMessage: benchCase.task,
       agent: benchCase.agent,
+      executionMode,
+      reasoningEffort,
       maxTurns: benchCase.maxTurns,
       signal: abort.signal,
       toolPermissionMode: 'unrestricted',
@@ -696,8 +742,19 @@ async function executeCase(
         && RETRIEVAL_COALESCE_REASONS.has(tool.guard_reason ?? ''),
     ).length;
     const maxToolCalls = toolCallLimit(benchCase.id);
+    const budgetFiles = new CollaborationFiles(join(mcpDataDir(), 'chat-collaboration'));
+    const network = await budgetFiles.get<{ rootId: string; budgetId: string }>('networks', handle.session.id);
+    const budget = await new CollaborationRevisions(budgetFiles).read<BudgetState>('budgets', `${network?.rootId ?? handle.session.id}:${network?.budgetId ?? 'initial'}:ultra`);
+    const reservations = budget ? Object.values(budget.value.reservations) : [];
+    const modelReservations = reservations.filter(row => row.kind === 'model' || row.kind === 'suggestion');
     return {
       run_id: runId,
+      execution_mode: executionMode,
+      requested_effort: reasoningEffort,
+      aggregate_budget: budget ? { tokens: modelReservations.reduce((total, row) => total + row.tokens, 0),
+        costUsd: modelReservations.some(row => row.cost === null) ? null : modelReservations.reduce((total, row) => total + (row.cost ?? 0), 0),
+        agentStarts: reservations.filter(row => (row.kind ?? 'agent') === 'agent').length, modelCalls: modelReservations.length,
+        uncertain: reservations.filter(row => row.state !== 'settled').length } : null,
       case_id: benchCase.id,
       agent: benchCase.agent,
       provider: 'zai',
@@ -824,14 +881,18 @@ async function main(): Promise<void> {
   process.env.CODER_FALLBACK_CHAIN = '';
 
   const models = parseListFlag('--models', ['glm-4.7-flash::coding', 'glm-5.2']);
-  const caseIds = parseListFlag('--cases', Object.keys(CASES)) as CaseId[];
+  const caseIds = parseListFlag('--cases', Object.keys(CASES).filter(id => id !== 'ultra_parallel_integration' || executionMode === 'ultra')) as CaseId[];
   const repetitions = parseNumberFlag('--repetitions', 1);
+  const shardCount = parseNumberFlag('--shard-count', 1);
+  const shardIndex = parseNumberFlag('--shard-index', 1);
+  if (shardIndex > shardCount) throw new Error('shard-index exceeds shard-count');
   const retrievalGuard = parseGuardMode();
   const semanticIndex = parseOnOffFlag('--semantic-index', 'on');
   const apiBase = parseStringFlag('--api-base', 'http://127.0.0.1:7333').replace(/\/+$/, '');
   process.env.CODER_RETRIEVAL_GUARD = retrievalGuard === 'on' ? '1' : '0';
   for (const caseId of caseIds) {
     if (!CASES[caseId]) throw new Error(`Unknown case: ${caseId}`);
+    if (caseId === 'ultra_parallel_integration' && executionMode !== 'ultra') throw new Error('The explicit workflow integration case requires --execution-mode ultra');
   }
 
   const config = loadConfig();
@@ -847,7 +908,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const jobs: Array<{ benchCase: BenchCase; model: string; repetition: number }> = [];
+  let jobs: Array<{ benchCase: BenchCase; model: string; repetition: number }> = [];
   for (let repetition = 1; repetition <= repetitions; repetition += 1) {
     for (const benchCase of caseIds.map((id) => CASES[id])) {
       for (const model of models) jobs.push({ benchCase, model, repetition });
@@ -855,15 +916,60 @@ async function main(): Promise<void> {
   }
   // Pair by case and alternate model order each repetition to reduce warm-cache/order bias.
   if (repetitions % 2 === 0) jobs.reverse();
+  jobs = jobs.filter((_job, index) => index % shardCount === shardIndex - 1);
+  // The supervisor isolates fixed jobs and preserves repetition labels.
+  const jobFile = parseStringFlag('--jobs-file', '');
+  if (jobFile) {
+    const specified: unknown = JSON.parse(readFileSync(resolve(jobFile), 'utf8'));
+    if (!Array.isArray(specified) || specified.length === 0) throw new Error('jobs-file must contain jobs');
+    const seen = new Set<string>();
+    jobs = specified.map(job => {
+      if (!job || !CASES[job.caseId] || !models.includes(job.model) || !Number.isSafeInteger(job.repetition) || job.repetition < 1) {
+        throw new Error('Invalid supervised evaluation job');
+      }
+      const key = JSON.stringify([job.caseId, job.model, job.repetition]);
+      if (seen.has(key)) throw new Error('Duplicate supervised evaluation job');
+      seen.add(key);
+      return { benchCase: CASES[job.caseId], model: job.model, repetition: job.repetition };
+    });
+  }
 
   const results: RunResult[] = [];
+  const maximumUsd = Number(parseStringFlag('--max-estimated-usd', '10'));
+  const maximumMinutes = parseNumberFlag('--max-minutes', 120);
+  if (!(maximumUsd > 0 && Number.isFinite(maximumUsd))) throw new Error('Invalid evaluation budget');
+  const roundStarted = Date.now();
+  let estimatedUsd = 0;
   const reportDir = resolve('.tmp/agent-effectiveness/reports');
+  const sourceRoot = resolve(process.env.RELIABILITY_EVAL_SOURCE_ROOT ?? '.');
+  const buildEvidence = { source: captureReliabilitySource(sourceRoot), head: spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true }).stdout.trim(),
+    dirtyDiffSha256: createHash('sha256').update(spawnSync('git', ['diff', '--binary', 'HEAD'], { maxBuffer: 16 * 1024 * 1024, windowsHide: true }).stdout).digest('hex'),
+    runnerSha256: createHash('sha256').update(readFileSync(join(sourceRoot, 'packages/code-agent/src/core/runner.ts'))).digest('hex'),
+    harnessSha256: createHash('sha256').update(readFileSync(new URL(import.meta.url))).digest('hex'),
+    verifier: { version: 2, sha256: createHash('sha256').update(readFileSync(new URL('../evals/agent-effectiveness/disconnected-config.mjs', import.meta.url))).digest('hex') },
+    promptRevision: exactInspectReturn ? 'exact-return-v2' : 'original-v1',
+    executionMode, reasoningEffort,
+    node: process.version, electron: process.versions.electron, shardCount, shardIndex };
   mkdirSync(reportDir, { recursive: true });
+  writeFileSync(join(reportDir, `budget-${process.pid}.json`), JSON.stringify({ models, jobs: jobs.length,
+    maximumUsd, maximumMinutes, inputUsdPerMillion: 1.4, outputUsdPerMillion: 4.4,
+    pricingSource: 'local model_prices glm-5.3 litellm; estimate, not billing proof',
+    enforcement: 'between cases; one in-flight case can exceed the estimate', startedAt: new Date().toISOString() }, null, 2));
   const checkpoint = join(reportDir, `in-progress-${process.pid}.json`);
+  // Fail before any paid call if the prepared and live MCP sources disagree.
+  const bridge = new McpToolBridge({ deferConnection: true });
+  try { await bridge.connect(); } finally { await bridge.close(); }
   for (const [index, job] of jobs.entries()) {
+    if (estimatedUsd >= maximumUsd || Date.now() - roundStarted >= maximumMinutes * 60_000) {
+      process.stderr.write(`[agent-eval] Budget reached after ${results.length}/${jobs.length} cases. Remaining cases are not_run.\n`);
+      break;
+    }
     process.stderr.write(
       `[agent-eval ${index + 1}/${jobs.length}] ${job.model} ${job.benchCase.agent}/${job.benchCase.id}\n`,
     );
+    writeFileSync(checkpoint, JSON.stringify({ buildEvidence, models, caseIds, repetitions, retrievalGuard, semanticIndex, apiBase,
+      completed: results.length, results, activeJob: { caseId: job.benchCase.id, model: job.model, repetition: job.repetition,
+        startedAt: new Date().toISOString() } }, null, 2));
     const result = await executeCase(
       job.benchCase,
       job.model,
@@ -873,10 +979,11 @@ async function main(): Promise<void> {
       apiBase,
     );
     results.push(result);
+    estimatedUsd += ((result.usage.prompt_tokens_total ?? result.usage.input_tokens) * 1.4 + result.usage.output_tokens * 4.4) / 1_000_000;
     writeFileSync(
       checkpoint,
       `${JSON.stringify({
-        models,
+        buildEvidence, models,
         caseIds,
         repetitions,
         retrievalGuard,
@@ -898,11 +1005,13 @@ async function main(): Promise<void> {
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const sourceAfter = captureReliabilitySource(sourceRoot);
+  const sourceStable = sourceAfter.sha256 === buildEvidence.source.sha256;
   const base = resolve('.tmp/agent-effectiveness/reports', `agent-effectiveness-${stamp}`);
   writeFileSync(
     `${base}.json`,
     `${JSON.stringify({
-      models,
+      buildEvidence, sourceAfter, sourceStable, models,
       caseIds,
       repetitions,
       retrievalGuard,
@@ -914,6 +1023,7 @@ async function main(): Promise<void> {
   );
   writeFileSync(`${base}.md`, markdownReport(results, models, retrievalGuard), 'utf8');
   process.stdout.write(`${base}.md\n${base}.json\n`);
+  if (!sourceStable) throw new Error('Evaluation sources changed during the run; comparison is invalid');
 }
 
 main()

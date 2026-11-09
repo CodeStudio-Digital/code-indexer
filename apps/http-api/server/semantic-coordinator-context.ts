@@ -68,7 +68,7 @@ runCodeProjectBuild(projectId: number, generation: SemanticGenerationRow, force:
 shouldPauseCodeProject(projectId: number): boolean;
 codeProjectIdForJob(job: SemanticJobRow): number | null;
 semanticProjectIdForJob(job: SemanticJobRow): number | null;
-ensureMemoryNamespace(namespace: string): Promise<void>;
+ensureMemoryNamespace(namespace: string, force?: boolean, beforeStart?: () => void): Promise<void>;
 catchUpMemoryNamespace(namespace: string): Promise<void>;
 beginDocsCollectionMutation(collectionId: number, operation: 'upsert' | 'delete'): Promise<{ job_id: number; token: string } | null>;
 endDocsCollectionMutation(fence: { job_id: number; token: string } | null, mutationError?: unknown): void;

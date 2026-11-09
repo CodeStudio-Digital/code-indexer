@@ -213,6 +213,9 @@ export interface GitRunResult {
   updatedBeforePush?: boolean;
   /** Stable UI intent when automatic push recovery needs operator action. */
   pushActionRequired?: GitPushActionRequired;
+  /** Pull or its autostash restoration left unresolved files, even if Git exited zero. */
+  updateActionRequired?: 'conflicts';
+  conflictedFiles?: string[];
 }
 
 export type GitPushActionRequired =
@@ -730,9 +733,9 @@ export interface ProjectGitApi {
   ): Promise<GitRunResult>;
 
   /**
-   * Pull from a remote into the current branch. `rebase: true` runs
-   * `git pull --rebase` (the JetBrains "Update Project" default) which
-   * keeps history linear when there's nothing local to merge.
+   * Pull into the current branch, using Git's autostash to preserve and
+   * reapply tracked local edits. `rebase: true` rebases local commits.
+   * Unresolved files are reported after both integration and restoration.
    */
   pull(
     input: GitScope & { remote?: string; branch?: string; rebase?: boolean },

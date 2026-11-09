@@ -71,8 +71,7 @@ export async function runAgentSession(input: { task: string; options: AgentCliOp
         io.write(`\n  ⚙ ${data.name} ${args.length > 120 ? args.slice(0, 120) + '…' : args}\n`);
       } else if (event.event === 'tool_call_result') {
         output.result(String(data.id), String(data.name), data.result as { content: string; isError?: boolean }, Number(data.duration_ms ?? 0));
-      } else if (event.event === 'goal_mutations_persisted') output.persisted(data as unknown as { toolUseIds: string[] });
-      else if (event.event === 'goal_mutations_persistence_failed') output.failed(data as unknown as { toolUseIds: string[]; message: string });
+      }
       else if (event.event === 'task_started') io.write(`\n  ▶ task_started ${data.task_id} (${data.mode})\n`);
       else if (event.event === 'task_finished') io.write(`\n  ✓ task_finished ${data.task_id} (${data.status})\n`);
       else if (event.event === 'stream_rollback') io.write('\n[The provider retracted its previous partial response.]\n');

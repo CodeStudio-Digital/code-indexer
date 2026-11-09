@@ -19,6 +19,7 @@ import { SqlEditor } from '../query/SqlEditor.js';
 import { FilterBar } from './FilterBar.js';
 import { RelatedRowsDialog } from './RelatedRowsDialog.js';
 import { analyzeSqlResultEditability } from './sql-result-editability.js';
+import { quoteGridRelation } from '../grid/grid-export.js';
 import type { DbColumn, DbEngine, DbQueryResult, DbTableInfo, DbTableSort, DbWhereCondition } from '../types.js';
 
 const PAGE_SIZES = [50, 100, 200, 500];
@@ -43,7 +44,7 @@ export function DataGridTab({
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'preview' | 'custom'>('preview');
   const [viewMode, setViewMode] = useState<'filter' | 'sql'>('filter');
-  const [sql, setSql] = useState(`SELECT * FROM ${table}`);
+  const [sql, setSql] = useState(`SELECT * FROM ${quoteGridRelation(engine ?? 'postgres', schema, table)}`);
   const [executedSql, setExecutedSql] = useState('');
   const [sort, setSort] = useState<DbTableSort | null>(null);
   const [where, setWhere] = useState<DbWhereCondition[]>([]);
@@ -144,7 +145,7 @@ export function DataGridTab({
     setLoading(true);
     setError(null);
     try {
-      const res = await api.runQuery(cid, q);
+      const res = await api.runQuery(cid, q, { schema });
       if (myReq === reqIdRef.current) setResult(res);
     } catch (e) {
       if (myReq === reqIdRef.current) {
@@ -211,7 +212,9 @@ export function DataGridTab({
     tableColumns: cols,
     result,
   }), [cols, executedSql, pkCols, result, schema, table]);
-  const editable = (mode === 'preview' || customEditability.editable) && pkCols.length > 0 && result != null && !error;
+  const incompleteCells = (result?.acquisition?.cellsTruncated ?? 0) > 0;
+  const complexCells = result?.rows.some(row => Object.values(row).some(value => value !== null && typeof value === 'object')) ?? false;
+  const editable = (mode === 'preview' || customEditability.editable && customEditability.completeRow) && pkCols.length > 0 && result != null && !error && !incompleteCells && !complexCells;
   const relatedRowsEnabled = !!tableInfo && (mode === 'preview' || customEditability.completeRow);
   const canAddRow = editable && (mode === 'preview' || customEditability.completeRow);
   // `tableRows` fetches pageSize+1 internally, so `truncated` is the authoritative
@@ -260,6 +263,9 @@ export function DataGridTab({
 
       {/* Results */}
       <div className="relative flex min-h-0 flex-1 flex-col">
+        {incompleteCells && <div role="status" className="border-b bg-amber-500/10 px-2 py-1 text-[11px] text-amber-400">
+          {t('data.incompleteCells')}
+        </div>}
         {loading && (
           <div className="absolute right-2 top-2 z-30">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

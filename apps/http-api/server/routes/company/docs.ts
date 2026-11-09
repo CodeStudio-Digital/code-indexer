@@ -1,25 +1,9 @@
-/**
- * Docs read-only proxy.
- *
- * The dashboard's Docs tab fetches markdown files produced by the
- * agents' `docs_*` tools. Routes are read-only on purpose: every write
- * MUST go through the agent tools (so the agents stay the source of
- * truth, and the company drive mirror picks up the change — see
- * `packages/company/src/tools/docs-tools.ts`).
- *
- * Phase D2: the sandbox is still the primary source, but when it is
- * dead (destroyed / restarting) or simply doesn't have the file, both
- * list and read FALL BACK to the durable drive mirror the docs tools
- * maintain under `__docs__/<service>/<path>`. Every payload now carries
- * `origin: 'sandbox' | 'drive_mirror'` so the UI can badge provenance.
- */
+/** Read-only projection of the same durable knowledge service used by agent tools. */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import {
-  checkRelativePath,
-  DOCS_CONTENT_CAP_BYTES,
   DOCS_MIRROR_PREFIX,
 } from '@mcp/company/tools/file-path-core.js';
 import {
@@ -29,143 +13,27 @@ import {
 } from '../_helpers.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
-type CompanyDocOrigin = 'sandbox' | 'drive_mirror';
+import { CompanyDocs, normalizeDocServiceId, validateDocPath } from '@mcp/company/services/CompanyDocs.js';
+export { normalizeDocServiceId } from '@mcp/company/services/CompanyDocs.js';
 
-interface CompanyDocEntry {
-  path: string;
-  origin: CompanyDocOrigin;
-  /** Mirror rows carry the drive's updated_at; sandbox reads have none. */
-  mtime: string | null;
-}
-
-interface CompanyDocContent {
-  content: string;
-  origin: CompanyDocOrigin;
-  mtime: string | null;
-}
-
-interface DocsBinding {
-  workdir: string;
-  containerId: string;
-}
-
-function resolveDocsBinding(sessionId: CompanySessionId, serviceId: string | null): DocsBinding | null {
-  const manager = getSandboxManager();
-  if (serviceId) {
-    const sb = manager.getService(sessionId, serviceId);
-    if (!sb) return null;
-    return { workdir: sb.workdir, containerId: sb.containerId };
-  }
-  const primary = manager.get(sessionId);
-  if (!primary) return null;
-  return { workdir: primary.workdir, containerId: primary.containerId };
-}
-
-/** Same namespace convention as `docs-tools.driveMirrorPath`. */
-export function normalizeDocServiceId(serviceId: string | null): string {
-  return serviceId && serviceId !== 'main' ? serviceId : 'main';
-}
-const mirrorSvc = normalizeDocServiceId;
-
-/**
- * Scope key of the session's drive (`tpl:<id>` / `ses:<rootId>`) — the
- * docs-RAG bridge uses it to namespace collection names and source URIs.
- */
 export function resolveDocsScopeKey(deps: ServerDeps, sessionId: CompanySessionId): string {
   return getMirrorStore(deps, sessionId).resolveScopeKey();
 }
-
-/**
- * Read-only mirror store — instantiated fresh per request like the
- * drive routes do; no publisher because these routes never mutate.
- */
 function getMirrorStore(deps: ServerDeps, sessionId: CompanySessionId): CompanyDriveStore {
-  return new CompanyDriveStore({
-    sessionStore: deps.sessionStore,
-    companySessionId: sessionId,
-  });
+  return new CompanyDriveStore({ sessionStore: deps.sessionStore, companySessionId: sessionId });
 }
-
-async function listSandboxDocs(binding: DocsBinding): Promise<string[]> {
-  const { resolveDriver } = await import('@mcp/services/sandbox/drivers/driver-factory.js');
-  const driver = await resolveDriver();
-  const probe = await driver.exec(
-    binding.containerId,
-    `cd ${binding.workdir}/docs 2>/dev/null && find . -type f \\( -name '*.md' -o -name 'index.json' \\) 2>/dev/null | sed 's|^\\./||' || true`,
-    { cwd: binding.workdir, timeoutMs: 5_000 },
-  );
-  return probe.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+export async function companyDocs(deps: ServerDeps, sessionId: CompanySessionId, serviceId: string | null): Promise<CompanyDocs> {
+  const service = normalizeDocServiceId(serviceId);
+  const manager = getSandboxManager();
+  const sb = service === 'main' ? manager.get(sessionId) : manager.getService(sessionId, service);
+  const binding = sb?.containerId ? {
+    driver: await (await import('@mcp/services/sandbox/drivers/driver-factory.js')).resolveDriver().catch(() => null),
+    workdir: sb.workdir, containerId: sb.containerId, previewUrl: sb.previewUrl, serviceId: service,
+  } : null;
+  return new CompanyDocs(getMirrorStore(deps, sessionId), service, binding?.driver ? binding as import('@mcp/company/types.js').SandboxBinding : null);
 }
-
-function listMirrorDocs(deps: ServerDeps, sessionId: CompanySessionId, serviceId: string | null): CompanyDocEntry[] {
-  const drive = getMirrorStore(deps, sessionId);
-  const prefix = `${DOCS_MIRROR_PREFIX}${mirrorSvc(serviceId)}/`;
-  return drive.list(drive.resolveScopeKey(), { prefix }).map((meta) => ({
-    path: meta.path.slice(prefix.length),
-    origin: 'drive_mirror' as const,
-    mtime: meta.updatedAt,
-  }));
-}
-
-/**
- * Merged doc listing: sandbox entries win over mirror entries with the
- * same path (the container copy is the live one); mirror-only entries
- * keep the docs browsable after a sandbox destroy/restart.
- */
-async function listCompanyDocs(
-  deps: ServerDeps,
-  sessionId: CompanySessionId,
-  serviceId: string | null,
-): Promise<CompanyDocEntry[]> {
-  const binding = resolveDocsBinding(sessionId, serviceId);
-  const byPath = new Map<string, CompanyDocEntry>();
-  for (const entry of listMirrorDocs(deps, sessionId, serviceId)) {
-    byPath.set(entry.path, entry);
-  }
-  if (binding) {
-    try {
-      for (const path of await listSandboxDocs(binding)) {
-        byPath.set(path, { path, origin: 'sandbox', mtime: null });
-      }
-    } catch {
-      // Sandbox listed as alive but exec failed (mid-restart) — the
-      // mirror entries already collected keep the tab functional.
-    }
-  }
-  return Array.from(byPath.values()).sort((a, b) => a.path.localeCompare(b.path));
-}
-
-/**
- * Read one doc: sandbox first, mirror as fallback (dead sandbox OR the
- * file is simply absent from the container). Null when neither has it.
- */
-export async function readCompanyDoc(
-  deps: ServerDeps,
-  sessionId: CompanySessionId,
-  serviceId: string | null,
-  path: string,
-): Promise<CompanyDocContent | null> {
-  const binding = resolveDocsBinding(sessionId, serviceId);
-  if (binding) {
-    try {
-      const { resolveDriver } = await import('@mcp/services/sandbox/drivers/driver-factory.js');
-      const driver = await resolveDriver();
-      const text = await driver.readFile(binding.containerId, `${binding.workdir}/docs/${path}`);
-      return { content: text, origin: 'sandbox', mtime: null };
-    } catch {
-      // fall through to the mirror
-    }
-  }
-  try {
-    const drive = getMirrorStore(deps, sessionId);
-    const mirrorPath = `${DOCS_MIRROR_PREFIX}${mirrorSvc(serviceId)}/${path}`;
-    const result = drive.read(drive.resolveScopeKey(), mirrorPath, {
-      maxBytes: DOCS_CONTENT_CAP_BYTES,
-    });
-    return { content: result.content, origin: 'drive_mirror', mtime: result.meta.updatedAt };
-  } catch {
-    return null;
-  }
+export async function readCompanyDoc(deps: ServerDeps, sessionId: CompanySessionId, serviceId: string | null, path: string) {
+  return (await companyDocs(deps, sessionId, serviceId)).read(path);
 }
 
 export function mountCompanyDocsRoutes(app: Hono, deps: ServerDeps): void {
@@ -177,9 +45,13 @@ export function mountCompanyDocsRoutes(app: Hono, deps: ServerDeps): void {
     if (!resolved) return notFound(c);
     const id = resolved.rootId;
     const serviceId = c.req.query('service') || null;
-    const entries = await listCompanyDocs(deps, id, serviceId);
+    try { normalizeDocServiceId(serviceId); } catch { return c.json({ error: 'invalid service' }, 400); }
+    const docs = await companyDocs(deps, id, serviceId);
+    const entries = await docs.list();
+    const drive = getMirrorStore(deps, id);
+    const services = [...new Set(['main', ...drive.list(drive.resolveScopeKey(), { prefix: DOCS_MIRROR_PREFIX }).map((row) => row.path.slice(DOCS_MIRROR_PREFIX.length).split('/')[0]!)])].map((service_id) => ({ service_id, name: service_id }));
     // `items` preserved for older consumers; `entries` carries origin.
-    return c.json({ items: entries.map((e) => e.path), entries });
+    return c.json({ items: entries.map((e) => e.path), entries, services });
   });
 
   app.get('/api/company/sessions/:id/docs/read', async (c) => {
@@ -191,9 +63,8 @@ export function mountCompanyDocsRoutes(app: Hono, deps: ServerDeps): void {
     const id = resolved.rootId;
     const serviceId = c.req.query('service') || null;
     const path = c.req.query('path') || '';
-    if (!checkRelativePath(path, { traversal: 'substring' }).ok) {
-      return c.json({ error: 'invalid path' }, 400);
-    }
+    try { validateDocPath(path); } catch { return c.json({ error: 'invalid path' }, 400); }
+    try { normalizeDocServiceId(serviceId); } catch { return c.json({ error: 'invalid service' }, 400); }
     const doc = await readCompanyDoc(deps, id, serviceId, path);
     if (!doc) return c.json({ error: `doc not found: ${path}` }, 404);
     return c.json(doc);

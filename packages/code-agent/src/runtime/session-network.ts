@@ -56,7 +56,8 @@ export class SessionNetwork {
       || !Array.isArray(next.projectIds) || next.projectIds.length > 32) throw new Error('Invalid network settings');
     next.projectIds = [...new Set(next.projectIds)];
     for (const pid of next.projectIds) this.requireProject(pid);
-    if (resetBudget || (next.enabled && !current.enabled)) next.budgetId = randomUUID();
+    // Enabling/disabling cannot silently replenish a spent root budget.
+    if (resetBudget) next.budgetId = randomUUID();
     await this.mailbox.files.put('networks', id, next);
     return next;
   }
@@ -143,7 +144,7 @@ export class SessionNetwork {
     const existing = new Set(slots.flatMap(slot => slot ? [slot.id] : []));
     if (planned.filter(child => !existing.has(child.childId)).length > slots.filter(slot => !slot).length) throw new Error('Session limit reached; adjust the agentic network settings');
   }
-  async create(id: string, input: ChatSpawnInput, key: string, deferStart = false) {
+  async create(id: string, input: ChatSpawnInput, key: string, deferStart = false, fork = false) {
     const { root, parent, projectId, provider, model, childId } = await this.validateCreate(id, input, key);
     let reserved = false;
     for (let slot = 0; slot < root.maxSessions - 1; slot++) {
@@ -157,6 +158,12 @@ export class SessionNetwork {
     await this.mailbox.files.insert('networks', childId, childConfig);
     let child = await this.session(childId).catch(() => null);
     const isNew = !child;
+    if (fork && !await this.mailbox.files.get('checkpoints', `fork-ready:${childId}`)) {
+      // The existing copy API reconciles a partially published deterministic
+      // target. The marker prevents later retries from copying new history.
+      child = await this.options.sessions.duplicateSession(id, { targetId: childId, title: input.title });
+      await this.mailbox.files.insert('checkpoints', `fork-ready:${childId}`, { source: id, target: childId });
+    }
     if (!child) child = await this.options.sessions.createSession({ id: childId, parent_session_id: parent.id,
       project_id: projectId, title: input.title.trim(), provider, model, agent: parent.agent,
       execution_mode_override: 'standard', max_turns: parent.max_turns, max_auto_continues: parent.max_auto_continues,
@@ -178,9 +185,10 @@ export class SessionNetwork {
       await this.session(target);
       if (target !== id && !await this.mailbox.connected(id, target)) throw new Error('Link both chats before adding a trigger');
     }
-    const completion = await this.mailbox.files.get<ChatCompletion>('completions', input.sourceSessionId);
+    const completion = (await this.mailbox.completions(input.sourceSessionId)).at(-1);
     await this.link(input.sourceSessionId, input.targetSessionId);
-    const trigger: ChatTrigger = { ...input, id: keyOf(`${id}:${key}`), ownerSessionId: id, baselineRunId: completion?.runId ?? null, status: 'waiting', createdAt: Date.now() };
+    const trigger: ChatTrigger = { ...input, journalCursorVersion: 1, id: keyOf(`${id}:${key}`), ownerSessionId: id, baselineRunId: completion?.runId ?? null,
+      sourceEpoch: await this.mailbox.epoch(input.sourceSessionId), targetEpoch: await this.mailbox.epoch(input.targetSessionId), status: 'waiting', createdAt: Date.now() };
     const stored = await this.mailbox.files.insert('triggers', trigger.id, trigger);
     if (['sourceSessionId', 'targetSessionId', 'event', 'prompt', 'includeFinal'].some(field => stored[field as keyof ChatTrigger] !== trigger[field as keyof ChatTrigger])) throw new Error('Trigger key reused with different settings');
     return stored;

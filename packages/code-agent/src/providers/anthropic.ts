@@ -9,6 +9,7 @@ import type {
 } from '@mcp/code-agent/core/messages.js';
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '@mcp/code-agent/core/system-prompt.js';
 import { renderTextDocument } from './document-utils.js';
+import { withTransportActivity } from './transport-activity-fetch.js';
 
 export const ANTHROPIC_EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
 
@@ -298,6 +299,7 @@ export class AnthropicChatProvider implements ChatProvider {
   readonly name: string;
   model: string;
   private client: Anthropic;
+  private clientOptions: ClientOptions;
   private defaultMetadata?: Anthropic.Metadata;
   private defaultBetas?: string[];
   private defaultTemperature?: number;
@@ -348,7 +350,7 @@ export class AnthropicChatProvider implements ChatProvider {
     this.streamViaCreate = opts.streamViaCreate ?? false;
     this.cacheMessages = opts.cacheMessages ?? false;
     this.promptCacheTtl = opts.promptCacheTtl;
-    this.client = new Anthropic({
+    this.clientOptions = {
       apiKey: opts.authToken ? null : (opts.apiKey ?? ''),
       // Runner recovery owns retries. Explicit override remains available to
       // non-runner hosts; the coder default is one physical attempt.
@@ -363,7 +365,8 @@ export class AnthropicChatProvider implements ChatProvider {
       // applies during the reasoning phase and the SDK avoids bundled
       // node-fetch@2. An explicit opts.fetch (proxy/OAuth) still wins.
       fetch: (opts.fetch ?? nativeFetch()) as unknown as ClientOptions['fetch'],
-    });
+    };
+    this.client = new Anthropic(this.clientOptions);
   }
 
   setModel(model: string): void {
@@ -371,6 +374,13 @@ export class AnthropicChatProvider implements ChatProvider {
   }
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
+    // Request-scoped observation: simultaneous sessions must not renew each
+    // other's watchdog. The underlying native fetch connection pool is shared.
+    const client = req.onTransportActivity && this.clientOptions.fetch
+      ? new Anthropic({ ...this.clientOptions, fetch: withTransportActivity(
+          this.clientOptions.fetch as unknown as typeof fetch, req.onTransportActivity,
+        ) as unknown as ClientOptions['fetch'] })
+      : this.client;
     const rawMessages = req.messages
       .map(toAnthropicMessage)
       .filter((m): m is Anthropic.MessageParam => m !== null);
@@ -445,10 +455,9 @@ export class AnthropicChatProvider implements ChatProvider {
         : {}),
     };
     let stream: AsyncIterable<AnthropicStreamEvent>;
-    let finalMessage: (() => Promise<{ usage?: Partial<AnthropicStreamUsage> }>) | null = null;
     let responseMeta: ChatProviderResponseMeta | null = null;
     if (this.streamViaCreate) {
-      const raw = await this.createRawStream(params, req.signal);
+      const raw = await this.createRawStream(params, req.signal, client);
       stream = raw.stream;
       responseMeta = buildAnthropicResponseMeta({
         params,
@@ -458,8 +467,9 @@ export class AnthropicChatProvider implements ChatProvider {
         useBetaMessages: this.useBetaMessages,
       });
     } else if (this.useBetaMessages) {
-      const helper = this.client.beta.messages.stream(
+      const helper = client.beta.messages.stream(
         params as Parameters<typeof this.client.beta.messages.stream>[0],
+        { signal: req.signal },
       );
       // Prevent the SDK's "unhandled rejection on stream error" behaviour
       // (see @anthropic-ai/sdk MessageStream.ts:382-394 — when neither
@@ -476,7 +486,6 @@ export class AnthropicChatProvider implements ChatProvider {
       });
       const wrapped = await helper.withResponse();
       stream = wrapped.data as AsyncIterable<AnthropicStreamEvent>;
-      finalMessage = () => helper.finalMessage() as Promise<{ usage?: Partial<AnthropicStreamUsage> }>;
       responseMeta = buildAnthropicResponseMeta({
         params,
         response: wrapped.response,
@@ -485,7 +494,7 @@ export class AnthropicChatProvider implements ChatProvider {
         useBetaMessages: true,
       });
     } else {
-      const helper = this.client.messages.stream(params as Anthropic.MessageStreamParams);
+      const helper = client.messages.stream(params as Anthropic.MessageStreamParams, { signal: req.signal });
       // Same rationale as the beta branch above — see MessageStream.ts
       // :382-394 in the SDK for why this listener is required.
       helper.on('error', () => {
@@ -493,7 +502,6 @@ export class AnthropicChatProvider implements ChatProvider {
       });
       const wrapped = await helper.withResponse();
       stream = wrapped.data as AsyncIterable<AnthropicStreamEvent>;
-      finalMessage = () => helper.finalMessage() as Promise<{ usage?: Partial<AnthropicStreamUsage> }>;
       responseMeta = buildAnthropicResponseMeta({
         params,
         response: wrapped.response,
@@ -516,8 +524,9 @@ export class AnthropicChatProvider implements ChatProvider {
       cache_read_input_tokens: 0,
     };
     let sawUsage = false;
+    let receivedTerminal = false;
 
-    for await (const event of stream) {
+    streamEvents: for await (const event of stream) {
       switch (event.type) {
         case 'message_start': {
           const messageUsage = event.message?.usage;
@@ -584,35 +593,17 @@ export class AnthropicChatProvider implements ChatProvider {
           break;
         }
         case 'message_stop':
-          yield { type: 'done' };
-          break;
+          // This commits the message. Do not wait for HTTP EOF: the upstream
+          // may leave the SSE connection open after its terminal event.
+          receivedTerminal = true;
+          break streamEvents;
         default:
           break;
       }
     }
 
-    if (finalMessage) {
-      // Final usage from the completed message is more complete on the SDK helper.
-      const final = await finalMessage();
-      if (final.usage) {
-        const inputT = final.usage.input_tokens ?? 0;
-        const cacheW = final.usage.cache_creation_input_tokens ?? 0;
-        const cacheR = final.usage.cache_read_input_tokens ?? 0;
-        yield {
-          type: 'usage',
-          usage: {
-            input_tokens: inputT,
-            output_tokens: final.usage.output_tokens ?? 0,
-            cache_creation_input_tokens: cacheW,
-            cache_read_input_tokens: cacheR,
-            // Anthropic splits the prompt: input_tokens EXCLUDES cached slices.
-            prompt_tokens_total: inputT + cacheW + cacheR,
-          },
-        };
-      }
-      return;
-    }
-
+    // message_start + message_delta contain the same cumulative usage that
+    // finalMessage() would return, without waiting for the socket to close.
     if (sawUsage) {
       yield {
         type: 'usage',
@@ -623,15 +614,17 @@ export class AnthropicChatProvider implements ChatProvider {
         },
       };
     }
+    if (receivedTerminal) yield { type: 'done' };
   }
 
   private async createRawStream(
     params: Record<string, unknown>,
     signal?: AbortSignal,
+    client = this.client,
   ): Promise<AnthropicRawStreamResult> {
     const requestOptions = signal ? { signal } : undefined;
     if (this.useBetaMessages) {
-      const response = await this.client.beta.messages.create(
+      const response = await client.beta.messages.create(
         { ...params, stream: true } as Parameters<typeof this.client.beta.messages.create>[0],
         requestOptions,
       ).withResponse();
@@ -641,7 +634,7 @@ export class AnthropicChatProvider implements ChatProvider {
         requestId: response.request_id,
       };
     }
-    const response = await this.client.messages.create(
+    const response = await client.messages.create(
       { ...params, stream: true } as Anthropic.MessageCreateParamsStreaming,
       requestOptions,
     ).withResponse();

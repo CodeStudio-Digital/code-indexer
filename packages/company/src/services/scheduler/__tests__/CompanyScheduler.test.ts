@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CompanyScheduler, type CompanySchedulerDeps } from '../CompanyScheduler.js';
 import { resolveAutonomy } from '../../autonomy/autonomy-config.js';
 import { setGlobalCompanyRecommend } from '../recommend-shim.js';
+import { fakeDispatchClaims } from './fake-dispatch-claims.js';
 
 const SESSION_ID = 'c0000000-0000-4000-8000-000000000001';
 const AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000042';
@@ -73,6 +74,8 @@ function makeScheduler(opts: {
       companyFiles: { listAgentRunsSync: () => opts.runs ?? [] },
     },
     kanban: {
+      dispatchClaims: fakeDispatchClaims(AGENT_RUN_ID),
+      getCard: (id: string) => opts.cards.find(card => card.id === id),
       listCardsFull: () => opts.cards,
       assignAgent: spies.assignAgent,
       moveCard: spies.moveCard,
@@ -116,11 +119,11 @@ describe('CompanyScheduler.tick', () => {
     });
   });
 
-  it('does NOT dispatch while the master is alive (master owns delegation)', async () => {
+  it('dispatches ready work while the master is alive, using durable card ownership', async () => {
     setGlobalCompanyRecommend(async () => ({ recommendations: [{ role: 'frontend', kind: 'spawn', score: 0.9 }] }));
     const { scheduler, spies } = makeScheduler({ cards: [makeCard()], masterAlive: true });
     await scheduler.tick();
-    expect(spies.spawn).not.toHaveBeenCalled();
+    expect(spies.spawn).toHaveBeenCalledOnce();
   });
 
   it('skips a card when the recommender resolves no role (never blind-guesses)', async () => {
@@ -146,7 +149,7 @@ describe('CompanyScheduler.tick', () => {
     await scheduler.tick();
     expect(published).toContainEqual({
       event: 'scheduler_skipped',
-      data: { cardId: CARD_ID, reason: 'spawn_failed', at: 0 },
+      data: { cardId: CARD_ID, reason: 'spawn_outcome_unknown', agentRunId: AGENT_RUN_ID, at: 0 },
     });
     expect(published.some((p) => p.event === 'scheduler_dispatched')).toBe(false);
     expect(published.some((p) => p.event === 'scheduler_sweep')).toBe(false);

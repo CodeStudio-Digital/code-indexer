@@ -8,6 +8,7 @@
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { ResultWindow } from './result-window.js';
 import { assertDatabaseDispatch } from './dispatch.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
@@ -44,17 +45,18 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
     try {
       const stmt = db.prepare(sql);
       if (stmt.reader) {
-        const rows: Array<Record<string, unknown>> = [];
+        const window = new ResultWindow(max);
         let rowCount = 0;
         // Read only one extra row to prove truncation. RETURNING statements
         // must still finish their mutation, but retain only the requested rows.
         for (const row of stmt.iterate(...params)) {
           rowCount++;
-          if (rows.length < max) rows.push(row as Record<string, unknown>);
-          if (stmt.readonly && rowCount > max) break;
+          window.push(row as Record<string, unknown>);
+          if (stmt.readonly && (rowCount > window.max || window.bytes >= window.maxBytes)) break;
         }
         const fields = (stmt.columns() as Array<{ name: string }>).map((c) => ({ name: c.name }));
-        return { rows, rowCount, fields, truncated: rowCount > max };
+        return { rows: window.rows, rowCount, fields, truncated: window.truncated,
+          acquisition: { ...window.acquisition, mode: 'cursor', observedRowsExact: !stmt.readonly || !window.truncated } };
       }
       const info = stmt.run(...params);
       return { rows: [], rowCount: info.changes, fields: [], command: 'OK' };
@@ -73,6 +75,7 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     try {
       assertDatabaseDispatch(opts);
+      if (opts.schema && opts.schema !== 'main') throw new Error('SQLite requires schema-qualified names for attached databases.');
       return Promise.resolve(execStatement(sql, (opts.params ?? []) as unknown[], max));
     } catch (err) {
       return Promise.reject(err);
@@ -80,6 +83,9 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
   }
 
   function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
+    validateBatch(statements, config.readOnly);
+    if (opts.schema && opts.schema !== 'main') return Promise.reject(new Error('SQLite batch requires schema-qualified names.'));
+    const tracker = new BatchTracker('transactional', opts);
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // One synchronous db handle (no pool to hop), but wrap the list in an explicit
     // transaction so a mid-list failure rolls back instead of leaving a partial apply.
@@ -88,8 +94,10 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
       opts.signal?.throwIfAborted();
       db.exec('BEGIN');
       inTxn = true;
+      tracker.started = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
       for (let index = 0; index < statements.length; index += 1) {
+        tracker.dispatch();
         opts.signal?.throwIfAborted();
         const stmt = statements[index];
         last = execStatement(
@@ -98,20 +106,23 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
           max,
         );
         opts.onResult?.(last, index);
+        tracker.completed++;
       }
       opts.signal?.throwIfAborted();
       db.exec('COMMIT');
       inTxn = false;
-      return Promise.resolve(last);
+      return Promise.resolve({ ...last, batchOutcome: tracker.success() });
     } catch (err) {
+      let rolledBack = false;
       if (inTxn) {
         try {
           db.exec('ROLLBACK');
+          rolledBack = true;
         } catch {
           /* nothing open to roll back */
         }
       }
-      return Promise.reject(err);
+      return Promise.reject(tracker.failure(err, rolledBack));
     }
   }
 
@@ -269,3 +280,4 @@ export function createSqliteDriver(config: DbConnectConfig): DatabaseDriver {
   };
   return driver;
 }
+import { BatchTracker, validateBatch } from './batch-outcome.js';

@@ -18,8 +18,9 @@ import { cleanThinkingMarkdown } from './thinking-text.js';
  *  - `useThrottledValue` bounds HOW MUCH work happens — react-markdown re-parses
  *    the whole accumulator on every call, so at ~60 flushes/s a long answer was
  *    re-parsed 60×/s. This caps that at ~12×/s.
- *  - `useDeferredValue` keeps whatever work remains INTERRUPTIBLE, so a parse in
- *    flight never blocks typing in the composer or a scroll.
+ *  - `useDeferredValue` lowers the render's priority so input can run first.
+ *    The markdown parser and syntax tokenizer are still synchronous once
+ *    entered; long documents use a worker parser and a bounded reading viewport.
  *
  * 80 ms is under the ~100 ms threshold where UI stops feeling instantaneous, and
  * the trailing commit means the settled text is identical to the unthrottled

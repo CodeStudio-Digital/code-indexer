@@ -9,7 +9,6 @@
  *     pin set makes the second call non-hidden)
  *   - admin/session-disabled → hard refusal (`gate`), handler NEVER runs,
  *     never pinned (closes the historical disabled-tools-execute hole)
- *   - goal state does not special-case hidden create_goal calls
  *   - visible tool → untouched
  *   - pinning is mandatory; hard blocks always win before pinning
  */
@@ -110,34 +109,6 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(r.results[0].refusalKind).toBe('gate');
     expect(r.results[0].content).toContain('[tool-disabled]');
     expect(args._pins.size).toBe(0);
-  });
-
-  it('does not let an active goal block or special-case a hidden create_goal', async () => {
-    const registry = new ToolRegistry();
-    registry.register(makeTool('create_goal'));
-    const args = pinArgs(registry, {
-      toolUses: [{ id: 't1', name: 'create_goal', input: {} }],
-      toolContext: {
-        cwd: process.cwd(),
-        projectName: 'pin-test',
-        getGoalState: () => ({ text: 'existing goal', status: 'in_progress' }),
-      } as unknown as ToolContext,
-    });
-    const r = await dispatchTools(args);
-    expect(r.results[0].isError).toBe(false);
-    expect(r.results[0].refusalKind).toBeUndefined();
-    expect(args._pins.has('create_goal')).toBe(true);
-  });
-
-  it('hidden create_goal with NO active goal executes and pins (cap-cut case)', async () => {
-    const registry = new ToolRegistry();
-    registry.register(makeTool('create_goal'));
-    const args = pinArgs(registry, {
-      toolUses: [{ id: 't1', name: 'create_goal', input: {} }],
-    });
-    const r = await dispatchTools(args);
-    expect(r.results[0].isError).toBe(false);
-    expect(args._pins.has('create_goal')).toBe(true);
   });
 
   it('visible tool result is untouched and never pinned', async () => {

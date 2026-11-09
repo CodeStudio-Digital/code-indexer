@@ -79,6 +79,10 @@ export interface ChatRequest {
    * Telemetry failures must never fail the model request.
    */
   onAttempt?: (attempt: ProviderAttemptTelemetry) => void | Promise<void>;
+  /** Real incoming response bytes, including keepalives swallowed by an SDK.
+   * Per request and payload-free. Never call from a local timer or UI heartbeat.
+   */
+  onTransportActivity?: () => void;
   /**
    * Sampling parameters resolved by the runner via `resolveTemperature()`.
    * Each provider reads `inference.temperature` and translates it to its
@@ -95,6 +99,10 @@ export interface ChatRequest {
  * A provider-agnostic streaming chat interface with tool-calling.
  */
 export interface ChatProvider {
+  /** Same capabilities used by the final wire guard, exposed for truthful UI/policy. */
+  readonly reasoningCapabilities?: import('./reasoning.js').NativeReasoningCapability;
+  /** Verified by the adapter/transport. Absent means unknown, not unlimited. */
+  readonly toolLimits?: { maxCount?: number; maxSchemaBytes?: number; maxNameChars?: number; source: string };
   readonly name: string;
   /** Active model. May be reassigned mid-session via setModel(). */
   model: string;

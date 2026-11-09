@@ -22,7 +22,6 @@ describe('overlayLiveState', () => {
         { content: 'New task B', activeForm: 'Doing B', status: 'pending' },
         { content: 'Done task', activeForm: 'Doing done', status: 'completed' },
       ],
-      null,
     );
     expect(out.pending_tasks).toEqual([
       '[in_progress] New task A',
@@ -34,23 +33,7 @@ describe('overlayLiveState', () => {
     const out = overlayLiveState(
       baseSummary,
       [{ content: 'Done', activeForm: 'Doing done', status: 'completed' }],
-      null,
     );
     expect(out.pending_tasks).toEqual(baseSummary.pending_tasks);
-  });
-
-  it('stamps the live goal into active_goal', () => {
-    const out = overlayLiveState(baseSummary, [], { text: 'Ship v2', status: 'in_progress' });
-    expect(out.active_goal).toBe('Ship v2 (status=in_progress)');
-  });
-
-  it('renderSummaryV2 surfaces the active goal at the top (PR-3 tagged blocks)', () => {
-    const overlaid = overlayLiveState(baseSummary, [], { text: 'Ship v2', status: 'in_progress' });
-    const rendered = renderSummaryV2(overlaid);
-    const goalIdx = rendered.indexOf('<active_goal>');
-    const requestIdx = rendered.indexOf('<primary_request>');
-    expect(goalIdx).toBeGreaterThanOrEqual(0);
-    expect(requestIdx).toBeGreaterThan(goalIdx);
-    expect(rendered).toContain('Ship v2 (status=in_progress)');
   });
 });

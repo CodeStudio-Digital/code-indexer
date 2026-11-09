@@ -1,5 +1,4 @@
 import type { AgentMessage } from '@mcp/provider-sdk';
-import type { PersistedGoalMutation } from '../goal-mutations.js';
 import type {
   ArtifactInput,
   ArtifactRef,
@@ -227,8 +226,6 @@ export interface FsPersistAssistantTurnInput {
   nested_tool_calls?: readonly FsToolCallInput[];
   subagent_usage?: FsAppendMessageUsage;
   existing_message_seq?: number;
-  goal_mutations?: readonly (JsonValue | PersistedGoalMutation)[];
-  goal_noop_tool_use_ids?: readonly string[];
   operation_id?: string;
 }
 
@@ -260,6 +257,10 @@ export interface FsCoderMessageRow {
 }
 
 export interface FsSessionWithMessages {
+  /** Typed host evidence from the full projected history, including compacted rows. */
+  unresolved_tool_outcomes?: string[];
+  resolved_tool_outcomes?: string[];
+  tool_outcome_state?: import('./tool-outcome-types.js').FsToolOutcomeState;
   session: FsCoderSession;
   messages: AgentMessage[];
   message_rows: FsCoderMessageRow[];
@@ -341,7 +342,10 @@ export interface FsCoderTurnPayload {
   messages: readonly FsStoredMessage[];
   message_patches: readonly FsStoredMessagePatch[];
   tool_calls: readonly FsToolCallRecord[];
-  goal_mutations: readonly JsonValue[];
+  tool_outcome_resolutions?: readonly import('./tool-outcome-types.js').FsToolOutcomeResolutionRecord[];
+  tool_outcome_incidents?: readonly import('./tool-outcome-types.js').FsToolOutcomeIncidentRecord[];
+  /** Legacy journal field; retained for reading historical transcripts, never executed. */
+  goal_mutations?: readonly JsonValue[];
 }
 
 export interface FsPreparedMessage {

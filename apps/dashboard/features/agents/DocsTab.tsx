@@ -51,7 +51,7 @@ interface TocEntry {
  * `null` when the file is missing / malformed — callers then fall back
  * to the flat list.
  */
-function useIndexFile(sessionId: string, service: string | null, hasIndex: boolean): {
+function useIndexFile(sessionId: string, service: string | null, hasIndex: boolean, revision = 0): {
   sections: TocEntry[] | null;
 } {
   const [sections, setSections] = useState<TocEntry[] | null>(null);
@@ -77,7 +77,7 @@ function useIndexFile(sessionId: string, service: string | null, hasIndex: boole
     return () => {
       cancelled = true;
     };
-  }, [sessionId, service, hasIndex]);
+  }, [sessionId, service, hasIndex, revision]);
   return { sections };
 }
 
@@ -180,22 +180,28 @@ function RagControls({ state, onIndex }: { state: ReturnType<typeof useDocsRag>[
       title={state === 'error' ? t('docs.indexRagFailed', 'RAG indexing failed — try again') : t('docs.indexRag', 'Index in RAG')}
     >
       <Database className={cn('h-3 w-3', state === 'error' && 'text-destructive')} />
-      {t('docs.indexRag', 'Index in RAG')}
+      {state === 'stale' ? 'Reindexar documento alterado' : t('docs.indexRag', 'Index in RAG')}
     </Button>
   );
 }
 
-export default function DocsTab({ companySessionId, services = [] }: DocsTabProps) {
+export default function DocsTab(props: DocsTabProps) {
+  return <DocsContent key={props.companySessionId} {...props} />;
+}
+
+function DocsContent({ companySessionId, services = [] }: DocsTabProps) {
   const { t } = useTranslation('agents');
   const [service, setService] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'view' | 'raw'>('view');
   const [copied, setCopied] = useState(false);
-  const { entries, reload, loading } = useDocsList(companySessionId, service);
+  const { entries, reload, loading, error, services: storedServices, revision } = useDocsList(companySessionId, service);
   const hasIndex = useMemo(() => entries.some((e) => e.path === 'index.json'), [entries]);
-  const { sections } = useIndexFile(companySessionId, service, hasIndex);
-  const { body, origin, mtime, loading: bodyLoading } = useDocBody(companySessionId, service, selected);
-  const rag = useDocsRag(companySessionId, service, selected);
+  const { sections } = useIndexFile(companySessionId, service, hasIndex, revision);
+  const { body, origin, mtime, loading: bodyLoading, error: bodyError } = useDocBody(companySessionId, service, selected, revision);
+  const rag = useDocsRag(companySessionId, service, selected, revision);
+
+  const availableServices = useMemo(() => [...new Map([...storedServices, ...services].filter((s) => s.service_id !== 'main').map((s) => [s.service_id, s])).values()], [storedServices, services]);
 
   const originByPath = useMemo(() => {
     const map = new Map<string, DocOrigin>();
@@ -237,7 +243,7 @@ export default function DocsTab({ companySessionId, services = [] }: DocsTabProp
   return (
     <div className="flex h-full overflow-hidden">
       <aside className="w-64 border-r flex flex-col bg-background">
-        {services.length > 0 && (
+        {availableServices.length > 0 && (
           <div className="p-2 border-b">
             <select
               className="text-xs bg-background border rounded px-1 py-0.5 w-full"
@@ -245,7 +251,7 @@ export default function DocsTab({ companySessionId, services = [] }: DocsTabProp
               onChange={(e) => setService(e.target.value || null)}
             >
               <option value="">{t('docs.primary')}</option>
-              {services.map((s) => (
+              {availableServices.map((s) => (
                 <option key={s.service_id} value={s.service_id}>
                   {s.name || s.service_id}
                 </option>
@@ -254,7 +260,7 @@ export default function DocsTab({ companySessionId, services = [] }: DocsTabProp
           </div>
         )}
         <div className="flex-1 overflow-y-auto py-1">
-          {sections && sections.length > 0 ? (
+          {error ? (<div role="alert" className="p-3 text-xs text-destructive">{error}<Button size="sm" variant="ghost" onClick={reload}>Tentar novamente</Button></div>) : loading ? (<div className="p-3 text-xs">{t('docs.loading')}</div>) : sections && sections.length > 0 ? (
             sections.map((s, i) => (
               <TreeNode
                 key={`${s.path ?? s.title}-${i}`}
@@ -352,7 +358,7 @@ export default function DocsTab({ companySessionId, services = [] }: DocsTabProp
         )}
 
         <div className="flex-1 overflow-y-auto">
-          {bodyLoading ? (
+          {bodyError ? (<div role="alert" className="p-6 text-xs text-destructive">{bodyError}</div>) : bodyLoading ? (
             <div className="p-6 text-xs text-muted-foreground">{t('docs.loading')}</div>
           ) : selected ? (
             viewMode === 'view' ? (

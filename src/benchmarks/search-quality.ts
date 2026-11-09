@@ -41,7 +41,7 @@ import { SemanticProfileRuntime } from '@mcp/indexer/search/semantic-profile-run
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
-import { runBenchmark, type CellResult, type EmbeddingEntry } from '@mcp/indexer/benchmarks/engine.js';
+import { runBenchmark, isRelevant, recallAt, type CellResult, type EmbeddingEntry } from '@mcp/indexer/benchmarks/engine.js';
 import { buildReranker, buildEmbedding } from '@mcp/indexer/benchmarks/specs.js';
 import { buildScratchVectorStore } from '@mcp/indexer/benchmarks/scratch-index.js';
 import {
@@ -128,20 +128,6 @@ function parseJsonl(path: string): EvalQuery[] {
   return out;
 }
 
-function isRelevant(result: HybridSearchResult, q: EvalQuery): boolean {
-  const data = result.data as unknown as Record<string, unknown>;
-  if (result.type === 'file') {
-    const path = (data.path as string) ?? '';
-    return (q.relevant_files ?? []).some((rf) => path === rf || path.endsWith(rf));
-  }
-  // symbol
-  const name = (data.name as string) ?? '';
-  const filePath = (data.file_path as string) ?? '';
-  const symOk = (q.relevant_symbols ?? []).some((rs) => name === rs);
-  const fileOk = (q.relevant_files ?? []).some((rf) => filePath === rf || filePath.endsWith(rf));
-  return symOk || fileOk;
-}
-
 function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -178,15 +164,15 @@ async function evalMode(
     }
     latencies.push(Date.now() - start);
 
-    // Recall@k — did we hit ANY relevant result in the top K?
+    // Recall credits each distinct gold target; MRR uses the first relevant row.
     let firstHitRank = -1;
     for (let i = 0; i < results.length; i++) {
       if (isRelevant(results[i], q)) {
         if (firstHitRank === -1) firstHitRank = i;
       }
     }
-    if (firstHitRank !== -1 && firstHitRank < 5) totalRecall5++;
-    if (firstHitRank !== -1 && firstHitRank < 10) totalRecall10++;
+    totalRecall5 += recallAt(results, q, 5);
+    totalRecall10 += recallAt(results, q, 10);
     totalRR += firstHitRank === -1 ? 0 : 1 / (firstHitRank + 1);
   }
 

@@ -68,7 +68,7 @@ describe('direct runCoder execution contract', () => {
     expect(calls).toEqual(['mode:ultra']);
     expect(result.policy).toEqual({
       ultraEnabled: true,
-      reasoningEffort: 'ultra',
+      reasoningEffort: undefined,
     });
     expect(result.storedReasoningEffort).toBeNull();
   });

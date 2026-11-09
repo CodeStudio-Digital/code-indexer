@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiBaseUrl } from '../../../lib/api-client.js';
-import { skillMention, type SkillSuggestion } from './skill-mention.js';
+import { skillMention, type SkillMention, type SkillSuggestion } from './skill-mention.js';
 
 export function useSkillPicker(input: string, sessionId?: string | null) {
   const [caret, setCaret] = useState(0);
@@ -10,7 +10,7 @@ export function useSkillPicker(input: string, sessionId?: string | null) {
   const [loadedKey, setLoadedKey] = useState('');
   const [error, setError] = useState(false);
   const [index, setIndex] = useState(0);
-  const mention = skillMention(input, caret);
+  const mention: SkillMention | null = skillMention(input, caret);
   const key = mention ? `${sessionId ?? ''}:${mention.trigger}:${mention.query}` : '';
   const open = Boolean(key && dismissed !== `${input}:${caret}`);
   const resolveSlash = useCallback(async (command: string) => {

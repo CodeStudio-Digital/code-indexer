@@ -61,7 +61,7 @@ export class SemanticIndexCoordinator {
     this.#context.catchUpCodeProject = (projectId) => this.catchUpCodeProject(projectId);
     this.#context.reindexCodeProject = (projectId, force) => this.reindexCodeProject(projectId, force);
     this.#context.enqueueCodeProjectReindex = (projectId, force, reason) => this.enqueueCodeProjectReindex(projectId, force, reason);
-    this.#context.ensureMemoryNamespace = (namespace) => this.ensureMemoryNamespace(namespace);
+    this.#context.ensureMemoryNamespace = (namespace, force, beforeStart) => this.ensureMemoryNamespace(namespace, force, beforeStart);
     this.#context.catchUpMemoryNamespace = (namespace) => this.catchUpMemoryNamespace(namespace);
     this.#context.beginDocsCollectionMutation = (collectionId, operation) => this.beginDocsCollectionMutation(collectionId, operation);
     this.#context.endDocsCollectionMutation = (fence, mutationError) => this.endDocsCollectionMutation(fence, mutationError);
@@ -98,7 +98,7 @@ export class SemanticIndexCoordinator {
   private shouldPauseCodeProject(projectId: number): boolean { return this.#context.shouldPauseCodeProject(projectId); }
   private codeProjectIdForJob(job: SemanticJobRow): number | null { return this.#context.codeProjectIdForJob(job); }
   private semanticProjectIdForJob(job: SemanticJobRow): number | null { return this.#context.semanticProjectIdForJob(job); }
-  ensureMemoryNamespace(namespace: string): Promise<void> { return this.#implementation.ensureMemoryNamespace(namespace); }
+  ensureMemoryNamespace(namespace: string, force?: boolean, beforeStart?: () => void): Promise<void> { return this.#implementation.ensureMemoryNamespace(namespace, force, beforeStart); }
   catchUpMemoryNamespace(namespace: string): Promise<void> { return this.#implementation.catchUpMemoryNamespace(namespace); }
   beginDocsCollectionMutation(collectionId: number, operation: 'upsert' | 'delete'): Promise<{ job_id: number; token: string } | null> { return this.#implementation.beginDocsCollectionMutation(collectionId, operation); }
   endDocsCollectionMutation(fence: { job_id: number; token: string } | null, mutationError?: unknown): void { return this.#implementation.endDocsCollectionMutation(fence, mutationError); }

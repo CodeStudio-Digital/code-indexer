@@ -7,15 +7,17 @@
  *
  * Why CLI: keeps us out of `simple-git` / `isomorphic-git` deps and
  * matches whatever git the user has installed (signing keys, hooks,
- * lfs, etc. all work for free). Each invocation is short-lived so
- * spawn cost is fine.
+ * lfs, etc. all work for free). Read commands spawn in a reusable worker
+ * because even asynchronous spawn can block Electron's main thread on Windows.
  */
 
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { realpath, rm } from 'node:fs/promises';
-import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { disposeGitProcesses, runGitProcess, type GitResult, type GitProcessInput } from './git-process.js';
+import { disposeGitReadWorker, runGitRead } from './git-read-runner.js';
+import { isReadOnlyGit } from './git-read-protocol.js';
 import {
   ApiError,
   type ProjectGitApi,
@@ -42,16 +44,6 @@ import { createGitOptimizationHandlers } from './git-optimizations.js';
 import { createRepoResolver } from './repos.js';
 import { selectHunks } from './hunk-stage.js';
 import { guardProjectGitApi, recordGitCacheDecision, recordGitProcess } from './guard.js';
-
-interface GitResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-  durationMs?: number;
-  timedOut?: boolean;
-  truncated?: boolean;
-  errorCode?: GitRunResult['errorCode'];
-}
 
 interface GitRunOptions {
   stdin?: string;
@@ -108,17 +100,9 @@ function safeGitEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   return env;
 }
 
-const activeGitProcesses = new Set<ReturnType<typeof spawn>>();
-
-function terminateProcessTree(child: ReturnType<typeof spawn>): void {
-  killProcessTree(child.pid, 'SIGKILL');
-}
-
-/** Reap any Git command/hook/credential-helper tree still running at quit. */
-export function disposeProjectGitProcesses(): void {
-  const snapshot = [...activeGitProcesses];
-  activeGitProcesses.clear();
-  for (const child of snapshot) terminateProcessTree(child);
+/** Reap and await Git commands, hooks and worker-owned reads at quit. */
+export async function disposeProjectGitProcesses(): Promise<void> {
+  await Promise.all([disposeGitProcesses(), disposeGitReadWorker()]);
 }
 
 function throwGitReadFailure(operation: string, result: GitResult, fallback: string): never {
@@ -140,88 +124,24 @@ function throwGitReadFailure(operation: string, result: GitResult, fallback: str
  * replaces it — dropping PATH would make git unspawnable); used to inject
  * GIT_EDITOR=true on the `--continue` path so it can't block on an editor.
  */
-function runGit(
-  cwd: string,
-  args: string[],
-  optsOrStdin?: string | GitRunOptions,
-): Promise<GitResult> {
+function runGit(cwd: string, args: string[], optsOrStdin?: string | GitRunOptions): Promise<GitResult> {
   const opts = typeof optsOrStdin === 'string' ? { stdin: optsOrStdin } : (optsOrStdin ?? {});
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    const timeoutMs = opts.timeoutMs ?? (opts.profile === 'network' ? GIT_NETWORK_TIMEOUT_MS : opts.profile === 'read' ? GIT_READ_TIMEOUT_MS : GIT_MUTATION_TIMEOUT_MS);
-    const maxOutputBytes = opts.maxOutputBytes ?? GIT_DETAIL_MAX_OUTPUT_BYTES;
-    let settled = false;
-    let timedOut = false;
-    let outputTooLarge = false;
-    let outputBytes = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const child = spawn('git', args, {
-      cwd,
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-      env: safeGitEnv({ ...(opts.profile === 'network' ? { GIT_TERMINAL_PROMPT: '0' } : {}), ...opts.env }),
-    });
-    activeGitProcesses.add(child);
-    const out: Buffer[] = [];
-    const err: Buffer[] = [];
-    const finish = (result: GitResult) => {
-      if (settled) return;
-      settled = true;
-      activeGitProcesses.delete(child);
-      if (timer) clearTimeout(timer);
-      recordGitProcess({
-        outputBytes: Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8'),
-        timedOut: result.timedOut,
-        truncated: result.truncated,
-      });
-      resolve(result);
-    };
-    const collect = (target: Buffer[], chunk: Buffer) => {
-      if (settled) return;
-      outputBytes += chunk.length;
-      if (maxOutputBytes && outputBytes > maxOutputBytes) {
-        outputTooLarge = true;
-        terminateProcessTree(child);
-        return;
-      }
-      target.push(chunk);
-    };
-    child.stdout.on('data', (chunk: Buffer) => collect(out, chunk));
-    child.stderr.on('data', (chunk: Buffer) => collect(err, chunk));
-    child.on('error', (e) => {
-      finish({ code: -1, stdout: '', stderr: (e as Error).message, durationMs: Date.now() - startedAt, errorCode: 'spawn_failed' });
-    });
-    child.on('close', (code) => {
-      if (timedOut) {
-        finish({ code: -1, stdout: '', stderr: `git ${args[0] ?? ''} timed out after ${timeoutMs}ms`, durationMs: Date.now() - startedAt, timedOut: true, errorCode: 'timeout' });
-        return;
-      }
-      if (outputTooLarge) {
-        finish({ code: -1, stdout: '', stderr: `git output exceeded ${maxOutputBytes} bytes`, durationMs: Date.now() - startedAt, truncated: true, errorCode: 'output_too_large' });
-        return;
-      }
-      finish({
-        code: code ?? -1,
-        stdout: Buffer.concat(out).toString('utf8'),
-        stderr: Buffer.concat(err).toString('utf8'),
-        durationMs: Date.now() - startedAt,
-        ...(code === 0 ? {} : { errorCode: 'git_failed' as const }),
-      });
-    });
-    if (timeoutMs > 0) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        terminateProcessTree(child);
-      }, timeoutMs);
-      timer.unref?.();
-    }
-    if (opts.stdin) {
-      child.stdin.write(opts.stdin);
-      child.stdin.end();
-    } else {
-      child.stdin.end();
-    }
-  });
+  const startedAt = Date.now();
+  const input: GitProcessInput = {
+    cwd, args, stdin: opts.stdin,
+    timeoutMs: opts.timeoutMs ?? (opts.profile === 'network' ? GIT_NETWORK_TIMEOUT_MS : opts.profile === 'read' ? GIT_READ_TIMEOUT_MS : GIT_MUTATION_TIMEOUT_MS),
+    maxOutputBytes: opts.maxOutputBytes ?? GIT_DETAIL_MAX_OUTPUT_BYTES,
+    env: safeGitEnv({ ...(opts.profile === 'network' ? { GIT_TERMINAL_PROMPT: '0' } : {}), ...opts.env }),
+  };
+  let untrack: (() => void) | undefined;
+  const operation = isReadOnlyGit(args, opts.profile) ? runGitRead(input)
+    : runGitProcess(input, pid => { untrack = trackProcessTree(pid); });
+  return operation.then(result => {
+    // Keep instrumentation in the caller's AsyncLocalStorage realm.
+    recordGitProcess({ outputBytes: Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8'),
+      timedOut: result.timedOut, truncated: result.truncated });
+    return { ...result, durationMs: Date.now() - startedAt };
+  }).finally(() => untrack?.());
 }
 
 /**
@@ -1873,11 +1793,34 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       const root = await resolveCwd(projectId, repoPath);
       await ensureRemote(root, remote);
       if (branch) await ensureBranchName(root, branch);
-      const args = ['pull'];
+      // Let Git own the temporary stash, including rebase continue/abort.
+      // Untracked files are left in place; Git refuses an incoming collision.
+      const args = ['pull', '--autostash'];
       if (rebase) args.push('--rebase');
       if (remote) args.push(remote);
       if (branch) args.push(branch);
-      return runAsResult(root, 'git', args, { GIT_TERMINAL_PROMPT: '0' }, GIT_NETWORK_TIMEOUT_MS);
+      const result = await runAsResult(root, 'git', args, {
+        GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', GIT_MERGE_AUTOEDIT: 'no',
+      }, GIT_NETWORK_TIMEOUT_MS);
+      // A successful pull can still leave conflicts when applying autostash.
+      // Read the index rather than relying on exit status or localized output.
+      const conflicts = await runGit(root, ['diff', '--name-only', '--diff-filter=U', '-z'], { profile: 'read' });
+      if (conflicts.code !== 0) {
+        return {
+          ...result, ok: false, code: result.code || conflicts.code,
+          errorCode: result.errorCode ?? conflicts.errorCode ?? 'git_failed',
+          stderr: [result.stderr, conflicts.stderr || 'Unable to verify the working tree after updating.'].filter(Boolean).join('\n'),
+        };
+      }
+      const conflictedFiles = conflicts.stdout.split('\0').filter(Boolean);
+      if (conflictedFiles.length > 0) {
+        return {
+          ...result, ok: false, code: result.code || 1,
+          errorCode: result.errorCode ?? 'git_failed',
+          updateActionRequired: 'conflicts' as const, conflictedFiles,
+        };
+      }
+      return result;
     },
 
     async updateBranch({ projectId, branch, repoPath }) {

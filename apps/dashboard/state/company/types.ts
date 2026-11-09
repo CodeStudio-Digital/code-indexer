@@ -25,7 +25,6 @@ export interface AgentStreamState {
   /** Null only for the synthetic idle master before its persisted run is known. */
   agentRunId: string | null;
   coderSessionId?: string;
-  textChunks: string[];
   toolCalls: ToolCallState[];
   status: AgentRunStatus;
   statusMessage?: string;
@@ -49,8 +48,6 @@ export interface ToolCallState {
   name: string;
   status: 'running' | 'done' | 'error';
   durationMs?: number;
-  /** Successful create_goal/update_goal result awaiting its atomic DB commit. */
-  awaitingPersistence?: boolean;
   /** Compensating persistence failure shown by richer consumers. */
   error?: string;
 }
@@ -76,6 +73,7 @@ export interface BoardMessage {
   agent_run_id: string | null;
   kind: string;
   content: string;
+  attachments?: import('@mcp/company-contracts').BoardAttachment[];
   mentions: string[];
   created_at: string;
 }
@@ -97,6 +95,9 @@ export interface StreamState {
   started: boolean;
   masterState: AgentStreamState | null;
   subordinateStates: Map<string, AgentStreamState>;
+  /** Presentation-only tails (81 chars), isolated from shell/status updates.
+   * Full transcripts remain in the coder session's canonical history. */
+  agentTextPreviews: Map<string, string>;
   boardMessages: BoardMessage[];
   masterPrompts: Map<string, MasterPrompt>;
   fallbackNotices: FallbackNotice[];
@@ -137,6 +138,7 @@ export const INITIAL_STREAM_STATE: StreamState = {
   started: false,
   masterState: null,
   subordinateStates: new Map(),
+  agentTextPreviews: new Map(),
   boardMessages: [],
   masterPrompts: new Map(),
   fallbackNotices: [],

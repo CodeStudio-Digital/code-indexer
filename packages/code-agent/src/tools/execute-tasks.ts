@@ -39,13 +39,7 @@ import {
   MICRO_AGENT_PROFILES,
   microAgentProfileForTaskKind,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
-import {
-  appendResearchContract,
-  applyParentGoalBudget,
-  buildResearchPolicy,
-  type ResearchDepth,
-  type SubagentResearchPolicy,
-} from '@mcp/code-agent/tools/subagent-research-policy.js';
+import { appendResearchContract, buildResearchPolicy, type ResearchDepth, type SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
 import { applyPlanApproval } from '@mcp/code-agent/tools/plan.js';
 import { effectiveGate, taskNeedsReconciliation } from '@mcp/code-agent/tools/task-list-shared.js';
 import {
@@ -202,14 +196,7 @@ function resolveKindArtifacts(task: CoderTask, ctx: ToolContext, agentCount = 1)
         source: 'inferred' as const,
       }
     : undefined;
-  const goal = ctx.getGoalState?.();
-  const researchPolicy = baseResearch
-    ? applyParentGoalBudget(
-        baseResearch,
-        goal?.status === 'in_progress' ? goal.budgetTokens ?? undefined : undefined,
-        agentCount,
-      )
-    : undefined;
+  const researchPolicy = baseResearch;
   return {
     systemPrompt: appendResearchContract(profile.systemPrompt, researchPolicy),
     allowlist: profile.allowlist,

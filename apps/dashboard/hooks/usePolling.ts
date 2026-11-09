@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { startPolling } from './polling-controller.js';
+import { useSurfaceVisible } from '../lib/surface-visibility.js';
 
 interface PollingOptions {
   /** When false the timer is off (e.g. only poll while an execution is live). */
@@ -8,7 +10,7 @@ interface PollingOptions {
 }
 
 /**
- * Visibility-aware `setInterval` for status polling. Three things the raw
+ * Visibility-aware polling with a delay after each completed refresh. The raw
  * `setInterval` pattern scattered across panels got wrong:
  *
  *  1. **Hidden tab/window keeps polling** — backgrounded Electron windows
@@ -20,47 +22,24 @@ interface PollingOptions {
  *     created once per `[intervalMs, enabled]`.
  *  3. **Polling while idle** — callers pass `enabled` to stop the timer
  *     when there's nothing live to watch.
+ *  4. **Overlapping requests** — return the refresh Promise so a slow backend
+ *     finishes before another periodic request starts.
  *
  * Does NOT replace SSE/streams — it's the fallback/coarse-status poll only.
  */
 export function usePolling(
-  callback: () => void,
+  callback: () => void | Promise<void>,
   intervalMs: number,
   options: PollingOptions = {},
 ): void {
   const { enabled = true, immediate = true } = options;
+  const visible = useSurfaceVisible();
   const cbRef = useRef(callback);
-  cbRef.current = callback;
+  useEffect(() => { cbRef.current = callback; }, [callback]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !visible) return;
 
-    let id: ReturnType<typeof setInterval> | null = null;
-    const tick = () => {
-      if (document.visibilityState !== 'hidden') cbRef.current();
-    };
-    const start = () => {
-      if (id == null) id = setInterval(tick, intervalMs);
-    };
-    const stop = () => {
-      if (id != null) {
-        clearInterval(id);
-        id = null;
-      }
-    };
-
-    if (immediate) cbRef.current();
-    start();
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') stop();
-      else start();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-
-    return () => {
-      stop();
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [intervalMs, enabled, immediate]);
+    return startPolling(() => cbRef.current(), intervalMs, immediate);
+  }, [intervalMs, enabled, immediate, visible]);
 }

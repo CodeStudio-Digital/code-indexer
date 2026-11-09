@@ -62,6 +62,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
           },
         },
       );
+      ctx.signal?.throwIfAborted();
       const activeGeneration = deps.semanticStore.getActiveGeneration(codeNamespace(projectId));
       const embeddingTarget = activeGeneration?.embedding_target;
       const resolvedReranker = diagnostics.plannedMode === 'hybrid'
@@ -71,6 +72,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
         && 'resolved_model' in resolvedReranker
         ? String((resolvedReranker as { resolved_model: unknown }).resolved_model)
         : null;
+      ctx.signal?.throwIfAborted();
       return {
         results: results as never,
         diagnostics: {
@@ -164,9 +166,9 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
       }
     },
 
-    async grep(input) {
+    async grep(input, ctx) {
       if (!db.getProject(input.projectId)) throw new ApiError('not_found', 404, 'project not found');
-      return grepProject(db, input.projectId, input);
+      return grepProject(db, input.projectId, { ...input, signal: ctx.signal });
     },
 
     async replace(input) {

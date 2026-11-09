@@ -1,10 +1,10 @@
 /**
- * Multi-front (sub-session) tab list for a company session.
+ * Session navigation within one company.
  *
- * Migration 067 models each tab as a full `CompanySession` with
+ * Migration 067 models each entry as a full `CompanySession` with
  * `parent_session_id` pointing to the root session. This hook drives
- * the tab bar:
- *   - `parent` is the root (the "Main" tab is the parent itself).
+ * the sidebar:
+ *   - `parent` is the root (the "Main" session is the parent itself).
  *   - `children` are active sub-sessions ordered by creation time.
  *   - `activeSessionId` is the URL's `:frontId` segment.
  *
@@ -13,7 +13,7 @@
  * sessions that were last opened pre-router; the entry is deleted on
  * read so the URL becomes authoritative going forward.
  */
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { CompanySession } from '@mcp/company-contracts';
 import { useCompanyStore, selectSiblings } from '../state/company/index.js';
@@ -22,6 +22,7 @@ import {
   parseAgentsParams,
 } from '../features/agents/routing.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from '../features/agents/zones/types.js';
+import { useSurfaceVisible } from '../lib/surface-visibility.js';
 
 interface SubSessionsState {
   parent: CompanySession | null;
@@ -48,6 +49,7 @@ function readPersistedOnce(rootId: string): string | null {
 }
 
 export function useCompanySiblings(rootSessionId: string | null) {
+  const visible = useSurfaceVisible();
   const navigate = useNavigate();
   const routeParams = useParams<{
     rootId?: string;
@@ -56,6 +58,7 @@ export function useCompanySiblings(rootSessionId: string | null) {
     tab?: string;
   }>();
   const baseState = useCompanyStore((s) => selectSiblings(s, rootSessionId));
+  const [error, setError] = useState<string | null>(null);
 
   const sessionEnsure = useCompanyStore((s) => s.sessionEnsure);
   const sessionLoaded = useCompanyStore((s) => s.sessionLoaded);
@@ -65,7 +68,9 @@ export function useCompanySiblings(rootSessionId: string | null) {
 
   // ─── URL-driven active session id ────────────────────────────
   const route = parseAgentsParams(routeParams, rootSessionId ?? undefined);
-  const activeSessionId = route?.frontId ?? rootSessionId;
+  const requestedSessionId = route?.frontId ?? rootSessionId;
+  const activeSessionId = requestedSessionId === rootSessionId || baseState.children.some(child => child.id === requestedSessionId)
+    ? requestedSessionId : rootSessionId;
   const state: SubSessionsState = { ...baseState, activeSessionId };
 
   // ─── Navigate helper that preserves zone+tab ────────────────
@@ -104,22 +109,58 @@ export function useCompanySiblings(rootSessionId: string | null) {
     sessionEnsure(rootSessionId);
     sessionSetLoading(rootSessionId, true);
     try {
-      const res = await fetch(`/api/company/sessions/${rootSessionId}/children`);
+      const res = await fetch(`/api/company/companies/${rootSessionId}/sessions`);
       if (!res.ok) {
-        sessionSetLoading(rootSessionId, false);
-        return;
+        throw new Error(`HTTP ${res.status}`);
       }
       const body = (await res.json()) as { parent: CompanySession; children: CompanySession[] };
+      setError(null);
       sessionLoaded(body.parent.id, body.parent, body.children);
     } catch (e) {
       console.error('useCompanySiblings: refresh failed:', e);
+      setError(e instanceof Error ? e.message : String(e));
       sessionSetLoading(rootSessionId, false);
     }
   }, [rootSessionId, sessionEnsure, sessionLoaded, sessionSetLoading]);
 
   useEffect(() => {
-    void refresh();
+    // Coalesce mount/replacement before starting a request; a discarded
+    // StrictMode mount must not publish loading/error state for its successor.
+    const timer = setTimeout(() => void refresh(), 0);
+    return () => clearTimeout(timer);
   }, [refresh]);
+  useEffect(() => {
+    if (baseState.parent && requestedSessionId !== activeSessionId) navigateToFront('main');
+  }, [baseState.parent, requestedSessionId, activeSessionId, navigateToFront]);
+
+  // Family metadata only; no transcript scans, and no idle/background timer.
+  const hasRunningSession = baseState.parent?.status === 'running'
+    || baseState.children.some((child) => child.status === 'running');
+  useEffect(() => {
+    if (!visible) return;
+    let disposed = false;
+    let refreshing = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refreshVisible = async () => {
+      if (disposed || refreshing || document.visibilityState === 'hidden') return;
+      refreshing = true;
+      try { await refresh(); } finally { refreshing = false; }
+      if (!disposed && hasRunningSession) timer = setTimeout(() => void refreshVisible(), 20_000);
+    };
+    const onFocus = () => {
+      if (timer) clearTimeout(timer);
+      void refreshVisible();
+    };
+    if (hasRunningSession) timer = setTimeout(() => void refreshVisible(), 20_000);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [hasRunningSession, refresh, visible]);
 
   const setActiveSessionId = useCallback(
     (sessionId: string | null) => {
@@ -134,7 +175,7 @@ export function useCompanySiblings(rootSessionId: string | null) {
       if (rootSessionId == null) return null;
       const parentId = state.parent?.id ?? rootSessionId;
       try {
-        const res = await fetch(`/api/company/sessions/${parentId}/children`, {
+        const res = await fetch(`/api/company/companies/${parentId}/sessions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name }),
@@ -162,7 +203,7 @@ export function useCompanySiblings(rootSessionId: string | null) {
       // Parent renames hit `PATCH /sessions/:id` (the session CRUD endpoint).
       // Child renames hit `PATCH /sessions/:parentId/children/:childId` so the
       // backend can enforce parent-child invariants. Same function so callers
-      // (e.g. FrontTabsBar) don't have to branch.
+      // (e.g. CompanySessionsSidebar) don't have to branch.
       const isParent = sessionId === parentId;
       const url = isParent
         ? `/api/company/sessions/${parentId}`
@@ -228,6 +269,7 @@ export function useCompanySiblings(rootSessionId: string | null) {
     parent: state.parent,
     children: state.children,
     loading: state.loading,
+    error,
     activeSessionId: state.activeSessionId,
     refresh,
     setActiveSessionId,

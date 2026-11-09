@@ -1,21 +1,16 @@
 import type { SessionId } from '@mcp/session-storage';
 import type { TasksState } from '../session-state-types.js';
-import type {
-  FsSessionGoal,
-  FsTasksRow,
-} from './operational-types.js';
+import type { FsTasksRow } from './operational-types.js';
 import type { FsCoderSession } from './types.js';
 
 export interface FsSessionWorkbenchBootstrapSource {
   getSession(id: SessionId | string): Promise<FsCoderSession | null>;
-  getSessionGoal(id: SessionId | string): Promise<FsSessionGoal | null>;
   getTasksRow(id: SessionId | string): Promise<FsTasksRow | null>;
   countConversationChapters(id: SessionId | string): Promise<number>;
 }
 
 export interface FsSessionWorkbenchBootstrapProjection {
   session: FsCoderSession;
-  goal: FsSessionGoal | null;
   tasks: TasksState | null;
   tasksRevision: number;
   chapterCount: number;
@@ -50,15 +45,13 @@ export class FsSessionWorkbenchBootstrapProjectionReader {
     const session = await this.source.getSession(sessionId);
     if (!session) return null;
 
-    const [goal, tasksRow, chapterCount] = await Promise.all([
-      this.source.getSessionGoal(sessionId),
+    const [tasksRow, chapterCount] = await Promise.all([
       this.source.getTasksRow(sessionId),
       this.source.countConversationChapters(sessionId),
     ]);
     const sessionRevision = timestampRevision(session.created_at, session.updated_at);
     const summaryRevision = timestampRevision(
       session.updated_at,
-      goal?.updated_at,
       tasksRow?.updated_at,
     );
     const contextRevision = timestampRevision(session.updated_at, tasksRow?.updated_at);
@@ -79,7 +72,6 @@ export class FsSessionWorkbenchBootstrapProjectionReader {
 
     return {
       session,
-      goal,
       tasks: tasksRow?.state ?? null,
       tasksRevision: tasksRow?.revision ?? 0,
       chapterCount,

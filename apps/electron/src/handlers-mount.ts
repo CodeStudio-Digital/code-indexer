@@ -36,9 +36,11 @@ import {
   serializeError,
   walkHandlers,
 } from '@apps/http-api/server/handler-tree.js';
-import { raceWithAbort } from './invoke-lifecycle.js';
+import { bindRendererLifetime, raceWithAbort } from './invoke-lifecycle.js';
+import { pumpMessagePortStream } from './stream-lifecycle.js';
 
 const activeInvokes = new Map<string, AbortController>();
+const activeStreams = new Map<string, AbortController>();
 const activeRequestsBySender = new Map<number, Set<AbortController>>();
 const senderLifecycleMounted = new WeakSet<Electron.WebContents>();
 let cancelInvokeMounted = false;
@@ -57,26 +59,16 @@ function abortSenderRequests(senderId: number, reason: string): void {
   for (const [key, controller] of activeInvokes) {
     if (controllers.has(controller)) activeInvokes.delete(key);
   }
+  for (const [key, controller] of activeStreams) {
+    if (controllers.has(controller)) activeStreams.delete(key);
+  }
 }
 
 function ensureSenderLifecycle(sender: Electron.WebContents): void {
   if (senderLifecycleMounted.has(sender)) return;
   senderLifecycleMounted.add(sender);
   const senderId = sender.id;
-  sender.on(
-    'did-start-navigation',
-    (_event, _url, _isInPlace, isMainFrame) => {
-      if (isMainFrame) {
-        abortSenderRequests(senderId, 'renderer navigated');
-      }
-    },
-  );
-  sender.once('render-process-gone', () => {
-    abortSenderRequests(senderId, 'renderer process exited');
-  });
-  sender.once('destroyed', () => {
-    abortSenderRequests(senderId, 'renderer closed');
-  });
+  bindRendererLifetime(sender, (reason) => abortSenderRequests(senderId, reason));
 }
 
 function trackSenderRequest(
@@ -133,6 +125,10 @@ function ensureCancelInvokeMounted(): void {
     if (typeof requestId !== 'string') return;
     activeInvokes.get(invokeKey(event.sender.id, requestId))?.abort(new Error('request cancelled'));
   });
+  ipcMain.on('api:cancel-stream', (event, requestId: unknown) => {
+    if (typeof requestId !== 'string') return;
+    activeStreams.get(invokeKey(event.sender.id, requestId))?.abort(new Error('stream subscriber cancelled'));
+  });
 }
 
 function mountInvoke(channel: string, fn: AnyFn) {
@@ -154,59 +150,45 @@ function mountInvoke(channel: string, fn: AnyFn) {
   });
 }
 
-function mountStream(channel: string, fn: AnyFn) {
-  ipcMain.on(`stream:${channel}`, (event: IpcMainEvent, msg: { requestId: string; payload: unknown }) => {
-    const { requestId, payload } = msg;
-    const { port1, port2 } = new MessageChannelMain();
-    const controller = new AbortController();
-    const untrack = trackSenderRequest(event.sender, controller);
-    // Hand port1 to the renderer; renderer's preload is listening for
-    // the same `stream-port:<requestId>` event name.
+function startTrackedStream(
+  event: IpcMainEvent,
+  requestId: string,
+  create: (signal: AbortSignal) => AsyncIterable<unknown>,
+): void {
+  const { port1, port2 } = new MessageChannelMain();
+  const controller = new AbortController();
+  const untrack = trackSenderRequest(event.sender, controller);
+  const key = invokeKey(event.sender.id, requestId);
+  activeStreams.get(key)?.abort(new Error('stream subscriber superseded'));
+  activeStreams.set(key, controller);
+  const cleanup = () => {
+    untrack();
+    if (activeStreams.get(key) === controller) activeStreams.delete(key);
+  };
+  // Hand port1 to the renderer; renderer's preload is listening for
+  // the same `stream-port:<requestId>` event name.
+  try {
     event.sender.postMessage(`stream-port:${requestId}`, null, [port1]);
-    void pumpStream(
-      port2,
-      fn,
-      payload,
-      channel,
-      controller.signal,
-    ).finally(untrack);
-  });
+  } catch {
+    controller.abort(new Error('stream port transfer failed'));
+    port1.close(); port2.close(); cleanup();
+    return;
+  }
+  void pumpMessagePortStream(
+    port2,
+    () => create(controller.signal),
+    controller,
+    serializeError,
+  ).finally(cleanup);
 }
 
-async function pumpStream(
-  port: Electron.MessagePortMain,
-  fn: AnyFn,
-  payload: unknown,
-  channel: string,
-  signal: AbortSignal,
-) {
-  let iterator: AsyncIterator<unknown> | undefined;
-  try {
-    const iterable = fn(
-      payload as never,
-      createContext({
-        signal,
-        clientInfo: { sourceType: 'electron', origin: channel },
-      }),
-    ) as AsyncIterable<unknown>;
-    iterator = iterable[Symbol.asyncIterator]();
-    port.start();
-    while (true) {
-      const step = await raceWithAbort(signal, () => iterator!.next());
-      if (step.done) break;
-      port.postMessage({ type: 'value', value: step.value });
-    }
-    port.postMessage({ type: 'done' });
-  } catch (err) {
-    if (!signal.aborted) {
-      port.postMessage({ type: 'error', error: serializeError(err) });
-    }
-  } finally {
-    if (signal.aborted && iterator?.return) {
-      void Promise.resolve(iterator.return()).catch(() => undefined);
-    }
-    port.close();
-  }
+function mountStream(channel: string, fn: AnyFn) {
+  ipcMain.on(`stream:${channel}`, (event: IpcMainEvent, msg: { requestId: string; payload: unknown }) => {
+    startTrackedStream(event, msg.requestId, signal => fn(msg.payload as never, createContext({
+      signal,
+      clientInfo: { sourceType: 'electron', origin: channel },
+    })) as AsyncIterable<unknown>);
+  });
 }
 
 /**
@@ -268,44 +250,6 @@ function mountHonoInvoke(channel: string, methodPath: string, app: Hono) {
 
 function mountHonoStream(channel: string, methodPath: string, app: Hono) {
   ipcMain.on(`stream:${channel}`, (event: IpcMainEvent, msg: { requestId: string; payload: unknown }) => {
-    const { requestId, payload } = msg;
-    const { port1, port2 } = new MessageChannelMain();
-    const controller = new AbortController();
-    const untrack = trackSenderRequest(event.sender, controller);
-    event.sender.postMessage(`stream-port:${requestId}`, null, [port1]);
-    void pumpHonoStream(
-      port2,
-      methodPath,
-      payload,
-      app,
-      controller.signal,
-    ).finally(untrack);
+    startTrackedStream(event, msg.requestId, signal => dispatchStreaming(app, methodPath, msg.payload, signal));
   });
-}
-
-async function pumpHonoStream(
-  port: Electron.MessagePortMain,
-  methodPath: string,
-  payload: unknown,
-  app: Hono,
-  signal: AbortSignal,
-) {
-  try {
-    port.start();
-    for await (const value of dispatchStreaming(
-      app,
-      methodPath,
-      payload,
-      signal,
-    )) {
-      port.postMessage({ type: 'value', value });
-    }
-    port.postMessage({ type: 'done' });
-  } catch (err) {
-    if (!signal.aborted) {
-      port.postMessage({ type: 'error', error: serializeError(err) });
-    }
-  } finally {
-    port.close();
-  }
 }

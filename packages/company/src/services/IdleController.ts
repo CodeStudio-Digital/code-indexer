@@ -10,12 +10,10 @@
  *   - Enriches `session_idle` with `master_error` + errorDetail when the
  *     master ended with an error, so the dashboard can show an
  *     actionable banner ("Master failed — send a message to retry").
- *   - After `idleTimeoutMs` of inactivity, closes the bus with
- *     `done(idle_timeout)`.
+ *   - Idleness keeps the scheduler, inbox and event stream available.
  *   - Auto-continue hook: when the user just answered a master plan/question,
  *     the master is automatically resumed with a "continue" message.
  *
- * Configurable via CODER_COMPANY_IDLE_TIMEOUT_MS (default 10 min).
  */
 
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
@@ -26,8 +24,6 @@ import type {
   ISubordinateQuery,
 } from '@mcp/company/services/ports.js';
 import type { CompanyEventBus } from '@mcp/company/services/CompanyEventBus.js';
-
-const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface IdleControllerDeps {
   ctx: SessionContext;
@@ -56,12 +52,9 @@ export interface IdleControllerDeps {
 
 export class IdleController implements IIdleController {
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private readonly timeoutMs: number;
   private readonly busUnsubscribers: Array<() => void> = [];
 
   constructor(private readonly deps: IdleControllerDeps) {
-    const env = Number(process.env.CODER_COMPANY_IDLE_TIMEOUT_MS);
-    this.timeoutMs = Number.isFinite(env) && env > 0 ? env : DEFAULT_IDLE_TIMEOUT_MS;
     if (deps.eventBus) {
       this.busUnsubscribers.push(
         deps.eventBus.on('master.ended', () => this.checkIdle()),
@@ -130,27 +123,20 @@ export class IdleController implements IIdleController {
       return;
     }
 
-    // Transition this session to "paused" — bus stays alive for follow-up
+    // Ordinary conversational idleness is not an operator pause. The scheduler
+    // and inbox may still have work, so keep their worker/event stream alive.
     // messages. With migration 067, sub-sessions are full CompanySession
     // rows so this single status field is naturally per-tab.
     void this.deps.ctx.companyFiles
-      .updateSessionStatus('paused')
+      .updateSessionStatus('idle')
       .catch(() => undefined);
 
     const err = this.deps.master.endedWithError;
     const endedAt = this.deps.master.endedAt ?? null;
-    // "Unexpected" =
-    //   - master ended with an error, OR
-    //   - the master exited without a recent (≤30s) user message —
-    //     i.e. it didn't shut down in response to a user turn.
-    // The 30s window absorbs the gap between a user pressing send and
-    // the master finishing a turn whose `done` promise settles.
-    const lastUserMs = this.deps.master.lastUserMessageAt
-      ? Date.parse(this.deps.master.lastUserMessageAt)
-      : 0;
-    const endedMs = endedAt ? Date.parse(endedAt) : Date.now();
-    const noRecentUserMessage = !lastUserMs || endedMs - lastUserMs > 30_000;
-    const unexpected = !!err || noRecentUserMessage;
+    // Autonomous work can finish long after the last user message, or without
+    // one (scheduler/subordinate wake). Only the runner's failure is evidence
+    // of an unexpected exit; time since user activity is not an outcome.
+    const unexpected = !!err;
     const idlePayload = err
       ? {
           reason: 'master_error' as const,
@@ -164,23 +150,7 @@ export class IdleController implements IIdleController {
           unexpected,
         };
     this.deps.bus.publish('session_idle', idlePayload);
-    this.resetTimer();
+    this.clear();
   }
 
-  private resetTimer(): void {
-    this.clear();
-    this.timer = setTimeout(() => {
-      if (
-        this.deps.master.hasEnded &&
-        this.deps.subordinates.runningCount === 0 &&
-        !this.deps.ctx.isAborted &&
-        !this.deps.ctx.isBusEnded
-      ) {
-        void this.deps.ctx.companyFiles
-          .updateSessionStatus('completed')
-          .catch(() => undefined);
-        this.deps.bus.markEnded('done', { reason: 'idle_timeout' });
-      }
-    }, this.timeoutMs);
-  }
 }

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { collaborationData, collaborationPolicy } from './fixtures/collaboration-data.js';
 
 test('mentions chats/projects and prepares five independent roles/models with a visible completion trigger', async ({ page }) => {
   test.setTimeout(60_000);
@@ -6,12 +7,13 @@ test('mentions chats/projects and prepares five independent roles/models with a 
   const failures: string[] = [], references: any[] = [], teams: any[] = [];
   page.on('pageerror', error => failures.push(error.message));
   await page.addInitScript(() => localStorage.setItem('i18n-lang', 'pt-BR'));
-  const config = { sessionId: id, rootId: id, projectId: 1, projectIds: [1], enabled: false, role: '', maxSessions: 8, maxWakeups: 50, budgetId: 'test' };
-  const data: any = { self: `chat:${id}`, config, peers: [], messages: [], candidates: [{ id: peerId, title: 'Revisão existente' }], links: [], triggers: [], wakeCount: 0, rootBudget: 50,
-    chats: [{ id, title: 'Planejar feature', projectId: 1, provider: 'p1', model: 'm1' }] };
+  const data = collaborationData(id), config = data.config;
+  data.candidates = [{ id: peerId, title: 'Revisão existente' }];
+  data.chats[0]!.title = 'Planejar feature';
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url()), path = url.pathname, method = route.request().method();
     const body = method === 'POST' || method === 'PUT' ? route.request().postDataJSON() : null;
+    if (path.endsWith('/collaboration/policy')) return route.fulfill({ json: collaborationPolicy() });
     if (path.endsWith('/collaboration/settings')) { if (body) Object.assign(config, body); return route.fulfill({ json: config }); }
     if (path.endsWith('/collaboration/suggestions')) return route.fulfill({ json: { items: url.searchParams.get('kind') === 'projects'
       ? [{ kind: 'project', id: '2', label: 'Backend', detail: 'D:/fixture/backend' }]
@@ -34,7 +36,7 @@ test('mentions chats/projects and prepares five independent roles/models with a 
       return route.fulfill({ json: { created: data.chats.slice(2) } });
     }
     if (path.endsWith('/collaboration/triggers')) {
-      data.triggers.push({ ...body, id: 'trigger1', ownerSessionId: id, status: 'waiting' });
+      data.triggers.push({ ...body, id: 'trigger1', ownerSessionId: id, status: 'waiting', baselineRunId: null, createdAt: Date.now() });
       return route.fulfill({ json: data.triggers[0] });
     }
     if (path.endsWith('/collaboration')) return route.fulfill({ json: data });
@@ -50,7 +52,7 @@ test('mentions chats/projects and prepares five independent roles/models with a 
   await page.getByRole('option', { name: /Backend/ }).click();
   await input.press('End'); await input.pressSequentially('e @Rev');
   await expect(page.getByRole('listbox', { name: 'Chats', exact: true }).getByRole('option', { name: /Revisão existente/ })).toBeVisible();
-  await page.screenshot({ path: '.tmp/session-network-mentions.png' });
+  await page.screenshot({ path: test.info().outputPath('session-network-mentions.png') });
   await input.press('Enter'); await input.press('Control+Enter');
   await expect(page.getByTestId('sent')).toContainText('@Revisão existente');
   expect(references[0]).toEqual({ chatIds: [peerId], projectIds: [2] });
@@ -80,6 +82,6 @@ test('mentions chats/projects and prepares five independent roles/models with a 
   await page.getByRole('button', { name: 'Arquitetura', exact: true }).click();
   await expect(page.getByText('p2 · m2', { exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Abrir chat', exact: true })).toHaveAttribute('href', /projects\/1\?session=/);
-  await page.screenshot({ path: '.tmp/session-network-graph.png' });
+  await page.screenshot({ path: test.info().outputPath('session-network-graph.png') });
   expect(failures).toEqual([]);
 });

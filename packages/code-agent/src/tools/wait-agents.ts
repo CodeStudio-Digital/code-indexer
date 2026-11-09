@@ -172,12 +172,13 @@ export const waitAgents: CoderTool = {
     // re-check even if a target's `finished` signal is lost. Subordinate
     // callers (isMaster false) only ever resolve on `all_done`/`deadline`.
     const outcome = await runAgentWaitLoop(orchestrator, {
-      targetIds, isMaster, deadlineMs,
+      targetIds, isMaster, deadlineMs, signal: ctx.signal,
       // Heartbeat the caller's supervisor record so a long, healthy wait isn't
       // misread as a stuck tool.
       heartbeatAgentRunId: cc.agentRunId ?? undefined,
     });
     switch (outcome.kind) {
+      case 'aborted': return { ...ok('Wait cancelled; target agents were not cancelled.'), structuredData: { schemaVersion: 1, reason: 'aborted', items: [], cursor: null } };
       case 'attention': {
         const e = outcome.event;
         const verb =
@@ -197,9 +198,8 @@ export const waitAgents: CoderTool = {
         );
       case 'deadline': {
         const stillRunning = targets.filter((t) => !isTargetTerminal(t.agentRunId));
-        return err(
-          `wait_agents: timed out after ${timeoutMinutes}min. Still running: ${stillRunning.map((t) => t.path).join(', ')}.`,
-        );
+        return { ...ok(`wait_agents: timed out after ${timeoutMinutes}min. Still running: ${stillRunning.map((t) => t.path).join(', ')}.`),
+          structuredData: { schemaVersion: 1, reason: 'timeout', items: stillRunning, cursor: null } };
       }
       case 'all_done':
       default:

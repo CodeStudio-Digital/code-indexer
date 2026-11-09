@@ -99,6 +99,7 @@ export interface RunCoderOptions {
    * so the runner proactively injects relevant memory each turn.
    */
   memoryRetriever?: {
+    recordInjected?(ids: readonly string[]): void | Promise<void>;
     retrieve(
       projectId: number,
       projectName: string,

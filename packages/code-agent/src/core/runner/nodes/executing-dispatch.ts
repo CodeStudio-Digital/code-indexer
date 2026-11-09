@@ -14,9 +14,11 @@
  * commands, interactive/unknown tools and repeated read signatures are barriers.
  */
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import { boundedToolResultData } from '../../../runtime/bounded-tool-result-data.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type {
   ToolContext,
+  ToolResult,
   CoderTool,
   GuardVerdict,
   ToolSourceTruncation,
@@ -78,6 +80,9 @@ export type RefusalKind =
   | 'abort';
 
 export interface DispatchedToolResult {
+  evidence?: ToolResult['evidence'];
+  structuredData?: unknown;
+  structuredDataOmitted?: 'invalid' | 'too_large';
   toolUseId: string;
   name: string;
   content: string;
@@ -453,7 +458,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // called by name — find_tools tells the model to do exactly that.
     // Policy: disabled tools hard-block; every other registered capability
     // flows through the normal gates, executes, and is pinned at the result
-    // tail. Goal state has no special dispatch authority.
+    // tail.
     // Disabled/policy-blocked capabilities are a security boundary, not a
     // pinning feature. The pin kill switch may suppress hidden-tool discovery,
     // but it must never make a blocked registered tool executable.
@@ -614,6 +619,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     const permissionGate = args.toolContext.permissionGate;
     if (permissionGate) {
       const decision = await permissionGate.check({
+        outcomeRecovery: args.toolContext.outcomeRecovery,
         toolUseId: tu.id,
         toolName: tu.name,
         input: normalizedInput,
@@ -681,6 +687,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let invocationContentFormat: 'text' | 'markdown' | 'json' = 'text';
     let invocationStructuredChars: number | null = null;
     let invocationStructuredData: unknown;
+    let invocationEvidence: ToolResult['evidence'];
     let invocationExtraBlocks: ContentBlock[] | undefined;
     let invocationGuardVerdict: GuardVerdict | undefined;
     let invocationSourceTruncations: ToolSourceTruncation[] = [];
@@ -718,6 +725,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let relayParentAbort: (() => void) | undefined;
     let releaseUnsafe: (() => void) | undefined;
     let releaseOwnedByInvocation = false;
+    const outcomeControl: NonNullable<ToolContext['toolOutcomeControl']> = {};
     if (invocationAbort && parentSignal) {
       relayParentAbort = (): void => {
         const reason = (parentSignal as { reason?: unknown }).reason;
@@ -730,9 +738,13 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     try {
       const callContext: ToolContext = {
         ...args.toolContext,
+        toolOutcomeControl: outcomeControl,
         // Anchor for approval requests raised from nested contexts
         // (code_exec proxies receive this context as `ctx`).
         currentToolUseId: tu.id,
+        deadlineAtEpochMs: toolTimeoutMs > 0
+          ? Math.min(args.toolContext.deadlineAtEpochMs ?? Infinity, t0 + toolTimeoutMs)
+          : args.toolContext.deadlineAtEpochMs,
         parentToolUseId: tu.id,
         nestedToolObserver: args.makeNestedObserver?.(tu.id, tu.name),
         nestedCapabilityDispatch: {
@@ -842,6 +854,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       }
       invocationContentFormat = result.contentFormat ?? 'text';
       invocationStructuredData = result.structuredData;
+      invocationEvidence = result.evidence;
       if (result.structuredData !== undefined) {
         try {
           invocationStructuredChars = JSON.stringify(result.structuredData)?.length ?? null;
@@ -864,7 +877,12 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         }
       }
     } catch (e) {
-      if (invocationStarted && tool?.source === 'mcp_external') {
+      // A lost wait is uncertain only after a physical effect-capable handler
+      // started (including a wrapper's RAW children). Native writes/shells
+      // need the same protection as remote effects; reads and lane/admission
+      // failures must not create a permanent recovery incident.
+      if (invocationStarted && (outcomeControl.scope?.hasUnsettledEffects()
+        || args.toolContext.toolCallLedger?.outcomeUnknownTool)) {
         invocationOutcomeUnknown = outcomeUnknown = true;
         args.toolContext.toolCallLedger?.markOutcomeUnknown(tu.name);
       }
@@ -874,7 +892,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         }
         invocationContent =
           `[tool-timeout: \`${tu.name}\` exceeded ${e.ms}ms. ` +
-          `Tune MCP_TOOL_NORMAL_TIMEOUT_MS / MCP_TOOL_SLOW_TIMEOUT_MS, or declare timeoutMs on the tool.]`;
+          `Inspect partial output and current state before retrying. For persistent commands, use exec_command and poll the returned session.]`;
         refusalKind = 'timeout';
       } else if (isAbortError(e)) {
         // A supervisor inject aborts the controller AND stashes a message —
@@ -887,7 +905,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         invocationContent = e instanceof Error ? e.message : String(e);
       }
       invocationIsError = true;
-      if (invocationOutcomeUnknown) invocationContent += ' The remote operation may have taken effect; reconcile before retrying.';
+      if (invocationOutcomeUnknown) invocationContent += ' The operation may have taken effect; reconcile before retrying.';
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (invocationAbort) args.unregisterInFlightTool?.(tu.id);
@@ -1110,7 +1128,14 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       ? { ...selectedGuardVerdict, stateEpoch: invocationGuard.stateEpoch }
       : selectedGuardVerdict;
 
+    const data = boundedToolResultData(invocationStructuredData, 1024 * 1024);
+    if (data.structuredDataOmitted) {
+      invocationSourceTruncations.push({ technique: `structured-data-${data.structuredDataOmitted}`, unit: 'items', inputSize: 1, outputSize: 0, recoverable: false });
+      if (invocationEvidence) invocationEvidence = { ...invocationEvidence, completeness: 'partial' };
+    }
     const dispatched: DispatchedToolResult = {
+      ...data,
+      evidence: invocationEvidence,
       toolUseId: tu.id,
       name: tu.name,
       content: finalShaped,

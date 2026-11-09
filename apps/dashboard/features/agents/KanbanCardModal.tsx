@@ -11,6 +11,7 @@ import { Textarea } from '../../components/ui/textarea.js';
 import { confirm } from '../../components/ui/prompt-dialog.js';
 import { WorkBoardBadge, WorkBoardDetailDialog } from '../../components/work-board/index.js';
 import { formatDateTime } from '../../lib/datetime.js';
+import { KanbanDispatchReview } from './KanbanDispatchReview.js';
 import type {
   KanbanCardFull,
   KanbanTag,
@@ -34,6 +35,8 @@ const COLUMN_LABEL_KEYS: Record<KanbanColumn, string> = {
 };
 
 interface KanbanCardModalProps {
+  companySessionId: string;
+  onRefresh: () => void;
   card: KanbanCardFull;
   allCards: KanbanCardFull[];
   open: boolean;
@@ -48,6 +51,8 @@ interface KanbanCardModalProps {
 }
 
 export function KanbanCardModal({
+  companySessionId,
+  onRefresh,
   card,
   allCards,
   open,
@@ -92,6 +97,8 @@ export function KanbanCardModal({
       ) : <button type="button" className="text-left transition-colors hover:text-primary" onClick={() => setEditingTitle(true)}>{card.title}</button>}
       footer={<><span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{t('agents:kanban.card.createdBy', { author: card.created_by, date: formatDateTime(card.created_at) })}</span><Button size="sm" variant="destructive" onClick={async () => { if (await confirm({ title: t('agents:kanban.card.deleteCard'), description: t('agents:kanban.card.deleteConfirm', { title: card.title }), confirmLabel: t('agents:kanban.card.deleteCard'), tone: 'destructive' })) { await onDelete(card.id); onClose(); } }}>{t('agents:kanban.card.deleteCard')}</Button></>}
     >
+
+        <KanbanDispatchReview key={`${companySessionId}:${card.id}`} sessionId={companySessionId} cardId={card.id} onChanged={onRefresh} />
 
         {/* Tag selector */}
         <div className="flex items-center gap-2 mt-2">

@@ -125,9 +125,11 @@ export function resourcesForInvocation(
     case 'shell': {
       if (toolName === 'get_diagnostics') return diagnosticExecutables(String(input.file_path ?? ''))
         .map(executable => ({ kind: 'command' as const, executable }));
+      const spec = input.command && typeof input.command === 'object' ? input.command as Record<string, unknown> : undefined;
       const executable = toolName.startsWith('git_') || toolName === 'enter_worktree' || toolName === 'exit_worktree'
         ? 'git'
-        : commandHead(String(input.command ?? input.cmd ?? ''));
+        : spec?.kind === 'argv' ? String(spec.executable ?? '')
+        : commandHead(String(spec?.script ?? input.command ?? input.cmd ?? ''));
       return executable
         ? [{ kind: 'command', executable }]
         : [];

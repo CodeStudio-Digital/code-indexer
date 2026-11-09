@@ -67,6 +67,8 @@ interface ToolApprovalBody {
   approved: boolean;
   note?: string;
   always_allow?: boolean;
+  recovery_reviewed?: boolean;
+  recovery_fingerprint?: string;
 }
 
 const queuedAttachmentBodyLimit = bodyLimit({
@@ -332,27 +334,27 @@ export function mountCoderInteractionRoutes(
   /**
    * Resolve a pending PermissionGate approval — a write/execute/admin tool
    * call paused BEFORE execution (modes 'ask'/'auto'). Live path: resolves
-   * the keyed wait slot `tool_approval:<tool_use_id>`. Dead-runner path:
-   * the tool was NEVER executed, so approving can't run it retroactively —
-   * both verdicts seal the dangling tool_use with an error result (deny →
-   * `[user-denied…]`, approve → re-call instruction) and the model
-   * re-decides on the next run.
+   * the keyed wait slot `tool_approval:<tool_use_id>`. A dead runner is not
+   * proof that an earlier approval was never delivered. Preserve uncertainty
+   * for the dangling invocation and never instruct an automatic replay.
    */
   app.post('/api/coder/sessions/:id/tool-approval', async (c) => {
     const id = parseSessionIdParam(c);
     const body = await c.req.json<ToolApprovalBody>();
     const toolUseId = typeof body.tool_use_id === 'string' ? body.tool_use_id.trim() : '';
     if (!toolUseId) return c.json({ error: 'tool_use_id required' }, 400);
-    const approved = !!body.approved;
+    const approved = body.approved === true;
     logRouteHit(id, '/tool-approval', {
       tool_use_id: toolUseId,
       approved,
-      always_allow: !!body.always_allow,
+      always_allow: body.always_allow === true,
     });
     const payload = JSON.stringify({
       approved,
       note: body.note,
-      alwaysAllow: !!body.always_allow,
+      alwaysAllow: body.always_allow === true,
+      recoveryReviewed: body.recovery_reviewed === true,
+      recoveryFingerprint: typeof body.recovery_fingerprint === 'string' ? body.recovery_fingerprint : undefined,
     });
     const askId = approvalAskId(toolUseId);
     try {
@@ -374,8 +376,9 @@ export function mountCoderInteractionRoutes(
         type: 'tool_result',
         tool_use_id: toolUseId,
         content: approved
-          ? '[approval-after-restart: aprovação recebida, mas o runner reiniciou e a ferramenta NÃO foi executada. Chame a ferramenta novamente.]'
-          : buildUserDeniedText(dangling.name, body.note),
+          ? '[approval-after-restart: não há runner ativo para receber esta aprovação. Uma entrega anterior pode ter iniciado a operação; seu resultado não foi confirmado. Inspecione o estado atual antes de qualquer nova tentativa.]'
+          : `${buildUserDeniedText(dangling.name, body.note)} Uma entrega anterior pode ter iniciado a operação; negar agora não confirma seu término nem desfaz seus efeitos.`,
+        effect_outcome: 'unknown',
         is_error: true,
       }],
     };

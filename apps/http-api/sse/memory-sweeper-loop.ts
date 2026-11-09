@@ -144,6 +144,7 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
     ) {
       const entry = entries[(scanStart + inspected) % entries.length]!;
       inspected += 1;
+      if (runEndMemory.hasPending?.(entry.session.id)) continue;
       // Host writes update the shared catalog. Only a non-idle/missing cached
       // state can require one authoritative read to observe that an external
       // worker has finished. Cached idle entries need no synchronous I/O; the
@@ -217,6 +218,7 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   const sweepSession = async (
     candidate: MemorySweepCandidate,
   ): Promise<boolean> => {
+    if (runEndMemory.hasPending?.(candidate.session_id)) return false;
     const span = await sessionStore.listMessagesAfter(
       candidate.session_id,
       candidate.distilled_mark,
@@ -265,6 +267,8 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
         sessionId: candidate.session_id,
       });
       const projectName = db.getProject(candidate.project_id)?.name ?? '';
+      // A compaction harvest may have started while the idle summary was running.
+      if (runEndMemory.hasPending?.(candidate.session_id)) return false;
       const persist = () =>
         Promise.resolve(
           runEndMemory.extractAndPersist(
@@ -273,12 +277,14 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
             input,
           ),
         );
-      const result = await withTimeout(
-        agentMemoryService
+      const persistence = (agentMemoryService
           ? agentMemoryService.runMutationBatch(persist)
-          : persist(),
-        STEP_TIMEOUT_MS,
-      );
+          : persist()).then(async result => {
+            // Reconcile late success too; a wait timeout never consumes/losses a span.
+            if (result && !result.hadError) await settleSpan(candidate.session_id, span.maxSeq);
+            return result;
+          });
+      const result = await withTimeout(persistence, STEP_TIMEOUT_MS);
       if (result === undefined) {
         await recordFailure(
           candidate,
@@ -292,7 +298,6 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
           .catch(() => undefined);
         return false;
       }
-      await settleSpan(candidate.session_id, span.maxSeq);
       return true;
     } catch (error) {
       const message =

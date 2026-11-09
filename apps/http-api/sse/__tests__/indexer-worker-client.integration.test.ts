@@ -71,6 +71,12 @@ describe('IndexerWorkerClient nested parser pool', () => {
       ]);
       expect(previousItemKeys).toEqual([]);
 
+      // Manual repair must cross the worker RPC boundary even when source
+      // hashes match the stored baseline; ordinary reopen remains cheap.
+      await expect(client.runStructuralIndex(project.id, {})).resolves.toMatchObject({ indexed: 0, skipped: 2 });
+      await expect(client.runStructuralIndex(project.id, { forceReparse: true }))
+        .resolves.toMatchObject({ indexed: 2, skipped: 0, errorCount: 0 });
+
       writeFileSync(join(root, 'alpha.ts'), 'export const alphaRenamed = 2;\n', 'utf8');
       const incrementalChanges: Array<{ path: string; kind: 'upsert' | 'delete' }> = [];
       const incrementalPreviousKeys: string[] = [];

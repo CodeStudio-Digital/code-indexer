@@ -1,4 +1,4 @@
-import { copyText } from './clipboard.js';
+import { copyText, readClipboardText } from './clipboard.js';
 
 interface MonacoClipboardService {
   writeText(text: string, type?: string): Promise<void>;
@@ -38,12 +38,7 @@ export function createMonacoClipboardService(): MonacoClipboardService {
 
     async readText(type) {
       if (type) return typedText.get(type) ?? '';
-      if (typeof navigator === 'undefined') return '';
-      try {
-        return await navigator.clipboard?.readText?.() ?? '';
-      } catch {
-        return '';
-      }
+      return readClipboardText();
     },
 
     async readFindText() {

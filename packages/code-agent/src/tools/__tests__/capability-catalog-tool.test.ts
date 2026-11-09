@@ -66,6 +66,16 @@ function setup() {
 }
 
 describe('capability_catalog', () => {
+  it('reports a blocked capability without promoting it', async () => {
+    const { catalog, ctx, promoteTool } = setup();
+    Object.assign(ctx.runner!, { discoveryState: () => ({ authorization: 'blocked', visible: false }) });
+    const found = await catalog.handler({ op: 'search', query: 'read_file' }, ctx);
+    const item = JSON.parse(found.content).items[0];
+    expect(item).toMatchObject({ authorization: 'blocked', visible: false });
+    const activated = await catalog.handler({ op: 'activate', capability_ids: [item.capabilityId] }, ctx);
+    expect(JSON.parse(activated.content).rejected).toEqual([{ capabilityId: item.capabilityId, reason: 'blocked_by_session_configuration' }]);
+    expect(promoteTool).not.toHaveBeenCalled();
+  });
   it('rejects malformed or excessive discovery input before scanning the registry', async () => {
     const { catalog, ctx, registry } = setup();
     const list = vi.spyOn(registry, 'list');
@@ -100,7 +110,7 @@ describe('capability_catalog', () => {
     const payload = JSON.parse(result.content);
 
     expect(promoteTool).toHaveBeenCalledWith('read_file');
-    expect(payload.activated[0]).toMatchObject({ capabilityId: readId, effective: 'next_turn' });
+    expect(payload.activated[0]).toMatchObject({ capabilityId: readId, effective: 'pending_projection' });
     expect(payload.rejected[0]).toMatchObject({ reason: 'not_in_attempt_snapshot' });
     expect(payload.capabilitySetDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(payload.projectionState).toBe('recomputed_at_next_turn_boundary');

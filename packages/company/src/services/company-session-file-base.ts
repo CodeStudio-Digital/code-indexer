@@ -2,10 +2,11 @@
 import { object, nullableString, stringValue, companyMetadata } from './company-session-file-values.js';
 import type { CompanySessionFileSnapshot } from './company-session-file-types.js';
 import { CompanySessionRepository, asCompanySessionId, asSessionId, type CompanySessionId, type EntityRecord, type SessionId, type SessionLocation, type SessionMetadata } from '@mcp/session-storage';
-import { accessSync, closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
+import { companySessionIdentity } from './session-identity.js';
 
 export class CompanySessionFileBase {
   readonly companySessionId: CompanySessionId;
@@ -48,6 +49,7 @@ export class CompanySessionFileBase {
     const metadata = companyMetadata(session);
     const labels = object(metadata.project_labels);
     return {
+      ...companySessionIdentity({ id: this.companySessionId, parent_session_id: session.parent_session_id, config_json: stringValue(metadata.config_json, '{}') }, metadata.configuration_origin),
       id: this.companySessionId,
       template_id:
         typeof metadata.template_id === 'number'
@@ -118,7 +120,7 @@ export class CompanySessionFileBase {
     );
   }
 
-  async updateSessionConfig(configJson: string): Promise<void> {
+  async updateSessionConfig(configJson: string, configurationOrigin?: { revision: string; inherited_from: string }): Promise<void> {
     const parsed: unknown = JSON.parse(configJson);
     if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new TypeError('Company session config must be a JSON object');
@@ -136,6 +138,7 @@ export class CompanySessionFileBase {
               company: {
                 ...companyMetadata(session),
                 config_json: normalized,
+                ...(configurationOrigin ? { configuration_origin: configurationOrigin } : {}),
               },
             },
           }) as SessionMetadata,
@@ -358,7 +361,12 @@ export class CompanySessionFileBase {
       fsyncSync(handle);
       closeSync(handle);
       handle = null;
-      renameSync(temp, target);
+      if (createOnly) {
+        // Publish-if-absent across workers. An exists-check followed by rename
+        // can overwrite a concurrently delivered inbox row with pending state.
+        linkSync(temp, target);
+        unlinkSync(temp);
+      } else renameSync(temp, target);
       this.fsyncCompanyDirectoryBestEffortSync(directory);
     } catch (error) {
       if (handle != null) {

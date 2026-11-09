@@ -7,21 +7,31 @@ export async function deliverNetworkTriggers(network: SessionNetwork): Promise<v
   for (const trigger of await network.mailbox.files.list<ChatTrigger>('triggers')) {
     if (trigger.status !== 'waiting') continue;
     try {
+    if ((trigger.sourceEpoch ?? 0) !== await network.mailbox.epoch(trigger.sourceSessionId)
+      || (trigger.targetEpoch ?? 0) !== await network.mailbox.epoch(trigger.targetSessionId)) {
+      await network.mailbox.files.put('triggers', trigger.id, { ...trigger, status: 'cancelled' }); continue;
+    }
     const config = await network.config(trigger.ownerSessionId).catch(() => null);
     if (!config?.enabled) continue;
     const root = await network.config(config.rootId).catch(() => null);
     if (!root?.enabled) continue;
-    const completion = await network.mailbox.files.get<ChatCompletion>('completions', trigger.sourceSessionId);
-    if (!completion || completion.runId === trigger.baselineRunId || completion.at < trigger.createdAt) continue;
-    const success = completion.reason === 'completed';
-    if ((trigger.event === 'completed' && !success) || (trigger.event === 'failed' && completion.reason !== 'error')) continue;
+    const events = await network.mailbox.completions(trigger.sourceSessionId);
+    const baseline = trigger.baselineRunId ? events.findIndex(row => row.runId === trigger.baselineRunId) : -1;
+    if (trigger.journalCursorVersion === 1 && trigger.baselineRunId && baseline < 0) throw new Error('cursor_expired: trigger baseline is missing');
+    const candidates = trigger.journalCursorVersion === 1 ? events.slice(baseline + 1) : events.filter(row => row.at >= trigger.createdAt);
+    const completion = candidates.find(row =>
+      row.runId !== trigger.baselineRunId
+      && (trigger.event === 'finished' || (trigger.event === 'completed' ? row.reason === 'completed'
+        : !['completed', 'aborted', 'cancelled'].includes(row.reason))));
+    if (!completion) continue;
     if (!await network.mailbox.connected(trigger.ownerSessionId, trigger.targetSessionId)
       || !await network.mailbox.connected(trigger.ownerSessionId, trigger.sourceSessionId)) continue;
-    const result = trigger.includeFinal ? await network.read(trigger.ownerSessionId, trigger.sourceSessionId).catch(() => null) : null;
+    const result = trigger.includeFinal && completion.finalText === undefined && events.at(-1)?.runId === completion.runId
+      ? await network.read(trigger.ownerSessionId, trigger.sourceSessionId).catch(() => null) : null;
     await network.mailbox.send({ from: rootChatId(trigger.sourceSessionId), to: rootChatId(trigger.targetSessionId), kind: 'task',
       idempotencyKey: `trigger:${trigger.id}:${completion.runId}`,
       body: JSON.stringify({ trigger: trigger.id, sourceChat: trigger.sourceSessionId, outcome: completion.reason,
-        instruction: trigger.prompt, ...(trigger.includeFinal ? { previousFinalAnswer: result?.final ?? null } : {}) }) });
+        instruction: trigger.prompt, ...(trigger.includeFinal ? { previousFinalAnswer: completion.finalText ?? result?.final ?? null } : {}) }) });
     await network.mailbox.files.put('triggers', trigger.id, { ...trigger, status: 'fired', firedRunId: completion.runId });
     } catch (error) {
       // A deleted peer or temporary delivery failure must not hold up unrelated dependencies/inboxes.

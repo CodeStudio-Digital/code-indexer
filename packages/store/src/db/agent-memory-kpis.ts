@@ -1,18 +1,18 @@
 import type { DB } from './types.js';
 
 /**
- * Memory-effectiveness KPIs (no LLM) — the measurable loop behind "is the
- * agent actually getting better over time?". Session-owned counters are
+ * Memory activity KPIs (no LLM). These describe persistence and retrieval,
+ * not correctness, model adherence or task effectiveness. Session-owned counters are
  * injected from filesystem bundles; SQLite is read only for the shared
  * Agent Memory catalog and its global recall events.
  *
  *  K1 learningRate  — % of sessions that produced ≥1 memory (created+merged)
- *  K2 recallHitRate — % of proactive/explicit recalls that injected ≥1 memory
- *  K3 usageCoverage — % of the live project stock accessed in the window
- *                     (markAccessed only fires on injected/recalled items —
- *                     the computable proxy for "injected AND used")
- *  K4 goldStock     — live `preference` memories (user scope + this project)
- *  K5 explicitCalls — recall_memory / remember / forget_memory tool calls
+ *  K2 recallHitRate — % of proactive retrievals returning ≥1 candidate
+ *  K3 usageCoverage — % of live project/local stock accessed in the window
+ *                     (explicit reads or assembled prompt snippets; older
+ *                     access counters also included discarded candidates)
+ *  K4 goldStock     — live `preference` memories (user + this project's project/local scopes)
+ *  K5 explicitCalls — native and MCP memory tool calls, including failures
  */
 export interface AgentMemoryKpis {
   windowDays: number;
@@ -80,7 +80,7 @@ export function getMemoryEffectivenessKpis(
       SELECT COUNT(*) AS live,
              COALESCE(SUM(CASE WHEN last_accessed_at >= datetime('now', ?) THEN 1 ELSE 0 END), 0) AS accessed
       FROM agent_memory
-      WHERE scope = 'project' AND project_id = ? AND archived_at IS NULL
+      WHERE scope IN ('project', 'local') AND project_id = ? AND archived_at IS NULL
       `).get(window, projectId) as { live: number; accessed: number };
     kpis.liveStock = row.live;
     if (row.live > 0) kpis.usageCoverage = row.accessed / row.live;
@@ -90,7 +90,7 @@ export function getMemoryEffectivenessKpis(
     const row = db.prepare(`
       SELECT COUNT(*) AS c FROM agent_memory
       WHERE archived_at IS NULL AND type = 'preference'
-        AND (scope = 'user' OR (scope = 'project' AND project_id = ?))
+        AND (scope = 'user' OR (scope IN ('project', 'local') AND project_id = ?))
       `).get(projectId) as { c: number };
     kpis.goldStock = row.c;
   } catch { /* best-effort */ }

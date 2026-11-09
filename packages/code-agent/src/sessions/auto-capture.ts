@@ -11,7 +11,7 @@ import type { SessionId } from '@mcp/session-storage';
  *     re-events UPDATE the same note instead of stacking copies;
  *   - `kind` carries an `auto:` prefix so `memoryForState` can cap how many
  *     auto notes enter the block (they never evict deliberate notes);
- *   - only four events qualify: plan approved, goal completed, task closed
+ *   - only three events qualify: plan approved, task closed
  *     with a summary, and an error-streak finally resolving. Volatile state
  *     (todo updates, unapproved plans) is deliberately NOT captured.
  *
@@ -27,7 +27,6 @@ export interface AutoCaptureStore {
 
 export interface AutoCapture {
   onPlanResolved(status: string, planText: string | null, feedback?: string): boolean;
-  onGoalUpserted(goal: { text: string; status: string; completionNote?: string | null }): boolean;
   onTaskStatus(
     taskId: string,
     patch: {
@@ -85,19 +84,6 @@ export function buildAutoCapture(args: {
         title: 'Approved plan',
         body: `${excerpt(planText, 300)}${fb}`,
         kind: 'auto:plan',
-      });
-      return true;
-    },
-
-    onGoalUpserted(goal) {
-      // Goal creation is already structural (goal_* columns render in the
-      // state block live) — only COMPLETION is a durable fact worth a note.
-      if (goal.status !== 'complete' || !goal.text) return false;
-      const note = goal.completionNote?.trim() ? ` — ${excerpt(goal.completionNote, 160)}` : '';
-      save({
-        title: 'Goal completed',
-        body: `${excerpt(goal.text, 200)}${note}`,
-        kind: 'auto:goal',
       });
       return true;
     },

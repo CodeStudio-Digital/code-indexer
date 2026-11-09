@@ -55,6 +55,7 @@ describe('agent runtime host public API', () => {
     expect(manifest.exports).toEqual({
       '.': './src/index.ts',
       './tool-result.js': './src/tool-result.ts',
+      './invocation-evidence.js': './src/invocation-evidence.ts',
     });
     expect(tsconfig.compilerOptions?.paths).not.toHaveProperty(
       '@mcp/agent-runtime-host/*',

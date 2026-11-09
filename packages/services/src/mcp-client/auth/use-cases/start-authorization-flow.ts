@@ -34,6 +34,7 @@ export class StartAuthorizationFlow {
     const reg = this.registrations.findByServerId(input.serverId);
     if (!reg) return err({ kind: 'registration_not_found', serverId: input.serverId });
 
+    this.pending.purgeExpired(this.clock.now());
     const pkce = generatePkcePair();
     const state = this.random.token(24);
     const now = this.clock.now();
@@ -54,7 +55,8 @@ export class StartAuthorizationFlow {
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', reg.clientId);
     url.searchParams.set('redirect_uri', reg.redirectUri);
-    url.searchParams.set('scope', reg.scopes.join(' '));
+    if (reg.scopes.length) url.searchParams.set('scope', reg.scopes.join(' '));
+    if (reg.resourceUrl) url.searchParams.set('resource', reg.resourceUrl);
     url.searchParams.set('state', state);
     url.searchParams.set('code_challenge', pkce.challenge);
     url.searchParams.set('code_challenge_method', pkce.method);

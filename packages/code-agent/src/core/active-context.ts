@@ -9,23 +9,14 @@
  *   user-content block on top of it costs nothing in cache terms.
  *
  * The block is REGENERATED every turn from live state — the runner's
- * `currentTodos`, the session's persisted goal, and the active task scope
+ * `currentTodos` and the active task scope
  * (if execute_task is in flight). It is never persisted to `this.messages`.
  */
 import type { TasksState } from '@mcp/session-storage/session-state-types.js';
-import type { GoalStatus } from '@mcp/code-agent/core/tool.js';
 import { type TodoItem, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
-
-export interface GoalSnapshot {
-  text: string;
-  status: GoalStatus;
-  budgetTokens?: number | null;
-  completionNote?: string | null;
-}
 
 export interface ActiveContextInputs {
   todos?: TodoItem[];
-  goal?: GoalSnapshot | null;
   tasksState?: TasksState | null;
   /** Hard cap in characters, applied after assembly. Truncates todo lines first. */
   maxChars?: number;
@@ -34,31 +25,12 @@ export interface ActiveContextInputs {
 const DEFAULT_MAX_CHARS = 4000;
 
 /**
- * State-transition guidance for an active goal, adapted from Codex's
- * `goals/continuation.md` + `goals/budget_limit.md` into a single compact line
- * (our `<active-context>` ships every turn, so a full page would tax every
- * turn). Only when `in_progress`: reinforce continuation fidelity — keep the
- * whole objective, don't declare completion early — with the soft-budget
- * wrap-up folded in. 'complete' goals need no guidance (the note says it all).
- */
-function goalGuidanceLine(goal: GoalSnapshot): string | null {
-  if (goal.status !== 'in_progress') return null;
-  let line =
-    'goal_guidance: keep the FULL objective intact — do not redefine success as a smaller or easier subset, and ending a turn does not require shrinking it. Mark complete only when the requested end state is true and verified (never just because the session is long).';
-  if (goal.budgetTokens && goal.budgetTokens > 0) {
-    line += ` Soft token budget ~${goal.budgetTokens}: as you approach it, wrap up (summarize progress + next step) instead of starting new substantive work.`;
-  }
-  return line;
-}
-
-/**
  * Render the <active-context> block. Returns null if there is nothing
- * worth saying (no goal, no todos, no active task) — callers should skip
+ * worth saying (no todos, no active task) — callers should skip
  * injection in that case to keep the prompt lean.
  */
 export function buildActiveContextBlock(input: ActiveContextInputs): string | null {
   const todos = input.todos ?? [];
-  const goal = input.goal ?? null;
   const state = input.tasksState ?? null;
   const cap = input.maxChars ?? DEFAULT_MAX_CHARS;
 
@@ -69,20 +41,12 @@ export function buildActiveContextBlock(input: ActiveContextInputs): string | nu
     ? state.tasks.find((t) => t.status === 'running') ?? null
     : null;
 
-  const hasContent = !!goal || todos.length > 0 || !!activeTask;
+  const hasContent = todos.length > 0 || !!activeTask;
   if (!hasContent) return null;
 
   // Header = everything except the todo body. Built as its own array so the
   // truncation path can measure/keep it without fragile positional indexing
-  // (goal guidance can insert a line between goal and active_task).
   const headerLines: string[] = ['<active-context>'];
-
-  if (goal) {
-    const note = goal.completionNote ? ` — ${goal.completionNote}` : '';
-    headerLines.push(`goal: ${goal.text} (status=${goal.status}${note})`);
-    const guidance = goalGuidanceLine(goal);
-    if (guidance) headerLines.push(guidance);
-  }
 
   if (activeTask) {
     const files = activeTask.files.length
@@ -101,7 +65,7 @@ export function buildActiveContextBlock(input: ActiveContextInputs): string | nu
   let block = [...headerLines, ...bodyLines, '</active-context>'].join('\n');
 
   if (block.length > cap) {
-    // Truncate todo body, keep header (open + goal + guidance + active_task) intact.
+    // Truncate todo body, keep header (open + active_task) intact.
     const headerSize = headerLines.join('\n').length;
     const budget = cap - headerSize - '\n</active-context>'.length - '\ntodos:'.length;
     const kept: string[] = [];

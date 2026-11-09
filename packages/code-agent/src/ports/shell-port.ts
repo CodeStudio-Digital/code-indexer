@@ -77,6 +77,12 @@ export interface ShellExecResult {
   /** `null` when the process was killed (timeout or abort). */
   exitCode: number | null;
   timedOut: boolean;
+  /** The launched command exited, but a descendant kept its output handles open. */
+  outputDrainTimedOut?: boolean;
+  /** Cleanup did not observe the launched command exit; do not claim termination. */
+  terminationUnconfirmed?: boolean;
+  /** PID of the launched command, not an inferred descendant/server PID. */
+  processId?: number;
   /** Present only when the streaming capture omitted source bytes. */
   stdoutTruncation?: { inputBytes: number; outputBytes: number };
   stderrTruncation?: { inputBytes: number; outputBytes: number };
@@ -233,12 +239,44 @@ export class LocalShellAdapter implements IShellPort {
       const stderr = new BoundedUtf8Capture(maxBytes);
       let timedOut = false;
       let killed = false;
+      let settled = false;
+      let exited = false;
+      let exitCode: number | null = null;
+      let drainTimer: ReturnType<typeof setTimeout> | undefined;
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (extra: Pick<ShellExecResult, 'outputDrainTimedOut' | 'terminationUnconfirmed'> = {}): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(drainTimer);
+        clearTimeout(cleanupTimer);
+        signal?.removeEventListener('abort', onAbort);
+        // Closing our capture must not terminate a successfully detached server.
+        // On uncertain cleanup keep the tree registered until its actual exit.
+        if (exited || !child.pid) untrack();
+        child.stdin?.destroy();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        const stdoutResult = stdout.finishDetailed();
+        const stderrResult = stderr.finishDetailed();
+        resolvePromise({
+          stdout: stdoutResult.content, stderr: stderrResult.content,
+          exitCode: killed ? null : exitCode, timedOut,
+          ...(child.pid ? { processId: child.pid } : {}), ...extra,
+          ...(stdoutResult.truncation ? { stdoutTruncation: stdoutResult.truncation } : {}),
+          ...(stderrResult.truncation ? { stderrTruncation: stderrResult.truncation } : {}),
+        });
+      };
       const terminateOwnedTree = (): void => {
+        if (exited || settled || cleanupTimer) return;
+        // Bound our wait independently of the shared Windows cleanup queue.
+        // The runner's 5s grace must not become the normal shell result path.
+        cleanupTimer = setTimeout(() => finish({ terminationUnconfirmed: !exited }), 4_000);
         void killProcessTree(child.pid, 'SIGKILL').finally(() => {
           // Fallback when taskkill is unavailable or its bounded circuit is
           // open. The tree helper runs first so Windows can still discover
           // descendants before the direct shell handle disappears.
-          try { child.kill('SIGKILL'); } catch { /* already exited */ }
+          if (!exited) { try { child.kill('SIGKILL'); } catch { /* already exited */ } }
         });
       };
 
@@ -252,6 +290,8 @@ export class LocalShellAdapter implements IShellPort {
       }, timeoutMs);
 
       const onAbort = () => {
+        clearTimeout(timer);
+        if (exited) { finish({ outputDrainTimedOut: true }); return; }
         killed = true;
         terminateOwnedTree();
       };
@@ -264,35 +304,27 @@ export class LocalShellAdapter implements IShellPort {
       child.stderr?.on('data', (chunk: Buffer) => {
         stderr.append(chunk);
       });
-      child.on('close', (code) => {
+      child.once('exit', (code) => {
+        exited = true;
+        exitCode = code;
+        // `exit` is the command lifetime; `close` also waits for inherited
+        // handles. Windows Start-Process -RedirectStandardOutput can leave
+        // those open for the entire server lifetime AFTER PowerShell exits.
         untrack();
         clearTimeout(timer);
-        signal?.removeEventListener('abort', onAbort);
-        const stdoutResult = stdout.finishDetailed();
-        const stderrResult = stderr.finishDetailed();
-        resolvePromise({
-          stdout: stdoutResult.content,
-          stderr: stderrResult.content,
-          exitCode: killed ? null : code,
-          timedOut,
-          ...(stdoutResult.truncation ? { stdoutTruncation: stdoutResult.truncation } : {}),
-          ...(stderrResult.truncation ? { stderrTruncation: stderrResult.truncation } : {}),
-        });
+        clearTimeout(cleanupTimer);
+        if (!settled) drainTimer = setTimeout(() => finish({ outputDrainTimedOut: true }), 500);
       });
-      child.on('error', (e) => {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', onAbort);
+      child.once('close', (code) => {
+        // `close` can follow a spawn error without an `exit` event.
+        exited = true;
+        exitCode = code;
+        untrack();
+        finish();
+      });
+      child.once('error', (e) => {
         stderr.append(e instanceof Error ? e.message : String(e));
-        const stdoutResult = stdout.finishDetailed();
-        const stderrResult = stderr.finishDetailed();
-        resolvePromise({
-          stdout: stdoutResult.content,
-          stderr: stderrResult.content,
-          exitCode: null,
-          timedOut,
-          ...(stdoutResult.truncation ? { stdoutTruncation: stdoutResult.truncation } : {}),
-          ...(stderrResult.truncation ? { stderrTruncation: stderrResult.truncation } : {}),
-        });
+        finish(child.pid && !exited ? { terminationUnconfirmed: true } : {});
       });
     });
   }

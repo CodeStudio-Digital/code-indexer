@@ -336,6 +336,9 @@
   "git.branch.updated": "{{branch}} atualizada",
   "git.branch.updateIssues": "A atualização encontrou problemas",
   "git.branch.updateFailed": "Falha na atualização",
+  "git.branch.projectUpdated": "Projeto atualizado",
+  "git.branch.updateConflicts": "A atualização precisa resolver conflitos",
+  "git.branch.updateConflictsDescription": "Revise os arquivos na aba Conflitos. Se houver um rebase em andamento, continue-o após resolver os arquivos.",
   "git.branch.noDifferences": "Nenhuma diferença",
   "git.branch.worktreeMatches": "A árvore de trabalho corresponde a {{branch}}.",
   "git.branch.matchesCurrent": "{{branch}} corresponde à branch atual.",
@@ -499,8 +502,8 @@
   "lspInstall.notNow": "Agora não",
   "lspInstall.dismiss": "Dispensar",
   "lspStatus.onDemandSuffix": "LSP sob demanda",
-  "lspStatus.idleDescription": "{{server}} está instalado e parado. O índice estrutural responde agora; o servidor inicia no primeiro uso interativo de IntelliSense."
-  ,"autocompleteSetup.enabledMessage": "Texto fantasma ativado — Tab aceita, Alt+\\ aciona manualmente.",
+  "lspStatus.idleDescription": "{{server}} está instalado e parado. O índice estrutural responde agora; o servidor inicia no primeiro uso interativo de IntelliSense.",
+  "autocompleteSetup.enabledMessage": "Texto fantasma ativado — Tab aceita, Alt+\\ aciona manualmente.",
   "autocompleteSetup.relatedCodeConsent": "Use código relacionado indexado. Até três janelas relevantes (700 tokens no total) de outros arquivos do projeto podem ser enviadas a este provedor.",
   "fileTree.explorer": "Explorador",
   "fileTree.reload": "Recarregar árvore de arquivos",
@@ -558,5 +561,8 @@
   "mediaPreview.pdfFrameTitle": "Visualização de PDF: {{file}}",
   "mediaPreview.preparing": "Preparando visualização…",
   "mediaPreview.invalidSvg": "SVG inválido",
-  "mediaPreview.invalidSvgHint": "Corrija o XML no modo Editar e a visualização será atualizada."
+  "mediaPreview.invalidSvgHint": "Corrija o XML no modo Editar e a visualização será atualizada.",
+  "fileTree": {
+    "pathsPartial": "Caminhos indexados parciais. Refine sua busca."
+  }
 }

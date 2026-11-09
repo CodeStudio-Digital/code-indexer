@@ -11,7 +11,7 @@
 import { DEFAULT_MAX_ROWS } from './types.js';
 import { resolveDriverEntry } from './driver-registry.js';
 import { assertDatabaseDispatch } from './dispatch.js';
-import { readCursorWindow, type DatabaseCursor } from './bounded-cursor.js';
+import { readCursorWindow, readDocumentWindow, type DatabaseCursor } from './bounded-cursor.js';
 import { isWriteCommand } from './command-classify.js';
 import type { DatabaseDriver, DbCommand, DbConnectConfig, QueryResult, RunQueryOptions } from './types.js';
 
@@ -111,15 +111,15 @@ export async function createMongoDriver(config: DbConnectConfig): Promise<Databa
 
     const coll = db.collection(command.collection ?? '');
     if (command.op === 'find') {
-      const page = await readCursorWindow(coll.find(p.filter ?? {}, { ...dispatchOptions,
-        sort: p.sort, skip: Number(p.skip ?? 0), limit: max + 1 }), max, opts);
-      const rows = page.rows.map(normalizeDoc);
+      const page = await readDocumentWindow(coll.find(p.filter ?? {}, { ...dispatchOptions,
+        sort: p.sort, skip: Number(p.skip ?? 0), limit: max + 1 }), max, opts, normalizeDoc);
+      const rows = page.rows;
       return { ...page, rows, fields: fieldsOf(rows) };
     }
     if (command.op === 'aggregate') {
-      const page = await readCursorWindow(coll.aggregate((p.pipeline as unknown[]) ?? [], dispatchOptions),
-        max, opts, isWriteCommand(command));
-      const rows = page.rows.map(normalizeDoc);
+      const page = await readDocumentWindow(coll.aggregate((p.pipeline as unknown[]) ?? [], dispatchOptions),
+        max, opts, normalizeDoc, isWriteCommand(command));
+      const rows = page.rows;
       return { ...page, rows, fields: fieldsOf(rows) };
     }
     if (command.op === 'countDocuments') {

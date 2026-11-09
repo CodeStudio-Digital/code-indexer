@@ -82,7 +82,7 @@ export interface DynamicInjectionContext {
   hasReviewableChanges?: boolean;
   /**
    * Session State Block (`assembly/session-state.ts`) — the always-alive
-   * structured state of the session (goal/plan/todos/notes/files/recall),
+   * structured state of the session (plan/todos/notes/files/recall),
    * pre-rendered by the Executing node. Subsumes the old per-field drive
    * injection (activePlan / sessionMemory / investigation nudge):
    *   - standard windows: injected on turn 1, ≤2 turns post-compaction, or
@@ -331,8 +331,8 @@ export function computeDynamicInjection(
   }
   if (ctx.hasReviewableChanges) {
     lines.push(
-      'this session has pending file changes — before you tell the user the work is done, call ' +
-        '`self_review` to validate them with the configured review pipeline, then apply or dismiss each finding.',
+      'this session has pending file changes — review the changed behavior before reporting completion. ' +
+        'Use `self_review` when available and warranted by risk; address its findings. Reuse a review that still covers the current changes, and report any required validation gap.',
     );
   }
 

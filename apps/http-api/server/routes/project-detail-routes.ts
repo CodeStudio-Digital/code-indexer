@@ -180,8 +180,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/projects/:id/index/structural/reconcile', async (c) => {
     const id = parseIdParam(c);
     if (!deps.db.getProject(id)) return notFound(c);
-    deps.projectIndexService.ensureFresh(id, 'manual');
-    const readiness = await deps.projectIndexService.ensureStructuralReady(
+    const readiness = await deps.projectIndexService.reconcileStructural(
       id,
       180_000,
       c.req.raw.signal,

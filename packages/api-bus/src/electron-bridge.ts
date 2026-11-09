@@ -27,6 +27,7 @@ export interface ElectronAPI {
   saveFile?(defaultName?: string): Promise<string | null>;
   oauthLoopbackStart?(): Promise<{ ok: boolean; port?: number; error?: string }>;
   oauthLoopbackStop?(): void;
+  oauthOpenExternal?(url: string): Promise<void>;
   openInNewWindow?(route: string, title?: string): Promise<{ ok: boolean; windowId?: number; error?: string }>;
   windowRegistry?: {
     setActiveProject(projectId: number): void;

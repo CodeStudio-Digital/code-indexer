@@ -185,24 +185,25 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
   // Tear down all live sessions when the feature unmounts (project switch).
   useEffect(() => {
     return () => {
-      for (const id of connectedRef.current) void api.disconnect(String(id));
+      for (const id of connectedRef.current) void api.disconnect(api.connectionKey(projectId, id));
       for (const key of connectedDbPoolsRef.current) void api.disconnect(key);
       connectedRef.current.clear();
       connectedDbPoolsRef.current.clear();
     };
-  }, []);
+  }, [projectId]);
 
   // Auto-reconnect: let the api layer rebuild a connect spec from the saved row
   // (parsing an `id@db` catalog key) so a live op that lands on a vanished pool
   // reconnects + retries instead of failing with "not connected".
   useEffect(() => {
     api.setSpecResolver(async (cid) => {
-      const { id, database } = api.parseConnKey(cid);
+      const { id, database, projectId: owner } = api.parseConnKey(cid);
+      if (owner !== projectId) return null;
       const conn = connectionsRef.current.find((c) => c.id === id);
       return conn ? api.resolveSpec(conn, database) : null;
-    });
-    return () => api.setSpecResolver(null);
-  }, []);
+    }, projectId);
+    return () => api.setSpecResolver(null, projectId);
+  }, [projectId]);
 
   const setStatus = useCallback((id: number, status: DbConnectionStatus) => {
     setStatusById((prev) => ({ ...prev, [id]: status }));
@@ -238,7 +239,7 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
 
   const disconnectConn = useCallback(
     async (conn: DbConnection) => {
-      await api.disconnect(String(conn.id)).catch(() => void 0);
+      await api.disconnect(api.connectionKey(projectId, conn.id)).catch(() => void 0);
       connectedRef.current.delete(conn.id);
       // Drop any per-database pools opened under this connection.
       for (const key of [...connectedDbPoolsRef.current]) {
@@ -266,10 +267,10 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
       database &&
       database !== conn.database_name
     ) {
-      return `${connectionId}@${database}`;
+      return api.connectionKey(projectId, connectionId, database);
     }
-    return String(connectionId);
-  }, []);
+    return api.connectionKey(projectId, connectionId);
+  }, [projectId]);
 
   /** Ensure the pool behind a routing key is live (connects a per-db pool lazily). */
   const ensureDbConnected = useCallback(
@@ -319,7 +320,7 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
   const fetchChildren = useCallback(async (node: DbTreeNode): Promise<DbTreeNode[]> => {
     // Root lists databases on the root pool; deeper nodes route by `id@db` so a
     // non-default Postgres/SQL Server database hits its own pool.
-    const cid = node.depth === 0 ? String(node.connectionId) : connKeyFor(node.connectionId, node.database);
+    const cid = connKeyFor(node.connectionId, node.depth === 0 ? undefined : node.database);
     if (node.depth === 0) {
       // Connection root → databases. Postgres/SQL Server list every database
       // (each browsed through its own lazily-connected pool).
@@ -499,7 +500,7 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
 
   const removeConnection = useCallback(
     async (conn: DbConnection) => {
-      await api.disconnect(String(conn.id)).catch(() => void 0);
+      await api.disconnect(api.connectionKey(projectId, conn.id)).catch(() => void 0);
       connectedRef.current.delete(conn.id);
       // Also drop this connection's lazily-opened Postgres per-database pools.
       for (const key of [...connectedDbPoolsRef.current]) {

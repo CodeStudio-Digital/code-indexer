@@ -240,7 +240,7 @@ export function RunSection({
                       value={`${searchTelemetry.reranker_applied} · ${searchTelemetry.reranker_failed} falha(s)`}
                     />
                     <Detail
-                      label="Resultados utilizados"
+                      label="Resultados abertos na interface"
                       value={`${searchTelemetry.opened_results} · ${searchTelemetry.semantic_wins} ganho(s) semântico(s)`}
                     />
                     <Detail

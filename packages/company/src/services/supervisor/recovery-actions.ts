@@ -149,8 +149,8 @@ export const abortStuckTool: RecoveryAction = async (stuck, ctx) => {
   const errorMessage =
     `[supervisor] Tool ${toolName} (id=${toolUseId}) timed out after ` +
     `${Math.round(stuck.ageMs / 1000)}s with no heartbeat. ` +
-    `The supervisor unwedged it so the run can continue. ` +
-    `Consider a different tool / smaller scope / spawning a subagent.`;
+    `The supervisor requested cancellation; this does not confirm whether the operation took effect. ` +
+    `Inspect and reconcile the original operation before any retry. Continue only when the harness outcome policy allows it.`;
   // RECOVERY_MODE='abort' forces the blunt path (terminate the run) even when
   // inject is available — an operator escape hatch if inject ever misbehaves.
   // Default ('inject'/unset) prefers the elegant unwedge.

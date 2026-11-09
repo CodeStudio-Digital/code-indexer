@@ -145,7 +145,7 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
     : null;
 
   return (
-    <div className="group/tool my-1 text-xs">
+    <div className="group/tool mt-1 text-xs">
       <button
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-1.5 rounded-md py-1 text-left text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"

@@ -6,11 +6,12 @@
  * SELECT must succeed before dispatch, so a failed switch cannot write to the
  * previously selected database.
  *
- * NOTE: written against the ioredis v5 API but NOT verified against a live server.
+ * Real integration coverage uses Redis 7.4 and ioredis 5.8.1.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
 import { assertDatabaseDispatch } from './dispatch.js';
 import { resolveDriverEntry } from './driver-registry.js';
+import { decodeRedisPreview, REDIS_PREVIEW_BYTES, REDIS_PREVIEW_ITEMS, REDIS_PREVIEW_SCRIPT } from './redis-preview.js';
 import type { DatabaseDriver, DbCommand, DbConnectConfig, QueryResult, RunQueryOptions } from './types.js';
 
 type PipeResult = Array<[Error | null, unknown]> | null;
@@ -162,19 +163,13 @@ export async function createRedisDriver(config: DbConnectConfig): Promise<Databa
 
     const key = String(p.key ?? '');
     if (command.op === 'get') {
-      const head = await pipeline().type(key).pttl(key).exec();
-      const type = String(opResult(head, 0) ?? 'none');
-      const pttl = Number(opResult(head, 1) ?? -1);
-      const vp = pipeline();
-      if (type === 'string') vp.get(key);
-      else if (type === 'hash') vp.hgetall(key);
-      else if (type === 'list') vp.lrange(key, 0, -1);
-      else if (type === 'set') vp.smembers(key);
-      else if (type === 'zset') vp.zrange(key, 0, -1, 'WITHSCORES');
-      else vp.get(key);
-      const value = opResult(await vp.exec());
-      const ttl = pttl >= 0 ? Math.floor(pttl / 1000) : pttl; // seconds; -1 none, -2 missing
-      return { rows: [{ key, type, ttl, value }], rowCount: 1, fields: [{ name: 'key' }, { name: 'type' }, { name: 'ttl' }, { name: 'value' }] };
+      if (Buffer.byteLength(key) > 4096) throw new Error('Redis preview key exceeds 4096 bytes');
+      assertDatabaseDispatch(opts);
+      const preview = decodeRedisPreview(await redis.call('EVAL', REDIS_PREVIEW_SCRIPT, 1, key,
+        Math.max(1, Math.min(REDIS_PREVIEW_ITEMS, Math.floor(max) || REDIS_PREVIEW_ITEMS)), REDIS_PREVIEW_BYTES));
+      const { truncated, ...row } = preview;
+      return { rows: [{ key, ...row }], rowCount: 1, truncated,
+        fields: [{ name: 'key' }, { name: 'type' }, { name: 'ttl' }, { name: 'value' }] };
     }
     if (command.op === 'set') {
       const pipe = pipeline().set(key, String(p.value ?? ''));

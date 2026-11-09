@@ -121,7 +121,7 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
  * Code FTS vtabs that BELONG to the project DB — they and their shadow tables
  * (`<name>_data` / `_idx` / `_content` / `_docsize` / `_config`) survive the trim.
  */
-export const PROJECT_FTS_VTABS = ['files_fts', 'symbols_fts', 'file_contents_fts'] as const;
+export const PROJECT_FTS_VTABS = ['files_fts', 'symbols_fts', 'file_contents_fts', 'file_paths_fts'] as const;
 
 const PROJECT_FTS_RE = new RegExp(`^(${PROJECT_FTS_VTABS.join('|')})(_[a-z]+)?$`);
 
@@ -160,7 +160,8 @@ export function centralTablesIn(db: DB): string[] {
 
 /** Project tables (from the copy manifest) + infra that MUST survive the trim. */
 export function projectKeepTables(): Set<string> {
-  const keep = new Set<string>(['projects', 'schema_version', 'sqlite_sequence', 'project_db_meta']);
+  // Revisions are derived by triggers while copying files; never copy an old generation.
+  const keep = new Set<string>(['projects', 'schema_version', 'sqlite_sequence', 'project_db_meta', 'structural_revisions', 'structural_build_chunks']);
   for (const e of [...INDEX_TABLES, ...FEATURE_TABLES]) keep.add(e.table);
   return keep;
 }

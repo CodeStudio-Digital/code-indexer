@@ -257,11 +257,6 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // todo_write / update_todo demoted to NAVIGATE (merge): they are now
   // back-compat aliases of task_list({gate:'track', ...}); only task_list is on
   // the bootstrap surface so the model sees ONE task tool.
-  // Goal tools — optional session objective telemetry. create_goal +
-  // update_goal stay in bootstrap as a coherent write/close pair; goal state
-  // never gates unrelated work. get_goal is demoted to navigate (Phase B).
-  'create_goal',
-  'update_goal',
   'invoke_skill',
   // RAG over the user-managed documentation corpus (Documentação sidebar).
   // Read-only, parallel-safe; always available so any agent mode can fall
@@ -340,6 +335,9 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'exec_command',
   'write_stdin',
   'list_sessions',
+  'poll_session',
+  'stop_session',
+  'read_process_output',
   'get_diagnostics',
   'lsp_definition',
   'lsp_references',
@@ -409,7 +407,6 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'list_notes',
   'forget_memory',
   'save_note',
-  'get_goal',
   'mcp__search_memory',
   // MCP resource discovery (registered for non-master sessions). Read-only,
   // cold (≤1 call in 12k turns) — was an untiered bootstrap fallback.
@@ -712,9 +709,6 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   glob: 'Find files matching a glob pattern',
   todo_write: 'Update the lightweight todo list sidebar',
   update_todo: 'Patch a single todo by id (status/content) — companion to todo_write',
-  create_goal: 'Record the session objective at the start of a task',
-  get_goal: 'Read the current session goal and its status',
-  update_goal: 'Update or complete the session goal',
   invoke_skill: 'Invoke a reusable skill by ID',
   rag_search_docs: 'Search the indexed documentation corpus (Documentação)',
   rag_read_doc: 'Read one doc section in full by chunk_id (+ neighbors)',
@@ -848,9 +842,10 @@ const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
   // Sandbox / builder
   docs_delete: 'Delete a document from the sandbox workspace docs directory',
   docs_index_update: 'Refresh the sandbox documentation index',
-  docs_list: 'List documents stored inside the sandbox workspace',
-  docs_read: 'Read a document from the sandbox workspace',
-  docs_write: 'Write a document inside the sandbox workspace',
+  docs_list: 'List durable Company knowledge, including when sandboxes are offline',
+  docs_search: 'Search durable Company knowledge locally',
+  docs_read: 'Read a durable Company document',
+  docs_write: 'Write durable Company knowledge with an optional sandbox working copy',
   read_sandbox_logs: 'Read recent logs from the bound sandbox',
   list_services: 'List services and health in the bound sandbox',
   service_logs: 'Read structured logs for one sandbox service',
@@ -862,6 +857,7 @@ const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
   qa_get_browser_endpoint: 'Resolve and validate the browser endpoint for a QA run',
   qa_publish_result: 'Publish a structured QA result to the Company work graph',
   qa_start_run: 'Start a tracked Company QA test run',
+  qa_check_preview: 'Execute preview acceptance checks and persist real QA evidence',
 
 
   // Company master

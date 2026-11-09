@@ -50,7 +50,7 @@ function prompt(overrides: Partial<MasterPrompt> = {}): MasterPrompt {
 }
 
 describe('stream-handlers / agentEvent', () => {
-  it('appends text_delta chunks for the master', () => {
+  it('updates the separate master preview from text deltas', () => {
     let state = blank();
     state = applyAgentEvent(state, {
       agent: 'master',
@@ -64,7 +64,7 @@ describe('stream-handlers / agentEvent', () => {
       event: 'text_delta',
       data: { text: 'world' },
     });
-    expect(state.masterState?.textChunks).toEqual(['hello ', 'world']);
+    expect(state.agentTextPreviews.get('master')).toBe('hello world');
   });
 
   it('creates a subordinate slot on first event', () => {
@@ -74,7 +74,8 @@ describe('stream-handlers / agentEvent', () => {
       event: 'text_delta',
       data: { text: 'meh' },
     });
-    expect(state.subordinateStates.get(REVIEWER_RUN_ID)?.textChunks).toEqual(['meh']);
+    expect(state.subordinateStates.get(REVIEWER_RUN_ID)?.role).toBe('reviewer');
+    expect(state.agentTextPreviews.get(REVIEWER_RUN_ID)).toBe('meh');
   });
 
   it('dedupes tool_call_start by id', () => {

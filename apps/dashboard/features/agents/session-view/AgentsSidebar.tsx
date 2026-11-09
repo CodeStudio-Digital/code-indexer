@@ -12,6 +12,7 @@ import { ProjectBadge } from './ProjectBadge.js';
 import { ProjectRolesBinding } from './ProjectRolesBinding.js';
 import { OperationalRulesEditor } from './OperationalRulesEditor.js';
 import { AutonomyPanel } from './AutonomyPanel.js';
+import { CompanyExecutionSettings, type CompanyExecutionFamily } from './CompanyExecutionSettings.js';
 import type { RoleConfig } from '../RoleEditModal.js';
 import { SidebarSection } from './SidebarSection.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
@@ -26,6 +27,8 @@ import type {
 
 interface AgentsSidebarProps {
   sessionId: string;
+  companyId?: string;
+  executionFamily?: CompanyExecutionFamily;
   open: boolean;
   config: Record<string, unknown> | null;
   projects: SessionProject[];
@@ -58,6 +61,8 @@ interface AgentsSidebarProps {
  */
 export function AgentsSidebar({
   sessionId,
+  companyId,
+  executionFamily,
   open,
   config,
   projects,
@@ -84,13 +89,17 @@ export function AgentsSidebar({
 
   async function patchRoleAssignments(updated: RoleAssignmentRaw[]) {
     try {
-      await fetch(`/api/company/sessions/${sessionId}/config`, {
+      const response = await fetch(`/api/company/sessions/${sessionId}/config`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ role_assignments: updated }),
       });
-    } catch {
-      /* non-fatal — refetch reconciles */
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+    } catch (error) {
+      toast.error(t('company.saveFailed', 'Could not save configuration'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return;
     }
     refetch();
   }
@@ -185,6 +194,7 @@ export function AgentsSidebar({
       </div>
 
       {/* ── Projetos ── */}
+      {!readOnly && companyId && executionFamily && <CompanyExecutionSettings companyId={companyId} sessionId={sessionId} family={executionFamily} revision={stream.teamRevision} onChanged={refetch} />}
       <SidebarSection
         storageKey="projects"
         icon={Folder}
@@ -384,6 +394,7 @@ export function AgentsSidebar({
       >
         {stream.masterState && (
           <AgentPane
+            sessionId={sessionId}
             agent={stream.masterState}
             onClick={() => {
               const masterRun = persistedAgentRuns.find((r) => r.role === 'master');
@@ -398,6 +409,7 @@ export function AgentsSidebar({
           return (
             <AgentPane
               key={agentRunId}
+              sessionId={sessionId}
               agent={agent}
               onClick={() => onOpenAgentRun(agentRunId, agent.role, agent.status)}
               onPause={readOnly ? undefined : () => void stream.pauseAgent(agentRunId)}

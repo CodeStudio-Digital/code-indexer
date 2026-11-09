@@ -53,29 +53,12 @@ export function wireRunnerEventsToBus(
     publish(bus, 'tool_call_start', { id, name, input });
   });
   runner.on('tool_call_result', (id, name, result, durationMs) => {
-    const awaitsGoalPersistence =
-      opts.deferTerminalEvent
-      && !result.isError
-      && (name === 'create_goal' || name === 'update_goal');
     publish(bus, 'tool_call_result', {
       id,
       name,
       result,
       duration_ms: durationMs,
-      ...(awaitsGoalPersistence ? { persistence: 'pending' } : {}),
     });
-  });
-  // Goal-tool success is provisional until runCoder commits the goal mutation
-  // and its tool evidence in one transaction. These acknowledgements are
-  // allowed through the runner's deferred-done persistence window so the card
-  // becomes green only after the durable write, or is compensated to red.
-  runner.on('goal_mutations_persisted', (payload) => {
-    if (!opts.deferTerminalEvent) return;
-    publishRaw(bus, 'goal_mutations_persisted', payload);
-  });
-  runner.on('goal_mutations_persistence_failed', (payload) => {
-    if (!opts.deferTerminalEvent) return;
-    publishRaw(bus, 'goal_mutations_persistence_failed', payload);
   });
   // Periodic heartbeat (and explicit progress notes from cooperating tools)
   // emitted while a tool is in flight. Riding the same bus → bridge highway

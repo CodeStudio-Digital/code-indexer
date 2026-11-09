@@ -234,12 +234,6 @@ describe('filesystem session operations', () => {
         current_task_id: null,
       },
     });
-    await store.upsertSessionGoal(session.id, {
-      text: 'Discarded goal',
-      status: 'in_progress',
-      createdAt: '2026-07-26T12:00:00.000Z',
-      updatedAt: '2026-07-26T12:00:00.000Z',
-    });
     const location = (await store.getSessionLocation(session.id))!;
     const beforeCommits =
       store.repository.readConversationSync(location).length;
@@ -272,7 +266,6 @@ describe('filesystem session operations', () => {
     ]);
     expect(await store.listPlans(session.id)).toEqual([]);
     expect(await store.getTasksState(session.id)).toBeNull();
-    expect(await store.getSessionGoal(session.id)).toBeNull();
     expect(await store.getSessionStats(session.id)).toMatchObject({
       total_input_tokens: 5,
       total_output_tokens: 2,

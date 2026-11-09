@@ -58,6 +58,66 @@ afterEach(async () => {
 });
 
 describe('coder interaction route filesystem recovery', () => {
+  it('transports the explicit recovery review and exact fingerprint without resolving storage in the route', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Recovery transport', provider: 'test', model: 'test' });
+    const app = new Hono();
+    mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
+    poolMock.provideUserInput.mockResolvedValueOnce(true);
+    const response = await app.request(`/api/coder/sessions/${session.id}/tool-approval`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_use_id: 'pending-write', approved: true, recovery_reviewed: true,
+        recovery_fingerprint: 'exact-displayed-fingerprint', always_allow: false }),
+    });
+    expect(response.status).toBe(200);
+    expect(poolMock.provideUserInput).toHaveBeenCalledWith(session.id, expect.any(String), 'tool_approval:pending-write');
+    expect(JSON.parse(poolMock.provideUserInput.mock.calls[0][1])).toMatchObject({ approved: true,
+      recoveryReviewed: true, recoveryFingerprint: 'exact-displayed-fingerprint', alwaysAllow: false });
+    expect((await store.getToolOutcomeState(session.id)).resolved).toEqual([]);
+  });
+
+  it('does not convert malformed boolean strings into approval, a permanent grant or recovery review', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Strict approval transport', provider: 'test', model: 'test' });
+    const app = new Hono();
+    mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
+    poolMock.provideUserInput.mockResolvedValueOnce(true);
+    const response = await app.request(`/api/coder/sessions/${session.id}/tool-approval`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_use_id: 'pending-write', approved: 'false', always_allow: 'false',
+        recovery_reviewed: 'true', recovery_fingerprint: { forged: true } }),
+    });
+    if (response.status < 400) {
+      const payload = JSON.parse(poolMock.provideUserInput.mock.calls[0][1]);
+      expect(payload.approved).toBe(false);
+      expect(payload.alwaysAllow).toBe(false);
+      expect(payload.recoveryReviewed).toBe(false);
+      expect(payload.recoveryFingerprint).toBeUndefined();
+    } else expect(poolMock.provideUserInput).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a retried approval after lost ACK and runner death into proof of non-execution', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Repeated lost approval ACK', provider: 'test', model: 'test' });
+    await store.appendMessage({ session_id: session.id, operation_id: 'pending-once', message: {
+      role: 'assistant', content: [{ type: 'tool_use', id: 'write-once', name: 'write_file', input: { path: 'fixture.txt', content: 'once' } }],
+    } });
+    const app = new Hono();
+    mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
+    poolMock.provideUserInput.mockRejectedValueOnce(new Error('approval dispatched; ACK deadline elapsed')).mockResolvedValueOnce(false);
+    const send = () => app.request(`/api/coder/sessions/${session.id}/tool-approval`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_use_id: 'write-once', approved: true, recovery_reviewed: true, recovery_fingerprint: 'displayed-old-set' }),
+    });
+    expect((await send()).status).toBe(503);
+    await send();
+    const transcript = (await store.loadAllSessionMessages(session.id))!;
+    const results = transcript.messages.filter(message => message.role === 'tool').flatMap(message => message.content);
+    for (const result of results) {
+      expect(result).toMatchObject({ type: 'tool_result', effect_outcome: 'unknown' });
+      expect(JSON.stringify(result)).not.toContain('NÃO foi executada');
+      expect(JSON.stringify(result)).not.toContain('Chame a ferramenta novamente');
+    }
+    expect((await store.getToolOutcomeState(session.id)).resolved).toEqual([]);
+  });
+
   it('does not synthesize a retryable tool result when an approval acknowledgement is lost', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Approval ACK loss', provider: 'test', model: 'test' });
     await store.appendMessage({ session_id: session.id, operation_id: 'pending-write', message: {

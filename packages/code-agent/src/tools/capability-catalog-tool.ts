@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AgentRunId, CapabilityId } from '@mcp/agent-runtime-contracts';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { capabilityDiscoveryEntries } from '@mcp/code-agent/core/capability-discovery.js';
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import { structuredResult } from '@mcp/code-agent/core/model-output.js';
@@ -15,6 +16,7 @@ import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-st
 import type { SessionId } from '@mcp/session-storage';
 import {
   getToolText,
+  rankDiscoveryCandidates,
   passesRelaxed,
   passesStrict,
   scoreTool,
@@ -90,8 +92,7 @@ function boundedDescribeResponse(items: readonly unknown[]): Record<string, unkn
  */
 export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): CoderTool {
   const buildEntries = () => ({
-    toolEntries: deps.registry.list().filter(tool => tool.name !== 'capability_catalog')
-      .map(tool => ({ tool, descriptor: deriveCapabilityDescriptor(tool).descriptor })),
+    toolEntries: capabilityDiscoveryEntries(deps.registry).filter(entry => entry.tool.name !== 'capability_catalog'),
     skillEntries: deps.skills.map(source => {
       const skill = structuredClone(source);
       const virtual = skillAsCatalogCapability(skill);
@@ -138,6 +139,7 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
       const skillEntries = entries.skillEntries;
       const op = String(args.op ?? '');
       const namespace = typeof args.namespace === 'string' ? args.namespace.trim() : '';
+      const discoveryRunner = ctx.runner as { discoveryState?: (name: string) => { authorization: string; visible: boolean; reason?: string } } | undefined;
       const namespaceMatches = (entry: { descriptor: ReturnType<typeof deriveCapabilityDescriptor>['descriptor'] }): boolean => {
         if (!namespace) return true;
         const source = entry.descriptor.source;
@@ -153,6 +155,8 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
         source: entry.descriptor.source.kind,
         namespace: entry.descriptor.source.serverId ?? entry.descriptor.source.providerId,
         tier: entry.descriptor.visibility.defaultTier,
+        availability: 'attempt_snapshot',
+        ...(discoveryRunner?.discoveryState?.(entry.descriptor.name) ?? { authorization: 'requires_dispatch_validation', visible: null }),
       });
 
       if (op === 'list') {
@@ -178,21 +182,17 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
         const candidates = [
           ...toolEntries.filter(namespaceMatches).map((entry) => ({
             ...entry,
+            name: entry.tool.name,
             score: scoreTool(tokens, getToolText(entry.tool)),
           })),
           ...skillEntries.filter(namespaceMatches).map((entry) => ({
             ...entry,
+            name: entry.descriptor.name,
             score: scoreTool(tokens, entry.searchText),
           })),
         ];
-        const strict = candidates.filter((entry) => passesStrict(entry.score, tokens.length, 0.5));
-        const weak = strict.length === 0;
-        const selected = (weak
-          ? candidates.filter((entry) => passesRelaxed(entry.score, tokens.length, 0.5))
-          : strict)
-          .sort((a, b) => b.score.total - a.score.total
-            || a.descriptor.capabilityId.localeCompare(b.descriptor.capabilityId))
-          .slice(0, boundedLimit(args.limit, 5));
+        const { weak, candidates: ranked } = rankDiscoveryCandidates(query, candidates, tokens.length);
+        const selected = ranked.slice(0, boundedLimit(args.limit, 5));
         return catalogResult({
           query,
           weak,
@@ -244,13 +244,16 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
         ctx.signal?.throwIfAborted();
         const toolEntry = toolById.get(id as CapabilityId);
         if (toolEntry) {
-
+          if (discoveryRunner?.discoveryState?.(toolEntry.tool.name).authorization === 'blocked') {
+            rejected.push({ capabilityId: id, reason: 'blocked_by_session_configuration' });
+            continue;
+          }
           if (!runner?.promoteTool) {
             rejected.push({ capabilityId: id, reason: 'runner_activation_unavailable' });
             continue;
           }
           const evicted = runner.promoteTool(toolEntry.tool.name);
-          activated.push({ capabilityId: id, effective: 'next_turn', evicted });
+          activated.push({ capabilityId: id, effective: 'pending_projection', evicted });
           continue;
         }
         const skillEntry = skillById.get(id as CapabilityId);

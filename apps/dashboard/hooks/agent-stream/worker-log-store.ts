@@ -128,6 +128,15 @@ export function pushWorkerLog(sid: SessionId, entry: WorkerLogEntry, seq?: numbe
 }
 
 /** Test-only: reset all module-level writer state and committed slots. */
+export function clearSessionWorkerLog(sid: SessionId): void {
+  pending.delete(sid);
+  touched.delete(sid);
+  dedup.delete(sid);
+  const slots = new Map(useWorkerLogStore.getState().slots);
+  slots.delete(sid);
+  useWorkerLogStore.getState()._set(slots);
+}
+
 export function __resetWorkerLogForTests(): void {
   pending.clear();
   touched.clear();

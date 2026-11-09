@@ -93,7 +93,7 @@ async function findPersistedArtifact(
       candidates.push({ runId: run.id, persistedPath: run.report_persisted_path });
     }
   }
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && !opts.hintRunId) {
     const runs = await deps.qaTestRunStore.listRuns({
       company_session_id: opts.sessionId,
       service_id: opts.serviceId === 'main' ? undefined : opts.serviceId,
@@ -174,6 +174,12 @@ export function mountQaArtifactRoutes(app: Hono, deps: ServerDeps): void {
     }
 
     // 2) Sandbox fallback (works for live runs).
+    if (hintRunId) {
+      const hinted = await deps.qaTestRunStore.getRun(hintRunId);
+      if (!hinted || hinted.company_session_id !== sessionId || hinted.status !== 'running' || hinted.executor === 'preview') {
+        return c.json({ error: 'Evidence for this QA run is unavailable; evidence from another run cannot replace it' }, 404);
+      }
+    }
     try {
       const buf = await getSandboxManager().readWorkspaceFileBufferOnService(
         String(sessionId),

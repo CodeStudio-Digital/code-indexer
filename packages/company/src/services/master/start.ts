@@ -43,6 +43,7 @@ export interface MasterStartOpts {
   signal?: AbortSignal;
   roleConfigs?: RoleConfig[];
   attachments?: CoderAttachment[];
+  boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
   /** Enable extended thinking on the master's first turn. */
   thinking?: boolean;
   /** Optional provider-specific extended-thinking budget. */
@@ -176,11 +177,7 @@ export async function startMaster(
     ctx.companyFiles.clearRecoveryFlag(),
   ]);
 
-  const startBoardMsg =
-    opts.attachments && opts.attachments.length > 0
-      ? `${opts.userMessage}\n\n_[${opts.attachments.length} ${opts.attachments.length === 1 ? 'attachment' : 'attachments'}]_`
-      : opts.userMessage;
-  deps.board.post('human', null, 'message', startBoardMsg);
+  deps.board.post('human', null, 'message', opts.userMessage, undefined, opts.boardAttachments);
   deps.board.post(
     'system',
     null,

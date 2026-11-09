@@ -32,10 +32,11 @@ function readServiceQuery(c: Context): string | undefined {
   return raw;
 }
 
-function buildArtifactUrl(sessionId: string, serviceId: string, path: string): string {
+function buildArtifactUrl(sessionId: string, serviceId: string, path: string, runId?: string): string {
   const sp = new URLSearchParams();
   sp.set('service', serviceId);
   sp.set('path', path);
+  if (runId) sp.set('run', runId);
   return `/api/company/sessions/${sessionId}/qa/artifact?${sp.toString()}`;
 }
 
@@ -59,13 +60,13 @@ export function enrichResultsWithUrls(
 }> {
   return results.map((r) => ({
     ...r,
-    trace_url: r.trace_path ? buildArtifactUrl(sessionId, serviceId, r.trace_path) : null,
+    trace_url: r.trace_path ? buildArtifactUrl(sessionId, serviceId, r.trace_path, r.run_id) : null,
     screenshot_url: r.screenshot_path
-      ? buildArtifactUrl(sessionId, serviceId, r.screenshot_path)
+      ? buildArtifactUrl(sessionId, serviceId, r.screenshot_path, r.run_id)
       : null,
-    video_url: r.video_path ? buildArtifactUrl(sessionId, serviceId, r.video_path) : null,
+    video_url: r.video_path ? buildArtifactUrl(sessionId, serviceId, r.video_path, r.run_id) : null,
     summary_md_url: r.summary_md_path
-      ? buildArtifactUrl(sessionId, serviceId, r.summary_md_path)
+      ? buildArtifactUrl(sessionId, serviceId, r.summary_md_path, r.run_id)
       : null,
   }));
 }

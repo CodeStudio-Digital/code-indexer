@@ -5,20 +5,28 @@ import type { NetworkData } from './network-types.js';
 import { SessionNetworkGraph } from './SessionNetworkGraph.js';
 import { SessionNetworkSetup } from './SessionNetworkSetup.js';
 import { SessionNetworkTriggers } from './SessionNetworkTriggers.js';
+import { UltraFollowupsPanel } from './UltraFollowupsPanel.js';
+import { isNetworkSnapshot } from './network-payload.js';
+import { usePolling } from '../../../hooks/usePolling.js';
+import { useSurfaceVisible } from '../../../lib/surface-visibility.js';
 
 export function ChatCollaborationPanel({ sessionId }: { sessionId: string }) {
+  const visible = useSurfaceVisible();
   const { t } = useTranslation('chat');
-  const { data, error, refetch } = useApi<NetworkData>(`/coder/sessions/${sessionId}/collaboration`);
+  const { data: payload, error, refetch } = useApi<NetworkData>(`/coder/sessions/${sessionId}/collaboration`);
+  const data = isNetworkSnapshot(payload) ? payload : null;
+  const invalid = payload != null && data === null;
   const [tab, setTab] = useState('graph');
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  usePolling(refetch, 5000, { immediate: false });
   useEffect(() => {
-    const timer = setInterval(() => { if (document.visibilityState === 'visible') refetch(); }, 5000);
+    if (!visible) return;
     const onChanged = (event: Event) => { if ((event as CustomEvent).detail?.sessionId === sessionId) refetch(); };
     window.addEventListener('coder:collaboration-changed', onChanged);
-    return () => { clearInterval(timer); window.removeEventListener('coder:collaboration-changed', onChanged); };
-  }, [refetch, sessionId]);
+    return () => window.removeEventListener('coder:collaboration-changed', onChanged);
+  }, [refetch, sessionId, visible]);
   const changed = () => { refetch(); window.dispatchEvent(new CustomEvent('coder:collaboration-changed', { detail: { sessionId } })); };
   const link = async (target: string, enabled: boolean) => {
     setBusy(true); setFailure(null);
@@ -28,7 +36,7 @@ export function ChatCollaborationPanel({ sessionId }: { sessionId: string }) {
   };
   const stop = async () => {
     setBusy(true); setFailure(null);
-    try { await apiPost(`/coder/sessions/${sessionId}/collaboration/stop`, {}); refetch(); }
+    try { await apiPost(`/coder/sessions/${sessionId}/collaboration/${data?.stopped ? 'resume' : 'stop'}`, {}); refetch(); }
     catch (error) { setFailure(String(error)); }
     finally { setBusy(false); }
   };
@@ -36,11 +44,13 @@ export function ChatCollaborationPanel({ sessionId }: { sessionId: string }) {
   const linked = new Set(data?.peers.filter(peer => !peer.parentId).map(peer => peer.sessionId));
   return <div className="flex h-full min-h-0 flex-col text-xs" data-testid="chat-collaboration">
     <div role="tablist" aria-label={t('collaboration.title')} className="flex flex-wrap gap-1 border-b p-2">
-      {['graph', 'setup', 'triggers', 'messages'].map(value => <button key={value} role="tab" aria-selected={tab === value} className={`rounded px-2 py-1 ${tab === value ? 'bg-accent font-medium' : 'text-muted-foreground'}`} onClick={() => setTab(value)}>{t(`network.tab.${value}`)}</button>)}
+      {['graph', 'setup', 'triggers', 'messages', 'followups'].map(value => <button key={value} role="tab" aria-selected={tab === value} className={`rounded px-2 py-1 ${tab === value ? 'bg-accent font-medium' : 'text-muted-foreground'}`} onClick={() => setTab(value)}>{t(`network.tab.${value}`)}</button>)}
     </div>
-    {(error || failure) && <p role="alert" className="p-3 text-destructive">{failure ?? error}</p>}
-    {!data && !error && <p className="p-3">{t('drive.loading')}</p>}
+    {(error || failure || invalid) && <div role="alert" className="p-3 text-destructive">{failure ?? error ?? t('collaboration.invalidResponse')}
+      <button className="ml-2 underline" onClick={refetch}>{t('messages.retry')}</button></div>}
+    {!data && !error && !invalid && <p className="p-3">{t('drive.loading')}</p>}
     <div role="tabpanel" className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+    {tab === 'followups' && <UltraFollowupsPanel key={sessionId} sessionId={sessionId} />}
     {data && tab === 'setup' && <SessionNetworkSetup key={sessionId} sessionId={sessionId} data={data} changed={changed} />}
     {data && tab === 'triggers' && <SessionNetworkTriggers key={sessionId} sessionId={sessionId} data={data} changed={changed} />}
     {data && tab === 'graph' && <>
@@ -58,7 +68,7 @@ export function ChatCollaborationPanel({ sessionId }: { sessionId: string }) {
         <span className="text-muted-foreground">{t(`collaboration.state.${peer.state}`, peer.state)}</span>
         {!peer.parentId && <button className="rounded px-1 text-muted-foreground hover:text-foreground" disabled={busy} onClick={() => void link(peer.sessionId, false)}>{t('collaboration.unlink')}</button>}
       </div>)}
-      <button className="rounded border px-2 py-1 disabled:opacity-40" disabled={busy} onClick={() => void stop()}>{t('collaboration.stop')}</button>
+      <button className="rounded border px-2 py-1 disabled:opacity-40" disabled={busy} onClick={() => void stop()}>{t(data.stopped ? 'collaboration.resume' : 'collaboration.stop')}</button>
     </>}
     {tab === 'messages' && <>
       {!data?.messages.length && <p className="text-muted-foreground">{t('collaboration.empty')}</p>}

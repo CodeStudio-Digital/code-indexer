@@ -17,11 +17,14 @@ it('returns the handler result before auxiliary work and isolates normalized inp
     await slow;
     throw new Error('index unavailable');
   });
-  expect(await registry.invoke('create_file', { path: 'original' }, { cwd: '.', projectName: 'fixture', onToolSettled: observer })).toBe(result);
+  const received = await registry.invoke('create_file', { path: 'original' }, { cwd: '.', projectName: 'fixture', onToolSettled: observer });
+  expect(received).toMatchObject(result);
+  expect(received.evidence?.version).toBe(2);
   expect(observer).not.toHaveBeenCalled();
   await nextEventLoop();
   expect(observer).toHaveBeenCalledOnce();
   expect(result).toEqual({ content: 'committed', isError: false });
+  expect(received.isError).toBe(false);
   release();
   await nextEventLoop();
 });

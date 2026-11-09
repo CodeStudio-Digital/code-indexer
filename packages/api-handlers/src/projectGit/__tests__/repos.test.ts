@@ -76,6 +76,23 @@ function makeResolver(root: string) {
 }
 
 describe('repos: discovery (listRepos)', () => {
+  it('skips the submodule process when absent and discovers it after invalidation', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'mcp-repos-idle-')));
+    dirs.push(root);
+    const git = vi.fn().mockResolvedValue({ code: 0, stdout: 'submodule.child.path child\n', stderr: '' });
+    const resolver = createRepoResolver({
+      runGit: git, requireRoot: () => root,
+      detectRepo: async () => ({ repoRoot: root, gitDir: join(root, '.git'), notARepo: false }),
+    });
+    expect(await resolver.listRepos(1)).toHaveLength(1);
+    expect(git).not.toHaveBeenCalled();
+    writeFileSync(join(root, '.gitmodules'), '[submodule "child"]\npath = child\n');
+    resolver.bust(1);
+    const repos = await resolver.listRepos(1);
+    expect(repos.find(repo => repo.projectRelPrefix === 'child')?.kind).toBe('submodule');
+    expect(git).toHaveBeenCalledTimes(1);
+  });
+
   it('finds main + submodules (init state) + nested repos (ignore state)', async () => {
     const root = await setupFixture();
     const repos = await makeResolver(root).listRepos(1);

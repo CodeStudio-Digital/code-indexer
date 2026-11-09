@@ -36,6 +36,8 @@ export function dottedToHttp(path: DotPath, input: unknown): { url: string; init
       return { url: `/api/projects/${ip!.id}/stats`, init: {} };
     case 'files.list':
       return { url: `/api/projects/${ip!.projectId}/files`, init: {} };
+    case 'files.searchPathsPage':
+      return { url: `/api/projects/${ip!.projectId}/file-paths?format=page&query=${encodeURIComponent(String(ip!.query ?? ''))}&limit=${Number(ip!.limit ?? 50)}&fuzzy=${ip!.fuzzy !== false}`, init: {} };
     case 'files.searchPaths':
       return { url: `/api/projects/${ip!.projectId}/file-paths?query=${encodeURIComponent(String(ip!.query ?? ''))}&limit=${Number(ip!.limit ?? 50)}&fuzzy=${ip!.fuzzy !== false}`, init: {} };
     case 'files.tree': {
@@ -236,6 +238,8 @@ export function dottedToHttp(path: DotPath, input: unknown): { url: string; init
       if (ip!.mode) qp.set('mode', String(ip!.mode));
       if (ip!.type) qp.set('type', String(ip!.type));
       if (ip!.supersessionKey) qp.set('supersessionKey', String(ip!.supersessionKey));
+        if (ip!.consumer) qp.set('consumer', String(ip!.consumer));
+        if (ip!.bypassCache === true) qp.set('bypassCache', '1');
       return { url: `/api/projects/${ip!.projectId}/search?${qp.toString()}`, init: {} };
     }
     case 'search.grep':

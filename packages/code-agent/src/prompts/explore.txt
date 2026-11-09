@@ -1,13 +1,14 @@
 # Explore mode is ACTIVE
-Investigate read-only, answer with evidence, and stop. Do not patch files or turn an assessment into an unsolicited implementation proposal.
+Investigate read-only and answer with evidence. Do not patch files or propose unsolicited implementation.
 
 ## Retrieval
 
-- Use `mcp__search` in `auto` for discovery or conceptual questions; do not issue translated variants in parallel.
-- Use `mcp__grep_code` for exact text, then read only the most promising file or symbol.
-- Use references/dependency tools only when the question is about impact or ownership.
+- Use available `mcp__search` in `auto` for discovery; no parallel translated variants.
+- Use `mcp__grep_code` for exact text, or native search/read if MCP is unavailable. Read the best hit.
+- For configuration questions, check defaults/overrides and their consumers; distinguish effective settings from unused declarations.
+- Use references/dependency tools for impact, ownership or value propagation.
 - Recall memory only when a prior decision or convention is likely; current code wins if they differ.
 
 ## Stop condition
 
-Once a plausible hit appears, read it instead of re-querying. After three unsuccessful search attempts, state what was checked and what remains unknown. Cite concrete `file:line` evidence and distinguish confirmed behavior from inference.
+Read promising hits, then stop when evidence covers each requested claim. After three unsuccessful searches, state what remains unknown. Cite `file:line`; distinguish confirmed behavior from inference and scoped absence from project-wide absence.

@@ -22,6 +22,9 @@ const currentTurns = new Map<SessionId, AssistantTurn>();
 const currentTurnListeners = new Map<SessionId, Set<() => void>>();
 const activeSessionListeners = new Set<() => void>();
 let activeSessionIdsSnapshot: readonly SessionId[] = [];
+export interface AgentSessionActivity { active: boolean; terminal: boolean; busId?: string }
+let activitySnapshot: Readonly<Record<SessionId, AgentSessionActivity>> = {};
+export const getAgentSessionActivitySnapshot = () => activitySnapshot;
 
 export const agentStreamAbortMap = new Map<SessionId, AbortController>();
 export const agentStreamLastSeenSeqMap = new Map<SessionId, number>();
@@ -66,12 +69,22 @@ export function subscribeActiveAgentSessions(listener: () => void): () => void {
 }
 
 function publishActiveAgentSessions(): void {
+  const activity = Object.fromEntries(Object.entries(sessionStates).map(([id, state]) => [id, {
+    active: state.streaming, terminal: !!state.doneReason, busId: agentStreamLastSeenBusIdMap.get(id),
+  }]));
+  const activityChanged = Object.keys(activity).length !== Object.keys(activitySnapshot).length
+    || Object.entries(activity).some(([id, value]) => {
+      const old = activitySnapshot[id];
+      return !old || old.active !== value.active || old.terminal !== value.terminal || old.busId !== value.busId;
+    });
+  if (activityChanged) activitySnapshot = activity;
   const next = Object.entries(sessionStates)
     .filter(([, state]) => state.streaming)
     .map(([sessionId]) => sessionId);
   if (
     next.length === activeSessionIdsSnapshot.length
     && next.every((sessionId, index) => sessionId === activeSessionIdsSnapshot[index])
+    && !activityChanged
   ) return;
   activeSessionIdsSnapshot = next;
   for (const listener of activeSessionListeners) listener();
@@ -243,6 +256,11 @@ export class AgentStreamOwnership {
     return this.active.has(sessionId);
   }
 
+  forget(sessionId: SessionId): void {
+    this.active.delete(sessionId);
+    this.completionCallbacks.delete(sessionId);
+  }
+
   private notifyMessageComplete(sessionId: SessionId): void {
     const callbacks = [
       ...(this.completionCallbacks.get(sessionId)?.values() ?? []),
@@ -266,6 +284,24 @@ export class AgentStreamOwnership {
 
 export const agentStreamOwnership = new AgentStreamOwnership();
 
+/** Called only after the backend confirms deletion; late readers lose ownership. */
+export function forgetAgentSession(sessionId: SessionId): void {
+  const controller = agentStreamAbortMap.get(sessionId);
+  agentStreamAbortMap.delete(sessionId);
+  controller?.abort();
+  clearTimeout(agentStreamAbortFallbackTimerMap.get(sessionId));
+  agentStreamAbortFallbackTimerMap.delete(sessionId);
+  agentStreamAbortRequestMap.delete(sessionId);
+  agentStreamLastSeenSeqMap.delete(sessionId);
+  agentStreamLastSeenBusIdMap.delete(sessionId);
+  agentStreamOwnership.forget(sessionId);
+  delete sessionStates[sessionId];
+  sessionTouchedAt.delete(sessionId);
+  publishCurrentTurn(sessionId, null);
+  publishActiveAgentSessions();
+  notifySession(sessionId);
+}
+
 /** Test-only reset for module-global process state. */
 export function __resetAgentStreamStoreForTests(): void {
   for (const controller of agentStreamAbortMap.values()) controller.abort();
@@ -276,6 +312,7 @@ export function __resetAgentStreamStoreForTests(): void {
   currentTurns.clear();
   currentTurnListeners.clear();
   activeSessionIdsSnapshot = [];
+  activitySnapshot = {};
   activeSessionListeners.clear();
   agentStreamAbortMap.clear();
   agentStreamLastSeenSeqMap.clear();

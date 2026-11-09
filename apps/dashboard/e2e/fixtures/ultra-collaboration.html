@@ -14,7 +14,7 @@ function Fixture(){
  const [open,setOpen]=useState(false),[effort,setEffort]=useState('high'),[mode,setMode]=useState('ultra');
  return h(TooltipProvider,null,h('main',{className:'flex h-screen bg-background text-foreground'},
   h('div',{className:'flex-1 p-8'},h('h1',{className:'text-xl font-semibold'},'Ultra · Colaboração entre chats'),h('button',{className:'mt-4 rounded border p-2',onClick:()=>setOpen(true)},'Configurar modelo'),h('output',{'data-testid':'effort',className:'block mt-4'},effort)),
-  h('aside',{className:'w-[430px] border-l'},h(ChatCollaborationPanel,{sessionId:'one'})),
+  h('aside',{className:'w-[430px] border-l'},h(ChatCollaborationPanel,{sessionId:new URL(location.href).searchParams.get('sessionId')||'one'})),
   h(ModelSettingsDialog,{open,onOpenChange:setOpen,showAgent:true,agent:'build',setAgent:noop,autoSuggestText:'',provider:'openai',model:'gpt-test',setModel:noop,onSwitchProvider:noop,
    providerOptions:[{id:'openai',label:'OpenAI'}],currentProviderModels:[{model_id:'gpt-test',label:'Test model'}],maxTurns:null,setMaxTurns:noop,maxAutoContinues:3,setMaxAutoContinues:noop,temperature:null,setTemperature:noop,
    reasoningEffort:effort,setReasoningEffort:setEffort,reasoningLevels:['low','medium','high'],executionMode:mode,setExecutionMode:setMode,fallbackProvider:null,fallbackModel:null,onFallbackChange:noop,getModelsForProvider:()=>[]})));

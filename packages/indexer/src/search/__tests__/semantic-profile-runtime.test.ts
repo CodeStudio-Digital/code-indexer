@@ -35,6 +35,21 @@ function profile(
 afterEach(() => vi.unstubAllGlobals());
 
 describe('SemanticProfileRuntime session cache', () => {
+  it('keeps automatic code retrieval on the evaluated hybrid baseline while allowing explicit rerankers', async () => {
+    let reranker: RerankerTarget = { kind: 'onnx', model: 'auto' };
+    const runtime = new SemanticProfileRuntime({
+      getProfile: purpose => profile(purpose, { kind: 'disabled' }, reranker),
+      getActiveGeneration: () => null,
+    }, EMPTY_PROVIDERS);
+    const code = runtime.reranker('code');
+    expect(code.queryBlockReason?.('Where is authentication checked?')).toBe('code_auto_reranker_not_promoted');
+    expect(await code.rerank('Where is authentication checked?', [{ id: 'a', text: 'source', originalScore: .8 }], 1))
+      .toEqual([{ id: 'a', score: .8, originalScore: .8 }]);
+    expect(runtime.reranker('memory').queryBlockReason?.('Where is authentication checked?')).toBeNull();
+    reranker = { kind: 'onnx', model: 'Xenova/bge-reranker-base' };
+    expect(code.queryBlockReason?.('Where is authentication checked?')).toBeNull();
+    await runtime.dispose();
+  });
   it('coalesces equal query vectors across collections but revalidates generation and policy', async () => {
     const target: EmbeddingTarget = { kind: 'onnx', model: 'test', pooling: 'mean', normalize: true,
       queryTemplate: 'query: {text}', documentTemplate: 'passage: {text}' };

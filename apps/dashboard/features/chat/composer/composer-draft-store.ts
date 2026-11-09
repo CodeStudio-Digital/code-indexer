@@ -28,6 +28,7 @@ const draftByKey = new Map<string, ComposerDraft>();
 const listeners = new Map<string, Set<() => void>>();
 /** Keys already seeded from localStorage — hydrate is a one-shot per key. */
 const hydratedKeys = new Set<string>();
+const deletedKeys = new Set<string>();
 
 const STORAGE_PREFIX = 'composerDraft:';
 
@@ -75,6 +76,7 @@ export function getDraft(key: string): ComposerDraft {
  * the text to localStorage; attachments are never written to disk.
  */
 export function setDraft(key: string, next: ComposerDraft): void {
+  if (deletedKeys.has(key)) return; // a retained composer's unmount must not resurrect deleted text/images
   const cur = getDraft(key);
   if (cur.text === next.text && cur.attachments === next.attachments) return;
   if (next.text !== cur.text) writeStoredText(key, next.text);
@@ -88,6 +90,12 @@ export function clearDraft(key: string): void {
   draftByKey.delete(key);
   writeStoredText(key, '');
   notify(key);
+}
+
+export function forgetDraft(key: string): void {
+  deletedKeys.add(key);
+  hydratedKeys.delete(key);
+  clearDraft(key);
 }
 
 export function subscribeDraft(key: string, cb: () => void): () => void {

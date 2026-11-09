@@ -57,12 +57,16 @@ export interface HarvestSessionStore {
     sessionId: SessionId,
     messageSeq: number,
   ): Promise<void>;
+  getMemoryDistilledBoundary?(sessionId: SessionId): Promise<number>;
 }
 
 /** Session-note kinds worth promoting even when not pinned. */
 const PROMOTABLE_KINDS = new Set(['decision', 'gotcha', 'convention', 'procedure']);
 const MAX_PROMOTED_NOTES = 10;
 const HARVEST_TIMEOUT_MS = 30_000;
+// A UI timeout is not cancellation. Retain the pending pass so another harvest
+// of the same span cannot start a second extraction while the first is alive.
+const pendingHarvests = new WeakMap<HarvestSessionStore, Map<string, Promise<void>>>();
 
 /**
  * Assemble the distiller input from an already-rendered compaction summary.
@@ -102,8 +106,9 @@ export function buildHarvestInput(args: {
 
 /**
  * Fire the distillers over a compaction summary and advance the session's
- * distill high-water mark to the boundary. Time-bounded (30s) and swallowed —
- * a failed harvest costs nothing but the lost learning.
+ * distill high-water mark only after a confirmed result. The caller waits at
+ * most 30s; a late success can still settle the boundary, while a failure or
+ * missing receipt leaves the span available for the idle sweeper/restart.
  */
 export async function harvestCompactionMemory(args: {
   runEndMemory: HarvestRunEndMemory;
@@ -115,6 +120,8 @@ export async function harvestCompactionMemory(args: {
   sessionId: SessionId;
   summary: CompactionSummaryV2;
   boundaryId: number;
+  /** First durable message covered by this summary; prevents skipping an earlier failed span. */
+  sourceStartSeq?: number;
   trigger: 'compaction' | 'manual_clear';
 }): Promise<void> {
   const { runEndMemory, store, sessionId } = args;
@@ -136,20 +143,38 @@ export async function harvestCompactionMemory(args: {
       sessionId,
     });
 
-    const result = await Promise.race([
-      runEndMemory.extractAndPersist(args.projectId, args.projectName, input),
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, HARVEST_TIMEOUT_MS);
-        (timer as { unref?: () => void }).unref?.();
-      }),
-    ]);
-    // Advance the mark on success and even on TIMEOUT (re-paying the summary
-    // to re-distill the same span would only churn the dedup) — but NOT on a
-    // real LLM failure: the span stays for the idle sweeper to retry, which
-    // caps attempts so a poison span still can't wedge the pipeline.
-    if (!(result && result.hadError === true)) {
-      await store.setMemoryDistilledBoundary(sessionId, args.boundaryId);
+    let pending = pendingHarvests.get(store);
+    if (!pending) { pending = new Map(); pendingHarvests.set(store, pending); }
+    const key = `${sessionId}:${args.boundaryId}`;
+    const queueKey = `${sessionId}:queue`;
+    let pass = pending.get(key);
+    if (!pass) {
+      const previous = pending.get(queueKey);
+      pass = (async () => {
+        await previous;
+        const boundary = await store.getMemoryDistilledBoundary?.(sessionId);
+        if (boundary != null && (boundary >= args.boundaryId ||
+          (args.sourceStartSeq != null && boundary < args.sourceStartSeq - 1))) return;
+        const result = await runEndMemory.extractAndPersist(args.projectId, args.projectName, input);
+        if (result && result.hadError !== true) {
+          await store.setMemoryDistilledBoundary(sessionId, args.boundaryId);
+        }
+      })().catch((error) => {
+        console.warn(`[memory] harvest did not settle (session ${sessionId}): ${error instanceof Error ? error.message : String(error)}`);
+      }).finally(() => {
+        pending!.delete(key);
+        if (pending!.get(queueKey) === pass) pending!.delete(queueKey);
+      });
+      pending.set(key, pass);
+      pending.set(queueKey, pass);
     }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([pass, new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, HARVEST_TIMEOUT_MS);
+        timer.unref?.();
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
   } catch (e) {
     console.warn(
       `[memory] compaction harvest failed (session ${sessionId}): ${e instanceof Error ? e.message : String(e)}`,

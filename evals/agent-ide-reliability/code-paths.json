@@ -1,0 +1,2328 @@
+{
+  "version": 1,
+  "scope": "lexical paths; semantic/caller quality is measured separately",
+  "files": [
+    {
+      "path": "src/core/SessionPolicy.ts",
+      "symbol": "SessionPolicy",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/TokenService.tsx",
+      "symbol": "TokenService",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/LoginPolicy.php",
+      "symbol": "LoginPolicy",
+      "language": "php"
+    },
+    {
+      "path": "src/game/InvoiceTotal.cs",
+      "symbol": "InvoiceTotal",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/StatusBadge.ts",
+      "symbol": "StatusBadge",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/ProjectIndex.tsx",
+      "symbol": "ProjectIndex",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/DirtyQueue.php",
+      "symbol": "DirtyQueue",
+      "language": "php"
+    },
+    {
+      "path": "src/game/StructuralRevision.cs",
+      "symbol": "StructuralRevision",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/SemanticCache.ts",
+      "symbol": "SemanticCache",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/PathCandidates.tsx",
+      "symbol": "PathCandidates",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/SymbolLookup.php",
+      "symbol": "SymbolLookup",
+      "language": "php"
+    },
+    {
+      "path": "src/game/CallerGraph.cs",
+      "symbol": "CallerGraph",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/ToolDiscovery.ts",
+      "symbol": "ToolDiscovery",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/ToolProjection.tsx",
+      "symbol": "ToolProjection",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/McpCatalog.php",
+      "symbol": "McpCatalog",
+      "language": "php"
+    },
+    {
+      "path": "src/game/McpRefresh.cs",
+      "symbol": "McpRefresh",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/McpResult.ts",
+      "symbol": "McpResult",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/InvocationOwner.tsx",
+      "symbol": "InvocationOwner",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/CommandSpec.php",
+      "symbol": "CommandSpec",
+      "language": "php"
+    },
+    {
+      "path": "src/game/ProcessOutput.cs",
+      "symbol": "ProcessOutput",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/ProcessCleanup.ts",
+      "symbol": "ProcessCleanup",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/SqlClassifier.tsx",
+      "symbol": "SqlClassifier",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/PoolLease.php",
+      "symbol": "PoolLease",
+      "language": "php"
+    },
+    {
+      "path": "src/game/QueryDeadline.cs",
+      "symbol": "QueryDeadline",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/RowWindow.ts",
+      "symbol": "RowWindow",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/CatalogPage.tsx",
+      "symbol": "CatalogPage",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/OptimisticEdit.php",
+      "symbol": "OptimisticEdit",
+      "language": "php"
+    },
+    {
+      "path": "src/game/ExportKeyset.cs",
+      "symbol": "ExportKeyset",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/ImportReceipt.ts",
+      "symbol": "ImportReceipt",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/ConnectionScope.tsx",
+      "symbol": "ConnectionScope",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/UnicodeOutput.php",
+      "symbol": "UnicodeOutput",
+      "language": "php"
+    },
+    {
+      "path": "src/game/CursorSignature.cs",
+      "symbol": "CursorSignature",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/RetryPolicy.ts",
+      "symbol": "RetryPolicy",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/CapabilitySchema.tsx",
+      "symbol": "CapabilitySchema",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/Cancellation.php",
+      "symbol": "Cancellation",
+      "language": "php"
+    },
+    {
+      "path": "src/game/MigrationJournal.cs",
+      "symbol": "MigrationJournal",
+      "language": "cs"
+    },
+    {
+      "path": "src/core/WorkspacePath.ts",
+      "symbol": "WorkspacePath",
+      "language": "ts"
+    },
+    {
+      "path": "src/ui/QueryHistory.tsx",
+      "symbol": "QueryHistory",
+      "language": "tsx"
+    },
+    {
+      "path": "src/server/ReadOnlyGuard.php",
+      "symbol": "ReadOnlyGuard",
+      "language": "php"
+    },
+    {
+      "path": "src/game/GenerationSwap.cs",
+      "symbol": "GenerationSwap",
+      "language": "cs"
+    }
+  ],
+  "queries": [
+    {
+      "id": "code-0-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/SessionPolicy.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/SessionPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-0-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "ts",
+      "query": "SessionPolicy.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/SessionPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-0-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "ts",
+      "query": "ssionPoli",
+      "projectId": 1,
+      "expected": [
+        "src/core/SessionPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-0-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\SessionPolicy.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/SessionPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-0-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "SessionPolicy.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-1-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/TokenService.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/TokenService.tsx"
+      ]
+    },
+    {
+      "id": "code-1-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "TokenService.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/TokenService.tsx"
+      ]
+    },
+    {
+      "id": "code-1-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "kenServi",
+      "projectId": 1,
+      "expected": [
+        "src/ui/TokenService.tsx"
+      ]
+    },
+    {
+      "id": "code-1-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\TokenService.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/TokenService.tsx"
+      ]
+    },
+    {
+      "id": "code-1-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "TokenService.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-2-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/LoginPolicy.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/LoginPolicy.php"
+      ]
+    },
+    {
+      "id": "code-2-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "LoginPolicy.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/LoginPolicy.php"
+      ]
+    },
+    {
+      "id": "code-2-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "ginPoli",
+      "projectId": 1,
+      "expected": [
+        "src/server/LoginPolicy.php"
+      ]
+    },
+    {
+      "id": "code-2-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\LoginPolicy.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/LoginPolicy.php"
+      ]
+    },
+    {
+      "id": "code-2-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "LoginPolicy.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-3-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/InvoiceTotal.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/InvoiceTotal.cs"
+      ]
+    },
+    {
+      "id": "code-3-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "InvoiceTotal.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/InvoiceTotal.cs"
+      ]
+    },
+    {
+      "id": "code-3-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "voiceTot",
+      "projectId": 1,
+      "expected": [
+        "src/game/InvoiceTotal.cs"
+      ]
+    },
+    {
+      "id": "code-3-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\InvoiceTotal.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/InvoiceTotal.cs"
+      ]
+    },
+    {
+      "id": "code-3-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "InvoiceTotal.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-4-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/StatusBadge.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/StatusBadge.ts"
+      ]
+    },
+    {
+      "id": "code-4-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "StatusBadge.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/StatusBadge.ts"
+      ]
+    },
+    {
+      "id": "code-4-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "atusBad",
+      "projectId": 1,
+      "expected": [
+        "src/core/StatusBadge.ts"
+      ]
+    },
+    {
+      "id": "code-4-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\StatusBadge.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/StatusBadge.ts"
+      ]
+    },
+    {
+      "id": "code-4-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "StatusBadge.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-5-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/ProjectIndex.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ProjectIndex.tsx"
+      ]
+    },
+    {
+      "id": "code-5-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "tsx",
+      "query": "ProjectIndex.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ProjectIndex.tsx"
+      ]
+    },
+    {
+      "id": "code-5-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "tsx",
+      "query": "ojectInd",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ProjectIndex.tsx"
+      ]
+    },
+    {
+      "id": "code-5-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\ProjectIndex.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ProjectIndex.tsx"
+      ]
+    },
+    {
+      "id": "code-5-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "ProjectIndex.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-6-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/DirtyQueue.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/DirtyQueue.php"
+      ]
+    },
+    {
+      "id": "code-6-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "DirtyQueue.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/DirtyQueue.php"
+      ]
+    },
+    {
+      "id": "code-6-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "rtyQue",
+      "projectId": 1,
+      "expected": [
+        "src/server/DirtyQueue.php"
+      ]
+    },
+    {
+      "id": "code-6-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\DirtyQueue.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/DirtyQueue.php"
+      ]
+    },
+    {
+      "id": "code-6-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "DirtyQueue.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-7-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/StructuralRevision.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/StructuralRevision.cs"
+      ]
+    },
+    {
+      "id": "code-7-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "StructuralRevision.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/StructuralRevision.cs"
+      ]
+    },
+    {
+      "id": "code-7-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "ructuralRevisi",
+      "projectId": 1,
+      "expected": [
+        "src/game/StructuralRevision.cs"
+      ]
+    },
+    {
+      "id": "code-7-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\StructuralRevision.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/StructuralRevision.cs"
+      ]
+    },
+    {
+      "id": "code-7-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "StructuralRevision.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-8-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/SemanticCache.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/SemanticCache.ts"
+      ]
+    },
+    {
+      "id": "code-8-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "SemanticCache.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/SemanticCache.ts"
+      ]
+    },
+    {
+      "id": "code-8-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "manticCac",
+      "projectId": 1,
+      "expected": [
+        "src/core/SemanticCache.ts"
+      ]
+    },
+    {
+      "id": "code-8-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\SemanticCache.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/SemanticCache.ts"
+      ]
+    },
+    {
+      "id": "code-8-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "SemanticCache.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-9-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/PathCandidates.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/PathCandidates.tsx"
+      ]
+    },
+    {
+      "id": "code-9-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "PathCandidates.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/PathCandidates.tsx"
+      ]
+    },
+    {
+      "id": "code-9-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "thCandidat",
+      "projectId": 1,
+      "expected": [
+        "src/ui/PathCandidates.tsx"
+      ]
+    },
+    {
+      "id": "code-9-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\PathCandidates.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/PathCandidates.tsx"
+      ]
+    },
+    {
+      "id": "code-9-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "PathCandidates.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-10-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/SymbolLookup.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/SymbolLookup.php"
+      ]
+    },
+    {
+      "id": "code-10-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "php",
+      "query": "SymbolLookup.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/SymbolLookup.php"
+      ]
+    },
+    {
+      "id": "code-10-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "php",
+      "query": "mbolLook",
+      "projectId": 1,
+      "expected": [
+        "src/server/SymbolLookup.php"
+      ]
+    },
+    {
+      "id": "code-10-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\SymbolLookup.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/SymbolLookup.php"
+      ]
+    },
+    {
+      "id": "code-10-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "SymbolLookup.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-11-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/CallerGraph.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/CallerGraph.cs"
+      ]
+    },
+    {
+      "id": "code-11-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "CallerGraph.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/CallerGraph.cs"
+      ]
+    },
+    {
+      "id": "code-11-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "llerGra",
+      "projectId": 1,
+      "expected": [
+        "src/game/CallerGraph.cs"
+      ]
+    },
+    {
+      "id": "code-11-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\CallerGraph.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/CallerGraph.cs"
+      ]
+    },
+    {
+      "id": "code-11-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "CallerGraph.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-12-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/ToolDiscovery.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ToolDiscovery.ts"
+      ]
+    },
+    {
+      "id": "code-12-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "ToolDiscovery.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ToolDiscovery.ts"
+      ]
+    },
+    {
+      "id": "code-12-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "olDiscove",
+      "projectId": 1,
+      "expected": [
+        "src/core/ToolDiscovery.ts"
+      ]
+    },
+    {
+      "id": "code-12-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\ToolDiscovery.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ToolDiscovery.ts"
+      ]
+    },
+    {
+      "id": "code-12-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "ToolDiscovery.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-13-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/ToolProjection.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ToolProjection.tsx"
+      ]
+    },
+    {
+      "id": "code-13-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "ToolProjection.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ToolProjection.tsx"
+      ]
+    },
+    {
+      "id": "code-13-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "olProjecti",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ToolProjection.tsx"
+      ]
+    },
+    {
+      "id": "code-13-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\ToolProjection.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ToolProjection.tsx"
+      ]
+    },
+    {
+      "id": "code-13-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "ToolProjection.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-14-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/McpCatalog.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/McpCatalog.php"
+      ]
+    },
+    {
+      "id": "code-14-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "McpCatalog.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/McpCatalog.php"
+      ]
+    },
+    {
+      "id": "code-14-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "pCatal",
+      "projectId": 1,
+      "expected": [
+        "src/server/McpCatalog.php"
+      ]
+    },
+    {
+      "id": "code-14-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\McpCatalog.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/McpCatalog.php"
+      ]
+    },
+    {
+      "id": "code-14-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "McpCatalog.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-15-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/McpRefresh.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/McpRefresh.cs"
+      ]
+    },
+    {
+      "id": "code-15-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "cs",
+      "query": "McpRefresh.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/McpRefresh.cs"
+      ]
+    },
+    {
+      "id": "code-15-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "cs",
+      "query": "pRefre",
+      "projectId": 1,
+      "expected": [
+        "src/game/McpRefresh.cs"
+      ]
+    },
+    {
+      "id": "code-15-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\McpRefresh.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/McpRefresh.cs"
+      ]
+    },
+    {
+      "id": "code-15-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "McpRefresh.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-16-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/McpResult.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/McpResult.ts"
+      ]
+    },
+    {
+      "id": "code-16-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "McpResult.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/McpResult.ts"
+      ]
+    },
+    {
+      "id": "code-16-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "pResu",
+      "projectId": 1,
+      "expected": [
+        "src/core/McpResult.ts"
+      ]
+    },
+    {
+      "id": "code-16-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\McpResult.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/McpResult.ts"
+      ]
+    },
+    {
+      "id": "code-16-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "McpResult.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-17-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/InvocationOwner.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/InvocationOwner.tsx"
+      ]
+    },
+    {
+      "id": "code-17-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "InvocationOwner.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/InvocationOwner.tsx"
+      ]
+    },
+    {
+      "id": "code-17-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "vocationOwn",
+      "projectId": 1,
+      "expected": [
+        "src/ui/InvocationOwner.tsx"
+      ]
+    },
+    {
+      "id": "code-17-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\InvocationOwner.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/InvocationOwner.tsx"
+      ]
+    },
+    {
+      "id": "code-17-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "InvocationOwner.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-18-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/CommandSpec.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/CommandSpec.php"
+      ]
+    },
+    {
+      "id": "code-18-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "CommandSpec.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/CommandSpec.php"
+      ]
+    },
+    {
+      "id": "code-18-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "mmandSp",
+      "projectId": 1,
+      "expected": [
+        "src/server/CommandSpec.php"
+      ]
+    },
+    {
+      "id": "code-18-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\CommandSpec.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/CommandSpec.php"
+      ]
+    },
+    {
+      "id": "code-18-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "CommandSpec.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-19-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/ProcessOutput.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/ProcessOutput.cs"
+      ]
+    },
+    {
+      "id": "code-19-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "ProcessOutput.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/ProcessOutput.cs"
+      ]
+    },
+    {
+      "id": "code-19-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "ocessOutp",
+      "projectId": 1,
+      "expected": [
+        "src/game/ProcessOutput.cs"
+      ]
+    },
+    {
+      "id": "code-19-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\ProcessOutput.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/ProcessOutput.cs"
+      ]
+    },
+    {
+      "id": "code-19-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "ProcessOutput.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-20-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/ProcessCleanup.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ProcessCleanup.ts"
+      ]
+    },
+    {
+      "id": "code-20-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "ts",
+      "query": "ProcessCleanup.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ProcessCleanup.ts"
+      ]
+    },
+    {
+      "id": "code-20-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "ts",
+      "query": "ocessClean",
+      "projectId": 1,
+      "expected": [
+        "src/core/ProcessCleanup.ts"
+      ]
+    },
+    {
+      "id": "code-20-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\ProcessCleanup.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ProcessCleanup.ts"
+      ]
+    },
+    {
+      "id": "code-20-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "ProcessCleanup.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-21-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/SqlClassifier.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/SqlClassifier.tsx"
+      ]
+    },
+    {
+      "id": "code-21-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "SqlClassifier.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/SqlClassifier.tsx"
+      ]
+    },
+    {
+      "id": "code-21-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "lClassifi",
+      "projectId": 1,
+      "expected": [
+        "src/ui/SqlClassifier.tsx"
+      ]
+    },
+    {
+      "id": "code-21-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\SqlClassifier.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/SqlClassifier.tsx"
+      ]
+    },
+    {
+      "id": "code-21-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "SqlClassifier.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-22-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/PoolLease.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/PoolLease.php"
+      ]
+    },
+    {
+      "id": "code-22-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "PoolLease.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/PoolLease.php"
+      ]
+    },
+    {
+      "id": "code-22-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "olLea",
+      "projectId": 1,
+      "expected": [
+        "src/server/PoolLease.php"
+      ]
+    },
+    {
+      "id": "code-22-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\PoolLease.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/PoolLease.php"
+      ]
+    },
+    {
+      "id": "code-22-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "PoolLease.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-23-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/QueryDeadline.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/QueryDeadline.cs"
+      ]
+    },
+    {
+      "id": "code-23-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "QueryDeadline.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/QueryDeadline.cs"
+      ]
+    },
+    {
+      "id": "code-23-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "eryDeadli",
+      "projectId": 1,
+      "expected": [
+        "src/game/QueryDeadline.cs"
+      ]
+    },
+    {
+      "id": "code-23-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\QueryDeadline.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/QueryDeadline.cs"
+      ]
+    },
+    {
+      "id": "code-23-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "QueryDeadline.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-24-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/RowWindow.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/RowWindow.ts"
+      ]
+    },
+    {
+      "id": "code-24-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "RowWindow.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/RowWindow.ts"
+      ]
+    },
+    {
+      "id": "code-24-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "wWind",
+      "projectId": 1,
+      "expected": [
+        "src/core/RowWindow.ts"
+      ]
+    },
+    {
+      "id": "code-24-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\RowWindow.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/RowWindow.ts"
+      ]
+    },
+    {
+      "id": "code-24-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "RowWindow.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-25-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/CatalogPage.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CatalogPage.tsx"
+      ]
+    },
+    {
+      "id": "code-25-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "tsx",
+      "query": "CatalogPage.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CatalogPage.tsx"
+      ]
+    },
+    {
+      "id": "code-25-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "tsx",
+      "query": "talogPa",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CatalogPage.tsx"
+      ]
+    },
+    {
+      "id": "code-25-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\CatalogPage.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CatalogPage.tsx"
+      ]
+    },
+    {
+      "id": "code-25-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "CatalogPage.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-26-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/OptimisticEdit.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/OptimisticEdit.php"
+      ]
+    },
+    {
+      "id": "code-26-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "OptimisticEdit.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/OptimisticEdit.php"
+      ]
+    },
+    {
+      "id": "code-26-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "timisticEd",
+      "projectId": 1,
+      "expected": [
+        "src/server/OptimisticEdit.php"
+      ]
+    },
+    {
+      "id": "code-26-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\OptimisticEdit.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/OptimisticEdit.php"
+      ]
+    },
+    {
+      "id": "code-26-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "OptimisticEdit.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-27-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/ExportKeyset.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/ExportKeyset.cs"
+      ]
+    },
+    {
+      "id": "code-27-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "ExportKeyset.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/ExportKeyset.cs"
+      ]
+    },
+    {
+      "id": "code-27-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "portKeys",
+      "projectId": 1,
+      "expected": [
+        "src/game/ExportKeyset.cs"
+      ]
+    },
+    {
+      "id": "code-27-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\ExportKeyset.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/ExportKeyset.cs"
+      ]
+    },
+    {
+      "id": "code-27-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "ExportKeyset.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-28-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/ImportReceipt.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ImportReceipt.ts"
+      ]
+    },
+    {
+      "id": "code-28-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "ImportReceipt.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ImportReceipt.ts"
+      ]
+    },
+    {
+      "id": "code-28-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "portRecei",
+      "projectId": 1,
+      "expected": [
+        "src/core/ImportReceipt.ts"
+      ]
+    },
+    {
+      "id": "code-28-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\ImportReceipt.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/ImportReceipt.ts"
+      ]
+    },
+    {
+      "id": "code-28-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "ImportReceipt.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-29-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/ConnectionScope.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ConnectionScope.tsx"
+      ]
+    },
+    {
+      "id": "code-29-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "ConnectionScope.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ConnectionScope.tsx"
+      ]
+    },
+    {
+      "id": "code-29-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "nnectionSco",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ConnectionScope.tsx"
+      ]
+    },
+    {
+      "id": "code-29-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\ConnectionScope.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/ConnectionScope.tsx"
+      ]
+    },
+    {
+      "id": "code-29-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "ConnectionScope.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-30-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/UnicodeOutput.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/UnicodeOutput.php"
+      ]
+    },
+    {
+      "id": "code-30-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "php",
+      "query": "UnicodeOutput.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/UnicodeOutput.php"
+      ]
+    },
+    {
+      "id": "code-30-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "php",
+      "query": "icodeOutp",
+      "projectId": 1,
+      "expected": [
+        "src/server/UnicodeOutput.php"
+      ]
+    },
+    {
+      "id": "code-30-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\UnicodeOutput.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/UnicodeOutput.php"
+      ]
+    },
+    {
+      "id": "code-30-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "UnicodeOutput.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-31-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/CursorSignature.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/CursorSignature.cs"
+      ]
+    },
+    {
+      "id": "code-31-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "CursorSignature.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/CursorSignature.cs"
+      ]
+    },
+    {
+      "id": "code-31-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "rsorSignatu",
+      "projectId": 1,
+      "expected": [
+        "src/game/CursorSignature.cs"
+      ]
+    },
+    {
+      "id": "code-31-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\CursorSignature.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/CursorSignature.cs"
+      ]
+    },
+    {
+      "id": "code-31-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "CursorSignature.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-32-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/RetryPolicy.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/RetryPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-32-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "RetryPolicy.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/RetryPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-32-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "tryPoli",
+      "projectId": 1,
+      "expected": [
+        "src/core/RetryPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-32-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\RetryPolicy.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/RetryPolicy.ts"
+      ]
+    },
+    {
+      "id": "code-32-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "RetryPolicy.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-33-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/CapabilitySchema.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CapabilitySchema.tsx"
+      ]
+    },
+    {
+      "id": "code-33-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "CapabilitySchema.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CapabilitySchema.tsx"
+      ]
+    },
+    {
+      "id": "code-33-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "pabilitySche",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CapabilitySchema.tsx"
+      ]
+    },
+    {
+      "id": "code-33-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\CapabilitySchema.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/CapabilitySchema.tsx"
+      ]
+    },
+    {
+      "id": "code-33-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "CapabilitySchema.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-34-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/Cancellation.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/Cancellation.php"
+      ]
+    },
+    {
+      "id": "code-34-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "Cancellation.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/Cancellation.php"
+      ]
+    },
+    {
+      "id": "code-34-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "ncellati",
+      "projectId": 1,
+      "expected": [
+        "src/server/Cancellation.php"
+      ]
+    },
+    {
+      "id": "code-34-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\Cancellation.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/Cancellation.php"
+      ]
+    },
+    {
+      "id": "code-34-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "Cancellation.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-35-exact_path",
+      "split": "tuning",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/MigrationJournal.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/MigrationJournal.cs"
+      ]
+    },
+    {
+      "id": "code-35-basename",
+      "split": "tuning",
+      "class": "basename",
+      "language": "cs",
+      "query": "MigrationJournal.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/MigrationJournal.cs"
+      ]
+    },
+    {
+      "id": "code-35-substring",
+      "split": "tuning",
+      "class": "substring",
+      "language": "cs",
+      "query": "grationJourn",
+      "projectId": 1,
+      "expected": [
+        "src/game/MigrationJournal.cs"
+      ]
+    },
+    {
+      "id": "code-35-windows_path",
+      "split": "tuning",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\MigrationJournal.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/MigrationJournal.cs"
+      ]
+    },
+    {
+      "id": "code-35-wrong-project",
+      "split": "tuning",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "MigrationJournal.cs",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-36-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "ts",
+      "query": "src/core/WorkspacePath.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/WorkspacePath.ts"
+      ]
+    },
+    {
+      "id": "code-36-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "ts",
+      "query": "WorkspacePath.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/WorkspacePath.ts"
+      ]
+    },
+    {
+      "id": "code-36-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "ts",
+      "query": "rkspacePa",
+      "projectId": 1,
+      "expected": [
+        "src/core/WorkspacePath.ts"
+      ]
+    },
+    {
+      "id": "code-36-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "ts",
+      "query": "src\\core\\WorkspacePath.ts",
+      "projectId": 1,
+      "expected": [
+        "src/core/WorkspacePath.ts"
+      ]
+    },
+    {
+      "id": "code-36-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "ts",
+      "query": "WorkspacePath.ts",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-37-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "tsx",
+      "query": "src/ui/QueryHistory.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/QueryHistory.tsx"
+      ]
+    },
+    {
+      "id": "code-37-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "tsx",
+      "query": "QueryHistory.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/QueryHistory.tsx"
+      ]
+    },
+    {
+      "id": "code-37-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "tsx",
+      "query": "eryHisto",
+      "projectId": 1,
+      "expected": [
+        "src/ui/QueryHistory.tsx"
+      ]
+    },
+    {
+      "id": "code-37-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "tsx",
+      "query": "src\\ui\\QueryHistory.tsx",
+      "projectId": 1,
+      "expected": [
+        "src/ui/QueryHistory.tsx"
+      ]
+    },
+    {
+      "id": "code-37-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "tsx",
+      "query": "QueryHistory.tsx",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-38-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "php",
+      "query": "src/server/ReadOnlyGuard.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/ReadOnlyGuard.php"
+      ]
+    },
+    {
+      "id": "code-38-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "php",
+      "query": "ReadOnlyGuard.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/ReadOnlyGuard.php"
+      ]
+    },
+    {
+      "id": "code-38-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "php",
+      "query": "adOnlyGua",
+      "projectId": 1,
+      "expected": [
+        "src/server/ReadOnlyGuard.php"
+      ]
+    },
+    {
+      "id": "code-38-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "php",
+      "query": "src\\server\\ReadOnlyGuard.php",
+      "projectId": 1,
+      "expected": [
+        "src/server/ReadOnlyGuard.php"
+      ]
+    },
+    {
+      "id": "code-38-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "php",
+      "query": "ReadOnlyGuard.php",
+      "projectId": 2,
+      "expected": []
+    },
+    {
+      "id": "code-39-exact_path",
+      "split": "acceptance",
+      "class": "exact_path",
+      "language": "cs",
+      "query": "src/game/GenerationSwap.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/GenerationSwap.cs"
+      ]
+    },
+    {
+      "id": "code-39-basename",
+      "split": "acceptance",
+      "class": "basename",
+      "language": "cs",
+      "query": "GenerationSwap.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/GenerationSwap.cs"
+      ]
+    },
+    {
+      "id": "code-39-substring",
+      "split": "acceptance",
+      "class": "substring",
+      "language": "cs",
+      "query": "nerationSw",
+      "projectId": 1,
+      "expected": [
+        "src/game/GenerationSwap.cs"
+      ]
+    },
+    {
+      "id": "code-39-windows_path",
+      "split": "acceptance",
+      "class": "windows_path",
+      "language": "cs",
+      "query": "src\\game\\GenerationSwap.cs",
+      "projectId": 1,
+      "expected": [
+        "src/game/GenerationSwap.cs"
+      ]
+    },
+    {
+      "id": "code-39-wrong-project",
+      "split": "acceptance",
+      "class": "wrong_project",
+      "language": "cs",
+      "query": "GenerationSwap.cs",
+      "projectId": 2,
+      "expected": []
+    }
+  ]
+}

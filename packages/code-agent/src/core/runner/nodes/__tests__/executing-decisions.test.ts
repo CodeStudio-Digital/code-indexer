@@ -24,6 +24,24 @@ function asProviderError(e: ReturnType<typeof providerErrorEvent>) {
 }
 
 describe('providerErrorEvent', () => {
+  it.each([
+    new Error('Invalid schema for function \'ext_rea__capture_browser_scenario\': null is not of types "boolean", "object"'),
+    Object.assign(new Error('Bad function parameters'), { code: 'invalid_function_parameters' }),
+  ])('does not retry deterministic schema rejection as an unknown network failure', error => {
+    expect(asProviderError(providerErrorEvent(error))).toMatchObject({ retryable: false, status: 0 });
+  });
+
+  it('retains the transport cause of native fetch terminated without exposing socket details', () => {
+    const ev = asProviderError(providerErrorEvent(new TypeError('terminated', {
+      cause: Object.assign(new Error('other side closed https://secret.example/?token=private'), {
+        code: 'UND_ERR_SOCKET',
+      }),
+    })));
+    expect(ev).toMatchObject({ status: 0, retryable: true, code: 'UND_ERR_SOCKET' });
+    expect(ev.message).toContain('UND_ERR_SOCKET');
+    expect(ev.message).not.toContain('private');
+  });
+
   it('extracts status + message + code from an APIError-shaped error', () => {
     const ev = asProviderError(
       providerErrorEvent(
@@ -75,9 +93,9 @@ describe('providerErrorEvent', () => {
     expect(ev.message).toMatch(/model not found/);
   });
 
-  it('routes a stream-idle TimeoutError to the low-cap unknown bucket (status 0)', () => {
+  it('tags a stream-idle TimeoutError for bounded transport recovery (status 0)', () => {
     const ev = asProviderError(providerErrorEvent(new TimeoutError(90_000, 'provider stream idle')));
-    expect(ev.status).toBe(0); // sentinel → provider-unknown-retry (cap 4), not transient-30
+    expect(ev.status).toBe(0);
     expect(ev.retryable).toBe(true);
     expect(ev.code).toBe('TIMEOUT');
   });

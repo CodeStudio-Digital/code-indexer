@@ -65,6 +65,40 @@ function setup(options: {
 }
 
 describe('coder conversation chapter routes', () => {
+  it('pairs calls at a page boundary using bounded recorded results without loading another page', async () => {
+    const calls: string[] = [];
+    const app = new Hono();
+    mountCoderChapterRoutes(app, { sessionStore: {
+      getSession: async () => ({ id: SESSION_ID }),
+      listConversationChapterSource: async () => {
+        calls.push('page');
+        return { items: [{ seq: 70, role: 'assistant', content: [
+          { type: 'tool_use', id: 'already-paired', name: 'read_file' },
+          { type: 'tool_use', id: 'next-page', name: 'read_file' },
+        ] }, { role: 'user', content: [
+          { type: 'tool_result', tool_use_id: 'already-paired', content: 'inline' },
+        ] }], next_cursor: 'message:100' };
+      },
+      getToolResultsByToolUseIds: async (sessionId, ids) => {
+        expect(sessionId).toBe(SESSION_ID);
+        expect(ids).toEqual(['next-page']);
+        calls.push('results');
+        return [{ tool_use_id: 'next-page', result_text: 'x'.repeat(6000), is_error: true }];
+      },
+      previousUserMessageSeq: async (sessionId, seq) => {
+        expect(sessionId).toBe(SESSION_ID); expect(seq).toBe(70); return 55;
+      },
+    } });
+    const response = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/${CHAPTER_ID}/messages?limit=100`);
+    expect(response.status).toBe(200);
+    expect(calls).toEqual(['page', 'results']);
+    const body = await response.json();
+    expect(body.next_cursor).toBe('message:100');
+    expect(body.preceding_user_seq).toBe(55);
+    expect(body.tool_results).toEqual([{ tool_use_id: 'next-page', content: 'x'.repeat(4000),
+      is_error: true, _truncated: true, _originalLength: 6000 }]);
+  });
+
   it('lists and searches chapters with bounded cursor pagination', async () => {
     const { app, calls } = setup();
     const list = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters?limit=999&cursor=chapter:3`);

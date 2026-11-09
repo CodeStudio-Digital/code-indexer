@@ -17,6 +17,7 @@ export const INDEX_TYPE_WEIGHT: Record<string, number> = {
  * canonical decision merely because it was generated recently. */
 export const INDEX_SOURCE_WEIGHT: Record<string, number> = {
   user: 1.1,
+  manual: 1.1,
   agent: 1,
   'migrated-snapshot': 0.85,
   distill: 0.65,
@@ -59,19 +60,28 @@ export function listMemoryIndex(
   const typeClause = type ? 'AND type = ?' : '';
   const params: unknown[] = [scope, pid];
   if (type) params.push(type);
+  const now = Date.now();
+  params.push(now / 86_400_000 + 2_440_587.5);
+  // Apply the same score BEFORE the candidate cap. Importance-only prefiltering
+  // made a fresh preference invisible behind 100 ancient, high-importance rows.
+  const typeWeights = Object.entries(INDEX_TYPE_WEIGHT).map(([key, value]) => `WHEN '${key}' THEN ${value}`).join(' ');
+  const sourceWeights = Object.entries(INDEX_SOURCE_WEIGHT).map(([key, value]) => `WHEN '${key}' THEN ${value}`).join(' ');
   const rows = db
     .prepare(
       `SELECT id, name, description, type, source, scope, importance, created_at, last_accessed_at,
               substr(content, 1, 200) AS excerpt
        FROM agent_memory
        WHERE scope = ? AND project_id = ? AND archived_at IS NULL ${typeClause}
-       ORDER BY importance DESC LIMIT 100`,
+       ORDER BY COALESCE(importance,0.5)
+         * pow(0.5, MAX(0,COALESCE(?-julianday(COALESCE(last_accessed_at,created_at)),30))/30)
+         * (0.5 + 0.5 * CASE type ${typeWeights} ELSE 0.5 END)
+         * CASE source ${sourceWeights} ELSE 0.8 END DESC, id DESC
+       LIMIT 100`,
     )
     .all(...params) as Array<{
     id: number; name: string; description: string; type: string; source: string; scope: string;
     importance: number; created_at: string; last_accessed_at: string | null; excerpt: string | null;
   }>;
-  const now = Date.now();
   const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
   const scored = rows.map((r) => {
     const ts = Date.parse(`${(r.last_accessed_at ?? r.created_at).replace(' ', 'T')}Z`);

@@ -12,24 +12,29 @@ import { SemanticRetryDeferredError } from './semantic-retry-policy.js';
 import type { SemanticCoordinatorContext } from './semantic-coordinator-context.js';
 
 export const operations = {
-ensureMemoryNamespace(this: SemanticCoordinatorContext, namespace: string): Promise<void> {
+ensureMemoryNamespace(this: SemanticCoordinatorContext, namespace: string, force = false, beforeStart?: () => void): Promise<void> {
     if (semanticPurposeForNamespace(namespace) !== 'memory') {
       return Promise.reject(new Error(`Unsupported Memory mutation namespace: ${namespace}`));
     }
     if (this.embeddingDisabled('memory')) return Promise.resolve();
     if (!this.allowsNamespaceMutation(namespace)) return Promise.resolve();
     return this.serial(namespace, async () => {
+      beforeStart?.();
       if (this.embeddingDisabled('memory') || !this.allowsNamespaceMutation(namespace)) return;
+      if (!force && this.deps.semanticStore.requiresExplicitNamespaceReindex?.(namespace)) {
+        throw new SemanticRetryDeferredError(Infinity);
+      }
       const generation = await this.ensureGeneration('memory', false);
       try {
+        beforeStart?.();
         const snapshot = /^snapshot:p(\d+)$/.exec(namespace);
         const projectMemory = /^memory:project:p(\d+)$/.exec(namespace);
         if (snapshot) {
-          await this.buildSnapshotNamespace(Number(snapshot[1]), generation, false);
+          await this.buildSnapshotNamespace(Number(snapshot[1]), generation, force);
         } else if (projectMemory) {
-          await this.buildMemoryNamespace('project', Number(projectMemory[1]), generation, false);
+          await this.buildMemoryNamespace('project', Number(projectMemory[1]), generation, force);
         } else if (namespace === userMemoryNamespace()) {
-          await this.buildMemoryNamespace('user', 0, generation, false);
+          await this.buildMemoryNamespace('user', 0, generation, force);
         } else {
           throw new Error(`Unsupported Memory mutation namespace: ${namespace}`);
         }

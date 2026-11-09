@@ -1,5 +1,6 @@
 import { defineTool, mcpAccess, type McpSourceTruncation } from '../tool.js';
 import { withProject } from './_helpers.js';
+import { recordMemoryAccess } from '@mcp/services/memory/access-telemetry.js';
 
 function integer(value: unknown, fallback: number, min: number, max: number) {
   const n = value ?? fallback;
@@ -55,6 +56,7 @@ export const searchMemory = defineTool({
       degraded_reason: degradedReason, results, ...(empty ? { message: empty } : {}), note })
       : [empty, ...results.map(r => `## ${r.title} [${r.category}]\n${r.content}` + (r.recovery ? '\nContinue: ' + JSON.stringify(r.recovery) : '')),
         ...(degradedReason ? ['[note: semantic memory owner unavailable; results are FTS-only: ' + degradedReason + ']'] : []), note].filter(Boolean).join('\n\n---\n\n');
+    recordMemoryAccess(db, results.map(row => row.id), 'explicit_read');
     return sourceTruncations.length ? { text, sourceTruncations } : text;
   }),
 });

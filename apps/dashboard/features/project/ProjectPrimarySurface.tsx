@@ -8,6 +8,7 @@ import type { AgentChatWorkbenchSlots } from '../chat/types.js';
 import type { ApiClientWorkbenchSlots } from '../api-client/workbench-slots.js';
 import { TransientSurface } from './tabs/TransientSurface.js';
 import { reapplySharedMonacoTheme } from '../../lib/monaco-theme.js';
+import { SurfaceVisibilityContext } from '../../lib/surface-visibility.js';
 
 const ProjectLspInstallPrompts = lazy(() =>
   import('../workspace/editor/LspInstallPrompt.js').then((module) => ({ default: module.ProjectLspInstallPrompts })),
@@ -75,7 +76,7 @@ function RetainedPane({
       data-project-primary-surface={surface}
       className={retainedPaneClassName(active)}
     >
-      {children}
+      <SurfaceVisibilityContext value={active}>{children}</SurfaceVisibilityContext>
     </div>
   );
 }

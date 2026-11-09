@@ -152,14 +152,12 @@ describe('CompactionSummaryV3', () => {
       {
         messages: [user('Everything is complete.')],
         liveState: {
-          goal: { text: 'Ship V3', status: 'in_progress' },
           activePlan: { text: 'Implement schema, then API', status: 'approved' },
           todos: [{ content: 'Old inferred task', status: 'completed' }],
         },
       },
       responseProvider(JSON.stringify(validSummary())),
     );
-    expect(result?.resume.active_goal).toBe('Ship V3 (status=in_progress)');
     expect(result?.resume.pending_tasks).toEqual([]);
     expect(result?.resume.next_step).toBe('');
     expect(result?.resume.constraints).toContain(

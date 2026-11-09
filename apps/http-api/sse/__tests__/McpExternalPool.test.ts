@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import type { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
+import { mcpServerConfigurationKey } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { McpExternalPool } from '../McpExternalPool.js';
 
 function server(updatedAt = '2026-08-02T00:00:00.000Z'): McpServerConfig {
@@ -41,17 +42,19 @@ function fakeManager(isOnline: () => boolean): {
   closeServer: ReturnType<typeof vi.fn>;
 } {
   const states = new Map<string, { state: 'connected' | 'error'; error?: string }>();
+  const configurationKeys = new Map<string, string>();
   const connectAll = vi.fn(async (configs: McpServerConfig[]) => {
-    states.clear();
     for (const config of configs) {
+      configurationKeys.set(config.id, mcpServerConfigurationKey(config));
       states.set(config.id, isOnline()
         ? { state: 'connected' }
         : { state: 'error', error: 'ECONNREFUSED' });
     }
   });
-  const closeAll = vi.fn(async () => { states.clear(); });
-  const closeServer = vi.fn(async (serverId: string) => { states.delete(serverId); });
+  const closeAll = vi.fn(async () => { states.clear(); configurationKeys.clear(); });
+  const closeServer = vi.fn(async (serverId: string) => { states.delete(serverId); configurationKeys.delete(serverId); });
   const connectServer = vi.fn(async (config: McpServerConfig) => {
+    configurationKeys.set(config.id, mcpServerConfigurationKey(config));
     states.set(config.id, isOnline()
       ? { state: 'connected' }
       : { state: 'error', error: 'ECONNREFUSED' });
@@ -60,15 +63,26 @@ function fakeManager(isOnline: () => boolean): {
   const manager = {
     connectAll,
     connectServer,
-    refreshAll: vi.fn(),
+    refreshAll: vi.fn(async (configs: McpServerConfig[]) => {
+      for (const id of states.keys()) {
+        if (!configs.some(config => config.id === id)) await closeServer(id);
+      }
+      const changed = configs.filter(config => states.get(config.id)?.state !== 'connected'
+        || configurationKeys.get(config.id) !== mcpServerConfigurationKey(config));
+      if (changed.length) await connectAll(changed);
+    }),
     closeAll,
     closeServer,
-    listAllTools: vi.fn(async () => isOnline()
-      ? {
+    listAllTools: vi.fn(async () => {
+      if (!isOnline()) {
+        for (const id of states.keys()) states.set(id, { state: 'error', error: 'ECONNREFUSED' });
+        return { tools: [], tierMap: new Map() };
+      }
+      return {
         tools: [unityTool()],
         tierMap: new Map([['ext_unity__get_server_health', 'unity']]),
-      }
-      : { tools: [], tierMap: new Map() }),
+      };
+    }),
     getConnectionStates: () => new Map(states),
     getCustomTierSummary: () => isOnline()
       ? new Map([['unity', { displayName: 'Unity', toolCount: 1 }]])
@@ -84,9 +98,139 @@ function fakeManager(isOnline: () => boolean): {
 const pools: McpExternalPool[] = [];
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.shutdown()));
+  vi.useRealTimers();
 });
 
 describe('McpExternalPool readiness reconciliation', () => {
+  it('keeps an admitted handler usable after an unchanged server reconnect', async () => {
+    const fake = fakeManager(() => true);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    const admitted = (await pool.listAllTools()).tools[0];
+    await pool.refreshServer('unity');
+    expect(pool.getSnapshot().tools[0].catalogueRevision).toBe(revision);
+    expect(await admitted.handler({}, {} as import('@mcp/code-agent/core/tool.js').ToolContext)).toMatchObject({ content: 'ok' });
+  });
+
+  it('keeps revisions on a full refresh when the configuration and contracts did not change', async () => {
+    const fake = fakeManager(() => true);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    await pool.refresh();
+    expect(pool.getSnapshot().tools[0].catalogueRevision).toBe(revision);
+  });
+
+  it('revalidates the contract after a transport loss before the next health tick', async () => {
+    const fake = fakeManager(() => true);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    const admitted = (await pool.listAllTools()).tools[0];
+    fake.manager.getConnectionStates().get('unity')!.state = 'error';
+    expect(await admitted.handler({}, {} as import('@mcp/code-agent/core/tool.js').ToolContext)).toMatchObject({ content: 'ok' });
+    expect(fake.closeServer).toHaveBeenCalledTimes(1);
+    expect(fake.manager.listAllTools).toHaveBeenCalledTimes(2);
+    expect(pool.getSnapshot().tools[0].catalogueRevision).toBe(revision);
+  });
+
+  it('recovers a long-lived session after repeated temporary health-check outages', async () => {
+    vi.useFakeTimers();
+    let online = true;
+    const fake = fakeManager(() => online);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    const admitted = (await pool.listAllTools()).tools[0];
+    online = false;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(pool.getSnapshot().tools).toEqual([]);
+    online = true;
+    // No new chat, snapshot fetch or find_tools call by the worker.
+    const result = await admitted.handler({}, {} as import('@mcp/code-agent/core/tool.js').ToolContext);
+    expect(result).toMatchObject({ content: 'ok' });
+    expect(result.isError).not.toBe(true);
+    expect(pool.getSnapshot().tools[0].catalogueRevision).toBe(revision);
+  });
+
+  it('revokes an actually removed tool even if the same name returns later', async () => {
+    vi.useFakeTimers();
+    const fake = fakeManager(() => true);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [], tierMap: new Map() });
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [unityTool()], tierMap: new Map() });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pool.getSnapshot().tools[0].catalogueRevision).not.toBe(revision);
+    expect(await pool.callTool('unity', 'get_server_health', {}, undefined, revision)).toMatchObject({ ok: false });
+  });
+
+  it('treats reconnect failures and cancellation as undispatched, never unknown effects', async () => {
+    vi.useFakeTimers();
+    let online = true;
+    const fake = fakeManager(() => online);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    online = false; await vi.advanceTimersByTimeAsync(60_000);
+    const ready = vi.spyOn(pool, 'getReadySnapshot').mockRejectedValue(new Error('broker still reloading'));
+    const controller = new AbortController(); controller.abort();
+    expect((await pool.callTool('unity', 'get_server_health', {}, controller.signal, revision)).result.effectOutcome).toBeUndefined();
+    expect(ready).not.toHaveBeenCalled();
+    const failed = await pool.callTool('unity', 'get_server_health', {}, undefined, revision);
+    expect(failed).toMatchObject({ ok: false, result: { error: { code: 'MCP_UNAVAILABLE', retryable: true } } });
+    expect(failed.result.effectOutcome).toBeUndefined();
+  });
+
+  it('ignores JSON object key order but revokes a changed input contract', async () => {
+    const fake = fakeManager(() => true);
+    const tool = unityTool();
+    const first = { type: 'object' as const, properties: { target: { type: 'string' as const } }, required: ['target'] };
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [{ ...tool, parameters: first }], tierMap: new Map() });
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [{ ...tool, parameters: {
+      required: ['target'], properties: { target: { type: 'string' } }, type: 'object',
+    } }], tierMap: new Map() });
+    await pool.refreshServer('unity');
+    expect(pool.getSnapshot().tools[0].catalogueRevision).toBe(revision);
+    vi.mocked(fake.manager.listAllTools).mockResolvedValue({ tools: [{ ...tool, parameters: {
+      ...first, properties: { target: { type: 'number' } },
+    } }], tierMap: new Map() });
+    await pool.refreshServer('unity');
+    expect(pool.getSnapshot().tools[0].catalogueRevision).not.toBe(revision);
+    expect(await pool.callTool('unity', 'get_server_health', {}, undefined, revision))
+      .toMatchObject({ ok: false, result: { error: { code: 'MCP_CATALOGUE_CHANGED' } } });
+  });
+
+  it('does not resurrect an old admission after disabling and enabling the server', async () => {
+    let configs = [server()];
+    const fake = fakeManager(() => true);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => configs });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    configs = []; await pool.getReadySnapshot();
+    configs = [server()]; await pool.getReadySnapshot();
+    expect(pool.getSnapshot().tools[0].catalogueRevision).not.toBe(revision);
+  });
+
+  it('does not invalidate Unity when an unrelated server configuration changes', async () => {
+    let other = { ...server(), id: 'other', url: 'http://127.0.0.1:8766/mcp' };
+    const fake = fakeManager(() => true);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server(), other] });
+    pools.push(pool); await pool.boot();
+    const revision = pool.getSnapshot().tools[0].catalogueRevision;
+    other = { ...other, url: other.url + '/changed' };
+    await pool.getReadySnapshot();
+    expect(pool.getSnapshot().tools[0].catalogueRevision).toBe(revision);
+    expect(fake.closeAll).not.toHaveBeenCalled();
+    expect(fake.connectAll).toHaveBeenLastCalledWith([other]);
+  });
+
   it('rechecks catalogue revision after delayed transport preparation', async () => {
     let config = server(); const fake = fakeManager(() => true);
     let release!: () => void, effects = 0;
@@ -214,7 +358,7 @@ describe('McpExternalPool readiness reconciliation', () => {
 
     config = { ...config, updated_at: '2026-08-02T00:01:00.000Z' };
     await pool.getReadySnapshot();
-    expect(fake.closeAll).toHaveBeenCalledTimes(1);
+    expect(fake.closeAll).not.toHaveBeenCalled();
     expect(fake.connectAll).toHaveBeenCalledTimes(2);
   });
 });

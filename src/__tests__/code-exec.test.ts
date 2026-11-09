@@ -200,8 +200,9 @@ describe('code_exec — sandbox + tool proxy', () => {
     // slice at the next tool call and resumeClock() rejects once it goes ≤ 0.
     // The burn must come AFTER the first await — the initial sync slice is
     // covered by the vm `timeout` option (a different mechanism).
+    let calls = 0;
     const registry = makeRegistry([
-      safeTool('fast', async () => ({ content: 'ok' })),
+      safeTool('fast', async () => { calls++; return { content: 'ok' }; }),
     ]);
     const exec = buildCodeExecTool(registry);
     const code = `
@@ -213,9 +214,10 @@ describe('code_exec — sandbox + tool proxy', () => {
     `;
     const r = await exec.handler({ code, timeout_ms: 600 }, ctx);
     expect(r.isError).toBe(true);
-    // The "(JS time)" suffix proves the async budget fired — the vm sync
-    // guard reports "parse/sync error" instead.
-    expect(r.content).toContain('timed out after 600 ms (JS time)');
+    // Either the active-time clock or the external watchdog can win. Both
+    // must report a JS timeout and fence the second nested operation.
+    expect(r.error).toMatchObject({ code: 'CODE_EXEC_JS_TIMEOUT', kind: 'timeout' });
+    expect(calls).toBe(1);
   });
 
   it('forbids access to require/process/Buffer in the sandbox', async () => {

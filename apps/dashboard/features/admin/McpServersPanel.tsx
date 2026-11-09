@@ -61,7 +61,7 @@ function ToolsList({ tools }: { tools: McpServerToolInfo[] }) {
 
 export function McpServersPanel() {
   const { t } = useTranslation(['admin', 'common']);
-  const { servers, loading, testResults, load, save, remove, test } = useAdminMcpServers();
+  const { servers, loading, testResults, save, remove, test, connected, invalidate } = useAdminMcpServers();
   const [editing, setEditing] = useState<Partial<AdminMcpServer> | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -125,7 +125,7 @@ export function McpServersPanel() {
                     {!s.enabled && <Badge variant="secondary">{t('admin:mcpServers.disabled')}</Badge>}
                     {s.has_token ? (
                       <span className="text-xs text-muted-foreground font-mono">{s.auth_token_masked}</span>
-                    ) : s.auth_type !== 'none' ? (
+                    ) : s.auth_type !== 'none' && s.auth_type !== 'oauth2' ? (
                       <span className="text-xs text-amber-600">{t('admin:mcpServers.noToken')}</span>
                     ) : null}
                     <TestBadge tr={tr} />
@@ -167,9 +167,10 @@ export function McpServersPanel() {
           initial={editing}
           isExisting={!!servers.find((x) => x.id === editing.id)}
           onClose={() => setEditing(null)}
+          onConnected={(result) => { if (editing.id) connected(editing.id, result); }}
+          onDisconnected={() => { if (editing.id) invalidate(editing.id); }}
           onSave={async (s) => {
-            await save(s);
-            setEditing(null);
+            if (await save(s)) setEditing(null);
           }}
         />
       )}

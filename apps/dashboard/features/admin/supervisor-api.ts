@@ -57,10 +57,12 @@ export interface SupervisorStatus {
 export interface SupervisorSessionStatus {
   sessionId: string;
   status: SupervisorStatus | null;
+  availability?: string;
 }
 
 export interface StatusResponse {
   enabled: boolean;
+  availability?: string;
   sessions: SupervisorSessionStatus[];
 }
 
@@ -90,8 +92,8 @@ export interface SupervisorIncidentEnvelope {
   detectedAtMs: number;
 }
 
-export async function fetchSupervisorStatus(): Promise<StatusResponse> {
-  const r = await fetch(`${apiBaseUrl()}/api/admin/supervisor/status`);
+export async function fetchSupervisorStatus(sessionId?: string): Promise<StatusResponse> {
+  const r = await fetch(`${apiBaseUrl()}/api/admin/supervisor/status${sessionId ? `/${encodeURIComponent(sessionId)}` : ''}`);
   if (!r.ok) throw new Error(`status ${r.status}`);
   return (await r.json()) as StatusResponse;
 }
@@ -159,11 +161,12 @@ interface SupervisorStreamCallbacks {
 
 export function openSupervisorStream(
   callbacks: SupervisorStreamCallbacks,
-  options: { since?: number } = {},
+  options: { since?: number; sessionId?: string } = {},
 ): () => void {
   const ctrl = new AbortController();
   const url = new URL('/api/admin/supervisor/stream', apiBaseUrl() || window.location.origin);
   if (options.since != null) url.searchParams.set('since', String(options.since));
+  if (options.sessionId) url.searchParams.set('sessionId', options.sessionId);
 
   void (async () => {
     try {
@@ -186,7 +189,7 @@ export function openSupervisorStream(
       //   id: <ignored>
       while (!ctrl.signal.aborted) {
         const { value, done } = await reader.read();
-        if (done) break;
+        if (done) { if (!ctrl.signal.aborted) throw new Error('Supervisor stream closed'); break; }
         buf += decoder.decode(value, { stream: true });
         let frameEnd = buf.indexOf('\n\n');
         while (frameEnd !== -1) {

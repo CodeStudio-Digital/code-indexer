@@ -42,6 +42,7 @@ export const SAFETY_POLL_MS = 2000;
 
 /** Structured result — the wrapper tool turns this into its own copy text. */
 export type AgentWaitOutcome =
+  | { kind: 'aborted' }
   | { kind: 'all_done' }
   /** Master only: a notification is buffered; return so the runner drains it. */
   | { kind: 'pending_messages' }
@@ -61,6 +62,7 @@ export interface WaitLoopOrchestrator {
 }
 
 export interface AgentWaitLoopOpts {
+  signal?: AbortSignal;
   /** `null` = whole running fleet (dynamic). `Set` = these fixed targets. */
   targetIds: ReadonlySet<string> | null;
   /** Master gets the early-returns; subordinates only get `all_done`/`deadline`. */
@@ -101,6 +103,7 @@ export async function runAgentWaitLoop(
   };
 
   while (!isDone()) {
+    if (opts.signal?.aborted) return { kind: 'aborted' };
     // Keep the supervisor from mistaking a healthy long wait for a stuck tool.
     if (opts.heartbeatAgentRunId != null) {
       getGlobalAgentSupervisor()?.heartbeat(opts.heartbeatAgentRunId);
@@ -113,7 +116,7 @@ export async function runAgentWaitLoop(
     const remaining = deadlineMs - now();
     if (remaining <= 0) return { kind: 'deadline' };
 
-    const event = await new Promise<AttentionEvent | { kind: 'timeout' }>((resolve) => {
+    const event = await new Promise<AttentionEvent | { kind: 'timeout' } | { kind: 'aborted' }>((resolve) => {
       let settled = false;
       const off = orchestrator.onSubordinateAttention((ev) => {
         if (settled) return;
@@ -136,6 +139,7 @@ export async function runAgentWaitLoop(
         settled = true;
         clearTimeout(timer);
         off();
+        opts.signal?.removeEventListener('abort', abort);
         resolve(ev);
       });
       // Safety poll (the deadlock fix): cap the sleep so we re-check isDone()
@@ -144,13 +148,22 @@ export async function runAgentWaitLoop(
         if (settled) return;
         settled = true;
         off();
+        opts.signal?.removeEventListener('abort', abort);
         resolve({ kind: 'timeout' });
       }, Math.min(remaining, pollMs));
+      const abort = () => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); off(); opts.signal?.removeEventListener('abort', abort);
+        resolve({ kind: 'aborted' });
+      };
+      opts.signal?.addEventListener('abort', abort, { once: true });
+      if (opts.signal?.aborted) abort();
     });
 
     // 'timeout'/'finished' (and non-target lifecycle events for subordinates)
     // → loop and re-check isDone(). `inbox_answered` never reaches here (the
     // listener drops it) but narrows the union for the master branches below.
+    if (event.kind === 'aborted') return { kind: 'aborted' };
     if (
       event.kind === 'timeout' ||
       event.kind === 'finished' ||

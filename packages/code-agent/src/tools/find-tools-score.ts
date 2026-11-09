@@ -24,7 +24,28 @@ export const STOPWORDS: ReadonlySet<string> = new Set([
   'is', 'are', 'be', 'do', 'does', 'how', 'what', 'that', 'this', 'it', 'my',
   'me', 'we', 'you', 'need', 'want', 'use', 'using', 'tool', 'tools',
   'please', 'can', 'some', 'any',
+  'o', 'a', 'os', 'as', 'um', 'uma', 'de', 'da', 'do', 'das', 'dos', 'para', 'por',
+  'em', 'no', 'na', 'nos', 'nas', 'com', 'e', 'ou', 'que', 'quero', 'preciso', 'ferramenta', 'ferramentas',
 ]);
+
+export function normalizeDiscoveryText(value: string): string {
+  return value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+}
+const aliases: Readonly<Record<string, string>> = {
+  ler: 'read', leitura: 'read', arquivo: 'file', arquivos: 'file',
+  buscar: 'search', busca: 'search', pesquisar: 'search', pesquisa: 'search',
+  encontrar: 'find', localizar: 'find', referencias: 'references', referencia: 'reference',
+  simbolo: 'symbol', simbolos: 'symbols', escrever: 'write', gravar: 'write',
+  editar: 'edit', criar: 'create', remover: 'remove', excluir: 'delete', listar: 'list',
+  executar: 'run', comando: 'command', comandos: 'command', banco: 'database',
+  dados: 'data', tabela: 'table', tabelas: 'tables', consulta: 'query',
+  caminho: 'path', projeto: 'project', projetos: 'projects', dependencias: 'dependencies',
+  esquema: 'schema', esquema_sql: 'schema', cancelar: 'cancel', esperar: 'wait',
+};
+function words(value: string): string[] {
+  return normalizeDiscoveryText(value).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+function canonicalWord(value: string): string { return aliases[value] ?? value; }
 
 const MAX_TOKENS = 12; // paste-a-paragraph guard
 const PREFIX_MIN = 3; // min token/part length for name+param prefix matches
@@ -43,10 +64,10 @@ const PARAM_DESC_WORD_CAP = 300;
  */
 export function tokenizeQuery(query: string): string[] {
   const deduped = [
-    ...new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2)),
+    ...new Set(words(query.slice(0, 4_000)).filter((t) => t.length >= 2)),
   ];
   const kept = deduped.filter((t) => !STOPWORDS.has(t));
-  return (kept.length > 0 ? kept : deduped).slice(0, MAX_TOKENS);
+  return [...new Set((kept.length > 0 ? kept : deduped).map(canonicalWord))].slice(0, MAX_TOKENS);
 }
 
 export interface ParamInfo {
@@ -92,12 +113,12 @@ export function topLevelParams(parameters: unknown): ParamInfo[] {
 }
 
 function splitParts(s: string): string[] {
-  return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return words(s).map(canonicalWord);
 }
 
 function uniqueWords(text: string, cap: number): string[] {
   const seen = new Set<string>();
-  for (const w of text.toLowerCase().split(/[^a-z0-9]+/)) {
+  for (const w of words(text).map(canonicalWord)) {
     if (w.length >= 2) seen.add(w);
     if (seen.size >= cap) break;
   }
@@ -142,6 +163,17 @@ export function getToolText(tool: ToolLike): ToolText {
   };
   textCache.set(tool, text);
   return text;
+}
+
+/** One ranking policy for catalog search and the legacy discovery adapter. */
+export function rankDiscoveryCandidates<T extends { name: string; score: ToolScore }>(query: string, candidates: T[], tokenCount = tokenizeQuery(query).length): { weak: boolean; candidates: T[] } {
+  const strict = candidates.filter(c => passesStrict(c.score, tokenCount, 0.5));
+  const weak = strict.length === 0;
+  const exact = normalizeDiscoveryText(query.trim());
+  const selected = weak ? candidates.filter(c => passesRelaxed(c.score, tokenCount, 0.5)) : strict;
+  selected.sort((a, b) => Number(normalizeDiscoveryText(b.name) === exact) - Number(normalizeDiscoveryText(a.name) === exact)
+    || b.score.total - a.score.total || a.name.localeCompare(b.name));
+  return { weak, candidates: selected };
 }
 
 export interface TokenHit {

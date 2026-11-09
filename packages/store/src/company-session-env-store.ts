@@ -96,8 +96,39 @@ export class CompanySessionEnvStore {
         );
       }
       const plaintext = await this.secretCodec.decrypt(envelope.ciphertext);
-      this.plaintextCache.set(this.cacheKey(sessionId, record.id), plaintext);
+      this.plaintextCache.set(this.cacheKey(sessionId, record.id, envelope.ciphertext), plaintext);
     }
+  }
+
+  /** Read one consistent file snapshot and hydrate changed/new secrets across processes. */
+  async listAsync(sessionId: string): Promise<CompanySessionEnvRow[]> {
+    const records = this.files.list(sessionId);
+    const rows: CompanySessionEnvRow[] = [];
+    for (const record of records) {
+      if (!record.data.variables.is_secret) { rows.push(this.mapRow(sessionId, record)); continue; }
+      const envelope = record.data.secrets.value;
+      if (!envelope || !this.secretCodec) throw new Error('Company secret codec/envelope unavailable');
+      const key = this.cacheKey(sessionId, record.id, envelope.ciphertext);
+      if (!this.plaintextCache.has(key)) {
+        const value = await this.secretCodec.decrypt(envelope.ciphertext);
+        this.evictEntity(sessionId, record.id);
+        this.plaintextCache.set(key, value);
+      }
+      rows.push(this.mapRow(sessionId, record));
+    }
+    return rows.sort((a, b) => a.key.localeCompare(b.key));
+  }
+  /** Metadata discovery never decrypts values or injects secrets into a prompt. */
+  listMetadata(sessionId: string): CompanySessionEnvRow[] {
+    return this.files.list(sessionId).map((record) => ({
+      id: record.id, seq: record.seq, session_id: sessionId, key: record.data.name,
+      value: '', is_secret: record.data.variables.is_secret ? 1 as const : 0 as const,
+      source: record.data.variables.source, service_scope: record.data.variables.service_scope,
+      created_at: record.createdAt, updated_at: record.updatedAt,
+    })).sort((a, b) => a.key.localeCompare(b.key));
+  }
+  async getAsync(sessionId: string, key: string): Promise<CompanySessionEnvRow | null> {
+    return (await this.listAsync(sessionId)).find((row) => row.key === key) ?? null;
   }
 
   list(sessionId: string): CompanySessionEnvRow[] {
@@ -156,10 +187,24 @@ export class CompanySessionEnvStore {
       },
       secrets: envelope ? { value: envelope } : {},
     };
-    const record = existing
-      ? this.files.update(sessionId, existing.id, () => data)
-      : this.files.create(sessionId, { data });
-    const cacheKey = this.cacheKey(sessionId, record.id);
+    // Encryption is asynchronous. Re-read under the shared entity lock after
+    // it finishes, so concurrent processes cannot create duplicate keys or
+    // overwrite a scope changed while keychain I/O was pending.
+    let committed = true;
+    const record = this.files.upsertFirst(
+      sessionId,
+      (candidate) => candidate.data.name === key,
+      () => ({ data }),
+      (current) => {
+        if (opts.onlyIfAbsent) { committed = false; return current.data; }
+        return { ...data, variables: { ...data.variables,
+          service_scope: opts.serviceScope === undefined ? current.data.variables.service_scope : serviceScope,
+        } };
+      },
+    );
+    if (!committed) return;
+    const cacheKey = this.cacheKey(sessionId, record.id, envelope?.ciphertext);
+    this.evictEntity(sessionId, record.id);
     if (isSecret) this.plaintextCache.set(cacheKey, value);
     else this.plaintextCache.delete(cacheKey);
   }
@@ -170,7 +215,7 @@ export class CompanySessionEnvStore {
       .find((candidate) => candidate.data.name === key);
     if (!existing) return;
     this.files.moveToTrash(sessionId, existing.id);
-    this.plaintextCache.delete(this.cacheKey(sessionId, existing.id));
+    this.evictEntity(sessionId, existing.id);
   }
 
   asRecord(sessionId: string): Record<string, string> {
@@ -203,7 +248,7 @@ export class CompanySessionEnvStore {
           `Secret Company env ${sessionId}:${record.data.name} has no encrypted envelope`,
         );
       }
-      const cacheKey = this.cacheKey(sessionId, record.id);
+      const cacheKey = this.cacheKey(sessionId, record.id, envelope.ciphertext);
       const cached = this.plaintextCache.get(cacheKey);
       if (cached !== undefined) {
         value = cached;
@@ -237,7 +282,11 @@ export class CompanySessionEnvStore {
     };
   }
 
-  private cacheKey(sessionId: string, entityId: string): string {
-    return `${sessionId.toLowerCase()}:${entityId.toLowerCase()}`;
+  private cacheKey(sessionId: string, entityId: string, ciphertext?: string): string {
+    return sessionId.toLowerCase() + ':' + entityId.toLowerCase() + ':' + (ciphertext ?? '');
+  }
+  private evictEntity(sessionId: string, entityId: string): void {
+    const prefix = this.cacheKey(sessionId, entityId);
+    for (const key of this.plaintextCache.keys()) if (key.startsWith(prefix)) this.plaintextCache.delete(key);
   }
 }

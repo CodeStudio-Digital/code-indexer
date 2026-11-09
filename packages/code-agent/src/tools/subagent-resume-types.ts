@@ -5,6 +5,8 @@ import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-prof
 import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
 import type { SessionId } from '@mcp/session-storage';
 export interface ResumableAgentState {
+  execution?: import('@mcp/agent-runtime-contracts').ExecutionSnapshot;
+  workResult?: import('@mcp/agent-runtime-contracts').AgentWorkResult;
   /** 0-based; matches agent_progress.agentIndex and the original roster. */
   agentIndex: number;
   label: string;

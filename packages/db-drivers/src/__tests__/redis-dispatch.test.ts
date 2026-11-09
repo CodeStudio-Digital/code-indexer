@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { fixture } from './fixtures/redis-client.js';
 import { createRedisDriver } from '../redis.js';
+import { REDIS_PREVIEW_BYTES, REDIS_PREVIEW_SCRIPT } from '../redis-preview.js';
 
 vi.mock('../driver-registry.js', () => ({ resolveDriverEntry: () => new URL('./fixtures/redis-client.ts', import.meta.url).href }));
 beforeEach(() => {
@@ -60,5 +61,19 @@ it('caps raw multi-bulk replies and preserves truncation evidence', async () => 
   try {
     expect(await driver.runCommand!({ kind: 'keyvalue', args: ['KEYS', '*'] }, { maxRows: 1 }))
       .toMatchObject({ rowCount: 3, rows: [{ '#': 1, value: 'a' }], truncated: true });
+  } finally { await driver.close(); }
+});
+
+it('uses a fixed bounded preview and never falls back to full acquisition on denied scripting', async () => {
+  const driver = await createRedisDriver({ engine: 'redis' });
+  fixture.execute = async () => ['string', -1, 1, 'preview'];
+  try {
+    expect(await driver.runCommand!({ kind: 'keyvalue', op: 'get', payload: { key: 'large' } }, { maxRows: 5000 }))
+      .toMatchObject({ truncated: true, rows: [{ key: 'large', value: 'preview' }] });
+    expect(fixture.events.at(-1)).toMatchObject({ method: 'EVAL', args: [REDIS_PREVIEW_SCRIPT, 1, 'large', 200, REDIS_PREVIEW_BYTES] });
+    fixture.events.length = 0;
+    fixture.execute = async () => { throw new Error('NOPERM scripting denied'); };
+    await expect(driver.runCommand!({ kind: 'keyvalue', op: 'get', payload: { key: 'large' } })).rejects.toThrow('NOPERM');
+    expect(fixture.events.map(event => event.method)).toEqual(['SELECT', 'EVAL']);
   } finally { await driver.close(); }
 });

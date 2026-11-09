@@ -65,7 +65,6 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
         role: 'master',
         agentRunId: d.agentRunId,
         coderSessionId: d.coderSessionId,
-        textChunks: [],
         toolCalls: [],
         status: d.status,
         statusMessage: d.message,
@@ -105,7 +104,6 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
       role: d.role,
       agentRunId: d.agentRunId,
       coderSessionId: d.coderSessionId,
-      textChunks: [],
       toolCalls: [],
       status: d.status,
       statusMessage: d.message,
@@ -137,7 +135,7 @@ export interface SessionIdlePayload {
   errorDetail?: string;
   /** P15a — ISO timestamp of when the master's runner exited. */
   endedAt?: string;
-  /** P15a — true when the exit looked unexpected (error or no recent user msg). */
+  /** P15a — true when the runtime reports an abnormal exit. */
   unexpected?: boolean;
 }
 
@@ -175,7 +173,6 @@ export function applySessionIdle(prev: StreamState, d: SessionIdlePayload): Stre
       : {
           role: 'master',
           agentRunId: null,
-          textChunks: [],
           toolCalls: [],
           status,
           statusMessage,

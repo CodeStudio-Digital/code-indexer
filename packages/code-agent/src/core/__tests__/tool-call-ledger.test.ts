@@ -1,5 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { ToolCallLedger, logicalOperationId } from '../tool-call-ledger.js';
+import { ToolCallLedger, logicalOperationId, extractValidationSignal } from '../tool-call-ledger.js';
+
+describe('validation command recognition', () => {
+  it.each([
+    'echo "npm test"',
+    'printf "pytest passed"',
+    'cat build.log',
+    'npm test -- --help',
+    'pnpm test --dry-run',
+    'npx jest --listTests',
+    'pytest --collect-only',
+    'npx tsc -v',
+    'pnpm test || echo success',
+    'echo before; pnpm test',
+    'pnpm test > result.txt',
+    'pnpm --dir ../other test',
+  ])('does not mistake %s for completed validation', (command) => {
+    expect(extractValidationSignal('run_command', { command })).toBeUndefined();
+  });
+
+  it('keeps verbose direct checks and explicit shell working directories valid', () => {
+    expect(extractValidationSignal('exec_command', { cmd: 'pytest -v', workdir: '/repo' })).toBe('pytest');
+    expect(extractValidationSignal('run_command', { command: 'pytest -c pytest.ini' })).toBe('pytest');
+    expect(extractValidationSignal('run_command', { command: 'npx tsc --noEmit' })).toBe('tsc --noEmit');
+  });
+
+  it('does not trust arbitrary tool names or command-looking read arguments', () => {
+    expect(extractValidationSignal('read_file', { command: 'npm test' })).toBeUndefined();
+    expect(extractValidationSignal('plugin_build', {})).toBeUndefined();
+  });
+});
 
 describe('ToolCallLedger', () => {
   it('keeps semantic date bounds and nested pagination-named filters distinct', () => {
@@ -201,52 +231,6 @@ describe('ToolCallLedger', () => {
 
     expect(failed.recoveryOperationId).toBe(recovered.recoveryOperationId);
     expect(JSON.stringify(ledger.snapshot())).not.toContain(workflowId);
-  });
-
-  it('records only the selected structured out-of-scope validation decision', () => {
-    const ledger = new ToolCallLedger();
-    const args = {
-      question: 'May failed baseline validation be treated as out of scope?',
-      options: [
-        {
-          label: 'Complete — drift is out of scope',
-          value: 'complete',
-          goal_lifecycle_resolution: 'accept_out_of_scope_validation',
-        },
-        { label: 'Keep working', value: 'retry' },
-      ],
-    };
-    expect(ledger.record({
-      name: 'ask_user',
-      args,
-      content: 'User answered: complete',
-      isError: false,
-    }).goalLifecycleResolution).toBe('accept_out_of_scope_validation');
-    expect(ledger.record({
-      name: 'ask_user',
-      args,
-      content: 'User answered: retry',
-      isError: false,
-    }).goalLifecycleResolution).toBeUndefined();
-  });
-
-  it('recognizes the released complete_out_of_scope option without retaining its prose', () => {
-    const ledger = new ToolCallLedger();
-    const entry = ledger.record({
-      name: 'ask_user',
-      args: {
-        question: 'Como proceder com o drift fora de escopo?',
-        options: [
-          { label: 'Concluir — drift é fora de escopo', value: 'complete_out_of_scope' },
-          { label: 'Continuar', value: 'continue' },
-        ],
-      },
-      content: 'User answered: complete_out_of_scope',
-      isError: false,
-    });
-    expect(entry.goalLifecycleResolution).toBe('accept_out_of_scope_validation');
-    expect(JSON.stringify(ledger.snapshot())).not.toContain('Como proceder');
-    expect(JSON.stringify(ledger.snapshot())).not.toContain('complete_out_of_scope');
   });
 
   it('refuses only after repeated identical no-progress results', () => {

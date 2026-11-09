@@ -45,6 +45,7 @@ export interface VectorItemState {
 }
 
 export interface VectorSearchOptions {
+  signal?: AbortSignal;
   topK?: number;
   filter?: Record<string, string>;
   namespace?: string;

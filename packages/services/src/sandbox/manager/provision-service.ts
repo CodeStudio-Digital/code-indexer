@@ -98,7 +98,7 @@ export interface ProvisionServiceDeps {
     status: PersistedSandboxStatus,
   ) => void;
   syncManagedEnvs: (sessionId: string) => Promise<void>;
-  syncEnvsToAllContainers: (sessionId: string) => Promise<void>;
+  syncEnvsToAllContainers: (sessionId: string) => Promise<unknown>;
   destroyService: (sessionId: string, serviceId: string, reason: string) => Promise<void>;
 
   reconcileDeps: ReconcileDeps;
@@ -269,7 +269,7 @@ export async function provisionAdditionalService(
     }
 
     // Scope-enforced (D1): vars bound to other services stay out of this one.
-    const sharedEnvs = resolveSessionEnvs(deps.envStore, req.sessionId, req.serviceId);
+    const sharedEnvs = await resolveSessionEnvs(deps.envStore, req.sessionId, req.serviceId);
     const image = imageSource === 'project_dockerfile' ? builtImageTag! : deps.nodeImage;
     if (imageSource === 'project_dockerfile') {
       deps.recordStep(seed, 'creating-container', 'Building image from Dockerfile…');

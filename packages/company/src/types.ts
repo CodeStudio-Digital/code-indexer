@@ -24,6 +24,8 @@ export * from '@mcp/company-contracts';
  * company orchestrator. Stored on ToolContext so tools can access it.
  */
 export interface CompanyContext {
+  workspaceMutationGate?: import('./services/workspace-coordinator.js').WorkspaceMutationGate;
+  sessionMessenger?: import('./services/session-messenger.js').CompanySessionMessenger;
   orchestrator: import('@mcp/company/orchestrator-port.js').CompanyOrchestratorPort;
   companySessionId: string;
   /** Product capability hosted by the persistent Company lifecycle. */

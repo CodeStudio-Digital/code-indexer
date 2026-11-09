@@ -1,7 +1,9 @@
 import { guardMcpToolResult } from './mcp-output-guard.js';
+import { mcpResultToToolResult } from './mcp-result.js';
 export { guardPathologicalMcpOutput } from './mcp-output-guard.js';
 import { listMcpResourcePage, readMcpResource } from './mcp-resource-bridge.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { DeferredMcpValidator } from './deferred-mcp-validator.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -145,7 +147,9 @@ export class McpToolBridge {
       args,
       env,
     });
-    this.client = new Client({ name: 'coder-agent', version: '0.1.0' }, { capabilities: {} });
+    this.client = new Client({ name: 'coder-agent', version: '0.1.0' }, {
+      capabilities: {}, jsonSchemaValidator: new DeferredMcpValidator(),
+    });
     const client = this.client;
     try {
       await client.connect(this.transport, { signal: this.lifetime.signal, timeout: 10_000 });
@@ -304,27 +308,27 @@ export class McpToolBridge {
             });
           }
           let mcpText: string;
+          let mcpStructuredData: unknown;
+          let mcpAttachments: ToolResult['extraUserBlocks'];
           let mcpSourceTruncations: ToolSourceTruncation[] = [];
           try {
             const request = { name: t.name, arguments: finalArgs };
             const result = signal
               ? await client.callTool(request, undefined, { signal })
               : await client.callTool(request);
-            const text = (result.content as Array<{ type: string; text?: string }> | undefined)
-              ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
-              .map((c) => c.text!)
-              .join('\n') ?? '';
+            const adapted = mcpResultToToolResult(result, t.name);
+            const text = adapted.content;
+            mcpStructuredData = adapted.structuredData;
+            mcpAttachments = adapted.extraUserBlocks;
+            mcpSourceTruncations = adapted.sourceTruncations ?? [];
             if (contract.mutates && (result._meta as { effectOutcome?: unknown } | undefined)?.effectOutcome === 'unknown') {
               return unknownToolOutcome(text || `MCP tool '${t.name}' lost effect confirmation at its owner.`);
             }
             if (result.isError) {
               const message = text || 'MCP tool returned error';
-              return err(message, inferToolErrorInfo(`mcp__${t.name}`, message));
+              return guardMcpToolResult({ ...adapted, ...err(message, inferToolErrorInfo(`mcp__${t.name}`, message)) }, toolCtx);
             }
             mcpText = text;
-            mcpSourceTruncations = normalizeSourceTruncations(
-              (result as { _meta?: { sourceTruncations?: unknown } })._meta?.sourceTruncations,
-            ).map(({ outputId: _remoteOutputId, ...source }) => source);
           } catch (e) {
             if (contract.mutates) return unknownToolOutcome(
               `MCP tool '${t.name}' lost confirmation after dispatch. Its effect may have completed. `
@@ -344,13 +348,17 @@ export class McpToolBridge {
           // 3. Post-process — merge overlay data into the MCP output
           if (overlay && overlayHandler?.postProcess) {
             const merged = overlayHandler.postProcess(clampNote + mcpText, args, overlay, projectRoot);
-            return guardMcpToolResult(merged, toolCtx, mcpSourceTruncations);
+            return guardMcpToolResult({ ...merged,
+              ...(mcpAttachments?.length ? { extraUserBlocks: mcpAttachments } : {}),
+              ...(mcpStructuredData !== undefined ? { structuredData: { source: mcpStructuredData, overlayApplied: true, text: merged.content } } : {}) }, toolCtx, mcpSourceTruncations);
           }
           // Do not cut here: the runner must see the complete raw payload so
           // it can spill it to ToolOutputStore before semantic reduction and
           // the context-relative fail-safe cap. A bridge-level head cut made
           // the omitted portion permanently unrecoverable.
-          return guardMcpToolResult(ok(clampNote + mcpText), toolCtx, mcpSourceTruncations);
+          return guardMcpToolResult({ ...ok(clampNote + mcpText),
+            ...(mcpAttachments?.length ? { extraUserBlocks: mcpAttachments } : {}),
+            ...(mcpStructuredData !== undefined ? { structuredData: mcpStructuredData } : {}) }, toolCtx, mcpSourceTruncations);
         },
       };
     });

@@ -13,6 +13,7 @@ export interface HygieneProject {
   stale_runs: number;
   mixed_case_languages: number;
   missing_on_disk: boolean;
+  disk_error?: string | null;
   /** File counts by mapper tier — keys: core/support/on_demand/untagged. */
   tiers: Partial<Record<'core' | 'support' | 'on_demand' | 'untagged', number>>;
 }
@@ -34,6 +35,8 @@ export interface CleanupResult {
 
 interface PurgeSummary {
   project_id: number;
+  project_name?: string;
+  purged: boolean;
   vectors_known: number;
   vectors_deleted: number;
   vector_error: string | null;

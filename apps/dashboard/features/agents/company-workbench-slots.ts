@@ -11,6 +11,11 @@ export interface CompanyCatalogRail {
   onOpenChange: (open: boolean) => void;
 }
 
+export interface CompanySessionsRail {
+  open: boolean;
+  onToggle: () => void;
+}
+
 /**
  * Hosts and global actions supplied by AgentsTab to an opened Company session.
  * The session keeps ownership of its zone state while its rail is rendered at

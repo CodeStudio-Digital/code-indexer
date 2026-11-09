@@ -111,6 +111,9 @@ export function listProjectsHygiene(db: DB): ProjectHygieneRow[] {
     LEFT JOIN file_counts f ON f.project_id = p.id
     LEFT JOIN semantic_counts s ON s.project_id = p.id
     LEFT JOIN stale_run_counts r ON r.project_id = p.id
+    WHERE p.id > 0
+      AND COALESCE(p.is_synthetic, 0) = 0
+      AND COALESCE(p.is_loose, 0) = 0
     ORDER BY p.name
   `).all() as ProjectHygieneRow[];
 }

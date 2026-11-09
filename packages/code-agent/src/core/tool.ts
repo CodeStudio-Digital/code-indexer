@@ -21,7 +21,6 @@ import type { JsonSchema } from '@mcp/provider-sdk';
 export type ToolRiskLevel = 'read' | 'write' | 'execute' | 'admin';
 export type ToolRepeatPolicy = 'stable' | 'volatile' | 'pollable' | 'mutating';
 export type ToolExecutionClass = 'read' | 'write' | 'execute' | 'control';
-export type GoalStatus = 'in_progress' | 'complete' | 'superseded';
 export type ToolEffectBoundaryKind =
   | 'filesystem'
   | 'shell'
@@ -222,6 +221,8 @@ export interface CoderTool {
 
 /** One nested tool invocation outcome, reported by code_exec's proxy. */
 export interface NestedToolCallRecord {
+  /** Host-typed uncertainty; result text is never used as effect evidence. */
+  effectOutcome?: 'unknown';
   /** tool_use id of the parent code_exec block. */
   parentToolUseId: string;
   /**
@@ -393,36 +394,6 @@ export interface ToolContext extends ToolContextServices {
    * effective inputs and lifecycle hooks are identical at every depth.
    */
   nestedCapabilityDispatch?: NestedCapabilityDispatch;
-  /**
-   * Optional persistence sinks for the goal tools (`create_goal`,
-   * `get_goal`, `update_goal`). Wired by `runCoder` so the goal survives
-   * runner restarts and shows the same value across dashboard reloads.
-   * Tools that don't have a session-store available (tests, ephemeral
-   * subagents) leave these undefined and the goal tool falls back to its
-   * in-memory WeakMap.
-   */
-  getGoalState?: () => {
-    text: string;
-    status: GoalStatus;
-    budgetTokens: number | null;
-    completionNote: string | null;
-    createdAt: string;
-    updatedAt: string;
-  } | null;
-  upsertGoalState?: (
-    goal: {
-      text: string;
-      status: GoalStatus;
-      budgetTokens?: number | null;
-      completionNote?: string | null;
-      createdAt: string;
-      updatedAt: string;
-    },
-    attribution: {
-      toolUseId: string;
-      toolName: 'create_goal' | 'update_goal';
-    },
-  ) => void | Promise<void>;
   /**
    * Invocation-scoped AgentRun/resource fence. First-party effect ports call
    * `assertMutation` synchronously as their final action before dispatch.

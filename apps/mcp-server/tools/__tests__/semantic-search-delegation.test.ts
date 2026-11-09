@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../../context.js';
+import { normalizeMcpToolResult } from '../../tool.js';
 import { searchTools, smallSemanticFilePreview } from '../search.js';
 
 const tool = searchTools.find((candidate) => candidate.name === 'search')!;
@@ -22,7 +23,7 @@ function context(remoteOk: boolean) {
         ok: true, error: null,
         value: {
           results: [result],
-          diagnostics: { vectorAvailable: true, embeddingAvailable: true, vectorRawMatches: 1 },
+          diagnostics: { vectorAvailable: true, embeddingAvailable: true, vectorRawMatches: 1, structuralRevision: 'remote:4', structuralRevisionAfter: 'remote:4', structuralRevisionStable: true, effectiveMode: 'hybrid' },
         },
       }
     : { ok: false, error: 'connection refused', value: null });
@@ -64,7 +65,7 @@ describe('mcp search semantic delegation', () => {
 
   it('uses the HTTP owner for hybrid/vector/auto queries', async () => {
     const h = context(true);
-    const output = await tool.handler({ project_name: 'demo', query: 'vector routing', mode: 'hybrid' }, h.ctx);
+    const output = normalizeMcpToolResult(await tool.handler({ project_name: 'demo', query: 'vector routing', mode: 'hybrid' }, h.ctx));
 
     expect(h.searchProject).toHaveBeenCalledWith(7, 'vector routing', {
       mode: 'hybrid',
@@ -75,9 +76,11 @@ describe('mcp search semantic delegation', () => {
       companySessionId: undefined,
     });
     expect(h.searchWithDiag).not.toHaveBeenCalled();
-    expect(output).toContain('src/router.ts');
-    expect(output).toContain('vector 0.800');
-    expect(output).not.toContain('score: 0.800');
+    expect(output.text).toContain('src/router.ts');
+    expect(output.text).toContain('vector 0.800');
+    expect(output.text).not.toContain('score: 0.800');
+    expect(output.structuredContent).toMatchObject({ projectId: 7, absenceConclusive: false,
+      freshness: { structuralRevision: 'remote:4', revisionStable: true, snapshot: false }, hits: [{ path: 'src/router.ts' }] });
   });
 
   it('forwards the hidden bridge session scope to the semantic owner', async () => {
@@ -102,21 +105,25 @@ describe('mcp search semantic delegation', () => {
 
   it('falls back to local FTS and reports the degradation when the owner is offline', async () => {
     const h = context(false);
-    const output = await tool.handler({ project_name: 'demo', query: 'vector routing', mode: 'hybrid' }, h.ctx);
+    const output = normalizeMcpToolResult(await tool.handler({ project_name: 'demo', query: 'vector routing', mode: 'hybrid' }, h.ctx));
 
     expect(h.searchWithDiag).toHaveBeenCalledWith(7, 'demo', 'vector routing', {
       mode: 'fts', type: 'all', limit: 20,
+      telemetryContext: { requestId: expect.any(String), consumer: 'agent', sessionId: undefined, companySessionId: undefined },
     });
-    expect(output).toContain('FTS-only');
-    expect(output).toContain('connection refused');
+    expect(output.text).toContain('FTS-only');
+    expect(output.text).toContain('connection refused');
   });
 
   it('keeps explicit FTS local and never calls the semantic owner', async () => {
     const h = context(true);
-    const output = await tool.handler({ project_name: 'demo', query: 'LocalVectorRouter', mode: 'fts' }, h.ctx);
+    const output = normalizeMcpToolResult(await tool.handler({ project_name: 'demo', query: 'LocalVectorRouter', mode: 'fts',
+      __mcp_session_id: 'session-7', __mcp_company_session_id: 'company-3' }, h.ctx));
     expect(h.searchProject).not.toHaveBeenCalled();
-    expect(h.searchWithDiag).toHaveBeenCalled();
-    expect(output).toContain('FTS #1');
-    expect(output).not.toContain('score: 0.000');
+    expect(h.searchWithDiag).toHaveBeenCalledWith(7, 'demo', 'LocalVectorRouter', expect.objectContaining({
+      telemetryContext: { requestId: expect.any(String), consumer: 'agent', sessionId: 'session-7', companySessionId: 'company-3' },
+    }));
+    expect(output.text).toContain('FTS #1');
+    expect(output.text).not.toContain('score: 0.000');
   });
 });

@@ -65,10 +65,11 @@ bridge.on('interactivePriority', (payload) => {
 });
 
 bridge.handle('structuralIndex', async (payload) => {
-  const { projectId, maxFiles, allowEmptyWipe, reportChanges } = payload as {
+  const { projectId, maxFiles, allowEmptyWipe, forceReparse, reportChanges } = payload as {
     projectId: number;
     maxFiles?: number;
     allowEmptyWipe?: boolean;
+    forceReparse?: boolean;
     reportChanges?: boolean;
   };
   let lastEmit = 0;
@@ -78,6 +79,7 @@ bridge.handle('structuralIndex', async (payload) => {
     concurrency,
     maxFiles,
     allowEmptyWipe,
+    forceReparse,
     waitForInteractivePriority: () => priorityGate.wait(projectId),
     onChanges: reportChanges
       ? async (events, previousItemKeys) => {

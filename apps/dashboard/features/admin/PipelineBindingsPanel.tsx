@@ -148,7 +148,6 @@ const PIPELINE_LABELS: Record<string, string> = {
   memory_extraction: 'Extração de memória',
   memory_recall: 'Filtro de memórias',
   memory_query: 'Query de recall de memórias',
-  goal_verification: 'Verificação de conclusão',
   'code-agent': 'Chat e multimodal',
   editor: 'Editor',
 };

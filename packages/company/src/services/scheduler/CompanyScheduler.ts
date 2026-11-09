@@ -10,10 +10,9 @@ export type { SchedulerSpawn } from './spawn-port.js';
  * Each tick (default 20s; C2 — ON by default, killed live by
  * `autonomy.freeze`/`autonomy.scheduler=false` per session or the
  * `MCP_COMPANY_SCHEDULER='0'` env kill-switch, checked at EVERY tick):
- *   1. Only act when the MASTER IS NOT ALIVE — the scheduler fills the gaps
- *      while the master rests between turns. When a dispatched subordinate
- *      finishes, its completion notify resurrects the master to synthesize.
- *      This avoids racing the master's own delegation.
+ *   1. Respect session pause/finalization and autonomy controls. The scheduler
+ *      continues between master turns; durable card claims prevent competing
+ *      sessions and manual delegation from launching the same card twice.
  *   2. Prioritize the board (`prioritizeKanban`, pure, in-worker) and pick the
  *      top UNBLOCKED + UNASSIGNED todo/backlog cards up to the free concurrency
  *      slots (`selectDispatchTargets`), capped to `maxPerSweep` per tick so the
@@ -21,7 +20,7 @@ export type { SchedulerSpawn } from './spawn-port.js';
  *   3. Resolve a role per card via the embedding recommender shim
  *      (`getGlobalCompanyRecommend`); skip the card when no role can be resolved
  *      (never blind-guess a role).
- *   4. Spawn, then assign the agent to the card and move it to in_progress.
+ *   4. Claim the card, persist its reserved agent/assignment, then spawn.
  *
  * Every step is best-effort and bounded; a failure on one card never aborts the
  * sweep. The hard concurrency cap is still enforced inside `subordinates.spawn`
@@ -116,7 +115,7 @@ export class CompanyScheduler {
       `[company s=${this.deps.ctx.companySessionId}] 🤖 AUTONOMOUS SCHEDULER ARMED ` +
       `(default ON — kill-switch: MCP_COMPANY_SCHEDULER=0 or autonomy.scheduler=false/freeze; ` +
       `tick=${tickMs()}ms, maxPerSweep=${maxPerSweep()}) — ` +
-      `will dispatch unblocked cards while the master is idle.`,
+      `will dispatch unblocked cards using durable task claims.`,
     );
     this.timer = setInterval(() => {
       if (this.running) return;
@@ -141,10 +140,11 @@ export class CompanyScheduler {
     // tick a no-op while the timer stays armed (re-enabling needs no restart).
     const cfg = this.autonomyConfig();
     if (!isAutonomyActionAllowed(cfg, 'scheduler')) return;
-    // Division of labor: while the master is actively orchestrating, it owns
-    // delegation — the scheduler only works the board during the master's
-    // dormant gaps.
-    if (this.deps.master.isAlive) return;
+    // Session pause is independent of company siblings. Durable card claims,
+    // rather than master liveness, coordinate competing dispatchers.
+    if (this.deps.ctx.isAborted || this.deps.ctx.isFinalized) return;
+    const state = this.deps.ctx.companyFiles.getSession?.();
+    if (state?.archived_at || state?.status === 'paused' || state?.status === 'error') return;
 
     const sessionId = this.deps.ctx.companySessionId;
     let cardsFull;
@@ -234,11 +234,11 @@ export class CompanyScheduler {
         {
           sessionId,
           kanban: {
-            // Cards were just listed for prioritization — reuse the snapshot
-            // instead of a second store read per target.
-            getCard: (id) => byId.get(id) ?? null,
+            dispatchClaims: this.deps.kanban.dispatchClaims,
+            getCard: (id) => this.deps.kanban.getCard(id),
             assignAgent: (c, agentRunId, role) => this.deps.kanban.assignAgent(c, agentRunId, role),
             moveCard: (c, col) => this.deps.kanban.moveCard(c, col),
+            unassignAgent: (c, id) => this.deps.kanban.unassignAgent(c, id),
             addComment: (c, author, runId, content) =>
               this.deps.kanban.addComment(c, author, runId, content),
           },

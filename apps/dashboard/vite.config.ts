@@ -79,6 +79,10 @@ export default defineConfig(({ command }) => ({
   },
   resolve: {
     alias: [
+      // The DOM entry uses document.createElement, unavailable in a Worker.
+      // Use upstream's portable decoder in dev and production, without changing
+      // conditional exports for unrelated packages or the entire renderer.
+      { find: /^decode-named-character-reference$/, replacement: resolve(repoRoot, 'node_modules/decode-named-character-reference/index.js') },
       // React 19 replays layout effects and refs while revealing subtrees.
       // Radix 1.1.7 can dispatch forever in that phase; keep one renderer-wide
       // replacement until the upstream Presence fix ships.

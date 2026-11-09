@@ -5,6 +5,7 @@ import {
 } from '@mcp/provider-sdk';
 import { OpenAIChatProvider } from '@mcp/code-agent/providers/openai.js';
 import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
+import { getOpenAIApiModelMetadata } from '@mcp/shared/providers/openai-api-models.js';
 import { parseModelWithMode } from '../wire-helpers/model-mode.js';
 import { resolveBaseURL } from '../wire-helpers/base-url.js';
 import { resolveHeaders } from '../wire-helpers/headers.js';
@@ -46,6 +47,8 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
           .map((entry) => [entry.model_id, entry.default_max_tokens as number]),
       );
       const activeMetadata = selectRuntimeModelMetadata(opts?.providerModels, model ?? baseModel);
+      const seedMetadata = spec.models?.[baseModel]
+        ?? (spec.kind === 'openai' ? getOpenAIApiModelMetadata(baseModel) : undefined);
       if (typeof activeMetadata?.default_max_tokens === 'number' && activeMetadata.default_max_tokens > 0) {
         modelMaxOutputTokens[baseModel] = activeMetadata.default_max_tokens;
       }
@@ -53,7 +56,10 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
         ? modelMaxOutputTokens
         : undefined;
 
-      if (spec.wireOpts?.responsesApi) {
+      // Custom instances of the OpenAI shape promise chat/completions, not the
+      // official Responses protocol (local proxies may also be keyless).
+      const officialOpenAI = baseURL && new URL(baseURL).origin === 'https://api.openai.com';
+      if (spec.wireOpts?.responsesApi && (spec.kind !== 'openai' || officialOpenAI)) {
         if (!baseURL) {
           throw new Error(`${spec.displayName} Responses API requires a base URL`);
         }
@@ -69,15 +75,16 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
           baseURL,
           model: baseModel,
           reasoning: {
-            supportedLevels: activeMetadata?.supported_reasoning_levels,
-            defaultLevel: activeMetadata?.default_reasoning_level,
+            supportedLevels: activeMetadata?.supported_reasoning_levels ?? seedMetadata?.supportedReasoningLevels,
+            defaultLevel: activeMetadata ? activeMetadata.default_reasoning_level : seedMetadata?.defaultReasoningLevel,
           },
-          applyPatchToolType: activeMetadata?.apply_patch_tool_type,
+          applyPatchToolType: activeMetadata?.apply_patch_tool_type ?? seedMetadata?.applyPatchToolType,
           codexHeaders: false,
           statefulResponses: spec.wireOpts.responsesStateless !== true,
           reasoningFromThinking:
             spec.wireOpts.responsesReasoningFromThinking === true,
-          reasoningSummary: spec.wireOpts.responsesReasoningSummaryModels?.includes(baseModel)
+          reasoningSummary: (spec.kind === 'openai' && seedMetadata?.canReason)
+            || spec.wireOpts.responsesReasoningSummaryModels?.includes(baseModel)
             ? 'auto'
             : null,
           includeOrchestrationUsage:

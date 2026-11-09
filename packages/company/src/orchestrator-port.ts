@@ -47,6 +47,7 @@ export interface CompanyOrchestratorPort {
       signal?: AbortSignal;
       roleConfigs?: RoleConfig[];
       attachments?: import('@mcp/code-agent/index/types.js').CoderAttachment[];
+      boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
       thinking?: boolean;
       thinkingBudgetTokens?: number;
       temperature?: number;
@@ -56,10 +57,12 @@ export interface CompanyOrchestratorPort {
       fallbackModels?: import('@mcp/company/types.js').AllowedModel[];
   }): Promise<MasterStartResult>;
   resumeExistingMaster(opts: {
+      recordUserMessage?: boolean;
       userMessage: string;
       maxTurns?: number;
       roleConfigs?: RoleConfig[];
       attachments?: import('@mcp/code-agent/index/types.js').CoderAttachment[];
+      boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
       thinking?: boolean;
       provider?: string;
       model?: string;
@@ -97,6 +100,7 @@ export interface CompanyOrchestratorPort {
   sendMessageToMaster(message: string, options?: {
       interject?: boolean;
       attachments?: import('@mcp/code-agent/index/types.js').CoderAttachment[];
+      boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
       thinking?: boolean;
   }): Promise<{
       ok: boolean;
@@ -254,7 +258,7 @@ export interface CompanyOrchestratorPort {
   removeSandboxService(serviceId: string): Promise<void>;
   abortAll(opts?: {
       teardownSandbox?: boolean;
-      finalStatus?: 'error' | 'idle';
+      finalStatus?: 'error' | 'idle' | 'paused';
   }): Promise<void>;
   finalizeAllSubordinates(): Promise<{
       finalized: number;

@@ -45,6 +45,13 @@ export const COMPANY_TOOLS: ReadonlySet<string> = new Set([
   'env_set',
   'env_delete',
   'env_validate',
+  // Durable company knowledge is available independently of containers.
+  'docs_delete',
+  'docs_index_update',
+  'docs_list',
+  'docs_search',
+  'docs_read',
+  'docs_write',
 ]);
 
 /** Generic QA workflow, auto-active for QA/qa-playwright roles. */
@@ -52,6 +59,7 @@ export const QA_TOOLS: ReadonlySet<string> = new Set([
   'qa_get_browser_endpoint',
   'qa_publish_result',
   'qa_start_run',
+  'qa_check_preview',
 ]);
 
 /**
@@ -60,12 +68,6 @@ export const QA_TOOLS: ReadonlySet<string> = new Set([
  * the subordinate/master sandbox binding.
  */
 export const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
-  // In-container docs (<workdir>/docs/).
-  'docs_delete',
-  'docs_index_update',
-  'docs_list',
-  'docs_read',
-  'docs_write',
   // Sandbox/service inspection and lifecycle.
   'read_sandbox_logs',
   'list_services',

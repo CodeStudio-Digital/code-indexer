@@ -35,29 +35,31 @@ describe('applyAgentStatus — subordinate materialisation', () => {
     expect(agent?.coderSessionId).toBe(CODER_SESSION_ID);
   });
 
-  it('merges status into an existing subordinate without clobbering coderSessionId or text', () => {
+  it('merges status without clobbering coderSessionId, tools or the separate text preview', () => {
     const existing: AgentStreamState = {
       role: 'backend',
       agentRunId: AGENT_RUN_ID,
       coderSessionId: CODER_SESSION_ID,
-      textChunks: ['hi'],
-      toolCalls: [],
+      toolCalls: [{ id: 'tool-1', name: 'read_file', status: 'done' }],
       status: 'running',
     };
     const start: StreamState = {
       ...base(),
       subordinateStates: new Map([[AGENT_RUN_ID, existing]]),
+      agentTextPreviews: new Map([[AGENT_RUN_ID, 'hi']]),
     };
     // A later event with NO coderSessionId (e.g. from the reconciler) must
     // keep the known id and not wipe accumulated text.
-    const agent = applyAgentStatus(
+    const result = applyAgentStatus(
       start,
       evt({ status: 'waiting', message: 'done', coderSessionId: undefined }),
-    ).subordinateStates.get(AGENT_RUN_ID);
+    );
+    const agent = result.subordinateStates.get(AGENT_RUN_ID);
     expect(agent?.status).toBe('waiting');
     expect(agent?.statusMessage).toBe('done');
     expect(agent?.coderSessionId).toBe(CODER_SESSION_ID);
-    expect(agent?.textChunks).toEqual(['hi']);
+    expect(agent?.toolCalls).toBe(existing.toolCalls);
+    expect(result.agentTextPreviews).toBe(start.agentTextPreviews);
   });
 
   it('creates the master with coderSessionId when absent', () => {

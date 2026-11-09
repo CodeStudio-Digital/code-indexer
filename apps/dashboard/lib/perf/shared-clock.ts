@@ -27,6 +27,7 @@
  * `getSnapshot` would spin React forever).
  */
 import { useSyncExternalStore } from 'react';
+import { useSurfaceVisible } from '../surface-visibility.js';
 
 type Listener = () => void;
 
@@ -128,6 +129,8 @@ const getDisabled = () => DISABLED_NOW;
  * not hold the timer alive).
  */
 export function useNow(enabled = true): number {
+  const visible = useSurfaceVisible();
+  enabled = enabled && visible;
   return useSyncExternalStore(
     enabled ? subscribeNow : subscribeNever,
     enabled ? readNow : getDisabled,
@@ -137,6 +140,8 @@ export function useNow(enabled = true): number {
 
 /** Same contract as `useNow`, refreshed 4×/s for sub-second readouts. */
 function useNowFast(enabled = true): number {
+  const visible = useSurfaceVisible();
+  enabled = enabled && visible;
   return useSyncExternalStore(
     enabled ? subscribeNowFast : subscribeNever,
     enabled ? readNowFast : getDisabled,

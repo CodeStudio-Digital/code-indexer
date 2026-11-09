@@ -96,7 +96,15 @@ export class CompanyInboxFiles {
         'Company inbox message requires toRole or toAgentRunId',
       );
     }
-    if (!this.agentRuns.getAgentRunSync(fromAgentRunId)) {
+    let source = this.context;
+    let sourceRuns = this.agentRuns;
+    if (input.fromSessionId && input.fromSessionId !== this.context.companySessionId) {
+      source = new CompanySessionFileBase({ companySessionId: input.fromSessionId, sessionStore: this.context.sessionStore });
+      const senderSession = source.getSession(); const targetSession = this.context.getSession();
+      if ((senderSession.parent_session_id ?? senderSession.id) !== (targetSession.parent_session_id ?? targetSession.id)) throw new Error('Company inbox cannot cross company boundaries');
+      sourceRuns = new CompanyAgentRunFiles(source);
+    }
+    if (input.origin === 'operator' ? String(fromAgentRunId) !== String(source.companySessionId) : !sourceRuns.getAgentRunSync(fromAgentRunId)) {
       throw new Error(`Unknown Company inbox sender ${fromAgentRunId}`);
     }
     if (toAgentRunId && !this.agentRuns.getAgentRunSync(toAgentRunId)) {
@@ -141,10 +149,13 @@ export class CompanyInboxFiles {
           0,
         ) + 1
       );
-    const id = randomUUID();
+    const id = input.id ? assertUuid(input.id, 'Company inbox message id') : randomUUID();
     const now = new Date().toISOString();
     const data: Record<string, unknown> = {
       from_agent_run_id: fromAgentRunId,
+      from_session_id: source.companySessionId,
+      to_session_id: this.context.companySessionId,
+      origin: input.origin ?? 'agent',
       from_role: input.fromRole,
       to_role: input.toRole ?? null,
       to_agent_run_id: toAgentRunId,

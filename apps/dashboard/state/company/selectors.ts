@@ -33,6 +33,16 @@ export function selectStream(
   return state.streams.get(sessionId) ?? EMPTY_STREAM_STATE;
 }
 
+/** Shell consumers do not observe token-only preview changes. Use with useShallow. */
+export function selectStreamSummary(state: CompanyStore, sessionId: string | null) {
+  const { agentTextPreviews: _previews, ...summary } = selectStream(state, sessionId);
+  return summary;
+}
+
+export function selectAgentTextPreview(state: CompanyStore, sessionId: string | null, agentKey: string): string {
+  return selectStream(state, sessionId).agentTextPreviews.get(agentKey) ?? '';
+}
+
 /** Sibling state for `rootId`, or the stable empty state if absent. */
 export function selectSiblings(
   state: CompanyStore,

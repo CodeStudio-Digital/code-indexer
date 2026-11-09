@@ -41,9 +41,9 @@ export function SchemaDiffTab({
       if (cancelled) return;
       const relational = rows.filter(isRelational);
       setConnections(relational);
-      const sourceId = sourceConnKey.split('@')[0];
-      const initial = relational.find((connection) => String(connection.id) !== sourceId) ?? relational[0];
-      if (initial) setTargetId(String(initial.id));
+      const sourceId = api.parseConnKey(sourceConnKey).id;
+      const initial = relational.find((connection) => connection.id !== sourceId) ?? relational[0];
+      if (initial) setTargetId(api.connectionKey(projectId, initial.id));
     }).catch((error) => toast.error(t('schemaDiff.loadError'), { description: error instanceof Error ? error.message : String(error) }));
     return () => { cancelled = true; };
   }, [projectId, sourceConnKey, t]);
@@ -117,7 +117,7 @@ export function SchemaDiffTab({
       toast.success(t('schemaDiff.applied', { count: result.applied }));
       setAtomic(result.atomic);
       await compare();
-      window.dispatchEvent(new CustomEvent('mcp:database-changed', { detail: { connectionId: Number(targetId), schema: targetSchema } }));
+      window.dispatchEvent(new CustomEvent('mcp:database-changed', { detail: { connectionId: api.parseConnKey(targetId).id, projectId, schema: targetSchema } }));
     } catch (error) {
       toast.error(t('schemaDiff.applyError'), { description: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -142,7 +142,7 @@ export function SchemaDiffTab({
           <div className="mb-1 text-[10px] uppercase text-muted-foreground">{t('schemaDiff.targetConnection')}</div>
           <Select value={targetId} onValueChange={setTargetId}>
             <SelectTrigger className="h-8 text-xs"><SelectValue placeholder={t('schemaDiff.chooseConnection')} /></SelectTrigger>
-            <SelectContent>{connections.map((connection) => <SelectItem key={connection.id} value={String(connection.id)}>{connection.label}</SelectItem>)}</SelectContent>
+            <SelectContent>{connections.map((connection) => <SelectItem key={connection.id} value={api.connectionKey(projectId, connection.id)}>{connection.label}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <div className="min-w-44">

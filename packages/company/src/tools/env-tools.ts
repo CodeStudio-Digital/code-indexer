@@ -23,6 +23,7 @@ import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
+import { scopeIncludesService } from '@mcp/store/env-scope.js';
 import { isUuid } from '@mcp/session-storage';
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -52,10 +53,15 @@ function sessionIdOf(ctx: ToolContext): string | null {
   return typeof raw === 'string' && isUuid(raw) ? raw.toLowerCase() : null;
 }
 
+async function applyEnvs(sessionId: string) {
+  try { return await getSandboxManager().syncEnvsToAllContainers(sessionId); }
+  catch { return { state: 'failed', applied: [], failed: [{ serviceId: '*', reason: 'environment_sync_failed' }], restartRequired: false }; }
+}
+
 const envList: CoderTool = {
   name: 'env_list',
   description:
-    'List every shared env var defined for this session. Returns key + value pairs as a newline- ' +
+    'List every shared env var defined for this session. Returns names and metadata only, without values, as a newline- ' +
     'separated table. Call this BEFORE writing code that reads process.env / c.env — you may find ' +
     'a variable already exists (DATABASE_URL, API_BASE_URL, etc.) and should be reused rather than ' +
     're-invented under a different name. Vars restricted to specific services show a ' +
@@ -67,13 +73,13 @@ const envList: CoderTool = {
     if (!s) return err('env tools unavailable (store not wired)');
     const sessionId = sessionIdOf(ctx);
     if (sessionId === null) return err('env_list requires a company session context');
-    const rows = s.list(sessionId);
+    const rows = s.listMetadata(sessionId);
     if (rows.length === 0) return ok('(no env vars defined yet)');
     return ok(
       rows
         .map(
           (r) =>
-            `${r.key}=${r.value}${r.is_secret ? ' # (secret)' : ''}` +
+            `${r.key} [${r.is_secret ? 'secret' : 'plain'}; source: ${r.source}]` +
             (r.service_scope ? ` [scope: ${r.service_scope}]` : ''),
         )
         .join('\n'),
@@ -92,6 +98,7 @@ const envRead: CoderTool = {
     type: 'object',
     properties: {
       key: { type: 'string', description: 'Variable name, e.g. DATABASE_URL' },
+      service: { type: 'string', description: 'Service context (master only); service-bound agents use their own scope.' },
     },
     required: ['key'],
     additionalProperties: false,
@@ -103,8 +110,10 @@ const envRead: CoderTool = {
     if (sessionId === null) return err('env_read requires a company session context');
     const key = String(args.key ?? '').trim();
     if (!KEY_RE.test(key)) return err(`env_read: invalid key '${key}'`);
-    const row = s.get(sessionId, key);
+    const row = await s.getAsync(sessionId, key);
     if (!row) return err(`env_read: '${key}' is not defined`);
+    const service = ctx.companyContext?.sandbox?.serviceId ?? (typeof args.service === 'string' ? args.service : 'main');
+    if (!scopeIncludesService(row.service_scope, service)) return err('env_read: key is outside this service scope');
     return ok(row.value);
   },
 };
@@ -113,8 +122,8 @@ const envSet: CoderTool = {
   name: 'env_set',
   description:
     'Create or overwrite a shared env var. The new value is immediately persisted and pushed to ' +
-    'every live container of the session as `/app/.env` (running dev-servers pick it up on their ' +
-    'next file-watch tick; some frameworks require a restart to re-read env). Use `is_secret: true` ' +
+    'eligible containers as `.env`; the result reports applied/failed services. Existing processes ' +
+    'may need a restart to read changed values. Use `is_secret: true` ' +
     'for API keys / tokens — that masks the value in the dashboard Env tab (agents still see ' +
     'plaintext). Key MUST match /^[A-Za-z_][A-Za-z0-9_]*$/. ' +
     'Pass `service` to restrict WHERE the var is materialized (only those containers get it in `.env`). ' +
@@ -157,7 +166,7 @@ const envSet: CoderTool = {
     if (!KEY_RE.test(key)) return err(`env_set: invalid key '${key}'`);
     const value = String(args.value ?? '');
     const force = !!args.force;
-    const existing = s.get(sessionId, key);
+    const existing = s.listMetadata(sessionId).find((row) => row.key === key);
     if (existing && existing.source === 'user' && !force) {
       return err(
         `env_set refused: '${key}' was set by the operator (source=user). ` +
@@ -169,17 +178,15 @@ const envSet: CoderTool = {
     // (all services); CSV → restrict materialization to those services.
     const service =
       args.service === undefined ? undefined : String(args.service ?? '').trim() || null;
-    await s.upsert(sessionId, key, value, !!args.is_secret, {
-      source: 'agent',
+    await s.upsert(sessionId, key, value, args.is_secret === undefined ? !!existing?.is_secret : !!args.is_secret, {
+      source: existing?.source === 'user' ? 'user' : 'agent',
       serviceScope: service,
     });
-    await getSandboxManager()
-      .syncEnvsToAllContainers(String(sessionId))
-      .catch(() => void 0);
+    const application = await applyEnvs(sessionId);
     return ok(
       `Set ${key} (${args.is_secret ? 'secret' : 'plain'}, ${value.length} bytes` +
         (service !== undefined ? `, scope: ${service ?? 'all services'}` : '') +
-        ')',
+        ') — ' + JSON.stringify(application),
     );
   },
 };
@@ -213,7 +220,8 @@ const envValidate: CoderTool = {
     if (required.length === 0) {
       return err('env_validate: pass a non-empty `required` array');
     }
-    const present = s.asRecord(sessionId);
+    const service = typeof args.service === 'string' ? args.service : ctx.companyContext?.sandbox?.serviceId ?? 'main';
+    const present = Object.fromEntries((await s.listAsync(sessionId)).filter((row) => scopeIncludesService(row.service_scope, service)).map((row) => [row.key, row.value]));
     const missing: string[] = [];
     const empty: string[] = [];
     for (const raw of required) {
@@ -243,14 +251,14 @@ const envValidate: CoderTool = {
 const envDelete: CoderTool = {
   name: 'env_delete',
   description:
-    'Remove a shared env var from the session and from every live container `.env`.\n' +
+    'Remove a shared env var and synchronize eligible containers. Operator-owned keys require force:true with explicit user authorization.\n' +
     'Both the DB row and the in-container entry go away; the next provision will not re-inject ' +
     'the key. Use when a service is removed or an env is renamed. Idempotent — deleting a ' +
     'non-existent key is a no-op.',
   source: 'native',
   parameters: {
     type: 'object',
-    properties: { key: { type: 'string' } },
+    properties: { key: { type: 'string' }, force: { type: 'boolean', description: 'Only when the user explicitly authorized removal of an operator-owned key.' } },
     required: ['key'],
     additionalProperties: false,
   },
@@ -261,11 +269,11 @@ const envDelete: CoderTool = {
     if (sessionId === null) return err('env_delete requires a company session context');
     const key = String(args.key ?? '').trim();
     if (!KEY_RE.test(key)) return err(`env_delete: invalid key '${key}'`);
+    const existing = s.listMetadata(sessionId).find((row) => row.key === key);
+    if (existing?.source === 'user' && !args.force) return err('env_delete refused: operator-owned key; force:true requires explicit user authorization.');
     s.delete(sessionId, key);
-    await getSandboxManager()
-      .syncEnvsToAllContainers(String(sessionId))
-      .catch(() => void 0);
-    return ok(`Deleted ${key}`);
+    const application = await applyEnvs(sessionId);
+    return ok(`Deleted ${key} — ${JSON.stringify(application)}`);
   },
 };
 

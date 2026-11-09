@@ -7,6 +7,8 @@ import { IndexingOverlay } from './IndexingOverlay.js';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { apiDelete, apiPatch, apiPost, useApi } from '../../hooks/useApi.js';
+import { deleteChats } from './delete-chats.js';
+import { useDeletedSession } from './useDeletedSession.js';
 import { useElementWidth } from '../../hooks/useElementWidth.js';
 import { useOpenedOnce } from '../../hooks/useOpenedOnce.js';
 import { Button } from '../../components/ui/button.js';
@@ -46,6 +48,9 @@ import {
 import { useSessionExecutionMode } from './useSessionExecutionMode.js';
 import { isAgentPreset } from './agent-state.js';
 import { useSessionAgent } from './useSessionAgent.js';
+import { useSessionProvider } from './useSessionProvider.js';
+import { ProviderSelectionNotice } from './ProviderSelectionNotice.js';
+import { sessionProviderSwitches } from '../../hooks/agent-stream/provider-switch.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { LiveMessageList } from './messages/LiveMessageList.js';
@@ -443,8 +448,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     respondToTasks,
     respondToSpec,
     respondToToolApproval,
-    switchProvider,
   } = stream;
+
+  const { onSwitchProvider: handleSwitchProvider, providerChange, retryProviderChange } = useSessionProvider({
+    selectedId, sessionData: selectedSessionData, setProvider, setModel,
+    updateSessionData, refetchSessions,
+  });
 
   const runnerLocksExecutionMode = executionModeChangeLocked(
     streaming,
@@ -479,9 +488,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       tasksRefreshTick,
       sessionData: selectedSessionData,
       provider,
-      model,
-      setProvider,
-      setModel,
     });
 
   // Snapshot counts/diffs are refreshed on selection, explicit review actions,
@@ -608,7 +614,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     wasStreamingRef.current = streaming;
   }, [streaming]);
 
-  const handleGoalToolCompleted = useCallback(
+  const handleTaskToolCompleted = useCallback(
     () => setStateRefreshKey((key) => key + 1),
     [],
   );
@@ -808,6 +814,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     { interject, attachments, skillIds },
   ) => {
     if (!selectedId) return;
+    await sessionProviderSwitches.wait(selectedId);
     try {
       const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean; waiting?: boolean }>(
         `/coder/sessions/${selectedId}/inject`,
@@ -936,18 +943,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       messagePageAbortControllersRef.current.delete(controller);
     }
   }, [selectedId, updateSessionData]);
-
-  // Read the matching session through a ref so this callback stays stable while
-  // refetches replace the payload.
-  const handleSwitchProvider = useCallback(async (newProvider: string, newModel: string) => {
-    setProvider(newProvider);
-    setModel(newModel);
-    if (selectedId && (streaming || sessionDataRef.current)) {
-      await switchProvider(newProvider, newModel || undefined);
-      refetchSession();
-      refetchSessions();
-    }
-  }, [selectedId, streaming, switchProvider, refetchSession, refetchSessions]);
 
   // Fallback: load from session when selected, save when changed
   useEffect(() => {
@@ -1191,6 +1186,14 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
   }, [selectedId]);
 
+  useDeletedSession(selectedId, setSelectedId);
+  const deleteConfirmedChats = useCallback(async (ids: string[]) => {
+    try { await deleteChats(ids); }
+    catch (error) {
+      await confirm({ title: t('chat:deleteFailed'), description: error instanceof Error ? error.message : String(error), confirmLabel: t('common:actions.close') });
+    } finally { refetchSessions(); }
+  }, [confirm, t, refetchSessions]);
+
   const handleDelete = useCallback(async (id: string) => {
     const ok = await confirm({
       title: t('chat:deleteSession'),
@@ -1199,10 +1202,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
-    await apiDelete(`/coder/sessions/${id}`);
-    if (selectedId === id) setSelectedId(null);
-    refetchSessions();
-  }, [confirm, t, selectedId, refetchSessions]);
+    await deleteConfirmedChats([id]);
+  }, [confirm, t, deleteConfirmedChats]);
 
   /**
    * Manual "summarize & clear": the backend summarizes the visible transcript
@@ -1247,10 +1248,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
-    await apiPost('/coder/sessions/batch-delete', { ids });
-    if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
-    refetchSessions();
-  }, [confirm, t, selectedId, refetchSessions]);
+    await deleteConfirmedChats(ids);
+  }, [confirm, t, deleteConfirmedChats]);
 
   const handleDeleteAll = useCallback(async () => {
     const ids = (worktrees.visible ?? []).map((s) => s.id);
@@ -1264,10 +1263,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
-    await apiPost('/coder/sessions/batch-delete', { ids });
-    if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
-    refetchSessions();
-  }, [worktrees.visible, confirm, t, view, selectedId, refetchSessions]);
+    await deleteConfirmedChats(ids);
+  }, [worktrees.visible, confirm, t, view, deleteConfirmedChats]);
 
   const handleArchive = useCallback(async (id: string, archived: boolean) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
@@ -1324,6 +1321,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     await refetchSessions();
     setSelectedId(res.session.id);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+  }, [refetchSessions]);
+  useEffect(() => {
+    const prepared = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string }>).detail;
+      if (!detail?.sessionId) return;
+      refetchSessions(); setSelectedId(detail.sessionId);
+      window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+    };
+    window.addEventListener('coder:proposal-prepared', prepared);
+    return () => window.removeEventListener('coder:proposal-prepared', prepared);
   }, [refetchSessions]);
 
   const handleFork = async (messageSeq: number) => {
@@ -1841,11 +1848,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   snapshotActions={selectedId ? snapshotActions : null}
                   snapshotFiles={snapshotFiles}
                   onClearCurrentTurn={clearCurrentTurn}
-                  onGoalToolCompleted={handleGoalToolCompleted}
+                  onTaskToolCompleted={handleTaskToolCompleted}
                 />
               </div>
               <div className="relative">
               <IndexingOverlay projectId={projectIndexId} />
+              <ProviderSelectionNotice state={providerChange} onRetry={retryProviderChange} />
               <Composer
                     sessionCollaboration
                 ref={composerRef}
@@ -1889,7 +1897,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 setExecutionMode={handleExecutionModeChange}
                 executionModePending={executionModePending}
                 executionModeLocked={executionModeLocked}
-                sendBlocked={executionModePending}
+                sendBlocked={executionModePending || providerChange?.pending || Boolean(providerChange?.error)}
                 planDepth={planDepth}
                 setPlanDepth={handlePlanDepthChange}
                 responseLanguage={responseLanguage}

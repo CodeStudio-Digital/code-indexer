@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./providers/openai-api-models.js": "./src/providers/openai-api-models.ts",
     "./utils/abortable.js": "./src/utils/abortable.ts",
     "./utils/serializable-stream.js": "./src/utils/serializable-stream.ts",
     "./assets/drawio-vendor.js": "./src/assets/drawio-vendor.ts",

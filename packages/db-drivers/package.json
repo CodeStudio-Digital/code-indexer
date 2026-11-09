@@ -7,7 +7,12 @@
     ".": "./src/index.ts",
     "./*": "./src/*"
   },
+  "dependencies": {
+    "@mcp/shared": "workspace:*",
+    "pg-cursor": "2.22.1"
+  },
   "devDependencies": {
+    "tsx": "^4.19.3",
     "vitest": "^4.1.2"
   }
 }

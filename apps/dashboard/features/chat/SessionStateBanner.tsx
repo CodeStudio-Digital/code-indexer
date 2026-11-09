@@ -1,26 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Target, ListChecks } from 'lucide-react';
+import { ListChecks } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
-
-/**
- * Session-level state header (banner variant).
- *
- * Surfaces the goal text and tasks summary as a horizontal strip — used by
- * `AgentSessionModal` where a sidebar layout doesn't fit. The main chat view
- * uses `SessionStateSidebar` instead.
- *
- * Reads `/api/coder/sessions/:id/state-summary` on mount and `refreshKey`
- * changes. Renders nothing when both goal and tasks are null.
- */
-interface GoalSummary {
-  text: string;
-  status: 'in_progress' | 'complete' | 'superseded';
-  budget_tokens: number | null;
-  completion_note: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 interface TaskRow {
   id: string;
@@ -38,7 +19,6 @@ interface TasksSummary {
 }
 
 interface StateSummary {
-  goal: GoalSummary | null;
   tasks: TasksSummary | null;
 }
 
@@ -67,61 +47,14 @@ export function SessionStateBanner({ sessionId, refreshKey, onActiveTaskChange }
   }, [sessionId, refreshKey, onActiveTaskChange]);
 
   if (!data) return null;
-  const { goal, tasks } = data;
-  if (!goal && !tasks) return null;
+  const { tasks } = data;
+  if (!tasks) return null;
 
   const activeTask = tasks?.tasks.find((t) => t.id === tasks.current_task_id) ?? null;
   const taskCounts = tasks ? countByStatus(tasks.tasks) : null;
 
   return (
     <div className="border-b bg-muted/30 px-3 sm:px-5 py-2 flex flex-col gap-1.5 text-xs">
-      {goal && (
-        <div className="flex items-start gap-2">
-          <Target className={cn(
-            'h-3.5 w-3.5 shrink-0 mt-0.5',
-            goal.status === 'complete'
-              ? 'text-success'
-              : goal.status === 'superseded'
-                ? 'text-muted-foreground'
-                : 'text-warning',
-          )} />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold uppercase tracking-wider text-muted-foreground">
-                {t('chat:state.goalLabel')}
-              </span>
-              <span
-                className={cn(
-                  'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                  goal.status === 'complete'
-                    ? 'bg-success/15 text-success'
-                    : goal.status === 'superseded'
-                      ? 'bg-muted text-muted-foreground'
-                      : 'bg-warning/15 text-warning',
-                )}
-              >
-                {goal.status === 'complete'
-                  ? t('chat:state.goalDone')
-                  : goal.status === 'superseded'
-                    ? t('chat:state.goalSuperseded')
-                    : t('chat:state.goalActive')}
-              </span>
-              {goal.budget_tokens != null && (
-                <span className="text-muted-foreground">
-                  {t('chat:state.goalBudget', { tokens: formatK(goal.budget_tokens) })}
-                </span>
-              )}
-            </div>
-            <div className="text-foreground truncate" title={goal.text}>{goal.text}</div>
-            {goal.completion_note && (
-              <div className="text-muted-foreground italic truncate" title={goal.completion_note}>
-                {goal.completion_note}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {tasks && (
         <div className="flex items-start gap-2">
           <ListChecks className="h-3.5 w-3.5 shrink-0 mt-0.5 text-info" />
@@ -176,10 +109,4 @@ function countByStatus(tasks: TaskRow[]): Record<string, number> {
     out[k] = (out[k] ?? 0) + 1;
   }
   return out;
-}
-
-function formatK(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1000)}k`;
-  return String(n);
 }

@@ -150,7 +150,7 @@ export function BranchPopover({
               icon={ArrowDownToLine}
               label="Update Project"
               hint="Ctrl+T"
-              busy={actions.busyAction === 'Update Project' || actions.busyAction === 'Pull (rebase)'}
+              busy={actions.busyAction === 'Update Project'}
               onClick={() => void actions.onUpdateProject()}
               filter={filter}
             />

@@ -1,4 +1,6 @@
 import type { DB } from './types.js';
+import { bumpContentRevision } from './structural-state.js';
+import { columnFtsMatch } from './fts-query.js';
 
 /** Mirror of the scanner's size cap — defense for watcher-path callers. */
 const MAX_CONTENT_BYTES = 200 * 1024;
@@ -26,14 +28,20 @@ export function isContentIndexable(content: string, sizeBytes?: number): boolean
  * file is now content-indexed.
  */
 export function upsertContent(db: DB, fileId: number, content: string, sizeBytes?: number): boolean {
-  db.prepare('DELETE FROM file_contents_fts WHERE rowid = ?').run(fileId);
-  if (!isContentIndexable(content, sizeBytes)) return false;
-  db.prepare('INSERT INTO file_contents_fts(rowid, content) VALUES (?, ?)').run(fileId, content);
-  return true;
+  return db.transaction(() => {
+    bumpContentRevision(db, fileId);
+    db.prepare('DELETE FROM file_contents_fts WHERE rowid = ?').run(fileId);
+    if (!isContentIndexable(content, sizeBytes)) return false;
+    db.prepare('INSERT INTO file_contents_fts(rowid, content) VALUES (?, ?)').run(fileId, content);
+    return true;
+  })();
 }
 
 export function removeContent(db: DB, fileId: number): void {
-  db.prepare('DELETE FROM file_contents_fts WHERE rowid = ?').run(fileId);
+  db.transaction(() => {
+    bumpContentRevision(db, fileId);
+    db.prepare('DELETE FROM file_contents_fts WHERE rowid = ?').run(fileId);
+  })();
 }
 
 export interface ContentMatch {
@@ -44,7 +52,9 @@ export interface ContentMatch {
 
 /**
  * MATCH over raw contents, scoped to one project. `match` must already be a
- * valid FTS5 query (callers sanitize); a malformed expression throws
+ * valid FTS5 query (callers sanitize). Phrase literals become word intersections
+ * because the compact index has no positions; exact matching needs source
+ * verification. A malformed expression throws
  * SQLITE_ERROR like every other FTS path here. Slim rows — callers rehydrate
  * full file records by id when they need more than the path.
  */
@@ -56,7 +66,7 @@ export function searchContent(db: DB, projectId: number, match: string, limit: n
     WHERE c.file_contents_fts MATCH ? AND f.project_id = ?
     ORDER BY c.rank
     LIMIT ?
-  `).all(match, projectId, limit) as ContentMatch[];
+  `).all(columnFtsMatch(match), projectId, limit) as ContentMatch[];
 }
 
 /**

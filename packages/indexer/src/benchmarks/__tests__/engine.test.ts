@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { DBSymbol, HybridSearchResult } from '@mcp/shared/types.js';
-import { isRelevant, percentile, ndcgAt, runBenchmark, type EvalQuery } from '../engine.js';
+import { isRelevant, percentile, ndcgAt, recallAt, runBenchmark, type EvalQuery } from '../engine.js';
 import { generateQueriesFromIndex } from '../query-gen.js';
 
 function sym(name: string, filePath: string): HybridSearchResult {
@@ -37,6 +37,20 @@ describe('percentile', () => {
     expect(percentile([10, 20, 30, 40, 50], 50)).toBe(30); // floor(.5*4)=2
     expect(percentile([10, 20, 30, 40, 50], 95)).toBe(40); // floor(.95*4)=3
     expect(percentile([10, 20, 30, 40, 50], 100)).toBe(50);
+  });
+});
+
+describe('distinct target metrics', () => {
+  it('uses all targets in the denominator and does not count duplicate rows', () => {
+    const query = { query: 'q', relevant_files: ['a.ts', 'b.ts'] };
+    const rows = [sym('first', 'a.ts'), sym('second', 'a.ts')];
+    expect(recallAt(rows, query, 10)).toBe(0.5);
+    expect(ndcgAt(rows, query)).toBeCloseTo(1 / (1 + 1 / Math.log2(3)));
+    expect(recallAt([file('a.ts')], { query: 'q', relevant_files: Array.from({ length: 20 }, (_, i) => i ? `${i}.ts` : 'a.ts') })).toBe(0.05);
+  });
+  it('requires a path boundary and normalizes Windows separators', () => {
+    expect(isRelevant(file('data.ts'), { query: 'q', relevant_files: ['a.ts'] })).toBe(false);
+    expect(isRelevant(file('src\\a.ts'), { query: 'q', relevant_files: ['src/a.ts'] })).toBe(true);
   });
 });
 

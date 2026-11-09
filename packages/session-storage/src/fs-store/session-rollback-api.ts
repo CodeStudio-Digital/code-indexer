@@ -21,7 +21,6 @@ import {
   toJsonValue,
 } from './conversation-codec.js';
 import { FsSessionEntityFiles } from './entity-files.js';
-import { projectGoalState } from './goal-repository.js';
 import { FsSessionDirectory } from './session-directory.js';
 import { coderMetadata } from './session-projection.js';
 import type {
@@ -105,21 +104,6 @@ function seed(message: AgentMessage): {
   return { text, attachments };
 }
 
-function goalSnapshot(
-  value: ReturnType<typeof projectGoalState>['goal'],
-): JsonValue | null {
-  if (!value) return null;
-  return toJsonValue({
-    id: value.id,
-    text: value.text,
-    status: value.status,
-    budget_tokens: value.budget_tokens,
-    completion_note: value.completion_note,
-    created_at: value.created_at,
-    updated_at: value.updated_at,
-  });
-}
-
 export class FsSessionRollbackRepository {
   readonly #entities: FsSessionEntityFiles;
 
@@ -167,20 +151,6 @@ export class FsSessionRollbackRepository {
       const hydrated = hydrateMessage(entry.location, target);
       let rollbackCommit = replayIndex >= 0 ? commits[replayIndex]! : null;
       if (!rollbackCommit) {
-        const goal = projectGoalState(commits);
-        const goalMutations = goal.goal
-          ? [
-              toJsonValue({
-                id: newSessionId(),
-                seq: goal.mutationSeq + 1,
-                source: 'admin',
-                tool_use_id: null,
-                tool_name: null,
-                expected: goalSnapshot(goal.goal),
-                next: null,
-              }),
-            ]
-          : [];
         const payload: FsCoderTurnPayload = {
           schema_version: 1,
           type: 'coder.turn',
@@ -189,7 +159,6 @@ export class FsSessionRollbackRepository {
           messages: [],
           message_patches: [],
           tool_calls: [],
-          goal_mutations: goalMutations,
         };
         rollbackCommit = await this.directory.repository.commitTurn(
           entry.location,
@@ -378,7 +347,6 @@ export class FsSessionRollbackRepository {
         return {
           ...state,
           status: 'idle',
-          goal: null,
           todos: [],
           compaction: {
             ...state.compaction,

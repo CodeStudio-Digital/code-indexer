@@ -19,12 +19,12 @@
  * is pinned to the footer (`mt-auto`) mirroring that rail.
  */
 import { Fragment, useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, LayoutTemplate, TerminalSquare, Users } from 'lucide-react';
+import { ChevronDown, ChevronUp, LayoutTemplate, MessageSquare, TerminalSquare, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { RailButton, RailContainer, RailSeparator } from '../../../components/chrome/index.js';
 import { TAB_REGISTRY, type TabDef } from './tab-registry.js';
 import type { Zone } from './types.js';
-import type { CompanyCatalogRail } from '../company-workbench-slots.js';
+import type { CompanyCatalogRail, CompanySessionsRail } from '../company-workbench-slots.js';
 
 interface LeftTabRailProps {
   activeZone: Zone;
@@ -34,8 +34,10 @@ interface LeftTabRailProps {
   bottomOpen: boolean;
   onToggleBottom: () => void;
   catalog?: CompanyCatalogRail;
+  sessions?: CompanySessionsRail;
   hiddenTabs?: readonly string[];
   showTerminal?: boolean;
+  navigationInContent?: boolean;
 }
 
 const ADVANCED_STORAGE_KEY = 'agents.railAdvanced';
@@ -48,7 +50,7 @@ function readStoredAdvanced(): boolean {
   }
 }
 
-export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onToggleBottom, catalog, hiddenTabs = [], showTerminal = true }: LeftTabRailProps) {
+export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onToggleBottom, catalog, sessions, hiddenTabs = [], showTerminal = true, navigationInContent = false }: LeftTabRailProps) {
   const { t } = useTranslation('agents');
   const [expanded, setExpanded] = useState(readStoredAdvanced);
 
@@ -98,6 +100,16 @@ export function LeftTabRail({ activeZone, activeTab, onChange, bottomOpen, onTog
 
   const moreLabel = t('company.moreTabs', { defaultValue: 'More' });
   const terminalLabel = t('company.terminal', { defaultValue: 'Terminal' });
+
+  if (navigationInContent) return (
+    <RailContainer side="left" aria-label={t('company.leftRailLabel')}>
+      {sessions && <RailButton icon={MessageSquare} label={t('sessions')} role="toggle" active={sessions.open} onClick={sessions.onToggle} />}
+      <div className="mt-auto flex flex-col items-center gap-0.5 pb-1">
+        {catalog && <RailButton icon={Users} label={t('catalog.companies')} role="toggle" active={catalog.open} onClick={() => catalog.open ? catalog.onOpenChange(false) : catalog.onToggle('sessions')} />}
+        {showTerminal && <RailButton icon={TerminalSquare} label={terminalLabel} role="toggle" active={bottomOpen} onClick={onToggleBottom} />}
+      </div>
+    </RailContainer>
+  );
 
   return (
     <RailContainer side="left" aria-label={t('company.leftRailLabel')}>

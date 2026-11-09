@@ -24,6 +24,18 @@ const plugins: EnabledPlugin[] = [
 ];
 
 describe('buildPluginTools', () => {
+  it('omits oversized plugin contracts while keeping healthy tools', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const tools = buildPluginTools([{ namespace: 'fixture', tools: [
+        { name: 'huge', description: '', parameters: { type: 'object', properties: {}, description: 'x'.repeat(70_000) } },
+        { name: 'healthy', description: '', parameters: { type: 'object', properties: {} } },
+      ] }], async () => ({ content: '' }));
+      expect(tools.map(tool => tool.name)).toEqual(['plugin__fixture__healthy']);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('omitted tool "fixture/huge"'));
+    } finally { warn.mockRestore(); }
+  });
+
   it('synthesizes namespaced CoderTools with mapped flags', () => {
     const tools = buildPluginTools(plugins, async () => ({ content: '' }));
     expect(tools.map((t) => t.name)).toEqual([

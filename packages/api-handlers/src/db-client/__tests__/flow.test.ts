@@ -63,13 +63,13 @@ describe('dbClient handler flow (sqlite)', () => {
 
   it('editRow: dryRun previews, then applies a PK-scoped UPDATE', async () => {
     const preview = await handlers.editRow(
-      { connectionId: cid, op: 'update', table: 'users', pk: { id: 1 }, values: { name: 'Linus' }, dryRun: true },
+      { connectionId: cid, op: 'update', table: 'users', pk: { id: 1 }, values: { name: 'Linus' }, original: { name: 'Ada', email: 'ada@x.io' }, dryRun: true },
       ctx,
     );
     expect(preview.sql).toMatch(/UPDATE .*users.* SET .*name.* WHERE .*id.* = 1/i);
     expect(preview.result).toBeUndefined(); // dryRun never executes
 
-    await handlers.editRow({ connectionId: cid, op: 'update', table: 'users', pk: { id: 1 }, values: { name: 'Linus' } }, ctx);
+    await handlers.editRow({ connectionId: cid, op: 'update', table: 'users', pk: { id: 1 }, values: { name: 'Linus' }, original: { name: 'Ada', email: 'ada@x.io' } }, ctx);
     const after = await handlers.query({ connectionId: cid, sql: 'SELECT name FROM users WHERE id = 1' }, ctx);
     expect(after.rows[0].name).toBe('Linus');
   });
@@ -103,7 +103,7 @@ describe('dbClient handler flow (sqlite)', () => {
     const preview = await handlers.editRows({
       connectionId: cid,
       changes: [
-        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: "O'Hara" } },
+        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: "O'Hara" }, original: { name: "Linus", email: "ada@x.io" } },
         { op: 'insert', table: 'users', values: { id: 2, name: 'Grace', email: 'grace@x.io' } },
       ],
       dryRun: true,
@@ -113,7 +113,7 @@ describe('dbClient handler flow (sqlite)', () => {
     await handlers.editRows({
       connectionId: cid,
       changes: [
-        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: "O'Hara" } },
+        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: "O'Hara" }, original: { name: "Linus", email: "ada@x.io" } },
         { op: 'insert', table: 'users', values: { id: 2, name: 'Grace', email: 'grace@x.io' } },
       ],
     }, ctx);
@@ -123,7 +123,7 @@ describe('dbClient handler flow (sqlite)', () => {
     await expect(handlers.editRows({
       connectionId: cid,
       changes: [
-        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: 'Should rollback' } },
+        { op: 'update', table: 'users', pk: { id: 1 }, values: { name: 'Should rollback' }, original: { name: "O'Hara", email: "ada@x.io" } },
         { op: 'insert', table: 'users', values: { id: 2, name: 'Duplicate' } },
       ],
     }, ctx)).rejects.toThrow();

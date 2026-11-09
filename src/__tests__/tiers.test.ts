@@ -5,17 +5,27 @@ import {
   filterByTiers,
   inferProfileFromMessage,
   TIER_COUNTS,
+  BOOTSTRAP_TOOLS,
+  NAVIGATE_TOOLS,
   type ToolTier,
 } from '@mcp/code-agent/tools/tiers.js';
 
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {
-    // Current explicit surface after progressive tool disclosure.
-    expect(TIER_COUNTS.bootstrap).toBe(37);
+    // Goal telemetry was retired; task_list remains the active task surface.
+    expect(TIER_COUNTS.bootstrap).toBe(49);
+    expect(BOOTSTRAP_TOOLS.has('create_goal')).toBe(false);
+    expect(BOOTSTRAP_TOOLS.has('update_goal')).toBe(false);
+    expect(BOOTSTRAP_TOOLS.has('task_list')).toBe(true);
   });
 
   it('navigate tier contains the expected tools', () => {
-    expect(TIER_COUNTS.navigate).toBe(57);
+    // get_goal was retired; all shell continuation/observation tools stay here.
+    expect(TIER_COUNTS.navigate).toBe(59);
+    expect(NAVIGATE_TOOLS.has('get_goal')).toBe(false);
+    for (const name of ['exec_command', 'write_stdin', 'poll_session', 'stop_session', 'read_process_output']) {
+      expect(NAVIGATE_TOOLS.has(name)).toBe(true);
+    }
   });
 
   it('admin tier contains the expected tools', () => {

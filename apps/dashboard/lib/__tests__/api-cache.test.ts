@@ -9,12 +9,15 @@ const BASE = 1_000_000;
 let now = BASE;
 
 beforeEach(() => {
+  vi.useFakeTimers();
   invalidateAll();
   now = BASE;
   vi.spyOn(Date, 'now').mockImplementation(() => now);
 });
 
 afterEach(() => {
+  invalidateAll();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -126,53 +129,77 @@ describe('writeThrough', () => {
   });
 });
 
-describe('expired-entry sweep', () => {
-  /**
-   * `writeThrough` is the probe for residency: it refreshes a key only when the
-   * entry is still PRESENT in the map, regardless of age. So a key that a sweep
-   * removed can no longer be revived by it, while a key still resident can —
-   * which distinguishes "evicted" from merely "expired" through the public API.
-   */
-  const fill = async (count: number, prefix: string) => {
-    for (let i = 0; i < count; i++) {
-      await dedupe(`${prefix}${i}`, () => Promise.resolve(i));
-    }
-  };
-
-  it('evicts entries whose TTL lapsed once the cache grows past the sweep size', async () => {
-    await fill(64, 'old');
-    // Still resident at this point: writeThrough can refresh them.
-    writeThrough('old0', 'refreshed');
-    expect(getCached('old0')).toBe('refreshed');
-
-    now = BASE + 5_000; // every 'old*' entry is now past its TTL
-    await dedupe('trigger', () => Promise.resolve('x')); // pushes size over the threshold
-
-    writeThrough('old0', 'resurrected');
-    expect(getCached('old0')).toBeUndefined();
-    writeThrough('old63', 'resurrected');
-    expect(getCached('old63')).toBeUndefined();
+describe('bounded retention', () => {
+  it('expires even a single untouched body and leaves no idle timer', async () => {
+    const deleteEntry = vi.spyOn(Map.prototype, 'delete');
+    await dedupe('lonely-body', async () => ({ value: 'resident' }));
+    expect(vi.getTimerCount()).toBe(1);
+    now = BASE + 1501;
+    await vi.advanceTimersByTimeAsync(1501);
+    // Verify actual eviction, rather than merely the lazy getCached miss.
+    expect(deleteEntry).toHaveBeenCalledWith('lonely-body');
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('keeps still-fresh entries when the sweep runs', async () => {
-    await fill(64, 'stale');
-    now = BASE + 5_000;
-    await dedupe('fresh', () => Promise.resolve('kept'));
-    // 'fresh' was written at the same instant as the sweep — it must survive.
-    expect(getCached('fresh')).toBe('kept');
-    writeThrough('fresh', 'still-there');
-    expect(getCached('fresh')).toBe('still-there');
+  it('never retains more than 64 entries during a fresh burst', async () => {
+    for (let i = 0; i < 100; i++) await dedupe(`burst-${i}`, async () => i);
+    const live = Array.from({ length: 100 }, (_, i) => getCached(`burst-${i}`)).filter(x => x !== undefined);
+    expect(live).toHaveLength(64);
+    expect(getCached('burst-0')).toBeUndefined();
+    expect(getCached('burst-99')).toBe(99);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
-  it('leaves a small cache alone (no sweep below the threshold)', async () => {
-    await dedupe('lonely', () => Promise.resolve(1));
-    now = BASE + 5_000;
-    await dedupe('other', () => Promise.resolve(2)); // size 2 — under the threshold
+  it('also bounds retained payload bytes below the entry-count limit', async () => {
+    const body = 'x'.repeat(60_000);
+    for (let i = 0; i < 30; i++) await dedupe(`large-${i}`, async () => body);
+    const count = Array.from({ length: 30 }, (_, i) => getCached(`large-${i}`)).filter(x => x !== undefined).length;
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThan(18);
+    expect(getCached('large-29')).toBe(body);
+  });
 
-    // Expired but NOT evicted, so the entry is still resident and writeThrough
-    // can refresh it. This is what pins the threshold gate: with an
-    // unconditional sweep the key would be gone and this would read undefined.
-    writeThrough('lonely', 'refreshed');
-    expect(getCached('lonely')).toBe('refreshed');
+  it('shares oversized and complex reads without retaining them after settlement', async () => {
+    const body = 'x'.repeat(300_000);
+    let complete!: (value: string) => void;
+    const producer = vi.fn(() => new Promise<string>(resolve => { complete = resolve; }));
+    const first = dedupe('huge', producer), second = dedupe('huge', producer);
+    expect(first).toBe(second); complete(body);
+    expect(await first).toBe(body); expect(await second).toBe(body);
+    expect(producer).toHaveBeenCalledOnce(); expect(getCached('huge')).toBeUndefined();
+    const complex = new Array(100_000).fill(1);
+    expect(await dedupe('complex', async () => complex)).toBe(complex);
+    expect(getCached('complex')).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not resurrect expired bodies via optimistic writes', async () => {
+    await dedupe('expired', async () => 'old');
+    now = BASE + 1501;
+    writeThrough('expired', 'new');
+    expect(getCached('expired')).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves a refreshed entry when the old expiry deadline fires', async () => {
+    await dedupe('refresh', async () => 'old');
+    now = BASE + 1000; writeThrough('refresh', 'new');
+    now = BASE + 1501; await vi.advanceTimersByTimeAsync(1501);
+    expect(getCached('refresh')).toBe('new');
+    now = BASE + 2501; await vi.advanceTimersByTimeAsync(1000);
+    expect(getCached('refresh')).toBeUndefined(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('invalidation keeps a shared request alive without recaching its stale result', async () => {
+    let complete!: (value: string) => void;
+    const producer = vi.fn(() => new Promise<string>(resolve => { complete = resolve; }));
+    const first = dedupe('pending', producer);
+    invalidateAll();
+    const second = dedupe('pending', producer);
+    expect(first).toBe(second); complete('old snapshot');
+    expect(await first).toBe('old snapshot'); expect(await second).toBe('old snapshot');
+    expect(getCached('pending')).toBeUndefined(); expect(vi.getTimerCount()).toBe(0);
+    await dedupe('pending', async () => 'fresh');
+    expect(getCached('pending')).toBe('fresh');
   });
 });

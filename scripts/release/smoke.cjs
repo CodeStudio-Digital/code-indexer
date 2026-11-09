@@ -89,7 +89,8 @@ async function probeRenderer(hash) {
     };
   })()`);
   win.destroy();
-  return { ok: result.mounted && result.locationIntact && result.relativeAssetLoads && result.imageProtocolLoads, ...result, consoleErrors };
+  const runtimeErrors = consoleErrors.filter(message => /ErrorBoundary|TypeError|ReferenceError|Uncaught|Minified React error/i.test(message));
+  return { ok: result.mounted && result.locationIntact && result.relativeAssetLoads && result.imageProtocolLoads && runtimeErrors.length === 0, ...result, consoleErrors, runtimeErrors };
 }
 
 /**
@@ -165,9 +166,14 @@ async function probeVision() {
 app.on('ready', async () => {
   // The renderer talks to the backend over mcp://; stub it so probes exercise
   // packaging, not backend availability.
-  protocol.handle('mcp', async request => request.url.endsWith('/api/_release/image')
-    ? new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7WQAAAAASUVORK5CYII=', 'base64'), { headers: { 'content-type': 'image/png' } })
-    : new Response('{}', { headers: { 'content-type': 'application/json' } }));
+  protocol.handle('mcp', async request => {
+    const pathname = new URL(request.url).pathname;
+    if (pathname === '/api/_release/image') return new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7WQAAAAASUVORK5CYII=', 'base64'), { headers: { 'content-type': 'image/png' } });
+    const body = pathname === '/api/projects' ? [] : pathname === '/api/admin/processes'
+      ? { at: Date.now(), mainPid: process.pid, cores: 1, status: 'live', rows: [], totals: { count: 0, memoryMB: 0, cpuPercent: 0 } }
+      : {};
+    return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+  });
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [CSP] } });
   });
@@ -176,7 +182,7 @@ app.on('ready', async () => {
   try {
     report.renderer = await probeRenderer(null);
     const deep = await probeRenderer('/popout/task-manager');
-    report.deepLink = { ok: deep.hash === '#/popout/task-manager', hash: deep.hash };
+    report.deepLink = { ok: deep.ok && deep.hash === '#/popout/task-manager', hash: deep.hash, runtimeErrors: deep.runtimeErrors };
     report.indexer = await probeIndexer();
     report.apiScripts = await probeApiScripts();
     report.webContent = await probeWebContent();
@@ -185,7 +191,7 @@ app.on('ready', async () => {
     report.harnessError = String(error.message || error).split('\n')[0];
   }
   emit(report);
-  app.exit(0);
+  app.exit(Object.values(report).every(result => result && result.ok === true) ? 0 : 1);
 });
 
 setTimeout(() => {

@@ -69,19 +69,18 @@ describe('MetaBusWirer', () => {
     expect(envelopes.filter(({ event }) => event === 'done')).toHaveLength(1);
   });
 
-  it('normalizes positional stream events and keeps goal success provisional', () => {
+  it('normalizes positional stream events and completes task tool results immediately', () => {
     const { runner, published } = setup();
 
     runner.emit('text_delta', 'hello');
-    runner.emit('tool_call_start', 'goal-1', 'create_goal', { objective: 'ship' });
+    runner.emit('tool_call_start', 'task-1', 'task_list', { summary: 'ship' });
     runner.emit(
       'tool_call_result',
-      'goal-1',
-      'create_goal',
+      'task-1',
+      'task_list',
       { content: 'created', isError: false },
       14,
     );
-    runner.emit('goal_mutations_persisted', { toolUseIds: ['goal-1'] });
 
     expect(published.map(({ data }) => data)).toEqual([
       {
@@ -94,26 +93,19 @@ describe('MetaBusWirer', () => {
         agent: 'backend',
         agentRunId: BACKEND_RUN_ID,
         event: 'tool_call_start',
-        data: { id: 'goal-1', name: 'create_goal', input: { objective: 'ship' } },
+        data: { id: 'task-1', name: 'task_list', input: { summary: 'ship' } },
       },
       {
         agent: 'backend',
         agentRunId: BACKEND_RUN_ID,
         event: 'tool_call_result',
         data: {
-          id: 'goal-1',
-          name: 'create_goal',
+          id: 'task-1',
+          name: 'task_list',
           result: { content: 'created', isError: false },
           duration_ms: 14,
-          status: 'running',
-          persistence: 'pending',
+          status: 'done',
         },
-      },
-      {
-        agent: 'backend',
-        agentRunId: BACKEND_RUN_ID,
-        event: 'goal_mutations_persisted',
-        data: { toolUseIds: ['goal-1'] },
       },
     ]);
   });

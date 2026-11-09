@@ -20,14 +20,13 @@ import type {
 import { persistedInteractivePromptSignature } from '../utils.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
-import { Markdown } from './Markdown.js';
+import { Markdown, LARGE_MARKDOWN_CHARS } from './Markdown.js';
 import { ImageGallery } from './ImageGallery.js';
 import { TaskExecutionBlock, parseExecuteTasksResult } from './TaskExecutionBlock.js';
 import { WorkflowBlock, parseWorkflowResult } from './WorkflowBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
 import { TodoWriteBlock } from './TodoWriteBlock.js';
 import { SelfReviewBlock } from './SelfReviewBlock.js';
-import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 import { FileEditBlock } from './FileEditBlock.js';
 import { isEditTool } from './edit-tools.js';
 import { deriveTaskCardState } from './task-card-state.js';
@@ -261,10 +260,13 @@ function UserMessage({
 
   const appliedSkills = message.selectedSkillIds ?? [];
   const hasUserBody = !!text || docs.length > 0 || !!fetchError;
+  // Virtualized Markdown rows are absolutely positioned and have no intrinsic
+  // width. Keep long messages from shrinking to the copy button or thumbnail.
+  const needsReadingWidth = text.length > LARGE_MARKDOWN_CHARS;
 
   return (
     <div className="group/user group/msg flex w-full justify-end py-1">
-      <article className="relative min-w-0 max-w-[min(82%,42rem)]">
+      <article className={cn('relative min-w-0 max-w-[min(82%,42rem)]', needsReadingWidth && 'w-full')}>
         <div className="absolute right-1 -top-5 z-10 flex h-5 items-center justify-end gap-2 text-[10px] text-muted-foreground/75 opacity-0 group-hover/user:opacity-100 focus-within:opacity-100">
           <div className={cn(
             'flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/user:opacity-100 focus-within:opacity-100',
@@ -324,7 +326,7 @@ function UserMessage({
             )}
           </div>
         )}
-        {images.length > 0 && <ImageGallery images={images.map((img, i) => {
+        {images.length > 0 && <ImageGallery align="end" images={images.map((img, i) => {
           const inline = img.base64 ? `data:${img.mediaType};base64,${img.base64}` : '';
           const url = sessionId && messageId != null
             ? `${apiBaseUrl()}/api/coder/sessions/${encodeURIComponent(sessionId)}/messages/${messageId}/images/${i}` : '';
@@ -813,11 +815,6 @@ export function renderAssistantBlock(
       : undefined,
     status: result ? (result.isError ? 'error' : 'done') : 'running',
   };
-  // Goal tools get a richer block — they're session-wide events that the
-  // generic collapsed ToolCallBlock makes too easy to miss.
-  if (isGoalTool(tc.name)) {
-    return <GoalCallBlock key={`gl-${b.id}-${i}`} call={tc} />;
-  }
   // edit_file / multi_edit / write_file / create_file / apply_patch → file-first
   // block. Persisted history never carries approvals (live-only), so no handler.
   if (isEditTool(tc.name)) {

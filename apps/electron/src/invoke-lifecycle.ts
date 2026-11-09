@@ -1,3 +1,16 @@
+import type { WebContents } from 'electron';
+
+/** Hash/history routing keeps the renderer alive, including its IPC streams. */
+export function bindRendererLifetime(sender: WebContents, onEnd: (reason: string) => void): void {
+  sender.on('did-start-navigation', (details, _url, isInPlace, isMainFrame) => {
+    const mainFrame = details.isMainFrame ?? isMainFrame;
+    const sameDocument = details.isSameDocument ?? isInPlace;
+    if (mainFrame && !sameDocument) onEnd('renderer navigated');
+  });
+  sender.once('render-process-gone', () => onEnd('renderer process exited'));
+  sender.once('destroyed', () => onEnd('renderer closed'));
+}
+
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason

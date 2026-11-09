@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -40,10 +40,8 @@ import { ScrollArea } from '../../components/ui/scroll-area.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
-import {
-  getActiveAgentSessionIdsSnapshot,
-  subscribeActiveAgentSessions,
-} from '../../hooks/agent-stream/session-stream-store.js';
+import { useSessionActivity } from './useSessionActivity.js';
+export { isExecutingSessionStatus } from './session-activity.js';
 import { providerAccent, workspaceColor, type AccentColor } from './constants.js';
 import type {
   CoderSession,
@@ -100,11 +98,6 @@ interface SessionSidebarProps {
 }
 
 const UNGROUPED_KEY = '__ungrouped__';
-const EXECUTING_SESSION_STATUSES = new Set(['running', 'in_progress', 'working']);
-
-export function isExecutingSessionStatus(status: string): boolean {
-  return EXECUTING_SESSION_STATUSES.has(status.trim().toLowerCase());
-}
 
 export function sessionSidebarClassName(docked: boolean, mobileOpen: boolean): string {
   return cn(
@@ -164,18 +157,7 @@ export const SessionSidebar = memo(function SessionSidebar({
   const { t } = useTranslation(['chat', 'common']);
   const [selectMode, setSelectMode] = useState(false);
   const [runningOnly, setRunningOnly] = useState(false);
-  const liveSessionIdList = useSyncExternalStore(
-    subscribeActiveAgentSessions,
-    getActiveAgentSessionIdsSnapshot,
-    getActiveAgentSessionIdsSnapshot,
-  );
-  const executingSessionIds = useMemo(() => {
-    const ids = new Set<string>(liveSessionIdList);
-    for (const session of sessions ?? []) {
-      if (isExecutingSessionStatus(session.status)) ids.add(session.id);
-    }
-    return ids;
-  }, [liveSessionIdList, sessions]);
+  const executingSessionIds = useSessionActivity(sessions);
   // Workspace mode (Sessões Globais) auto-buckets by virtual workspace; the
   // per-project named-folder controls don't apply there.
   const showGroups = groupBy === 'group';

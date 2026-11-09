@@ -364,7 +364,7 @@ export class ChromeService {
     const store = this.qaRunStore;
     if (!store) return;
     try {
-      const running = await store.listRunningRuns();
+      const running = (await store.listRunningRuns()).filter((run) => run.executor !== 'preview');
       for (const run of running) {
         try {
           await store.completeRun(run.id, {

@@ -32,8 +32,9 @@ export function buildRepoMap(
     const top = f.symbols
       .map((s) => `${s.kind} ${s.name}`)
       .join(', ');
-    if (!top) continue;
-    const line = `- ${f.path}: ${top}`;
+    // JSON/YAML/configuration files can be useful without extracted symbols.
+    // Keep their path inside the same file and character budgets.
+    const line = `- ${f.path}${top ? `: ${top}` : ''}`;
     if (used + line.length + 1 > budgetChars) {
       elidedFiles++;
       continue;

@@ -73,7 +73,7 @@ describe('Company filesystem session routes', () => {
         master_model: 'gpt-5',
       }),
     });
-    expect(create.status).toBe(201);
+    expect(create.status, await create.clone().text()).toBe(201);
     const created = await create.json() as {
       session: { id: string; name: string };
     };

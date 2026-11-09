@@ -7,6 +7,8 @@ export * from './capabilities.js';
 export * from './policy.js';
 export * from './runtime-configuration.js';
 export * from './ultra.js';
+export * from './ultra-work.js';
+export * from './ultra-followups.js';
 export * from './artifacts.js';
 export * from './events.js';
 export * from './coder-terminal.js';

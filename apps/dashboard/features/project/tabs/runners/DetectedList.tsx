@@ -22,12 +22,16 @@ interface DetectedListProps {
 export function DetectedList({ projectId, detected, loading, error, onStarted }: DetectedListProps) {
   const { t } = useTranslation(['projects', 'common']);
   const [busy, setBusy] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function run(label: string, command: string, manager: RunnerManager, key: string, cwd?: string) {
     setBusy(key);
+    setRunError(null);
     try {
       const task = await startTask({ projectId, command, label, manager, cwd });
       onStarted(task.taskId);
+    } catch (err) {
+      setRunError(`${command}\n${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(null);
     }
@@ -49,6 +53,11 @@ export function DetectedList({ projectId, detected, loading, error, onStarted }:
 
   return (
     <div className="flex-1">
+      {runError && (
+        <div role="alert" className="px-3 py-2 text-xs text-red-400 whitespace-pre-wrap break-words select-text">
+          {runError}
+        </div>
+      )}
       {detected.groups.map((group) => (
         <Group
           key={`${group.manager}:${group.source}`}

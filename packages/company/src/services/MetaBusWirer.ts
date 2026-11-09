@@ -20,7 +20,6 @@ export const FORWARDED_EVENTS: readonly string[] = [
   // Turn streaming
   'text_delta', 'tool_call_start', 'tool_call_result', 'message_complete',
   // Goal mutation durability
-  'goal_mutations_persisted', 'goal_mutations_persistence_failed',
   // Live activity pill — `provider_call` gives the `provider:model` + "calling
   // provider with N tools" line; `tool_progress` refines elapsed/note; the
   // `operation_*` trio covers nested sub-agent / task ops. The dashboard
@@ -50,15 +49,12 @@ function normalizeEventData(event: string, args: unknown[]): unknown {
         && result !== null
         && 'isError' in result
         && (result as { isError?: unknown }).isError === true;
-      const awaitsGoalPersistence =
-        !isError && (name === 'create_goal' || name === 'update_goal');
       return {
         id,
         name,
         result,
         duration_ms: durationMs,
-        status: isError ? 'error' : awaitsGoalPersistence ? 'running' : 'done',
-        ...(awaitsGoalPersistence ? { persistence: 'pending' } : {}),
+        status: isError ? 'error' : 'done',
       };
     }
     case 'message_complete':

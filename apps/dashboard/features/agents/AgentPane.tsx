@@ -6,8 +6,10 @@ import { cn } from '../../lib/utils.js';
 import { ActivityLineBlock } from '../../components/stream/ActivityLineBlock.js';
 import { AgentActions } from './AgentActions.js';
 import type { AgentStreamState } from '../../hooks/useCompanyStream.js';
+import { useCompanyStore, selectAgentTextPreview } from '../../state/company/index.js';
 
 interface AgentPaneProps {
+  sessionId: string;
   agent: AgentStreamState;
   onClick?: () => void;
   /**
@@ -36,11 +38,12 @@ const STATUS_CONFIG: Record<string, { icon: React.FC<{ className?: string }>; co
   paused: { icon: Pause, color: 'text-amber-400 bg-amber-500/10', labelKey: 'status.paused' },
 };
 
-export function AgentPane({ agent, onClick, onPause, onResume, onDelete }: AgentPaneProps) {
+export function AgentPane({ sessionId, agent, onClick, onPause, onResume, onDelete }: AgentPaneProps) {
   const { t } = useTranslation('agents');
   const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.idle;
   const StatusIcon = statusCfg.icon;
-  const currentText = agent.textChunks.join('');
+  const agentKey = agent.role === 'master' ? 'master' : agent.agentRunId ?? '';
+  const currentText = useCompanyStore((s) => selectAgentTextPreview(s, sessionId, agentKey));
   const activeToolCalls = agent.toolCalls.filter((t) => t.status === 'running');
   const completedCount = agent.toolCalls.filter((t) => t.status === 'done').length;
   const isMaster = agent.role === 'master';

@@ -30,17 +30,15 @@ export function useProcessCensus(intervalMs: number): {
   const [snapshot, setSnapshot] = useState<ProcessSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
-    void (async () => {
-      try {
-        const r = await fetch(`${apiBaseUrl()}/api/admin/processes?intervalMs=${intervalMs}`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        setSnapshot((await r.json()) as ProcessSnapshot);
-        setError(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch(`${apiBaseUrl()}/api/admin/processes?intervalMs=${intervalMs}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setSnapshot((await r.json()) as ProcessSnapshot);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }, [intervalMs]);
 
   usePolling(refresh, intervalMs);

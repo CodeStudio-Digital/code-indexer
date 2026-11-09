@@ -348,6 +348,8 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
       {/* Card detail modal */}
       {activeCard && (
         <KanbanCardModal
+          companySessionId={companySessionId}
+          onRefresh={() => void kanban.refreshCard(activeCard.id)}
           card={activeCard}
           allCards={kanban.cards}
           open={!!activeCard}

@@ -18,6 +18,7 @@ import { GitTab as BuilderGitTab } from '../../../builder/preview/git/GitTab.js'
 import { CompanyApiTab } from '../../CompanyApiTab.js';
 import { useSessionProjects } from '../../../builder/preview/useSessionProjects.js';
 import type { BuildTab } from '../types.js';
+import { useSessionServices } from '../../tests/shared/useSessionServices.js';
 
 interface BuildZoneProps {
   sessionId: string;
@@ -26,7 +27,8 @@ interface BuildZoneProps {
 
 export function BuildZone({ sessionId, tab }: BuildZoneProps) {
   const { projects, loading, error } = useSessionProjects(sessionId);
-  if (tab === 'docs') return <DocsTab companySessionId={sessionId} />;
+  const { services } = useSessionServices(sessionId);
+  if (tab === 'docs') return <DocsTab companySessionId={sessionId} services={services} />;
   if (tab === 'tests') return <TestsTab sessionId={sessionId} />;
 
   // Files + Git need the project list. Render lightweight states while

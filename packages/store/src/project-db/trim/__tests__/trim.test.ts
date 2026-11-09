@@ -99,7 +99,7 @@ describe('trimProjectSchema (C2)', () => {
       // 2) Completeness: nothing survives outside the project KEEP set + FTS
       //    shadows. A leftover here is a central table missing from the drop-list.
       const keep = projectKeepTables();
-      const isFtsShadow = (n: string) => /^(files_fts|symbols_fts|file_contents_fts)(_.*)?$/.test(n);
+      const isFtsShadow = (n: string) => /^(files_fts|symbols_fts|file_contents_fts|file_paths_fts)(_.*)?$/.test(n);
       const leftover = after.filter((n) => !keep.has(n) && !isFtsShadow(n));
       expect(leftover, `central tables missing from drop-list: ${leftover.join(', ')}`).toEqual([]);
       // 3) Core project tables + code FTS survive (FTS5 vtabs list as type='table').

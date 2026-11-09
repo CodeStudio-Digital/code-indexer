@@ -104,23 +104,28 @@ export function groupMessages(
 /**
  * A model can make many provider/tool cycles before the user speaks again.
  * Persist those cycles independently, but present them as one assistant turn
- * with one header. Apply this only after the fine-grained render cap so a very
- * large turn cannot bypass the DOM budget.
+ * with one header. Rendering splits the logical turn into bounded virtual
+ * segments; grouping must not repeatedly copy the growing turn arrays.
  */
 export function mergeConsecutiveAssistantGroups(groups: VisualGroup[]): VisualGroup[] {
   const merged: VisualGroup[] = [];
+  let owned: Extract<VisualGroup, { kind: 'assistant' }> | null = null;
   for (const group of groups) {
     const previous = merged[merged.length - 1];
     if (group.kind === 'assistant' && previous?.kind === 'assistant') {
-      merged[merged.length - 1] = {
-        kind: 'assistant',
-        messages: [...previous.messages, ...group.messages],
-        messageIds: [...previous.messageIds, ...group.messageIds],
-        usages: [...previous.usages, ...group.usages],
-        hasText: previous.hasText || group.hasText,
-      };
+      if (owned !== previous) {
+        owned = { ...previous, messages: [...previous.messages],
+          messageIds: [...previous.messageIds], usages: [...previous.usages] };
+        merged[merged.length - 1] = owned;
+      }
+      // Avoid spread argument limits for unusually large imported histories.
+      for (const message of group.messages) owned.messages.push(message);
+      for (const id of group.messageIds) owned.messageIds.push(id);
+      for (const usage of group.usages) owned.usages.push(usage);
+      owned.hasText ||= group.hasText;
     } else {
       merged.push(group);
+      owned = null;
     }
   }
   return merged;

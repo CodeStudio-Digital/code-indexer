@@ -51,6 +51,7 @@ import { DbClientStore } from '../../../packages/store/src/db-client-store.js';
 import { setDbToolsStores, setDbSecretDecryptor } from '../../../packages/code-agent/src/tools/db/index.js';
 import { CompanySessionEnvStore } from '../../../packages/store/src/company-session-env-store.js';
 import { QaTestRunStore } from '../../../packages/services/src/qa/store/qa-test-run-store.js';
+import { QaTestResultStore } from '../../../packages/services/src/qa/store/qa-test-result-store.js';
 import { CompanyServiceTransitionsStore } from '../../../packages/store/src/company-service-transitions-store.js';
 import { CompanyServiceLogsStore } from '../../../packages/store/src/company-service-logs-store.js';
 import { CompanySandboxServicesStore } from '../../../packages/store/src/company-sandbox-services-store.js';
@@ -88,6 +89,7 @@ import {
 } from '../../../packages/company/src/services/scheduler/recommend-shim.js';
 import { setGlobalDocsHintProvider } from '../../../packages/code-agent/src/core/docs-hint.js';
 import { DocStore } from '../../../packages/store/src/doc-store.js';
+import { setCompanyDocCorpus } from '../../../packages/company/src/services/company-doc-corpus.js';
 import {
   setGlobalPreviewDevtools,
   previewRpcTimeoutMs,
@@ -313,6 +315,7 @@ setDbSecretDecryptor((blob) =>
 // as the coder-worker: server/docs/search-backend.ts pulls `@mcp/*`
 // aliases that don't resolve inside worker_threads.
 const workerDocStore = new DocStore(rawDb);
+setCompanyDocCorpus(workerDocStore);
 setGlobalDocsHintProvider({
   listForProject: (projectId) => {
     try {
@@ -327,7 +330,7 @@ setGlobalDocsHintProvider({
     }
   },
 });
-setQaTestRunStore(new QaTestRunStore(sessionStore));
+setQaTestRunStore(new QaTestRunStore(sessionStore), new QaTestResultStore(sessionStore));
 // One CompanySessionEnvStore shared by BOTH the QA browser-endpoint tools and
 // the env_* tools (env_list/env_read/env_set/…). Each has its own module-level
 // binding that server.ts wires on the main thread; worker_threads don't share
@@ -449,7 +452,7 @@ const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
     // without terminating the run; falls back to `abort()` when inject misses.
     runners: {
       get: (agentRunId: string) => {
-        const runner = orchestrator.getSubordinate(agentRunId)?.runner;
+        const runner = orchestrator.getRunnerForSupervision(agentRunId);
         if (!runner) return undefined;
         return {
           injectToolResultError: (toolUseId: string, msg: string) =>
@@ -662,7 +665,7 @@ bridge.handle('supervisor.rpc', (payload) => {
 
 bridge.handle('stop', async () => {
   try { await workerDocSearch.dispose(); } catch { /* telemetry is best-effort */ }
-  try { disposeExecCommandSessions('company-worker-stop'); } catch { /* best-effort */ }
+  try { await disposeExecCommandSessions('company-worker-stop'); } catch { /* best-effort */ }
   try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
   // Tear down the orchestrator. `abortAll` aborts any live runners
   // and marks the bus ended. The bus.end mirror above will fire.
@@ -693,6 +696,9 @@ bridge.handle('stop', async () => {
   flushPending();
   busUnsubscribe();
   setSandboxArchiveBundleResolver(null);
+  // Release coder journal leases as well as Company metadata before the worker
+  // exits: another worker shares this PID, so PID liveness cannot recover them.
+  await sessionStore.close();
   try { companyStore.close(); } catch { /* best-effort */ }
   return { ok: true };
 });

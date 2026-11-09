@@ -34,6 +34,11 @@ const ITEM_CHAR_CAP = 1_200;
 const BLOCK_CHAR_CAP = 12_000;
 const DEFAULT_TIMEOUT_MS = 2_000;
 
+function recordRendered(ids: string[]): void {
+  try { void Promise.resolve(getCompanyMemoryPorts()?.memoryRetriever.recordInjected?.(ids)).catch(() => undefined); }
+  catch { /* best-effort telemetry */ }
+}
+
 function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -71,14 +76,18 @@ export async function fetchProjectMemoryBlock(opts: FetchProjectMemoryBlockOpts)
     if (!items || items.length === 0) return '';
 
     const rendered: string[] = [];
+    const includedIds: string[] = [];
     let used = 0;
     for (const item of items) {
       const block = renderItem(item);
       if (used + block.length > BLOCK_CHAR_CAP) break;
       rendered.push(block);
+      includedIds.push(item.id);
       used += block.length;
     }
     if (rendered.length === 0) return '';
+
+    recordRendered(includedIds);
 
     return `\n## PROJECT MEMORY (from previous runs)
 
@@ -110,14 +119,18 @@ export async function fetchUserMemoryBlock(opts: { taskText: string; timeoutMs?:
     if (!items || items.length === 0) return '';
 
     const rendered: string[] = [];
+    const includedIds: string[] = [];
     let used = 0;
     for (const item of items) {
       const block = renderItem(item);
       if (used + block.length > BLOCK_CHAR_CAP) break;
       rendered.push(block);
+      includedIds.push(item.id);
       used += block.length;
     }
     if (rendered.length === 0) return '';
+
+    recordRendered(includedIds);
 
     return `\n## USER PREFERENCES (how I want you to work)
 

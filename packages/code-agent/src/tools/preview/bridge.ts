@@ -12,6 +12,7 @@ import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
 import { cancellableToolRpc } from '../cancellable-rpc.js';
 import { PreviewOutcomeUnknownError } from './failure.js';
+import { isConfirmedRpcFailure } from '@mcp/shared/rpc-response-error.js';
 import type { PreviewDispatchScope } from '@mcp/services/preview/contracts.js';
 import {
   assertMutationFence,
@@ -113,10 +114,10 @@ export async function invokePreview(
       () => backend.cancel?.(requestId), signal, 'Preview operation aborted.',
     );
   } catch (error) {
-    // A transport rejection is not evidence that CDP never delivered a click,
-    // keypress, evaluation, navigation or server start. Preserve this ambiguity
-    // through the tool result so the runner stops before repeating effects.
-    if (dispatched && PREVIEW_EFFECT_METHODS.has(method)) {
+    // A lost reply may hide a delivered effect. A correlated failure reply,
+    // however, is a tool error the agent can inspect and recover from (e.g.
+    // connection refused), not a missing outcome. Neither implies rollback.
+    if (dispatched && PREVIEW_EFFECT_METHODS.has(method) && !isConfirmedRpcFailure(error)) {
       throw new PreviewOutcomeUnknownError(error);
     }
     throw error;

@@ -49,7 +49,6 @@ function catalogEntry(id: SessionId): CatalogEntry {
       status: 'idle',
       updated_at: updatedAt,
       archived_at: null,
-      goal: null,
       todos: [],
       permissions: {},
       tools: {},
@@ -99,6 +98,19 @@ function shortSpanStore(id: SessionId) {
 }
 
 describe('memory sweeper relational writes', () => {
+  it('skips a late host harvest even after its worker is no longer active', async () => {
+    const id = sessionId(38);
+    const { sessionStore } = shortSpanStore(id);
+    const sweeper = startMemorySweeper({ sessionStore,
+      db: { getProjectMemoryEnabled: () => true } as unknown as CodeIndexDB,
+      runEndMemory: { hasPending: () => true, isConfigured: async () => true } as unknown as RunEndMemory,
+      intervalMs: 60_000, idleAfterMs: 0, maxPerSweep: 1, isSessionActive: () => false });
+    try {
+      expect(await sweeper.runOnce()).toBe(0);
+      expect(sessionStore.maxMessageSeq).not.toHaveBeenCalled();
+      expect(sessionStore.listMessagesAfter).not.toHaveBeenCalled();
+    } finally { sweeper.stop(); }
+  });
   it('does not reopen an unchanged no-op conversation on every timer tick and balances diagnostics', async () => {
     const id = sessionId(39);
     const { sessionStore, entry } = shortSpanStore(id);

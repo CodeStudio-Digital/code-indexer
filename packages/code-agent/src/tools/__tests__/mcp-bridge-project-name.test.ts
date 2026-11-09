@@ -196,7 +196,7 @@ describe('McpToolBridge project_name injection', () => {
       inputSizeExact: false,
       outputSize: 400,
       unit: 'lines',
-      recoverable: true,
+      recoverable: false,
     }]);
   });
 

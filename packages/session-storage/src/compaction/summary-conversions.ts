@@ -20,7 +20,6 @@ export function summaryV2ToV3(summary: CompactionSummaryV2): CompactionSummaryV3
       constraints: [],
       pending_tasks: summary.pending_tasks,
       next_step: summary.next_step,
-      ...(summary.active_goal ? { active_goal: summary.active_goal } : {}),
     },
   });
 }
@@ -40,7 +39,6 @@ export function summaryV3ToV2(summary: CompactionSummaryV3): CompactionSummaryV2
     pending_tasks: summary.resume.pending_tasks,
     current_work: summary.resume.current_focus,
     next_step: summary.resume.next_step,
-    ...(summary.resume.active_goal ? { active_goal: summary.resume.active_goal } : {}),
   };
 }
 

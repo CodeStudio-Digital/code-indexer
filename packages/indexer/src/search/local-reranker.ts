@@ -8,8 +8,8 @@
  * apps/http-api/server/deps.ts). A cross-encoder scores (query, passage)
  * pairs jointly, which sharply lifts precision on the RRF-merged top-N.
  *
- * Default model is `Xenova/bge-reranker-base` — multilingual enough for PT-BR
- * comments + English code identifiers. A lighter alternative is
+ * Default model is `Xenova/bge-reranker-base`, trained for English and Chinese.
+ * Other languages require a separately measured quality gate. A lighter alternative is
  * `mixedbread-ai/mxbai-rerank-xsmall-v1` (set via `config.model`).
  *
  * `@huggingface/transformers` is imported lazily on first use. The desktop
@@ -19,6 +19,7 @@ import { createIdleResource, type IdleResource } from '@mcp/shared/utils/idle-di
 import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 import { resolveModelCacheDir } from './model-cache.js';
 import { resolveOnnxIdleTtlMs } from './onnx-idle.js';
+import { localRerankQueryBlockReason } from './rerank-query-policy.js';
 import type { SemanticOnnxDtype } from '@mcp/store/semantic-store.js';
 
 const DEFAULT_MODEL = 'Xenova/bge-reranker-base';
@@ -67,6 +68,10 @@ export class LocalReranker implements RerankerService {
   private executionProvider: string;
   private lastLatencyMs: number | null = null;
   private lease: IdleResource<CrossEncoder>;
+
+  queryBlockReason(query: string): string | null {
+    return localRerankQueryBlockReason(this.model, query);
+  }
 
   constructor(opts?: {
     model?: string;
@@ -141,6 +146,7 @@ export class LocalReranker implements RerankerService {
    */
   async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
     if (candidates.length === 0) return [];
+    if (this.queryBlockReason(query)) return passthrough(candidates, topK);
 
     const started = Date.now();
     try {

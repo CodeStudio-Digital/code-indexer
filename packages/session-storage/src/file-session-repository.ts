@@ -41,6 +41,7 @@ import {
   computeRequestHash,
   readConversation,
   readConversationSync,
+  SessionLeaseHeldError,
   SessionWriter,
   type SessionWriterOptions,
   type WriterProjection,
@@ -208,6 +209,7 @@ export class FileSessionRepository {
   readonly #writerOwnerId?: string;
   readonly #faultInjector?: SessionStorageFaultInjector;
   readonly #writers = new Map<string, Promise<SessionWriter>>();
+  readonly #projectionMutations = new Map<string, Promise<void>>();
   readonly #metricProjections = new WeakMap<SessionWriter, SessionMetricsProjection>();
   readonly #sessionCache = new Map<string, SessionMetadata>();
   readonly #stateCache = new Map<string, SessionState>();
@@ -629,12 +631,45 @@ export class FileSessionRepository {
     });
   }
 
+  /** Company metadata is edited by both HTTP and its worker. Keep its lease
+   * only for the atomic mutation; coder journals retain their long-lived owner.
+   * Retry acquisition only, never a callback whose write may already have run. */
+  #withProjectionWriter<T>(
+    location: SessionLocation,
+    mutate: (writer: SessionWriter) => Promise<T>,
+  ): Promise<T> {
+    const kind = this.readSessionSync(location).kind;
+    if (kind !== 'company' && kind !== 'app_studio') {
+      return this.#writer(location).then(mutate);
+    }
+    const key = cacheKey(location);
+    const previous = this.#projectionMutations.get(key) ?? Promise.resolve();
+    const result = previous.then(async () => {
+      const deadline = Date.now() + 5_000;
+      let writer: SessionWriter;
+      for (;;) {
+        try { writer = await this.#writer(location); break; }
+        catch (error) {
+          if (!(error instanceof SessionLeaseHeldError) || Date.now() >= deadline) throw error;
+          await new Promise(resolve => setTimeout(resolve, 25 + Math.random() * 25));
+        }
+      }
+      try { return await mutate(writer); }
+      finally { await this.closeSession(location); }
+    });
+    const settled = result.then(() => undefined, () => undefined);
+    this.#projectionMutations.set(key, settled);
+    void settled.then(() => {
+      if (this.#projectionMutations.get(key) === settled) this.#projectionMutations.delete(key);
+    });
+    return result;
+  }
+
   async updateSession(
     location: SessionLocation,
     update: (current: SessionMetadata) => SessionMetadata,
   ): Promise<SessionMetadata> {
-    const writer = await this.#writer(location);
-    const next = await writer.runExclusive(async () => {
+    const next = await this.#withProjectionWriter(location, writer => writer.runExclusive(async () => {
       const current = this.readSessionSync(location);
       const updated = update(current);
       if (updated.id !== current.id || updated.schema_version !== 1) {
@@ -648,7 +683,7 @@ export class FileSessionRepository {
       });
       this.#sessionCache.set(cacheKey(location), value);
       return value;
-    });
+    }));
     this.#emit({ type: 'updated', location });
     return next;
   }
@@ -657,8 +692,7 @@ export class FileSessionRepository {
     location: SessionLocation,
     update: (current: SessionState) => SessionState,
   ): Promise<SessionState> {
-    const writer = await this.#writer(location);
-    const next = await writer.runExclusive(async () => {
+    const next = await this.#withProjectionWriter(location, writer => writer.runExclusive(async () => {
       const current = this.readStateSync(location);
       const updated = update(current);
       if (updated.schema_version !== 1) throw new Error('State update cannot change schema_version');
@@ -670,7 +704,7 @@ export class FileSessionRepository {
       });
       this.#stateCache.set(cacheKey(location), value);
       return value;
-    });
+    }));
     this.#emit({ type: 'updated', location });
     return next;
   }
@@ -1089,6 +1123,7 @@ export class FileSessionRepository {
   }
 
   async close(): Promise<void> {
+    await Promise.all(this.#projectionMutations.values());
     const writers = [...this.#writers.values()];
     this.#writers.clear();
     await Promise.allSettled(writers.map(async (writer) => (await writer).close()));

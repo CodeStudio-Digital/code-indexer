@@ -1,9 +1,11 @@
+import { mcpResultToToolResult } from './mcp-result.js';
 import type { ExternalMcpContent } from './mcp-content-types.js';
 import { mcpServerConfigurationKey } from './mcp-transport.js';
 import type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
 export type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
 import { terminateSession, createTransport } from './mcp-transport.js';
 import { listToolsFromConnection } from './mcp-catalog-listing.js';
+import { DeferredMcpValidator } from './deferred-mcp-validator.js';
 /**
  * McpServerManager — manages connections to N external MCP servers and
  * aggregates their tools into CoderTool[] with `ext_<server_id>__` prefix.
@@ -28,7 +30,9 @@ import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/r
 import { sanitizeUntrustedCapabilityMetadata } from '@mcp/code-agent/core/capability-catalog.js';
 
 /** Connect timeout per server (ms). */
-const CONNECT_TIMEOUT_MS = 10_000;
+// Package runners (npx/uvx) and OAuth refresh may legitimately exceed 10s on
+// cold start. Keep a bounded, cancellable budget for all three transports.
+const CONNECT_TIMEOUT_MS = 30_000;
 
 export class McpServerManager {
   private connections = new Map<string, ServerConnection>();
@@ -50,9 +54,8 @@ export class McpServerManager {
    * Failures are isolated — a failing server logs a warning but doesn't block others.
    */
   async connectAll(configs: McpServerConfig[]): Promise<void> {
-    const results = await Promise.allSettled(
-      configs.map((cfg) => this.connectServer(cfg)),
-    );
+    if (new Set(configs.map(config => config.id)).size !== configs.length) throw new Error('Duplicate MCP server ids');
+    const results = await mapMcpSources(configs, cfg => this.connectServer(cfg));
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (r.status === 'rejected') {
@@ -103,7 +106,9 @@ export class McpServerManager {
       }), signal);
       // No asynchronous boundary between the last authority check and connect.
       signal.throwIfAborted();
-      client = new Client({ name: 'coder-ext-' + config.id, version: '0.1.0' }, { capabilities: {} });
+      client = new Client({ name: 'coder-ext-' + config.id, version: '0.1.0' }, {
+        capabilities: {}, jsonSchemaValidator: new DeferredMcpValidator(),
+      });
       await awaitMcpConnection(client.connect(transport), signal);
       signal.throwIfAborted();
       if (this.connecting.get(config.id) !== attempt) throw new Error('External MCP connection superseded');
@@ -128,12 +133,13 @@ export class McpServerManager {
    * List tools from all connected servers, aggregated and prefixed.
    * Returns both the CoderTool array and a tier map for filterByTiers.
    */
-  async listAllTools(): Promise<{ tools: CoderTool[]; tierMap: Map<string, ToolTier> }> {
+  async listAllTools(options: { serverId?: string } = {}): Promise<{ tools: CoderTool[]; tierMap: Map<string, ToolTier> }> {
     const allTools: CoderTool[] = [];
     const tierMap = new Map<string, ToolTier>();
 
-    for (const [serverId, conn] of this.connections) {
-      if (conn.state !== 'connected') continue;
+    await mapMcpSources([...this.connections], async ([serverId, conn]) => {
+      if (options.serverId && options.serverId !== serverId) return;
+      if (conn.state !== 'connected') return;
 
       try {
         const listed = await listToolsFromConnection(serverId, conn);
@@ -147,6 +153,10 @@ export class McpServerManager {
             t.description,
             t.inputSchema ?? { type: 'object', properties: {} },
           );
+          if (sanitized.schemaError) {
+            console.warn(`[mcp-ext] omitted tool "${prefixedName}": ${sanitized.schemaError}`);
+            continue;
+          }
           const schema = sanitized.schema as unknown as JsonSchema;
 
           tierMap.set(prefixedName, conn.config.default_tier);
@@ -184,7 +194,7 @@ export class McpServerManager {
         conn.state = 'error';
         conn.error = e instanceof Error ? e.message : String(e);
       }
-    }
+    });
 
     // Sort all external tools by name for prefix-cache stability
     allTools.sort((a, b) => a.name.localeCompare(b.name));
@@ -192,10 +202,17 @@ export class McpServerManager {
     return { tools: allTools, tierMap };
   }
 
-  /** Rebuild every transport from the latest persisted configuration. */
+  /** Reconcile by source. Unchanged transports (and their in-flight calls) survive. */
   async refreshAll(configs: McpServerConfig[]): Promise<void> {
-    await this.closeAll();
-    await this.connectAll(configs);
+    const next = new Map(configs.map(config => [config.id, config]));
+    if (next.size !== configs.length) throw new Error('Duplicate MCP server ids in configuration');
+    const removed = [...new Set([...this.connections.keys(), ...this.connecting.keys()])].filter(id => !next.has(id));
+    await Promise.all(removed.map(id => this.closeServer(id)));
+    const changed = configs.filter(config => {
+      const current = this.connections.get(config.id);
+      return current?.state !== 'connected' || mcpServerConfigurationKey(current.config) !== mcpServerConfigurationKey(config);
+    });
+    await this.connectAll(changed);
   }
 
   /** Reconnect only before dispatch. A lost response never authorizes a replay. */
@@ -221,7 +238,7 @@ export class McpServerManager {
           if (ctx.signal?.aborted || this.connections.get(serverId) !== admitted || admitted.state !== 'connected'
             || mcpServerConfigurationKey(admitted.config) !== configKey) throw new Error('MCP connection retired.');
           ctx.assertExternalMcpDispatch?.();
-        }, () => this.callToolOnce(admitted, toolName, args, ctx.signal));
+        }, () => this.callToolOnce(admitted, toolName, args, ctx.signal, ctx.deadlineAtEpochMs));
       } catch (e) {
         if (e instanceof McpDispatchRejected) return err(e.message);
         conn.state = 'disconnected';
@@ -259,75 +276,12 @@ export class McpServerManager {
     toolName: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    deadlineAtEpochMs?: number,
   ): Promise<ToolResult> {
-    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, { signal });
-    const blocks = (result.content ?? []) as ExternalMcpContent[];
-    const textParts: string[] = [];
-    const extraUserBlocks: ContentBlock[] = [];
-
-    for (const block of blocks) {
-      if (block.type === 'text' && typeof block.text === 'string') {
-        textParts.push(block.text);
-        continue;
-      }
-      if (block.type === 'image' && typeof block.data === 'string') {
-        extraUserBlocks.push({
-          type: 'image',
-          mediaType: block.mimeType || 'image/png',
-          base64: block.data,
-        });
-        continue;
-      }
-      if (block.type === 'audio' && typeof block.data === 'string') {
-        extraUserBlocks.push({
-          type: 'document',
-          name: `${toolName}-audio`,
-          mediaType: block.mimeType || 'audio/mpeg',
-          base64: block.data,
-        });
-        continue;
-      }
-      if (block.type === 'resource' && block.resource) {
-        const resource = block.resource;
-        const mediaType = resource.mimeType || 'application/octet-stream';
-        if (typeof resource.blob === 'string' && mediaType.startsWith('image/')) {
-          extraUserBlocks.push({ type: 'image', mediaType, base64: resource.blob });
-        } else {
-          extraUserBlocks.push({
-            type: 'document',
-            name: resource.uri || `${toolName}-resource`,
-            mediaType,
-            text: resource.text,
-            base64: resource.blob,
-          });
-        }
-        continue;
-      }
-      if (block.type === 'resource_link' && typeof block.uri === 'string') {
-        textParts.push(`[resource] ${block.name ? `${block.name}: ` : ''}${block.uri}`);
-      }
-    }
-
-    const structuredData = result.structuredContent;
-    if (textParts.length === 0 && structuredData !== undefined) {
-      textParts.push(JSON.stringify(structuredData));
-    }
-    if (textParts.length === 0 && extraUserBlocks.length > 0) {
-      textParts.push(
-        `External MCP tool returned ${extraUserBlocks.length} attachment` +
-        `${extraUserBlocks.length === 1 ? '' : 's'}.`,
-      );
-    }
-    const text = textParts.join('\n') || 'External MCP tool returned no content.';
-    const base = result.isError ? err(text) : ok(text);
-    return {
-      ...base,
-      ...(structuredData !== undefined ? { structuredData } : {}),
-      ...(extraUserBlocks.length > 0 ? { extraUserBlocks } : {}),
-      ...(textParts.length === 1 && structuredData !== undefined && blocks.length === 0
-        ? { contentFormat: 'json' as const }
-        : {}),
-    };
+    const remaining = Math.min(60_000, (deadlineAtEpochMs ?? Date.now() + 60_000) - Date.now());
+    if (remaining <= 0) throw new Error("MCP deadline expired before dispatch");
+    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, { signal, timeout: remaining });
+    return mcpResultToToolResult(result, toolName);
   }
 
   /**
@@ -480,6 +434,20 @@ export class McpServerManager {
     }
     return count;
   }
+}
+
+/** Independent sources have a fixed admission ceiling, including failed peers. */
+async function mapMcpSources<T, R>(items: T[], action: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try { results[index] = { status: 'fulfilled', value: await action(items[index]) }; }
+      catch (reason) { results[index] = { status: 'rejected', reason }; }
+    }
+  }));
+  return results;
 }
 
 /** Bind handlers to the complete persisted configuration, without exposing credentials. */

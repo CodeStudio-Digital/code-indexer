@@ -216,6 +216,10 @@ class FsSecondaryOperationalStore {
     id: SessionId | string,
   ) => Promise<FsToolCallRecord[]>;
 
+  listSessionMemoryToolCalls = thisCall(
+    (self, id: SessionId | string) => self.services.tools.listMemoryCalls(id), this,
+  ) as (id: SessionId | string) => Promise<Array<{ tool_name: string; created_at: string }>>;
+
   listGroups = thisCall(
     (self, projectId: ProjectId | null) =>
       self.services.groups.list(projectId),

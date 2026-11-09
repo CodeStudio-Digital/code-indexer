@@ -15,7 +15,6 @@ import { QaErrorClassHint } from '../shared/QaErrorClassHint.js';
 import { summariseRunI18n } from '../shared/qa-i18n.js';
 import { LiveRunTree } from './LiveRunTree.js';
 import { useLiveRun } from './useLiveRun.js';
-import { useQaDiagnostics } from './useQaDiagnostics.js';
 import type { QaDiagnostics } from '../shared/types.js';
 
 interface Props {
@@ -27,9 +26,7 @@ const WATCHDOG_PREFIX = 'No events received from reporter';
 
 export function LiveRunView({ sessionId, serviceId }: Props) {
   const { t } = useTranslation('agents');
-  const { run, results, loading } = useLiveRun(sessionId, { serviceId });
-  const showDiagnostics = !loading && !run;
-  const diag = useQaDiagnostics(sessionId, showDiagnostics);
+  const { run, results, loading, error } = useLiveRun(sessionId, { serviceId });
 
   if (loading) {
     return (
@@ -40,7 +37,14 @@ export function LiveRunView({ sessionId, serviceId }: Props) {
   }
 
   if (!run) {
-    return <EmptyStatePanel diagnostics={diag.data} loading={diag.loading} error={diag.error} />;
+    return <div className="p-4 space-y-4 overflow-auto h-full">
+      <div className="rounded-lg border bg-card p-4 space-y-2">
+        <h3 className="font-medium text-sm">Validação no preview</h3>
+        <p className="text-sm text-muted-foreground">Defina os critérios na tarefa e delegue a validação ao agente QA. O CodeStudio verifica a página real e salva capturas e resultados nesta sessão.</p>
+        <p className="text-xs text-muted-foreground">Nenhuma execução ativa. Novas execuções aparecem automaticamente; resultados concluídos ficam no Histórico.</p>
+        {error && <p role="alert" className="text-sm text-destructive">Não foi possível consultar as execuções: {error}</p>}
+      </div>
+    </div>;
   }
 
   const elapsedMs = computeElapsed(run.started_at);
@@ -51,6 +55,7 @@ export function LiveRunView({ sessionId, serviceId }: Props) {
         <div className="flex items-center gap-2">
           <QaStatusBadge kind="run" status={run.status} />
           <span className="text-sm font-semibold truncate max-w-[280px]">{run.suite}</span>
+          <span className="text-xs text-muted-foreground">{run.executor === 'preview' ? 'Preview' : 'Playwright'}</span>
         </div>
         <div className="text-xs text-muted-foreground">
           {summariseRunI18n(t, run.passed, run.failed, run.skipped)}
@@ -66,7 +71,7 @@ export function LiveRunView({ sessionId, serviceId }: Props) {
   );
 }
 
-function EmptyStatePanel({
+export function QaDiagnosticsPanel({
   diagnostics,
   loading,
   error,
@@ -87,11 +92,7 @@ function EmptyStatePanel({
   if (error || !diagnostics) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
-        <p className="text-sm text-muted-foreground">{t('qa.noRun')}</p>
-        <p className="text-xs text-muted-foreground mt-1">
-          {t('qa.noRunHint')}
-        </p>
-        {error ? <p className="text-xs text-red-600 mt-2">{t('qa.diagnosticsUnavailable', { error })}</p> : null}
+        {error ? <p className="text-xs text-red-600">{t('qa.diagnosticsUnavailable', { error })}</p> : <p className="text-xs text-muted-foreground">{t('qa.loadingDiagnostics')}</p>}
       </div>
     );
   }
@@ -101,7 +102,7 @@ function EmptyStatePanel({
 
   return (
     <div className="px-4 py-6 space-y-3 max-w-3xl mx-auto">
-      <div className="text-sm font-medium">{t('qa.noRunTitle')}</div>
+      <div className="text-sm font-medium">Diagnóstico da regressão</div>
       <p className="text-xs text-muted-foreground">
         {t('qa.diagnosticsIntro')}
       </p>

@@ -4,16 +4,12 @@ export type ResearchDepth = typeof RESEARCH_DEPTHS[number];
 
 export interface SubagentResearchPolicy {
   depth: ResearchDepth;
-  source: 'explicit' | 'inferred' | 'budget';
+  source: 'explicit' | 'inferred';
   /** A synthesis checkpoint, never a tool-call cutoff. Zero disables this trigger. */
   softToolTarget: number;
   /** A synthesis checkpoint, never a wall-clock timeout. Zero disables this trigger. */
   softTimeTargetMs: number;
   completionCriteria: string[];
-  parentGoalBudgetTokens?: number;
-  budgetShareTokens?: number;
-  /** Internal: keep custom targets intact when a parent goal budget is applied. */
-  customTargets?: boolean;
 }
 
 export interface BuildResearchPolicyInput {
@@ -22,8 +18,6 @@ export interface BuildResearchPolicyInput {
   targetMinutes?: number;
   targetToolCalls?: number;
   completionCriteria?: readonly string[];
-  parentGoalBudgetTokens?: number;
-  agentCount?: number;
 }
 
 interface DepthDefaults {
@@ -107,37 +101,8 @@ export function buildResearchPolicy(input: BuildResearchPolicyInput): SubagentRe
     softToolTarget: nonNegativeInteger(input.targetToolCalls, defaults.softToolTarget),
     softTimeTargetMs: targetMinutes,
     completionCriteria: normalizedCriteria(input.completionCriteria),
-    customTargets: input.targetMinutes != null || input.targetToolCalls != null,
   };
-  return applyParentGoalBudget(policy, input.parentGoalBudgetTokens, input.agentCount);
-}
-
-export function applyParentGoalBudget(
-  policy: SubagentResearchPolicy,
-  parentGoalBudgetTokens: number | undefined,
-  agentCount = 1,
-): SubagentResearchPolicy {
-  if (parentGoalBudgetTokens == null || !Number.isFinite(parentGoalBudgetTokens) || parentGoalBudgetTokens <= 0) {
-    return policy;
-  }
-  const budget = Math.floor(parentGoalBudgetTokens);
-  const share = Math.max(1, Math.floor(budget / Math.max(1, agentCount)));
-  // A session-wide goal budget must influence delegated work. When the model
-  // did not explicitly request a depth/target and the per-child share is small,
-  // prefer a decision scan. This is still soft: no run is aborted at the share.
-  if (policy.source === 'inferred' && !policy.customTargets && policy.depth === 'standard' && share < 8_000) {
-    const quick = RESEARCH_DEPTH_DEFAULTS.quick;
-    return {
-      ...policy,
-      depth: 'quick',
-      source: 'budget',
-      softToolTarget: quick.softToolTarget,
-      softTimeTargetMs: quick.softTimeTargetMs,
-      parentGoalBudgetTokens: budget,
-      budgetShareTokens: share,
-    };
-  }
-  return { ...policy, parentGoalBudgetTokens: budget, budgetShareTokens: share };
+  return policy;
 }
 
 function formatTargetMs(ms: number): string {
@@ -160,13 +125,9 @@ export function appendResearchContract(
 ): string {
   if (!policy) return systemPrompt;
   const defaults = RESEARCH_DEPTH_DEFAULTS[policy.depth];
-  const budget = policy.parentGoalBudgetTokens
-    ? `\n- Parent goal budget: ~${policy.parentGoalBudgetTokens} tokens session-wide` +
-      `${policy.budgetShareTokens ? ` (~${policy.budgetShareTokens} planning share for this child)` : ''}. Prioritize decisions; this is not a cutoff.`
-    : '';
   return `${systemPrompt}\n\n# Research contract (soft, not a watchdog)\n\n` +
     `- Depth: **${policy.depth}** (${policy.source}). ${defaults.scope}\n` +
-    `- Synthesis targets: ${policy.softToolTarget || 'disabled'} tool calls; ${formatTargetMs(policy.softTimeTargetMs)}.${budget}\n` +
+    `- Synthesis targets: ${policy.softToolTarget || 'disabled'} tool calls; ${formatTargetMs(policy.softTimeTargetMs)}.\n` +
     '- Targets trigger a synthesis checkpoint only. They do not authorize skipping explicit completion criteria and never turn the run into partial/failure.\n' +
     '- File novelty is not decision novelty. Once the requested decisions have evidence, stop even if more files could be inspected.\n' +
     '- Prefer one strong source per decision. Add a second source only for ambiguity, conflict, or material risk.\n' +

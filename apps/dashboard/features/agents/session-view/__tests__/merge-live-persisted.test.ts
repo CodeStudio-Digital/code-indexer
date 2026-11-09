@@ -54,7 +54,6 @@ const run = (n: number, role: string, over: Partial<PersistedAgentRun> = {}): Pe
 const live = (n: number, over: Partial<AgentStreamState> = {}): AgentStreamState => ({
   role: 'backend',
   agentRunId: uuid(n),
-  textChunks: [],
   toolCalls: [],
   status: 'running',
   ...over,
@@ -70,11 +69,11 @@ describe('mergeSubordinates', () => {
   it('overlays live state by agentRunId (live wins) and dedups', () => {
     const merged = mergeSubordinates(
       [run(2, 'frontend')],
-      new Map([[uuid(2), live(2, { status: 'running', textChunks: ['x'] })]]),
+      new Map([[uuid(2), live(2, { status: 'running', statusMessage: 'live progress' })]]),
     );
     expect(merged).toHaveLength(1);
     expect(merged[0].status).toBe('running');
-    expect(merged[0].textChunks).toEqual(['x']);
+    expect(merged[0].statusMessage).toBe('live progress');
   });
 
   it('preserves persisted coderSessionId when the live seed lacks it', () => {

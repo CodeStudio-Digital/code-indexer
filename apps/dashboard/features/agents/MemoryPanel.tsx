@@ -1,14 +1,11 @@
 /**
  * Project-memory tab for the company view (Mem C).
  *
- * The memory itself is the project's context-snapshot store (migrations
- * 114/115) — the same snapshots the run-end distiller writes and the
- * spawn-time PROJECT MEMORY block reads. This tab is the operator's
- * curation valve: inspect what agents will be born knowing, fix wrong
- * memories, delete noise, add hand-written decisions.
+ * The primary surface curates the active agent_memory store consumed by
+ * startup/recall. Preserved context notes are available for explicit import.
  *
- * Zero new endpoints: mounts the existing `SnapshotEditor`
- * (features/snapshots) over `/api/projects/:id/snapshots`, with a
+ * Mounts the shared `SnapshotEditor`
+ * (features/snapshots) over the active memory routes, with a
  * `ProjectSelect` on top to flip between the session's linked projects —
  * same composition as `IndexedFilesTab`.
  */

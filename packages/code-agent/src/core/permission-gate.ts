@@ -5,7 +5,7 @@
  *
  *   - 'ask'           → write + execute + admin pause;
  *   - 'auto'          → execute + admin pause (file edits run free);
- *   - 'unrestricted'  → never pauses (legacy behavior).
+ *   - 'unrestricted'  → new work runs freely; DB writes and exact uncertain replays remain explicit.
  *
  * Enforced in code at the dispatch layer (executing-dispatch + code_exec
  * nested calls), NOT by the model. The gate lives on `ToolContext`, so
@@ -20,11 +20,15 @@
  * Unparseable or foreign payloads deny too (fail-safe).
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { createHash } from 'node:crypto';
+import { stableArgsKey } from './runner/dup-utils.js';
+import { needsOutcomeRecoveryApproval } from './uncertain-tool-outcome.js';
 import { isIrreversibleTool, resolveToolInvocationMetadata } from './policy.js';
+import type { OutcomeRecoverySnapshot } from './outcome-recovery-state.js';
 
 export type ToolPermissionMode = 'ask' | 'auto' | 'unrestricted';
 export type ApprovalRiskClass = 'write' | 'execute' | 'admin';
-export type ApprovalKind = 'standard' | 'database_write';
+export type ApprovalKind = 'standard' | 'database_write' | 'outcome_recovery';
 
 export const TOOL_PERMISSION_MODES: readonly ToolPermissionMode[] = ['ask', 'auto', 'unrestricted'];
 
@@ -135,6 +139,7 @@ export interface ApprovalCheckInput {
   parentToolUseId?: string;
   turn?: number;
   nested?: boolean;
+  outcomeRecovery?: import('./tool.js').ToolContext['outcomeRecovery'];
 }
 
 export type ApprovalCheckResult =
@@ -146,6 +151,8 @@ export interface PermissionGateDeps {
   getMode: () => ToolPermissionMode;
   emit: (event: 'tool_approval_request' | 'tool_approval_resolved', payload: Record<string, unknown>) => void;
   waitForUserInput: (askId: string) => Promise<string>;
+  /** Release the existing keyed slot after durable recovery restores policy. */
+  resolvePending?: (askId: string, value: string) => boolean;
   /** Session "always allow" grants persisted from previous runs. */
   initialGrants?: readonly string[];
   /** Persist a new "always allow" grant. */
@@ -159,6 +166,9 @@ const KEEP_ALIVE_MS = 4 * 60_000; // watchdog flips at 10 min — tick well unde
 export class PermissionGate {
   private readonly deps: PermissionGateDeps;
   private readonly grants: Set<string>;
+  /** Exact invocation grants only; historical uncertainty is never erased. */
+  private readonly recoveryApprovals = new Set<string>();
+  private readonly pendingPolicyChecks = new Set<() => void>();
   private pending = 0;
   private keepAlive: ReturnType<typeof setInterval> | null = null;
 
@@ -169,6 +179,17 @@ export class PermissionGate {
 
   pendingCount(): number {
     return this.pending;
+  }
+
+  getMode(): ToolPermissionMode { return this.deps.getMode(); }
+
+  requiresOutcomeRecoveryApproval(req: ApprovalCheckInput): boolean {
+    return needsOutcomeRecoveryApproval(req.outcomeRecovery, req.tool, req.input, this.getMode());
+  }
+
+  /** Event-driven: a live mode switch can release an already waiting new call. */
+  refreshPending(): void {
+    for (const check of this.pendingPolicyChecks) check();
   }
 
   /**
@@ -193,20 +214,38 @@ export class PermissionGate {
   }
 
   async check(req: ApprovalCheckInput): Promise<ApprovalCheckResult> {
-    const riskClass = classifyForGate(req.tool, req.toolName, req.input);
+    if (req.outcomeRecovery?.toolUseIds.length && req.outcomeRecovery.refresh) {
+      await req.outcomeRecovery.refresh();
+    }
+    const recovery = this.requiresOutcomeRecoveryApproval(req);
+    if (recovery && this.hasOutcomeRecoveryApproval(req)) return { allowed: true };
+    const classified = classifyForGate(req.tool, req.toolName, req.input);
+    const riskClass = recovery && classified === 'allow' ? 'execute' : classified;
     if (riskClass === 'allow') return { allowed: true };
-    const approvalKind = approvalKindFor(req.toolName, riskClass);
+    const approvalKind = recovery ? 'outcome_recovery' : approvalKindFor(req.toolName, riskClass);
     // A deliberate "always allow" grant is the only bypass for DB writes.
     // Global auto/unrestricted modes must not silently authorize data mutation.
-    if (this.grants.has(req.toolName)) return { allowed: true };
+    if (!recovery && this.grants.has(req.toolName)) return { allowed: true };
     const mode = this.deps.getMode();
-    if (approvalKind !== 'database_write') {
+    if (approvalKind === 'standard') {
       if (mode === 'unrestricted') return { allowed: true };
       if (mode === 'auto' && riskClass === 'write') return { allowed: true };
     }
 
+    const recoverySnapshot = recovery ? req.outcomeRecovery?.snapshot?.() : undefined;
+    // Bind this decision to the occurrences present before the card is shown.
+    // Reusing a toolUseId does not make a later incident the same operation.
+    const admissionKey = this.recoveryKey(req);
+
     // Slot first, event second — a same-tick approval must find the resolver.
     const wait = this.deps.waitForUserInput(approvalAskId(req.toolUseId));
+    let automaticRecovery = false;
+    const closeRecovered = (): void => {
+      if (!this.deps.resolvePending || this.requiresOutcomeRecoveryApproval(req)) return;
+      if (this.policyAllows(req) && this.deps.resolvePending(approvalAskId(req.toolUseId), JSON.stringify({ approved: true }))) automaticRecovery = true;
+    };
+    const unsubscribe = recovery ? req.outcomeRecovery?.subscribe?.(closeRecovered) : undefined;
+    this.pendingPolicyChecks.add(closeRecovered);
     this.beginPending();
     try {
       this.deps.emit('tool_approval_request', {
@@ -214,26 +253,58 @@ export class PermissionGate {
         parentToolUseId: req.parentToolUseId,
         toolName: req.toolName,
         argsSummary: approvalArgsSummary(req.input),
-        // Database approvals need the exact SQL/command, not the compact
+        // Database and recovery approvals need the exact call, not the compact
         // 600-character summary, so the user can make an informed decision.
         // Keep other tools summary-only to avoid duplicating arbitrarily large
         // file contents in the SSE stream.
-        ...((req.toolName === 'db_query' || req.toolName === 'db_command')
+        ...((recovery || req.toolName === 'db_query' || req.toolName === 'db_command')
           && req.input && typeof req.input === 'object'
           ? { input: req.input }
           : {}),
         riskClass,
         approvalKind,
+        ...(recoverySnapshot?.acknowledge && recoverySnapshot.incidents.length ? {
+          recovery: { fingerprint: recoverySnapshot.fingerprint, incidents: recoverySnapshot.incidents },
+        } : {}),
         turn: req.turn,
         nested: req.nested ?? false,
       });
-      return this.resolve(req, await wait);
+      const answer = await wait;
+      return await this.resolve(req, answer, recoverySnapshot, admissionKey, recovery, automaticRecovery);
     } finally {
+      unsubscribe?.();
+      this.pendingPolicyChecks.delete(closeRecovered);
       this.endPending();
     }
   }
 
-  private resolve(req: ApprovalCheckInput, raw: string): ApprovalCheckResult {
+  hasOutcomeRecoveryApproval(req: ApprovalCheckInput): boolean {
+    return this.recoveryApprovals.has(this.recoveryKey(req));
+  }
+
+  /** The Registry consumes admission once; a repeated physical call needs a new decision. */
+  consumeOutcomeRecoveryApproval(req: ApprovalCheckInput): boolean {
+    return this.recoveryApprovals.delete(this.recoveryKey(req));
+  }
+
+  private recoveryKey(req: ApprovalCheckInput): string {
+    return createHash('sha256').update(stableArgsKey({
+      id: req.toolUseId, name: req.toolName, input: req.input,
+      pending: [...(req.outcomeRecovery?.toolUseIds ?? [])].sort(),
+      fingerprint: req.outcomeRecovery?.snapshot?.().fingerprint,
+      replay: [...(req.outcomeRecovery?.replayToolUseIds?.(req.toolName, req.input) ?? [])].sort(),
+    })).digest('hex');
+  }
+
+  private policyAllows(req: ApprovalCheckInput): boolean {
+    const currentClass = classifyForGate(req.tool, req.toolName, req.input);
+    const currentMode = this.deps.getMode();
+    return currentClass === 'allow' || this.grants.has(req.toolName)
+      || (approvalKindFor(req.toolName, currentClass) === 'standard'
+        && (currentMode === 'unrestricted' || (currentMode === 'auto' && currentClass === 'write')));
+  }
+
+  private async resolve(req: ApprovalCheckInput, raw: string, snapshot: OutcomeRecoverySnapshot | undefined, admissionKey: string, recoveryOrigin: boolean, automaticRecovery: boolean): Promise<ApprovalCheckResult> {
     let payload: Record<string, unknown> = {};
     try {
       const parsed: unknown = JSON.parse(raw);
@@ -241,7 +312,40 @@ export class PermissionGate {
     } catch { /* fail-safe deny below */ }
 
     if (payload.approved === true) {
-      if (payload.alwaysAllow === true) {
+      // Resolving the wait slot schedules a continuation. A new incident or a
+      // mode change can arrive before that continuation actually runs.
+      if (automaticRecovery) {
+        if (this.requiresOutcomeRecoveryApproval(req) || !this.policyAllows(req)) {
+          this.emitResolved(req, false, 'recovery', 'recovery or permission state changed before dispatch');
+          return { allowed: false, refusalText: '[tool-recovery-state-changed: recovery or permission state changed before dispatch. Nothing was dispatched; check the current state before requesting approval again.]' };
+        }
+        this.emitResolved(req, true, 'recovery');
+        return { allowed: true };
+      }
+      if (payload.recoveryReviewed === true) {
+        if (!snapshot?.acknowledge || payload.recoveryFingerprint !== snapshot.fingerprint) {
+          this.emitResolved(req, false, 'user', 'recovery snapshot changed or is unavailable');
+          return { allowed: false, refusalText: '[tool-recovery-review-invalid: recovery review did not match the displayed incidents. Nothing was dispatched.]' };
+        }
+        try {
+          await snapshot.acknowledge();
+          if (req.outcomeRecovery?.toolUseIds.length) throw new Error('New unresolved incidents require review.');
+        } catch {
+          this.emitResolved(req, false, 'user', 'recovery review could not be durably confirmed');
+          return { allowed: false, refusalText: '[tool-recovery-review-unconfirmed: the incident review could not be committed or new incidents appeared. Nothing was dispatched. Inspect recovery status before proceeding.]' };
+        }
+      }
+      const recovery = this.requiresOutcomeRecoveryApproval(req);
+      if (recovery) {
+        if (payload.recoveryReviewed !== true && (!recoveryOrigin || this.recoveryKey(req) !== admissionKey)) {
+          this.emitResolved(req, false, 'user', 'recovery incidents changed after the approval was requested');
+          return { allowed: false, refusalText: '[tool-recovery-state-changed: new recovery incidents were not covered by this approval. Nothing was dispatched; inspect the updated incidents before requesting approval again.]' };
+        }
+        // A successful durable review explicitly authorizes the transition to
+        // its post-review state. Execute-once never grants a different state.
+        this.recoveryApprovals.add(payload.recoveryReviewed === true ? this.recoveryKey(req) : admissionKey);
+      }
+      if (!recoveryOrigin && !recovery && payload.alwaysAllow === true) {
         this.grants.add(req.toolName);
         try { this.deps.onGrant?.(req.toolName); } catch { /* persistence is best-effort */ }
       }
@@ -266,7 +370,7 @@ export class PermissionGate {
     return { allowed: false, refusalText: buildUserDeniedText(req.toolName, note) };
   }
 
-  private emitResolved(req: ApprovalCheckInput, approved: boolean, source: 'user' | 'interrupt' | 'abort', note?: string): void {
+  private emitResolved(req: ApprovalCheckInput, approved: boolean, source: 'user' | 'interrupt' | 'abort' | 'recovery', note?: string): void {
     this.deps.emit('tool_approval_resolved', {
       toolUseId: req.toolUseId,
       toolName: req.toolName,

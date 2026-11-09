@@ -52,7 +52,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     },
     projectIndexService: {
       ensureFresh: vi.fn(),
-      ensureStructuralReady: vi.fn(async () => ({ status: 'ready', phase: 'ready' })),
+      reconcileStructural: vi.fn(async () => ({ status: 'ready', phase: 'ready' })),
       getStatus: vi.fn(() => ({ projectId: 7, phase: 'ready' })),
     },
     semanticJobs: {
@@ -244,8 +244,8 @@ describe('project indexing routes', () => {
       method: 'POST',
     });
     expect(response.status).toBe(200);
-    expect(deps.projectIndexService.ensureFresh).toHaveBeenCalledWith(7, 'manual');
-    expect(deps.projectIndexService.ensureStructuralReady).toHaveBeenCalledWith(
+    expect(deps.projectIndexService.ensureFresh).not.toHaveBeenCalled();
+    expect(deps.projectIndexService.reconcileStructural).toHaveBeenCalledWith(
       7, 180_000, expect.any(AbortSignal),
     );
   });

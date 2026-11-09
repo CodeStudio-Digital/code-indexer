@@ -89,6 +89,18 @@ describe('ordinary session networks', () => {
     await expect(network.create(child.id, { title: 'Grandchild', role: 'Research' }, 'nested')).rejects.toThrow('Enable agentic');
   });
 
+  it('delivers the first unconsumed run and its own answer after clock rollback and two completions', async () => {
+    await network.settings(parentId, { enabled: true });
+    const source = await network.create(parentId, { title: 'Research', role: 'Investigate' }, 'ordered-source');
+    await network.trigger(parentId, { sourceSessionId: source.id, targetSessionId: parentId, event: 'completed', prompt: 'Synthesize', includeFinal: true }, 'ordered-trigger');
+    await mailbox.recordCompletion({ sessionId: source.id, runId: 'one', at: 1, reason: 'completed', finalText: 'First answer' });
+    await mailbox.recordCompletion({ sessionId: source.id, runId: 'two', at: 0, reason: 'completed', finalText: 'Second answer' });
+    await deliverNetworkTriggers(network);
+    const messages = await mailbox.messages(rootChatId(parentId));
+    expect(messages).toHaveLength(1); expect(messages[0].body).toContain('First answer');
+    expect(messages[0].body).not.toContain('Second answer');
+  });
+
   it('reads only authorized chats and does not initialize discovery for unused ordinary chats', async () => {
     expect(await network.context(parentId)).toBe('');
     const foreign = await sessions.createSession({ project_id: 2, title: 'Foreign', provider: 'p1', model: 'm1' });
@@ -116,14 +128,14 @@ describe('ordinary session networks', () => {
     await network.settings(parentId, { enabled: true });
     const creation = await call('create_chat', { title: 'Reviewer', role: 'Review', provider: 'p2', model: 'm2' });
     expect(creation.isError).not.toBe(true);
-    const child = JSON.parse(creation.content);
+    const child = creation.structuredData as { id: string; chatId: string };
     expect(child.chatId).toBe(rootChatId(child.id));
     const discovery = await call('list_project_chats', { query: 'Reviewer' });
-    expect(JSON.parse(discovery.content)[0]).toMatchObject({ chatId: child.chatId, provider: 'p2' });
+    expect((discovery.structuredData as unknown[])[0]).toMatchObject({ chatId: child.chatId, provider: 'p2' });
     const read = await call('read_chat', { session_id: child.chatId });
-    expect(JSON.parse(read.content)).toMatchObject({ id: child.id, final: null });
+    expect(read.structuredData).toMatchObject({ id: child.id, final: null });
     const trigger = await call('create_chat_trigger', { sourceSessionId: child.id, targetSessionId: parentId, event: 'completed', prompt: 'Synthesize', includeFinal: true });
-    expect(JSON.parse(trigger.content)).toMatchObject({ status: 'waiting' });
+    expect(trigger.structuredData).toMatchObject({ status: 'waiting' });
     const blocked = await call('create_chat', { title: 'Forbidden', role: 'Review' }, { sessionNetwork: network, sessionId: parentId, companyContext: {} } as never);
     expect(blocked.isError).toBe(true);
     expect(await sessions.listSessions(1)).toHaveLength(2);

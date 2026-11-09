@@ -116,7 +116,6 @@ export class CompactingNode implements BehaviorNode {
       const state = ctx.bridge?.getSessionStateData?.() ?? null;
       if (state) {
         liveState = {
-          goal: state.goal,
           activePlan: state.activePlan,
           // Presence (including an empty list) is intentional: persisted task
           // state is authoritative over model-inferred pending work.

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { prepareMessage, requestKey, toJsonValue } from '@mcp/session-storage/fs-store/conversation-codec.js';
 import {
   appendFile,
   mkdir,
@@ -45,6 +47,35 @@ afterEach(async () => {
 });
 
 describe('FsSessionStore conversation journal', () => {
+  it('replays a pre-removal turn without duplicating it and omits Meta from new records', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Legacy replay', provider: 'test', model: 'test' });
+    const location = (await store.getSessionLocation(session.id))!;
+    const input = {
+      session_id: session.id, operation_id: 'legacy-assistant',
+      message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'Approved plan remains available' }] },
+      usage: null, tool_calls: [],
+    };
+    const prepared = prepareMessage(location, input.message, input.usage);
+    const legacyKey = requestKey({ type: 'persist-assistant-turn', message: prepared.stored,
+      tool_calls: [], nested_tool_calls: [], existing_message_seq: null,
+      goal_mutations: [], goal_noop_tool_use_ids: [],
+    });
+    await store.repository.commitTurn(location, {
+      operation_id: input.operation_id,
+      payload: toJsonValue({ schema_version: 1, type: 'coder.turn', request_key: legacyKey,
+        messages: [{ ...prepared.stored, id: randomUUID(), seq: 1 }], message_patches: [], tool_calls: [], goal_mutations: [],
+      }),
+    });
+    await expect(store.persistAssistantTurn(input)).resolves.toBe(1);
+    expect(await store.getMessageCount(session.id)).toBe(1);
+    await store.persistAssistantTurn({ ...input, operation_id: 'new-assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Continuing the tasks' }] },
+    });
+    const commits = await store.repository.readConversation(location);
+    expect(commits).toHaveLength(2);
+    expect(commits[1].payload).not.toHaveProperty('goal_mutations');
+  });
+
   it('hydrates only the selected window and lists every sent attachment without opening blobs', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Bounded attachments', provider: 'test', model: 'test' });
     for (let index = 0; index < 24; index++) {
@@ -110,6 +141,17 @@ describe('FsSessionStore conversation journal', () => {
     } });
     const history = await store.listMessagesAfter(session.id, 0);
     expect(unresolvedToolOutcome(history.messages)).toBe('uncertain-call');
+    const boundary = (await store.loadSessionWithMessages(session.id))!.message_rows.at(-1)!.seq;
+    await store.setCompactionBoundary(session.id, 'The operation was interrupted.', boundary, 'manual');
+    await store.appendMessage({ session_id: session.id, message: { role: 'user', content: [{ type: 'text', text: 'Continue' }] } });
+    await store.close();
+    store = FsSessionStore.fromRoots({ dataDir, projectRootResolver: {
+      resolveProjectRoot: id => id === 7 ? projectRoot : null,
+      listProjectRoots: () => [{ project_id: 7, root_path: projectRoot }],
+    } });
+    const compacted = await store.loadSessionWithMessages(session.id);
+    expect(unresolvedToolOutcome(compacted!.messages)).toBeUndefined();
+    expect(compacted!.unresolved_tool_outcomes).toEqual(['uncertain-call']);
   });
   it('persists warmed turns without rereading the full journal', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Warm turns', provider: 'test', model: 'test' });

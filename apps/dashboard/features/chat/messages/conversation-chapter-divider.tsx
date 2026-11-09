@@ -120,7 +120,7 @@ export function ConversationChapterDivider({
             )}
             <button
               type="button"
-              disabled={conversationLoading}
+              disabled={conversationLoading && !conversationExpanded}
               onClick={() => onToggleConversation?.(chapter)}
               className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/60 bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
             >

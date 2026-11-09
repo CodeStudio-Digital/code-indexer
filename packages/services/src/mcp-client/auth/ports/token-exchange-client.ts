@@ -2,6 +2,8 @@ export interface ExchangeCodeInput {
   tokenEndpoint: string;
   clientId: string;
   clientSecret: string | null;
+  resourceUrl?: string | null;
+  tokenEndpointAuthMethod?: string;
   code: string;
   codeVerifier: string;
   redirectUri: string;
@@ -11,6 +13,8 @@ export interface RefreshInput {
   tokenEndpoint: string;
   clientId: string;
   clientSecret: string | null;
+  resourceUrl?: string | null;
+  tokenEndpointAuthMethod?: string;
   refreshToken: string;
 }
 
@@ -18,6 +22,8 @@ export interface RevokeInput {
   revocationEndpoint: string;
   clientId: string;
   clientSecret: string | null;
+  resourceUrl?: string | null;
+  tokenEndpointAuthMethod?: string;
   token: string;
   tokenTypeHint?: 'access_token' | 'refresh_token';
 }

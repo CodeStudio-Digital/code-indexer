@@ -107,7 +107,6 @@ export function mountCoderSummarizeClearRoute(
         try {
           const state = await sessionStore.getSessionStateData(id);
           liveState = state ? {
-            goal: state.goal,
             activePlan: state.activePlan,
             todos: state.todos.map((todo) => ({
               content: todo.label,
@@ -239,6 +238,7 @@ export function mountCoderSummarizeClearRoute(
           sessionId: id,
           summary: summaryV3ToV2(summary),
           boundaryId: boundarySeq,
+          sourceStartSeq: firstRow.seq,
           trigger: 'manual_clear',
         });
       }

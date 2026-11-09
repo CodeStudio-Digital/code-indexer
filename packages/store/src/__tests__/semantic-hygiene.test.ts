@@ -12,6 +12,37 @@ afterEach(() => {
 });
 
 describe('semantic hygiene', () => {
+  it('lists only real projects and preserves the reserved user-memory project', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-hygiene-user-memory-'));
+    dirs.push(dir);
+    const db = new CodeIndexDB(join(dir, 'index.db'));
+    try {
+      const project = db.createProject('real', join(dir, 'real'));
+      const synthetic = db.createProject('synthetic', join(dir, 'synthetic'));
+      const loose = db.createProject('loose', join(dir, 'loose'));
+      db.setProjectSynthetic(synthetic.id, true);
+      db.setProjectLoose(loose.id, true);
+      const memory = db.createAgentMemory({ scope: 'user', projectId: 0, name: 'keep-user-memory', content: 'preserve this preference' });
+
+      expect(db.getProjectsHygiene().map(row => row.id)).toEqual([project.id]);
+      expect(db.getProject(0)?.name).toBe('__user__');
+      expect(db.getAgentMemoryById(memory.id)?.content).toBe('preserve this preference');
+    } finally { db.close(); }
+  });
+
+  it('rejects direct deletion or clearing of the reserved user-memory project', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-hygiene-reserved-'));
+    dirs.push(dir);
+    const db = new CodeIndexDB(join(dir, 'index.db'));
+    try {
+      const memory = db.createAgentMemory({ scope: 'user', projectId: 0, name: 'keep-user-memory', content: 'preserve this preference' });
+      expect(() => db.deleteProject(0)).toThrow(/reserved user-memory project/i);
+      expect(() => db.clearProjectData(0)).toThrow(/reserved user-memory project/i);
+      expect(db.getProject(0)?.name).toBe('__user__');
+      expect(db.getAgentMemoryById(memory.id)?.content).toBe('preserve this preference');
+    } finally { db.close(); }
+  });
+
   it('reports vectors and source orphans from semantic_items, not vector_ids', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcp-semantic-hygiene-'));
     dirs.push(dir);

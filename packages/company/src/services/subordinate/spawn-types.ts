@@ -7,6 +7,7 @@ import type { IAgentStatusUpdater, IBoardPoster, IKanbanNotifier, IMasterNotifie
 import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-provider.js';
 import { type SubordinateCompletionDeps } from '@mcp/company/services/subordinate/completion-handler.js';
 export interface SpawnSubordinateDeps {
+  onExecutionStarting?: () => void;
   ctx: SessionContext;
   board: IBoardPoster;
   status: IAgentStatusUpdater;

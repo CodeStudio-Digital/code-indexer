@@ -14,15 +14,75 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { RecoveringNode } from '../recovering.js';
-import { isContextOverflowError } from '../../provider-retry.js';
+import { backoffDelayMs, isContextOverflowError } from '../../provider-retry.js';
 import { makeTestContext } from './test-helpers.js';
+import { resetProviderRetrySequence } from '../../machine/context.js';
 
 vi.mock('../../provider-retry.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../provider-retry.js')>()),
-  backoffDelayMs: () => 0,
+  backoffDelayMs: vi.fn(() => 0),
 }));
 
 describe('RecoveringNode', () => {
+  const disconnect = { kind: 'ProviderError' as const, retryable: true, status: 0, code: 'UND_ERR_SOCKET', message: 'Connection interrupted (UND_ERR_SOCKET)' };
+
+  it('recovers a disconnect after earlier timeouts separated by committed responses', async () => {
+    const { ctx } = makeTestContext();
+    for (let i = 0; i < 4; i++) {
+      expect((await new RecoveringNode().execute(ctx, { ...disconnect, code: 'TIMEOUT' })).kind).toBe('TurnSucceeded');
+      resetProviderRetrySequence(ctx);
+    }
+    expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('TurnSucceeded');
+    expect(ctx.recovery.get('provider-transport-retry')).toBe(5);
+    expect(ctx.transportRetriesThisTurn).toBe(1);
+    expect(ctx.recovery.has('provider-unknown-retry')).toBe(false);
+  });
+
+  it('still stops repeated disconnects for the same response at four retries', async () => {
+    const { ctx } = makeTestContext();
+    for (let i = 0; i < 4; i++) expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('TurnSucceeded');
+    expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('Aborted');
+    expect(ctx.transition).toBe('provider-transport-retry');
+    expect(ctx.error?.message).toContain('4 retries without a completed response');
+  });
+
+  it('shares the run budget across HTTP failures and socket failures even after successful responses', async () => {
+    const { ctx } = makeTestContext();
+    ctx.opts.runtimePolicy = { provider: { transientRetriesPerTurn: 3, transientRetriesPerRun: 2 } } as never;
+    expect((await new RecoveringNode().execute(ctx, { ...disconnect, status: 503 })).kind).toBe('TurnSucceeded');
+    resetProviderRetrySequence(ctx);
+    expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('TurnSucceeded');
+    resetProviderRetrySequence(ctx);
+    expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('Aborted');
+    expect(ctx.error?.message).toContain('3/2');
+  });
+
+  it('honors cancellation before spending a retry', async () => {
+    const { ctx } = makeTestContext({ toolContext: { signal: AbortSignal.abort() } as never });
+    expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('Aborted');
+    expect(ctx.stopReason).toBe('aborted');
+    expect(ctx.recovery.size).toBe(0);
+  });
+
+  it('cancels a backoff immediately without starting another provider attempt', async () => {
+    const controller = new AbortController();
+    const { ctx } = makeTestContext({ toolContext: { signal: controller.signal } as never });
+    vi.mocked(backoffDelayMs).mockReturnValueOnce(10_000);
+    const pending = new RecoveringNode().execute(ctx, disconnect);
+    controller.abort();
+    expect((await pending).kind).toBe('Aborted');
+    expect(ctx.aborted).toBe(true);
+    expect(ctx.stopReason).toBe('aborted');
+  });
+
+  it('does not reset the consecutive budget by alternating HTTP and socket failures', async () => {
+    const { ctx } = makeTestContext();
+    ctx.opts.runtimePolicy = { provider: { transientRetriesPerTurn: 2, transientRetriesPerRun: 30 } } as never;
+    expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('TurnSucceeded');
+    expect((await new RecoveringNode().execute(ctx, { ...disconnect, status: 503 })).kind).toBe('TurnSucceeded');
+    expect((await new RecoveringNode().execute(ctx, disconnect)).kind).toBe('Aborted');
+  });
+
   it('aborts defensively when lastEvent is null', async () => {
     const { ctx } = makeTestContext();
     const event = await new RecoveringNode().execute(ctx, null);

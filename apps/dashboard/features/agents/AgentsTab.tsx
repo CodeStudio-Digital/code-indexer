@@ -52,6 +52,11 @@ interface CompanySession {
   runtime_kind?: 'company' | 'app_studio';
   app_session_id?: string | null;
   created_at: string;
+  aggregate_status?: string;
+  session_count?: number;
+  running_sessions?: number;
+  paused_sessions?: number;
+  attention_sessions?: number;
 }
 
 const COMPANY_CATALOG_VIEW_KEY = 'mcp-ide:company.catalogView';
@@ -59,8 +64,8 @@ const COMPANY_CATALOG_VIEW_KEY = 'mcp-ide:company.catalogView';
 export function AgentsTab() {
   const { t } = useTranslation('agents');
   const navigate = useNavigate();
-  const routeParams = useParams<{ rootId?: string }>();
-  const { data: sessions, refetch: refetchSessions } = useApi<CompanySession[]>('/company/sessions');
+  const routeParams = useParams<{ rootId?: string; frontId?: string }>();
+  const { data: sessions, refetch: refetchSessions } = useApi<CompanySession[]>('/company/companies');
   const { data: templates } = useApi<Array<{ id: number }>>('/company/templates');
   // Selected session is URL-driven: the `:rootId` segment of
   // `/company/sessions/:rootId/...`. At `/agents` it's null.
@@ -72,6 +77,9 @@ export function AgentsTab() {
     return window.localStorage.getItem(COMPANY_CATALOG_VIEW_KEY) === 'templates' ? 'templates' : 'sessions';
   });
   const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(selectedSessionId == null);
+  // The home catalog and an opened company's dock have separate ownership.
+  // Entering a company always starts with its sessions, even on a wide screen.
+  const [companyCatalogRootId, setCompanyCatalogRootId] = useState<string | null>(null);
   const [sessionQuery, setSessionQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<CompanySession | null>(null);
   const catalogPanelRef = useRef<ImperativePanelHandle>(null);
@@ -100,17 +108,22 @@ export function AgentsTab() {
   }, [agentsSidebarOpen, selectedSessionId]);
 
   const toggleCatalog = useCallback((view: CompanyCatalogView) => {
+    if (selectedSessionId) {
+      setCompanyCatalogRootId((rootId) => rootId === selectedSessionId && sidebarView === view ? null : selectedSessionId);
+      setSidebarView(view);
+      return;
+    }
     if (sidebarView === view) {
       setAgentsSidebarOpen((open) => !open);
       return;
     }
     setSidebarView(view);
     setAgentsSidebarOpen(true);
-  }, [sidebarView]);
+  }, [selectedSessionId, sidebarView]);
 
   function selectSession(id: string) {
+    setCompanyCatalogRootId(null);
     navigate(buildAgentsDefaultUrl(id));
-    if (typeof window !== 'undefined' && window.innerWidth < 768) setAgentsSidebarOpen(false);
   }
 
   async function handleDelete(e: React.MouseEvent, id: string) {
@@ -131,7 +144,7 @@ export function AgentsTab() {
   const catalogPanel = (
     <WorkbenchSurface className="flex h-full flex-col rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
       <WorkbenchPanelHeader
-        title={sidebarView === 'sessions' ? t('sessions') : t('templates')}
+        title={sidebarView === 'sessions' ? t('catalog.companies') : t('templates')}
         icon={sidebarView === 'sessions' ? Users : LayoutTemplate}
         actions={
           <button
@@ -143,9 +156,26 @@ export function AgentsTab() {
             <Plus className="h-3.5 w-3.5" />
           </button>
         }
-        onClose={() => setAgentsSidebarOpen(false)}
+        onClose={() => selectedSessionId ? setCompanyCatalogRootId(null) : setAgentsSidebarOpen(false)}
         closeLabel={t('catalog.collapse')}
       />
+
+      {selectedSessionId && (
+        <div className="flex gap-1 border-b border-[var(--workbench-border)] p-1.5" role="group" aria-label={t('catalog.navigationLabel')}>
+          {(['sessions', 'templates'] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              aria-pressed={sidebarView === view}
+              onClick={() => setSidebarView(view)}
+              className={cn('flex-1 rounded px-2 py-1 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                sidebarView === view ? 'bg-[var(--workbench-active)] text-primary' : 'text-muted-foreground hover:bg-[var(--workbench-hover)] hover:text-foreground')}
+            >
+              {view === 'sessions' ? t('catalog.companies') : t('templates')}
+            </button>
+          ))}
+        </div>
+      )}
 
       {sidebarView === 'sessions' ? (
         <>
@@ -156,6 +186,7 @@ export function AgentsTab() {
                 value={sessionQuery}
                 onChange={(event) => setSessionQuery(event.target.value)}
                 placeholder={t('catalog.filterCompanies')}
+                aria-label={t('catalog.filterCompanies')}
                 className="min-w-0 flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
               />
             </label>
@@ -202,12 +233,12 @@ export function AgentsTab() {
   const sessionWorkbenchSlots: CompanySessionWorkbenchSlots = {
     leftRailHost: sessionRailHost,
     catalog: {
-      open: agentsSidebarOpen,
+      open: selectedSessionId !== null && companyCatalogRootId === selectedSessionId,
       activeView: sidebarView,
       sessionCount: sessions?.length,
       templateCount: templates?.length,
       onToggle: toggleCatalog,
-      onOpenChange: setAgentsSidebarOpen,
+      onOpenChange: (open) => setCompanyCatalogRootId(open ? selectedSessionId : null),
     },
     catalogPanel,
   };
@@ -221,7 +252,7 @@ export function AgentsTab() {
           <RailContainer side="left" aria-label={t('catalog.navigationLabel')}>
             <RailButton
               icon={Users}
-              label={t('sessions')}
+              label={t('catalog.companies')}
               role="toggle"
               active={agentsSidebarOpen && sidebarView === 'sessions'}
               onClick={() => toggleCatalog('sessions')}
@@ -346,7 +377,7 @@ function CompanyHome({
   onOpenSession: (id: string) => void;
 }) {
   const { t } = useTranslation('agents');
-  const running = sessions.filter((session) => session.status === 'running').length;
+  const running = sessions.reduce((count, session) => count + (session.running_sessions ?? (session.status === 'running' ? 1 : 0)), 0);
   const recent = sessions.slice(0, 5);
 
   return (
@@ -354,23 +385,18 @@ function CompanyHome({
       <WorkbenchPanelHeader
         title={t('catalog.title')}
         icon={Users}
-        actions={
-          <Button size="sm" className="h-6 gap-1 px-2 text-[10px]" onClick={onCreateCompany}>
-            <Plus className="h-3 w-3" /> {t('newCompany')}
-          </Button>
-        }
       />
       <div className="flex-1 overflow-y-auto p-4 lg:p-6">
         <div className="mx-auto max-w-6xl space-y-4">
-          <section className="grid gap-3 lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,.75fr)]">
+          <section className={cn('grid gap-3', sessions.length > 0 && 'lg:grid-cols-[minmax(0,1.55fr)_minmax(240px,.65fr)]')}>
             <div className="relative overflow-hidden rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)] p-5">
               <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-violet-500/8 blur-3xl" />
               <div className="relative max-w-2xl">
                 <div className="mb-3 grid h-9 w-9 place-items-center rounded-md bg-violet-500/12 text-violet-400">
                   <Boxes className="h-5 w-5" />
                 </div>
-                <h1 className="text-lg font-semibold text-foreground">{t('catalog.heroTitle')}</h1>
-                <p className="mt-1.5 max-w-xl text-xs leading-5 text-muted-foreground">
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t('catalog.heroTitle')}</h1>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
                   {t('catalog.heroDescription')}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -384,15 +410,15 @@ function CompanyHome({
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
+            {sessions.length > 0 && <div className="grid grid-cols-3 gap-2 lg:grid-cols-1">
               <Metric label={t('catalog.companies')} value={sessions.length} icon={Users} />
               <Metric label={t('catalog.running')} value={running} icon={Activity} tone="success" />
               <Metric label={t('templates')} value={templateCount} icon={LayoutTemplate} />
-            </div>
+            </div>}
           </section>
 
-          <section className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,.8fr)]">
-            <div className="rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
+          <section className={cn('grid gap-3', recent.length > 0 && 'lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,.8fr)]')}>
+            {recent.length > 0 && <div className="rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
               <div className="flex h-9 items-center gap-2 border-b border-[var(--workbench-border)] px-3">
                 <FolderKanban className="h-4 w-4 text-muted-foreground" />
                 <h2 className="text-xs font-semibold">{t('catalog.recentCompanies')}</h2>
@@ -421,7 +447,8 @@ function CompanyHome({
                         )}
                       </span>
                       <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                        <StatusBadge status={session.status} />
+                        <StatusBadge status={session.aggregate_status ?? session.status} />
+                        <span>{session.session_count ?? 1} {t('sessions').toLocaleLowerCase()}</span>
                         {formatDay(session.created_at)}
                       </span>
                     </span>
@@ -429,7 +456,7 @@ function CompanyHome({
                   </button>
                 ))}
               </div>
-            </div>
+            </div>}
 
             <div className="rounded-lg border border-[var(--workbench-border)] bg-[var(--workbench-surface)]">
               <div className="flex h-9 items-center gap-2 border-b border-[var(--workbench-border)] px-3">
@@ -603,9 +630,9 @@ function SessionRow({ session: s, selected, onSelect, onDuplicate, onDelete }: S
         </div>
       </div>
       <div className="mt-1 flex items-center gap-1.5 pl-8">
-        <StatusBadge status={s.status} />
+        <StatusBadge status={s.aggregate_status ?? s.status} />
         <span className="text-[10px] text-muted-foreground">
-          {formatDay(s.created_at)}
+          {s.session_count ?? 1} {t('sessions').toLocaleLowerCase()}
         </span>
       </div>
       {Menu}

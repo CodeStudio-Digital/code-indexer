@@ -25,22 +25,15 @@ export interface VerificationGateOptions {
   maxNudges?: number;
 }
 
-export type GoalCompletionHealth =
-  | 'verified'
-  | 'unverified'
-  | 'completed_with_warnings';
-
-export interface GoalCompletionAdvisory {
-  health: GoalCompletionHealth;
-  text: string;
-}
-
 function currentRunEntries(ctx: RunContext): ToolCallLedgerEntry[] {
   return ctx.opts.toolContext.toolCallLedger?.snapshot(ctx.verification.ledgerStartSeq) ?? [];
 }
 
 function isWriteEntry(ctx: RunContext, entry: ToolCallLedgerEntry): boolean {
   if (entry.outcome !== 'success') return false;
+  // Shell metadata is conservatively mutating even for test invocations and
+  // empty polls. Their own verification receipts are not subsequent edits.
+  if (entry.validationSignal) return false;
   if (entry.executionClass === 'write') return true;
   const tool = ctx.opts.registry.get?.(entry.name);
   if (!tool) return false;
@@ -75,6 +68,7 @@ function persistedReadiness(
   if (persisted.lastVerify.isError || (persisted.lastVerify.exitCode != null && persisted.lastVerify.exitCode !== 0)) {
     return { ...base, status: 'stale' };
   }
+  if (persisted.lastVerify.exitCode == null) return { ...base, status: 'ambiguous' };
   if (persisted.filesEditedAfter.length > 0) return { ...base, status: 'stale' };
   if ((persisted.filesEditedAtSameTime?.length ?? 0) > 0) return { ...base, status: 'ambiguous' };
   return { ...base, status: 'fresh' };
@@ -86,7 +80,7 @@ export async function evaluateVerificationReadinessAtFinish(
   const entries = currentRunEntries(ctx);
   const writes = entries.filter((entry) => isWriteEntry(ctx, entry));
   const validations = entries.filter((entry) => !!entry.validationSignal);
-  const successfulValidations = validations.filter((entry) => entry.outcome === 'success');
+  const successfulValidations = validations.filter((entry) => entry.outcome === 'success' && entry.validationOutcome === 'passed');
   const changedFiles = (() => {
     try {
       return [...(ctx.bridge?.getSessionStateData?.()?.filesChanged ?? [])];
@@ -97,6 +91,7 @@ export async function evaluateVerificationReadinessAtFinish(
   const lastWriteSeq = maxSeq(writes);
   const lastValidationSeq = maxSeq(validations);
   const lastSuccessfulValidationSeq = maxSeq(successfulValidations);
+  const lastSuccessfulValidationStartSeq = successfulValidations.at(-1)?.validationStartedSeq ?? null;
   const validationSignals = uniqueSignals(validations);
 
   if (changedFiles.length === 0 && lastWriteSeq == null) {
@@ -114,7 +109,8 @@ export async function evaluateVerificationReadinessAtFinish(
 
   if (lastWriteSeq != null || lastValidationSeq != null) {
     const status: VerificationReadinessStatus = lastWriteSeq != null
-      ? lastSuccessfulValidationSeq != null && lastSuccessfulValidationSeq > lastWriteSeq
+      ? lastSuccessfulValidationStartSeq != null && lastSuccessfulValidationStartSeq > lastWriteSeq
+        && lastSuccessfulValidationSeq === lastValidationSeq
         ? 'fresh'
         : lastValidationSeq != null
           ? 'stale'
@@ -165,29 +161,6 @@ export function formatVerificationReadiness(readiness: VerificationReadiness): s
   }
 }
 
-/**
- * Classify completion evidence without granting it execution authority.
- * `update_goal(status="complete")` persists first; this health is then shown
- * in the tool result and written to the session audit trail.
- */
-export function buildGoalCompletionAdvisory(
-  readiness: VerificationReadiness,
-): GoalCompletionAdvisory {
-  const health: GoalCompletionHealth =
-    readiness.status === 'fresh'
-      ? 'verified'
-      : readiness.status === 'not_applicable'
-        ? 'unverified'
-        : 'completed_with_warnings';
-  return {
-    health,
-    text:
-      `[goal-advisory] Completion health: ${health}. ` +
-      formatVerificationReadiness(readiness) +
-      ' Goal completion was persisted; verification evidence is advisory and cannot block it.',
-  };
-}
-
 export function maybeVerificationNudge(
   ctx: RunContext,
   readiness: VerificationReadiness,
@@ -212,11 +185,4 @@ export function maybeVerificationNudge(
     'Run the smallest relevant test, typecheck, lint, or build now. ' +
     'If validation is impossible, say why and do not claim that it passed.'
   );
-}
-
-/**
- * @deprecated Verification no longer refuses update_goal completion.
- */
-export function maybeVerificationCompletionRefusal(_ctx: RunContext): string | null {
-  return null;
 }

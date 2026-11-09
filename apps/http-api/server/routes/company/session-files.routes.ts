@@ -1,5 +1,7 @@
 import type { Hono } from 'hono';
+import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
+import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import type { ServerDeps } from '../../deps.js';
 import type {
   CompanySessionFileRow,
@@ -66,6 +68,29 @@ export function mountCompanyFileSessionRoutes(
     return c.json(rows.map((row) => ({ ...row, ...runtimeEnvelope(row) })));
   });
 
+  app.get('/api/company/companies', async c => {
+    const status = c.req.query('status');
+    // Metadata only: no transcripts, agent histories or tool results are read.
+    const all = await sessions.listCompanySessions({ includeChildren: true });
+    const families = new Map<string, CompanySessionFileRow[]>();
+    for (const row of all) {
+      if (row.archived_at) continue;
+      const companyId = row.parent_session_id ?? row.id;
+      const family = families.get(companyId) ?? [];
+      family.push(row);
+      families.set(companyId, family);
+    }
+    const rows = all.filter(row => !row.parent_session_id && !row.archived_at).map(row => {
+      const family = families.get(row.id) ?? [row];
+      const running_sessions = family.filter(item => item.status === 'running').length;
+      const paused_sessions = family.filter(item => item.status === 'paused').length;
+      const attention_sessions = family.filter(item => item.status === 'error').length;
+      const aggregate_status = running_sessions ? 'running' : attention_sessions ? 'error' : paused_sessions ? 'paused' : family.every(item => item.status === 'completed') ? 'completed' : 'idle';
+      return { ...row, ...runtimeEnvelope(row), session_count: family.length, running_sessions, paused_sessions, attention_sessions, aggregate_status };
+    });
+    return c.json(status ? rows.filter(row => row.aggregate_status === status) : rows);
+  });
+
   app.get('/api/company/sessions/:id', async (c) => {
     const id = parseCompanySessionIdParam(c);
     const full = await enrichedFull(deps, id);
@@ -80,15 +105,29 @@ export function mountCompanyFileSessionRoutes(
     const pending = await inbox.list('inboxMessage', {
       limit: 50,
     });
+    let liveOrchestrator = false;
+    let masterAlive = false;
+    let masterEndedAt: string | null = null;
+    try {
+      const orchestrator = getCompanyOrchestrator(id);
+      if (orchestrator) {
+        const status = await orchestrator.getMasterStatus();
+        liveOrchestrator = !orchestrator.metaBus.ended;
+        masterAlive = status.alive;
+        masterEndedAt = status.endedAt;
+      }
+    } catch {
+      // Minimal/test hosts can lack a pool. A failed RPC is never reported alive.
+    }
     return c.json({
       ...full,
-      liveOrchestrator: false,
-      masterAlive: false,
-      masterEndedAt: null,
+      liveOrchestrator,
+      masterAlive,
+      masterEndedAt,
       pendingMasterInboxCount: pending.items.filter(
         (item) =>
           item.data.status === 'pending' &&
-          item.data.toRole === '__master__',
+          (item.data.to_role === '__master__' || item.data.toRole === '__master__'),
       ).length,
     });
   });
@@ -105,7 +144,7 @@ export function mountCompanyFileSessionRoutes(
       if (error) return c.json({ error }, 400);
     }
     const roleAssignments = resolveRoleProjectBindings(
-      body.role_assignments ?? [],
+      (body.role_assignments ?? []).map(withDefaultQaSkill),
       body.project_ids.flatMap((projectId) => {
         const project = deps.db.getProject(projectId);
         return project
@@ -122,6 +161,7 @@ export function mountCompanyFileSessionRoutes(
       master_provider: body.master_provider,
       master_model: body.master_model,
       role_assignments: roleAssignments,
+      ...(body.qa_executor === 'preview' || body.qa_executor === 'playwright' ? { qa_executor: body.qa_executor } : {}),
       ...(body.allowed_models?.length
         ? { allowed_models: body.allowed_models }
         : {}),

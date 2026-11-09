@@ -121,11 +121,12 @@ export interface MemorySweeperSessionStore {
 }
 
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     promise,
     new Promise<undefined>((resolve) => {
-      const timer = setTimeout(() => resolve(undefined), ms);
+      timer = setTimeout(() => resolve(undefined), ms);
       timer.unref?.();
     }),
-  ]);
+  ]).finally(() => clearTimeout(timer));
 }

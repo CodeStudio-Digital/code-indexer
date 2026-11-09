@@ -45,7 +45,12 @@ export class TimeoutError extends Error {
  */
 export async function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
-  if (signal.aborted) throw new AbortError();
+  if (signal.aborted) {
+    // The operation was created by the caller before entering this helper.
+    // Observe its eventual rejection even when cancellation already won.
+    void promise.catch(() => undefined);
+    throw new AbortError();
+  }
   let onAbort: (() => void) | undefined;
   try {
     return await new Promise<T>((resolve, reject) => {

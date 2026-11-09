@@ -65,15 +65,7 @@ import {
   renderResumeHint,
 } from '@mcp/code-agent/tools/spawn-agent-render.js';
 import { retainSpawnGroup, countFailed } from '@mcp/code-agent/tools/spawn-agent-resume.js';
-import {
-  type NormalizedAgent,
-  limitsForAgent,
-  buildSubagentWorkspaceBriefing,
-  taskWithWorkspaceBriefing,
-  toRetentionAgent,
-  prepareAgentsForDispatch,
-  systemPromptForAgent,
-} from '@mcp/code-agent/tools/spawn-agent-core.js';
+import { type NormalizedAgent, limitsForAgent, buildSubagentWorkspaceBriefing, taskWithWorkspaceBriefing, toRetentionAgent, systemPromptForAgent } from '@mcp/code-agent/tools/spawn-agent-core.js';
 import { runBackgroundEphemeral } from '@mcp/code-agent/tools/spawn-agent-background.js';
 import { captureInvestigation } from '@mcp/code-agent/tools/investigation-capture.js';
 import {
@@ -135,6 +127,7 @@ function rawString(value: unknown): string | undefined {
 type SpawnOutcomeStatus = 'completed' | 'partial' | 'failed';
 
 function spawnOutcomeResult(input: {
+  results?: import('@mcp/agent-runtime-contracts').AgentWorkResult[];
   content: string;
   usage: ChatUsage;
   spawnId: string;
@@ -161,6 +154,7 @@ function spawnOutcomeResult(input: {
     failedCount: input.failedCount,
     stillFailed,
     resumableCount: input.resumableCount,
+    results: input.results,
   };
   if (stillFailed === 0) {
     return {
@@ -554,6 +548,7 @@ async function runSingleEphemeral(
   const outcomeCounts = countSubagentOutcomes([result]);
   return spawnOutcomeResult({
     content: header + body + trail + hint,
+    results: result.workResult ? [result.workResult] : undefined,
     usage: result.usage,
     spawnId,
     agentCount: 1,
@@ -733,6 +728,7 @@ async function runParallelEphemeral(
     : failed > 0 ? renderResumeHint(groupId, failed) : '';
   return spawnOutcomeResult({
     content: header + body + hint,
+    results: results.flatMap(result => result.workResult ? [result.workResult] : []),
     usage: totalUsage,
     spawnId: groupId,
     agentCount: results.length,
@@ -880,7 +876,6 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
         return err(`spawn_agent: kind='${kind}' invalid — must be 'ephemeral' or 'persistent'.`);
       }
 
-      if (kind === 'ephemeral') agents = prepareAgentsForDispatch(agents, ctx);
 
       if (kind === 'persistent') {
         if (agents.length > 1) {

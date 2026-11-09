@@ -7,9 +7,8 @@
  * replaces its `tasks` array on every backend snapshot. Both the global
  * header dropdown and the project Runners tab read from here.
  *
- * Actions (start/stop/restart) are thin wrappers over `apiCall` — the
- * resulting state change arrives back through the events stream, so we
- * never mutate `tasks` optimistically.
+ * Confirmed RPC results update the mirror immediately; the events stream
+ * supplies process exits and changes from other windows.
  */
 
 import { create } from 'zustand';
@@ -75,6 +74,16 @@ export function initRunningTasks(): void {
   })();
 }
 
+/** Publish a confirmed launch even when the event stream is reconnecting. */
+function rememberTask(task: RunnerTask, replacedId?: string): RunnerTask {
+  useRunningTasks.setState((state) => {
+    const tasks = state.tasks.filter((item) => item.taskId !== replacedId);
+    // An exit event can beat the start reply. Preserve that newer status.
+    return { tasks: tasks.some((item) => item.taskId === task.taskId) ? tasks : [...tasks, task] };
+  });
+  return task;
+}
+
 export async function startTask(input: {
   projectId: number;
   command: string;
@@ -85,7 +94,7 @@ export async function startTask(input: {
   target?: RuntimeTarget;
 }): Promise<RunnerTask> {
   try {
-    return await apiCall<RunnerTask>('runner.start', input);
+    return rememberTask(await apiCall<RunnerTask>('runner.start', input));
   } catch (error) {
     recordExecutionFailure({
       projectId: input.projectId,
@@ -106,7 +115,7 @@ export async function startSnippet(input: {
   label: string;
 }): Promise<RunnerTask> {
   try {
-    return await apiCall<RunnerTask>('runner.runSnippet', input);
+    return rememberTask(await apiCall<RunnerTask>('runner.runSnippet', input));
   } catch (error) {
     recordExecutionFailure({
       projectId: input.projectId,
@@ -121,12 +130,16 @@ export async function startSnippet(input: {
 
 export async function stopTask(taskId: string): Promise<void> {
   await apiCall('runner.stop', { taskId });
+  useRunningTasks.setState((state) => ({
+    tasks: state.tasks.map((task) => task.taskId === taskId ? { ...task, status: 'stopped' } : task),
+  }));
 }
 
 export async function dismissTask(taskId: string): Promise<void> {
   await apiCall('runner.dismiss', { taskId });
+  useRunningTasks.setState((state) => ({ tasks: state.tasks.filter((task) => task.taskId !== taskId) }));
 }
 
 export async function restartTask(taskId: string): Promise<RunnerTask> {
-  return apiCall<RunnerTask>('runner.restart', { taskId });
+  return rememberTask(await apiCall<RunnerTask>('runner.restart', { taskId }), taskId);
 }

@@ -19,12 +19,32 @@ afterEach(async () => {
 });
 
 describe('database pool lifecycle', () => {
+  it('supersedes simultaneous configuration rotations without a circular wait', async () => {
+    const mgr = manager(); mocks.createDriver.mockResolvedValue(driver());
+    const results = await Promise.allSettled([
+      mgr.acquire('tenant:old', config, { invalidatePrefix: 'tenant:' }),
+      mgr.acquire('tenant:new', config, { invalidatePrefix: 'tenant:' }),
+    ]);
+    expect(results.map(result => result.status)).toEqual(['rejected', 'fulfilled']);
+    expect(mgr.has('tenant:old')).toBe(false);
+    expect(mgr.has('tenant:new')).toBe(true);
+    expect(mocks.createDriver).toHaveBeenCalledOnce();
+  });
+
+  it('rejects excess pools before setup without evicting existing work', async () => {
+    const mgr = new DbConnectionManager({ pools: 1, activePerPool: 1 }); managers.push(mgr);
+    mocks.createDriver.mockResolvedValue(driver());
+    await mgr.acquire('first', config);
+    await expect(mgr.acquire('second', config)).rejects.toThrow('capacity');
+    expect(mgr.has('first')).toBe(true);
+    expect(mocks.createDriver).toHaveBeenCalledOnce();
+  });
   it('shares one connection setup among concurrent callers of the same key', async () => {
     const db = driver(); mocks.createDriver.mockResolvedValue(db);
     const mgr = manager();
     const results = await Promise.all(Array.from({ length: 20 }, () => mgr.acquire('conn:1', config)));
     expect(mocks.createDriver).toHaveBeenCalledOnce();
-    expect(results.every(value => value === db)).toBe(true);
+    expect(results.every(value => value === results[0])).toBe(true);
   });
 
   it.each(['key', 'all'])('drains late setup after close %s and never resurrects its pool', async scope => {
@@ -72,11 +92,11 @@ describe('database pool lifecycle', () => {
     const rejected = expect(first).rejects.toThrow(/closed during connection setup/);
     await Promise.resolve();
     const closing = mgr.closeKey('conn:1');
-    expect(await mgr.acquire('conn:1', config)).toBe(replacement);
+    const lease = await mgr.acquire('conn:1', config);
     const stale = driver(); old.resolve(stale);
     await closing; await rejected;
     expect(stale.close).toHaveBeenCalledOnce();
     expect(replacement.close).not.toHaveBeenCalled();
-    expect(mgr.get('conn:1')).toBe(replacement);
+    expect(mgr.get('conn:1')).toBe(lease);
   });
 });

@@ -7,6 +7,7 @@
 
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IMetaBusPublisher, IKanbanNotifier } from '@mcp/company/services/ports.js';
+import { DispatchClaims } from './scheduler/dispatch-claims.js';
 import type {
   KanbanCard,
   KanbanCardFull,
@@ -18,6 +19,10 @@ import type {
   KanbanTag,
 } from '@mcp/company/types.js';
 export class KanbanService implements IKanbanNotifier {
+  private claims: DispatchClaims | undefined;
+  get dispatchClaims(): DispatchClaims {
+    return this.claims ??= new DispatchClaims(this.ctx.effectiveCompanyFiles.location.bundle_path);
+  }
   constructor(
     private readonly ctx: SessionContext,
     private readonly bus: IMetaBusPublisher,

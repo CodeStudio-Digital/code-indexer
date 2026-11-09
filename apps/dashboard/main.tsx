@@ -14,8 +14,7 @@ import './lib/public-asset.js';
 import { startUserTimingBufferGuard } from './lib/perf/user-timing-guard.js';
 import { ensureRendererVitals } from './features/admin/perf/renderer-vitals.js';
 
-// The desktop shell behaves like a native application: chrome is not text
-// selectable by default, while content surfaces opt back in explicitly. Keep
+// Desktop content is selectable; native controls opt out explicitly. Keep
 // the marker on <html> so popouts (which mount outside AppShell) share the same
 // policy and the browser dashboard remains unaffected.
 document.documentElement.dataset.appRuntime = isElectronRenderer() ? 'electron' : 'browser';

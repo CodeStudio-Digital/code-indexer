@@ -62,6 +62,9 @@ function hydrate(
   const data = record.data;
   return {
     id: assertUuid(record.id, 'QA run id'),
+    executor: data.executor === 'preview' ? 'preview' : 'playwright',
+    target_url: nullableString(data.target_url),
+    criteria: Array.isArray(data.criteria) ? data.criteria as unknown as QaRun['criteria'] : [],
     seq: record.seq,
     company_session_id: asCompanySessionId(companySessionId),
     agent_run_id: nullableString(data.agent_run_id),
@@ -213,6 +216,9 @@ export class QaTestRunStore implements IQaTestRunStore {
           },
           data: {
             status: 'running',
+            executor: input.executor ?? 'playwright',
+            target_url: input.target_url ?? null,
+            criteria: input.criteria ? JSON.parse(JSON.stringify(input.criteria)) : [],
             agent_run_id: input.agent_run_id,
             suite: input.suite,
             service_id: input.service_id ?? 'main',

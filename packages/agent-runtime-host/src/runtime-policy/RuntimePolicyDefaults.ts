@@ -7,7 +7,7 @@ export const DEFAULT_RUNTIME_POLICY_V1: Readonly<RuntimePolicyValuesV1> = Object
   provider: Object.freeze({
     firstByteTimeoutMs: 240_000,
     idleTimeoutMs: 90_000,
-    thinkingOnlyTimeoutMs: 240_000,
+    thinkingOnlyTimeoutMs: 0,
     transientRetriesPerTurn: 3,
     transientRetriesPerRun: 30,
     streamHeartbeatMs: 10_000,

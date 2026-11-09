@@ -10,6 +10,7 @@ import {
 import type { InboxStatus } from '@mcp/company/types.js';
 import { appOwnedControlPlaneConflict } from './runtime-capabilities.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import { CompanySessionMessenger } from '@mcp/company/services/session-messenger.js';
 
 /**
  * HTTP routes for the agent inbox.
@@ -31,6 +32,20 @@ export function mountCompanyInboxRoutes(app: Hono, deps: ServerDeps): void {
       sessionStore,
     });
   };
+
+  app.post('/api/company/sessions/:id/messages', async c => {
+    const sourceId = parseCompanySessionIdParam(c);
+    const source = await deps.operationalSessionFiles.getCompanySession(sourceId);
+    if (!source) return notFound(c, 'source session not found');
+    if (source.runtime_kind !== 'company') return appOwnedControlPlaneConflict(c, 'company messaging');
+    const body = await parseJsonBody<{ targetSessionId?: string; targetAgentRunId?: string; targetRole?: string; body?: string; kind?: 'notify' | 'question'; idempotencyKey?: string }>(c);
+    if (!body.targetSessionId || !body.body?.trim() || !body.idempotencyKey || (body.kind && !['notify', 'question'].includes(body.kind))) return c.json({ error: 'targetSessionId, body and idempotencyKey are required; kind must be notify or question' }, 400);
+    try {
+      const files = await filesFor(sourceId);
+      const message = await new CompanySessionMessenger(files).send({ ...body, targetSessionId: body.targetSessionId, body: body.body, idempotencyKey: body.idempotencyKey }, 'operator');
+      return c.json({ message, deliveredImmediately: false, targetSessionId: message.to_session_id }, 202);
+    } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
 
   app.get('/api/company/sessions/:id/inbox', async (c) => {
     const sessionId = parseCompanySessionIdParam(c);

@@ -27,6 +27,7 @@ export async function attachChatMailbox(
       if (closed || message.to !== participant.id || injected.has(message.id) || ['expired', 'cancelled', 'answered'].includes(message.status)) continue;
       // Delivered messages remain readable. Only unacknowledged deliveries are injected again after recovery.
       if (message.status !== 'queued') continue;
+      if (!await store.currentGeneration(message)) continue;
       const sender = await store.participant(message.from);
       if (!sender || !await store.connected(sender.sessionId, participant.sessionId)) continue;
       injected.add(message.id);

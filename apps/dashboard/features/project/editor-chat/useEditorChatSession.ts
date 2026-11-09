@@ -51,6 +51,8 @@ import type { SessionLaunchConfig } from '../../chat/SessionLaunchDialog.js';
 import type { CoderSession, CoderSessionGroup, PromptHandlers, SessionData } from '../../chat/types.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
 import { useSessionAgent } from '../../chat/useSessionAgent.js';
+import { useSessionProvider } from '../../chat/useSessionProvider.js';
+import { sessionProviderSwitches } from '../../../hooks/agent-stream/provider-switch.js';
 import type { NotificationSourceContext } from '../../notifications/index.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
 
@@ -148,9 +150,13 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   const {
     streaming, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick,
     snapshotInventoryTick,
-    answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider, pendingApprovals,
+    answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, pendingApprovals,
   } = stream;
   const currentTurn = useAgentCurrentTurn(selectedId);
+  const { onSwitchProvider, providerChange, retryProviderChange } = useSessionProvider({
+    selectedId, sessionData: selectedSessionData, setProvider, setModel,
+    updateSessionData, refetchSessions,
+  });
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
   const { providerOptions, currentProviderModels, getModelsForProvider, tasksState } =
@@ -160,9 +166,6 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       tasksRefreshTick,
       sessionData: selectedSessionData,
       provider,
-      model,
-      setProvider,
-      setModel,
     });
   const transcriptProjection = useEditorTranscriptProjection(selectedSessionData, currentTurn, tasksState);
 
@@ -378,6 +381,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     { interject, attachments, skillIds },
   ) => {
     if (!selectedId) return;
+    await sessionProviderSwitches.wait(selectedId);
     try {
       const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean }>(
         `/coder/sessions/${selectedId}/inject`,
@@ -437,15 +441,6 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     return onStudioSend(selectionPrefixSessionId, (text) => { void handleSend(text, []); });
   }, [selectionPrefixSessionId, handleSend]);
 
-  const onSwitchProvider = useCallback(async (newProvider: string, newModel: string) => {
-    setProvider(newProvider);
-    setModel(newModel);
-    if (selectedId && (streaming || selectedSessionData)) {
-      await switchProvider(newProvider, newModel || undefined);
-      refetchSession();
-    }
-  }, [selectedId, streaming, selectedSessionData, switchProvider, refetchSession]);
-
   const loadEarlierMessages = useEditorMessagePagination(selectedId, selectedSessionData, updateSessionData);
 
   const handlers: PromptHandlers = useMemo(() => ({
@@ -464,7 +459,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     transcriptProjection, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     snapshotActions, snapshotFiles,
     queue, handleQueue,
-    provider, model, setModel, agent, setAgent: handleAgentChange,
+    provider, model, setModel, providerChange, retryProviderChange, agent, setAgent: handleAgentChange,
     maxTurns, setMaxTurns: handleMaxTurnsChange,
     maxAutoContinues,
     setMaxAutoContinues: handleMaxAutoContinuesChange,

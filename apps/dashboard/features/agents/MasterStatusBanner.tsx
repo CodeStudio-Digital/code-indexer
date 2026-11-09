@@ -6,8 +6,8 @@
  * Three variants:
  *   - `error`: red persistent banner with `errorDetail`. Shown whenever
  *     `masterErrorDetail` is set (independent of `masterEndedAt`).
- *   - `unexpected`: orange persistent banner. Master exited without a
- *     recent user message (e.g. internal abort, runner crash). Stays
+ *   - `unexpected`: orange persistent banner. Runtime reported an abnormal
+ *     exit without an error detail (e.g. internal abort, runner crash). Stays
  *     visible until the user sends a new message.
  *   - `finished`: blue auto-dismiss toast for the "happy path" exit
  *     after a user turn. Fades after 10s via local timer.
@@ -25,7 +25,7 @@ import { formatClock } from '../../lib/datetime.js';
 interface MasterStatusBannerProps {
   /** ISO timestamp of the last runner exit, null when active or never started. */
   endedAt: string | null;
-  /** True when the exit looked unexpected (errored or no recent user turn). */
+  /** True when the runtime reports an abnormal exit. */
   unexpected: boolean;
   /** Error detail string when the master ended with an error. */
   errorDetail: string | null;

@@ -46,6 +46,9 @@ export interface MasterResumeOpts {
   maxTurns?: number;
   roleConfigs?: RoleConfig[];
   attachments?: CoderAttachment[];
+  boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
+  /** Internal wakeups already have a board entry; HTTP user submissions opt in. */
+  recordUserMessage?: boolean;
   /** Enable extended thinking on the resumed master's next turn. */
   thinking?: boolean;
   thinkingBudgetTokens?: number;
@@ -245,6 +248,7 @@ export async function resumeMaster(
     ctx.companyFiles.clearRecoveryFlag(),
   ]);
 
+  if (opts.recordUserMessage) deps.board.post('human', null, 'message', opts.userMessage, undefined, opts.boardAttachments);
   deps.board.post(
     'system',
     null,

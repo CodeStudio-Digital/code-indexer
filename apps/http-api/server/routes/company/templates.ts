@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import type { CompanyRoleConfig } from '@mcp/company/types.js';
+import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 
 interface CreateTemplateBody {
@@ -40,7 +41,7 @@ export function mountCompanyTemplateRoutes(app: Hono, deps: ServerDeps): void {
     const template = companyStore.createTemplate(
       body.name.trim(),
       body.description?.trim() ?? '',
-      body.roles,
+      body.roles.map(withDefaultQaSkill),
     );
     return c.json(template, 201);
   });

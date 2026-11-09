@@ -4,22 +4,52 @@ import type { DB } from './types.js';
 /** Return only the best paths, without hydrating/transferring full DBFile rows.
  * SQLite does matching and a bounded top-K sort over the project/path index. */
 export function searchPaths(db: DB, projectId: number, query: string, limit = 50, fuzzy = true): Array<{ path: string }> {
-  const q = query.trim().slice(0, 128).toLowerCase();
+  const q = query.trim().replace(/\\/g, '/').slice(0, 128).toLowerCase();
   if (!q) return [];
   const take = Math.max(1, Math.min(300, Number.isFinite(limit) ? Math.floor(limit) : 50));
   const escape = (text: string) => text.replace(/[\\%_]/g, '\\$&');
   const pattern = `%${fuzzy ? [...q].map(escape).join('%') : escape(q)}%`;
-  return db.prepare(`
+  const candidates = new Set<string>();
+  // Prefix uses a covering B-tree; substrings use trigram postings. The
+  // expensive subsequence fallback examines a bounded candidate window.
+  for (const row of db.prepare('SELECT path FROM files WHERE project_id=? AND path LIKE ? ESCAPE \'\\\' ORDER BY path LIMIT ?')
+    .all(projectId, `${escape(q)}%`, take) as { path: string }[]) candidates.add(row.path);
+  for (const row of db.prepare(`SELECT path FROM files WHERE project_id=?
+    AND substr(path,length(rtrim(path,replace(path,'/','')))+1) LIKE ? ESCAPE '\\' LIMIT ?`)
+    .all(projectId, `${escape(q)}%`, take) as { path: string }[]) candidates.add(row.path);
+  if ([...q].length >= 3) {
+    for (const row of db.prepare(`SELECT f.path FROM file_paths_fts p JOIN files f ON f.id=p.rowid
+      WHERE file_paths_fts MATCH ? AND f.project_id=? LIMIT 3000`).all(`"${q.replace(/"/g, '""')}"`, projectId) as { path: string }[]) candidates.add(row.path);
+  }
+  if (fuzzy && candidates.size < take || q.length < 3) {
+    const fallback = db.prepare(`
     WITH matches AS (
-      SELECT path, instr(lower(path), ?) AS pos FROM files
-      WHERE project_id = ? AND path LIKE ? ESCAPE '\\'
+      SELECT path, instr(lower(path), ?) AS pos FROM
+        (SELECT path FROM files WHERE project_id = ? ORDER BY path LIMIT 5000)
+      WHERE path LIKE ? ESCAPE '\\'
     )
     SELECT path FROM matches ORDER BY
       CASE WHEN pos = 0 THEN 100000 + length(path)
         ELSE (pos - 1) * 2 + length(path)
           - CASE WHEN pos = 1 OR substr(path, pos - 1, 1) = '/' THEN 1000 ELSE 0 END
       END, path LIMIT ?
-  `).all(q, projectId, pattern, take) as Array<{ path: string }>;
+    `).all(q, projectId, pattern, take) as Array<{ path: string }>;
+    for (const row of fallback) candidates.add(row.path);
+  }
+  const score = (path: string) => {
+    const pos = path.toLowerCase().indexOf(q);
+    return pos < 0 ? 100_000 + path.length : pos * 2 + path.length - (pos === 0 || path[pos - 1] === '/' ? 1000 : 0);
+  };
+  return [...candidates].sort((a, b) => score(a) - score(b) || a.localeCompare(b)).slice(0, take).map(path => ({ path }));
+}
+
+/** Bounded path-only acquisition for live search; one extra row proves truncation. */
+export function listPathsBounded(db: DB, projectId: number, language?: string, limit = 5000): { paths: string[]; truncated: boolean } {
+  const take = Math.max(1, Math.min(10000, Number.isFinite(limit) ? Math.floor(limit) : 5000));
+  const rows = (language
+    ? db.prepare('SELECT path FROM files WHERE project_id=? AND language=? ORDER BY path LIMIT ?').all(projectId, language, take + 1)
+    : db.prepare('SELECT path FROM files WHERE project_id=? ORDER BY path LIMIT ?').all(projectId, take + 1)) as { path: string }[];
+  return { paths: rows.slice(0, take).map(r => r.path), truncated: rows.length > take };
 }
 
 export interface UpsertFileData {

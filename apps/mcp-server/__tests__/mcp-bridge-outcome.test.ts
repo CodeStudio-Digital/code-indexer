@@ -38,7 +38,8 @@ describe('internal MCP effect contracts', () => {
     const read = vi.fn().mockResolvedValue({ owned: true });
     const input = { run_id: 'fixture' };
     const result = await tool.handler(input, { cwd: process.cwd(), projectName: 'fixture', agentReads: { read } } as ToolContext);
-    expect(result.content).toContain('"owned":true');
+    expect(result.structuredData).toEqual({ owned: true });
+    expect(result.content).not.toBe('');
     expect(read).toHaveBeenCalledWith(name, input, undefined);
     expect(callTool).not.toHaveBeenCalled();
     expect((await tool.handler(input, { cwd: process.cwd() } as ToolContext)).isError).toBe(true);

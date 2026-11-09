@@ -62,9 +62,8 @@ export function mountCompanyEnvsRoutes(app: Hono, deps: ServerDeps): void {
     if (reveal && resolved.appOwned) {
       return appOwnedControlPlaneConflict(c, 'environment secret reveal');
     }
-    await companySessionEnvStore.initialize();
     const keyFilter = c.req.query('key');
-    const all = companySessionEnvStore.list(resolved.rootId);
+    const all = await companySessionEnvStore.listAsync(resolved.rootId);
     const rows = keyFilter ? all.filter((row) => row.key === keyFilter) : all;
     if (reveal) {
       const secretKeys = rows
@@ -143,10 +142,8 @@ export function mountCompanyEnvsRoutes(app: Hono, deps: ServerDeps): void {
           'service_scope' in body ? body.service_scope : undefined,
       },
     );
-    await getSandboxManager()
-      .syncEnvsToAllContainers(resolved.rootId)
-      .catch(() => undefined);
-    return c.json({ ok: true });
+    const application = await getSandboxManager().syncEnvsToAllContainers(resolved.rootId).catch(() => ({ state: 'failed', applied: [], failed: [{ serviceId: '*', reason: 'environment_sync_failed' }], restartRequired: false }));
+    return c.json({ ok: true, persisted: true, application });
   });
 
   app.delete('/api/company/sessions/:id/envs/:key', async (c) => {
@@ -158,9 +155,7 @@ export function mountCompanyEnvsRoutes(app: Hono, deps: ServerDeps): void {
     const key = c.req.param('key');
     if (!key) return c.json({ error: 'key required' }, 400);
     companySessionEnvStore.delete(resolved.rootId, key);
-    await getSandboxManager()
-      .syncEnvsToAllContainers(resolved.rootId)
-      .catch(() => undefined);
-    return c.json({ ok: true });
+    const application = await getSandboxManager().syncEnvsToAllContainers(resolved.rootId).catch(() => ({ state: 'failed', applied: [], failed: [{ serviceId: '*', reason: 'environment_sync_failed' }], restartRequired: false }));
+    return c.json({ ok: true, persisted: true, application });
   });
 }

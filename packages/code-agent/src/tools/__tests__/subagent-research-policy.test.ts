@@ -35,29 +35,6 @@ describe('subagent research policy', () => {
     expect(disabled.softTimeTargetMs).toBe(0);
   });
 
-  it('uses the parent goal budget to prioritize an implicit standard investigation', () => {
-    const budgeted = buildResearchPolicy({
-      task: 'Inspect the migration surface',
-      parentGoalBudgetTokens: 12_000,
-      agentCount: 3,
-    });
-    expect(budgeted).toMatchObject({
-      depth: 'quick',
-      source: 'budget',
-      budgetShareTokens: 4_000,
-      softToolTarget: 16,
-    });
-
-    const explicit = buildResearchPolicy({
-      task: 'Inspect the migration surface',
-      explicitDepth: 'deep',
-      parentGoalBudgetTokens: 12_000,
-      agentCount: 3,
-    });
-    expect(explicit.depth).toBe('deep');
-    expect(explicit.source).toBe('explicit');
-  });
-
   it('renders concrete sufficiency criteria and a non-terminal synthesis checkpoint', () => {
     const policy = buildResearchPolicy({
       task: 'Inspect auth',

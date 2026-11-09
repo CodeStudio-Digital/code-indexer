@@ -62,6 +62,8 @@ export interface CellResult {
   p50_ms: number;
   p95_ms: number;
   queries: number;
+  negative_queries: number;
+  negative_accuracy: number | null;
 }
 
 export interface BenchmarkProgress {
@@ -73,16 +75,28 @@ export interface BenchmarkProgress {
 
 /** Did the result hit any declared relevant target? (binary relevance) */
 export function isRelevant(result: HybridSearchResult, q: EvalQuery): boolean {
+  return matchedTargets(result, q).length > 0;
+}
+
+function targets(q: EvalQuery): string[] {
+  return [...new Set([...(q.relevant_files ?? []).map(path => `file:${path.replaceAll('\\', '/')}`),
+    ...(q.relevant_symbols ?? []).map(name => `symbol:${name}`)])];
+}
+
+function matchedTargets(result: HybridSearchResult, q: EvalQuery): string[] {
   const data = result.data as unknown as Record<string, unknown>;
-  if (result.type === 'file') {
-    const path = (data.path as string) ?? '';
-    return (q.relevant_files ?? []).some((rf) => path === rf || path.endsWith(rf));
-  }
-  const name = (data.name as string) ?? '';
-  const filePath = (data.file_path as string) ?? '';
-  const symOk = (q.relevant_symbols ?? []).some((rs) => name === rs);
-  const fileOk = (q.relevant_files ?? []).some((rf) => filePath === rf || filePath.endsWith(rf));
-  return symOk || fileOk;
+  const path = String(result.type === 'file' ? data.path ?? '' : data.file_path ?? '').replaceAll('\\', '/');
+  return targets(q).filter(target => target.startsWith('file:')
+    ? path === target.slice(5) || path.endsWith('/' + target.slice(5))
+    : result.type === 'symbol' && data.name === target.slice(7));
+}
+
+/** Recall credits distinct declared targets, not just the first relevant row. */
+export function recallAt(results: HybridSearchResult[], q: EvalQuery, k = 10): number {
+  const expected = targets(q);
+  if (!expected.length) return 0;
+  const found = new Set(results.slice(0, k).flatMap(result => matchedTargets(result, q)));
+  return found.size / expected.length;
 }
 
 export function percentile(values: number[], p: number): number {
@@ -98,14 +112,15 @@ export function percentile(values: number[], p: number): number {
  * relevant hits (a single target matched by several rows can't push nDCG > 1).
  */
 export function ndcgAt(results: HybridSearchResult[], q: EvalQuery, k = 10): number {
-  const R = Math.min(k, (q.relevant_files?.length ?? 0) + (q.relevant_symbols?.length ?? 0));
+  const R = Math.min(k, targets(q).length);
   if (R === 0) return 0;
   let dcg = 0;
-  let credited = 0;
-  for (let i = 0; i < Math.min(results.length, k) && credited < R; i++) {
-    if (isRelevant(results[i], q)) {
+  const credited = new Set<string>();
+  for (let i = 0; i < Math.min(results.length, k) && credited.size < R; i++) {
+    const target = matchedTargets(results[i], q).find(value => !credited.has(value));
+    if (target) {
       dcg += 1 / Math.log2(i + 2);
-      credited++;
+      credited.add(target);
     }
   }
   let idcg = 0;
@@ -153,6 +168,7 @@ export async function runBenchmark(
       let r10 = 0;
       let rr = 0;
       let ndcg = 0;
+      let negatives = 0, correctNegatives = 0;
 
       for (const q of cfg.querySet) {
         const start = Date.now();
@@ -178,8 +194,9 @@ export async function runBenchmark(
             break;
           }
         }
-        if (firstHit !== -1 && firstHit < 5) r5++;
-        if (firstHit !== -1 && firstHit < 10) r10++;
+        r5 += recallAt(results, q, 5);
+        r10 += recallAt(results, q, 10);
+        if (!targets(q).length) { negatives++; if (!results.length) correctNegatives++; }
         rr += firstHit === -1 ? 0 : 1 / (firstHit + 1);
         ndcg += ndcgAt(results, q, 10);
 
@@ -190,13 +207,15 @@ export async function runBenchmark(
       out.push({
         embedding: emb.label,
         reranker: rer.label,
-        recall_at_5: n ? r5 / n : 0,
-        recall_at_10: n ? r10 / n : 0,
-        mrr: n ? rr / n : 0,
-        ndcg_at_10: n ? ndcg / n : 0,
+        recall_at_5: n > negatives ? r5 / (n - negatives) : 0,
+        recall_at_10: n > negatives ? r10 / (n - negatives) : 0,
+        mrr: n > negatives ? rr / (n - negatives) : 0,
+        ndcg_at_10: n > negatives ? ndcg / (n - negatives) : 0,
         p50_ms: percentile(latencies, 50),
         p95_ms: percentile(latencies, 95),
         queries: n,
+        negative_queries: negatives,
+        negative_accuracy: negatives ? correctNegatives / negatives : null,
       });
     }
   }

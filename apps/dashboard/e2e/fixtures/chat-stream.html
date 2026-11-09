@@ -18,19 +18,22 @@ function Fixture() {
   const [tick,setTick]=useState(0); const [running,setRunning]=useState(true);
   const [count,setCount]=useState(80); const [images,setImages]=useState([]); const [session,setSession]=useState('fixture-one');
   const [stored,setStored]=useState(false);
+  const [layoutText,setLayoutText]=useState(null);
   useEffect(()=>{if(!running)return; const timer=setInterval(()=>setTick(n=>n+1),80);return()=>clearInterval(timer);},[running]);
   window.chatFixture={pause:()=>setRunning(false),resume:()=>setRunning(true),gallery:async()=>{
     const bytes=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
     const files=Array.from({length:15},(_,i)=>new File([bytes],`Projeto ${i+1}.png`,{type:'image/png'}));
     setImages(await filesToAttachments(files));setRunning(false);setCount(0);
-  },stored:()=>setStored(true),short:()=>{setRunning(false);setCount(2);setTick(0);},switch:()=>setSession('fixture-two')};
+  },stored:()=>setStored(true),short:()=>{setRunning(false);setCount(2);setTick(0);},switch:()=>setSession('fixture-two'),
+  layout:({text,imageCount=0})=>{setRunning(false);setCount(0);setStored(false);setLayoutText(text);setImages(Array.from({length:imageCount},(_,i)=>({base64,mediaType:'image/png',name:`Imagem ${i+1}.png`})));
+  }};
   document.body.dataset.tick=String(tick);
   const data=useMemo(()=>{
     const messages=Array.from({length:count},(_,i)=>({role:i%2===0?'user':'assistant',content:[{type:'text',text:i%2===0?`Pergunta ${i/2+1}`:`Resposta ${Math.ceil(i/2)}: conteúdo da conversa para testar a leitura durante o stream.`}]}));
-    messages.push({role:'user',content:[{type:'text',text:'Avalie o projeto?'},...images.map(image=>({type:'image',...image,...(stored?{base64:'',_hasBase64:true}:{})}))]});
+    messages.push({role:'user',content:[{type:'text',text:layoutText??'Avalie o projeto?'},...images.map(image=>({type:'image',...image,...(stored?{base64:'',_hasBase64:true}:{})}))]});
     return {session:{id:session,model:'fixture',provider:'fixture',status:'running'},messages,message_rows:messages.map((m,i)=>({seq:i+1,role:m.role})),total_messages:messages.length,archived_count:0};
-  },[count,images,session,stored]);
-  const turn=images.length?null:{blocks:[
+  },[count,images,session,stored,layoutText]);
+  const turn=images.length||layoutText!==null?null:{blocks:[
     {type:'text',id:'intro',text:'Vou examinar a estrutura e os arquivos principais do projeto.'},
     {type:'tool',call:{id:'files',name:'list_directory',input:{path:'.'},status:'done',result:'src, package.json',durationMs:3}},
     {type:'tool',call:{id:'search',name:'mcp__search',input:{query:'architecture'},status:'running',startedAt:Date.now()}},

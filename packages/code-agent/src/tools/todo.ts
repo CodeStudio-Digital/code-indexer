@@ -101,7 +101,7 @@ function validateTodos(raw: unknown): { ok: true; todos: TodoItem[] } | { ok: fa
 
 // ─── Burst guard for todo_write ────────────────────────────────────────
 //
-// Mirrors the create_goal burst guard in goal.ts. When the agent reissues
+// Avoid repeated checklist writes. When the agent reissues
 // `todo_write` with the same logical list 3+ times inside 90s without any
 // real change in between, we hard-refuse and point them at update_todo.
 // Detecting "same logical list" by signature on `content` keeps refining

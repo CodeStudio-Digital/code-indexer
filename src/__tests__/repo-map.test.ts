@@ -95,6 +95,25 @@ describe('buildRepoMap', () => {
   it('returns empty for an unknown project id', () => {
     expect(buildRepoMap(db, 9999, 4000)).toBe('');
   });
+
+  it('retains configuration-only files and exported constants without exposing private variables', () => {
+    const settingsProject = db.createProject('settings-only', join(workDir, 'settings')).id;
+    const base = { language: 'ts', size: 100, lineCount: 3, contentHash: 'config', summary: '', concepts: [],
+      dependencies: [], internalDeps: [], externalDeps: [], notes: [], complexity: 'low', layer: 'config',
+      isEntryPoint: false, isTest: false, isGenerated: false };
+    const fileId = db.upsertFile(settingsProject, { ...base, path: 'src/settings/limits.ts' });
+    const symbol = { kind: 'constant' as const, signature: '', parent: null, modifiers: [], return_type: null,
+      parameters: null, line: 1, comment: null, tags: [] };
+    db.upsertSymbols(settingsProject, fileId, 'src/settings/limits.ts', [
+      { ...symbol, name: 'TRANSFER_LIMITS', exported: true },
+      { ...symbol, name: 'privateScratch', kind: 'variable', exported: false, line: 2 },
+    ]);
+    db.upsertFile(settingsProject, { ...base, path: 'settings.json', language: 'json' });
+    const map = buildRepoMap(db, settingsProject, 4000);
+    expect(map).toContain('src/settings/limits.ts: constant TRANSFER_LIMITS');
+    expect(map).toContain('- settings.json');
+    expect(map).not.toContain('privateScratch');
+  });
 });
 
 describe('resolveRepoMapBudget', () => {

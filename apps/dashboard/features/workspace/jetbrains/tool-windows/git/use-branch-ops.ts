@@ -12,11 +12,10 @@ import { apiCall } from '../../../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../../../state/workspace.js';
 import { confirm, prompt, toast } from '../../../../../components/ui/prompt-dialog.js';
 import { requestGitReload } from '../../../editor/conflict-registry.js';
-import type { GitBranch } from '@mcp/api-bus';
+import type { GitBranch, GitRunResult } from '@mcp/api-bus';
 import { checkoutBranch } from './branch-actions.js';
 import { openProjectPushDialog } from '../../../../git-push/push-dialog-store.js';
-
-interface GitRunResult { ok: boolean; stdout: string; stderr: string }
+import { showGitUpdateResult } from './update-feedback.js';
 
 export interface BranchActions {
   onOpenLog: (b: GitBranch) => void;
@@ -206,7 +205,10 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
         const r = b.isCurrent
           ? await apiCall<GitRunResult>('projectGit.pull', { projectId, repoPath, rebase: true })
           : await apiCall<GitRunResult>('projectGit.updateBranch', { projectId, repoPath, branch: b.name });
-        r.ok ? toast.success(t('git.branch.updated', { branch: b.name })) : toast.error(t('git.branch.updateIssues'), { description: tail(r) });
+        showGitUpdateResult(r, {
+          projectId, repoPath, successTitle: t('git.branch.updated', { branch: b.name }), t,
+        });
+        if (r.updateActionRequired === 'conflicts') onClose?.();
         await after();
         requestGitReload();
       } catch (e) { toast.error(t('git.branch.updateFailed'), { description: e instanceof Error ? e.message : String(e) }); }

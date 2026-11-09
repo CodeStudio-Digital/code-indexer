@@ -33,7 +33,7 @@ describe('coder archived message pagination', () => {
 
     const globals = await app.request('/api/coder/sessions/global');
     expect(globals.status).toBe(200);
-    expect(await globals.json()).toEqual([{ id: SESSION_ID }]);
+    expect(await globals.json()).toEqual([{ id: SESSION_ID, runtime_active: false, runtime_bus_id: null }]);
   });
 
   it('anchors after maxMessageSeq when no visible row can supply before_seq', async () => {

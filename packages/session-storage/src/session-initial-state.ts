@@ -40,7 +40,6 @@ export function initialSessionState(
     status: supplied.status ?? input.status ?? 'idle',
     updated_at: now,
     archived_at: supplied.archived_at ?? null,
-    goal: supplied.goal ?? null,
     todos: supplied.todos ?? [],
     permissions: supplied.permissions ?? {},
     tools: supplied.tools ?? {},

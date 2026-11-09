@@ -7,8 +7,9 @@
  * Corpus = `db.listFiles` (the indexed set already excludes node_modules/.git),
  * filtered by an optional comma-separated glob mask (e.g. `*.tsx, *.ts`).
  */
-import path from 'node:path';
-import { promises as fs } from 'node:fs';
+import { boundedGrep } from '@mcp/services/services/bounded-grep.js';
+import { discoverLivePaths } from '@mcp/indexer/indexer/live-paths.js';
+import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 
 export interface GrepMatch {
   line: number; // 1-based
@@ -25,6 +26,8 @@ export interface GrepResult {
   total: number;
   fileCount: number;
   truncated: boolean;
+  coverage?: { complete: boolean; examinedFiles: number; skippedFiles: number; skippedLines: number; changedFiles: number; discoveredFiles: number; failedRoots: number };
+  freshness?: { mode: 'live_disk'; observedAt: string; finishedAt: string; snapshot: false };
 }
 
 export interface GrepOptions {
@@ -37,10 +40,11 @@ export interface GrepOptions {
   maxMatches?: number;
   /** Skip lines longer than this (minified bundles). */
   maxLineLen?: number;
+  signal?: AbortSignal;
 }
 
 interface FileLister {
-  getProject(id: number): { root_path: string } | null | undefined;
+  getProject(id: number): { root_path: string; index_ignore_patterns?: string | null } | null | undefined;
   listFiles(id: number): Array<{ path: string }>;
 }
 
@@ -88,48 +92,23 @@ export async function grepProject(db: FileLister, projectId: number, o: GrepOpti
   const matcher = buildMatcher(o);
   if (!project || !matcher) return empty;
 
+  o.signal?.throwIfAborted();
+  const observedAt = new Date().toISOString();
   const maskRe = maskToRe(o.mask);
-  const maxMatches = o.maxMatches ?? 2000;
-  const maxLineLen = o.maxLineLen ?? 1000;
-  const root = path.resolve(project.root_path);
-
-  const files = db
-    .listFiles(projectId)
-    .map((f) => f.path)
-    .filter((p) => !maskRe || maskRe.test(baseName(p)));
-
-  const out: GrepFile[] = [];
-  let total = 0;
-  let truncated = false;
-
-  for (const rel of files) {
-    if (total >= maxMatches) { truncated = true; break; }
-    let content: string;
-    try {
-      content = await fs.readFile(path.resolve(root, rel), 'utf8');
-    } catch {
-      continue;
-    }
-    if (content.includes(String.fromCharCode(0))) continue; // skip binary files
-    const lines = content.split('\n');
-    const fileMatches: GrepMatch[] = [];
-    for (let i = 0; i < lines.length && total < maxMatches; i++) {
-      // Drop the trailing CR from CRLF files so match offsets + display are
-      // computed on the clean line (the CR sits past any match anyway).
-      const raw = lines[i];
-      const text = raw.charCodeAt(raw.length - 1) === 13 ? raw.slice(0, -1) : raw;
-      if (text.length > maxLineLen) continue;
-      matcher.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = matcher.exec(text)) !== null) {
-        fileMatches.push({ line: i + 1, text, start: m.index, end: m.index + m[0].length });
-        total++;
-        if (m[0].length === 0) matcher.lastIndex++; // guard zero-width loop
-        if (total >= maxMatches) { truncated = true; break; }
-      }
-    }
-    if (fileMatches.length) out.push({ path: rel, matches: fileMatches });
+  const sources = [{ rootPath: project.root_path, prefix: '', ignorePatterns: projectIndexIgnorePatterns(project) }];
+  const indexed = db.listFiles(projectId).map(f => f.path);
+  const disk = await discoverLivePaths(sources, { exclude: new Set(indexed), signal: o.signal });
+  const paths = [...indexed, ...disk.paths].filter(p => !maskRe || maskRe.test(baseName(p)));
+  const scan = await boundedGrep({ sources, paths, pattern: matcher, maxMatches: o.maxMatches ?? 2000, maxLineLen: o.maxLineLen, signal: o.signal });
+  const grouped = new Map<string, GrepFile>();
+  for (const { file, ...match } of scan.matches) {
+    let entry = grouped.get(file);
+    if (!entry) { entry = { path: file, matches: [] }; grouped.set(file, entry); }
+    entry.matches.push(match);
   }
-
-  return { files: out, total, fileCount: out.length, truncated };
+  const complete = !scan.truncated && !disk.truncated && !disk.failedRoots && !scan.skippedFiles && !scan.skippedLines && !scan.changedFiles;
+  return { files: [...grouped.values()], total: scan.matches.length, fileCount: grouped.size, truncated: !complete,
+    coverage: { complete, examinedFiles: scan.examinedFiles, skippedFiles: scan.skippedFiles, skippedLines: scan.skippedLines, changedFiles: scan.changedFiles, discoveredFiles: disk.paths.length, failedRoots: disk.failedRoots },
+    freshness: { mode: 'live_disk', observedAt, finishedAt: new Date().toISOString(), snapshot: false },
+  };
 }

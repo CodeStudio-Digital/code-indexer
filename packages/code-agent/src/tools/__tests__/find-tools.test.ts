@@ -18,6 +18,22 @@ import { describe, it, expect, vi } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { buildFindToolsTool } from '../find-tools.js';
+import { toolProjectionReceipt } from '../../core/tool-projection.js';
+
+it('does not request reactivation of a declaration rejected by the current provider', async () => {
+  const promoteTool = vi.fn();
+  const result = await buildFindToolsTool(buildRegistry()).handler({ query: 'edit_file', limit: 1 }, {
+    cwd: '/tmp', projectName: 'test', runner: {
+      visibleToolNames: new Set(), promoteTool,
+      discoveryState: () => ({ authorization: 'allowed', visible: false }),
+      projectionReceipt: toolProjectionReceipt([], new Set(), new Set(['edit_file']), 'p', 'c', new Set(['edit_file'])),
+    },
+  } as never);
+  expect(result.content).toContain('schema rejected by current provider');
+  expect(result.content).not.toContain('Requested activation');
+  expect(promoteTool).not.toHaveBeenCalled();
+  expect(result.structuredData).toMatchObject({ discovery: { tools: [{ name: 'edit_file', state: 'deferred', reason: 'provider_schema_rejected' }] } });
+});
 
 function tool(name: string, description: string, opts?: Partial<CoderTool>): CoderTool {
   return {
@@ -86,6 +102,18 @@ async function findTools(registry: ToolRegistry, query: string, limit = 5): Prom
   const result: ToolResult = await found.handler({ query, limit }, { cwd: '/tmp', projectName: 'test' } as never);
   return typeof result.content === 'string' ? result.content : '';
 }
+
+it('reports an exact blocked match without requesting activation', async () => {
+  const promoteTool = vi.fn();
+  const result = await buildFindToolsTool(buildRegistry()).handler({ query: 'edit_file' }, {
+    cwd: '/tmp', projectName: 'test', runner: {
+      visibleToolNames: new Set(), promoteTool,
+      discoveryState: () => ({ authorization: 'blocked', visible: false }),
+    },
+  } as never);
+  expect(result.content).toContain('blocked by session configuration');
+  expect(promoteTool).not.toHaveBeenCalled();
+});
 
 function namesIn(output: string): string[] {
   const out: string[] = [];
@@ -199,7 +227,7 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
       },
     });
     expect(promoted).toEqual(['edit_file']);
-    expect(output).toContain('Activated edit_file for the next turn');
+    expect(output).toContain('Requested activation of edit_file');
     expect(output).toContain('expand_toolset({ tier: "navigate" })');
   });
 
@@ -223,7 +251,7 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
       },
     });
     expect(promoted).toEqual(['edit_file']);
-    expect(output).toContain('Activated edit_file for the next turn');
+    expect(output).toContain('Requested activation of edit_file');
     expect(output).toContain('replaced least-recently-used: old_tool');
   });
 

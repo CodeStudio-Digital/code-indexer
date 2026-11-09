@@ -104,7 +104,7 @@ export class RuntimeReconciler {
       // Orphaned-card sweep runs AFTER reconcileSubordinates so it reads DB
       // statuses already flipped to idle for ghost runs — avoids a false reset
       // during a transient in-memory gap.
-      this.reconcileOrphanedCards();
+      await this.reconcileOrphanedCards();
       await this.heartbeatMasterInbox();
     } catch (e) {
       console.warn(
@@ -248,7 +248,7 @@ export class RuntimeReconciler {
    * paired with the dispatch loop that re-picks the freed card.
    * No-op when no kanban service was wired.
    */
-  private reconcileOrphanedCards(): void {
+  private async reconcileOrphanedCards(): Promise<void> {
     const cfg = this.deps.autonomy
       ? this.deps.autonomy.get()
       : resolveAutonomy(null, process.env);
@@ -263,9 +263,11 @@ export class RuntimeReconciler {
     } catch {
       return;
     }
-    const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
+    const ownRuns = this.deps.ctx.companyFiles.listAgentRunsSync();
+    const runs = this.deps.ctx.companyFiles.listCompanyAgentRunsSync?.() ?? ownRuns;
+    const ownRunIds = new Set(ownRuns.map(run => run.id));
     const liveRunIds = new Set(
-      runs.filter((r) => ACTIVE_RUN_STATUSES.has(r.status)).map((r) => r.id),
+      runs.filter((r) => ACTIVE_RUN_STATUSES.has(r.status) || r.status === 'paused').map((r) => r.id),
     );
 
     const schedCards = cardsFull.map((c) => ({
@@ -277,7 +279,10 @@ export class RuntimeReconciler {
         .map((a) => asAgentRunId(a.agent_run_id)),
     }));
     const schedRuns = [...new Set(schedCards.flatMap((c) => c.assignedAgentRunIds))].map(
-      (id) => ({ agentRunId: id, live: liveRunIds.has(id) }),
+      // Only the owning session may declare a run orphaned. A sibling created
+      // after this worker's catalog snapshot, or a reserved not-yet-created
+      // run, must not be mistaken for a failed run.
+      (id) => ({ agentRunId: id, live: liveRunIds.has(id) || !ownRunIds.has(id) }),
     );
 
     const orphanIds = findOrphanedCards(schedCards, schedRuns);
@@ -285,16 +290,23 @@ export class RuntimeReconciler {
 
     for (const cardId of orphanIds) {
       try {
+        const claim = await kanban.dispatchClaims?.read(cardId);
+        if (claim && claim.phase !== 'released') {
+          if (claim.sessionId !== sessionId || !ownRunIds.has(asAgentRunId(claim.agentRunId))) continue;
+          // A run in creation can still report idle before its runner starts.
+          if (claim.phase === 'starting' || claim.phase === 'reserved' || claim.phase === 'uncertain' || claim.phase === 'reviewing') continue;
+        }
         const card = cardsFull.find((c) => c.id === cardId);
         for (const a of card?.agents ?? []) {
           if (
             !a.unassigned_at &&
-            !liveRunIds.has(asAgentRunId(a.agent_run_id))
+            ownRunIds.has(asAgentRunId(a.agent_run_id)) && !liveRunIds.has(asAgentRunId(a.agent_run_id))
           ) {
             kanban.unassignAgent(cardId, a.agent_run_id);
           }
         }
         kanban.moveCard(cardId, 'todo');
+        if (claim && claim.phase !== 'released') await kanban.dispatchClaims.transition(cardId, claim, 'released');
         kanban.addComment(
           cardId,
           'scheduler',

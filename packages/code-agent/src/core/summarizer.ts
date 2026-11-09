@@ -38,14 +38,13 @@ export {
 
 /**
  * Replace the LLM-extracted `pending_tasks` with the live todo list and
- * stamp the live goal into `active_goal`. Run this AFTER summarizeSpanV2
+ * retain the task state after summarizeSpanV2
  * so rendered summaries reflect ground truth, not what the LLM happened
  * to extract from the message span.
  */
 export function overlayLiveState(
   summary: CompactionSummaryV2,
   liveTodos: Array<{ content: string; activeForm: string; status: string }>,
-  liveGoal: { text: string; status: string } | null,
 ): CompactionSummaryV2 {
   const unfinished = liveTodos
     .filter((t) => t.status === 'pending' || t.status === 'in_progress')
@@ -53,7 +52,6 @@ export function overlayLiveState(
   return {
     ...summary,
     pending_tasks: unfinished.length > 0 ? unfinished : summary.pending_tasks,
-    active_goal: liveGoal ? `${liveGoal.text} (status=${liveGoal.status})` : summary.active_goal,
   };
 }
 
@@ -386,7 +384,6 @@ function parseV2(json: string): CompactionSummaryV2 | null {
  *
  * Field → tag mapping (preserved across the existing v2 schema, so
  * `overlayLiveState` and the Codex-fallback path keep working):
- *   active_goal       → <active_goal>
  *   primary_request   → <primary_request>
  *   current_work +
  *   next_step         → <current_focus>
@@ -415,7 +412,6 @@ export function renderSummaryV2(s: CompactionSummaryV2): string {
     lines.push('');
   };
 
-  if (s.active_goal) block('active_goal', s.active_goal);
   if (s.primary_request) block('primary_request', s.primary_request);
 
   // Current focus = current_work + next_step. Two short fields collapsed

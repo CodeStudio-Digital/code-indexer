@@ -17,9 +17,6 @@ export interface ToolCallEvent {
   };
   durationMs?: number;
   status: 'running' | 'awaiting_approval' | 'done' | 'error';
-  /** Goal create/update returned from the model loop but its session mutation
-   *  has not committed with the tool audit row yet. */
-  awaitingPersistence?: boolean;
   /** `Date.now()` stamped when `tool_call_start` arrived. Used to render
    *  "running Xs" while the tool is in flight, AND as a fallback for
    *  `elapsedMs` if the worker is on an older build that doesn't emit
@@ -50,12 +47,27 @@ export interface PendingToolApproval {
   parentToolUseId?: string;
   toolName: string;
   argsSummary: string;
-  /** Exact structured args for database approvals; generic tools remain summary-only. */
+  /** Exact structured args for database and uncertain-outcome recovery approvals. */
   input?: Record<string, unknown>;
   riskClass: 'write' | 'execute' | 'admin';
-  approvalKind: 'standard' | 'database_write';
+  approvalKind: 'standard' | 'database_write' | 'outcome_recovery';
+  /** Host-provided incident set eligible for a durable human review. */
+  recovery?: ToolApprovalRecovery;
   nested?: boolean;
   receivedAt: number;
+}
+
+export interface ToolApprovalRecovery {
+  fingerprint: string;
+  incidents: Array<{ toolUseId: string; toolName?: string; argsSummary?: string }>;
+}
+
+export interface ToolApprovalVerdict {
+  approved: boolean;
+  note?: string;
+  alwaysAllow?: boolean;
+  recoveryReviewed?: boolean;
+  recoveryFingerprint?: string;
 }
 
 export type PlanResolution = 'approved' | 'revision_requested' | 'rejected' | 'validation_error';
@@ -532,7 +544,7 @@ export interface SessionState {
   /** Live-only processes rendered in the right Session state rail. */
   activeProcesses: ActiveProcess[];
   /**
-   * Monotonic counter bumped on every event that mutates the live goal /
+   * Monotonic counter bumped on every event that mutates the live task /
    * tasks / todos state (tasks_posted, task_started, task_finished,
    * task_updated, todos_updated). The session sidebar combines this with
    * the per-turn refreshKey so status changes show up mid-turn instead of

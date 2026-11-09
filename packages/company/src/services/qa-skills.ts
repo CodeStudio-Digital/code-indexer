@@ -1,4 +1,4 @@
-
+import { declaredRoleSkillIds } from '@mcp/company-contracts/qa-defaults.js';
 /**
  * Pure: return `true` when at least one entry in the session config's
  * `role_assignments` carries the `qa-playwright` skill. Used by
@@ -18,13 +18,17 @@ export function hasQaPlaywrightSkill(configJson: string): boolean {
     return false;
   }
   if (!parsed || typeof parsed !== 'object') return false;
+  // Explicit selection wins. Legacy qa-playwright teams keep their image;
+  // new qa-preview teams do not pay for browser/regression dependencies.
+  const executor = (parsed as { qa_executor?: unknown }).qa_executor;
+  if (executor === 'preview') return false;
+  if (executor === 'playwright') return true;
   const roles = (parsed as { role_assignments?: unknown }).role_assignments;
   if (!Array.isArray(roles)) return false;
   for (const role of roles) {
     if (!role || typeof role !== 'object') continue;
     const skills = (role as { skills?: unknown }).skills;
-    if (!Array.isArray(skills)) continue;
-    if (skills.some((s) => typeof s === 'string' && s === 'qa-playwright')) {
+    if (declaredRoleSkillIds(skills).includes('qa-playwright')) {
       return true;
     }
   }

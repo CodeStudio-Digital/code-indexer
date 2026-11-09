@@ -26,8 +26,7 @@ class OwnedProjectIndex implements OwnedProjectIndexService {
     const normalized = roots.map(root => process.platform === 'win32' ? root.toLowerCase() : root);
     if (normalized[0] !== normalized[1]) throw new Error('Indexing path differs from the owning project');
     check();
-    deps.projectIndexService.ensureFresh(projectId, 'manual');
-    const readiness = await deps.projectIndexService.ensureStructuralReady(projectId, 180_000, control.signal);
+    const readiness = await deps.projectIndexService.reconcileStructural(projectId, 180_000, control.signal, check);
     check();
     if (readiness.status !== 'ready') return `Structural reconciliation is still ${readiness.status}; semantic indexing was not requested. Inspect project index status before continuing.`;
     const job = deps.semanticCoordinator.enqueueCodeProjectReindex(projectId, input.rebuild_semantic === true);

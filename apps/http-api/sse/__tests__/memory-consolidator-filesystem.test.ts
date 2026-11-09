@@ -65,7 +65,6 @@ function entry(options: {
       status: options.status ?? 'idle',
       updated_at: options.updatedAt,
       archived_at: null,
-      goal: null,
       todos: [],
       permissions: {},
       tools: {},

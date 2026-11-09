@@ -19,6 +19,7 @@
  */
 import { writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { AGENTS, type AgentId } from '../../agents/index.js';
 import {
   buildSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
@@ -72,14 +73,13 @@ const SECTION_BUDGETS: Record<string, number> = {
   '(preamble)': 340,
   '(base-intro)': 130,
   '# Workspace': 1100, // includes the platform-derived shell descriptor
-  '# Goal lifecycle': 160,
   '# Tool tiers': 170,
   '# Tool tiers (IMPORTANT)': 240,
   '# Code retrieval': 430,
   '# Tool strategy — index starting': 280,
   '# Tool strategy — native only (MCP bridge unavailable)': 200,
   '# Tool contract': 200,
-  '# Images & vision': 200,
+  '# Images & vision': 330, // attachment recovery, one-inference pixels, crop/video and fallback; compressed from 500
   '# Session overlay (automatic freshness)': 150,
   '# Subagents (isolated delegation)': 320,
   '# Memory': 420,
@@ -92,6 +92,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Code comments': 280,
   '# Operating autonomously': 260,
   '# Multi-agent mode (Ultra)': 420,
+  '# Ultra collaboration': 1800, // durable collaboration contract already shipped in the baseline
   '# Multi-agent mode (explicit request only)': 320,
   '# Plan mode is ACTIVE': 1750,
 
@@ -100,6 +101,11 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Builder mode is ACTIVE': 1600,
 
   '# Admin mode is ACTIVE': 2450,
+  '# API verification mode is ACTIVE': 3600,
+  '# Database Specialist mode is ACTIVE': 2300,
+  '# Diagram mode is ACTIVE': 2200,
+  '# Research mode is ACTIVE': 1400,
+  '# Spec mode is ACTIVE': 3200,
   '# Interactive tools': 720,
   '# Execution contract': 520,
   '# Active context': 140,
@@ -117,9 +123,9 @@ interface Composition {
 }
 
 const MATRIX: Composition[] = [];
-for (const providerFamily of ['anthropic', 'zai'] as const) {
+for (const providerFamily of ['anthropic', 'claude-code', 'codex', 'openai', 'openrouter', 'zai', 'gemini', 'deepseek', 'kimi-code', 'generic'] as const) {
   for (const planMode of [false, true]) {
-  for (const agentId of [undefined, 'explore', 'build', 'builder'] as const) {
+  for (const agentId of [undefined, ...Object.keys(AGENTS) as AgentId[]]) {
       MATRIX.push({
         label: `${providerFamily}|plan=${planMode}|agent=${agentId ?? 'none'}`,
         ctx: { ...BASE_CTX, providerFamily, planMode, agentId },

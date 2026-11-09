@@ -10,6 +10,8 @@ import { err, ok, type Result } from './result.js';
 export interface CompleteInput {
   state: string;
   code: string;
+  expectedServerId?: string;
+  isCurrent?: () => boolean;
 }
 
 export interface CompleteOutput {
@@ -34,7 +36,7 @@ export class CompleteAuthorizationFlow {
   async execute(input: CompleteInput): Promise<Result<CompleteOutput>> {
     const now = this.clock.now();
     const p = this.pending.consume(input.state, now);
-    if (!p) return err({ kind: 'invalid_state' });
+    if (!p || (input.expectedServerId && input.expectedServerId !== p.serverId)) return err({ kind: 'invalid_state' });
     if (!p.isUsable(now + 1)) return err({ kind: 'state_expired' });
 
     const reg = this.registrations.findByServerId(p.serverId);
@@ -45,13 +47,16 @@ export class CompleteAuthorizationFlow {
         tokenEndpoint: reg.tokenEndpoint,
         clientId: reg.clientId,
         clientSecret: reg.clientSecret,
+        resourceUrl: reg.resourceUrl,
+        tokenEndpointAuthMethod: reg.tokenEndpointAuthMethod,
         code: input.code,
         codeVerifier: p.verifier,
-        redirectUri: reg.redirectUri,
+        redirectUri: p.redirectUri,
       });
 
+      if (input.isCurrent && !input.isCurrent()) return err({ kind: 'invalid_state' });
       const accessExpiresAt =
-        response.expiresInSec !== null ? now + response.expiresInSec * 1000 : null;
+        response.expiresInSec !== null ? this.clock.now() + response.expiresInSec * 1000 : null;
 
       this.tokens.upsert(
         McpOAuthTokens.issue({

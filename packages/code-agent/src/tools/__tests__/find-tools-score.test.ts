@@ -14,6 +14,12 @@ import {
 } from '../find-tools-score.js';
 
 describe('tokenizeQuery', () => {
+  it('normalizes Portuguese accents and preserves Unicode words', () => {
+    expect(tokenizeQuery('buscar referências no arquivo')).toEqual(['search', 'references', 'file']);
+    expect(tokenizeQuery('código 日本語')).toEqual(['codigo', '日本語']);
+    const score = scoreTool(tokenizeQuery('ler arquivo'), getToolText({ name: 'read_file' }));
+    expect(score.hitCount).toBe(2);
+  });
   it('dedups repeated tokens and preserves first-seen order', () => {
     expect(tokenizeQuery('evolution_id product evolution create')).toEqual([
       'evolution', 'id', 'product', 'create',

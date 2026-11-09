@@ -21,7 +21,8 @@
     "newQuery": "New query",
     "deleteTitle": "Delete connection?",
     "deleteBody": "This removes the saved connection and its query history.",
-    "connecting": "Connecting…"
+    "connecting": "Connecting…",
+    "partialSearch": "Search is incomplete: some connections did not respond."
   },
   "dialog": {
     "titleNew": "New connection",
@@ -123,7 +124,9 @@
       "join-without-on": "JOIN without ON may produce a Cartesian product.",
       "unresolved-table": "Table or view was not found in the loaded catalog."
     },
-    "timeoutInvalid": "Enter a whole-number timeout between {{min}} and {{max}} seconds."
+    "timeoutInvalid": "Enter a whole-number timeout between {{min}} and {{max}} seconds.",
+    "catalogPartial": "Suggestions show a partial catalog.",
+    "loadCatalogPage": "Load more suggestions"
   },
   "aux": {
     "history": "History",
@@ -335,6 +338,8 @@
     "removeElementConfirm": "Remove this element from the key?",
     "console": "Command console",
     "consolePlaceholder": "RESP command, e.g. GET key",
+    "consoleAcquisition": "Raw commands load their reply before the display limit. Use SCAN and bounded ranges for large collections.",
+    "partialPreview": "Partial preview (up to 200 elements / 64 KiB). Value editing is disabled. Use bounded commands to inspect the remainder.",
     "badTtl": "TTL must be a number (seconds)"
   },
   "filter": {
@@ -355,7 +360,8 @@
     "pageSize": "Rows/page",
     "runSql": "Run",
     "resetSql": "Reset to SELECT *",
-    "empty": "No rows on this page"
+    "empty": "No rows on this page",
+    "incompleteCells": "Some cells exceeded the size limit. Editing is disabled on this page to preserve complete values."
   },
   "edit": {
     "editRow": "Edit row",
@@ -412,5 +418,15 @@
   "edit.primaryKey": "PK",
   "edit.null": "NULL",
   "edit.true": "true",
-  "edit.false": "false"
+  "edit.false": "false",
+  "jobs": {
+    "running": "Running",
+    "cancelling": "Cancellation requested",
+    "completed": "Completed",
+    "failed": "Stopped; check result",
+    "cancel": "Cancel",
+    "settling": "Waiting for the final server receipt",
+    "cancelled": "Cancelled by the server",
+    "unknown": "Outcome unconfirmed; inspect before retrying"
+  }
 }

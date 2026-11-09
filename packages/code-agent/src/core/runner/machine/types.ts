@@ -103,8 +103,12 @@ export interface RunContext {
    * over.
    */
   recovery: Map<RecoveryKind, number>;
+  /** Provider-specific schema rejections affect projection, never authorization. */
+  rejectedToolSchemas: Map<string, Set<string>>;
+  lastProviderToolNames: ReadonlySet<string>;
   /** Consecutive 429/5xx retries for the current logical provider call. */
   transientRetriesThisTurn: number;
+  transportRetriesThisTurn: number;
   /** Run-wide ordinal for physical upstream attempts persisted to telemetry. */
   providerAttempts: number;
   /** Consecutive OpenRouter prompt-cache misses above the configured threshold. */
@@ -150,26 +154,6 @@ export interface RunContext {
    */
   planNudges: number;
   /**
-   * Legacy goal-lifecycle observation state retained for telemetry and
-   * compatibility. Goal state no longer authorizes tools or clean finishes.
-   */
-  goalLifecycle: {
-    ledgerStartSeq: number;
-    /**
-     * Sticky ownership proof for a goal created by this run. The shared ledger
-     * is intentionally bounded, so the original create_goal entry can age out
-     * during a long objective while the run is still active.
-     */
-    createdGoalInRun: boolean;
-    missingNudges: number;
-    inProgressNudges: number;
-    /**
-     * Logical operations refused before execution because no active goal
-     * existed, mapped to the ledger sequence immediately before the refusal.
-     */
-    preDispatchPending: Map<string, number>;
-  };
-  /**
    * Completion-evidence observation state. The ledger boundary scopes
    * advisory health classification to this run.
    */
@@ -177,13 +161,6 @@ export interface RunContext {
     ledgerStartSeq: number;
     nudges: number;
   };
-  /**
-   * Legacy counters retained for serialized run-context compatibility.
-   * Independent completion review is now asynchronous advisory telemetry.
-   */
-  goalVerifyAttempts: number;
-  /** Evidence revision associated with goalVerifyAttempts; progress resets the cap. */
-  goalVerifyEvidenceFingerprint: string | null;
   /** Dedup deterministic loop-strategy reminders for five turns. */
   lastStrategyNudgeTurnByKey: Map<string, number>;
   /**
@@ -404,7 +381,7 @@ export interface BridgeCallbacks {
   clearMilestoneCompaction?: () => void;
   /** Build the `<active_skills>` block from the trailing user message. */
   buildActiveSkillsBlock?: (compactedHistory: AgentMessage[]) => string | null;
-  /** Build the `<active-context>` block (goal + todos + scope). */
+  /** Build the `<active-context>` block (todos + scope). */
   buildActiveContextBlock?: () => string | null;
   /**
    * Resolve the temperature for this turn. Returns null when the model
@@ -522,17 +499,6 @@ export interface BridgeCallbacks {
    */
   awaitTurnPersistence?: () => Promise<void>;
   /**
-   * Independent goal-completion reviewer (host-implemented). The Executing
-   * node schedules it only after completion persists. The read-only reviewer
-   * never sees the executor transcript, and its verdict is audit-only.
-   */
-  verifyGoalCompletion?: (
-    evidence?: import('../nodes/executing-verification-gate.js').VerificationReadiness,
-  ) => Promise<{
-    goalMet: boolean;
-    gaps: ReadonlyArray<{ description: string; severity: string }>;
-  } | null>;
-  /**
    * PR-F — supply per-turn signals that drive Kimi-style dynamic
    * injection. Returns the diff between the runner's current view of
    * skills/files and what's been seen so far this turn:
@@ -560,6 +526,7 @@ export interface BridgeCallbacks {
     taskText: string,
     turn: number,
   ) => Promise<ReadonlyArray<{ id: string; title: string; content: string; staleNote?: string }>>;
+  onMemoryInjected?: (ids: readonly string[]) => void | Promise<void>;
   /**
    * Mem C — optional LLM query synthesizer for meta/continuation messages.
    * The Executing node calls it (fail-open) BEFORE `getRelevantProjectMemory`
@@ -577,7 +544,6 @@ export interface BridgeCallbacks {
    * the window-scaled policy (`assembly/injection-policy.ts`). Unset = off.
    */
   getSessionStateData?: () => {
-    goal: { text: string; status: string } | null;
     activePlan: { text: string; status: string } | null;
     todos: ReadonlyArray<{ status: string; label: string }>;
     notes: ReadonlyArray<{ id: string; title: string; body: string; kind: string; pinned: boolean }>;

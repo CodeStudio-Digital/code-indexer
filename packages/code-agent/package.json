@@ -27,7 +27,8 @@
     "ffmpeg-static": "5.2.0",
     "openai": "^4.85.4",
     "turndown": "^7.2.4",
-    "turndown-plugin-gfm": "^1.0.2"
+    "turndown-plugin-gfm": "^1.0.2",
+    "@mcp/api-bus": "workspace:*"
   },
   "devDependencies": {
     "sharp": "0.34.5",

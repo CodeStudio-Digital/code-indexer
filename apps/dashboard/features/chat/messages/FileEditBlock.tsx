@@ -4,6 +4,7 @@
  * files the call touched, each expandable to an inline diff. Failures fall back
  * to a visible error so a failed edit is never disguised as a success.
  */
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
@@ -12,7 +13,7 @@ import { ToolCallBlock } from './ToolCallBlock.js';
 import { ToolFileChanges } from './ToolFileChanges.js';
 import { filesFromEditToolCall } from './edit-tools.js';
 
-export function FileEditBlock({
+export const FileEditBlock = memo(function FileEditBlock({
   call,
   onToolApproval,
 }: {
@@ -50,4 +51,4 @@ export function FileEditBlock({
       )}
     </div>
   );
-}
+});

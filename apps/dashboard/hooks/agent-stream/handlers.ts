@@ -55,6 +55,7 @@ import {
 import { rollbackStreamedChars } from './stream-rollback.js';
 import { finalizeLiveVisualizations, outcomeForDoneReason } from './live-block-finalize.js';
 import { isPromptResolved } from './prompt-resolution-store.js';
+import { parseToolApprovalRecovery } from './tool-approval-response.js';
 
 interface HandlerContext {
   sid: SessionId;
@@ -267,9 +268,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           image?: { mediaType: string; base64: string };
         };
         duration_ms: number;
-        persistence?: 'pending';
       };
-      const awaitingPersistence = d.persistence === 'pending' && !d.result.isError;
       const idx = toolIndex.get(d.id);
       if (idx !== undefined) {
         const block = blocks[idx];
@@ -278,8 +277,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             ...block.call,
             result: d.result,
             durationMs: d.duration_ms,
-            status: d.result.isError ? 'error' : awaitingPersistence ? 'running' : 'done',
-            awaitingPersistence,
+            status: d.result.isError ? 'error' : 'done',
             // Clear progress hints — the result is the new source of truth
             // for elapsed/status; carrying elapsedMs further would confuse
             // the "running Xs" renderer into showing it on a finished tool.
@@ -290,7 +288,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           };
         }
       } else if (typeof d.name === 'string' && d.name.length > 0) {
-        // Pre-dispatch refusals (goal lifecycle, verification evidence, policy)
+        // Pre-dispatch refusals (verification evidence, policy)
         // deliberately have no tool_call_start event. The result still carries
         // the canonical tool name + input, so materialize the terminal block
         // here instead of leaving a truthful refusal invisible until refetch.
@@ -303,77 +301,18 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             input: d.result.input,
             result: d.result,
             durationMs: d.duration_ms,
-            status: d.result.isError ? 'error' : awaitingPersistence ? 'running' : 'done',
-            awaitingPersistence,
+            status: d.result.isError ? 'error' : 'done',
           },
         });
       }
-      if (!awaitingPersistence) {
-        if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
-        removeProcess(`tool:${d.id}`);
-        if (snapshotInventoryDirty) {
-          snapshotInventoryDirty = false;
-          updateSession(sid, (cur) => ({
-            snapshotInventoryTick: (cur.snapshotInventoryTick ?? 0) + 1,
-          }));
-        }
+      if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
+      removeProcess(`tool:${d.id}`);
+      if (snapshotInventoryDirty) {
+        snapshotInventoryDirty = false;
+        updateSession(sid, (cur) => ({
+          snapshotInventoryTick: (cur.snapshotInventoryTick ?? 0) + 1,
+        }));
       }
-      flush();
-    },
-
-    goal_mutations_persisted: (data) => {
-      const ids = Array.isArray(data.toolUseIds)
-        ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
-        : [];
-      let activityChanged = false;
-      for (const id of ids) {
-        const idx = toolIndex.get(id);
-        const block = idx === undefined ? undefined : blocks[idx];
-        if (block?.type === 'tool' && block.call.awaitingPersistence) {
-          block.call = {
-            ...block.call,
-            status: block.call.result?.isError ? 'error' : 'done',
-            awaitingPersistence: false,
-            elapsedMs: undefined,
-            progressNote: undefined,
-          };
-        }
-      }
-      for (const id of ids) {
-        activityChanged = removeActivity(blocks, `tool:${id}`) || activityChanged;
-        removeProcess(`tool:${id}`);
-      }
-      if (activityChanged) rebuildToolIndex(blocks, toolIndex);
-      flush();
-    },
-
-    goal_mutations_persistence_failed: (data) => {
-      const ids = Array.isArray(data.toolUseIds)
-        ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
-        : [];
-      const message = typeof data.message === 'string' && data.message.length > 0
-        ? data.message
-        : 'Goal state could not be persisted.';
-      let activityChanged = false;
-      for (const id of ids) {
-        const idx = toolIndex.get(id);
-        const block = idx === undefined ? undefined : blocks[idx];
-        if (block?.type === 'tool') {
-          block.call = {
-            ...block.call,
-            status: 'error',
-            awaitingPersistence: false,
-            result: { content: message, isError: true },
-            elapsedMs: undefined,
-            progressNote: undefined,
-          };
-        }
-      }
-      for (const id of ids) {
-        activityChanged = removeActivity(blocks, `tool:${id}`) || activityChanged;
-        removeProcess(`tool:${id}`);
-      }
-      if (activityChanged) rebuildToolIndex(blocks, toolIndex);
       flush();
     },
 
@@ -392,7 +331,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         argsSummary?: string;
         input?: Record<string, unknown>;
         riskClass?: 'write' | 'execute' | 'admin';
-        approvalKind?: 'standard' | 'database_write';
+        approvalKind?: 'standard' | 'database_write' | 'outcome_recovery';
+        recovery?: unknown;
         nested?: boolean;
       };
       if (!d.toolUseId) return;
@@ -404,6 +344,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         input: d.input,
         riskClass: d.riskClass ?? 'write',
         approvalKind: d.approvalKind ?? 'standard',
+        recovery: d.approvalKind === 'outcome_recovery' ? parseToolApprovalRecovery(d.recovery) : undefined,
         nested: !!d.nested,
         receivedAt: Date.now(),
       };
@@ -415,7 +356,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
           block.call = {
             ...block.call,
             status: 'awaiting_approval',
-            approvals: [...(block.call.approvals ?? []), approval],
+            approvals: [...(block.call.approvals ?? []).filter((a) => a.toolUseId !== d.toolUseId), approval],
           };
         }
       }
@@ -1190,6 +1131,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       dispatchAgentPreview(sid, false);
       updateSession(sid, {
         doneReason,
+        streaming: false,
+        preflight: null,
         ...(d.error ? { error: d.error } : {}),
         // No run → no resolvable approvals (abort/interrupt denied them).
         pendingApprovals: [],
@@ -1209,6 +1152,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       dispatchAgentPreview(sid, false);
       updateSession(sid, {
         doneReason: String(d.reason ?? 'error'),
+        streaming: false,
+        preflight: null,
         error: message,
         // A terminal failure has the same lifecycle cleanup contract as done:
         // no approval or foreground/background process can still resolve.

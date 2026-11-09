@@ -1,6 +1,7 @@
 import type { Context, Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
+import { reconstructMissingToolResults, type ToolResultLookup } from './session-message-preview.js';
 import {
   notFound,
   parseIntQuery,
@@ -39,8 +40,9 @@ type MaybePromise<T> = T | Promise<T>;
  * be disabled during a rolling upgrade. The routes return 501 instead of
  * crashing an older process whose store has not been migrated yet.
  */
-interface ConversationChapterStore {
+interface ConversationChapterStore extends Partial<ToolResultLookup> {
   getSession: (sessionId: SessionId) => MaybePromise<unknown | null>;
+  previousUserMessageSeq?: (sessionId: SessionId, beforeSeq: number) => MaybePromise<number | null>;
   getConversationChapterStatus?: (
     sessionId: SessionId,
   ) => MaybePromise<unknown>;
@@ -199,10 +201,22 @@ export function mountCoderChapterRoutes(
     ) {
       return notFound(c, 'chapter not found');
     }
-    return c.json(await store.listConversationChapterSource(
+    const page = await store.listConversationChapterSource(
       sessionId,
       chapterId,
       { limit, cursor },
-    ));
+    );
+    // A page can end between a tool call and its result. Resolve only the
+    // missing calls in this bounded window; never drain subsequent pages.
+    const messages = page.items.filter((item): item is { content: unknown } =>
+      typeof item === 'object' && item !== null && 'content' in item);
+    const tool_results = store.getToolResultsByToolUseIds
+      ? await reconstructMissingToolResults({ getToolResultsByToolUseIds: store.getToolResultsByToolUseIds.bind(store) }, sessionId, messages)
+      : [];
+    const first = page.items[0] as { seq?: unknown } | undefined;
+    const preceding_user_seq = typeof first?.seq === 'number' && store.previousUserMessageSeq
+      ? await store.previousUserMessageSeq(sessionId, first.seq)
+      : null;
+    return c.json({ ...page, tool_results, preceding_user_seq });
   });
 }

@@ -2,6 +2,7 @@ import { err, unknownToolOutcome, type ToolResult } from '@mcp/agent-runtime-hos
 
 /** The RPC was dispatched, but the host did not confirm its effect. */
 export class PreviewOutcomeUnknownError extends Error {
+  readonly code = 'TOOL_OUTCOME_UNKNOWN';
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = 'PreviewOutcomeUnknownError';

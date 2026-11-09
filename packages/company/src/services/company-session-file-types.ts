@@ -1,6 +1,7 @@
 import { type AgentRunId, type CompanySessionId, type SessionId } from '@mcp/session-storage';
+import type { CompanySessionIdentity } from '@mcp/company-contracts';
 import type { AgentRunStatus, BoardKind, CompanyAgentDispatchSource, CompanyRuntimeKind, InboxKind, InboxPriority, InboxStatus, MasterPrompt, MasterPromptKind, MasterPromptOption } from '@mcp/company/types.js';
-export interface CompanySessionFileSnapshot {
+export interface CompanySessionFileSnapshot extends CompanySessionIdentity {
   id: CompanySessionId;
   template_id: number | null;
   runtime_kind: CompanyRuntimeKind;
@@ -41,6 +42,7 @@ export interface CompanyAgentRunFileRow {
 }
 
 export interface CreateCompanyAgentRunFileInput {
+  id?: string;
   role: string;
   coder_session_id: SessionId | string;
   project_ids: readonly number[];
@@ -70,6 +72,9 @@ export interface ReadCompanyBoardFileOptions {
 }
 
 export interface CreateCompanyInboxFileInput {
+  id?: string;
+  fromSessionId?: string;
+  origin?: 'agent' | 'operator';
   fromAgentRunId: AgentRunId | string;
   fromRole: string;
   toRole?: string | null;

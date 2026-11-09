@@ -1,3 +1,4 @@
+import type { EnvApplication } from './env-application.js';
 import type { EnvSource, EnvAutoKind, EnvRow } from './env-row-types.js';
 export type { EnvSource, EnvAutoKind, EnvRow } from './env-row-types.js';
 /**
@@ -39,7 +40,7 @@ function sourceLabel(source: EnvSource | undefined): string {
 interface EnvRowEditorProps {
   row: EnvRow;
   sessionId: string;
-  onSaved: () => Promise<void> | void;
+  onSaved: (result?: EnvApplication) => Promise<void> | void;
   onDelete?: () => void;
   /** When true, the row renders read-only (managed by the sandbox). */
   managed?: boolean;

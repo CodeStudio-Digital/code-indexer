@@ -14,7 +14,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../../deps.js';
 import { parseSessionIdParam } from '../../_helpers.js';
-import { getSandboxManager } from '@mcp/services/sandbox/index.js';
+import { tryGetSandboxManager } from '@mcp/services/sandbox/index.js';
 import { restoreQaWorkspace } from '@mcp/services/qa/workspace-restore.js';
 
 export function mountQaRestoreConfigRoute(app: Hono, deps: ServerDeps): void {
@@ -22,11 +22,15 @@ export function mountQaRestoreConfigRoute(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/company/sessions/:id/qa/restore-config', async (c) => {
     const sessionId = parseSessionIdParam(c);
+    const manager = tryGetSandboxManager();
+    if (!manager?.get(sessionId)) {
+      return c.json({ ok: false, error: 'no-sandbox', message: 'Sandbox not provisioned for this session yet.' }, 409);
+    }
     try {
       // Operator-triggered: don't wipe test-results / playwright-report
       // out from under them. v4.5 retention is only run from
       // `qa_start_run`, where the wipe is part of preparing a NEW run.
-      const report = await restoreQaWorkspace(getSandboxManager(), {
+      const report = await restoreQaWorkspace(manager, {
         sessionId,
         pruneArtifacts: false,
       });

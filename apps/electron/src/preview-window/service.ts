@@ -68,7 +68,7 @@ export class PreviewWindowService extends PreviewInspector implements IPreviewDe
 
   /** Injected in main.ts (null in tests / non-runner contexts). Enables
    *  url-less preview_open: reuse the project's running runner or start one. */
-  constructor(private runnerBridge: RunnerBridge | null = null) { super(); }
+  constructor(private runnerBridge: RunnerBridge | null = null, private readonly options: { show?: boolean } = {}) { super(); }
 
   protected getPreview(key: string) { return this.byKey.get(key); }
 
@@ -263,11 +263,13 @@ export class PreviewWindowService extends PreviewInspector implements IPreviewDe
     const appIconPath = resolveAppIconPath();
     assertPreviewDispatch();
     const win = new BrowserWindow({
+      show: this.options.show ?? true,
       width,
       height,
       title: `Preview · ${key}`,
       ...(appIconPath ? { icon: appIconPath } : {}),
       webPreferences: {
+        offscreen: this.options.show === false,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,

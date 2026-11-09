@@ -96,7 +96,7 @@ describe('getStaleBatch', () => {
       memories: [{ id: 1, project_id: 7, referenced_files: refs([['a.ts', 'h1'], ['b.ts', null]]) }],
       files: { 7: { 'a.ts': 'h1', 'b.ts': 'whatever' } },
     });
-    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 1 });
+    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 1, unknown: 1 });
   });
 
   it('accepts the legacy bare-string reference shape (no baseline → not judged)', () => {
@@ -104,7 +104,7 @@ describe('getStaleBatch', () => {
       memories: [{ id: 1, project_id: 7, referenced_files: JSON.stringify(['a.ts', 'b.ts']) }],
       files: { 7: { 'a.ts': 'h1' } },
     });
-    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 0 });
+    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 0, unknown: 2 });
   });
 
   it('yields empty entries for unparseable, non-array, null and unknown rows', () => {
@@ -125,7 +125,7 @@ describe('getStaleBatch', () => {
       memories: [{ id: 1, project_id: 42, referenced_files: refs([['a.ts', 'h1']]) }],
       files: {},
     });
-    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 0 });
+    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 0, unknown: 1 });
   });
 
   it('skips rather than marks stale when the files lookup throws', () => {
@@ -135,7 +135,7 @@ describe('getStaleBatch', () => {
       filesTableThrows: true,
     });
     // No file index ⇒ not judgeable, matching the old per-path `catch { continue }`.
-    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 0 });
+    expect(getStaleBatch(db, [1]).get(1)).toEqual({ stale: [], total: 0, unknown: 1 });
   });
 
   it('keeps per-memory results separate across projects', () => {
@@ -165,5 +165,24 @@ describe('getStaleBatch', () => {
     // The old shape prepared 2 statements then ran 60 + 60 queries. Batched, the
     // whole job is a handful of statements regardless of the id count.
     expect(handle.statements).toBeLessThan(10);
+  });
+
+  it('uses the owning project index even when central retains matching old hashes', () => {
+    const central = makeDb({
+      memories: [{ id: 1, project_id: 7, referenced_files: refs([['a.ts', 'old']]) }],
+      files: { 7: { 'a.ts': 'old' } },
+    });
+    const local = makeDb({ memories: [], files: { 7: { 'a.ts': 'new' } } });
+    expect(getStaleBatch(central.db, [1], () => local.db).get(1))
+      .toEqual({ stale: ['a.ts'], total: 1 });
+  });
+
+  it('does not fall back to stale central data when the owning index is unavailable', () => {
+    const central = makeDb({
+      memories: [{ id: 1, project_id: 7, referenced_files: refs([['a.ts', 'old']]) }],
+      files: { 7: { 'a.ts': 'old' } },
+    });
+    expect(getStaleBatch(central.db, [1], () => { throw new Error('index offline'); }).get(1))
+      .toEqual({ stale: [], total: 0, unknown: 1 });
   });
 });

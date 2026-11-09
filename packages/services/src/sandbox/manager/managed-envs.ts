@@ -115,8 +115,7 @@ export async function syncManagedEnvs(
   // long before expiry so an in-flight Playwright run never hits 401.
   if (qaEnabled) {
     try {
-      const existing = deps.envStore
-        .list(sessionId)
+      const existing = (await deps.envStore.listAsync(sessionId))
         .find((r) => r.key === 'MCP_PREVIEW_COOKIE');
       const exp = parseTokenExpiry(existing?.value);
       const REFRESH_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
@@ -138,7 +137,7 @@ export async function syncManagedEnvs(
       const isSecret = desiredSecret.has(key);
       await deps.envStore.upsert(sessionId, key, value, isSecret, { source: 'auto' });
     }
-    for (const row of deps.envStore.list(sessionId)) {
+    for (const row of await deps.envStore.listAsync(sessionId)) {
       const isManaged =
         row.key.startsWith('PREVIEW_URL_') ||
         row.key.startsWith('SERVICE_URL_') ||

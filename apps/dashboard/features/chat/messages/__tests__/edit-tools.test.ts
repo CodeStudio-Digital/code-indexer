@@ -12,6 +12,19 @@ describe('isEditTool', () => {
 });
 
 describe('filesFromEditToolCall', () => {
+  it('reuses parsed large patches during unrelated text frames but invalidates changed tool inputs', () => {
+    const input = { patch: '*** Begin Patch\n*** Update File: first.ts\n' + '+line\n'.repeat(20000) + '*** End Patch' };
+    const first = filesFromEditToolCall('apply_patch', input);
+    for (let frame = 0; frame < 120; frame++) expect(filesFromEditToolCall('apply_patch', input)).toBe(first);
+    input.patch = '*** Begin Patch\n*** Delete File: second.ts\n*** End Patch';
+    expect(filesFromEditToolCall('apply_patch', input)).toEqual([{ path: 'second.ts', op: 'delete' }]);
+    const single = { path: 'new.ts' };
+    expect(filesFromEditToolCall('create_file', single)).toEqual([{ path: 'new.ts', op: 'add' }]);
+    expect(filesFromEditToolCall('edit_file', single)).toEqual([{ path: 'new.ts', op: 'edit' }]);
+    single.path = 'renamed.ts';
+    expect(filesFromEditToolCall('edit_file', single)).toEqual([{ path: 'renamed.ts', op: 'edit' }]);
+  });
+
   it('edit_file / multi_edit / write_file → single edit ref from input.path', () => {
     expect(filesFromEditToolCall('edit_file', { path: 'src/a.ts' })).toEqual([
       { path: 'src/a.ts', op: 'edit' },

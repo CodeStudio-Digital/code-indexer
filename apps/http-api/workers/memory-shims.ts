@@ -73,6 +73,7 @@ export interface ShimRecalledMemory extends ShimRetrievedMemory {
 /** Structural match for `RunCoderOptions.memoryRetriever` / `.runEndMemory` / `.projectMemory`. */
 export interface WorkerMemoryShims {
   memoryRetriever: {
+    recordInjected(ids: readonly string[]): Promise<void>;
     retrieve(
       projectId: number,
       projectName: string,
@@ -231,6 +232,11 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
 
   return {
     memoryRetriever: {
+      recordInjected: async ids => {
+        if (!ids.length) return;
+        try { await bridge.request('memoryInjected', { ids: [...ids] }, { timeoutMs: 2_000 }); }
+        catch { /* Best-effort diagnostics must not delay a turn. */ }
+      },
       retrieve: async (projectId, projectName, taskText) => {
         try {
           return await bridge.request<ShimRetrievedMemory[]>(

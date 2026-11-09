@@ -185,8 +185,13 @@ if (noPackage) {
 //     because it would force a from-source node-pty build that fails on winpty
 //     under pnpm/Windows. node-pty ships N-API prebuilds (ABI-stable) and needs
 //     no rebuild; better-sqlite3 uses the V8 C++ API and MUST be rebuilt for
-//     Electron — that's exactly what `electron:rebuild` (-o better-sqlite3) does.
-runTool('@electron/rebuild', 'electron-rebuild', ['-f', '-o', 'better-sqlite3']);
+//     Electron. Probe the actual runtime first: a compatible addon may be in
+//     use by desktop workers, and rebuilding it gratuitously fails on Windows.
+const sqliteProbe = spawnSync(resolve(root, 'node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
+  ['-e', 'const D=require("better-sqlite3");const d=new D(":memory:");if(d.prepare("SELECT 1 AS ok").get().ok!==1)process.exit(1);d.close();'],
+  { cwd: root, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true, timeout: 15_000 });
+if (sqliteProbe.status === 0) console.log('Electron SQLite ABI probe passed; retaining the compatible native addon.');
+else runTool('@electron/rebuild', 'electron-rebuild', ['-f', '-o', 'better-sqlite3']);
 
 // 4. electron-builder
 // Publishing is a separate release stage that runs only after verification.

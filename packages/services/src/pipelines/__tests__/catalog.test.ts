@@ -60,12 +60,21 @@ describe('semantic profile catalog ownership', () => {
       'quality_tool_misuse::classifier',
       'doc_ingest::embedder',
       'doc_search::reranker',
+      'goal_verification::reviewer',
     ]);
     const catalogPairs = new Set(
       PIPELINE_CATALOG.map((entry) => `${entry.pipelineName}::${entry.bindingRole}`),
     );
 
-    expect(PIPELINE_CATALOG).toHaveLength(18);
+    expect([...catalogPairs].sort()).toEqual([
+      'code-agent::compaction', 'code-agent::preflight', 'code-agent::transcription', 'code-agent::vision',
+      'doc_ingest::classifier', 'doc_ingest::link_extractor', 'doc_ingest::scorer_llm',
+      'doc_search::rewriter', 'docs_research::classifier', 'docs_research::scorer_llm',
+      'editor::autocomplete', 'indexer_search::hyde', 'intent_contract::reviewer',
+      'memory_extraction::distiller', 'memory_query::query_writer', 'memory_recall::reranker',
+      'snapshot_review::reviewer',
+    ]);
+    expect(PIPELINE_CATALOG).toHaveLength(catalogPairs.size);
     for (const pair of retiredPairs) expect(catalogPairs.has(pair)).toBe(false);
   });
 });

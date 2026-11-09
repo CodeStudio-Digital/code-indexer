@@ -50,7 +50,7 @@ function nodeModulesVolumeName(sessionId: CompanySessionId | string, serviceId?:
 }
 
 /** Stop the worker-owned Company runtime before its durable rows disappear. */
-export async function stopCompanySessionRuntime(sessionId: CompanySessionId): Promise<void> {
+async function stopCompanySessionRuntime(sessionId: CompanySessionId): Promise<void> {
   const orchestrator = getCompanyOrchestrator(sessionId);
   if (orchestrator) {
     try {

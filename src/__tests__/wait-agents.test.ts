@@ -203,7 +203,12 @@ describe('wait_agents', () => {
     await vi.advanceTimersByTimeAsync(200);
     const r = await promise;
     vi.useRealTimers();
-    expect(r.isError).toBe(true);
+    // A wait deadline is a successful pending observation, not a failed agent.
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredData).toMatchObject({
+      schemaVersion: 1, reason: 'timeout',
+      items: [{ agentRunId: ID_7, path: `/root/master/qa-${ID_7}` }],
+    });
     expect(r.content).toContain('timed out');
     expect(r.content).toContain(`/root/master/qa-${ID_7}`);
   });

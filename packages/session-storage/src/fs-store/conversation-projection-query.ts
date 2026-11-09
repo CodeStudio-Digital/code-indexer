@@ -1,6 +1,5 @@
 import type { AgentMessage } from '@mcp/provider-sdk';
 import type { FsCoderMessageRow, FsCoderSession } from './types.js';
-import type { FsSessionGoal } from './operational-types.js';
 
 export type FsConversationProjectionQuery =
   | { kind: 'visible' | 'stats'; boundary: number }

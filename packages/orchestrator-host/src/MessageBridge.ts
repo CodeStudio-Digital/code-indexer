@@ -16,8 +16,8 @@
  *
  * Failure semantics:
  *   - Non-`ok: true` responses become rejected promises with an
- *     `Error` whose `.message` is `error` and `.code` is `code` (when
- *     present). Callers can `if ((e as { code?: string }).code === ...)`.
+ *     `RpcResponseError` whose `.message` is `error` and `.code` is `code`
+ *     (when present), distinguishing a host failure reply from a lost reply.
  *   - Listener exceptions are swallowed so a buggy handler can't kill
  *     the worker. Errors are surfaced via `opts.onListenerError` for
  *     observability.
@@ -30,6 +30,7 @@ import type {
 } from './protocol.js';
 import { performance } from 'node:perf_hooks';
 import { isEvent, isRequest, isResponse } from './protocol.js';
+import { RpcResponseError } from '@mcp/shared/rpc-response-error.js';
 
 /**
  * Subset of `worker_threads.MessagePort` we actually use. Decouples
@@ -281,9 +282,7 @@ export class MessageBridge {
       if (msg.ok) {
         entry.resolve(msg.value);
       } else {
-        const err = new Error(msg.error) as Error & { code?: string };
-        if (msg.code) err.code = msg.code;
-        entry.reject(err);
+        entry.reject(new RpcResponseError(msg.error, msg.code));
       }
       return;
     }

@@ -37,6 +37,7 @@
 import {
   CandidatePipeline,
   TopKSelector,
+  DiversitySelector,
   type Filter,
   type Hydrator,
   type PipelineCandidate,
@@ -118,6 +119,7 @@ export interface HybridSearchPipelineQuery extends PipelineQuery {
     rerankerCandidates?: number;
     rerankerReturned?: number;
     rerankerError?: string;
+    rerankerSkippedReason?: string;
   };
 }
 
@@ -271,8 +273,10 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
 
   async source(q: HybridSearchPipelineQuery): Promise<HybridSearchPipelineCandidate[]> {
     if (!this.deps.vectorStore) return [];
+    q.signal?.throwIfAborted();
     try {
       const variants = await this.buildVariants(q);
+      q.signal?.throwIfAborted();
       q.diag.queryVariants = variants;
 
       // Project isolation rides on the namespace; `type` stays a metadata filter.
@@ -292,6 +296,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
             v,
             { signal: q.signal, supersessionKey: q.supersessionKey ? `${q.supersessionKey}:embed:${index}` : undefined },
           );
+          q.signal?.throwIfAborted();
           if (q.diag.generationUsed !== undefined && q.diag.generationUsed !== generationId) {
             throw new Error(`query variants resolved different semantic generations (${q.diag.generationUsed}, ${generationId})`);
           }
@@ -302,6 +307,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
             filter,
             namespace,
             generationId,
+            signal: q.signal,
           });
           totalRaw += matches.length;
           return this.rehydrate(matches, q.projectId);
@@ -343,6 +349,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
       q.diag.vectorRehydrated = orderedResults.length;
       return orderedResults;
     } catch (err) {
+      q.signal?.throwIfAborted();
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[hybrid-pipeline] vector source failed:', msg);
       q.diag.vectorError = msg;
@@ -366,10 +373,11 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
           q.projectId,
           q.projectName,
         ),
+        q.signal,
       );
       if (hypothetical && hypothetical !== query) return [query, hypothetical];
     }
-    return buildTemplateVariants(query);
+    return [query.trim()];
   }
 
   private rehydrate(
@@ -377,6 +385,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
     projectId?: number,
   ): HybridSearchPipelineCandidate[] {
     const out: HybridSearchPipelineCandidate[] = [];
+    const byId = new Map<string, HybridSearchPipelineCandidate>();
     for (const match of matches) {
       const isFile = match.metadata.type === 'file';
       const refId = match.metadata.ref_id ? parseInt(match.metadata.ref_id, 10) : 0;
@@ -393,7 +402,19 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
         vector_score: match.score,
         data,
       };
-      out.push(emptyCandidate(r));
+      const key = candidateKey(r);
+      const existing = byId.get(key);
+      if (existing) {
+        // Signature/body/sibling vectors may resolve to the same symbol. One
+        // query variant gets one vote per symbol, regardless of chunk count.
+        if (match.score > (existing.result.vector_score ?? -Infinity)) {
+          existing.result.vector_score = match.score;
+        }
+        continue;
+      }
+      const candidate = emptyCandidate(r);
+      byId.set(key, candidate);
+      out.push(candidate);
     }
     return out;
   }
@@ -726,8 +747,10 @@ export class RerankerHydrator
   readonly name = 'reranker';
   constructor(private reranker: RerankerService, private db?: CodeIndexDB) {}
 
-  enable(): boolean {
-    return !(this.reranker instanceof NullReranker);
+  enable(query: HybridSearchPipelineQuery): boolean {
+    const reason = this.reranker.queryBlockReason?.(query.query);
+    if (reason) { query.diag.rerankerApplied = false; query.diag.rerankerSkippedReason = reason; }
+    return !(this.reranker instanceof NullReranker) && !reason;
   }
 
   async hydrate(
@@ -849,26 +872,6 @@ export class CacheWriteSink
 
 // ─── Helpers (shared with legacy method for parity) ──────────────────
 
-function buildTemplateVariants(query: string): string[] {
-  const trimmed = query.trim();
-  const variants = new Set<string>();
-  variants.add(trimmed);
-  const topic = trimmed
-    .replace(
-      /^(how\s+(?:does|do|is|are|can|to)|what\s+(?:is|does|are)|where\s+(?:is|does|are)|why\s+(?:is|does|are))\s+/i,
-      '',
-    )
-    .replace(/\?+\s*$/, '')
-    .trim();
-  if (topic && topic !== trimmed) {
-    variants.add(`implementation of ${topic}`);
-    variants.add(`function class ${topic}`);
-  } else {
-    variants.add(`${trimmed} implementation`);
-  }
-  return Array.from(variants).slice(0, 3);
-}
-
 // ─── Factory ──────────────────────────────────────────────────────────
 
 export interface CreateHybridPipelineOptions {
@@ -884,6 +887,28 @@ export interface CreateHybridPipelineOptions {
   telemetry?: TelemetrySink;
   /** Optional cache writeback. */
   cacheWrite?: (results: HybridSearchResult[]) => void;
+}
+
+/** Keep concept searches from spending the candidate budget on one file. */
+export class SearchCandidateSelector extends TopKSelector<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> {
+  constructor(name: string, private depth: (q: HybridSearchPipelineQuery) => number) {
+    super({ name, k: depth, scoreOf: candidate => candidate.score });
+  }
+
+  override select(query: HybridSearchPipelineQuery, candidates: HybridSearchPipelineCandidate[]) {
+    if (query.type !== 'all' || planQuery(query.query).mode !== 'hybrid') {
+      return super.select(query, candidates);
+    }
+    return new DiversitySelector<HybridSearchPipelineQuery, HybridSearchPipelineCandidate>({
+      k: this.depth(query),
+      scoreOf: candidate => candidate.score,
+      groupKey: ({ result, candidateId }) => {
+        const data = result.data as unknown as Record<string, unknown>;
+        const path = result.type === 'file' ? data.path : data.file_path;
+        return typeof path === 'string' && path ? path.replace(/\\/g, '/') : candidateId;
+      },
+    }).select(query, candidates);
+  }
 }
 
 export function createHybridSearchPipeline(
@@ -921,23 +946,17 @@ export function createHybridSearchPipeline(
       ],
       scorers: [new RrfFusionScorer()],
       postScoringFilters: [new DedupFilter()],
-      selector: new TopKSelector<HybridSearchPipelineQuery, HybridSearchPipelineCandidate>({
-        name: 'rerank_depth',
+      selector: new SearchCandidateSelector('rerank_depth',
         // Bound cross-encoder cost without applying the public top-K before
         // reranking. With no reranker this is already the final result depth.
-        k: (query) => rerankerEnabled ? rerankDepth(query, opts.reranker) : query.limit,
-        scoreOf: (c) => c.score,
-      }),
+        (query) => rerankerEnabled && !opts.reranker.queryBlockReason?.(query.query) ? rerankDepth(query, opts.reranker) : query.limit,
+      ),
       postSelectionHydrators:
         rerankerEnabled ? [new RerankerHydrator(opts.reranker, opts.db)] : undefined,
-      postSelectionSelector: new TopKSelector<
-        HybridSearchPipelineQuery,
-        HybridSearchPipelineCandidate
-      >({
-        name: 'final_top_k',
-        k: (query) => query.limit,
-        scoreOf: (c) => c.score,
-      }),
+      // Preserve file diversity in the public result window as well. Sorting
+      // by the raw scores here would undo the candidate selector's ordering,
+      // including when reranking is unavailable for the query language.
+      postSelectionSelector: new SearchCandidateSelector('final_top_k', query => query.limit),
       sideEffects: sideEffects.length > 0 ? sideEffects : undefined,
     },
   );
@@ -957,8 +976,6 @@ export async function runHybridSearchPipeline(
   // Factory pipelines already apply final_top_k after reranking. Keep the
   // slice as a defensive bound for callers supplying a custom pipeline.
   return result.selected
-    .slice()
-    .sort((a, b) => b.score - a.score)
     .slice(0, query.limit)
     .map((candidate) => ({ ...candidate.result, score: candidate.score }));
 }

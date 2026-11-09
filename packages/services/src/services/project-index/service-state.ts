@@ -19,6 +19,8 @@ export abstract class ProjectIndexState {
   protected running = new Set<number>();
   protected runReason = new Map<number, EnsureFreshReason>();
   protected draining = new Set<number>();
+  protected drainFailures = new Map<number, number>();
+  protected drainRetries = new Map<number, ReturnType<typeof setTimeout>>();
   /** One stat-first reconciliation per open lifecycle, regardless of turns. */
   protected reconciledLifecycle = new Set<number>();
   /** A branch switch received during a run collapses into one follow-up pass. */
@@ -61,6 +63,7 @@ export abstract class ProjectIndexState {
     protected settings: () => ProjectIndexSettings = readProjectIndexSettings,
     protected gitMetaWatcher: GitMetaWatcher = new GitMetaWatcher(),
   ) {
+    this.dirty = new DirtyQueue(db.structuralJournal?.());
     this.status = new ProjectIndexStatusStore(db);
     this.startFallbackPoll();
   }

@@ -80,7 +80,8 @@
   },
   "nsis": {
     "oneClick": false,
-    "allowToChangeInstallationDirectory": true
+    "allowToChangeInstallationDirectory": true,
+    "include": "apps/electron/build/installer.nsh"
   },
   "publish": [
     {

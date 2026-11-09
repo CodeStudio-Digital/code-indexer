@@ -1,3 +1,4 @@
+import { clipboardFiles } from './clipboard-files.js';
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FileText, Paperclip, Sparkles, X } from 'lucide-react';
@@ -7,6 +8,7 @@ import { toast } from '../../../components/ui/prompt-dialog.js';
 import type { AgentAttachment, EnrichedProviderModel, ExecutionMode, ProviderOption } from '../types.js';
 import { filesToAttachments } from '../utils.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
+import { PromptSuggestionChip } from './PromptSuggestionChip.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
 import { ModelSettingsDialog, modelSettingsLabel } from './ModelSettingsDialog.js';
 import { RailComposerBar } from './RailComposerBar.js';
@@ -133,7 +135,8 @@ interface ComposerProps {
   /**
    * Per-session tool permission mode (migration 131) — PermissionGate.
    * 'ask' pauses every write/execute/admin tool for approval, 'auto'
-   * pauses execute/admin only, 'unrestricted' never pauses. Persisted via
+   * pauses execute/admin only; 'unrestricted' allows new work while retaining
+   * exact uncertain-replay and database-write approvals. Persisted via
    * PATCH (applies mid-run); rendered as a cycling shield toggle.
    */
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
@@ -256,7 +259,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     }, []);
     const voiceRecording = useVoiceCaptureStatus() === 'recording';
 
-    const handleFiles = useCallback(async (files: FileList | null) => {
+    const handleFiles = useCallback(async (files: FileList | File[] | null) => {
       if (!files || files.length === 0) return;
       try {
         const arr = await filesToAttachments(files, attachments, {
@@ -289,21 +292,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     }, [input]);
 
     const onPaste = useCallback(async (e: React.ClipboardEvent) => {
-      const items = Array.from(e.clipboardData?.items ?? []);
-      const files = items
-        .filter((it) => it.kind === 'file')
-        .map((it) => it.getAsFile())
-        .filter((f): f is File => !!f);
+      const files = clipboardFiles(e.clipboardData);
       if (files.length === 0) return;
       e.preventDefault();
-      const renamed = files.map((f) => {
-        if (f.name && f.name !== 'image.png') return f;
-        const ext = (f.type.split('/')[1] ?? 'png').replace('jpeg', 'jpg');
-        return new File([f], `pasted-${Date.now()}.${ext}`, { type: f.type });
-      });
-      const dt = new DataTransfer();
-      renamed.forEach((f) => dt.items.add(f));
-      await handleFiles(dt.files);
+      await handleFiles(files);
     }, [handleFiles]);
 
     const hasInput = input.trim().length > 0 || attachments.length > 0 || picker.picks.length > 0 || !!props.skillPicks?.length;
@@ -375,7 +367,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     // (next turn vs end of session) is decided by the queue. Attachments travel
     // with the queued item so they cannot bleed into a later immediate send.
     const handleQueue = useCallback(async (mode: QueueMode) => {
-      if ((!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length) || !props.onQueue) return;
+      if (props.sendBlocked || (!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length) || !props.onQueue) return;
       const text = input.trim()
         ? input
         : attachments.length ? t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' }) : t('composer.useSkills');
@@ -415,7 +407,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onQueue(finalText, mode, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, picker.picks, resolveTypedSkill, references.commit, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, clearDraft, t]);
+    }, [input, attachments, picker.picks, resolveTypedSkill, references.commit, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, props.sendBlocked, clearDraft, t]);
 
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;
@@ -440,8 +432,9 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       <div className="relative border-t border-[var(--workbench-border)] bg-[var(--workbench-raised)]" {...dropHandlers}>
         <DropOverlay show={isDragging} />
         {props.queuedStrip}
+        {props.sessionCollaboration && props.sessionId && !streaming && !input.trim() && <PromptSuggestionChip key={props.sessionId} sessionId={props.sessionId} onSelect={setInput} />}
         {props.sessionCollaboration && props.sessionId && <div className="flex items-center justify-between border-b px-2 py-1">
-          <AgenticModeControl sessionId={props.sessionId} /><span className="text-[10px] text-muted-foreground"># skills · @ chats · $ projetos</span>
+          <AgenticModeControl sessionId={props.sessionId} /><span className="text-[10px] text-muted-foreground">{t('composer.mentionShortcuts')}</span>
         </div>}
         {references.error && <p role="alert" className="p-2 text-xs text-destructive">{references.error}</p>}
         {references.picks.length > 0 && <div className="flex flex-wrap gap-1 p-2">{references.picks.map(item => <span key={`${item.kind}:${item.id}`} className="inline-flex items-center gap-1 rounded border bg-muted px-2 text-xs">

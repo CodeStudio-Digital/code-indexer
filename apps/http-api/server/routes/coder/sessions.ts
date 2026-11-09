@@ -1,3 +1,4 @@
+import { trimMessageBlocks, reconstructMissingToolResults } from './session-message-preview.js';
 import { registerSessionImageRoutes } from './session-images.js';
 import { resolveProjectWorktree } from '@mcp/code-agent/tools/project-worktrees.js';
 import type { Hono } from 'hono';
@@ -45,6 +46,7 @@ import {
   type AgentSelectionId,
 } from '../../../custom-agents.js';
 import { withSessionLock } from './sessionLock.js';
+import { deleteCoderSession, SessionDeletionCleanupError } from './delete-session.js';
 import {
   DEFAULT_SESSION_MAX_AUTO_CONTINUES,
   MAX_SESSION_AUTO_CONTINUES,
@@ -110,163 +112,6 @@ function resolveCreationExecutionSettings(
 
 /** Upper bound on a response-language label (migration 177) — a language name, not prose. */
 const MAX_RESPONSE_LANGUAGE_LEN = 64;
-
-const TRIM_TOOL_RESULT = 4000;
-
-function isSpawnAgentTool(name: unknown): boolean {
-  return name === 'spawn_agent' || name === 'spawn_agents';
-}
-
-function collectToolNamesByUseId(messages: Array<{ content: unknown[] }>): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of messages) {
-    for (const block of m.content) {
-      const b = block as Record<string, unknown>;
-      if (b?.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string') {
-        out.set(b.id, b.name);
-      }
-    }
-  }
-  return out;
-}
-
-function compactSpawnAgentResult(content: string): string {
-  const matches = [...content.matchAll(/^###\s+Agent\s+\d+:\s+.*$/gm)];
-  if (matches.length === 0) return content.slice(0, TRIM_TOOL_RESULT);
-
-  const headerStart = matches[0].index ?? 0;
-  const header = content.slice(0, headerStart).trimEnd();
-  const targetChars = Math.max(TRIM_TOOL_RESULT, 8000);
-  const fixedOverhead = header.length + matches.length * 180;
-  const bodyBudget = Math.max(260, Math.floor((targetChars - fixedOverhead) / matches.length));
-
-  const sections: string[] = [];
-  for (let i = 0; i < matches.length; i++) {
-    const start = matches[i].index ?? 0;
-    const nextStart = matches[i + 1]?.index ?? content.length;
-    const rawSection = content
-      .slice(start, nextStart)
-      .replace(/\n\s*---\s*$/, '')
-      .trim();
-    const lines = rawSection.split('\n');
-    const title = lines.shift() ?? '';
-    const meta = lines.shift() ?? '';
-    const body = lines.join('\n').trim();
-    const preview =
-      body.length > bodyBudget
-        ? `${body.slice(0, bodyBudget).trimEnd()}\n\n… [agent report truncated for transport]`
-        : body;
-    sections.push([title, meta, preview].filter(Boolean).join('\n'));
-  }
-
-  const compact = `${header ? `${header}\n\n` : ''}${sections.join('\n\n---\n\n')}`;
-  return compact.length < content.length ? compact : content;
-}
-
-function trimToolResultContent(content: string, toolName: unknown): string {
-  if (content.length <= TRIM_TOOL_RESULT) return content;
-  if (isSpawnAgentTool(toolName)) return compactSpawnAgentResult(content);
-  return content.slice(0, TRIM_TOOL_RESULT);
-}
-
-function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(messages: M[]): M[] {
-  const toolNamesByUseId = collectToolNamesByUseId(messages);
-  return messages.map((m) => {
-    // Synthetic tool-image plumbing message (view_image / preview_screenshot →
-    // a user/image block). The dashboard renders this image INLINE under the
-    // tool call on reload, so keep its base64 (no upload endpoint to re-fetch
-    // a tool screenshot, unlike a user upload).
-    const isToolImageMsg =
-      m.role !== 'assistant' &&
-      m.content.some(
-        (b) =>
-          (b as Record<string, unknown>).type === 'text' &&
-          String((b as Record<string, unknown>).text ?? '').trim() ===
-            '(Image(s) attached from the tool call above.)',
-      );
-    return {
-    ...m,
-    content: m.content.map((block) => {
-      const b = block as Record<string, unknown>;
-      if (b.type === 'tool_result' && typeof b.content === 'string' && b.content.length > TRIM_TOOL_RESULT) {
-        const toolName = typeof b.tool_use_id === 'string' ? toolNamesByUseId.get(b.tool_use_id) : undefined;
-        const content = b.content as string;
-        const trimmedContent = trimToolResultContent(content, toolName);
-        if (trimmedContent.length >= content.length) return b;
-        return {
-          ...b,
-          content: trimmedContent,
-          _truncated: true,
-          _originalLength: content.length,
-        };
-      }
-      // Preserve assistant-emitted images (e.g. server-managed image_generation
-      // results from Codex). Stripping their base64 would lose the image on
-      // session reload — there's no upload endpoint to re-fetch them from.
-      // User-side image/document uploads still get trimmed: they're stored
-      // verbatim and the dashboard fetches them on demand. Tool-produced images
-      // (isToolImageMsg) are kept too — rendered inline, no re-fetch path.
-      if (
-        (b.type === 'image' || b.type === 'document') &&
-        typeof b.base64 === 'string' &&
-        m.role !== 'assistant' &&
-        !isToolImageMsg
-      ) {
-        const { base64: _omit, ...rest } = b;
-        void _omit;
-        return { ...rest, _hasBase64: true };
-      }
-      return b;
-    }),
-    };
-  });
-}
-
-/**
- * Read-time status repair: for tool_use blocks whose `tool_result` block is
- * absent from the loaded window, look up the recorded result in the
- * session bundle's tool-call records. The dashboard seeds these into its
- * tool-result map so the call renders its real terminal status instead of a
- * perpetual "loading" spinner. This heals sessions written before the
- * paired-persistence fix (where a mid-run compaction dropped the tool message
- * while the audit row survived). Empty for healthy sessions — every block is
- * already paired — so it adds nothing to the common-case payload.
- */
-async function reconstructMissingToolResults(
-  sessionStore: ServerDeps['sessionStore'],
-  sessionId: SessionId,
-  messages: Array<{ role?: string; content: unknown }>,
-): Promise<Array<{ tool_use_id: string; content: string; is_error: boolean; _truncated?: boolean; _originalLength?: number }>> {
-  const useIds = new Set<string>();
-  const resIds = new Set<string>();
-  const toolNamesByUseId = new Map<string, string>();
-  for (const m of messages) {
-    if (!Array.isArray(m.content)) continue;
-    for (const block of m.content as Array<Record<string, unknown>>) {
-      if (!block || typeof block !== 'object') continue;
-      if (block.type === 'tool_use' && typeof block.id === 'string') {
-        useIds.add(block.id);
-        if (typeof block.name === 'string') toolNamesByUseId.set(block.id, block.name);
-      }
-      else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') resIds.add(block.tool_use_id);
-    }
-  }
-  const missing = [...useIds].filter((id) => !resIds.has(id));
-  if (missing.length === 0) return [];
-  return (await sessionStore.getToolResultsByToolUseIds(sessionId, missing)).map((r) => {
-    const content =
-      r.result_text.length > TRIM_TOOL_RESULT
-        ? trimToolResultContent(r.result_text, toolNamesByUseId.get(r.tool_use_id))
-        : r.result_text;
-    const trimmed = content.length < r.result_text.length;
-    return {
-      tool_use_id: r.tool_use_id,
-      content,
-      is_error: r.is_error,
-      ...(trimmed ? { _truncated: true, _originalLength: r.result_text.length } : {}),
-    };
-  });
-}
 
 type GenerateTitleBody = {
   content?: unknown;
@@ -407,14 +252,10 @@ export function mountCoderSessionsRoutes(
   const validateAgentSelection = (value: unknown): value is AgentSelectionId =>
     resolveAgentSelection(providerStore, value) !== null;
 
-  // Abort a session's live worker run before trashing its bundle.
-  const abortActiveRun = async (id: SessionId): Promise<void> => {
-    try {
-      await workerPool.abort(id);
-    } catch {
-      /* best-effort — teardown still proceeds */
-    }
-  };
+  const runtimeActivity = (id: SessionId) => ({
+    runtime_active: workerPool.isRunning(id) && workerPool.getBus(id)?.ended !== true,
+    runtime_bus_id: workerPool.getBus(id)?.busId ?? null,
+  });
 
   // Is a run in flight for this session? Used to reject mutations that must not
   // race a live run. Linked roots are read at run start, so mutations take
@@ -496,7 +337,8 @@ export function mountCoderSessionsRoutes(
     let archived: boolean | null = false;
     if (archivedQ === '1' || archivedQ === 'true') archived = true;
     else if (archivedQ === 'all') archived = null;
-    return c.json(await sessionStore.listGlobalSessions({ archived }));
+    return c.json((await sessionStore.listGlobalSessions({ archived }))
+      .map(session => ({ ...session, ...runtimeActivity(session.id) })));
   });
 
   /**
@@ -684,31 +526,36 @@ export function mountCoderSessionsRoutes(
     if (groupQ === 'null') groupId = null;
     else if (groupQ !== undefined && groupQ !== '') groupId = groupQ;
 
-    return c.json(await sessionStore.listSessions(projectId, { archived, groupId }));
+    return c.json((await sessionStore.listSessions(projectId, { archived, groupId }))
+      .map(session => ({ ...session, ...runtimeActivity(session.id) })));
   });
 
+  // In-memory snapshot: no transcript/stat scans and no one-request-per-chat polling.
+  app.get('/api/coder/activity', (c) => c.json({
+    active: workerPool.snapshot().filter(entry => runtimeActivity(entry.sessionId).runtime_active)
+      .map(entry => ({ session_id: entry.sessionId, bus_id: workerPool.getBus(entry.sessionId)?.busId ?? null })),
+  }));
+
   app.post('/api/coder/sessions/batch-delete', async (c) => {
-    const body = await parseJsonBody<{ ids?: string[] }>(c);
+    const body = await parseJsonBody<{ ids?: string[]; permanent?: boolean }>(c);
     const ids = Array.isArray(body.ids)
       ? body.ids.map((id) => parseSessionIdValue(id, 'ids[]'))
       : [];
     if (ids.length === 0) return c.json({ error: 'ids required' }, 400);
-    for (const id of ids) {
-      const session = await sessionStore.getSession(id);
-      if (session?.is_global) {
-        await abortActiveRun(id);
+    const items = [];
+    const failures = [];
+    for (const id of new Set(ids)) {
+      try { items.push(await deleteCoderSession(id, body.permanent === true, sessionStore, workerPool)); }
+      catch (error) {
+        if (error instanceof SessionDeletionCleanupError) items.push(error.deleted);
+        failures.push({ session_id: id, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    const trashed = await sessionStore.trashSessionsBatch(ids);
     return c.json({
-      ok: true,
-      deleted: trashed.length,
-      items: trashed.map((entry) => ({
-        session_id: entry.location.session_id,
-        trash_name: entry.trash_name,
-        trashed_at: entry.trashed_at,
-        scope: entry.location.scope,
-      })),
+      ok: failures.length === 0,
+      deleted: items.length,
+      items,
+      ...(failures.length ? { failures } : {}),
     });
   });
 
@@ -1434,28 +1281,23 @@ export function mountCoderSessionsRoutes(
 
   app.delete('/api/coder/sessions/:id', async (c) => {
     const id = parseSessionIdParam(c);
-    const session = await sessionStore.getSession(id);
-    if (session?.is_global) await abortActiveRun(id);
-    const trashed = await sessionStore.deleteSession(id);
-    return c.json({
-      ok: true,
-      session_id: id,
-      trash_name: trashed.trash_name,
-      trashed_at: trashed.trashed_at,
-      scope: trashed.location.scope,
-    });
+    try {
+      return c.json({ ok: true, ...await deleteCoderSession(id, c.req.query('permanent') === 'true', sessionStore, workerPool) });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof SessionDeletionCleanupError ? { deleted: error.deleted } : {}) }, 409);
+    }
   });
 
   /**
-   * Goal + active tasks summary. Single endpoint so the dashboard can pin
+   * Active tasks summary. Single endpoint so the dashboard can pin
    * a "session header" widget without juggling two requests. Both fields
-   * are nullable — a session with no goal AND no tasks returns nulls.
+   * are nullable — a session with no tasks returns nulls.
    */
   app.get('/api/coder/sessions/:id/state-summary', async (c) => {
     const id = parseSessionIdParam(c);
     const session = await sessionStore.getSession(id);
     if (!session) return notFound(c, 'session not found');
-    const goal = await sessionStore.getSessionGoal(id);
     // Post-merge: todos + tasks share one gate-typed session file.
     // A track-gate list IS the lightweight checklist → surface it as `todos`,
     // not `tasks`. An approve-gate list → `tasks`. This makes the sidebar render
@@ -1497,16 +1339,6 @@ export function mountCoderSessionsRoutes(
       }
     }
     return c.json({
-      goal: goal
-        ? {
-            text: goal.text,
-            status: goal.status,
-            budget_tokens: goal.budget_tokens,
-            completion_note: goal.completion_note,
-            created_at: goal.created_at,
-            updated_at: goal.updated_at,
-          }
-        : null,
       // Only an APPROVE list renders as "Tasks". A track checklist is returned
       // via `todos` above, so `tasks` is null for it (no duplicate panel).
       tasks: tasksState && !isTrack && tasksState.tasks.length > 0
@@ -1538,7 +1370,8 @@ export function mountCoderSessionsRoutes(
     const id = parseSessionIdParam(c);
     const bus = workerPool.getBus(id);
     return c.json({
-      active: !!bus && !bus.ended,
+      active: runtimeActivity(id).runtime_active,
+      bus_id: bus?.busId ?? null,
       last_seq: bus ? bus.nextSeq - 1 : -1,
     });
   });

@@ -15,9 +15,12 @@
     "@mcp/services": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
-    "web-tree-sitter": "^0.24.7"
+    "web-tree-sitter": "^0.24.7",
+    "glob": "^11.0.1",
+    "minimatch": "^10.0.1"
   },
   "devDependencies": {
+    "better-sqlite3": "^12.11.1",
     "vitest": "^4.1.2"
   }
 }

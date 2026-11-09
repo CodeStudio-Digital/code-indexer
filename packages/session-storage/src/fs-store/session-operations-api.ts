@@ -1,6 +1,7 @@
 import type { AgentMessage } from '@mcp/provider-sdk';
 import type { CoderSessionStats } from '@mcp/session-storage/session-state-types.js';
 import {
+  SessionOperationConflictError,
   type JsonValue,
   type SessionId,
   type SessionState,
@@ -193,6 +194,12 @@ export class FsSessionOperations {
       const targetCommits =
         this.directory.repository.readConversationSync(targetEntry.location);
       const targetProjection = projectConversation(targetCommits);
+      if (targetCommits.length > 0 && (projection.toolOutcomes.pending.length || projection.toolOutcomes.resolved.length)
+        && JSON.stringify(targetProjection.toolOutcomes) !== JSON.stringify(projection.toolOutcomes)) {
+        // A legacy replay changes tool-call identities and may omit rolled-back
+        // operations. It cannot safely manufacture their resolution provenance.
+        throw new SessionOperationConflictError('An incomplete legacy copy cannot discard tool outcome evidence; create a fresh copy');
+      }
       const targetAlreadyComplete =
         targetProjection.storedMessages.length === sourceMessages.length &&
         targetProjection.storedMessages.every((message, index) => {

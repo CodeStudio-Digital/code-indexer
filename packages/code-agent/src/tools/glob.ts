@@ -1,5 +1,6 @@
 import { glob as fastGlob } from 'glob';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { setImmediate as yieldToHost } from 'node:timers/promises';
 import { join, relative } from 'node:path';
 import ignore from 'ignore';
 import { minimatch } from 'minimatch';
@@ -111,6 +112,15 @@ export const globTool: CoderTool = {
     }
 
     const filtered: Array<{ rel: string; mtime: number }> = [];
+    let visited = 0;
+    // Large ignored trees can contain tens of thousands of files. Yield while
+    // collecting mtimes so evaluator heartbeats, cancellation and other chats
+    // are not starved by an otherwise asynchronous glob.
+    const checkpoint = async (): Promise<void> => {
+      if (++visited % 64 !== 0) return;
+      await yieldToHost();
+      if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error('glob cancelled');
+    };
     try {
       if (!args.path && ctx.globalWorkspace) {
         // Enumerate the real linked roots carried in ToolContext and expose
@@ -124,6 +134,7 @@ export const globTool: CoderTool = {
           });
           const ig = respectIgnore ? loadIgnore(project.rootPath) : null;
           for (const relToProject of matches) {
+            await checkpoint();
             const sourceRel = relToProject.split('\\').join('/');
             const projectRel = `${project.slug}/${sourceRel}`;
             if (!minimatch(projectRel, pattern)) continue;
@@ -142,6 +153,7 @@ export const globTool: CoderTool = {
         });
         const ig = respectIgnore ? loadIgnore(outputRoot) : null;
         for (const relToRoot of matches) {
+          await checkpoint();
           const absPath = join(searchRoot, relToRoot);
           const projectRel = relative(outputRoot, absPath).split('\\').join('/');
           if (ig && ig.ignores(projectRel)) continue;

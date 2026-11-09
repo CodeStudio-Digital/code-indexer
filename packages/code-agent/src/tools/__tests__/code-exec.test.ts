@@ -66,6 +66,17 @@ function noopTool(name: string): CoderTool {
 }
 
 describe('code_exec timeout (codex-faithful)', () => {
+  it('contains a post-await spin while the owning event loop continues', async () => {
+    const registry = new ToolRegistry();
+    registry.register(slowTool('read_step', 10));
+    let ticks = 0;
+    const clock = setInterval(() => ticks++, 10);
+    try {
+      const result = await buildCodeExecTool(registry).handler({ code: 'await tools.read_step({}); while (true) {}', timeout_ms: 200 }, makeCtx());
+      expect(result.isError).toBe(true);
+      expect(ticks).toBeGreaterThan(5);
+    } finally { clearInterval(clock); }
+  });
   it('rejects a lexical tools shadow before starting any nested call', async () => {
     const registry = new ToolRegistry();
     const handler = vi.fn(async () => ok('skeleton'));
@@ -145,18 +156,6 @@ describe('code_exec timeout (codex-faithful)', () => {
     expect(exposed).toContain('run_command');
     expect(exposed).toContain('exec_command');
     expect(exposed).toContain('read_file');
-  });
-
-  it('keeps goal lifecycle tools on the direct top-level audit path', () => {
-    const registry = new ToolRegistry();
-    registry.register(noopTool('create_goal'));
-    registry.register(noopTool('get_goal'));
-    registry.register(noopTool('update_goal'));
-
-    const exposed = _exposedToolNames(registry);
-    expect(exposed).not.toContain('create_goal');
-    expect(exposed).not.toContain('get_goal');
-    expect(exposed).not.toContain('update_goal');
   });
 });
 
@@ -1239,17 +1238,18 @@ describe('code_exec metadata safety and scheduling', () => {
   it('times out a queued unsafe call before lane acquisition', async () => {
     const registry = new ToolRegistry();
     let physicalInvocations = 0;
+    let physicalStarted = 0;
     registry.register({
       ...noopTool('run_command'),
       mutates: true,
       parallelSafe: false,
       resolveTimeoutMs: (args) => Number(args.timeout_ms),
       handler: () => {
+        physicalStarted ||= Date.now();
         physicalInvocations++;
         return new Promise<never>(() => {}); // deliberately ignores cancellation
       },
     });
-    const started = Date.now();
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
     process.prependListener('unhandledRejection', onUnhandled);
@@ -1268,7 +1268,9 @@ describe('code_exec metadata safety and scheduling', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain('timed out after 30 ms');
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // Process startup has its own watchdog; this measures the queued deadline.
+    expect(physicalStarted).toBeGreaterThan(0);
+    expect(Date.now() - physicalStarted).toBeLessThan(1_000);
     expect(physicalInvocations).toBe(1);
     expect(unhandled).toEqual([]);
   });

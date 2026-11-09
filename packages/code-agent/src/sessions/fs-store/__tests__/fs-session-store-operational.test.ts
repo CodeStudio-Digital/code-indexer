@@ -47,6 +47,36 @@ afterEach(async () => {
 
 describe('FsSessionStore operational state', () => {
 
+  it('ignores historical Meta records while retaining approved plans after restart', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Legacy session', provider: 'test', model: 'test' });
+    await store.appendMessage({
+      session_id: session.id,
+      message: { role: 'user', content: [{ type: 'text', text: 'Continue the approved plan' }] },
+    });
+    const location = (await store.getSessionLocation(session.id))!;
+    await store.repository.commitTurn(location, {
+      operation_id: 'legacy-meta-record',
+      payload: {
+        schema_version: 1, type: 'coder.turn', request_key: 'legacy-meta-record',
+        messages: [], message_patches: [], tool_calls: [],
+        goal_mutations: [{ source: 'admin', next: { text: 'Retired objective', status: 'in_progress' } }],
+      },
+    });
+    await store.recordPlan({ session_id: session.id, tool_use_id: 'legacy-plan', plan_text: 'Validate the preserved tasks' });
+    await store.resolvePlan(session.id, 'legacy-plan', 'approved');
+    await restart();
+    const state = await store.getSessionStateData(session.id);
+    expect(state).not.toHaveProperty('goal');
+    expect(state.activePlan).toMatchObject({ text: 'Validate the preserved tasks', status: 'approved' });
+    expect((await store.loadAllSessionMessages(session.id))?.messages[0].content).toEqual([
+      { type: 'text', text: 'Continue the approved plan' },
+    ]);
+    await expect(store.appendMessage({
+      session_id: session.id,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Tasks remain available' }] },
+    })).resolves.toBeGreaterThan(1);
+  });
+
   it('serializes note upserts by title and preserves idempotency after reopening', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Notes', provider: 'test', model: 'test' });
     const writes = await Promise.all(Array.from({ length: 8 }, (_, index) => store.rememberMemory(session.id, {
@@ -332,7 +362,7 @@ describe('FsSessionStore operational state', () => {
     expect(await store.getPendingAgentTransition(session.id)).toBeNull();
   });
 
-  it('journals goals atomically and persists plans, memory, tasks and tool stats', async () => {
+  it('persists plans, memory, tasks and tool stats', async () => {
     const session = await store.createSession({
       project_id: 7,
       title: 'Operational entities',
@@ -340,157 +370,17 @@ describe('FsSessionStore operational state', () => {
       model: 'test',
     });
     const createdAt = new Date().toISOString();
-    const goalToolUseId = 'goal-create-1';
-    const goalTurn = {
-      session_id: session.id,
-      operation_id: 'assistant:goal-create-1',
-      message: {
-        role: 'assistant' as const,
-        content: [
-          {
-            type: 'tool_use' as const,
-            id: goalToolUseId,
-            name: 'create_goal',
-            input: { text: 'Move runtime state to files' },
-          },
-        ],
-      },
-      usage: null,
-      tool_calls: [
-        {
-          tool_use_id: goalToolUseId,
-          tool_name: 'create_goal',
-          args: { text: 'Move runtime state to files' },
-          result_text: 'created',
-          is_error: false,
-          duration_ms: 3,
-        },
-      ],
-      goal_mutations: [
-        {
-          tool_use_id: goalToolUseId,
-          tool_name: 'create_goal',
-          expected: null,
-          next: {
-            text: 'Move runtime state to files',
-            status: 'in_progress',
-            budget_tokens: 10_000,
-            completion_note: null,
-            created_at: createdAt,
-            updated_at: createdAt,
-          },
-        },
-      ],
-    };
-    expect(await store.persistAssistantTurn(goalTurn)).toBe(1);
-    expect(await store.persistAssistantTurn(goalTurn)).toBe(1);
-
-    const initialGoal = await store.getSessionGoal(session.id);
-    expect(initialGoal).toMatchObject({
-      text: 'Move runtime state to files',
-      status: 'in_progress',
-      revision: 1,
-      mutation_seq: 1,
-    });
-    expect(initialGoal?.id).toMatch(UUID_PATTERN);
-
-    const updatedAt = new Date(Date.now() + 1_000).toISOString();
-    const completedGoal = await store.upsertSessionGoal(session.id, {
-      text: initialGoal!.text,
-      status: 'complete',
-      budgetTokens: initialGoal!.budget_tokens,
-      completionNote: 'done',
-      createdAt: initialGoal!.created_at,
-      updatedAt,
-      expected_revision: 1,
-      operation_id: 'goal:complete',
-    });
-    const replayedGoal = await store.upsertSessionGoal(session.id, {
-      text: initialGoal!.text,
-      status: 'complete',
-      budgetTokens: initialGoal!.budget_tokens,
-      completionNote: 'done',
-      createdAt: initialGoal!.created_at,
-      updatedAt,
-      expected_revision: 1,
-      operation_id: 'goal:complete',
-    });
-    expect(replayedGoal).toEqual(completedGoal);
-
-    const goalNoopToolUseId = 'goal-complete-noop-1';
-    expect(await store.persistAssistantTurn({
-      session_id: session.id,
-      operation_id: 'assistant:goal-complete-noop-1',
-      message: {
-        role: 'assistant',
-        content: [{
-          type: 'tool_use',
-          id: goalNoopToolUseId,
-          name: 'update_goal',
-          input: { status: 'complete' },
-        }],
-      },
-      usage: null,
-      tool_calls: [{
-        tool_use_id: goalNoopToolUseId,
-        tool_name: 'update_goal',
-        args: { status: 'complete' },
-        result_text: 'Goal is already complete; no state change was needed.',
-        is_error: false,
-        duration_ms: 1,
-      }],
-      goal_noop_tool_use_ids: [goalNoopToolUseId],
-    })).toBe(3);
-    expect(await store.getSessionGoal(session.id)).toEqual(completedGoal);
-
-    await expect(
-      store.upsertSessionGoal(session.id, {
-        text: 'conflict',
-        status: 'in_progress',
-        createdAt,
-        updatedAt,
-        expected_revision: 1,
-      }),
-    ).rejects.toThrow(/expected revision 1, got 2/);
-    expect(
-      await store.clearSessionGoal(session.id, {
-        expected_revision: 2,
-        operation_id: 'goal:clear',
-      }),
-    ).toBe(true);
-    expect(await store.getSessionGoal(session.id)).toBeNull();
-    const recreatedAt = new Date(Date.now() + 2_000).toISOString();
-    const recreatedGoal = await store.upsertSessionGoal(session.id, {
-      text: 'Verify the cutover',
-      status: 'in_progress',
-      budgetTokens: null,
-      createdAt: recreatedAt,
-      updatedAt: recreatedAt,
-      expected_revision: 0,
-      operation_id: 'goal:recreate',
-    });
-    expect(recreatedGoal).toMatchObject({
-      revision: 1,
-      mutation_seq: 4,
-    });
-    expect(
-      await store.clearSessionGoal(session.id, {
-        expected_revision: 2,
-        operation_id: 'goal:clear',
-      }),
-    ).toBe(true);
-    expect(
-      await store.upsertSessionGoal(session.id, {
-        text: initialGoal!.text,
-        status: 'complete',
-        budgetTokens: initialGoal!.budget_tokens,
-        completionNote: 'done',
-        createdAt: initialGoal!.created_at,
-        updatedAt,
-        expected_revision: 1,
-        operation_id: 'goal:complete',
-      }),
-    ).toEqual(completedGoal);
+    for (const name of ['read_file', 'list_directory']) {
+      const turn = {
+        session_id: session.id,
+        operation_id: 'assistant:' + name,
+        message: { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: name, name, input: { path: 'src' } }] },
+        usage: null,
+        tool_calls: [{ tool_use_id: name, tool_name: name, args: { path: 'src' }, result_text: 'x'.repeat(30), is_error: false, duration_ms: 3 }],
+      };
+      const sequence = await store.persistAssistantTurn(turn);
+      expect(await store.persistAssistantTurn(turn)).toBe(sequence);
+    }
 
     const plan = await store.recordPlan({
       session_id: session.id,
@@ -693,7 +583,6 @@ describe('FsSessionStore operational state', () => {
 
     await restart();
 
-    expect(await store.getSessionGoal(session.id)).toEqual(recreatedGoal);
     expect((await store.listPlans(session.id))[0]).toMatchObject({
       id: plan.id,
       status: 'approved',
@@ -756,8 +645,8 @@ describe('FsSessionStore operational state', () => {
     expect(stats.totalCalls).toBe(3);
     expect(stats.byName).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: 'create_goal', count: 1 }),
-        expect.objectContaining({ name: 'update_goal', count: 1 }),
+        expect.objectContaining({ name: 'read_file', count: 1 }),
+        expect.objectContaining({ name: 'list_directory', count: 1 }),
         expect.objectContaining({ name: 'edit_file', count: 1 }),
       ]),
     );

@@ -36,45 +36,109 @@ const TTL_MS = 1500;
 interface CacheEntry {
   data: unknown;
   at: number;
+  bytes: number;
 }
 
 const inflight = new Map<string, Promise<unknown>>();
 const cache = new Map<string, CacheEntry>();
-/** Separate slot for `dedupeInflight` — collapses concurrent reads WITHOUT
- *  caching the body (so the next read after settle still revalidates). */
 const inflightOnly = new Map<string, Promise<unknown>>();
+// Entry count is a hard limit. The payload estimate is an additional budget,
+// not a claim about the VM's exact heap layout. Large or complex bodies still
+// share their in-flight request, but are not retained after it settles.
+const MAX_ENTRIES = 64;
+const MAX_ENTRY_BYTES = 256 * 1024;
+const MAX_CACHE_BYTES = 2 * 1024 * 1024;
+const MAX_VISITED_VALUES = 4096;
+let cacheBytes = 0;
+let generation = 0;
+let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+let expiryDeadline = Infinity;
 
-/**
- * How many live entries trigger a sweep of expired ones.
- *
- * Eviction used to be purely lazy: an entry was dropped only when that EXACT
- * key was read again after its TTL, or when a mutation called
- * `invalidateAll()`. Every other key kept its full response body resident
- * forever. A read-heavy stretch with no writes — scrolling transcript pages,
- * opening files, running searches, each a distinct URL — therefore accumulated
- * megabytes of bodies that could never be served again, since they were all
- * long past the 1500 ms TTL.
- *
- * The sweep is provably behaviour-neutral: it deletes exactly the entries
- * `getCached` would already have treated as a miss. 64 keeps it rare (the
- * cache exists to collapse a single render pass, which is a handful of keys)
- * and the pass itself is over a map that small.
- */
-const SWEEP_AT_SIZE = 64;
-
-function sweepExpired(now: number): void {
-  for (const [key, entry] of cache) {
-    if (now - entry.at > TTL_MS) cache.delete(key);
+function estimateBytes(value: unknown, key: string): number {
+  let bytes = key.length * 2 + 64;
+  let visited = 0;
+  const seen = new Set<object>();
+  function visit(item: unknown, depth: number): void {
+    if (++visited > MAX_VISITED_VALUES || depth > 32) { bytes = Infinity; return; }
+    if (typeof item === 'string') { bytes += item.length * 2 + 16; return; }
+    if (item == null || typeof item === 'number' || typeof item === 'boolean') { bytes += 8; return; }
+    if (typeof item !== 'object') { bytes = Infinity; return; }
+    if (seen.has(item)) return;
+    seen.add(item);
+    bytes += 64;
+    if (Array.isArray(item)) {
+      if (item.length > MAX_VISITED_VALUES - visited) { bytes = Infinity; return; }
+      for (const child of item) {
+        visit(child, depth + 1);
+        if (bytes > MAX_ENTRY_BYTES) return;
+      }
+    } else {
+      const proto = Object.getPrototypeOf(item);
+      if (proto !== Object.prototype && proto !== null) { bytes = Infinity; return; }
+      for (const name in item) {
+        if (!Object.hasOwn(item, name)) continue;
+        bytes += name.length * 2 + 16;
+        visit((item as Record<string, unknown>)[name], depth + 1);
+        if (bytes > MAX_ENTRY_BYTES) return;
+      }
+    }
   }
+  if (bytes <= MAX_ENTRY_BYTES) visit(value, 0);
+  return bytes;
 }
 
+function removeCached(key: string): void {
+  const entry = cache.get(key);
+  if (entry) { cacheBytes -= entry.bytes; cache.delete(key); }
+}
+
+/** One deadline timer, only while bodies are resident; no idle polling. */
+function scheduleExpiry(): void {
+  let deadline = Infinity;
+  for (const entry of cache.values()) deadline = Math.min(deadline, entry.at + TTL_MS + 1);
+  if (expiryTimer !== undefined && expiryDeadline <= deadline && deadline !== Infinity) return;
+  clearTimeout(expiryTimer);
+  expiryTimer = undefined;
+  expiryDeadline = deadline;
+  if (deadline === Infinity) return;
+  expiryTimer = setTimeout(() => {
+    expiryTimer = undefined;
+    expiryDeadline = Infinity;
+    const now = Date.now();
+    for (const [key, entry] of cache) {
+      if (now - entry.at > TTL_MS) removeCached(key);
+    }
+    scheduleExpiry();
+  }, Math.max(1, deadline - Date.now()));
+}
+
+function cacheValue(key: string, data: unknown): void {
+  removeCached(key);
+  let bytes: number;
+  try { bytes = estimateBytes(data, key); } catch { bytes = Infinity; }
+  if (key && bytes <= MAX_ENTRY_BYTES) {
+    const now = Date.now();
+    for (const [existingKey, entry] of cache) {
+      if (now - entry.at > TTL_MS) removeCached(existingKey);
+    }
+    while (cache.size >= MAX_ENTRIES || cacheBytes + bytes > MAX_CACHE_BYTES) {
+      const oldest = cache.keys().next();
+      if (oldest.done) break;
+      removeCached(oldest.value);
+    }
+    cache.set(key, { data, at: now, bytes });
+    cacheBytes += bytes;
+  }
+  scheduleExpiry();
+}
 /** Fresh cached body for `key`, or undefined (miss/expired). Empty key never hits. */
 export function getCached<T>(key: string): T | undefined {
   if (!key) return undefined;
   const entry = cache.get(key);
   if (!entry) return undefined;
   if (Date.now() - entry.at > TTL_MS) {
-    cache.delete(key);
+    removeCached(key);
+    scheduleExpiry();
     return undefined;
   }
   return entry.data as T;
@@ -90,13 +154,10 @@ export function dedupe<T>(key: string, producer: () => Promise<T>): Promise<T> {
   const existing = inflight.get(key);
   if (existing) return existing as Promise<T>;
 
+  const startedInGeneration = generation;
   const p = producer()
     .then((data) => {
-      const now = Date.now();
-      cache.set(key, { data, at: now });
-      // Amortized cleanup: bodies whose TTL lapsed are unreachable by
-      // `getCached` and must not stay resident for the life of the renderer.
-      if (cache.size >= SWEEP_AT_SIZE) sweepExpired(now);
+      if (generation === startedInGeneration) cacheValue(key, data);
       return data;
     })
     .finally(() => {
@@ -130,10 +191,18 @@ export function dedupeInflight<T>(key: string, producer: () => Promise<T>): Prom
  *  resurrects an expired key or creates a phantom for an unfetched one. */
 export function writeThrough(key: string, data: unknown): void {
   if (!key) return;
-  if (cache.has(key)) cache.set(key, { data, at: Date.now() });
+  const entry = cache.get(key);
+  if (!entry) return;
+  if (Date.now() - entry.at > TTL_MS) { removeCached(key); scheduleExpiry(); return; }
+  cacheValue(key, data);
 }
 
 /** Drop every cached body. Called on any successful mutation. */
 export function invalidateAll(): void {
+  generation += 1;
   cache.clear();
+  cacheBytes = 0;
+  clearTimeout(expiryTimer);
+  expiryTimer = undefined;
+  expiryDeadline = Infinity;
 }

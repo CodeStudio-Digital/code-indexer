@@ -1,3 +1,4 @@
+import { readEnvMutation, type EnvApplication } from './env-application.js';
 /**
  * EnvEditDialog — modal editor for a single shared env var.
  *
@@ -34,7 +35,7 @@ interface EnvEditDialogProps {
   services?: EnvServiceOption[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => Promise<void> | void;
+  onSaved: (result?: EnvApplication) => Promise<void> | void;
 }
 
 export function EnvEditDialog({
@@ -52,11 +53,14 @@ export function EnvEditDialog({
   const [saving, setSaving] = useState(false);
   // For a masked secret the real value is fetched on open; block Save until then.
   const [loadingValue, setLoadingValue] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [valueReady, setValueReady] = useState(!row.masked);
 
   useEffect(() => {
     if (!open) return;
     // Reseed from the row each time the dialog opens.
     setValue(row.value);
+    setError(null); setValueReady(!row.masked);
     setIsSecret(row.is_secret);
     setScope(row.service_scope ?? null);
     if (!row.masked) return;
@@ -70,11 +74,14 @@ export function EnvEditDialog({
         const r = await fetch(
           `/api/company/sessions/${sessionId}/envs?reveal=1&key=${encodeURIComponent(row.key)}`,
         );
-        if (r.ok) {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        {
           const body = (await r.json()) as { envs: EnvRow[] };
           const match = body.envs?.find((e) => e.key === row.key);
-          if (!cancelled && match) setValue(match.value);
+          if (!match) throw new Error('Variable unavailable');
+          if (!cancelled) { setValue(match.value); setValueReady(true); }
         }
+      } catch (e) { if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       } finally {
         if (!cancelled) setLoadingValue(false);
       }
@@ -87,13 +94,15 @@ export function EnvEditDialog({
   async function save() {
     setSaving(true);
     try {
-      await fetch(`/api/company/sessions/${sessionId}/envs/${encodeURIComponent(row.key)}`, {
+      const response = await fetch(`/api/company/sessions/${sessionId}/envs/${encodeURIComponent(row.key)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ value, is_secret: isSecret, service_scope: scope }),
       });
-      await onSaved();
+      const result = await readEnvMutation(response);
+      await onSaved(result);
       onOpenChange(false);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -125,11 +134,12 @@ export function EnvEditDialog({
           </label>
           <EnvScopeSelector services={services} value={scope} onChange={setScope} />
         </div>
+        {error && <div role="alert" className="text-xs text-destructive">{error}</div>}
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             {t('common.cancel')}
           </Button>
-          <Button onClick={save} disabled={saving || loadingValue}>
+          <Button onClick={save} disabled={saving || loadingValue || !valueReady}>
             {saving ? t('env.saving') : t('env.save')}
           </Button>
         </DialogFooter>

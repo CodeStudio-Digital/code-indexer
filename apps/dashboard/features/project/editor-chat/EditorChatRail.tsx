@@ -15,6 +15,7 @@ import { useWorkspaceStore } from '../../../state/workspace.js';
 import { editorChatContextActions, useEditorChatContext } from '../../../state/editor-chat-context.js';
 import { MessageList } from '../../chat/messages/MessageList.js';
 import { Composer } from '../../chat/composer/Composer.js';
+import { ProviderSelectionNotice } from '../../chat/ProviderSelectionNotice.js';
 import { QueuedMessages } from '../../chat/composer/QueuedMessages.js';
 import {
   firstModelValue,
@@ -201,7 +202,10 @@ export function EditorChatRail({
       tone: 'destructive',
     });
     if (!ok) return;
-    await s.deleteSession(id);
+    try { await s.deleteSession(id); }
+    catch (error) {
+      await confirm({ title: t('chat:deleteFailed'), description: error instanceof Error ? error.message : String(error), confirmLabel: t('common:actions.close') });
+    }
   };
 
   if (s.selectedId == null) {
@@ -309,6 +313,7 @@ export function EditorChatRail({
           />
         </div>
         {includeEditorContext && <SelectionChips projectId={projectId} />}
+        <ProviderSelectionNotice state={s.providerChange} onRetry={s.retryProviderChange} />
         <Composer
           compact
           filePicks={fileRefs}
@@ -354,7 +359,7 @@ export function EditorChatRail({
           setExecutionMode={s.setExecutionMode}
           executionModePending={s.executionModePending}
           executionModeLocked={s.executionModeLocked}
-          sendBlocked={s.executionModePending}
+          sendBlocked={s.executionModePending || s.providerChange?.pending || Boolean(s.providerChange?.error)}
           planDepth={s.planDepth}
           setPlanDepth={s.setPlanDepth}
           getModelsForProvider={s.getModelsForProvider}

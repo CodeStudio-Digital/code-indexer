@@ -9,10 +9,14 @@ import { createMysqlDriver } from './mysql.js';
 import { createOracleDriver } from './oracle.js';
 import { createPostgresDriver } from './postgres.js';
 import { createRedisDriver } from './redis.js';
-import { createSqliteDriver } from './sqlite.js';
+import { createSqliteProcessDriver } from './sqlite-process.js';
 import { isWriteCommand } from './command-classify.js';
 import { isReadStatement } from './sql/read-guard.js';
+import { validateBatch } from './batch-outcome.js';
 import type { DatabaseDriver, DbConnectConfig } from './types.js';
+import { withDatabaseDeadline } from './dispatch.js';
+import { createCatalogReader } from './catalog-reader.js';
+import { withDatabaseTimings } from './query-timing.js';
 
 export async function createDriver(config: DbConnectConfig): Promise<DatabaseDriver> {
   let driver: DatabaseDriver;
@@ -25,7 +29,7 @@ export async function createDriver(config: DbConnectConfig): Promise<DatabaseDri
       driver = await createMysqlDriver(config);
       break;
     case 'sqlite':
-      driver = createSqliteDriver(config);
+      driver = await createSqliteProcessDriver(config);
       break;
     case 'mssql':
       driver = await createMssqlDriver(config);
@@ -42,7 +46,17 @@ export async function createDriver(config: DbConnectConfig): Promise<DatabaseDri
     default:
       throw new Error(`Unsupported database engine: ${String(config.engine)}`);
   }
-  return config.readOnly ? protectReadOnly(driver) : driver;
+  const guarded = config.readOnly ? protectReadOnly(driver) : driver;
+  return {
+    ...guarded,
+    ...((guarded.kind ?? 'relational') === 'relational' ? { catalogPage: createCatalogReader(guarded, config.engine) } : {}),
+    query: (sql, params) => withDatabaseTimings(() => withDatabaseDeadline({ params, timeoutMs: 30_000 }, effective => guarded.runQuery(sql, effective))),
+    runQuery: (sql, opts = {}) => withDatabaseTimings(() => withDatabaseDeadline(opts, effective => guarded.runQuery(sql, effective))),
+    ...(guarded.runBatch ? { runBatch: (statements: Parameters<NonNullable<DatabaseDriver['runBatch']>>[0], opts: import('./types.js').RunBatchOptions = {}) =>
+      withDatabaseTimings(() => withDatabaseDeadline(opts, effective => guarded.runBatch!(statements, { ...opts, ...effective }))) } : {}),
+    ...(guarded.runCommand ? { runCommand: (command: Parameters<NonNullable<DatabaseDriver['runCommand']>>[0], opts: import('./types.js').RunQueryOptions = {}) =>
+      withDatabaseTimings(() => withDatabaseDeadline(opts, effective => guarded.runCommand!(command, effective))) } : {}),
+  };
 }
 
 /**
@@ -66,8 +80,9 @@ function protectReadOnly(driver: DatabaseDriver): DatabaseDriver {
     },
     ...(driver.runBatch
       ? {
-          runBatch() {
-            return Promise.reject(new Error('Connection is read-only — batch execution is blocked.'));
+          async runBatch(statements, opts) {
+            validateBatch(statements, true);
+            return driver.runBatch!(statements, opts);
           },
         }
       : {}),

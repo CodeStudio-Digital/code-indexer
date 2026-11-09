@@ -1,5 +1,6 @@
 export { listMemoryIndex } from './agent-memory-ranking.js';
 import { captureReferencedFiles } from './agent-memory-references.js';
+import { validatePreservedMemoryReferences } from './preserved-memory-references.js';
 export { getStaleReferencedFiles, getStaleBatch } from './agent-memory-references.js';
 import { slugify, normalizeScopeProject, BATCH_IDS, clamp01 } from './agent-memory-values.js';
 export { slugify } from './agent-memory-values.js';
@@ -27,15 +28,16 @@ function resolveLiveSlug(
   return `${desired}-${Date.now()}`;
 }
 
-export function create(db: DB, data: CreateAgentMemoryData): AgentMemoryRow {
+export function create(db: DB, data: CreateAgentMemoryData, fileIndex: DB | null = db): AgentMemoryRow {
   const scope: AgentMemoryScope = data.scope ?? 'project';
   const projectId = normalizeScopeProject(scope, data.projectId ?? 0);
   const desired = slugify(data.name);
   const name = resolveLiveSlug(db, scope, projectId, desired);
   const sync = scope === 'local' ? 0 : data.sync === false ? 0 : 1;
-  const referenced =
-    data.referencedFiles && data.referencedFiles.length > 0
-      ? JSON.stringify(captureReferencedFiles(db, projectId, data.referencedFiles))
+  const referenced = data.referencedFileSnapshots !== undefined
+    ? (scope === 'user' ? null : JSON.stringify(validatePreservedMemoryReferences(data.referencedFileSnapshots)))
+    : data.referencedFiles && data.referencedFiles.length > 0
+      ? JSON.stringify(captureReferencedFiles(fileIndex, projectId, data.referencedFiles))
       : null;
   const result = db
     .prepare(
@@ -112,6 +114,7 @@ export function replace(
   db: DB,
   oldId: number,
   data: CreateAgentMemoryData,
+  fileIndex: DB | null = db,
 ): AgentMemoryRow {
   const tx = db.transaction((): AgentMemoryRow => {
     const old = db.prepare('SELECT * FROM agent_memory WHERE id = ?').get(oldId) as
@@ -126,7 +129,7 @@ export function replace(
          WHERE id = ? AND archived_at IS NULL`,
       ).run('superseded:pending', oldId);
     }
-    const fresh = create(db, data);
+    const fresh = create(db, data, fileIndex);
     if (old) {
       // carry the earliest created_at forward
       db.prepare('UPDATE agent_memory SET created_at = ? WHERE id = ?').run(
@@ -355,13 +358,14 @@ export function pruneEvents(db: DB, maxAgeDays = 30, maxRows = 50_000): number {
 
 /**
  * Aggregate health stats for the memory dashboard / a "prove it left dormancy"
- * check. Optionally scoped to one project (user-scope counts stay global).
+ * check. Project stock includes project/local memories, matching curation;
+ * user-scope counts stay global. Retrieval APIs keep their exact scope.
  */
 export function getStats(db: DB, projectId?: number): AgentMemoryStats {
   const liveProject = (
     db
       .prepare(
-        `SELECT COUNT(*) AS c FROM agent_memory WHERE scope = 'project' AND archived_at IS NULL${
+        `SELECT COUNT(*) AS c FROM agent_memory WHERE scope IN ('project', 'local') AND archived_at IS NULL${
           projectId != null ? ' AND project_id = ?' : ''
         }`,
       )

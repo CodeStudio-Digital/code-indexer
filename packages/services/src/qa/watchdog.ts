@@ -70,7 +70,9 @@ export async function runWatchdogTick(
         duration_ms: run.duration_ms,
         // Keep the legacy message (UI + countWatchdogKills match on it)
         // and add the machine-readable class introduced by migration 189.
-        last_error: QA_WATCHDOG_ERROR_MESSAGE,
+        last_error: run.executor === 'preview'
+          ? 'Preview QA did not finish its acceptance checks. Inspect the original preview operation, then start a new run after reconciliation.'
+          : QA_WATCHDOG_ERROR_MESSAGE,
         error_class: 'orphan',
       });
       if (updated && updated.status === 'error') killed++;

@@ -1,0 +1,1086 @@
+{
+  "schemaVersion": 1,
+  "preparedAt": "2026-10-26T23:46:29.539Z",
+  "studyDate": "2026-10-26",
+  "timezone": "America/Sao_Paulo",
+  "scope": "Static analysis and documentation only",
+  "codeStudio": {
+    "root": "D:/MCP",
+    "gitHead": "448d526dd2e24247617938721c0d8cf18ce850cf",
+    "workingTree": "Contains pre-existing modified and untracked sources; source hashes below identify the cited files."
+  },
+  "snapshots": [
+    {
+      "root": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64",
+      "provenance": {
+        "product": "Claude Code CLI",
+        "version": "2.1.308",
+        "platform": "win32-x64",
+        "channel": "npm stable",
+        "acquiredAt": "2026-10-26T22:16:03.738493+00:00",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.308.tgz",
+        "resolvedUrl": "https://registry.npmjs.org/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.308.tgz",
+        "artifact": "artifacts/claude-code-win32-x64-2.1.308.tgz",
+        "artifactSha256": "bfb51c874e4697627e16bf5254cdec5761a57f207b346593b7236a2671002c8f",
+        "expectedIntegrity": "sha512-OxskS6onyOdKqdvd9/33M5//ItBdAnoI/cjdp0PU47KDMDF5WWE82Slo0ISq8kpNr2wK0lXB5Z2Rv1weJR0znw==",
+        "expectedSha1": "76c33078e26fc7ef6d83ec1609c0f7ff4b752784",
+        "original": "original/claude.exe",
+        "originalSha256": "c9796ba22a9221586b36371b36f5b66198d66eb4badf6a4cf4a5f7b07becea53",
+        "limitations": [
+          "Static extraction only; native runtime and bytecode are not original JavaScript source."
+        ]
+      },
+      "providedVerificationReport": {
+        "product": "Claude Code CLI",
+        "version": "2.1.308",
+        "status": "passed",
+        "verifiedAt": "2026-10-26T22:45:05.680Z",
+        "originalFilesVerified": 2755,
+        "javascriptCoverage": 2510,
+        "formattedAstsVerified": 2507,
+        "compressedResourcesPreserved": 3,
+        "artifactIntegrity": true,
+        "extractedIdentity": true,
+        "outputHashes": true,
+        "astEquivalentAfterReversingDocumentedImports": true,
+        "runtimeTested": false,
+        "limitations": [
+          "Static identity/AST checks do not prove runtime equivalence.",
+          "Domain classification is heuristic."
+        ]
+      },
+      "reportRerun": false
+    },
+    {
+      "root": "D:/Claude-Open/snapshots/desktop-3.6556.2-win32-x64",
+      "provenance": {
+        "product": "Claude Desktop",
+        "version": "3.6556.2",
+        "platform": "win32-x64",
+        "channel": "official RELEASES full package",
+        "acquiredAt": "2026-10-26T22:16:00.072739+00:00",
+        "feedUrl": "https://downloads.claude.ai/releases/win32/x64/RELEASES",
+        "url": "https://downloads.claude.ai/releases/win32/x64/AnthropicClaude-3.6556.2-full.nupkg",
+        "resolvedUrl": "https://downloads.claude.ai/releases/win32/x64/AnthropicClaude-3.6556.2-full.nupkg",
+        "artifact": "artifacts/AnthropicClaude-3.6556.2-full.nupkg",
+        "artifactSha256": "cd4bba57a6f8f972f3e5072edcfffa11e146c30eaa5882b2d2848046bccf6fcd",
+        "expectedSha1": "6eb9992be90ef510ad1e98560a29f5532421888b",
+        "expectedBytes": 250498161,
+        "original": "original/app.asar",
+        "originalSha256": "3e9cb8e8034e75d9e1996f960169877c556e17a454041a25233b372493fec9ac",
+        "limitations": [
+          "Native and unpacked payloads retained in package, not executed or analyzed."
+        ]
+      },
+      "providedVerificationReport": {
+        "product": "Claude Desktop",
+        "version": "3.6556.2",
+        "status": "passed",
+        "verifiedAt": "2026-10-26T22:45:50.297Z",
+        "originalFilesVerified": 623,
+        "javascriptCoverage": 554,
+        "formattedAstsVerified": 554,
+        "compressedResourcesPreserved": 0,
+        "artifactIntegrity": true,
+        "extractedIdentity": true,
+        "outputHashes": true,
+        "astEquivalentAfterReversingDocumentedImports": true,
+        "runtimeTested": false,
+        "limitations": [
+          "Static identity/AST checks do not prove runtime equivalence.",
+          "Domain classification is heuristic."
+        ]
+      },
+      "reportRerun": false
+    }
+  ],
+  "rea": {
+    "evidenceId": "ev_f6ef94697b368107d4ea761e6c6ee89fba3171b41c5dbf736f8da4cfb440624c",
+    "parentEvidenceId": "ev_bd25d2a824c690dde015d303f763eefb846bf86ea0adb536b8b3cf2324f82169",
+    "analysis": "static, selected JavaScript sources; never executed",
+    "artifact": {
+      "path": "D:\\Claude-Open\\snapshots\\cli-2.1.308-win32-x64\\study",
+      "sha256": "bd577875c47329ba6b52e89d6a7001de44111ca73d196f6b65f6b9abe0250b75"
+    },
+    "statistics": {
+      "relevant_files": 2507,
+      "nested_asar_containers": 0,
+      "text_bytes_read": 153745,
+      "invalid_utf8_files": 0,
+      "parsed_javascript_files": 4,
+      "visited_ast_nodes": 27683,
+      "findings": 1251,
+      "modules": 0,
+      "parse_failures": 0
+    },
+    "sourceSelection": {
+      "requested_paths": [
+        "shared/1138-chunk-ate2580t.js",
+        "sessions/permissions/0194-chunk-cy61f014.js",
+        "shared/0729-chunk-z9mc9575.js",
+        "shared/1719-chunk-25jmp92a.js"
+      ],
+      "unselected_files": 2503
+    },
+    "coverage": {
+      "application": {
+        "status": "partial",
+        "truncated": false,
+        "omitted_count": null,
+        "limits": []
+      },
+      "semantic": {
+        "status": "partial",
+        "truncated": true,
+        "omitted_nodes": null,
+        "omitted_relations": null,
+        "limits": [
+          {
+            "name": "semantic_graph_file_node_ceiling",
+            "value": 4000,
+            "unit": "items"
+          },
+          {
+            "name": "semantic_graph_node_ceiling",
+            "value": 12000,
+            "unit": "items"
+          }
+        ],
+        "families": [
+          {
+            "family": "boundary",
+            "status": "partial",
+            "retained_relations": 0,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          },
+          {
+            "family": "call-flow",
+            "status": "partial",
+            "retained_relations": 1339,
+            "omitted_relations": null,
+            "unknown_count": 3935
+          },
+          {
+            "family": "child-process",
+            "status": "partial",
+            "retained_relations": 0,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          },
+          {
+            "family": "closure",
+            "status": "partial",
+            "retained_relations": 1559,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          },
+          {
+            "family": "configuration",
+            "status": "partial",
+            "retained_relations": 0,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          },
+          {
+            "family": "data-flow",
+            "status": "partial",
+            "retained_relations": 5415,
+            "omitted_relations": null,
+            "unknown_count": 4425
+          },
+          {
+            "family": "event",
+            "status": "partial",
+            "retained_relations": 0,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          },
+          {
+            "family": "object-flow",
+            "status": "partial",
+            "retained_relations": 94,
+            "omitted_relations": null,
+            "unknown_count": 4580
+          },
+          {
+            "family": "promise-ownership",
+            "status": "partial",
+            "retained_relations": 7,
+            "omitted_relations": null,
+            "unknown_count": 2508
+          },
+          {
+            "family": "request",
+            "status": "partial",
+            "retained_relations": 0,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          },
+          {
+            "family": "resource-lifecycle",
+            "status": "partial",
+            "retained_relations": 0,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          },
+          {
+            "family": "timer",
+            "status": "partial",
+            "retained_relations": 0,
+            "omitted_relations": null,
+            "unknown_count": 2503
+          }
+        ]
+      },
+      "application_unknowns": 2503,
+      "semantic_unknowns": 35472
+    },
+    "limitations": [
+      "Boundary extraction covers unshadowed JSON/global coercions plus parse and validation method candidates.",
+      "Caller-selected source analysis leaves 2503 inventoried files outside analysis scope. Inventory identity covers the complete artifact; relationships through unselected sources remain unknown.",
+      "Child-process extraction covers asynchronous node:child_process creation, literal argv/env/stdio options, exit/error listeners, and kill signals.",
+      "CommonJS and ESM binding relationships were recovered from inert syntax and resolved only within the inventoried artifact container.",
+      "Configuration extraction covers process.env, process.argv, node:fs reads, and direct logical defaults.",
+      "Event extraction covers EventEmitter-style literal registrations, removals, and dispatch candidates; dynamic names remain unknown.",
+      "Function fingerprints are static candidates; equal digests can remain ambiguous and do not prove behavioral equivalence.",
+      "Graph coverage is incomplete; unavailable facts remain explicit and must not be read as absence.",
+      "JavaScript and HTML were parsed as inert text; bundle bootstrap code was never executed.",
+      "Local data flow does not claim control-flow-sensitive reaching definitions or arbitrary dynamic property resolution.",
+      "Promise ownership covers explicit unshadowed Promise construction, static factories, aggregation, chaining, and await syntax only.",
+      "Request extraction covers fetch, WebSocket, node:http/node:https construction, direct option fields, and exact local response consumers.",
+      "Resource extraction covers built-in filesystem/network acquisition and exact local close/destroy/end handles.",
+      "Static imports, entrypoints, workers, endpoints, and storage relationships do not prove runtime execution.",
+      "Static paths and relationships may remain unresolved when expressions are dynamic or obfuscated.",
+      "The semantic graph contains static syntax observations and conservative relationship candidates; it does not claim runtime execution.",
+      "Timer extraction covers global or node:timers scheduling and exact local-handle cancellation.",
+      "Webpack/Rspack factories were recovered from AST literals; REA did not invoke push handlers or bundle bootstrap code."
+    ]
+  },
+  "files": [
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/source.json",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1
+        }
+      ],
+      "sha256": "09ec31bfab934e43e43d7ac41ccd939ac98893511e62a3c52bb0dd4190e3ae02",
+      "bytes": 989
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/desktop-3.6556.2-win32-x64/source.json",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1
+        }
+      ],
+      "sha256": "e68e74dc050afa56367b835376ea01079f351a6929c306aac1d28471a81f5373",
+      "bytes": 946
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/verification.json",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1
+        }
+      ],
+      "sha256": "f9f435cf8190fc9a637dd8719d9421e367a1c401fb8ba30bb5bb2e24e2df066b",
+      "bytes": 556
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/desktop-3.6556.2-win32-x64/verification.json",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1
+        }
+      ],
+      "sha256": "2de1749d1106d172c665cdfcca30deead1362f26c8656fe081fad41a8e3b4030",
+      "bytes": 553
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/1138-chunk-ate2580t.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 262
+        },
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 92
+        }
+      ],
+      "sha256": "c41d3ec04c32fb6e98002490c7d46795b5f1f9ef8c81b52aceec155cb06ca66d",
+      "bytes": 8815,
+      "snapshotMapping": {
+        "original": "chunk-ate2580t.js",
+        "output": "study/shared/1138-chunk-ate2580t.js",
+        "expectedOutputSha256": "c41d3ec04c32fb6e98002490c7d46795b5f1f9ef8c81b52aceec155cb06ca66d",
+        "rawSha256": "dd31093688042349ebecedcae01d1e3074774efd57ac77fd381fd5df13c1daa7",
+        "importRewriteCount": 7
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/sessions/permissions/0194-chunk-cy61f014.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 930
+        }
+      ],
+      "sha256": "dd0d323ecba8d178b0b1f0e64ee32996da49ddbd38197a0393bfe48ec8caa57f",
+      "bytes": 39926,
+      "snapshotMapping": {
+        "original": "chunk-cy61f014.js",
+        "output": "study/sessions/permissions/0194-chunk-cy61f014.js",
+        "expectedOutputSha256": "dd0d323ecba8d178b0b1f0e64ee32996da49ddbd38197a0393bfe48ec8caa57f",
+        "rawSha256": "f96b5e940ecb0211e6377a13fef70b258c9ab9c597a04a13ae9f9cdf00c3ecd3",
+        "importRewriteCount": 26
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/1123-chunk-92p2xk8s.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 89
+        }
+      ],
+      "sha256": "54777a223f1a8f9009e70b230dfc9f096820de87f19e7bf70f370234c851daea",
+      "bytes": 7625,
+      "snapshotMapping": {
+        "original": "chunk-92p2xk8s.js",
+        "output": "study/shared/1123-chunk-92p2xk8s.js",
+        "expectedOutputSha256": "54777a223f1a8f9009e70b230dfc9f096820de87f19e7bf70f370234c851daea",
+        "rawSha256": "28bd34f8f5448ac35f038ada1e18ad4f050f487c29041e5399321713d2a4d64c",
+        "importRewriteCount": 16
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/0729-chunk-z9mc9575.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 114
+        }
+      ],
+      "sha256": "b5900313d9d53cc4d0be0135c44701f980c9a8f45cdab84596068a01cd608ed8",
+      "bytes": 4917,
+      "snapshotMapping": {
+        "original": "chunk-z9mc9575.js",
+        "output": "study/shared/0729-chunk-z9mc9575.js",
+        "expectedOutputSha256": "b5900313d9d53cc4d0be0135c44701f980c9a8f45cdab84596068a01cd608ed8",
+        "rawSha256": "c646653ed5063516327a5107fe3084d521813525c5625034f7f9aa83a45b10a0",
+        "importRewriteCount": 5
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/git/1649-chunk-nvd6bhm5.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 36
+        }
+      ],
+      "sha256": "b57639fa4264482ab71925dbf8cb2be8973b0da378c02988667a565f73fa1f7b",
+      "bytes": 22098,
+      "snapshotMapping": {
+        "original": "chunk-nvd6bhm5.js",
+        "output": "study/git/1649-chunk-nvd6bhm5.js",
+        "expectedOutputSha256": "b57639fa4264482ab71925dbf8cb2be8973b0da378c02988667a565f73fa1f7b",
+        "rawSha256": "78839ef17e2668148b433224e333f8daaf0fb7e6e34ab11e36130a4faac38ca4",
+        "importRewriteCount": 7
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/1719-chunk-25jmp92a.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1972
+        }
+      ],
+      "sha256": "3d2f94e7f4ca3b016c8678e7c0ca77ea1f5ef2ae10d97d2704a4b81a3cb30083",
+      "bytes": 100087,
+      "snapshotMapping": {
+        "original": "chunk-25jmp92a.js",
+        "output": "study/shared/1719-chunk-25jmp92a.js",
+        "expectedOutputSha256": "3d2f94e7f4ca3b016c8678e7c0ca77ea1f5ef2ae10d97d2704a4b81a3cb30083",
+        "rawSha256": "06cdb3e4985a5ee05bd26cec1931c0fba80475f69312a34aa3f5fab5bd25d659",
+        "importRewriteCount": 430
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/0343-chunk-r1a5mb1n.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 20984
+        }
+      ],
+      "sha256": "7b9920b2f07d83baaa3caf550540d3a8ab3ef82b215017b7e1a6149aa6636146",
+      "bytes": 865553,
+      "snapshotMapping": {
+        "original": "chunk-r1a5mb1n.js",
+        "output": "study/shared/0343-chunk-r1a5mb1n.js",
+        "expectedOutputSha256": "7b9920b2f07d83baaa3caf550540d3a8ab3ef82b215017b7e1a6149aa6636146",
+        "rawSha256": "c88b5b153d917f11efc6c7c4da819585ba8ba1813376b6689e34b21a325b5590",
+        "importRewriteCount": 169
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/git/0463-chunk-g748mveh.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 77463
+        }
+      ],
+      "sha256": "eb5e2246cf63a7fed3f56b39fa92b2d2af15b6d0adece7959a100928591a753e",
+      "bytes": 6740050,
+      "snapshotMapping": {
+        "original": "chunk-g748mveh.js",
+        "output": "study/git/0463-chunk-g748mveh.js",
+        "expectedOutputSha256": "eb5e2246cf63a7fed3f56b39fa92b2d2af15b6d0adece7959a100928591a753e",
+        "rawSha256": "d563e1fba67c32a9b70aafb038dd3e8e274ec0f40f6c1c05a1c1a22c4cd0d9f7",
+        "importRewriteCount": 488
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/2406-chunk-0he8p7hr.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 430
+        }
+      ],
+      "sha256": "791fdb2a0c69a393688a60f25b8ccd66520721740a9d826f945ab3dd6f182e97",
+      "bytes": 22088,
+      "snapshotMapping": {
+        "original": "chunk-0he8p7hr.js",
+        "output": "study/shared/2406-chunk-0he8p7hr.js",
+        "expectedOutputSha256": "791fdb2a0c69a393688a60f25b8ccd66520721740a9d826f945ab3dd6f182e97",
+        "rawSha256": "20fcdf9fdb904f9bd4f22791b356319a6480b39ae91cc556f7bfe40d79a7e6a0",
+        "importRewriteCount": 382
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/1331-chunk-nqqwe5my.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 4106
+        }
+      ],
+      "sha256": "06345a9145957d4c1d24b477589531a32cc9f3bdb04b3e1b9883ed91605aae25",
+      "bytes": 151092,
+      "snapshotMapping": {
+        "original": "chunk-nqqwe5my.js",
+        "output": "study/shared/1331-chunk-nqqwe5my.js",
+        "expectedOutputSha256": "06345a9145957d4c1d24b477589531a32cc9f3bdb04b3e1b9883ed91605aae25",
+        "rawSha256": "42f5ef74c19be65780314c74f07b5390fec6af7586173b4c7b27825963aa569c",
+        "importRewriteCount": 386
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/git/0682-chunk-76dswmxz.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1536
+        }
+      ],
+      "sha256": "3d8bd1cdaa548c9e425f5ee76e9e21c545382bec824b1e8f71a145ba58cc6a04",
+      "bytes": 210469,
+      "snapshotMapping": {
+        "original": "chunk-76dswmxz.js",
+        "output": "study/git/0682-chunk-76dswmxz.js",
+        "expectedOutputSha256": "3d8bd1cdaa548c9e425f5ee76e9e21c545382bec824b1e8f71a145ba58cc6a04",
+        "rawSha256": "df60c740ab9c80f7814356a0fbc02e3da2de7e83eef0dccc1cdbeab86d014485",
+        "importRewriteCount": 121
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/agent/teams/1686-chunk-6rx9hxyw.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1288
+        }
+      ],
+      "sha256": "f16927fa3505aaef66d72754f1c09546783fab26baea91044c583f3aa23cc453",
+      "bytes": 137364,
+      "snapshotMapping": {
+        "original": "chunk-6rx9hxyw.js",
+        "output": "study/agent/teams/1686-chunk-6rx9hxyw.js",
+        "expectedOutputSha256": "f16927fa3505aaef66d72754f1c09546783fab26baea91044c583f3aa23cc453",
+        "rawSha256": "50bf09c7b08822469152c228fb4e3eedb409a7b11482ad9b7baa40eff46b6eaf",
+        "importRewriteCount": 438
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/agent/teams/0386-chunk-szdpc5cr.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1415
+        }
+      ],
+      "sha256": "de8cdc0ef47fda8665506889727d1b8bbb9623866b8aab7401a5cbc9fea394d1",
+      "bytes": 68375,
+      "snapshotMapping": {
+        "original": "chunk-szdpc5cr.js",
+        "output": "study/agent/teams/0386-chunk-szdpc5cr.js",
+        "expectedOutputSha256": "de8cdc0ef47fda8665506889727d1b8bbb9623866b8aab7401a5cbc9fea394d1",
+        "rawSha256": "92bcde5ecf92e519d4bc178c2e55eb89e68f4d4d4bbaa3702a6d41b78373169b",
+        "importRewriteCount": 31
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/agent/teams/1731-chunk-12de33vy.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 890
+        }
+      ],
+      "sha256": "16c9799ff4a82b4bd1d65666630b54339e7e91cc8e24f3635302c08643460395",
+      "bytes": 47412,
+      "snapshotMapping": {
+        "original": "chunk-12de33vy.js",
+        "output": "study/agent/teams/1731-chunk-12de33vy.js",
+        "expectedOutputSha256": "16c9799ff4a82b4bd1d65666630b54339e7e91cc8e24f3635302c08643460395",
+        "rawSha256": "aa4352e099b04ef51877d60db9509af1e07ff0f2b6f4c34c978ed8089831b862",
+        "importRewriteCount": 476
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/agent/tools/0647-chunk-qxvz6zeb.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 8090
+        }
+      ],
+      "sha256": "78ced49be51329c57293c021999bb9cd468f7f1bf98e73e74abf3c369b571354",
+      "bytes": 224985,
+      "snapshotMapping": {
+        "original": "chunk-qxvz6zeb.js",
+        "output": "study/agent/tools/0647-chunk-qxvz6zeb.js",
+        "expectedOutputSha256": "78ced49be51329c57293c021999bb9cd468f7f1bf98e73e74abf3c369b571354",
+        "rawSha256": "d0fc54eeb6bd86d5563921078917111a95e1c0b9d1fdc37338ece6ca756cf5ce",
+        "importRewriteCount": 113
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/agent/teams/1716-chunk-g2qe4gfx.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 226
+        }
+      ],
+      "sha256": "07fcaaf99bc9cc8c2eb6dc4d9dbbc5cc6aea3a55228c707185e145b41044af00",
+      "bytes": 13079,
+      "snapshotMapping": {
+        "original": "chunk-g2qe4gfx.js",
+        "output": "study/agent/teams/1716-chunk-g2qe4gfx.js",
+        "expectedOutputSha256": "07fcaaf99bc9cc8c2eb6dc4d9dbbc5cc6aea3a55228c707185e145b41044af00",
+        "rawSha256": "ae183c81f1d913c27da9d3e24e6e0342174d3674f990e7e1f35ca2ec7c48bd47",
+        "importRewriteCount": 170
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/0391-chunk-ystqn8a7.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 419
+        }
+      ],
+      "sha256": "92f45ef575da8655cf10f55a482edf1fa5ae5bd88348d46920448373eba09537",
+      "bytes": 13099,
+      "snapshotMapping": {
+        "original": "chunk-ystqn8a7.js",
+        "output": "study/shared/0391-chunk-ystqn8a7.js",
+        "expectedOutputSha256": "92f45ef575da8655cf10f55a482edf1fa5ae5bd88348d46920448373eba09537",
+        "rawSha256": "4b327a52fa0ec4d256f1ff8e0d5d3cecf6564a2cdc32c5910a58d01813553263",
+        "importRewriteCount": 11
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/2257-chunk-khbe5m2g.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 329
+        }
+      ],
+      "sha256": "d56b851216fe93349d8b1399ae2382df0b50b3aa9288977d7e27ea02ceb1beeb",
+      "bytes": 16394,
+      "snapshotMapping": {
+        "original": "chunk-khbe5m2g.js",
+        "output": "study/shared/2257-chunk-khbe5m2g.js",
+        "expectedOutputSha256": "d56b851216fe93349d8b1399ae2382df0b50b3aa9288977d7e27ea02ceb1beeb",
+        "rawSha256": "f20e010e03bb4c9f25b965873358e37bf34fdef220d0fcd80a8128612f30bc99",
+        "importRewriteCount": 20
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/agent/teams/0337-chunk-009f75dj.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 14
+        }
+      ],
+      "sha256": "f9841d45da632fe84ababc7dbb1cff8495fbec0b85575c4cfffb215bd2203bf1",
+      "bytes": 8637,
+      "snapshotMapping": {
+        "original": "chunk-009f75dj.js",
+        "output": "study/agent/teams/0337-chunk-009f75dj.js",
+        "expectedOutputSha256": "f9841d45da632fe84ababc7dbb1cff8495fbec0b85575c4cfffb215bd2203bf1",
+        "rawSha256": "004096370ff3b6d06be84874c6e6517baf3e8350576f7ccecc5c355c571cea67",
+        "importRewriteCount": 1
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/0701-chunk-4s5v7b92.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 176
+        }
+      ],
+      "sha256": "0833030d36ec725f2e2d394d778d1b26fe4ca8367b230f727155b3e8e218eef2",
+      "bytes": 14020,
+      "snapshotMapping": {
+        "original": "chunk-4s5v7b92.js",
+        "output": "study/shared/0701-chunk-4s5v7b92.js",
+        "expectedOutputSha256": "0833030d36ec725f2e2d394d778d1b26fe4ca8367b230f727155b3e8e218eef2",
+        "rawSha256": "e20b74a68860e16875fbb635452fa7487d2e845944c6db497b505a29f97a20ae",
+        "importRewriteCount": 19
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/0698-chunk-3bcyh81d.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 100
+        }
+      ],
+      "sha256": "cc708e138fec0403b4a3164b8dbd9548b8c840370f362ecbca1d0fcfad1d92a8",
+      "bytes": 2805,
+      "snapshotMapping": {
+        "original": "chunk-3bcyh81d.js",
+        "output": "study/shared/0698-chunk-3bcyh81d.js",
+        "expectedOutputSha256": "cc708e138fec0403b4a3164b8dbd9548b8c840370f362ecbca1d0fcfad1d92a8",
+        "rawSha256": "86ad2b333e4d2da2f887b2110b42578c4d77af03d7376bd90b3d5f2398b51a90",
+        "importRewriteCount": 6
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/cli-2.1.308-win32-x64/study/shared/2473-chunk-f2ktdqzk.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 2868
+        }
+      ],
+      "sha256": "6e2fc74abf4f478880b70ee9ee79f2f3fc09786b7ae98b6871f3853079ec1731",
+      "bytes": 86047,
+      "snapshotMapping": {
+        "original": "chunk-f2ktdqzk.js",
+        "output": "study/shared/2473-chunk-f2ktdqzk.js",
+        "expectedOutputSha256": "6e2fc74abf4f478880b70ee9ee79f2f3fc09786b7ae98b6871f3853079ec1731",
+        "rawSha256": "b53ff0862bdd7fe67d8bf6efce09603f41529a586634e948f55ecf0697fbe59b",
+        "importRewriteCount": 537
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/desktop-3.6556.2-win32-x64/study/git/0188-index.chunk-CQPpqBhW.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 18447
+        },
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 66680
+        },
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 32291
+        },
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 30809
+        },
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 19321
+        }
+      ],
+      "sha256": "baf0d34c0ad2ee91eef0b5e0cc0d3563a82cd6f328795bf9286688ca42d84e15",
+      "bytes": 2997979,
+      "snapshotMapping": {
+        "original": ".vite/build/index.chunk-CQPpqBhW.js",
+        "output": "study/git/0188-index.chunk-CQPpqBhW.js",
+        "expectedOutputSha256": "baf0d34c0ad2ee91eef0b5e0cc0d3563a82cd6f328795bf9286688ca42d84e15",
+        "rawSha256": "8efd499ab133400f7fb91b1fd5e4ad46241bcc2e77fc585cb4ddf47c3198af7c",
+        "importRewriteCount": 171
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/desktop-3.6556.2-win32-x64/study/git/0121-index.chunk-Blko8cBb.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 9721
+        },
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 5928
+        }
+      ],
+      "sha256": "549e779e8a7ea46fe15005e55713d90fbb6c2663848f2ff9740eb565a5c34650",
+      "bytes": 961465,
+      "snapshotMapping": {
+        "original": ".vite/build/index.chunk-Blko8cBb.js",
+        "output": "study/git/0121-index.chunk-Blko8cBb.js",
+        "expectedOutputSha256": "549e779e8a7ea46fe15005e55713d90fbb6c2663848f2ff9740eb565a5c34650",
+        "rawSha256": "0434b64629ecc63afe7a5078d5da6d548cc2a8a0a8bf42a506fc1213650f6a0a",
+        "importRewriteCount": 97
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/desktop-3.6556.2-win32-x64/study/shared/0112-index.chunk-BjQ1_Xc5.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 158
+        }
+      ],
+      "sha256": "eb73fe51754931458ca835e68ad7fc3d1a116f4b90ebde291df33f5a117164db",
+      "bytes": 47120,
+      "snapshotMapping": {
+        "original": ".vite/build/index.chunk-BjQ1_Xc5.js",
+        "output": "study/shared/0112-index.chunk-BjQ1_Xc5.js",
+        "expectedOutputSha256": "eb73fe51754931458ca835e68ad7fc3d1a116f4b90ebde291df33f5a117164db",
+        "rawSha256": "0ed934770773bd97fe22dcf48e6c1a6ee912f2b1920a23503fde05469c43b537",
+        "importRewriteCount": 3
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/Claude-Open/snapshots/desktop-3.6556.2-win32-x64/study/auth/oauth/0181-index.chunk-CIsKxfLj.js",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 231237
+        }
+      ],
+      "sha256": "d6bbdcd5f05d388eaaf4fa280b79e9944b4246af31a38f689dc34e1fb6e13783",
+      "bytes": 8857316,
+      "snapshotMapping": {
+        "original": ".vite/build/index.chunk-CIsKxfLj.js",
+        "output": "study/auth/oauth/0181-index.chunk-CIsKxfLj.js",
+        "expectedOutputSha256": "d6bbdcd5f05d388eaaf4fa280b79e9944b4246af31a38f689dc34e1fb6e13783",
+        "rawSha256": "c2aa53f330fb89d5f29a9c373d1e6ba815b69c067bbd2d0e33563a3c9be1c0fc",
+        "importRewriteCount": 305
+      },
+      "matchesStudyManifest": true
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/sessions/ultra-policy.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 3
+        }
+      ],
+      "sha256": "8ec972197a4e9adf3837eeb1b5421d83e003609aedecb6b70395148b2d203bdb",
+      "bytes": 3418
+    },
+    {
+      "path": "D:/MCP/packages/agent-runtime-contracts/src/ultra.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 3
+        }
+      ],
+      "sha256": "9ad131d2d770dfffa11264013dc9a19f225d48e209d1ff6c0babcd163988f929",
+      "bytes": 836
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/runtime/ultra-budget.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1
+        }
+      ],
+      "sha256": "ef18d09234a780ce60c19db03501a9e49aa4bd981e3e28c4ee2e5f7d16829811",
+      "bytes": 1020
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/index.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1527
+        }
+      ],
+      "sha256": "40fe4cdfdc86f08577c3247584845ce35165d654833311f5998984e022c1baed",
+      "bytes": 189702
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/core/system-prompt.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 440
+        }
+      ],
+      "sha256": "9c469eb341d9863a21c7ee5f07cc03d22e598c8d3bda297f3a54ecbe3bf2486f",
+      "bytes": 44375
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/tools/chat-resume.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 8
+        }
+      ],
+      "sha256": "61f8a11371c2d19363fccbdca5528fe834a67f8de2600ce4fc28a0238400c94d",
+      "bytes": 3771
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/tools/collect-agents.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 132
+        }
+      ],
+      "sha256": "af0d1e06731fbc9397b1faa392dc77333b177c44f15f4f2e9d146957f0700087",
+      "bytes": 7174
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/tools/workflow/workflow-types.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 16
+        }
+      ],
+      "sha256": "c15aae1dd37614d03e8a8ba1760c463fd4162dada5cc2987b383f9a0ac28dfa3",
+      "bytes": 7388
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/tools/workflow/workflow-run.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 151
+        }
+      ],
+      "sha256": "473b3f1769cb46e3d71aaee807419fdcc4ab0086502d8f4586281c1bb22fb1a3",
+      "bytes": 12852
+    },
+    {
+      "path": "D:/MCP/packages/session-storage/src/collaboration/store.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 41
+        }
+      ],
+      "sha256": "820c8e78f0f4a22388d438a4358cf247d39f867d33a3de9539262b78ec641cf9",
+      "bytes": 10865
+    },
+    {
+      "path": "D:/MCP/packages/session-storage/src/collaboration/files.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 49
+        }
+      ],
+      "sha256": "ddb67d13f4b9fc50c25de9de5624fcb804d91d9404a6355173de46d3b6279717",
+      "bytes": 3292
+    },
+    {
+      "path": "D:/MCP/apps/http-api/server/routes/coder/chat-collaboration-wake.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 13
+        }
+      ],
+      "sha256": "ae2df6d0505de2e068e8aa2603cde794993c6138818b2a2206544cb847b61a65",
+      "bytes": 6816
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/runtime/session-network-events.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 14
+        }
+      ],
+      "sha256": "76ca9d1112708b7008521b46f5a01fa63a5b3329f3f5be51bae8f4c8ffe8b6c3",
+      "bytes": 3024
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/runtime/session-network.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 16
+        }
+      ],
+      "sha256": "cf738eba453124c5bc6a17a128ec3390efb482ccf1f09e6c5ccb33c3dc6f62d9",
+      "bytes": 15482
+    },
+    {
+      "path": "D:/MCP/packages/agent-runtime-contracts/src/chat-network.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 13
+        }
+      ],
+      "sha256": "81700e6b31ef8bea509c9b29492149cc9c8a78370a3bec697e42f124490e1205",
+      "bytes": 845
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/runtime/ultra-workspace.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 44
+        }
+      ],
+      "sha256": "26aba3df5ef407af79a71a520104972407a8c5a260b23a19662404a7f5fd5faf",
+      "bytes": 11096
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/core/runner/orchestrator.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 197
+        }
+      ],
+      "sha256": "92cb3a66de981ae2978c10ef95c19d608ab96eadf86321e74474b2184139435c",
+      "bytes": 12942
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/tools/subagent-jobs-lifecycle.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 68
+        }
+      ],
+      "sha256": "5ddab4f3054485472f61bc7eac480096daba9b6fee53225678719930ccb1ee84",
+      "bytes": 4816
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/core/runner/nodes/reviewing.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 1
+        }
+      ],
+      "sha256": "9828f6a8319969c24097e85f6421684fb16104c9c1cfbe85b35d53a9c6e86f0e",
+      "bytes": 1854
+    },
+    {
+      "path": "D:/MCP/packages/company/src/services/scheduler/CompanyScheduler.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 51
+        }
+      ],
+      "sha256": "f122b64617996b99544aa481f40b2bd79b3184fd2512d3eb29ef11374c46ae0f",
+      "bytes": 11501
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/core/capability-discovery.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 4
+        }
+      ],
+      "sha256": "c8a2c0be53ffa95fb2c022601bc7b213b7035c537e4eacdd2e7e651a98646fb8",
+      "bytes": 764
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/core/tool-projection.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 9
+        }
+      ],
+      "sha256": "0b90161528e1ae74be438f2b9aa684a9abfda32657011d5ca9e36e94f3b36a0e",
+      "bytes": 850
+    },
+    {
+      "path": "D:/MCP/packages/code-agent/src/tools/find-tools.ts",
+      "citations": [
+        {
+          "document": "01-evidencias-comparacao.md",
+          "line": 59
+        }
+      ],
+      "sha256": "1e451bfcbe36a9a352ee9a7352a6fa7c4dce43dc6461c96a6ae9b2ce04c360d3",
+      "bytes": 14509
+    }
+  ],
+  "documentationCheck": {
+    "passed": true,
+    "documents": 6,
+    "citedFiles": 53,
+    "studyHashesChecked": 26,
+    "errors": []
+  },
+  "runtimeExecuted": false,
+  "benchmarksExecuted": false
+}

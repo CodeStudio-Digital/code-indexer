@@ -279,29 +279,6 @@ const CATALOG_SEED: CatalogSeed[] = [
     introducedInPhase: 'memory-query',
   },
 
-  // ─── Goal completion verifier (Claude-Code stop-condition pattern) ───────
-  // An INDEPENDENT read-only second agent that confirms the ORIGINAL goal was
-  // actually met (goal + plan + project state + evidence) before the goal is
-  // completed — the "stop-condition verifier" half of CC's two-agent split.
-  // Baseline for top-level goal completion; CODER_GOAL_VERIFY=0 is the explicit
-  // kill switch. An unset binding falls back to the general default AI model.
-  // Prefer a DIFFERENT model family so it does not share executor blind spots.
-  {
-    pipelineName: 'goal_verification',
-    bindingRole: 'reviewer',
-    description:
-      'Independent completion verifier: a read-only second agent that confirms the original goal was ' +
-      'actually achieved (goal, plan, project state, and evidence) before the goal is completed. Enabled by default; ' +
-      'CODER_GOAL_VERIFY=0 disables it. ' +
-      'Pick a strong reasoning model — ideally a different family than the executor. Unset → general default AI model.',
-    recommendedDefault: {
-      providerKind: 'anthropic',
-      modelHint: 'claude-sonnet-4',
-      config: { temperature: 0, max_tokens: 1500, json_mode: true },
-    },
-    introducedInPhase: 'cc-gap-A1',
-  },
-
   // ─── Vision fallback (image → text) ──────────────────────────────────────
   // When the active chat model cannot see images (no 'image' input modality)
   // OR the composer "Describe images" flag is on, uploaded attachments and

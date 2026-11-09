@@ -54,13 +54,13 @@ test.describe('Electron text-selection policy', () => {
     expect(await dragSelection(page, emptyState)).toContain('Start a conversation');
   });
 
-  test('blocks desktop chrome and re-enables useful content', async ({ page }) => {
+  test('keeps desktop text selectable while controls remain unselectable', async ({ page }) => {
     await page.evaluate(() => {
       document.documentElement.dataset.appRuntime = 'electron';
     });
 
-    await expect(page.locator('body')).toHaveCSS('user-select', 'none');
-    await expect(page.getByTestId('empty-state')).toHaveCSS('user-select', 'none');
+    await expect(page.locator('body')).toHaveCSS('user-select', 'text');
+    await expect(page.getByTestId('empty-state')).toHaveCSS('user-select', 'text');
     await expect(page.getByTestId('rail')).toHaveCSS('user-select', 'none');
     await expect(page.getByTestId('content')).toHaveCSS('user-select', 'text');
     await expect(page.getByTestId('content-button')).toHaveCSS('user-select', 'none');
@@ -70,7 +70,7 @@ test.describe('Electron text-selection policy', () => {
     await expect(page.getByTestId('textarea')).toHaveCSS('user-select', 'text');
     await expect(page.getByTestId('editable')).toHaveCSS('user-select', 'text');
 
-    expect(await dragSelection(page, page.getByTestId('empty-state'))).toBe('');
+    expect(await dragSelection(page, page.getByTestId('empty-state'))).toContain('Start a conversation');
     expect(await dragSelection(page, page.getByTestId('content'))).toContain('Selectable session content');
     expect(await dragSelection(page, page.getByTestId('content-button'))).toBe('');
     expect(await dragSelection(page, page.getByTestId('code'))).toContain('const selectable = true;');

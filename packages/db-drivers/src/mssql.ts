@@ -10,6 +10,7 @@
  * against a live server — exercise with a real instance before trusting writes.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { ResultWindow } from './result-window.js';
 import { assertDatabaseDispatch } from './dispatch.js';
 import { quoteRelation } from './sql/identifiers.js';
 import { buildTablePreview } from './sql/preview.js';
@@ -36,9 +37,30 @@ interface MssqlRequestOverrides {
   requestTimeout?: number;
 }
 interface MssqlRequest {
+  stream?: boolean;
+  on?(event: string, listener: (...args: any[]) => void): MssqlRequest;
   input(name: string, value: unknown): MssqlRequest;
   query(sql: string): Promise<MssqlQueryOutput>;
   cancel(): void;
+}
+
+export async function boundedMssqlQuery(request: MssqlRequest, sql: string, max: number): Promise<QueryResult> {
+  if (!request.on) return shapeMssqlResult(await request.query(sql), max);
+  request.stream = true;
+  let window = new ResultWindow(max);
+  let fields: Array<{ name: string }> = [];
+  // In stream mode node-mssql reports SQL and transport errors only as 'error'
+  // events and then still resolves query(). Without this listener the emit
+  // throws outside the promise, and a failed statement would look executed.
+  let streamError: unknown;
+  let failed = false;
+  request.on('error', error => { if (!failed) { failed = true; streamError = error; } });
+  request.on('recordset', columns => { window = new ResultWindow(max); fields = Object.keys(columns).map(name => ({ name })); });
+  request.on('row', row => window.push(row));
+  const result = await request.query(sql);
+  if (failed) throw streamError;
+  return { rows: window.rows, rowCount: window.observed || (result.rowsAffected ?? []).reduce((a, b) => a + b, 0),
+    fields, truncated: window.truncated, acquisition: window.acquisition };
 }
 interface MssqlPool {
   connect(): Promise<MssqlPool>;
@@ -160,6 +182,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
     assertDatabaseDispatch(opts);
+    if (opts.schema && opts.schema !== 'dbo') throw new Error('SQL Server requires schema-qualified names; per-query default schema changes are unsupported.');
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // SQL Server has no per-session `SET TRANSACTION READ ONLY`. For a saved
     // read-only connection, execute inside a pinned transaction and always roll
@@ -184,7 +207,7 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
       }
       (opts.params ?? []).forEach((p, i) => request.input(`p${i}`, p ?? null));
       assertDatabaseDispatch(opts);
-      const result = shapeMssqlResult(await request.query(sql), max);
+      const result = await boundedMssqlQuery(request, sql, max);
       if (txn && inTxn) {
         await txn.rollback();
         inTxn = false;
@@ -202,7 +225,10 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
   }
 
   async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
-    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
+    validateBatch(statements, config.readOnly);
+    if (opts.schema && opts.schema !== 'dbo') throw new Error('SQL Server batch requires schema-qualified names.');
+    const tracker = new BatchTracker('transactional', opts);
+    tracker.dispatch();
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // A node-mssql Transaction pins a single connection for begin→commit; every
     // Request built from it runs there. SQL Server rolls back DDL too, so a
@@ -225,23 +251,30 @@ export async function createMssqlDriver(config: DbConnectConfig): Promise<Databa
       }
       await txn.begin();
       inTxn = true;
+      tracker.started = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
       for (let index = 0; index < statements.length; index += 1) {
+        tracker.dispatch();
         const stmt = statements[index];
-        const request = new mssql.Request(txn);
+        const request = new mssql.Request(txn, mssqlRequestOverrides(opts.timeoutMs));
         current = request;
         if (typeof stmt !== 'string') {
           (stmt.params ?? []).forEach((param, paramIndex) => request.input(`p${paramIndex}`, param ?? null));
         }
-        last = shapeMssqlResult(await request.query(typeof stmt === 'string' ? stmt : stmt.sql), max);
+        last = await boundedMssqlQuery(request, typeof stmt === 'string' ? stmt : stmt.sql, max);
         opts.onResult?.(last, index);
+        tracker.completed++;
       }
-      await txn.commit();
+      tracker.dispatch();
+      tracker.committing = !config.readOnly;
+      if (config.readOnly) await txn.rollback();
+      else await txn.commit();
       inTxn = false;
-      return last;
+      return { ...last, batchOutcome: tracker.success(config.readOnly ? 'rolled_back' : 'committed') };
     } catch (err) {
-      if (inTxn) await txn.rollback().catch(() => void 0);
-      throw err;
+      let rolledBack = false;
+      if (inTxn) await txn.rollback().then(() => { rolledBack = true; }, () => void 0);
+      throw tracker.failure(err, rolledBack);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
     }
@@ -530,3 +563,4 @@ function groupForeignKeys(
   }
   return [...map.values()];
 }
+import { BatchTracker, validateBatch } from './batch-outcome.js';

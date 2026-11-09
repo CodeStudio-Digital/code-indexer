@@ -170,8 +170,7 @@ export async function preflightBrowser(deps: PreflightDeps): Promise<PreflightRe
     wsEndpoint = state.wsEndpoint;
   } else {
     const store = deps.envStore !== undefined ? deps.envStore : getQaEndpointEnvStore();
-    const row = store?.list(deps.sessionId)
-      .find((r) => r.key === 'PLAYWRIGHT_WS_ENDPOINT');
+    const row = (await store?.listAsync(deps.sessionId))?.find((r) => r.key === 'PLAYWRIGHT_WS_ENDPOINT');
     const url = row?.value ? probeUrlFromWsEndpoint(row.value) : null;
     if (!url) {
       tripBreaker(deps.sessionId, now());

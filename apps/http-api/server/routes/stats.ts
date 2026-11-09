@@ -16,8 +16,8 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
 
   /**
    * Agent Memory health (migration 181) — feeds the project Memory tab's
-   * "is memory actually being used?" card: live project/user memory counts plus
-   * telemetry (remember/recall/forget + recalls that injected ≥1 memory).
+   * activity card: stock and retrieval/write activity. Only `events.injected`
+   * confirms assembled prompt snippets; no counter proves model adherence.
    * Read-only over shared agent_memory tables and filesystem session bundles.
    */
   app.get('/api/projects/:id/agent-memory/stats', async (c) => {
@@ -33,6 +33,8 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
       // Shared memory stock/recall stays in SQLite. Learning and explicit-tool
       // counters come from the owning/linked filesystem session bundles.
       kpis: db.getMemoryEffectivenessKpis(projectId, sessionKpis),
+      semantics: { recall: 'retrieved_candidates', access: 'prompt_snippet_or_explicit_read',
+        effectivenessMeasured: false, sessionMetricsCacheMs: 5_000 },
     });
   });
 

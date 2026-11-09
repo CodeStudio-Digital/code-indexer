@@ -5,7 +5,7 @@
  *  - cf-worker     → plain TypeScript Worker (`--type=hello-world`)
  *  - opennext-cf   → Next.js on Workers, wired with @opennextjs/cloudflare
  *                    (`--framework=next`, the modern OpenNext path)
- *  - vite-react-cf → React + Vite on Workers (`--framework=react`)
+ *  - vite-react-cf → React + Vite on Workers (`--framework=react --variant=react-ts`)
  *
  * Flags verified against developers.cloudflare.com/pages/get-started/c3:
  * `-y` accepts defaults, `--no-deploy` skips the deploy prompt, `--no-git`
@@ -49,4 +49,8 @@ function c3Template(id: TemplateId, label: string, extra: string[]): HostTemplat
 
 export const cfWorkerTemplate = c3Template('cf-worker', 'create-cloudflare (worker)', ['--type=hello-world']);
 export const openNextCfTemplate = c3Template('opennext-cf', 'create-cloudflare (Next/OpenNext)', ['--framework=next']);
-export const viteReactCfTemplate = c3Template('vite-react-cf', 'create-cloudflare (React + Vite)', ['--framework=react']);
+// C3's React variant prompt does not use --lang or --accept-defaults.
+// Select it explicitly: the wizard runs with stdin closed and cannot answer it.
+export const viteReactCfTemplate = c3Template('vite-react-cf', 'create-cloudflare (React + Vite)', [
+  '--framework=react', '--variant=react-ts',
+]);

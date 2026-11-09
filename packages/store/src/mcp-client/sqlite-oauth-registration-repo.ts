@@ -38,8 +38,8 @@ export class SqliteMcpOAuthRegistrationRepo
         `INSERT INTO mcp_oauth_registrations
            (server_id, issuer, authorization_endpoint, token_endpoint,
             revocation_endpoint, registration_source, client_id,
-            client_secret, client_secret_hash, scopes, redirect_uri, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            client_secret, client_secret_hash, scopes, redirect_uri, created_at, resource_url, token_endpoint_auth_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(server_id) DO UPDATE SET
            issuer = excluded.issuer,
            authorization_endpoint = excluded.authorization_endpoint,
@@ -51,7 +51,9 @@ export class SqliteMcpOAuthRegistrationRepo
            client_secret_hash = excluded.client_secret_hash,
            scopes = excluded.scopes,
            redirect_uri = excluded.redirect_uri,
-           created_at = excluded.created_at`,
+           created_at = excluded.created_at,
+           resource_url = excluded.resource_url,
+           token_endpoint_auth_method = excluded.token_endpoint_auth_method`,
       )
       .run(
         r.serverId,
@@ -66,6 +68,8 @@ export class SqliteMcpOAuthRegistrationRepo
         JSON.stringify(r.scopes),
         r.redirectUri,
         new Date(r.createdAt).toISOString(),
+        r.resourceUrl,
+        r.tokenEndpointAuthMethod,
       );
   }
 

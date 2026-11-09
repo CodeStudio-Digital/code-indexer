@@ -19,10 +19,7 @@ interface UseAgentChatStateArgs {
    *  refetches the latest list/approval mid-run, not only on run end. */
   tasksRefreshTick: number;
   sessionData: SessionData | null;
-  setProvider: (p: string) => void;
-  setModel: (m: string) => void;
   provider: string;
-  model: string;
 }
 
 /**
@@ -36,10 +33,7 @@ export function useAgentChatState({
   doneReason,
   tasksRefreshTick,
   sessionData,
-  setProvider,
-  setModel,
   provider,
-  model,
 }: UseAgentChatStateArgs) {
   const [enrichedProviders, setEnrichedProviders] = useState<EnrichedProvider[]>([]);
   const [tasksState, setTasksState] = useState<PersistedTasksState | null>(null);
@@ -106,20 +100,6 @@ export function useAgentChatState({
       cancelled = true;
     };
   }, [selectedId, doneReason]);
-
-  // Restore provider/model from the selected session so users don't have to
-  // re-pick the model every time they switch sessions. Recompose the encoded
-  // Select value `modelId::mode` when a mode is present.
-  useEffect(() => {
-    const s = sessionData?.session;
-    if (!s) return;
-    if (s.provider && s.provider !== provider) setProvider(s.provider);
-    if (s.model) {
-      const encoded = s.model_mode ? `${s.model}::${s.model_mode}` : s.model;
-      if (encoded !== model) setModel(encoded);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, sessionData?.session?.provider, sessionData?.session?.model]);
 
   // Memoized so the returned references stay stable across the parent's
   // frequent re-renders (click/stream churn). An inline `.map(...)` here would

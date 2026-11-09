@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { virtualProjectDir } from '@mcp/shared/utils/data-paths.js';
+import { scopeIncludesService } from '@mcp/store/env-scope.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 
 /**
@@ -77,47 +78,23 @@ export function resolveHostWorkdirMount(sessionId: string): string | null {
  * services are excluded. Omitting it keeps the legacy session-wide
  * record (scope-agnostic callers like env_validate).
  */
-export function resolveSessionEnvs(
+export async function resolveSessionEnvs(
   envStore: CompanySessionEnvStore | null,
   sessionId: string,
   serviceId?: string,
-): Record<string, string> {
+): Promise<Record<string, string>> {
   if (!envStore) return {};
-  try {
-    return serviceId !== undefined
-      ? envStore.asRecordForService(sessionId, serviceId)
-      : envStore.asRecord(sessionId);
-  } catch {
-    return {};
-  }
-}
+  const rows = await envStore.listAsync(sessionId);
+  return Object.fromEntries(rows.filter((r) => serviceId === undefined || scopeIncludesService(r.service_scope, serviceId)).map((r) => [r.key, r.value]));
 
-/**
- * Best-effort import of an existing `.env` file in `hostWorkdirMount`
- * into the session bundle. No-ops on missing file/store
- * or read failure. Rows written with `source: 'imported'`,
- * `onlyIfAbsent: true` so user-managed values always win.
- */
-export async function importDotEnvIntoStore(
-  envStore: CompanySessionEnvStore | null,
-  hostWorkdirMount: string,
-  sessionId: string,
-): Promise<void> {
+}
+export async function importDotEnvIntoStore(envStore: CompanySessionEnvStore | null, hostWorkdirMount: string, sessionId: string): Promise<void> {
   if (!envStore) return;
   const envPath = join(hostWorkdirMount, '.env');
   if (!existsSync(envPath)) return;
-  try {
-    const content = readFileSync(envPath, 'utf8');
-    const pairs = parseDotEnv(content);
-    for (const [key, value] of Object.entries(pairs)) {
-      await envStore.upsert(sessionId, key, value, false, {
-        source: 'imported',
-        onlyIfAbsent: true,
-      });
-    }
-  } catch (e) {
-    console.warn(
-      `[sandbox-manager] import .env for session ${sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+  const pairs = parseDotEnv(readFileSync(envPath, 'utf8'));
+  for (const [key, value] of Object.entries(pairs)) {
+    const secret = /(?:SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|CREDENTIAL|DATABASE_URL|DSN)/i.test(key) || /:\/\/[^/]+:[^/]+@/.test(value);
+    await envStore.upsert(sessionId, key, value, secret, { source: 'imported', onlyIfAbsent: true });
   }
 }

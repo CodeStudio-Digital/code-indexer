@@ -21,6 +21,7 @@
  * `indexed` when that row exists with status 'done' — no extra
  * bookkeeping table needed.
  */
+import { invalidateCompanyDoc } from '@mcp/company/services/company-doc-corpus.js';
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import {
@@ -97,10 +98,12 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
     }
     const serviceId = typeof body.service === 'string' && body.service ? body.service : null;
 
+    try { normalizeDocServiceId(serviceId); } catch { return c.json({ error: 'invalid service' }, 400); }
     const doc = await readCompanyDoc(deps, id, serviceId, path);
     if (!doc) return c.json({ error: `doc not found: ${path}` }, 404);
 
-    const projectId = resolveLinkedProjectId(resolved.root);
+    const projectIds = resolved.root.project_ids;
+    const projectId = projectIds[0] ?? null;
     if (projectId == null) {
       return c.json(
         { error: 'no_linked_project', message: 'Link a project to this company session first' },
@@ -114,7 +117,7 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const collection = ensureBridgeCollection(deps, scopeKey);
       // Idempotent: re-linking an already linked pair is a no-op.
-      deps.docStore.linkProjectCollection(projectId, collection.id, 'auto');
+      for (const linkedProjectId of projectIds) deps.docStore.linkProjectCollection(linkedProjectId, collection.id, 'auto');
       const { source, result } = await deps.indexDocsUseCase.runWithSemanticCollection(
         collection.id,
         async () => {
@@ -138,6 +141,12 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
           const result = await runIngest(
             ingestDeps(deps, id), collection, source, async () => [page], undefined, { skipGate: true },
           );
+          const latest = await readCompanyDoc(deps, id, serviceId, path);
+          if (!latest || latest.version !== doc.version) {
+            invalidateCompanyDoc(scopeKey, svc, path, deps.docStore);
+            throw new Error('Document changed during indexing; index the latest version again');
+          }
+          deps.docStore.updateSourceStats(source.id, { content_hash: doc.version });
           return { source, result };
         },
       );
@@ -147,6 +156,8 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
         chunks: result.chunks_indexed,
         collectionId: collection.id,
         projectId,
+        projectIds,
+        version: doc.version,
         origin: doc.origin,
       });
     } catch (e) {
@@ -169,14 +180,22 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'invalid path' }, 400);
     }
     const serviceId = c.req.query('service') || null;
+    try { normalizeDocServiceId(serviceId); } catch { return c.json({ error: 'invalid service' }, 400); }
     const scopeKey = resolveDocsScopeKey(deps, id);
     const collection = deps.docStore.getCollectionByName(collectionName(scopeKey));
     if (!collection) return c.json({ indexed: false });
     const uri = docUri(scopeKey, normalizeDocServiceId(serviceId), path);
     const source = findSource(deps, collection.id, uri);
-    const indexed = !!source && source.status === 'done' && source.last_indexed_at != null;
+    const current = await readCompanyDoc(deps, id, serviceId, path);
+    const stale = !!source && (!current || source.content_hash !== current.version);
+    const indexed = !!source && !stale && source.status === 'done' && source.last_indexed_at != null;
     return c.json({
       indexed,
+      stale,
+      deleted: !current,
+      version: current?.version ?? null,
+      projectIds: resolved.root.project_ids,
+      service: normalizeDocServiceId(serviceId),
       lastIndexedAt: source?.last_indexed_at ?? null,
       sourceId: source?.id ?? null,
     });

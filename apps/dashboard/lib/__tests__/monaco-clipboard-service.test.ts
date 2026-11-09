@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { copyText } from '../clipboard.js';
 import { createMonacoClipboardService } from '../monaco-clipboard-service.js';
 
-vi.mock('../clipboard.js', () => ({
+vi.mock('../clipboard.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../clipboard.js')>(),
   copyText: vi.fn(async () => true),
 }));
 

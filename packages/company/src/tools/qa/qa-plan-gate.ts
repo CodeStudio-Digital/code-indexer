@@ -10,6 +10,7 @@
  * the tool handler's sandbox/store plumbing.
  */
 import type { QaPlanGate } from '@mcp/services/qa/types.js';
+import { declaredRoleSkillIds } from '@mcp/company-contracts/qa-defaults.js';
 
 /**
  * Pure: does `role` carry the `qa-playwright` skill in this session's
@@ -31,7 +32,7 @@ export function roleHasQaPlaywrightSkill(configJson: string, role: string): bool
     if (!entry || typeof entry !== 'object') continue;
     const r = entry as { role?: unknown; skills?: unknown };
     if (r.role !== role) continue;
-    return Array.isArray(r.skills) && r.skills.includes('qa-playwright');
+    return declaredRoleSkillIds(r.skills).some((skill) => skill === 'qa-playwright' || skill === 'qa-preview');
   }
   return false;
 }

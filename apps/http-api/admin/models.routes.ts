@@ -13,6 +13,7 @@ import {
   resolveContextWindowWithSource,
 } from '@mcp/code-agent/providers/capabilities.js';
 import { SUBAGENT_PROFILE_IDS } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+import { getOpenAIApiModelMetadata, isPublicOpenAIApi } from '@mcp/shared/providers/openai-api-models.js';
 
 export function modelsRouter(store: ProviderStore): Hono {
   const app = new Hono();
@@ -29,7 +30,8 @@ export function modelsRouter(store: ProviderStore): Hono {
     // Meridian model). Source is forced to 'manual' so the next refresh
     // doesn't wipe it.
     const id = c.req.param('id');
-    if (!store.getProvider(id)) return c.json({ error: 'not found' }, 404);
+    const provider = store.getProvider(id);
+    if (!provider) return c.json({ error: 'not found' }, 404);
     const body = await c.req.json<UpsertModelInput>();
     if (!body.model_id || !body.name) {
       return c.json({ error: 'model_id, name required' }, 400);
@@ -41,6 +43,12 @@ export function modelsRouter(store: ProviderStore): Hono {
     // warning so the admin notices and overrides explicitly.
     let resolvedNote: string | null = null;
     const incomingBody: UpsertModelInput = { ...body, source: 'manual' };
+    const apiMetadata = isPublicOpenAIApi(provider.kind, provider.base_url)
+      ? getOpenAIApiModelMetadata(body.model_id) : undefined;
+    if (incomingBody.context_window == null && apiMetadata) {
+      incomingBody.context_window = apiMetadata.contextWindow;
+      resolvedNote = 'OpenAI API model documentation';
+    }
     if (incomingBody.context_window == null) {
       const resolved = resolveContextWindowWithSource(incomingBody.model_id);
       if (resolved.source !== 'fallback') {

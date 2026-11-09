@@ -1,4 +1,5 @@
 import { err, ok, type CoderTool } from '../core/tool.js';
+import { okStructured } from '../core/model-output.js';
 import { integrateUltraWorkspace, archiveIntegratedWorkspace, type UltraWorkspace } from '../runtime/ultra-workspace.js';
 import type { ChatCheckpoint } from './chat-resume.js';
 
@@ -17,8 +18,8 @@ export const chatChangesTools: CoderTool[] = (['read_chat_changes', 'integrate_c
       if (peer.parentId !== actor) return err('Only the owning coordinator can inspect or integrate this child');
       const workspace = await store.files.get<UltraWorkspace>('checkpoints', `workspace:${peer.id}`);
       if (!workspace) return err('This child has no isolated changes');
-      if (name === 'read_chat_changes') return ok(JSON.stringify({ files: workspace.files, integrated: workspace.integrated,
-        diff: workspace.diff.slice(0, 60_000), truncated: workspace.diff.length > 60_000, workspace: workspace.path }));
+      if (name === 'read_chat_changes') return okStructured({ files: workspace.files, integrated: workspace.integrated,
+        diff: workspace.diff.slice(0, 60_000), truncated: workspace.diff.length > 60_000, workspace: workspace.path });
       if (peer.state === 'running') return err('Wait until the child finishes before integrating');
       if (workspace.integrated) return ok('Changes were already integrated');
       const checkpoint = await store.files.get<ChatCheckpoint>('checkpoints', peer.id);
@@ -28,7 +29,7 @@ export const chatChangesTools: CoderTool[] = (['read_chat_changes', 'integrate_c
       // Cleanup failure must not turn a confirmed integration into an ambiguous retry.
       let retained = false;
       try { await archiveIntegratedWorkspace(workspace); } catch { retained = true; }
-      return ok(JSON.stringify({ integrated: true, files: workspace.files, retainedCheckout: retained, next: 'Run relevant tests and review the resulting changes.' }));
+      return okStructured({ integrated: true, files: workspace.files, retainedCheckout: retained, next: 'Run relevant tests and review the resulting changes.' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ...err(message), ...(message.includes('outcome unknown') ? { effectOutcome: 'unknown' as const } : {}) };

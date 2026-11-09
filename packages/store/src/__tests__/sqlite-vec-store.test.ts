@@ -3,7 +3,7 @@
  * sqlite-vec (vec0) under Node — verifies the version-specific KNN + metadata
  * filter SQL actually behaves, not just that it type-checks.
  */
-import { afterEach, describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,6 +26,31 @@ function freshDir(): string {
 }
 
 describe('SqliteVecVectorStore', () => {
+  it('retries loading after a repaired native extension instead of caching rejection forever', async () => {
+    const database = new SqliteVecDatabase(':memory:');
+    try {
+      const load = vi.spyOn(database.db, 'loadExtension');
+      load.mockImplementationOnce(() => { throw new Error('Não foi possível encontrar o módulo especificado.'); });
+      await expect(database.loadExtension()).rejects.toThrow('native extension unavailable');
+      await expect(database.loadExtension()).resolves.toBeUndefined();
+      expect(database.db.prepare('SELECT vec_version() version').get()).toHaveProperty('version');
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally { database.close(); }
+  });
+  it('retries a busy legacy cleanup without discarding the original table on failure', async () => {
+    const database = new SqliteVecDatabase(':memory:');
+    try {
+      await database.loadExtension();
+      database.db.exec('CREATE TABLE vectors(id TEXT)');
+      const original = database.db.exec.bind(database.db);
+      const exec = vi.spyOn(database.db, 'exec').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
+      await expect(database.discardLegacyDefaultTable()).rejects.toThrow('SQLITE_BUSY');
+      expect(database.db.prepare("SELECT name FROM sqlite_master WHERE name='vectors'").get()).toBeTruthy();
+      exec.mockImplementation(original);
+      await database.discardLegacyDefaultTable();
+      expect(database.db.prepare("SELECT name FROM sqlite_master WHERE name='vectors'").get()).toBeUndefined();
+    } finally { database.close(); }
+  });
   it('drops only retired Knowledge generation tables during explicit cleanup', async () => {
     const database = new SqliteVecDatabase(join(freshDir(), 'vectors.db'));
     try {

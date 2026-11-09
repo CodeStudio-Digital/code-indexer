@@ -345,7 +345,7 @@ const REPLAY_STATE_KINDS = new Set<string>([
   // hasn't refetched from these events, not only from the GET). The real
   // volume is in text/thinking deltas + worker_log, which stay excluded.
   'message_complete', 'tool_call_start', 'tool_call_result',
-  'goal_mutations_persisted', 'goal_mutations_persistence_failed', 'provider_call',
+  'provider_call',
   // Interactive gates / cards that may still be pending from an older turn.
   'tool_approval_request', 'tool_approval_resolved',
   'plan', 'spec', 'question', 'decision',

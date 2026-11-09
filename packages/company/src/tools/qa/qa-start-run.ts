@@ -23,8 +23,9 @@
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
-import type { IQaTestRunStore } from '@mcp/services/qa/store/interfaces.js';
+import type { IQaTestRunStore, IQaTestResultStore } from '@mcp/services/qa/store/interfaces.js';
 import type { QaRunTrigger } from '@mcp/services/qa/types.js';
 import { assertUuid } from '@mcp/session-storage';
 import { getResolvedRuntime, getSandboxManager } from '@mcp/services/sandbox/index.js';
@@ -38,6 +39,8 @@ import {
 } from '@mcp/services/qa/config-validator.js';
 import { resolvePlanGate, roleHasQaPlaywrightSkill } from './qa-plan-gate.js';
 import { preflightBrowser } from './qa-preflight.js';
+import { parsePreviewCriteria, parsePreviewTarget } from './qa-preview-input.js';
+import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/bridge.js';
 
 // Re-export for back-compat with existing tests / external callers.
 export type { WorkspaceRestoreReport };
@@ -45,14 +48,18 @@ export type { WorkspaceRestoreReport };
 // ─── Module-level store binding (injected at boot) ──────────────
 
 let runStore: IQaTestRunStore | null = null;
+let resultStore: IQaTestResultStore | null = null;
 
 /**
  * Wire the QaTestRunStore from `server.ts`. Called once during boot.
  * Pass `null` only in tests that want to verify the absent-store path.
  */
-export function setQaTestRunStore(store: IQaTestRunStore | null): void {
+export function setQaTestRunStore(store: IQaTestRunStore | null, results: IQaTestResultStore | null = null): void {
   runStore = store;
+  resultStore = results;
 }
+
+export function getQaStores() { return { runStore, resultStore }; }
 
 // ─── Helpers (pure, exported for tests) ─────────────────────────
 
@@ -127,6 +134,15 @@ export function normaliseTrigger(raw: unknown): QaRunTrigger {
 const PARAMETERS: JsonSchema = {
   type: 'object',
   properties: {
+    executor: { type: 'string', enum: ['preview', 'playwright'], description: 'Default preview: native desktop QA with persisted evidence. Use playwright explicitly for scripted regression/CI.' },
+    target_url: { type: 'string', description: 'Preview target HTTP(S) loopback URL (localhost/127.0.0.1/[::1]). Required for preview.' },
+    criteria: {
+      type: 'array', minItems: 1, maxItems: 30,
+      items: { type: 'object', properties: {
+        name: { type: 'string' }, selector: { type: 'string' }, text: { type: 'string' }, visible: { type: 'boolean' },
+      }, required: ['name', 'selector'], additionalProperties: false },
+      description: 'Preview acceptance checks: matching element, optional visible text and visibility (default true).',
+    },
     suite: {
       type: 'string',
       description:
@@ -204,7 +220,7 @@ export function qaStartRun(
   return {
     name: 'qa_start_run',
     description:
-      'Create a QA test run record and obtain the env vars (PLAYWRIGHT_QA_RUN_ID, PLAYWRIGHT_QA_ENDPOINT) the bundled Playwright reporter needs. Call this BEFORE `npx playwright test`. QA subordinates must have an APPROVED plan first (submit_plan_to_master) — the tool refuses otherwise.',
+      'Start durable QA for this session/task. Default executor=preview requires target_url and declarative criteria; call qa_check_preview with the returned run_id to collect real evidence and finish. Use executor=playwright explicitly for scripted regression. QA plans follow session approval policy.',
     parameters: PARAMETERS,
     source: 'native',
     handler: async (args) => {
@@ -231,6 +247,25 @@ export function qaStartRun(
           approval: agentRunId != null ? orchestrator.hasApprovedPlan(agentRunId) : null,
         });
         if (!gate.allowed) return err(gate.reason);
+
+        let configuredExecutor: unknown;
+        try { configuredExecutor = JSON.parse(orchestrator.getSessionConfigJson()).qa_executor; } catch { /* legacy config */ }
+        const executor = args.executor ?? (configuredExecutor === 'playwright' ? 'playwright' : 'preview');
+        if (executor !== 'preview' && executor !== 'playwright') {
+          return err('executor must be preview or playwright');
+        }
+        if (executor !== 'playwright') {
+          const target_url = parsePreviewTarget(args.target_url);
+          const criteria = parsePreviewCriteria(args.criteria);
+          if (!getGlobalPreviewDevtools()) return err('Native preview unavailable. Open CodeStudio desktop or choose executor=playwright for regression.');
+          if (!resultStore) return err('QA result persistence is unavailable. Restart CodeStudio.');
+          const run = await store.startRun({
+            company_session_id: sessionId, agent_run_id: agentRunId, suite, trigger, service_id,
+            kanban_feature_card_id, plan_gate: gate.plan_gate, executor: 'preview', target_url, criteria,
+          });
+          return okStructured({ run_id: run.id, executor: 'preview', target_url, criteria,
+            next: 'Call qa_check_preview with run_id. It opens the target, evaluates criteria, saves screenshot and page evidence, and updates history/Kanban. For a stateful flow, use preview tools first, then qa_check_preview with navigate=false.' });
+        }
 
         const manager = getSandboxManager();
 
@@ -262,6 +297,7 @@ export function qaStartRun(
           service_id,
           kanban_feature_card_id,
           plan_gate: gate.plan_gate,
+          executor: 'playwright',
         });
 
         const { base, fallback } = resolveEndpointBase(process.env, getResolvedRuntime());

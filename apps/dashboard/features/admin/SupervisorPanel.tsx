@@ -20,6 +20,7 @@ import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePolling } from '../../hooks/usePolling.js';
+import { mergeSupervisorIncidents } from './supervisor-incidents.js';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -88,6 +89,10 @@ interface SupervisorPanelProps {
 type StreamState = 'connecting' | 'live' | 'reconnecting';
 
 export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanelProps = {}): JSX.Element {
+  return <ScopedSupervisorPanel key={sessionId ?? 'all'} sessionId={sessionId} variant={variant} />;
+}
+
+function ScopedSupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanelProps): JSX.Element {
   const { t } = useTranslation('admin');
   const dashboard = variant === 'dashboard';
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -114,12 +119,15 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
   // appeared. Reset when the bound session changes; manual refresh clears
   // it to force a fresh pull.
   const incidentsBackfilledRef = useRef(false);
+  const requestGeneration = useRef({ value: 0 });
 
   const loadStatus = useCallback(async () => {
+    const generation = ++requestGeneration.current.value;
     setLoading(true);
     setError(null);
     try {
-      const s = await fetchSupervisorStatus();
+      const s = await fetchSupervisorStatus(sessionId);
+      if (generation !== requestGeneration.current.value) return;
       // Filter the global response to just the bound session when prop is set.
       const filtered: StatusResponse =
         sessionId != null
@@ -133,6 +141,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
       if (targetSession != null && !incidentsBackfilledRef.current) {
         try {
           const inc = await fetchSupervisorIncidents(targetSession, 30);
+          if (generation !== requestGeneration.current.value) return;
           setIncidents(inc.incidents);
           incidentsBackfilledRef.current = true;
         } catch {
@@ -140,21 +149,24 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
         }
       }
     } catch (e) {
+      if (generation !== requestGeneration.current.value) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current.value) setLoading(false);
     }
   }, [sessionId]);
 
   // Immediate load on mount + whenever the bound session changes. Reset the
   // backfill so switching the bound session re-seeds its incident history.
   useEffect(() => {
+    const guard = requestGeneration.current;
     incidentsBackfilledRef.current = false;
     void loadStatus();
+    return () => { guard.value++; };
   }, [loadStatus]);
   // Recurring poll (status is in-memory per worker, not pushed by the SSE
   // stream). Visibility-aware: pauses while the window is hidden.
-  usePolling(() => void loadStatus(), POLL_MS, { immediate: false });
+  usePolling(loadStatus, POLL_MS, { immediate: false });
 
   // Live incidents — uses `openSupervisorStream` (fetch+ReadableStream
   // SSE parser) so it works in both browser dev AND Electron's `mcp://`
@@ -188,7 +200,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
             retryTimer = setTimeout(connect, wait);
           },
         },
-        { since: Date.now() - 60_000 },
+        { since: Date.now() - 60_000, sessionId },
       );
     }
 
@@ -241,12 +253,15 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
   }
 
   const hasSessions = (status?.sessions?.length ?? 0) > 0;
-  const totalIncidents = liveBuffer.length + incidents.length;
+  const mergedIncidents = mergeSupervisorIncidents(incidents, liveBuffer, sessionId);
+  const totalIncidents = mergedIncidents.length;
   const allHealthy =
     hasSessions &&
+    !error && status?.availability !== 'unavailable' &&
     status!.sessions.every(
       (s) =>
         s.status != null &&
+        s.status.isRunning && s.status.lastTickAtMs !== null &&
         s.status.stuckCount === 0 &&
         s.status.breakers.agents.every((a) => !a.tripped) &&
         s.status.breakers.roles.every((r) => r.quarantinedUntilMs == null) &&
@@ -317,7 +332,13 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
       )}
 
       {/* Sessions — flexible: empty state when nothing tracked */}
-      {!hasSessions ? (
+      {status?.availability === 'unavailable' || error ? (
+        <p role="status" className="rounded border border-amber-500/30 p-3 text-xs text-amber-500">Supervisão indisponível. Não foi possível confirmar a saúde dos agentes desta sessão.</p>
+      ) : status?.enabled === false ? (
+        <p role="status" className="rounded border p-3 text-xs text-muted-foreground">Supervisão desativada nesta sessão.</p>
+      ) : !status ? (
+        <p role="status" className="text-xs text-muted-foreground">Consultando supervisão…</p>
+      ) : !hasSessions ? (
         <EmptySessionsHint dashboard={dashboard} />
       ) : (
         <div className={`space-y-2 ${dashboard ? '' : 'flex-shrink-0'}`}>
@@ -352,7 +373,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
         </CardHeader>
         <CardContent className={`p-0 ${dashboard ? '' : 'flex-1 min-h-0'}`}>
           {totalIncidents === 0 ? (
-            <EmptyIncidentsHint dashboard={dashboard} />
+            allHealthy ? <EmptyIncidentsHint dashboard={dashboard} /> : <p className="p-3 text-xs text-muted-foreground">Nenhum incidente registrado. A saúde da execução depende do estado da supervisão acima.</p>
           ) : (
             // Rail fills remaining height via the radix ScrollArea (its
             // viewport resolves `h-full` against the flex parent). The
@@ -360,7 +381,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
             // capped-overflow box — the same pattern as other telemetry lists.
             <IncidentsScroller dashboard={dashboard}>
               <div className="px-3 pb-3 space-y-1">
-                {liveBuffer.map((env, idx) => (
+                {mergedIncidents.map((env, idx) => (
                   <IncidentRowView
                     key={`live-${env.sessionId}-${env.detectedAtMs}-${idx}`}
                     kind={env.kind}
@@ -368,17 +389,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
                     agentRunId={env.agentRunId}
                     detail={env.detail}
                     detectedAtMs={env.detectedAtMs}
-                    live
-                  />
-                ))}
-                {incidents.map((row) => (
-                  <IncidentRowView
-                    key={`db-${row.id}`}
-                    kind={row.incidentKind}
-                    sessionId={row.companySessionId ?? 'unknown'}
-                    agentRunId={row.agentRunId}
-                    detail={row.detail}
-                    detectedAtMs={row.detectedAtMs}
+                    live={env.live}
                   />
                 ))}
               </div>

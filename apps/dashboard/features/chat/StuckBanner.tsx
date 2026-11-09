@@ -19,6 +19,7 @@
 import { memo } from 'react';
 import { AlertCircle, ScrollText } from 'lucide-react';
 import { useNow } from '../../lib/perf/shared-clock.js';
+import { useTranslation } from 'react-i18next';
 
 interface StuckBannerProps {
   /** When false, the banner never renders (no stream → no stall to flag). */
@@ -37,6 +38,7 @@ export const StuckBanner = memo(function StuckBanner({
   thresholdMs = 30_000,
   onOpenLog,
 }: StuckBannerProps) {
+  const { t } = useTranslation('chat');
   // Re-render every second while streaming so the elapsed-seconds counter
   // ticks. Subscribing to the app-wide 1 Hz clock only while `streaming` keeps
   // an idle session at zero timers, and a hidden window at zero wakeups.
@@ -52,9 +54,7 @@ export const StuckBanner = memo(function StuckBanner({
       <div className="flex items-center gap-2">
         <AlertCircle className="h-3.5 w-3.5 shrink-0" />
         <span className="flex-1">
-          Worker idle for{' '}
-          <span className="font-mono font-semibold">{seconds}s</span> — possible
-          stall. The runner hasn't emitted any event since the last activity.
+          {t('connectionSilent', { seconds })}
         </span>
         {onOpenLog && (
           <button
@@ -63,7 +63,7 @@ export const StuckBanner = memo(function StuckBanner({
             className="inline-flex items-center gap-1 rounded border border-amber-500/40 px-2 py-0.5 text-[10px] font-medium hover:bg-amber-500/[0.12]"
           >
             <ScrollText className="h-3 w-3" />
-            Open log
+            {t('connectionOpenLog')}
           </button>
         )}
       </div>

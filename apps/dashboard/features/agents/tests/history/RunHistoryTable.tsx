@@ -101,7 +101,7 @@ function RunRow({ run, onClick }: { run: QaRun; onClick: () => void }) {
       onClick={onClick}
     >
       <td className="px-3 py-2 text-xs text-muted-foreground">{startedShort}</td>
-      <td className="px-3 py-2 font-medium truncate max-w-[280px]">{run.suite}</td>
+      <td className="px-3 py-2 font-medium truncate max-w-[280px]">{run.suite}<span className="block text-[10px] font-normal text-muted-foreground">{run.executor === 'preview' ? 'Preview' : 'Playwright'}</span></td>
       <td className="px-3 py-2">
         <QaStatusBadge kind="run" status={run.status} />
       </td>

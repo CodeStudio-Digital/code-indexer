@@ -64,6 +64,8 @@ export interface ReconnectingSSEOpts {
   getLastEventBusId?: () => string | null | undefined;
   /** AbortSignal for cancellation. */
   signal: AbortSignal;
+  /** Reconnect a silent transport (including missing pings), not a slow agent. */
+  idleTimeoutMs?: number;
   /** Backoff for reconnect attempts. Defaults to exponential 1s..16s, 5 tries. */
   backoff?: BackoffStrategy;
   /**
@@ -217,80 +219,118 @@ export class ReconnectingSSEClient {
     // otherwise this is a cold connect.
     this.emitPhase(typeof lastId === 'number' && lastId >= 0 ? 'replaying' : 'connecting');
 
-    const res = await fetch(this.opts.url, {
-      method: this.opts.method,
-      headers,
-      body: this.opts.method === 'POST' ? JSON.stringify(this.opts.body ?? {}) : undefined,
-      signal: this.opts.signal,
-    });
-    if (!res.ok || !res.body) {
-      // Surface the parsed JSON body alongside the status so callers can
-      // route specific 4xx flavours (e.g., 409 INTERACTION_PENDING) into
-      // their own UI state instead of a generic "error" toast.
-      let httpBody: unknown = null;
-      try {
-        httpBody = await res.json();
-      } catch {
-        /* response body wasn't JSON */
+    const connection = new AbortController();
+    // A custom Electron stream may not settle read()/cancel() after abort.
+    // Race the reader explicitly and never await transport disposal.
+    const interrupt = (error: Error) => connection.abort(error);
+    const onAbort = () => interrupt(new DOMException('Aborted', 'AbortError'));
+    this.opts.signal.addEventListener('abort', onAbort, { once: true });
+    if (this.opts.signal.aborted) onAbort();
+    let lastBytesAt = Date.now();
+    let receivedBytes = false;
+    const idleMs = this.opts.idleTimeoutMs;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const checkIdle = () => {
+      const remaining = idleMs! - (Date.now() - lastBytesAt);
+      if (remaining > 0) idleTimer = setTimeout(checkIdle, remaining);
+      else interrupt(new Error('SSE transport heartbeat timed out; reconnecting'));
+    };
+    if (idleMs && idleMs > 0) idleTimer = setTimeout(checkIdle, idleMs);
+    try {
+      const res = await withConnectionAbort(fetch(this.opts.url, {
+        method: this.opts.method,
+        headers,
+        body: this.opts.method === 'POST' ? JSON.stringify(this.opts.body ?? {}) : undefined,
+        signal: connection.signal,
+      }), connection.signal);
+      if (!res.ok || !res.body) {
+        // Surface the parsed JSON body alongside the status so callers can
+        // route specific 4xx flavours (e.g., 409 INTERACTION_PENDING) into
+        // their own UI state instead of a generic "error" toast.
+        let httpBody: unknown = null;
+        try {
+          httpBody = await withConnectionAbort(res.json(), connection.signal);
+        } catch {
+          /* response body wasn't JSON */
+        }
+        throw Object.assign(new Error(`HTTP ${res.status}`), {
+          nonRetryable: res.status >= 400 && res.status < 500,
+          status: res.status,
+          httpBody,
+          retryAfterMs: retryAfterMs(res),
+        });
       }
-      throw Object.assign(new Error(`HTTP ${res.status}`), {
-        nonRetryable: res.status >= 400 && res.status < 500,
-        status: res.status,
-        httpBody,
-        retryAfterMs: retryAfterMs(res),
-      });
-    }
-    this.connectionOpenedAt = Date.now();
+      reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let firstEventSeen = false;
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let firstEventSeen = false;
+      while (true) {
+        const { value, done } = await withConnectionAbort(reader.read(), connection.signal);
+        if (done) break;
+        lastBytesAt = Date.now();
+        if (!receivedBytes) { receivedBytes = true; this.connectionOpenedAt = lastBytesAt; }
+        buffer += decoder.decode(value, { stream: true });
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+        const { events, rest } = parseSSEChunk(buffer, this.parseErrorHandler);
+        buffer = rest;
 
-      const { events, rest } = parseSSEChunk(buffer, this.parseErrorHandler);
-      buffer = rest;
-
-      for (const ev of events) {
-        if (ev.event === 'ping') {
-          // A heartbeat proves the fetch/reader path is live even when the
-          // agent has no semantic output (long thinking/tool wait). Keep it
-          // out of onEvent so it cannot enter transcripts or advance cursors.
+        for (const ev of events) {
+          if (ev.event === 'ping') {
+            // A heartbeat proves the fetch/reader path is live even when the
+            // agent has no semantic output (long thinking/tool wait). Keep it
+            // out of onEvent so it cannot enter transcripts or advance cursors.
+            if (!firstEventSeen) {
+              this.emitPhase('live');
+              firstEventSeen = true;
+            }
+            this.emitHeartbeat(Date.now());
+            continue;
+          }
           if (!firstEventSeen) {
+            // First real event over this connection — we're live now,
+            // any replay buffer has started flowing.
             this.emitPhase('live');
             firstEventSeen = true;
           }
-          this.emitHeartbeat(Date.now());
-          continue;
-        }
-        if (!firstEventSeen) {
-          // First real event over this connection — we're live now,
-          // any replay buffer has started flowing.
-          this.emitPhase('live');
-          firstEventSeen = true;
-        }
-        this.opts.onEvent(ev);
-        const currentBusId = normalizedBusId(this.opts.getLastEventBusId?.());
-        if (currentBusId && this.highestEventIdBusId !== currentBusId) {
-          this.highestEventIdBusId = currentBusId;
-          this.highestEventIdSeen = Number.NEGATIVE_INFINITY;
-        }
-        if (typeof ev.id === 'number' && ev.id > this.highestEventIdSeen) {
-          this.highestEventIdSeen = ev.id;
-          this.connectionMadeProgress = true;
-        }
-        if (this.isTerminal(ev)) {
-          this.terminalSeen = true;
-          try { await reader.cancel(); } catch { /* ignore */ }
-          return;
+          this.opts.onEvent(ev);
+          const currentBusId = normalizedBusId(this.opts.getLastEventBusId?.());
+          if (currentBusId && this.highestEventIdBusId !== currentBusId) {
+            this.highestEventIdBusId = currentBusId;
+            this.highestEventIdSeen = Number.NEGATIVE_INFINITY;
+          }
+          if (typeof ev.id === 'number' && ev.id > this.highestEventIdSeen) {
+            this.highestEventIdSeen = ev.id;
+            this.connectionMadeProgress = true;
+          }
+          if (this.isTerminal(ev)) {
+            this.terminalSeen = true;
+            return;
+          }
         }
       }
+    } finally {
+      clearTimeout(idleTimer);
+      this.opts.signal.removeEventListener('abort', onAbort);
+      if (reader) {
+        void reader.cancel().catch(() => undefined);
+        try { reader.releaseLock(); } catch { /* already released */ }
+      }
+      connection.abort();
     }
   }
+}
+
+/** Remove the abort listener after every read; a long stream must not retain
+ * one Promise.race reaction per chunk on a never-settled shared promise. */
+function withConnectionAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    void pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 export class SSEStreamEndedWithoutTerminalError extends Error {

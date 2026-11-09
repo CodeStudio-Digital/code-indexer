@@ -15,16 +15,25 @@ interface PluginFrameInfo {
 }
 
 const frames = new Map<MessageEventSource, PluginFrameInfo>();
+const disposalListeners = new Set<(source: MessageEventSource) => void>();
 
 /** Grace before a missed frame lookup is retried, in ms. */
 const RESOLVE_GRACE_MS = 60;
 
 export function registerPluginFrame(win: MessageEventSource, info: PluginFrameInfo): void {
+  if (frames.has(win)) unregisterPluginFrame(win);
   frames.set(win, info);
 }
 
 export function unregisterPluginFrame(win: MessageEventSource): void {
   frames.delete(win);
+  for (const listener of disposalListeners) listener(win);
+}
+
+/** Resource owners (streams) must end when an iframe unloads or is rebound. */
+export function onPluginFrameDisposed(listener: (source: MessageEventSource) => void): () => void {
+  disposalListeners.add(listener);
+  return () => { disposalListeners.delete(listener); };
 }
 
 /** The frame's identity, or null after one delayed retry. */

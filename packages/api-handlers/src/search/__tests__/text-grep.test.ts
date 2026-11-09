@@ -46,7 +46,7 @@ describe('grepProject', () => {
 
   it('whole word excludes substrings (getService)', async () => {
     const r = await grepProject(fakeDb(dir, ['src/a.ts']), 1, { query: 'Service', wholeWord: true });
-    expect(r.total).toBe(2); // 'Service' (l1) + 'service' (l3, ci); NOT getService
+    expect(r.total).toBe(3); // a.ts (2) plus b.tsx discovered live; NOT getService
   });
 
   it('regex matches', async () => {

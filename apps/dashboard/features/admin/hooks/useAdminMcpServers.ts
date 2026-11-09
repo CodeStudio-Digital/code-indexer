@@ -15,6 +15,9 @@ export function useAdminMcpServers() {
   const [servers, setServers] = useState<AdminMcpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [testResults, setTestResults] = useState<Record<string, McpServerTestResult>>({});
+  const invalidate = (id: string) => setTestResults(previous => {
+    const next = { ...previous }; delete next[id]; return next;
+  });
 
   const load = async () => {
     setLoading(true);
@@ -33,13 +36,16 @@ export function useAdminMcpServers() {
     const isExisting = !!servers.find((x) => x.id === s.id);
     try {
       await saveMcpServer(s, isExisting);
+      if (s.id) invalidate(s.id);
       await load();
+      return true;
     } catch (e) {
       await notify({
         title: 'Save failed',
         description: (e as Error).message,
         variant: 'destructive',
       });
+      return false;
     }
   };
 
@@ -52,14 +58,23 @@ export function useAdminMcpServers() {
     });
     if (!ok) return;
     await deleteMcpServer(id);
+    invalidate(id);
     await load();
   };
 
   const test = async (id: string) => {
     setTestResults((t) => ({ ...t, [id]: { ok: false, error: 'testing…' } }));
-    const result = await testMcpServer(id);
-    setTestResults((t) => ({ ...t, [id]: result }));
+    try {
+      const result = await testMcpServer(id);
+      setTestResults((t) => ({ ...t, [id]: result }));
+    } catch (e) {
+      setTestResults((t) => ({ ...t, [id]: { ok: false, error: e instanceof Error ? e.message : String(e) } }));
+    }
   };
 
-  return { servers, loading, testResults, load, save, remove, test };
+  const connected = (id: string, result: McpServerTestResult) => {
+    setTestResults(t => ({ ...t, [id]: result }));
+    void load();
+  };
+  return { servers, loading, testResults, load, save, remove, test, connected, invalidate };
 }

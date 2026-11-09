@@ -1,11 +1,9 @@
 /**
  * Stream resilience for the ChatProvider contract.
  *
- * Node 24's undici (shipped in Electron 42) surfaces
- * `ERR_STREAM_PREMATURE_CLOSE` ("Premature close") for HTTP response streams
- * that terminate without a clean end — where Node 20 stayed silent. For LLM
- * streaming this most often fires AFTER the model's response has already fully
- * arrived (the socket teardown is just flagged late by the stricter loader).
+ * HTTP transports can fail while tearing down an already committed response:
+ * node-fetch reports ERR_STREAM_PREMATURE_CLOSE, while native fetch can report
+ * TypeError('terminated') with UND_ERR_SOCKET/ECONNRESET under `cause`.
  *
  * `withStreamResilience` wraps a provider so that a premature close occurring
  * AFTER the logical `{ type: 'done' }` delta ends the stream cleanly (the
@@ -15,6 +13,7 @@
  */
 import type { ChatProvider, ChatRequest } from './adapter.js';
 import type { ChatDelta } from './wire.js';
+import { providerTransportError } from './transport-error.js';
 
 /**
  * True for Node's `ERR_STREAM_PREMATURE_CLOSE` (message "Premature close"),
@@ -38,6 +37,12 @@ export function isPrematureClose(err: unknown): boolean {
  */
 export function withStreamResilience(inner: ChatProvider): ChatProvider {
   return {
+    get reasoningCapabilities() {
+      return inner.reasoningCapabilities;
+    },
+    get toolLimits() {
+      return inner.toolLimits;
+    },
     get name() {
       return inner.name;
     },
@@ -61,7 +66,7 @@ export function withStreamResilience(inner: ChatProvider): ChatProvider {
         // Response already completed (`done` seen) and the only failure is the
         // late socket teardown → end gracefully. Otherwise it's a real
         // truncation (or an unrelated error) → let the runner handle it.
-        if (sawDone && isPrematureClose(err)) return;
+        if (sawDone && !req.signal?.aborted && (isPrematureClose(err) || providerTransportError(err))) return;
         throw err;
       }
     },

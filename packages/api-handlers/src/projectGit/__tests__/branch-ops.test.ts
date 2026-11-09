@@ -13,6 +13,14 @@ import { join } from 'node:path';
 
 const gitSpawnStats = vi.hoisted(() => ({ forEachRef: 0 }));
 
+vi.mock('../git-read-runner.js', async () => {
+  const actual = await vi.importActual<typeof import('../git-read-runner.js')>('../git-read-runner.js');
+  return { ...actual, runGitRead(input: Parameters<typeof actual.runGitRead>[0]) {
+    if (input.args[0] === 'for-each-ref') gitSpawnStats.forEachRef++;
+    return actual.runGitRead(input);
+  } };
+});
+
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
   return {

@@ -13,6 +13,8 @@ import type { RoleSkills } from '@mcp/company/types.js';
 import type { RoleDispatchSource } from '@mcp/company/services/subordinate/role-runtime.js';
 
 export interface SpawnSubordinateSpec {
+  /** Internal durable dispatch identity; allocated before starting work. */
+  reservedAgentRunId?: string;
   role: string;
   task: string;
   /** Origin of this fresh run, persisted for runtime provenance. */

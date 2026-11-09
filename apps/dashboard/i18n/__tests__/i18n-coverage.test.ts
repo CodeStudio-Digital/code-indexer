@@ -254,6 +254,10 @@ const protectedAllowlist = new Map<string, Set<string>>([
   ['apps/dashboard/features/admin/SkillsInstallUrlDialog.tsx', new Set(['https://mcp.directory/skills/<slug>'])],
   ['apps/dashboard/features/agents/tests/history/RunDetailModal.tsx', new Set(['summary.md'])],
   ['apps/dashboard/features/chat/ToolStatsModal.tsx', new Set(['ms'])],
+  // Locale-independent close glyph; the button's accessible label uses chat:ultra.dismiss.
+  ['apps/dashboard/features/chat/composer/PromptSuggestionChip.tsx', new Set(['×'])],
+  // Product mode name, followed by its policy version; descriptive copy remains translated.
+  ['apps/dashboard/features/chat/right-panel/UltraPolicyStatus.tsx', new Set(['Ultra'])],
   ['apps/dashboard/features/onboarding/OnboardingWizard.tsx', new Set(['my-app'])],
   ['apps/dashboard/features/workspace/jetbrains/tool-windows/GitWindow.tsx', new Set(['Git'])],
 ]);
@@ -287,8 +291,9 @@ function walkDashboardSource(dir = dashboardRoot, out: string[] = []): string[] 
   for (const entry of readdirSync(dir)) {
     if (['node_modules', 'dist', '.vite'].includes(entry)) continue;
     const path = join(dir, entry);
-    // The synthetic renderer benchmark is test input, not a product surface.
-    if (relative(dashboardRoot, path).replace(/\\/g, '/') === 'performance/renderer/fixture.tsx') continue;
+    // Only these synthetic benchmark entry points are test input, not product surfaces.
+    const dashboardPath = relative(dashboardRoot, path).replace(/\\/g, '/');
+    if (dashboardPath === 'performance/renderer/fixture.tsx' || dashboardPath === 'performance/markdown/fixture.tsx') continue;
     const stat = statSync(path);
     if (stat.isDirectory()) {
       if (relative(dashboardRoot, path).replace(/\\/g, '/') === 'i18n/__tests__') continue;
@@ -379,6 +384,18 @@ function scanDialogCallItems(file: string): LiteralItem[] {
 }
 
 describe('dashboard visible literals', () => {
+  it('keeps production renderers and collaboration panels covered beside synthetic fixtures', () => {
+    const files = dashboardSource().map(file => relative(dashboardRoot, file).replace(/\\/g, '/'));
+    expect(files).not.toContain('performance/renderer/fixture.tsx');
+    expect(files).not.toContain('performance/markdown/fixture.tsx');
+    expect(files).toEqual(expect.arrayContaining([
+      'features/chat/messages/Markdown.tsx',
+      'features/chat/messages/markdown-highlight.ts',
+      'features/chat/composer/PromptSuggestionChip.tsx',
+      'features/chat/right-panel/UltraPolicyStatus.tsx',
+    ]));
+  });
+
   it('keeps migrated dashboard surfaces free of raw visible text', () => {
     const failures = protectedDashboardFiles.flatMap(scanVisibleJsxLiterals);
     expect(failures).toEqual([]);

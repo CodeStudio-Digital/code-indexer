@@ -25,6 +25,9 @@ test('stream follows until upward intent, stays still while reading, and resumes
   await page.getByRole('button', { name: /latest|últim|fim|recent/i }).click();
   await expect.poll(bottomDistance).toBeLessThan(10);
   await page.mouse.wheel(0, -300);
+  // wheel() returns before Chromium applies the scroll. Consume the old
+  // session's gesture before testing the new session's follow reset.
+  await expect.poll(bottomDistance).toBeGreaterThan(100);
   await page.evaluate(() => (window as any).chatFixture.switch());
   await expect.poll(bottomDistance).toBeLessThan(10);
 });
@@ -64,4 +67,48 @@ test('tool/text blocks stay compact and 15 images open in a viewport-sized keybo
   await expect(dialog.locator('img')).toHaveAttribute('src', /stored-api\/api\/coder\/.*\/images\/0$/);
   await expect.poll(() => dialog.locator('img').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(640);
   expect(errors).toEqual([]);
+});
+
+test('long user messages keep a readable width with or without attachments after Markdown is virtualized', async ({ page }) => {
+  const paragraphs = Array.from({ length: 120 }, (_, i) =>
+    `Passo ${i + 1}: revisar o contrato de execução e os campos do tratamento. O conteúdo deve continuar legível e a imagem deve permanecer anexada à mensagem.`);
+  const text = 'No histórico de execução agora tem nome do passo e nome do tratamento.\n\n' + paragraphs.join('\n\n');
+  for (const width of [1440, 850, 420]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const imageCount of [0, 1, 3]) {
+      await page.evaluate(args => (window as any).chatFixture.layout(args), { text, imageCount });
+      const document = page.locator('[data-large-markdown]');
+      await expect(document).toHaveAttribute('data-markdown-ready', 'true');
+      await expect(page.locator('.chat-transcript img')).toHaveCount(imageCount);
+      await expect.poll(() => document.evaluate(node => {
+        const article = node.closest('article')!;
+        return article.getBoundingClientRect().width / article.parentElement!.getBoundingClientRect().width;
+      })).toBeGreaterThan(0.75);
+      const viewport = document.locator('[data-markdown-viewport]');
+      expect(await viewport.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThan(3);
+      expect(await viewport.locator('[data-transcript-row-key]').count()).toBeLessThan(35);
+      const article = page.locator('article').filter({ has: document });
+      if (imageCount) {
+        const bounds = await article.evaluate(node => ({
+          right: node.getBoundingClientRect().right,
+          imagesRight: Math.max(...Array.from(node.querySelectorAll('img')).map(image => image.closest('button')!.getBoundingClientRect().right)),
+        }));
+        expect(Math.abs(bounds.right - bounds.imagesRight)).toBeLessThan(2);
+      }
+      await viewport.evaluate(node => { node.scrollTop = node.scrollHeight; });
+      await expect(viewport.getByText(paragraphs.at(-1)!, { exact: true })).toBeVisible();
+    }
+  }
+});
+
+test('short user messages and image-only turns retain their compact size', async ({ page }) => {
+  for (const [text, imageCount] of [['Ok', 0], ['', 1]] as const) {
+    await page.evaluate(args => (window as any).chatFixture.layout(args), { text, imageCount });
+    await expect(page.locator('[data-large-markdown]')).toHaveCount(0);
+    const article = page.locator('.chat-transcript article').first();
+    await expect(page.locator('.chat-transcript img')).toHaveCount(imageCount);
+    if (text) await expect(article.getByText(text, { exact: true })).toBeVisible();
+    await expect(article).toBeVisible();
+    expect((await article.boundingBox())!.width).toBeLessThan(imageCount ? 135 : 90);
+  }
 });

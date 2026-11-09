@@ -269,3 +269,14 @@ it('retains the cleanup fence after SDK onclose has discarded its transport', as
     expect(f.state.initialized).toBe(1);
   } finally { await manager.closeAll().catch(() => {}); await f.close(); }
 });
+
+it('allows a cold MCP startup beyond the former ten-second deadline', async () => {
+  const f = await fixture(), manager = new McpServerManager();
+  f.state.hold = new Promise<void>(resolve => setTimeout(resolve, 11_000));
+  try {
+    await manager.connectServer(f.config);
+    expect(manager.connectedCount).toBe(1);
+    expect((await manager.listAllTools()).tools).toHaveLength(1);
+    expect(f.state.initialized).toBe(1);
+  } finally { await manager.closeAll(); await f.close(); }
+});

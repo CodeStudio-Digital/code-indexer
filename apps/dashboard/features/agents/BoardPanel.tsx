@@ -10,6 +10,7 @@ import { Markdown } from '../chat/messages/Markdown.js';
 import type { BoardMessage } from '../../hooks/useCompanyStream.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
 import { MasterPromptCard } from './MasterPromptCard.js';
+import { BoardAttachments } from './BoardAttachments.js';
 
 const KIND_ICONS: Record<string, React.FC<{ className?: string }>> = {
   message: MessageSquare,
@@ -176,16 +177,11 @@ export const BoardPanel = memo(function BoardPanel({
         <MessageSquare className="h-4 w-4 text-muted-foreground" />
         <span className="text-sm font-medium">{t('board.title')}</span>
         <Badge variant="outline" className="text-[10px]">{items.length}</Badge>
-        {sessionName && (
-          <span className="ml-auto text-[10px] text-muted-foreground truncate max-w-[60%]" title={sessionName}>
-            {sessionName}{sessionId !== undefined && ` · #${sessionId}`}
-          </span>
-        )}
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className={cn('h-7 w-7 shrink-0', !sessionName && 'ml-auto')}
+          className="ml-auto h-7 w-7 shrink-0"
           onClick={handleCopyMarkdown}
           disabled={items.length === 0}
           title={copiedMarkdown ? t('board.copiedMarkdown') : t('board.copyMarkdown')}
@@ -200,7 +196,11 @@ export const BoardPanel = memo(function BoardPanel({
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {items.length === 0 && (
-          <p className="text-xs text-muted-foreground text-center py-4">{t('board.noActivity')}</p>
+          <div className="mx-auto mt-12 max-w-md rounded-lg border border-dashed p-8 text-center">
+            <MessageSquare className="mx-auto mb-3 h-6 w-6 text-primary" />
+            <p className="text-sm font-medium">{t('board.emptyTitle', 'Start a conversation')}</p>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('board.noActivity')}</p>
+          </div>
         )}
         {items.map((item) => {
           if (item.type === 'prompt') {
@@ -266,6 +266,7 @@ export const BoardPanel = memo(function BoardPanel({
               </div>
               <div className="text-foreground/90 text-xs leading-relaxed">
                 <Markdown text={msg.content} />
+                {sessionId && !!msg.attachments?.length && <BoardAttachments sessionId={sessionId} entryId={msg.id} attachments={msg.attachments} />}
               </div>
             </div>
           );

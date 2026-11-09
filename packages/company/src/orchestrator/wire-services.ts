@@ -232,6 +232,7 @@ export function wireServices(args: {
   // inbox so we can back-wire the router into the queue's master short-circuit.
   const masterInbox = new MasterInboxRouter({ ctx, master, publisher, eventBus });
   inbox.setMasterRouter(masterInbox);
+  inbox.startExternalDeliveryWatcher();
   // Defer boot-time scan so listeners on `master.inbox_received` can subscribe
   // before the first emit.
   queueMicrotask(() => {

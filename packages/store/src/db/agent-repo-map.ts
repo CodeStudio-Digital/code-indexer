@@ -16,7 +16,10 @@ export function repoMapPage(db: DB, projectId: number, input: RepoMapPageInput =
     const total = (db.prepare('SELECT COUNT(*) AS n FROM files WHERE project_id=?').get(projectId) as { n: number }).n;
     let files: RepoMapFile[];
     const kinds = order === 'recent' ? "'function','class','interface','type','enum','module'" : "'function','class','interface','method','type'";
-    const symbolFilter = `kind IN (${kinds})` + (order === 'recent' ? " AND (parent IS NULL OR parent='')" : '');
+    // Public configuration often consists solely of constants/object values.
+    // Include those declarations while keeping private scratch variables out.
+    const symbolFilter = `(kind IN (${kinds}) OR (kind IN ('constant','variable') AND exported=1))`
+      + (order === 'recent' ? " AND (parent IS NULL OR parent='')" : '');
     if (order === 'recent') {
       files = db.prepare(`SELECT id,path,0 AS score,is_entry_point,0 AS dependent_count,0 AS symbol_count
         FROM files WHERE project_id=? ORDER BY updated_at DESC,path,id LIMIT ? OFFSET ?`).all(projectId, limit, offset) as RepoMapFile[];

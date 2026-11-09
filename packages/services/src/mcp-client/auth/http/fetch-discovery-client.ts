@@ -27,7 +27,17 @@ export class FetchDiscoveryClient implements DiscoveryClient {
       resourceUrl,
       'oauth-protected-resource',
     );
-    const body = await fetchFirstJson(candidates);
+    let body: Record<string, unknown>;
+    try { body = await fetchFirstJson(candidates); }
+    catch (discoveryError) {
+      // Some providers expose metadata exclusively in the 401 challenge.
+      const response = await fetch(resourceUrl, { headers: { accept: 'application/json, text/event-stream' }, signal: AbortSignal.timeout(10_000), redirect: 'error' });
+      const challenge = response.headers.get('www-authenticate') ?? '';
+      await response.body?.cancel();
+      const metadata = /\bresource_metadata\s*=\s*"([^"]+)"/i.exec(challenge)?.[1];
+      if (!metadata) throw discoveryError;
+      body = await fetchFirstJson([metadata]);
+    }
     return {
       resource: stringField(body, 'resource'),
       authorizationServers: stringArray(body, 'authorization_servers'),
@@ -43,7 +53,13 @@ export class FetchDiscoveryClient implements DiscoveryClient {
       issuer,
       'oauth-authorization-server',
     );
-    const body = await fetchFirstJson(candidates);
+    const url = new URL(issuer);
+    const path = url.pathname.replace(/\/+$/, '');
+    candidates.push(`${url.origin}/.well-known/openid-configuration${path === '/' ? '' : path}`);
+    if (path && path !== '/') candidates.push(`${url.origin}${path}/.well-known/openid-configuration`);
+    const body = await fetchFirstJson([...new Set(candidates)]);
+    if (stringField(body, 'issuer') !== issuer) throw new Error('Authorization server issuer mismatch');
+    if (!stringField(body, 'authorization_endpoint') || !stringField(body, 'token_endpoint')) throw new Error('Incomplete authorization server metadata');
     return {
       issuer: stringField(body, 'issuer'),
       authorizationEndpoint: stringField(body, 'authorization_endpoint'),
@@ -113,13 +129,23 @@ async function fetchFirstJson(urls: string[]): Promise<Record<string, unknown>> 
   for (const url of urls) {
     let res: Response;
     try {
-      res = await fetch(url, { headers: { accept: 'application/json' } });
+      const endpoint = new URL(url);
+      if (endpoint.username || endpoint.password || (endpoint.protocol !== 'https:' && !(endpoint.protocol === 'http:'
+        && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname)))) throw new Error('OAuth metadata requires HTTPS or loopback');
+      res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
     } catch (e) {
       failures.push({ url, status: 0, body: e instanceof Error ? e.message : String(e) });
       continue;
     }
     if (res.ok) {
-      return (await res.json()) as Record<string, unknown>;
+      try {
+        const json: unknown = await res.json();
+        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error('Expected metadata object');
+        return json as Record<string, unknown>;
+      } catch {
+        failures.push({ url, status: res.status, body: 'Invalid JSON metadata' });
+        continue;
+      }
     }
     failures.push({ url, status: res.status, body: await res.text() });
   }

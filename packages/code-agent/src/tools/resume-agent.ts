@@ -82,7 +82,7 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
       if (!observed) {
         return err(
           `resume_agent: spawn '${spawnId}' not found — resumable states live ~45min in this session only. ` +
-          `Re-run the task with spawn_agent instead.`,
+          `Inspect durable child runs and reconcile effects before replacing missing work.`,
         );
       }
       if (
@@ -137,7 +137,7 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
             continue;
           }
           if (!state.transcript) {
-            skipped.push(`#${state.agentIndex + 1} ${state.label} (resume state expired — re-spawn or decompose the task)`);
+            skipped.push(`#${state.agentIndex + 1} ${state.label} (resume state expired — reconcile durable runs before replacing work)`);
             continue;
           }
           if (state.attempt >= attemptCap(state)) {

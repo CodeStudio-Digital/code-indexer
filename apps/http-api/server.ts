@@ -48,6 +48,7 @@ import {
 } from '@mcp/services/sandbox/sandbox-manager.js';
 import { setCompanyLocalProjectStore } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
+import { setCompanyDocCorpus } from '@mcp/company/services/company-doc-corpus.js';
 import { setDbToolsStores, setDbSecretDecryptor } from '@mcp/code-agent/tools/db/index.js';
 import { getMainSecretDecryptor } from './server/secret-decrypt-port.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
@@ -311,6 +312,7 @@ export function createApp() {
   setCompanySessionEnvStore(deps.companySessionEnvStore);
   setCompanyLocalProjectStore(deps.companyLocalProjectStore);
   setEnvToolStore(deps.companySessionEnvStore);
+  setCompanyDocCorpus(deps.docStore);
   // db_* v2 tools — connections come from the SAME per-project-routed store
   // instances the routes/db-client handlers use (deps.dbClientFor), so the
   // agent always sees the rows the Databases tab shows. Session projects come
@@ -365,7 +367,7 @@ export function createApp() {
   // HotStateCache remains removed. Company board state is now file-backed
   // inside each session bundle, so the retired SQLite board benchmark is no
   // longer a valid runtime or decision path.
-  setQaTestRunStore(deps.qaTestRunStore);
+  setQaTestRunStore(deps.qaTestRunStore, deps.qaTestResultStore);
   setQaEndpointEnvStore(deps.companySessionEnvStore);
   // API client (auto-test/auto-fix) store — wired for the `api_*` agent tools.
   setApiClientStore(deps.apiClientStore);
@@ -891,7 +893,7 @@ export function createApp() {
     probeEmbeddingTarget: (target) => deps.semanticProfileRuntime.probeEmbeddingTarget(target),
     probeRerankerTarget: (target) => deps.semanticProfileRuntime.probeRerankerTarget(target),
     rerankerDiagnostics: (purpose) => deps.semanticProfileRuntime.rerankerDiagnostics(purpose),
-  }, deps.sessionStore));
+  }, deps.sessionStore, { dbPath: deps.config.dbPath, bearerResolver: mcpClientAuth.resolveBearer }));
   mountCoderRoutes(app, deps);
   mountLspRoutes(app, deps);
   mountEditorRoutes(app, deps);

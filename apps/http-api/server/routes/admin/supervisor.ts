@@ -18,8 +18,8 @@ import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import {
   FileSupervisionPersistence,
+  supervisorEnabled,
   type IncidentQueryRow,
-  type SupervisorStatus,
 } from '@mcp/company/services/supervisor/index.js';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import {
@@ -35,6 +35,7 @@ import {
   type SupervisorIncidentEnvelope,
 } from '../../../sse/supervisor-incident-bus.js';
 import { attachHeartbeat } from '../../../sse/SSEHeartbeat.js';
+import { readSupervisorStatus } from './supervisor-status.js';
 
 interface SupervisorAdminDeps {
   sessionStore: FsSessionStore;
@@ -82,32 +83,15 @@ export function mountSupervisorAdminRoutes(app: Hono, deps: SupervisorAdminDeps)
   // GET /status — aggregated across all active workers
   app.get('/api/admin/supervisor/status', async (c) => {
     const pool = getWorkerOrchestratorPool();
-    const ids = pool.activeSessionIds();
-    const results = await Promise.allSettled(
-      ids.map(async (id) => ({
-        sessionId: id,
-        status: (await pool.supervisorRpc(id, 'getStatus')) as SupervisorStatus | null,
-      })),
-    );
-    const sessions: Array<{ sessionId: CompanySessionId; status: SupervisorStatus }> = [];
-    for (const result of results) {
-      if (result.status === 'fulfilled' && result.value.status !== null) {
-        sessions.push({
-          sessionId: result.value.sessionId,
-          status: result.value.status,
-        });
-      }
-    }
-    return c.json({ enabled: true, sessions });
+    return c.json(await readSupervisorStatus(pool, undefined, supervisorEnabled()));
   });
 
   // GET /status/:sessionId — single session
   app.get('/api/admin/supervisor/status/:sessionId', async (c) => {
     const sessionId = parseCompanySessionId(c.req.param('sessionId'));
     if (sessionId == null) return c.json({ error: 'invalid sessionId' }, 400);
-    const status = await pumpSupervisorRpc(sessionId, 'getStatus');
-    if (status === null) return c.json({ error: 'session not active' }, 404);
-    return c.json({ sessionId, status });
+    const result = await readSupervisorStatus(getWorkerOrchestratorPool(), sessionId, supervisorEnabled());
+    return c.json({ ...result, sessionId, status: result.sessions[0]?.status ?? null });
   });
 
   // GET /incidents?sessionId=X&limit=N — bundle-backed, survives worker eviction
@@ -161,9 +145,12 @@ export function mountSupervisorAdminRoutes(app: Hono, deps: SupervisorAdminDeps)
   //        Use 0 (default) to get the full ring.
   app.get('/api/admin/supervisor/stream', (c) => {
     const sinceMs = Number(c.req.query('since') ?? 0);
+    const scope = c.req.query('sessionId');
+    if (scope && !isUuid(scope)) return c.json({ error: 'invalid sessionId' }, 400);
     return streamSSE(c, async (stream) => {
       let seq = 0;
       const send = async (env: SupervisorIncidentEnvelope): Promise<void> => {
+        if (scope && env.sessionId !== scope) return;
         try {
           await stream.writeSSE({
             id: String(seq++),

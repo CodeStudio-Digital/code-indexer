@@ -120,6 +120,7 @@ export function KeyValueTab({ connKey, db }: { connKey: string; db: string }) {
 
       {consoleOpen && (
         <div className="flex flex-col gap-1 border-b bg-muted/30 p-1.5">
+          <p className="text-xs text-muted-foreground">{t('kv.consoleAcquisition')}</p>
           <div className="flex items-center gap-2">
             <input
               className="h-8 flex-1 rounded border bg-background px-2 font-mono text-xs outline-none"

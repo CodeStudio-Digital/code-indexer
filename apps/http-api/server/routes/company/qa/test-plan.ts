@@ -1,71 +1,65 @@
-/**
- * Test plan routes — read and write `tests/e2e/TEST_PLAN.md` from inside
- * the company session's sandbox container. Lets the dashboard's
- * TestPlanView render the plan and a future inline editor save edits
- * back without leaving the UI.
- *
- * The QA agent already manages this file via `read_file`/`write_file`
- * tools; these endpoints exist purely so the human-in-the-loop has a
- * direct surface, and so the dashboard renders the canonical contents
- * (parsed once via the pure `parseTestPlanSections`).
- *
- * Path is hard-coded; the routes don't accept arbitrary file paths to
- * avoid path-traversal headaches. The validation lives in
- * `SandboxManager.readWorkspaceFile` regardless.
- */
-import type { Hono } from 'hono';
+/** Preview plans come from durable run criteria; legacy Playwright plans stay
+ * readable in their own service workspace. Opening this view never provisions
+ * a sandbox or initializes a container driver. */
+import type { Hono, Context } from 'hono';
 import type { ServerDeps } from '../../../deps.js';
-import { parseJsonBody, parseSessionIdParam } from '../../_helpers.js';
-import { getSandboxManager } from '@mcp/services/sandbox/index.js';
+import { notFound, parseCompanySessionIdParam, parseJsonBody, resolveCompanySessionContext } from '../../_helpers.js';
+import { tryGetSandboxManager } from '@mcp/services/sandbox/index.js';
+import type { QaTestPlan } from '@mcp/services/qa/types.js';
 
 const TEST_PLAN_PATH = 'tests/e2e/TEST_PLAN.md';
 const MAX_BODY_BYTES = 200 * 1024;
-
-interface PutBody {
-  content: string;
+const emptyPlan: QaTestPlan = { exists: false, content: '', source: 'none' };
+function serviceId(c: Context): string | null {
+  const id = c.req.query('service') || 'main';
+  return /^[a-zA-Z0-9_-]{1,64}$/.test(id) ? id : null;
 }
 
 export function mountQaTestPlanRoutes(app: Hono, deps: ServerDeps): void {
-  void deps; // No store deps — manager is module-level.
-
-  app.get('/api/company/sessions/:id/qa/test-plan', async (c) => {
-    const sessionId = parseSessionIdParam(c);
+  app.get('/api/company/sessions/:id/qa/test-plan', async c => {
+    const id = parseCompanySessionIdParam(c);
+    if (!await resolveCompanySessionContext(deps.sessionStore, id)) return notFound(c);
+    const service = serviceId(c);
+    if (!service) return c.json({ error: 'invalid service_id' }, 400);
+    const [run] = await deps.qaTestRunStore.listRuns({ company_session_id: id, service_id: service, limit: 1 });
+    if (run?.executor === 'preview' && run.criteria?.length) {
+      const plan: QaTestPlan = { exists: true, source: 'preview', run_id: run.id, title: run.suite,
+        target_url: run.target_url, criteria: run.criteria,
+        content: '## ' + run.suite + '\n\n' + run.criteria.map(criterion => '- ' + criterion.name).join('\n') };
+      return c.json(plan);
+    }
+    const manager = tryGetSandboxManager();
+    const sandbox = service === 'main' ? manager?.get(id) : manager?.getService(id, service);
+    if (!manager || !sandbox) return c.json(emptyPlan);
     try {
-      const content = await getSandboxManager().readWorkspaceFile(
-        String(sessionId),
-        TEST_PLAN_PATH,
-      );
-      return c.json({ exists: content !== null, content: content ?? '' });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // No-sandbox is the common case for non-builder sessions — return
-      // 200 with `exists:false` so the UI renders an empty placeholder
-      // instead of an error toast.
-      if (/no sandbox/i.test(msg)) return c.json({ exists: false, content: '' });
-      return c.json({ error: msg }, 500);
+      const content = await manager.readWorkspaceFileOnService(id, service, TEST_PLAN_PATH);
+      const plan: QaTestPlan = content == null ? emptyPlan : { exists: true, content, source: 'sandbox', run_id: run?.id };
+      return c.json(plan);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no sandbox/i.test(message)) return c.json(emptyPlan);
+      return c.json({ error: message }, 500);
     }
   });
 
-  app.put('/api/company/sessions/:id/qa/test-plan', async (c) => {
-    const sessionId = parseSessionIdParam(c);
-    const body = await parseJsonBody<PutBody>(c);
-    if (typeof body.content !== 'string') {
-      return c.json({ error: 'body.content must be a string' }, 400);
-    }
-    if (body.content.length > MAX_BODY_BYTES) {
-      return c.json({ error: `body too large (>${MAX_BODY_BYTES} bytes)` }, 413);
-    }
+  app.put('/api/company/sessions/:id/qa/test-plan', async c => {
+    const id = parseCompanySessionIdParam(c);
+    if (!await resolveCompanySessionContext(deps.sessionStore, id)) return notFound(c);
+    const service = serviceId(c);
+    if (!service) return c.json({ error: 'invalid service_id' }, 400);
+    const body = await parseJsonBody<{ content: string }>(c);
+    if (typeof body?.content !== 'string') return c.json({ error: 'body.content must be a string' }, 400);
+    if (Buffer.byteLength(body.content, 'utf8') > MAX_BODY_BYTES) return c.json({ error: 'body too large (>' + MAX_BODY_BYTES + ' bytes)' }, 413);
+    const manager = tryGetSandboxManager();
+    const sandbox = service === 'main' ? manager?.get(id) : manager?.getService(id, service);
+    if (!manager || !sandbox) return c.json({ error: 'session has no sandbox' }, 409);
     try {
-      await getSandboxManager().writeWorkspaceFile(
-        String(sessionId),
-        TEST_PLAN_PATH,
-        body.content,
-      );
+      await manager.writeWorkspaceFileOnService(id, service, TEST_PLAN_PATH, body.content);
       return c.json({ ok: true });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (/no sandbox/i.test(msg)) return c.json({ error: 'session has no sandbox' }, 409);
-      return c.json({ error: msg }, 500);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no sandbox/i.test(message)) return c.json({ error: 'session has no sandbox' }, 409);
+      return c.json({ error: message }, 500);
     }
   });
 }

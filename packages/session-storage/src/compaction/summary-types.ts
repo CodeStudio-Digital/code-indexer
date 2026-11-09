@@ -21,8 +21,6 @@ export interface CompactionResumeV3 {
   constraints: string[];
   pending_tasks: string[];
   next_step: string;
-  /** Ground-truth goal overlay. It is never requested from the model. */
-  active_goal?: string;
 }
 
 export interface CompactionSummaryMetricsV3 {
@@ -46,7 +44,6 @@ export interface CompactionSummaryV3 {
 }
 
 export interface CompactionLiveStateV3 {
-  goal?: string | { text: string; status?: string } | null;
   activePlan?: string | { text: string; status?: string } | null;
   todos?: Array<{ content: string; activeForm?: string; status: string }>;
   plan?: Array<{ step?: string; content?: string; status: string }>;
@@ -125,11 +122,4 @@ export interface CompactionSummaryV2 {
   pending_tasks: string[];
   current_work: string;
   next_step: string;
-  /**
-   * Live-state overlay populated by the runner AFTER the LLM summarization
-   * step (Agent Loop v2). Keeps the rendered summary anchored to ground truth
-   * even when the LLM-extracted pending_tasks/next_step drift from reality.
-   * Either field may be omitted when there is nothing to record.
-   */
-  active_goal?: string;
 }

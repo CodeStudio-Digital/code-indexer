@@ -901,13 +901,6 @@ function createState(
   projection: Record<string, unknown>,
 ): SessionState {
   const updated = text(root.updated_at) ?? text(root.created_at) ?? new Date().toISOString();
-  const goalText = text(root.goal_text);
-  const goalCreatedAt =
-    text(root.goal_created_at) ?? text(root.created_at) ?? updated;
-  const goalStatus =
-    root.goal_status === 'complete' || root.goal_status === 'superseded'
-      ? root.goal_status
-      : 'in_progress';
   const boundarySeq = messageSequenceForLegacyId(
     ctx,
     plan,
@@ -955,20 +948,6 @@ function createState(
     status: String(normalizeStatus(root.status ?? 'idle')),
     updated_at: updated,
     archived_at: text(root.archived_at),
-    goal: goalText
-      ? {
-          id: deterministicUuid(`goal:${plan.uuid}`),
-          text: goalText,
-          status: goalStatus,
-          budget_tokens:
-            typeof root.goal_budget_tokens === 'number'
-              ? root.goal_budget_tokens
-              : null,
-          completion_note: text(root.goal_completion_note),
-          created_at: goalCreatedAt,
-          updated_at: text(root.goal_updated_at) ?? updated,
-        }
-      : null,
     todos: (parseJson(root.todos_json ?? root.tasks_json) ?? []) as JsonValue[],
     permissions: {
       mode: text(root.tool_permission_mode),

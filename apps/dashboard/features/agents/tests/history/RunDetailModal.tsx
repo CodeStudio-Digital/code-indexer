@@ -35,6 +35,10 @@ interface RunDetail {
 }
 
 export function RunDetailModal({ sessionId, runId, onClose }: Props) {
+  return <ScopedRunDetailModal key={`${sessionId}:${runId}`} sessionId={sessionId} runId={runId} onClose={onClose} />;
+}
+
+function ScopedRunDetailModal({ sessionId, runId, onClose }: Props) {
   const { t } = useTranslation('agents');
   const [data, setData] = useState<RunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +73,7 @@ export function RunDetailModal({ sessionId, runId, onClose }: Props) {
         <header className="flex items-center justify-between px-4 py-3 border-b gap-3">
           <h2 className="text-sm font-semibold">{t('qa.runDetailTitle')}</h2>
           <div className="flex items-center gap-3 text-xs">
-            {data?.report_url && (
+            {data?.report_url && data.run.executor !== 'preview' && (
               <a
                 href={data.report_url}
                 target="_blank"
@@ -117,9 +121,11 @@ function RunDetailBody({
   return (
     <>
       <div className="space-y-1">
+        {run.target_url && <p className="text-xs text-muted-foreground break-all">Alvo: {run.target_url} · {run.criteria?.length ?? 0} critérios</p>}
         <div className="flex items-center gap-2">
           <span className="text-base font-semibold truncate">{run.suite}</span>
           <QaStatusBadge kind="run" status={run.status} />
+          <span className="text-xs text-muted-foreground">{run.executor === 'preview' ? 'Preview' : 'Playwright'}</span>
           {run.service_id && run.service_id !== 'main' && (
             <span className="text-[10px] uppercase tracking-wider bg-muted px-1.5 py-0.5 rounded">
               {run.service_id}

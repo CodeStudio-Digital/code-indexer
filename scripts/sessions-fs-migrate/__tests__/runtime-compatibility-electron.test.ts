@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 electronDescribe('migrated bundle runtime compatibility', () => {
-  it('reopens conversation, tools, goal, plans, tasks, metrics and state through FsSessionStore', async () => {
+  it('reopens conversation, tools, plans, tasks, metrics and state through FsSessionStore', async () => {
     const root = mkdtempSync(join(tmpdir(), 'sessions-fs-runtime-compat-'));
     cleanup.push(root);
     const projectRoot = join(root, 'project');
@@ -542,11 +542,7 @@ electronDescribe('migrated bundle runtime compatibility', () => {
           result_text: 'second duplicate output',
         },
       ]);
-      expect(await store.getSessionGoal(sessionUuid)).toMatchObject({
-        text: 'Ship filesystem sessions',
-        status: 'in_progress',
-        budget_tokens: 1234,
-      });
+      expect(await store.getSessionStateData(sessionUuid)).not.toHaveProperty('goal');
       expect(await store.listPlans(sessionUuid)).toMatchObject([
         {
           tool_use_id: 'plan-1',

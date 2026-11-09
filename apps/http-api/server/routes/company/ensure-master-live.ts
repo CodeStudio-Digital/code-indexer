@@ -36,6 +36,7 @@ interface EnsureMasterOpts {
   /** Delivered to the master as a continuation (the answer / message / plan verdict). */
   message: string;
   attachments?: Parameters<CompanyOrchestrator['startMaster']>[0]['attachments'];
+  boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
   interject?: boolean;
   thinking?: boolean;
 }
@@ -79,6 +80,7 @@ export async function ensureCompanyMasterLiveLocked(
       const delivery = await existing.sendMessageToMaster(opts.message, {
         interject: opts.interject,
         attachments: opts.attachments,
+        boardAttachments: opts.boardAttachments,
         thinking: opts.thinking,
       });
       if (!delivery.ok) {
@@ -162,6 +164,7 @@ export async function ensureCompanyMasterLiveLocked(
       maxTurns: 100,
       roleConfigs,
       attachments: opts.attachments,
+      boardAttachments: opts.boardAttachments,
       thinking: opts.thinking ?? masterRuntime.thinking,
       thinkingBudgetTokens: masterRuntime.thinkingBudgetTokens,
       temperature: masterRuntime.temperature,

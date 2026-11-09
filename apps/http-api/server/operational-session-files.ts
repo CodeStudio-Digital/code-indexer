@@ -15,6 +15,8 @@ import {
   type SessionMetadata,
   type SessionState,
 } from '@mcp/session-storage';
+import { companySessionIdentity, companyConfigRevision } from '@mcp/company/services/session-identity.js';
+import type { CompanySessionIdentity } from '@mcp/company-contracts';
 
 export type OperationalRuntimeKind = 'company' | 'app_studio';
 
@@ -28,7 +30,7 @@ interface OperationalProjectResolver {
   getProject(projectId: ProjectId): OperationalProject | null;
 }
 
-export interface CompanySessionFileRow {
+export interface CompanySessionFileRow extends CompanySessionIdentity {
   id: CompanySessionId;
   template_id: number | null;
   runtime_kind: OperationalRuntimeKind;
@@ -69,6 +71,7 @@ export interface CreateCompanyFileSessionInput {
 }
 
 type CompanyMetadata = {
+  configuration_origin: { revision: string; inherited_from: string } | null;
   name: string;
   template_id: number | null;
   runtime_kind: OperationalRuntimeKind;
@@ -88,6 +91,8 @@ function jsonObject(value: unknown): Record<string, unknown> {
 function asCompanyMetadata(session: SessionMetadata): CompanyMetadata {
   const raw = jsonObject(session.metadata.company);
   return {
+    configuration_origin: typeof jsonObject(raw.configuration_origin).revision === 'string' && typeof jsonObject(raw.configuration_origin).inherited_from === 'string'
+      ? jsonObject(raw.configuration_origin) as { revision: string; inherited_from: string } : null,
     name: typeof raw.name === 'string' ? raw.name : session.title ?? 'Company',
     template_id:
       typeof raw.template_id === 'number' ? raw.template_id : null,
@@ -210,6 +215,7 @@ export class OperationalSessionFiles {
   #companyRow(entry: CatalogEntry): CompanySessionFileRow {
     const company = asCompanyMetadata(entry.session);
     return {
+      ...companySessionIdentity({ id: entry.session.id, parent_session_id: entry.session.parent_session_id, config_json: company.config_json }, jsonObject(entry.session.metadata.company).configuration_origin),
       id: entry.session.id as unknown as CompanySessionId,
       template_id: company.template_id,
       runtime_kind: company.runtime_kind,
@@ -262,6 +268,7 @@ export class OperationalSessionFiles {
       ]),
     );
     const company: CompanyMetadata = {
+      configuration_origin: null,
       name,
       template_id: input.template_id ?? null,
       runtime_kind: runtimeKind,
@@ -271,6 +278,9 @@ export class OperationalSessionFiles {
       recovered_at: null,
       recovered_reason: null,
     };
+    const configurationOrigin = input.parent_session_id
+      ? { revision: companyConfigRevision(input.config_json ?? '{}'), inherited_from: input.parent_session_id }
+      : null;
     const entry = await this.#repository.createSession({
       kind: runtimeKind,
       scope: global
@@ -286,7 +296,7 @@ export class OperationalSessionFiles {
         : null,
       title: name,
       status: 'idle',
-      metadata: { company } as unknown as Record<string, JsonValue>,
+      metadata: { company: { ...company, configuration_origin: configurationOrigin } } as unknown as Record<string, JsonValue>,
     });
     return this.#companyRow(entry);
   }

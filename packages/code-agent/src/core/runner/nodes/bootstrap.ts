@@ -11,18 +11,13 @@
  */
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import { events } from '../machine/events.js';
-import { unresolvedToolOutcome, uncertainToolOutcomeError } from '../../uncertain-tool-outcome.js';
+import { synchronizeOutcomeRecovery } from '../outcome-recovery.js';
 
 export class BootstrapNode implements BehaviorNode {
   readonly state = 'Bootstrap' as const;
 
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
-    const uncertain = unresolvedToolOutcome(ctx.messages);
-    if (uncertain) {
-      ctx.stopReason = 'error';
-      ctx.error = uncertainToolOutcomeError(uncertain);
-      return events.toolOutcomeUnknown();
-    }
+    await synchronizeOutcomeRecovery(ctx);
     console.log(`[coder/bt] Bootstrap emitting run_started runId=${ctx.runId}`);
     ctx.emit('run_started', {
       runId: ctx.runId,

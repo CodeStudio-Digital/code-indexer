@@ -16,6 +16,7 @@ export interface RowChangeInput {
   table: string;
   pk?: Record<string, unknown>;
   values?: Record<string, unknown>;
+  original?: Record<string, unknown>;
 }
 
 export interface ChangeSetState {
@@ -61,7 +62,7 @@ export function buildRowChanges(
     seen.add(rk);
     const pk = Object.fromEntries(pkCols.map((c) => [c, row[c]]));
     if (state.deleted.has(rk)) {
-      out.push({ op: 'delete', schema, table, pk });
+      out.push({ op: 'delete', schema, table, pk, original: { ...row } });
       continue;
     }
     const patch = state.edited[rk];
@@ -70,7 +71,7 @@ export function buildRowChanges(
     const values = Object.fromEntries(
       Object.entries(patch).filter(([col, value]) => !sameValue(value, row[col])),
     );
-    if (Object.keys(values).length > 0) out.push({ op: 'update', schema, table, pk, values });
+    if (Object.keys(values).length > 0) out.push({ op: 'update', schema, table, pk, values, original: { ...row } });
   }
   for (const nr of state.newRows) {
     const values = Object.fromEntries(Object.entries(nr.values).filter(([, v]) => v !== undefined));

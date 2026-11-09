@@ -6,8 +6,13 @@
  * `pg_cancel_backend(pid)`. Rows are capped by `maxRows` (streaming is P4).
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { ResultWindow } from './result-window.js';
+import { createRequire } from 'node:module';
+import { isReadStatement } from './sql/read-guard.js';
+import type { EventEmitter } from 'node:events';
 import { assertDatabaseDispatch } from './dispatch.js';
 import { buildTablePreview } from './sql/preview.js';
+import { timedDatabaseStage } from './query-timing.js';
 import type {
   ColumnInfo,
   DatabaseDriver,
@@ -26,6 +31,7 @@ import type {
 // Minimal structural types so we don't hard-depend on `pg`'s types at build time.
 interface PgClient {
   query(config: { text: string; values?: unknown[]; rowMode?: string }): Promise<PgResult | PgResult[]>;
+  query(query: EventEmitter): unknown;
   /** Passing an error evicts the client from the pool instead of recycling it. */
   release(err?: Error | boolean): void;
 }
@@ -77,13 +83,65 @@ function sslConfig(config: DbConnectConfig): Record<string, unknown> | undefined
 }
 
 export async function createPostgresDriver(config: DbConnectConfig): Promise<DatabaseDriver> {
-  const { default: pg } = (await import('pg')) as unknown as { default: { Pool: new (c: unknown) => PgPool } };
+  const require = createRequire(import.meta.url);
+  const { default: pg } = (await import('pg')) as unknown as { default: { Pool: new (c: unknown) => PgPool; Query?: new (c: unknown) => EventEmitter } };
   const pool = new pg.Pool(buildPoolConfig(config));
+  // Cancellation has its own connection capacity; saturation of the data pool
+  // cannot queue the cancellation behind the queries it must interrupt.
+  const control = new pg.Pool({ ...buildPoolConfig(config), max: 1 });
+  async function boundedQuery(client: PgClient, text: string, values: unknown[] | undefined, max: number): Promise<QueryResult> {
+    if (!pg.Query) return shapePgResult(await client.query({ text, values }), max);
+    if (isReadStatement(text)) {
+      const Cursor = require('pg-cursor') as new (text: string, values?: unknown[]) => EventEmitter & {
+        read(count: number, callback: (error: Error | null, rows: Array<Record<string, unknown>>, result: PgResult) => void): void;
+        close(): Promise<void>;
+      };
+      const cursor = new Cursor(text, values);
+      const window = new ResultWindow(max);
+      let fields: PgResult['fields'] = [], exhausted = false;
+      client.query(cursor);
+      try {
+        while (!exhausted && window.observed <= window.max && window.bytes < window.maxBytes) {
+          const count = Math.min(128, window.max + 1 - window.observed);
+          const chunk = await new Promise<Array<Record<string, unknown>>>((resolve, reject) => {
+            cursor.read(count, (error, rows, result) => {
+              if (error) reject(error);
+              else { fields = result?.fields ?? fields; resolve(rows); }
+            });
+          });
+          exhausted = chunk.length < count;
+          for (const row of chunk) window.push(row);
+        }
+        return { rows: window.rows, rowCount: window.observed,
+          fields: (fields ?? []).map(f => ({ name: f.name, dataTypeId: f.dataTypeID })),
+          truncated: window.truncated || !exhausted,
+          acquisition: { ...window.acquisition, mode: 'cursor', observedRowsExact: exhausted } };
+      } finally { await cursor.close(); }
+    }
+    let window = new ResultWindow(max);
+    let rowResult: PgResult | undefined;
+    return new Promise((resolve, reject) => {
+      const query = new pg.Query!({ text, values });
+      query.on('row', (row, result: PgResult) => {
+        if (result !== rowResult) { rowResult = result; window = new ResultWindow(max); }
+        window.push(row);
+      });
+      query.once('error', reject);
+      query.once('end', (raw: PgResult | PgResult[]) => {
+        const result = Array.isArray(raw) ? [...raw].reverse().find(r => r.fields?.length) ?? raw[raw.length - 1] : raw;
+        if (rowResult && rowResult !== result) window = new ResultWindow(max);
+        resolve({ rows: window.rows, rowCount: result.rowCount ?? window.observed,
+          fields: (result.fields ?? []).map(f => ({ name: f.name, dataTypeId: f.dataTypeID })),
+          command: result.command, truncated: window.truncated, acquisition: window.acquisition });
+      });
+      client.query(query);
+    });
+  }
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
     assertDatabaseDispatch(opts);
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
-    const client = await pool.connect();
+    const client = await timedDatabaseStage('acquireMs', () => pool.connect());
     let pid: number | null = null;
     let onAbort: (() => void) | null = null;
     try {
@@ -94,7 +152,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
         if (opts.signal.aborted) throw new Error('query cancelled');
         onAbort = (): void => {
           // Side connection so the cancel isn't blocked behind the running query.
-          pool.query('SELECT pg_cancel_backend($1)', [pid]).catch(() => void 0);
+          control.query('SELECT pg_cancel_backend($1)', [pid]).catch(() => void 0);
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
@@ -104,8 +162,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
         await client.query({ text: `SET search_path TO ${qIdent(opts.schema)}, public` });
       }
       assertDatabaseDispatch(opts);
-      const raw = await client.query({ text: sql, values: opts.params });
-      return shapePgResult(raw, max);
+      return await timedDatabaseStage('executeFetchMs', () => boundedQuery(client, sql, opts.params, max));
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
       // Reset the search_path so the pooled client is clean for the next borrower.
@@ -128,12 +185,14 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
   }
 
   async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
-    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
+    validateBatch(statements, config.readOnly);
+    const tracker = new BatchTracker('transactional', opts);
+    tracker.dispatch();
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pinned client for the whole batch — a runQuery loop could hand each
     // statement a different pooled backend, so BEGIN/COMMIT wouldn't share one
     // transaction. Here BEGIN…COMMIT and every statement land on this client.
-    const client = await pool.connect();
+    const client = await timedDatabaseStage('acquireMs', () => pool.connect());
     let onAbort: (() => void) | null = null;
     let inTxn = false;
     let dirty = false;
@@ -144,38 +203,46 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
         const pid = Number((pidRes.rows[0] as { pid: number }).pid);
         onAbort = (): void => {
           // Side connection so the cancel isn't blocked behind the running batch.
-          pool.query('SELECT pg_cancel_backend($1)', [pid]).catch(() => void 0);
+          control.query('SELECT pg_cancel_backend($1)', [pid]).catch(() => void 0);
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
       await client.query({ text: 'BEGIN' });
       inTxn = true;
+      tracker.started = true;
+      if (config.readOnly) await client.query({ text: 'SET TRANSACTION READ ONLY' });
+      if (opts.timeoutMs != null) await client.query({ text: "SELECT set_config('statement_timeout', $1, true)", values: [String(opts.timeoutMs)] });
+      if (opts.schema) await client.query({ text: "SELECT set_config('search_path', $1, true)", values: [quoteIdent('postgres', opts.schema)] });
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
       for (let index = 0; index < statements.length; index += 1) {
+        tracker.dispatch();
         const stmt = statements[index];
-        last = shapePgResult(await client.query({
-          text: typeof stmt === 'string' ? stmt : stmt.sql,
-          values: typeof stmt === 'string' ? undefined : stmt.params,
-        }), max);
+        last = await timedDatabaseStage('executeFetchMs', () => boundedQuery(client, typeof stmt === 'string' ? stmt : stmt.sql,
+          typeof stmt === 'string' ? undefined : stmt.params, max));
         opts.onResult?.(last, index);
+        tracker.completed++;
       }
+      tracker.dispatch();
+      tracker.committing = true;
       await client.query({ text: 'COMMIT' });
       inTxn = false;
-      return last;
+      return { ...last, batchOutcome: tracker.success() };
     } catch (err) {
       // A failed statement leaves the txn in the aborted state — ROLLBACK clears
       // it so the connection recycles clean. If even ROLLBACK fails, evict it.
+      let rolledBack = false;
       if (inTxn) {
         try {
           await client.query({ text: 'ROLLBACK' });
+          rolledBack = true;
         } catch {
           dirty = true;
         }
       }
-      throw err;
+      throw tracker.failure(err, rolledBack);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
-      client.release(dirty ? new Error('db-batch: rollback failed') : undefined);
+      client.release(dirty || opts.signal?.aborted ? new Error('db-batch: connection retired') : undefined);
     }
   }
 
@@ -409,7 +476,7 @@ export async function createPostgresDriver(config: DbConnectConfig): Promise<Dat
       return runQuery(sql, { params });
     },
     async close() {
-      await pool.end();
+      await Promise.all([pool.end(), control.end()]);
     },
   };
   return driver;
@@ -505,3 +572,5 @@ function groupForeignKeys(
   }
   return [...map.values()];
 }
+import { BatchTracker, validateBatch } from './batch-outcome.js';
+import { quoteIdent } from './sql/identifiers.js';

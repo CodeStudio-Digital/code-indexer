@@ -23,6 +23,11 @@ export interface ConnMeta {
 
 interface PoolEntry {
   driver: DatabaseDriver;
+  raw: DatabaseDriver;
+  active: number;
+  retired: boolean;
+  drained?: () => void;
+  closing?: Promise<void>;
   lastUsed: number;
   pinned: boolean;
   meta: ConnMeta;
@@ -47,14 +52,54 @@ export class DbConnectionManager {
   private pools = new Map<string, PoolEntry>();
   private openings = new Map<string, OpeningEntry>();
   private sweeper: NodeJS.Timeout | null = null;
+  private rotations = new Map<string, number>();
+  private nextRotation = 0;
+  constructor(private readonly limits = { pools: 64, activePerPool: 32 }) {}
+
+  private retire(entry: PoolEntry): Promise<void> {
+    if (entry.closing) return entry.closing;
+    entry.retired = true;
+    entry.closing = (async () => {
+      if (entry.active > 0) await new Promise<void>((resolve) => { entry.drained = resolve; });
+      await entry.raw.close();
+    })();
+    return entry.closing;
+  }
+
+  private leased(raw: DatabaseDriver, pinned: boolean): PoolEntry {
+    const entry: PoolEntry = { raw, driver: raw, pinned, active: 0, retired: false, lastUsed: Date.now(), meta: {} };
+    const methods = new Map<PropertyKey, unknown>();
+    entry.driver = new Proxy(raw, {
+      get: (target, property) => {
+        const value = Reflect.get(target, property);
+        if (typeof value !== 'function') return value;
+        if (!methods.has(property)) methods.set(property, property === 'close'
+          ? () => this.retire(entry)
+          : async (...args: unknown[]) => {
+            if (entry.retired) throw new Error('Database connection is draining; reconnect before dispatch');
+            if (property !== 'cancelQuery' && entry.active >= this.limits.activePerPool) {
+              throw new Error('Database operation capacity reached; wait for an active operation to finish');
+            }
+            entry.active++;
+            try { return await Reflect.apply(value, target, args); }
+            finally {
+              entry.lastUsed = Date.now();
+              if (--entry.active === 0) entry.drained?.();
+            }
+          });
+        return methods.get(property);
+      },
+    });
+    return entry;
+  }
 
   private ensureSweeper(): void {
     if (this.sweeper) return;
     this.sweeper = setInterval(() => {
       const cutoff = Date.now() - IDLE_TTL_MS;
       for (const [key, entry] of this.pools.entries()) {
-        if (!entry.pinned && entry.lastUsed < cutoff) {
-          entry.driver.close().catch(() => void 0);
+        if (!entry.pinned && entry.active === 0 && entry.lastUsed < cutoff) {
+          void this.retire(entry).catch(() => void 0);
           this.pools.delete(key);
         }
       }
@@ -70,7 +115,7 @@ export class DbConnectionManager {
   /** Get an existing driver by key, or create one from `config`. */
   async acquire(key: string, config: DbConnectConfig, opts: AcquireOptions = {}): Promise<DatabaseDriver> {
     const existing = this.pools.get(key);
-    if (existing) {
+    if (existing && !existing.retired) {
       existing.lastUsed = Date.now();
       if (opts.pinned) existing.pinned = true;
       return existing.driver;
@@ -80,27 +125,36 @@ export class DbConnectionManager {
       pending.pinned ||= opts.pinned ?? false;
       return pending.promise;
     }
+    if (this.pools.size + this.openings.size >= this.limits.pools) {
+      throw new Error('Database pool capacity reached; disconnect an idle connection before opening another');
+    }
+    const rotation = opts.invalidatePrefix ? ++this.nextRotation : 0;
+    if (opts.invalidatePrefix) this.rotations.set(opts.invalidatePrefix, rotation);
     const opening = { pinned: opts.pinned ?? false, closed: false } as OpeningEntry;
     // Publish before invoking an asynchronous driver factory so concurrent
     // callers share setup and close can fence a not-yet-connected resource.
     opening.promise = Promise.resolve().then(async () => {
       if (opening.closed) throw new Error('Database pool closed during connection setup');
       if (opts.invalidatePrefix) {
+        // Two simultaneous rotations must never wait on each other's setup.
+        if (this.rotations.get(opts.invalidatePrefix) !== rotation) throw new Error('Database connection setup superseded by a newer configuration');
         const stale = [...new Set([...this.pools.keys(), ...this.openings.keys()])]
           .filter(candidate => candidate !== key && candidate.startsWith(opts.invalidatePrefix!));
         if (stale.length) await Promise.all(stale.map(candidate => this.closeKey(candidate)));
       }
       if (opening.closed) throw new Error('Database pool closed during connection setup');
       const driver = await createDriver(config);
-      if (opening.closed) {
+      if (opening.closed || (opts.invalidatePrefix && this.rotations.get(opts.invalidatePrefix) !== rotation)) {
         await driver.close().catch(() => void 0);
         throw new Error('Database pool closed during connection setup');
       }
-      this.pools.set(key, { driver, lastUsed: Date.now(), pinned: opening.pinned, meta: {} });
+      const entry = this.leased(driver, opening.pinned);
+      this.pools.set(key, entry);
       this.ensureSweeper();
-      return driver;
+      return entry.driver;
     }).finally(() => {
       if (this.openings.get(key) === opening) this.openings.delete(key);
+      if (opts.invalidatePrefix && this.rotations.get(opts.invalidatePrefix) === rotation) this.rotations.delete(opts.invalidatePrefix);
     });
     this.openings.set(key, opening);
     return opening.promise;
@@ -120,13 +174,13 @@ export class DbConnectionManager {
   /** Look up an established driver (no create). Bumps lastUsed. */
   get(key: string): DatabaseDriver | null {
     const entry = this.pools.get(key);
-    if (!entry) return null;
+    if (!entry || entry.retired) return null;
     entry.lastUsed = Date.now();
     return entry.driver;
   }
 
   has(key: string): boolean {
-    return this.pools.has(key);
+    return this.pools.has(key) && !this.pools.get(key)!.retired;
   }
 
   /** Close + drop a single connection. */
@@ -140,22 +194,23 @@ export class DbConnectionManager {
     this.pools.delete(key);
     await Promise.allSettled([
       ...(pending ? [pending.promise] : []),
-      ...(entry ? [entry.driver.close()] : []),
+      ...(entry ? [this.retire(entry)] : []),
     ]);
   }
 
   /** Close every pooled driver. For shutdown + tests. */
   async closeAll(): Promise<void> {
-    const drivers = [...this.pools.values()].map((e) => e.driver);
+    const entries = [...this.pools.values()];
     const pending = [...this.openings.values()];
     for (const opening of pending) opening.closed = true;
     this.openings.clear();
+    this.rotations.clear();
     this.pools.clear();
     if (this.sweeper) {
       clearInterval(this.sweeper);
       this.sweeper = null;
     }
-    await Promise.allSettled([...drivers.map((d) => d.close()), ...pending.map(entry => entry.promise)]);
+    await Promise.allSettled([...entries.map((e) => this.retire(e)), ...pending.map(entry => entry.promise)]);
   }
 }
 

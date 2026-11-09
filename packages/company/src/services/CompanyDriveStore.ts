@@ -7,7 +7,7 @@
  * unreferenced payload but never a confirmed reference to missing bytes.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -267,6 +267,7 @@ export class CompanyDriveStore {
     path: string,
     content: string,
     owner: DriveOwnerRef = {},
+    expectedVersion?: string | null,
   ): DriveFileMeta {
     this.assertScope(scopeKey);
     validatePath(path);
@@ -281,6 +282,7 @@ export class CompanyDriveStore {
       this.rootSessionId,
       (candidate) => candidate.data.path === path,
       () => {
+        if (typeof expectedVersion === 'string') throw new Error('Document version conflict: document was removed; read again');
         created = true;
         const payloadFile = randomUUID();
         atomicWrite(this.payloadPath(payloadFile), payload);
@@ -297,6 +299,10 @@ export class CompanyDriveStore {
         };
       },
       (previous) => {
+        if (expectedVersion !== undefined) {
+          const version = createHash('sha256').update(readFileSync(this.payloadPath(previous.data.payload_file))).digest('hex');
+          if (expectedVersion !== version) throw new Error('Document version conflict: another session updated it; read again');
+        }
         atomicWrite(this.payloadPath(previous.data.payload_file), payload);
         return {
           ...previous.data,

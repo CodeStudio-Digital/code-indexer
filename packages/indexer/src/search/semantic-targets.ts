@@ -340,6 +340,7 @@ function validateRerankResults(
  * incomplete or malformed result sets instead of assigning implicit scores. */
 class StrictReranker implements RerankerService {
   constructor(private readonly inner: RerankerService) {}
+  queryBlockReason(query: string): string | null { return this.inner.queryBlockReason?.(query) ?? null; }
   get name(): string { return this.inner.name; }
   cacheRevision(): string {
     return this.inner.cacheRevision?.() ?? `legacy:${this.inner.name}`;
@@ -371,6 +372,7 @@ class StrictReranker implements RerankerService {
  * the strict facade above so a broken target is observable. */
 class FailOpenReranker implements RerankerService {
   constructor(private readonly inner: RerankerService) {}
+  queryBlockReason(query: string): string | null { return this.inner.queryBlockReason?.(query) ?? null; }
   get name(): string { return this.inner.name; }
   cacheRevision(): string {
     return this.inner.cacheRevision?.() ?? `legacy:${this.inner.name}`;

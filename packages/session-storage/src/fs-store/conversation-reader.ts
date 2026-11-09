@@ -20,11 +20,15 @@ import { compactionBoundary, finiteNumber } from './session-projection.js';
 import { FsSessionDirectory } from './session-directory.js';
 import { attachmentPage, readAttachment } from './session-attachments.js';
 import type { FsCoderMessageRow, FsMessagePage, FsSessionWithMessages } from './types.js';
+import type { FsToolOutcomeState } from './tool-outcome-types.js';
 import type { FsConversationChapterSourcePage } from './history-metrics-types.js';
 import { queryConversationProjection, type FsConversationProjection,
   type FsConversationProjectionQuery } from './conversation-projection-query.js';
 
 interface HydratedConversation {
+  unresolved_tool_outcomes?: string[];
+  resolved_tool_outcomes?: string[];
+  tool_outcome_state?: FsToolOutcomeState;
   entry: Awaited<ReturnType<FsSessionDirectory['requireEntry']>>;
   session: ReturnType<FsSessionDirectory['map']>;
   rows: FsCoderMessageRow[];
@@ -245,6 +249,8 @@ export class FsConversationReader {
     const projection = projectConversation(
       await this.directory.repository.readConversation(entry.location),
     );
+    // Inspect typed metadata before selecting the visible tail. Compaction is
+    // not reconciliation and must not silently restore mutation authority.
     const rows = projection.storedMessages.map((stored) =>
       messageRow(entry.session.id, stored, { role: stored.role, phase: stored.phase, content: [] }),
     );
@@ -254,6 +260,9 @@ export class FsConversationReader {
       rows,
       messages: [],
       stored: new Map(projection.storedMessages.map(message => [message.seq, message])),
+      unresolved_tool_outcomes: projection.toolOutcomes.unresolvedToolUseIds,
+      resolved_tool_outcomes: projection.toolOutcomes.resolvedToolUseIds,
+      tool_outcome_state: projection.toolOutcomes,
     };
   }
 
@@ -263,6 +272,9 @@ export class FsConversationReader {
     if (!(await this.directory.entry(id))) return null;
     const result = await this.hydrated(id, { kind: 'visible', boundary: await this.boundary(id) });
     return {
+      ...(result.unresolved_tool_outcomes ? { unresolved_tool_outcomes: result.unresolved_tool_outcomes } : {}),
+      resolved_tool_outcomes: result.resolved_tool_outcomes,
+      tool_outcome_state: result.tool_outcome_state,
       session: result.session,
       messages: result.messages,
       message_rows: result.rows,
@@ -275,6 +287,9 @@ export class FsConversationReader {
     if (!(await this.directory.entry(id))) return null;
     const result = await this.hydrated(id);
     return {
+      ...(result.unresolved_tool_outcomes ? { unresolved_tool_outcomes: result.unresolved_tool_outcomes } : {}),
+      resolved_tool_outcomes: result.resolved_tool_outcomes,
+      tool_outcome_state: result.tool_outcome_state,
       session: result.session,
       messages: result.messages,
       message_rows: result.rows,
@@ -304,6 +319,9 @@ export class FsConversationReader {
     if (!(await this.directory.entry(id))) return null;
     const result = await this.hydrated(id, { kind: 'tail', limit: tail, boundary: await this.boundary(id) });
     return {
+      unresolved_tool_outcomes: result.unresolved_tool_outcomes,
+      resolved_tool_outcomes: result.resolved_tool_outcomes,
+      tool_outcome_state: result.tool_outcome_state,
       session: result.session,
       messages: result.messages,
       message_rows: result.rows,

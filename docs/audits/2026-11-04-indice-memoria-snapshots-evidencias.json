@@ -1,0 +1,234 @@
+{
+  "createdAt": "2026-11-04T17:41:32.309Z",
+  "audit": "indice-memoria-snapshots",
+  "productionModified": false,
+  "realDataReadOnly": true,
+  "modelCalls": 0,
+  "scope": {
+    "projectId": 10,
+    "projectName": "Protomaker Hosp",
+    "checkout": "D:/MCP",
+    "claims": "Focused audit; no full-suite, installed-app or LLM efficacy certification"
+  },
+  "structure": {
+    "counts": {
+      "files": 795,
+      "symbols": 8733,
+      "file_dependencies": 1244,
+      "structural_revisions": 1
+    },
+    "fileStats": {
+      "total": 795,
+      "matched": 795,
+      "missing": 0,
+      "sizeChanged": 0,
+      "mtimeChanged": 0,
+      "noStoredMtime": 0,
+      "outsideRoot": 0,
+      "errors": 0
+    },
+    "integrity": {
+      "orphanSymbols": 0,
+      "orphanDependencySources": 0,
+      "orphanDependencyTargets": 0
+    },
+    "pendingDeltas": 0
+  },
+  "memory": {
+    "referenceHashes": {
+      "memories": 263,
+      "withReferences": 97,
+      "withBaseline": 109,
+      "withoutBaseline": 49,
+      "invalid": 0
+    },
+    "centralFiles": 755,
+    "hashDrift": {
+      "localFiles": 795,
+      "missingInCentral": 53,
+      "differentHash": 44
+    },
+    "referenceStaleness": {
+      "referencesWithBaseline": 109,
+      "staleAgainstCentral": 0,
+      "staleAgainstLocal": 79,
+      "disagrees": 79,
+      "falseFresh": 79,
+      "falseStale": 0,
+      "memoriesWithDisagreement": 56
+    },
+    "liveAccess": [
+      {
+        "scope": "project",
+        "live": 263,
+        "accessed30d": 64
+      },
+      {
+        "scope": "user",
+        "live": 219,
+        "accessed30d": 0
+      }
+    ],
+    "vectorCoverage": [
+      {
+        "scope": "project",
+        "namespace": "memory:project:p10",
+        "generation": 7,
+        "live": 263,
+        "indexed": 216,
+        "failed": 14,
+        "missing": 33,
+        "partial": 0
+      },
+      {
+        "scope": "user",
+        "namespace": "memory:user",
+        "generation": 7,
+        "live": 219,
+        "indexed": 130,
+        "failed": 50,
+        "missing": 39,
+        "partial": 0
+      }
+    ],
+    "events": [
+      {
+        "event_type": "recall",
+        "scope": "project",
+        "count": 59,
+        "nonempty": 44,
+        "kept": 173,
+        "dropped": null,
+        "firstAt": "2026-10-05 18:09:29",
+        "lastAt": "2026-11-04 17:17:40"
+      }
+    ]
+  },
+  "search": {
+    "at": "2026-11-04T17:40:45.304Z",
+    "readOnly": true,
+    "days": 30,
+    "exists": true,
+    "searches": 11,
+    "outcomes": 0,
+    "byConsumer": {
+      "agent": 11
+    },
+    "byModes": {
+      "auto->fts": 9,
+      "auto->hybrid": 2
+    },
+    "byOutcome": {},
+    "sessionScoped": 11,
+    "invalidLines": 0,
+    "bytes": 22698
+  },
+  "legacySnapshots": {
+    "projectCount": 0,
+    "profileActiveCount": 16,
+    "omittedCategoryRows": 3,
+    "probe": {
+      "executedAt": "2026-11-04T17:28:27.367Z",
+      "methodSource": "packages\\services\\src\\services\\snapshots.ts",
+      "methodLine": 438,
+      "uiCategoriesSource": "apps\\dashboard\\features\\snapshots\\snapshot-types.ts",
+      "inputCategories": [
+        "architecture",
+        "decision",
+        "pattern",
+        "convention",
+        "todo",
+        "note",
+        "gotcha",
+        "procedure"
+      ],
+      "renderedCategories": [
+        "architecture",
+        "decision",
+        "pattern",
+        "convention",
+        "todo",
+        "note"
+      ],
+      "omittedCategories": [
+        "gotcha",
+        "procedure"
+      ],
+      "emptyInput": "",
+      "gotchaOnlyOutput": "# Project Context\n",
+      "procedureOnlyOutput": "# Project Context\n",
+      "boundary": "Pure production-method extraction. No DB, models, network, runtime UI, or real project data."
+    }
+  },
+  "tests": {
+    "structural": {
+      "source": ".tmp/knowledge-audit-2026-11-04/structural/structural-baseline.json",
+      "success": true,
+      "tests": 80,
+      "passed": 80,
+      "failed": 0,
+      "testFiles": 11
+    },
+    "memory": {
+      "source": ".tmp/knowledge-audit-2026-11-04/memory/existing-tests-results.json",
+      "success": true,
+      "tests": 181,
+      "passed": 181,
+      "failed": 0,
+      "testFiles": 19
+    },
+    "snapshots": {
+      "at": "2026-11-04T17:38:33.9088659Z",
+      "firstRun": {
+        "passed": 25,
+        "reason": "10 EPERM realpath failures in sandbox; 25 passed",
+        "failed": 10
+      },
+      "hostRetry": {
+        "passed": 10,
+        "failed": 0,
+        "success": true
+      },
+      "uniqueTests": 35,
+      "finalPassed": 35,
+      "checkedPids": [
+        61504,
+        63396,
+        69896,
+        78368,
+        63856
+      ],
+      "alive": []
+    },
+    "structuralProbes": {
+      "source": ".tmp/knowledge-audit-2026-11-04/structural/structural-probes-final.json",
+      "success": true,
+      "tests": 2,
+      "passed": 2,
+      "failed": 0,
+      "testFiles": 2
+    },
+    "memoryProbes": {
+      "source": ".tmp/knowledge-audit-2026-11-04/memory/observed-gaps-results.json",
+      "success": true,
+      "tests": 6,
+      "passed": 6,
+      "failed": 0,
+      "testFiles": 1
+    },
+    "formatProbeCount": 1,
+    "totalExistingPassed": 296,
+    "totalProbeCases": 9,
+    "productionBugsFixed": false,
+    "exclusions": [
+      "Initial broad include discovery/run interrupted and corrected",
+      "Sandbox EPERM retries separated from product failures"
+    ]
+  },
+  "reports": [
+    "docs/audits/2026-11-04-indice-memoria-snapshots.md",
+    ".tmp/knowledge-audit-2026-11-04/structural/report.md",
+    ".tmp/knowledge-audit-2026-11-04/memory/report.md",
+    ".tmp/knowledge-audit-2026-11-04/snapshots/report.md"
+  ]
+}

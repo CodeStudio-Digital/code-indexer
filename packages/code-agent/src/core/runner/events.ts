@@ -44,6 +44,9 @@ export interface RunnerEvents {
    * refusals from genuine tool failures (both have isError=true).
    */
   tool_call_result: (id: string, name: string, result: {
+    evidence?: import('@mcp/code-agent/core/tool.js').ToolResult['evidence'];
+    structuredData?: unknown;
+    structuredDataOmitted?: 'invalid' | 'too_large';
     content: string;
     isError?: boolean;
     effectOutcome?: 'unknown';
@@ -61,17 +64,6 @@ export interface RunnerEvents {
     guardVerdict?: import('@mcp/code-agent/core/tool.js').GuardVerdict;
     stateEpoch?: number;
   }, durationMs: number) => void;
-  /**
-   * Host persistence acknowledgements for create_goal/update_goal. Their live
-   * tool result is provisional until the assistant/tool rows and ordered goal
-   * mutations commit together, so SSE/UI keep the card pending until one of
-   * these events arrives.
-   */
-  goal_mutations_persisted: (payload: { toolUseIds: string[] }) => void;
-  goal_mutations_persistence_failed: (payload: {
-    toolUseIds: string[];
-    message: string;
-  }) => void;
   /**
    * Periodic heartbeat fired while a tool is in flight, and explicit
    * progress reports from cooperating tools (via `ctx.reportProgress`).
@@ -188,7 +180,8 @@ export interface RunnerEvents {
     toolName: string;
     argsSummary: string;
     riskClass: 'write' | 'execute' | 'admin';
-    approvalKind: 'standard' | 'database_write';
+    approvalKind: 'standard' | 'database_write' | 'outcome_recovery';
+    recovery?: { fingerprint: string; incidents: readonly import('../outcome-recovery-state.js').OutcomeRecoveryIncident[] };
     turn?: number;
     nested?: boolean;
   }) => void;
@@ -197,7 +190,7 @@ export interface RunnerEvents {
     toolUseId: string;
     toolName: string;
     approved: boolean;
-    source: 'user' | 'interrupt' | 'abort';
+    source: 'user' | 'interrupt' | 'abort' | 'recovery';
     note?: string;
   }) => void;
   /** Emitted when provider/model is swapped mid-session. */

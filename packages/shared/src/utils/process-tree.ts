@@ -82,8 +82,9 @@ function launchWindowsKill(request: WindowsKillRequest): void {
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
     finish();
   }, WINDOWS_KILL_TIMEOUT_MS);
-  timeout.unref?.();
-  child.unref();
+  // Awaited cleanup must keep standalone hosts alive until it settles. An
+  // unreferenced child AND timer allow Node to exit with this promise pending.
+  // The bounded timeout preserves asynchronous shutdown without hanging it.
 }
 
 function pumpWindowsKillQueue(): void {

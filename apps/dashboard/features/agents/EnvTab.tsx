@@ -17,12 +17,13 @@
  * without grepping the log.
  */
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { confirm } from '../../components/ui/prompt-dialog.js';
 import { EnvRowEditor, type EnvAutoKind, type EnvRow, type EnvSource } from './EnvRowEditor.js';
+import { readEnvMutation, describeEnvApplication, type EnvApplication } from './env-application.js';
 import { EnvScopeSelector, type EnvServiceOption } from './EnvScopeSelector.js';
 
 /** Render order — operator-relevant groups first, system noise last. */
@@ -97,31 +98,41 @@ interface EnvTabProps {
   companySessionId: string;
 }
 
-export default function EnvTab({ companySessionId }: EnvTabProps) {
+export default function EnvTab(props: EnvTabProps) {
+  return <EnvTabContent key={props.companySessionId} {...props} />;
+}
+
+function EnvTabContent({ companySessionId }: EnvTabProps) {
   const { t } = useTranslation('agents');
   const [envs, setEnvs] = useState<EnvRow[]>([]);
   const [revealed, setRevealed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const services = useSessionServices(companySessionId);
+  const [application, setApplication] = useState<string | null>(null);
 
-  async function reload() {
+  const request = useRef(0);
+  async function reload(result?: EnvApplication) {
+    const sequence = ++request.current;
+    if (result) setApplication(describeEnvApplication(result));
     setLoading(true);
     try {
       const r = await fetch(
         `/api/company/sessions/${companySessionId}/envs${revealed ? '?reveal=1' : ''}`,
       );
-      if (r.ok) {
-        const body = (await r.json()) as { envs: EnvRow[] };
-        setEnvs(body.envs ?? []);
-      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = (await r.json()) as { envs: EnvRow[] };
+      if (sequence === request.current) setEnvs(body.envs ?? []);
+    } catch (e) {
+      if (sequence === request.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (sequence === request.current) setLoading(false);
     }
   }
 
   useEffect(() => {
     void reload();
+    return () => { request.current += 1; };
   }, [companySessionId, revealed]);
 
   async function deleteEnv(key: string) {
@@ -131,10 +142,12 @@ export default function EnvTab({ companySessionId }: EnvTabProps) {
     }))) {
       return;
     }
-    await fetch(`/api/company/sessions/${companySessionId}/envs/${encodeURIComponent(key)}`, {
-      method: 'DELETE',
-    });
-    await reload();
+    try {
+      const response = await fetch(`/api/company/sessions/${companySessionId}/envs/${encodeURIComponent(key)}`, { method: 'DELETE' });
+      const result = await readEnvMutation(response);
+      setApplication(describeEnvApplication(result));
+      await reload();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }
 
   return (
@@ -160,17 +173,18 @@ export default function EnvTab({ companySessionId }: EnvTabProps) {
             variant="ghost"
             size="icon"
             className="h-7 w-7 shrink-0"
-            onClick={reload}
+            onClick={() => void reload()}
             title={t('env.reload')}
           >
             <RefreshCw className={'h-3.5 w-3.5 ' + (loading ? 'animate-spin' : '')} />
           </Button>
         </div>
         <p className="text-[11px] leading-snug text-muted-foreground">
-          {t('env.description')}
+          Configuração compartilhada da empresa, com escopo por serviço. Salvar atualiza os arquivos de ambiente; processos existentes podem exigir reinício.
         </p>
       </div>
 
+      {application && <div role="status" className="mb-3 rounded border p-2 text-xs">{application}</div>}
       {envs.length === 0 ? (
         <div className="text-xs text-muted-foreground border rounded p-3">
           {t('env.noEnvVars')}
@@ -207,7 +221,7 @@ function EnvGroupedList({
   sessionId: string;
   services: EnvServiceOption[];
   onDelete: (key: string) => Promise<void>;
-  onReload: () => Promise<void>;
+  onReload: (result?: EnvApplication) => Promise<void>;
 }) {
   const groups = useMemo(() => {
     const byBucket = new Map<EnvSource, EnvRow[]>();
@@ -242,7 +256,7 @@ function EnvGroupedList({
           <div className="divide-y">
             {rows.map((row) => (
               <EnvRowEditor
-                key={row.key}
+                key={`${row.key}:${row.updated_at}`}
                 row={row}
                 managed={source === 'auto'}
                 autoKind={source === 'auto' ? autoKindOf(row.key) : undefined}
@@ -267,7 +281,7 @@ function AddEnvForm({
 }: {
   sessionId: string;
   services: EnvServiceOption[];
-  onSaved: () => Promise<void>;
+  onSaved: (result?: EnvApplication) => Promise<void>;
   onError: (msg: string | null) => void;
 }) {
   const { t } = useTranslation('agents');
@@ -287,16 +301,13 @@ function AddEnvForm({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ value, is_secret: isSecret, service_scope: scope }),
       });
-      if (!r.ok) {
-        const b = (await r.json().catch(() => ({}))) as { error?: string };
-        onError(b.error ?? `HTTP ${r.status}`);
-        return;
-      }
+      const result = await readEnvMutation(r);
       setKey('');
       setValue('');
       setIsSecret(false);
       setScope(null);
-      await onSaved();
+      await onSaved(result);
+    } catch (e) { onError(e instanceof Error ? e.message : String(e));
     } finally {
       setSubmitting(false);
     }

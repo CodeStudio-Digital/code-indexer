@@ -298,12 +298,13 @@ describe('SemanticVectorWorkerClient generation cleanup RPC', () => {
     const request = vi.fn(async () => []);
     Object.defineProperty(client, 'request', { value: request });
 
-    await client.search([1, 0], { namespace: 'code:p3', generationId: 9, topK: 4 });
+    const signal = new AbortController().signal;
+    await client.search([1, 0], { namespace: 'code:p3', generationId: 9, topK: 4, signal });
 
     expect(request).toHaveBeenCalledWith('vectors.search', {
       queryVector: [1, 0],
       options: { namespace: 'code:p3', generationId: 9, topK: 4 },
-    });
+    }, signal);
   });
 
   it('transports the immutable batch write target through the worker bridge', async () => {

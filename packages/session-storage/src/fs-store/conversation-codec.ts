@@ -19,6 +19,8 @@ import type {
   FsStoredMessagePatch,
   FsToolCallRecord,
 } from './types.js';
+import { ToolOutcomeProjection } from './tool-outcome-projection.js';
+import type { FsToolOutcomeState } from './tool-outcome-types.js';
 
 export interface ProjectedStoredMessage extends FsStoredMessage {
   turn_seq: number;
@@ -32,6 +34,7 @@ export interface FsConversationProjection {
   commits: readonly ConversationCommit[];
   /** Highest sequence ever committed, including rows hidden by rollback. */
   highestMessageSeq: number;
+  toolOutcomes: FsToolOutcomeState;
 }
 
 interface StoredArtifactBlock {
@@ -344,7 +347,9 @@ export function parseCoderTurnPayload(
     !Array.isArray(payload.messages) ||
     !Array.isArray(payload.message_patches) ||
     !Array.isArray(payload.tool_calls) ||
-    !Array.isArray(payload.goal_mutations)
+    (payload.goal_mutations !== undefined && !Array.isArray(payload.goal_mutations)) ||
+    (payload.tool_outcome_resolutions !== undefined && !Array.isArray(payload.tool_outcome_resolutions)) ||
+    (payload.tool_outcome_incidents !== undefined && !Array.isArray(payload.tool_outcome_incidents))
   ) {
     throw new FsConversationFormatError(
       `Conversation seq ${commit.seq} is not a coder.turn v1 payload`,
@@ -372,6 +377,7 @@ export class ConversationProjection {
   private readonly operations = new Map<string, ConversationCommit>();
   private readonly commits: ConversationCommit[] = [];
   private toolCalls: FsToolCallRecord[] = [];
+  private readonly toolOutcomes = new ToolOutcomeProjection();
   highestMessageSeq = 0;
 
   findCommit(operationId: string): ConversationCommit | undefined { return this.operations.get(operationId); }
@@ -455,6 +461,7 @@ export class ConversationProjection {
       toolCallIds.add(call.id);
       toolCalls.push(call);
     }
+    this.toolOutcomes.apply(payload);
     this.toolCalls = toolCalls;
     this.highestMessageSeq = highestMessageSeq;
     this.operations.set(commit.operation_id, commit);
@@ -467,6 +474,7 @@ export class ConversationProjection {
       toolCalls: [...this.toolCalls],
       commits: [...this.commits],
       highestMessageSeq: this.highestMessageSeq,
+      toolOutcomes: this.toolOutcomes.snapshot(),
     };
   }
 }
@@ -477,20 +485,8 @@ export function projectConversation(commits: readonly ConversationCommit[]): FsC
   return projection.snapshot();
 }
 
-export { messageRow } from './conversation-message-row.js';
+export { messageRow, extractText } from './conversation-message-row.js';
 
 export function requestKey(value: unknown): string {
   return computeRequestHash(toJsonValue(value));
-}
-
-export function extractText(message: AgentMessage): string | null {
-  const text = message.content
-    .filter(
-      (block): block is Extract<ContentBlock, { type: 'text' }> =>
-        block.type === 'text',
-    )
-    .map((block) => block.text)
-    .join('\n')
-    .trim();
-  return text || null;
 }

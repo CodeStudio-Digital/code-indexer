@@ -1,0 +1,28 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+import { Terminal } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
+import { Markdown } from '../../../apps/dashboard/features/chat/messages/Markdown.js';
+import { installTerminalClipboard } from '../../../apps/dashboard/features/shared/terminal/terminal-clipboard.js';
+import { copyText } from '../../../apps/dashboard/lib/clipboard.js';
+import { createMonacoClipboardService } from '../../../apps/dashboard/lib/monaco-clipboard-service.js';
+
+await i18n.use(initReactI18next).init({ lng: 'en', resources: { en: { chat: {} } }, interpolation: { escapeValue: false } });
+document.documentElement.dataset.appRuntime = 'electron';
+createRoot(document.getElementById('markdown')!).render(<Markdown text={'[chat web](https://example.org/chat) [chat local](http://localhost:3000/chat)\n\n```text\ncopy code block\n```'} />);
+const input: string[] = [];
+const terminal = new Terminal({ cols: 100, rows: 5 });
+terminal.open(document.getElementById('terminal')!);
+installTerminalClipboard(terminal, document.getElementById('terminal')!);
+terminal.onData(data => input.push(data));
+terminal.write('terminal selected text\r\nnext line');
+const output = new Terminal({ cols: 100, rows: 4, disableStdin: true });
+output.open(document.getElementById('output')!);
+installTerminalClipboard(output, document.getElementById('output')!, true);
+output.write('output selected text\r\nfinished job');
+document.getElementById('copy')!.onclick = () => { void copyText('copy button text'); };
+const editorClipboard = createMonacoClipboardService();
+Object.assign(window, { interactionSmoke: { terminal, output, input, editorClipboard } });
+document.body.dataset.ready = 'true';

@@ -26,6 +26,7 @@ export async function resolveAndRunMaster(
     maxTurns: number;
     roleConfigs: Parameters<CompanyOrchestrator['startMaster']>[0]['roleConfigs'];
     attachments: Parameters<CompanyOrchestrator['startMaster']>[0]['attachments'];
+    boardAttachments?: import('@mcp/company-contracts').BoardAttachment[];
     thinking?: boolean;
     thinkingBudgetTokens?: number;
     temperature?: number;
@@ -37,12 +38,14 @@ export async function resolveAndRunMaster(
 ): Promise<void> {
   if (masterExists) {
     await orchestrator.resumeExistingMaster({
+      recordUserMessage: true,
       userMessage: opts.userMessage,
       provider: opts.provider,
       model: opts.model,
       maxTurns: opts.maxTurns,
       roleConfigs: opts.roleConfigs,
       attachments: opts.attachments,
+      boardAttachments: opts.boardAttachments,
       thinking: opts.thinking,
       thinkingBudgetTokens: opts.thinkingBudgetTokens,
       temperature: opts.temperature,
@@ -58,6 +61,7 @@ export async function resolveAndRunMaster(
     maxTurns: opts.maxTurns,
     roleConfigs: opts.roleConfigs,
     attachments: opts.attachments,
+    boardAttachments: opts.boardAttachments,
     thinking: opts.thinking,
     thinkingBudgetTokens: opts.thinkingBudgetTokens,
     temperature: opts.temperature,

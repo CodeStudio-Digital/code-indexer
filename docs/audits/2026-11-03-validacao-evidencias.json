@@ -1,0 +1,1443 @@
+{
+  "auditDate": "2026-11-03",
+  "timeZone": "America/Sao_Paulo",
+  "generatedAt": "2026-11-04T01:59:15.191Z",
+  "checkout": {
+    "root": "D:/MCP",
+    "version": "3.15.7",
+    "branch": "codex/remove-rust-runtime",
+    "head": "448d526dd2e24247617938721c0d8cf18ce850cf",
+    "initialStatusEntries": 501,
+    "currentStatusEntries": 503,
+    "addedStatusEntries": [
+      "?? docs/audits/2026-11-03-validacao-evidencias.json",
+      "?? docs/audits/2026-11-03-validacao-geral-harness.md"
+    ],
+    "removedStatusEntries": []
+  },
+  "inventory": {
+    "sourceFiles": 4262,
+    "physicalSourceLines": 613378,
+    "testFiles": 1621,
+    "physicalTestLines": 214174
+  },
+  "checks": {
+    "typecheck-host": {
+      "name": "typecheck-host",
+      "command": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "startedAt": "2026-11-04T01:09:50.472Z",
+      "finishedAt": "2026-11-04T01:10:32.564Z",
+      "durationSeconds": 42.092,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\typecheck-host.log"
+    },
+    "typecheck-dashboard-host": {
+      "name": "typecheck-dashboard-host",
+      "command": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "apps/dashboard/tsconfig.json"
+      ],
+      "startedAt": "2026-11-04T01:10:33.452Z",
+      "finishedAt": "2026-11-04T01:11:11.373Z",
+      "durationSeconds": 37.921,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\typecheck-dashboard-host.log"
+    },
+    "build-backend-host": {
+      "name": "build-backend-host",
+      "command": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--outDir",
+        ".tmp/audit-2026-11-03/build/backend"
+      ],
+      "startedAt": "2026-11-04T01:28:40.331Z",
+      "finishedAt": "2026-11-04T01:29:32.000Z",
+      "durationSeconds": 51.669,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\build-backend-host.log"
+    },
+    "build-dashboard": {
+      "name": "build-dashboard",
+      "command": [
+        "node",
+        "node_modules/vite/bin/vite.js",
+        "build",
+        "apps/dashboard",
+        "--outDir",
+        "D:\\MCP\\.tmp\\audit-2026-11-03\\build\\dashboard"
+      ],
+      "startedAt": "2026-11-04T01:06:10.991Z",
+      "finishedAt": "2026-11-04T01:06:50.860Z",
+      "durationSeconds": 39.869,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\build-dashboard.log"
+    },
+    "boundaries": {
+      "name": "boundaries",
+      "command": [
+        "node",
+        "node_modules/tsx/dist/cli.mjs",
+        "scripts/check-repository-boundaries.ts"
+      ],
+      "startedAt": "2026-11-04T01:02:35.200Z",
+      "finishedAt": "2026-11-04T01:04:17.721Z",
+      "durationSeconds": 102.521,
+      "exitCode": 1,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\boundaries.log"
+    },
+    "loc": {
+      "name": "loc",
+      "command": [
+        "node",
+        "node_modules/tsx/dist/cli.mjs",
+        "scripts/check-loc-cap.ts"
+      ],
+      "startedAt": "2026-11-04T01:04:18.392Z",
+      "finishedAt": "2026-11-04T01:04:29.618Z",
+      "durationSeconds": 11.226,
+      "exitCode": 1,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\loc.log"
+    },
+    "cycles": {
+      "name": "cycles",
+      "command": [
+        "node",
+        "node_modules/tsx/dist/cli.mjs",
+        "scripts/check-circular-imports.ts"
+      ],
+      "startedAt": "2026-11-04T01:04:30.081Z",
+      "finishedAt": "2026-11-04T01:04:40.359Z",
+      "durationSeconds": 10.278,
+      "exitCode": 1,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\cycles.log"
+    },
+    "deadcode": {
+      "name": "deadcode",
+      "command": [
+        "node",
+        "node_modules/knip/bin/knip.js"
+      ],
+      "startedAt": "2026-11-04T01:04:42.319Z",
+      "finishedAt": "2026-11-04T01:05:33.737Z",
+      "durationSeconds": 51.418,
+      "exitCode": 1,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\deadcode.log"
+    },
+    "env": {
+      "name": "env",
+      "command": [
+        "node",
+        "node_modules/tsx/dist/cli.mjs",
+        "scripts/audit-env-vars.ts",
+        "--check"
+      ],
+      "startedAt": "2026-11-04T01:05:34.296Z",
+      "finishedAt": "2026-11-04T01:09:16.727Z",
+      "durationSeconds": 222.431,
+      "exitCode": 1,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\env.log"
+    },
+    "workspace-host": {
+      "name": "workspace-host",
+      "command": [
+        "node",
+        "scripts/test-workspace.mjs"
+      ],
+      "startedAt": "2026-11-04T01:09:55.458Z",
+      "finishedAt": "2026-11-04T01:56:20.566Z",
+      "durationSeconds": 2785.108,
+      "exitCode": 1,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\audit-2026-11-03\\workspace-host.log"
+    }
+  },
+  "backendAliases": {
+    "config": "tsconfig.build.json",
+    "files": 8490,
+    "changed": 2593,
+    "elapsedMs": 64764.7852
+  },
+  "workspace": {
+    "electron": {
+      "path": "D:\\MCP\\.tmp\\test-workspace\\electron.json",
+      "modified": "2026-11-04T01:56:02.023Z",
+      "success": false,
+      "files": 1580,
+      "passedFiles": 1569,
+      "failedFiles": 11,
+      "totalTests": 11609,
+      "passedTests": 11561,
+      "failedTests": 14,
+      "pendingTests": 34,
+      "todoTests": 0,
+      "failureFiles": [
+        {
+          "file": "D:/MCP/src/__tests__/runner-tool-timeout.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "runner — universal tool timeout explicit timeoutMs on the tool wins over the runner default",
+              "durationMs": 94.8203999999987,
+              "messages": [
+                "AssertionError: expected 79 to be 80 // Object.is equality\n    at D:/MCP/src/__tests__/runner-tool-timeout.test.ts:117:31\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/src/__tests__/tiers.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "tool tiers bootstrap tier contains exactly the expected tools",
+              "durationMs": 4.127899999999954,
+              "messages": [
+                "AssertionError: expected 49 to be 51 // Object.is equality\n    at D:/MCP/src/__tests__/tiers.test.ts:14:35\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            },
+            {
+              "name": "tool tiers navigate tier contains the expected tools",
+              "durationMs": 0.47260000000005675,
+              "messages": [
+                "AssertionError: expected 59 to be 60 // Object.is equality\n    at D:/MCP/src/__tests__/tiers.test.ts:18:34\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/src/__tests__/wait-agents.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "wait_agents times out and reports still-running targets",
+              "durationMs": 4.536900000000003,
+              "messages": [
+                "AssertionError: expected undefined to be true // Object.is equality\n    at D:/MCP/src/__tests__/wait-agents.test.ts:206:23\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/apps/dashboard/i18n/__tests__/i18n-coverage.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "dashboard visible literals blocks new raw visible JSX text across dashboard files",
+              "durationMs": 274.71209999999974,
+              "messages": [
+                "AssertionError: expected [ …(2) ] to deeply equal []\n    at D:/MCP/apps/dashboard/i18n/__tests__/i18n-coverage.test.ts:391:67\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/apps/http-api/server/routes/__tests__/project-git.routes.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "project git HTTP RPC provides browser parity through the allowlisted RPC endpoint",
+              "durationMs": 15975.093499999999,
+              "messages": [
+                "AssertionError: expected 504 to be 200 // Object.is equality\n    at D:/MCP/apps/http-api/server/routes/__tests__/project-git.routes.test.ts:49:29\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/packages/api-handlers/src/projectGit/__tests__/push-preview.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "reviewed project push previews commits and tags, exposes commit contents, then publishes the reviewed refs",
+              "durationMs": 82335.085,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at task (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/MCP/packages/api-handlers/src/projectGit/__tests__/push-preview.test.ts:72:3\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/packages/code-agent/src/core/__tests__/prompt-budget.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "prompt-budget — per-section ceilings every section is registered and within budget across the matrix",
+              "durationMs": 37.46939999999995,
+              "messages": [
+                "AssertionError: section \"# Ultra collaboration\" grew past its 1800-char ceiling (2175 chars, in zai|multi-agent=ultra): expected 2175 to be less than or equal to 1800\n    at D:/MCP/packages/code-agent/src/core/__tests__/prompt-budget.test.ts:163:111\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/packages/code-agent/src/tools/__tests__/project-worktrees.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "project worktree inventory and authority creates a real isolated checkout, lists it and keeps uncommitted files in main",
+              "durationMs": 21160.9026,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at task (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/MCP/packages/code-agent/src/tools/__tests__/project-worktrees.test.ts:22:3\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)",
+                "Error: EBUSY: resource busy or locked, rmdir 'C:\\Users\\maico\\AppData\\Local\\Temp\\codestudio-worktrees-cfFnn4\\project with spaces'"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/packages/services/src/pipelines/__tests__/catalog.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "semantic profile catalog ownership keeps retired and no-effect targets out of the catalog",
+              "durationMs": 3.537500000000364,
+              "messages": [
+                "AssertionError: expected [ { …(6) }, { …(6) }, { …(6) }, …(14) ] to have a length of 18 but got 17\n    at Proxy.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+expect@4.1.4/node_modules/@vitest/expect/dist/index.js:1389:20)\n    at Proxy.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+expect@4.1.4/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///D:/MCP/node_modules/.pnpm/chai@6.2.2/node_modules/chai/index.js:1700:25)\n    at D:/MCP/packages/services/src/pipelines/__tests__/catalog.test.ts:68:30\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/apps/http-api/server/routes/coder/__tests__/worktrees.routes.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "worktree sessions HTTP integration creates a worktree, publishes several sessions there and reads its files",
+              "durationMs": 24301.2768,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at beforeEach (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:719:26)\n    at D:/MCP/apps/http-api/server/routes/coder/__tests__/worktrees.routes.test.ts:29:1\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at VitestModuleEvaluator._runInlinedModule (file:///D:/MCP/node_modules/.pnpm/vitest@4.1.4_@types+node@22_346be2b3a1175288cca6e0913aa8a0d4/node_modules/vitest/dist/module-evaluator.js:206:4)\n    at VitestModuleRunner.directRequest (file:///D:/MCP/node_modules/.pnpm/vite@8.1.0_@types+node@22.1_eb118796bfb9055c9f804c0e167f61bf/node_modules/vite/dist/node/module-runner.js:1259:59)\n    at VitestModuleRunner.cachedRequest (file:///D:/MCP/node_modules/.pnpm/vite@8.1.0_@types+node@22.1_eb118796bfb9055c9f804c0e167f61bf/node_modules/vite/dist/node/module-runner.js:1166:73)\n    at VitestModuleRunner.import (file:///D:/MCP/node_modules/.pnpm/vite@8.1.0_@types+node@22.1_eb118796bfb9055c9f804c0e167f61bf/node_modules/vite/dist/node/module-runner.js:1120:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2457:5\n    at collectTests (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2433:3)\n    at startTests (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:3277:17)"
+              ]
+            },
+            {
+              "name": "worktree sessions HTTP integration keeps missing checkout sessions bound and refuses to browse main as a fallback",
+              "durationMs": 41466.9501,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at task (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/MCP/apps/http-api/server/routes/coder/__tests__/worktrees.routes.test.ts:82:3\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)",
+                "Error: STACK_TRACE_ERROR\n    at afterEach (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:752:106)\n    at D:/MCP/apps/http-api/server/routes/coder/__tests__/worktrees.routes.test.ts:47:1\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at VitestModuleEvaluator._runInlinedModule (file:///D:/MCP/node_modules/.pnpm/vitest@4.1.4_@types+node@22_346be2b3a1175288cca6e0913aa8a0d4/node_modules/vitest/dist/module-evaluator.js:206:4)\n    at VitestModuleRunner.directRequest (file:///D:/MCP/node_modules/.pnpm/vite@8.1.0_@types+node@22.1_eb118796bfb9055c9f804c0e167f61bf/node_modules/vite/dist/node/module-runner.js:1259:59)\n    at VitestModuleRunner.cachedRequest (file:///D:/MCP/node_modules/.pnpm/vite@8.1.0_@types+node@22.1_eb118796bfb9055c9f804c0e167f61bf/node_modules/vite/dist/node/module-runner.js:1166:73)\n    at VitestModuleRunner.import (file:///D:/MCP/node_modules/.pnpm/vite@8.1.0_@types+node@22.1_eb118796bfb9055c9f804c0e167f61bf/node_modules/vite/dist/node/module-runner.js:1120:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2457:5\n    at collectTests (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2433:3)\n    at startTests (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:3277:17)"
+              ]
+            },
+            {
+              "name": "worktree sessions HTTP integration records and reverts edits in the worktree without touching the same file in main",
+              "durationMs": 47174.2669,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at task (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/MCP/apps/http-api/server/routes/coder/__tests__/worktrees.routes.test.ts:93:3\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/packages/services/src/services/docs/__tests__/incremental-folder.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "incremental folder ingestion preserves ids, skips unchanged files, re-embeds changes and locally removes stale vectors",
+              "durationMs": 20784.7923,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at task (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/MCP/packages/services/src/services/docs/__tests__/incremental-folder.test.ts:93:3\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "node": {
+      "path": "D:\\MCP\\.tmp\\test-workspace\\node.json",
+      "modified": "2026-11-04T01:56:17.953Z",
+      "success": true,
+      "files": 8,
+      "passedFiles": 8,
+      "failedFiles": 0,
+      "totalTests": 86,
+      "passedTests": 86,
+      "failedTests": 0,
+      "pendingTests": 0,
+      "todoTests": 0,
+      "failureFiles": []
+    },
+    "nativeBuildScripts": {
+      "tests": 5,
+      "pass": 5,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0
+    },
+    "note": "Use completed workspace-host result and report modification timestamps to exclude prior-run files.",
+    "totals": {
+      "passed": 11652,
+      "failed": 14,
+      "skipped": 34
+    }
+  },
+  "reruns": {
+    "prompt-budget": {
+      "path": "D:\\MCP\\.tmp\\audit-2026-11-03\\prompt-budget.json",
+      "modified": "2026-11-04T01:21:33.787Z",
+      "success": false,
+      "files": 1,
+      "passedFiles": 0,
+      "failedFiles": 1,
+      "totalTests": 10,
+      "passedTests": 9,
+      "failedTests": 1,
+      "pendingTests": 0,
+      "todoTests": 0,
+      "failureFiles": [
+        {
+          "file": "D:/MCP/packages/code-agent/src/core/__tests__/prompt-budget.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "prompt-budget — per-section ceilings every section is registered and within budget across the matrix",
+              "durationMs": 16.290300000000002,
+              "messages": [
+                "AssertionError: section \"# Ultra collaboration\" grew past its 1800-char ceiling (2175 chars, in zai|multi-agent=ultra): expected 2175 to be less than or equal to 1800\n    at D:/MCP/packages/code-agent/src/core/__tests__/prompt-budget.test.ts:163:111\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "deterministic-rerun": {
+      "path": "D:\\MCP\\.tmp\\audit-2026-11-03\\deterministic-rerun.json",
+      "modified": "2026-11-04T01:28:02.221Z",
+      "success": false,
+      "files": 3,
+      "passedFiles": 1,
+      "failedFiles": 2,
+      "totalTests": 26,
+      "passedTests": 24,
+      "failedTests": 2,
+      "pendingTests": 0,
+      "todoTests": 0,
+      "failureFiles": [
+        {
+          "file": "D:/MCP/src/__tests__/wait-agents.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "wait_agents times out and reports still-running targets",
+              "durationMs": 3.882499999999993,
+              "messages": [
+                "AssertionError: expected undefined to be true // Object.is equality\n    at D:/MCP/src/__tests__/wait-agents.test.ts:206:23\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+              ]
+            }
+          ]
+        },
+        {
+          "file": "D:/MCP/apps/dashboard/i18n/__tests__/i18n-coverage.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "dashboard visible literals blocks new raw visible JSX text across dashboard files",
+              "durationMs": 201.2125000000001,
+              "messages": [
+                "AssertionError: expected [ …(2) ] to deeply equal []\n    at D:/MCP/apps/dashboard/i18n/__tests__/i18n-coverage.test.ts:391:67\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "tiers-rerun": {
+      "path": "D:\\MCP\\.tmp\\audit-2026-11-03\\tiers-rerun.json",
+      "modified": "2026-11-04T01:42:54.636Z",
+      "success": false,
+      "files": 1,
+      "passedFiles": 0,
+      "failedFiles": 1,
+      "totalTests": 13,
+      "passedTests": 11,
+      "failedTests": 2,
+      "pendingTests": 0,
+      "todoTests": 0,
+      "failureFiles": [
+        {
+          "file": "D:/MCP/src/__tests__/tiers.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "tool tiers bootstrap tier contains exactly the expected tools",
+              "durationMs": 3.416199999999975,
+              "messages": [
+                "AssertionError: expected 49 to be 51 // Object.is equality\n    at D:/MCP/src/__tests__/tiers.test.ts:14:35\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            },
+            {
+              "name": "tool tiers navigate tier contains the expected tools",
+              "durationMs": 0.2734000000000094,
+              "messages": [
+                "AssertionError: expected 59 to be 60 // Object.is equality\n    at D:/MCP/src/__tests__/tiers.test.ts:18:34\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2955:64"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "catalog-rerun": {
+      "path": "D:\\MCP\\.tmp\\audit-2026-11-03\\catalog-rerun.json",
+      "modified": "2026-11-04T01:49:53.136Z",
+      "success": false,
+      "files": 1,
+      "passedFiles": 0,
+      "failedFiles": 1,
+      "totalTests": 4,
+      "passedTests": 3,
+      "failedTests": 1,
+      "pendingTests": 0,
+      "todoTests": 0,
+      "failureFiles": [
+        {
+          "file": "D:/MCP/packages/services/src/pipelines/__tests__/catalog.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "semantic profile catalog ownership keeps retired and no-effect targets out of the catalog",
+              "durationMs": 2.729799999999983,
+              "messages": [
+                "AssertionError: expected [ { …(6) }, { …(6) }, { …(6) }, …(14) ] to have a length of 18 but got 17\n    at Proxy.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+expect@4.1.4/node_modules/@vitest/expect/dist/index.js:1389:20)\n    at Proxy.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+expect@4.1.4/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///D:/MCP/node_modules/.pnpm/chai@6.2.2/node_modules/chai/index.js:1700:25)\n    at D:/MCP/packages/services/src/pipelines/__tests__/catalog.test.ts:68:30\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "io-rerun": {
+      "path": "D:\\MCP\\.tmp\\audit-2026-11-03\\io-rerun.json",
+      "modified": "2026-11-04T01:46:28.916Z",
+      "success": false,
+      "files": 5,
+      "passedFiles": 4,
+      "failedFiles": 1,
+      "totalTests": 23,
+      "passedTests": 21,
+      "failedTests": 2,
+      "pendingTests": 0,
+      "todoTests": 0,
+      "failureFiles": [
+        {
+          "file": "D:/MCP/packages/api-handlers/src/projectGit/__tests__/push-preview.test.ts",
+          "message": "",
+          "assertions": [
+            {
+              "name": "reviewed project push rebases onto a newer remote branch and retries the reviewed push",
+              "durationMs": 77714.92430000001,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at task (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/MCP/packages/api-handlers/src/projectGit/__tests__/push-preview.test.ts:129:3\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+              ]
+            },
+            {
+              "name": "reviewed project push stops before push and requests conflict resolution when automatic rebase conflicts",
+              "durationMs": 73982.06520000001,
+              "messages": [
+                "Error: STACK_TRACE_ERROR\n    at task (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at D:/MCP/packages/api-handlers/src/projectGit/__tests__/push-preview.test.ts:149:3\n    at file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///D:/MCP/node_modules/.pnpm/@vitest+runner@4.1.4/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "git-unloaded-rerun": {
+      "path": "D:\\MCP\\.tmp\\audit-2026-11-03\\git-unloaded-rerun.json",
+      "modified": "2026-11-04T01:57:59.145Z",
+      "success": true,
+      "files": 1,
+      "passedFiles": 1,
+      "failedFiles": 0,
+      "totalTests": 8,
+      "passedTests": 8,
+      "failedTests": 0,
+      "pendingTests": 0,
+      "todoTests": 0,
+      "failureFiles": []
+    }
+  },
+  "ui": {
+    "stats": {
+      "startTime": "2026-11-04T01:15:02.361Z",
+      "duration": 471753.182,
+      "expected": 51,
+      "skipped": 33,
+      "unexpected": 6,
+      "flaky": 0
+    },
+    "failures": [
+      {
+        "file": "regression/ultra-collaboration.spec.ts",
+        "title": "links chats, shows correlated exchanges, pauses requests and keeps reasoning selectable in Ultra",
+        "project": "1280x720-dark",
+        "status": "unexpected",
+        "annotations": [],
+        "errors": [
+          "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+          "Error: locator.selectOption: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByLabel('Selecionar chat')\u001b[22m\n\n\n  13 |   });\n  14 |   await page.goto('/e2e/fixtures/ultra-collaboration.html');\n> 15 |   await page.getByLabel('Selecionar chat').selectOption('two');\n     |                                            ^\n  16 |   await page.getByRole('button',{name:'Vincular',exact:true}).click();\n  17 |   await expect(page.getByRole('button',{name:'Desvincular',exact:true})).toBeVisible();\n  18 |   await page.locator('summary').click();\n    at D:\\MCP\\apps\\dashboard\\e2e\\regression\\ultra-collaboration.spec.ts:15:44"
+        ]
+      },
+      {
+        "file": "regression/ultra-collaboration.spec.ts",
+        "title": "links chats, shows correlated exchanges, pauses requests and keeps reasoning selectable in Ultra",
+        "project": "1440x900-dark",
+        "status": "unexpected",
+        "annotations": [],
+        "errors": [
+          "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+          "Error: locator.selectOption: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByLabel('Selecionar chat')\u001b[22m\n\n\n  13 |   });\n  14 |   await page.goto('/e2e/fixtures/ultra-collaboration.html');\n> 15 |   await page.getByLabel('Selecionar chat').selectOption('two');\n     |                                            ^\n  16 |   await page.getByRole('button',{name:'Vincular',exact:true}).click();\n  17 |   await expect(page.getByRole('button',{name:'Desvincular',exact:true})).toBeVisible();\n  18 |   await page.locator('summary').click();\n    at D:\\MCP\\apps\\dashboard\\e2e\\regression\\ultra-collaboration.spec.ts:15:44"
+        ]
+      },
+      {
+        "file": "regression/ultra-collaboration.spec.ts",
+        "title": "links chats, shows correlated exchanges, pauses requests and keeps reasoning selectable in Ultra",
+        "project": "1920x1080-dark",
+        "status": "unexpected",
+        "annotations": [],
+        "errors": [
+          "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+          "Error: locator.selectOption: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByLabel('Selecionar chat')\u001b[22m\n\n\n  13 |   });\n  14 |   await page.goto('/e2e/fixtures/ultra-collaboration.html');\n> 15 |   await page.getByLabel('Selecionar chat').selectOption('two');\n     |                                            ^\n  16 |   await page.getByRole('button',{name:'Vincular',exact:true}).click();\n  17 |   await expect(page.getByRole('button',{name:'Desvincular',exact:true})).toBeVisible();\n  18 |   await page.locator('summary').click();\n    at D:\\MCP\\apps\\dashboard\\e2e\\regression\\ultra-collaboration.spec.ts:15:44"
+        ]
+      },
+      {
+        "file": "session-network.spec.ts",
+        "title": "mentions chats/projects and prepares five independent roles/models with a visible completion trigger",
+        "project": "1280x720-dark",
+        "status": "unexpected",
+        "annotations": [],
+        "errors": [
+          "\u001b[31mTest timeout of 60000ms exceeded.\u001b[39m",
+          "Error: locator.click: Test timeout of 60000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: 'Adicionar participante' })\u001b[22m\n\n\n  59 |   await page.getByRole('tab', { name: 'Equipe', exact: true }).click();\n  60 |   for (let index = 1; index <= 5; index++) {\n> 61 |     await page.getByRole('button', { name: 'Adicionar participante' }).click();\n     |                                                                        ^\n  62 |     await page.getByLabel(`Nome do participante ${index}`, { exact: true }).fill(['Produto', 'Arquitetura', 'Segurança', 'Desempenho', 'Revisor crítico'][index - 1]!);\n  63 |     await page.getByLabel(`Função do participante ${index}`, { exact: true }).fill(`Investigar perspectiva ${index} e debater evidências com os colegas.`);\n  64 |     await page.getByLabel(`Modelo do participante ${index}`, { exact: true }).selectOption(JSON.stringify(index % 2 ? ['p1', 'm1'] : ['p2', 'm2']));\n    at D:\\MCP\\apps\\dashboard\\e2e\\session-network.spec.ts:61:72"
+        ]
+      },
+      {
+        "file": "session-network.spec.ts",
+        "title": "mentions chats/projects and prepares five independent roles/models with a visible completion trigger",
+        "project": "1440x900-dark",
+        "status": "unexpected",
+        "annotations": [],
+        "errors": [
+          "\u001b[31mTest timeout of 60000ms exceeded.\u001b[39m",
+          "Error: locator.click: Test timeout of 60000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: 'Adicionar participante' })\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" class=\"rounded border px-2 py-1 disabled:opacity-40\">Adicionar participante</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is not stable\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m  - element was detached from the DOM, retrying\u001b[22m\n\n\n  59 |   await page.getByRole('tab', { name: 'Equipe', exact: true }).click();\n  60 |   for (let index = 1; index <= 5; index++) {\n> 61 |     await page.getByRole('button', { name: 'Adicionar participante' }).click();\n     |                                                                        ^\n  62 |     await page.getByLabel(`Nome do participante ${index}`, { exact: true }).fill(['Produto', 'Arquitetura', 'Segurança', 'Desempenho', 'Revisor crítico'][index - 1]!);\n  63 |     await page.getByLabel(`Função do participante ${index}`, { exact: true }).fill(`Investigar perspectiva ${index} e debater evidências com os colegas.`);\n  64 |     await page.getByLabel(`Modelo do participante ${index}`, { exact: true }).selectOption(JSON.stringify(index % 2 ? ['p1', 'm1'] : ['p2', 'm2']));\n    at D:\\MCP\\apps\\dashboard\\e2e\\session-network.spec.ts:61:72"
+        ]
+      },
+      {
+        "file": "session-network.spec.ts",
+        "title": "mentions chats/projects and prepares five independent roles/models with a visible completion trigger",
+        "project": "1920x1080-dark",
+        "status": "unexpected",
+        "annotations": [],
+        "errors": [
+          "\u001b[31mTest timeout of 60000ms exceeded.\u001b[39m",
+          "Error: locator.click: Test timeout of 60000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: 'Adicionar participante' })\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" class=\"rounded border px-2 py-1 disabled:opacity-40\">Adicionar participante</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m  - element was detached from the DOM, retrying\u001b[22m\n\n\n  59 |   await page.getByRole('tab', { name: 'Equipe', exact: true }).click();\n  60 |   for (let index = 1; index <= 5; index++) {\n> 61 |     await page.getByRole('button', { name: 'Adicionar participante' }).click();\n     |                                                                        ^\n  62 |     await page.getByLabel(`Nome do participante ${index}`, { exact: true }).fill(['Produto', 'Arquitetura', 'Segurança', 'Desempenho', 'Revisor crítico'][index - 1]!);\n  63 |     await page.getByLabel(`Função do participante ${index}`, { exact: true }).fill(`Investigar perspectiva ${index} e debater evidências com os colegas.`);\n  64 |     await page.getByLabel(`Modelo do participante ${index}`, { exact: true }).selectOption(JSON.stringify(index % 2 ? ['p1', 'm1'] : ['p2', 'm2']));\n    at D:\\MCP\\apps\\dashboard\\e2e\\session-network.spec.ts:61:72"
+        ]
+      }
+    ],
+    "skipped": [
+      {
+        "file": "editor-settings-keymap.spec.ts",
+        "title": "exposes editor panes and persists comment and format remaps after reload",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\editor-settings-keymap.spec.ts",
+              "line": 21,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "editor-settings-keymap.spec.ts",
+        "title": "mounts a real Monaco file without unstable external-store snapshots",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\editor-settings-keymap.spec.ts",
+              "line": 21,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "editor-settings-keymap.spec.ts",
+        "title": "exposes editor panes and persists comment and format remaps after reload",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\editor-settings-keymap.spec.ts",
+              "line": 21,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "editor-settings-keymap.spec.ts",
+        "title": "mounts a real Monaco file without unstable external-store snapshots",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\editor-settings-keymap.spec.ts",
+              "line": 21,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "editor-settings-keymap.spec.ts",
+        "title": "exposes editor panes and persists comment and format remaps after reload",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\editor-settings-keymap.spec.ts",
+              "line": 21,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "editor-settings-keymap.spec.ts",
+        "title": "mounts a real Monaco file without unstable external-store snapshots",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\editor-settings-keymap.spec.ts",
+              "line": 21,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "keeps left, primary and right surfaces composed",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes all four quadrants without replacing the editor",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "switches to the API-owned docks without leaving stale project tools open",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "replaces the Git host when another left tool window is selected",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "opens right docks only while they have renderable content",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes Sessions through the IDE docks without nesting another shell",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "keeps SSH alive as a primary surface instead of a bottom tab",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "uses the neutral workbench hierarchy in Database",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes Global Sessions with the shared workbench containers",
+        "project": "1280x720-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "keeps left, primary and right surfaces composed",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes all four quadrants without replacing the editor",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "switches to the API-owned docks without leaving stale project tools open",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "replaces the Git host when another left tool window is selected",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "opens right docks only while they have renderable content",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes Sessions through the IDE docks without nesting another shell",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "keeps SSH alive as a primary surface instead of a bottom tab",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "uses the neutral workbench hierarchy in Database",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes Global Sessions with the shared workbench containers",
+        "project": "1440x900-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "keeps left, primary and right surfaces composed",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes all four quadrants without replacing the editor",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "switches to the API-owned docks without leaving stale project tools open",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "replaces the Git host when another left tool window is selected",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "opens right docks only while they have renderable content",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes Sessions through the IDE docks without nesting another shell",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "keeps SSH alive as a primary surface instead of a bottom tab",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "uses the neutral workbench hierarchy in Database",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      },
+      {
+        "file": "workbench.visual.spec.ts",
+        "title": "composes Global Sessions with the shared workbench containers",
+        "project": "1920x1080-dark",
+        "status": "skipped",
+        "annotations": [
+          {
+            "type": "skip",
+            "description": "Set CODESTUDIO_E2E_PROJECT_ID to a local fixture project.",
+            "location": {
+              "file": "D:\\MCP\\apps\\dashboard\\e2e\\workbench.visual.spec.ts",
+              "line": 6,
+              "column": 8
+            }
+          }
+        ],
+        "errors": []
+      }
+    ],
+    "excludedFiles": [
+      "global-session-workbench.spec.ts",
+      "ide-search-latency.spec.ts",
+      "ide-semantic-latency.spec.ts"
+    ],
+    "method": "Vite + mocked API, three viewports, no real backend or provider calls"
+  },
+  "dependencies": {
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 13,
+        "moderate": 83,
+        "high": 76,
+        "critical": 2
+      },
+      "dependencies": 1091,
+      "devDependencies": 0,
+      "optionalDependencies": 0,
+      "totalDependencies": 1091
+    },
+    "advisoryEntries": 168,
+    "uniquePackages": 35,
+    "packages": {
+      "unhead": 3,
+      "fast-xml-parser": 1,
+      "hono": 26,
+      "protobufjs": 11,
+      "ip-address": 6,
+      "@protobufjs/utf8": 1,
+      "fast-xml-builder": 1,
+      "ws": 2,
+      "qs": 4,
+      "brace-expansion": 7,
+      "shell-quote": 2,
+      "esbuild": 1,
+      "form-data": 1,
+      "undici": 29,
+      "ts-deepmerge": 1,
+      "adm-zip": 8,
+      "body-parser": 2,
+      "fast-uri": 12,
+      "sharp": 3,
+      "postcss": 3,
+      "react-router": 5,
+      "pdfjs-dist": 1,
+      "nanoid": 4,
+      "@hono/node-server": 2,
+      "@xmldom/xmldom": 13,
+      "mysql2": 1,
+      "source-map-js": 1,
+      "proxy-addr": 1,
+      "@vue/server-renderer": 1,
+      "@modelcontextprotocol/sdk": 6,
+      "vite": 5,
+      "zod": 1,
+      "@azure/msal-node": 1,
+      "minimatch": 1,
+      "glob": 1
+    },
+    "critical": [
+      {
+        "module": "shell-quote",
+        "title": "shell-quote quote() does not escape newlines in object .op values",
+        "patched": ">=1.8.4",
+        "url": "https://github.com/advisories/GHSA-w7jw-789q-3m8p",
+        "findings": [
+          {
+            "version": "1.8.3",
+            "paths": [
+              ".>@scalar/api-reference-react>@scalar/api-reference>@scalar/api-client>shell-quote"
+            ]
+          }
+        ]
+      },
+      {
+        "module": "proxy-addr",
+        "title": "proxy-addr vulnerable to IP spoofing via IPv4-mapped IPv6 trust subnet",
+        "patched": ">=2.0.8",
+        "url": "https://github.com/advisories/GHSA-jqcg-44mw-7w3h",
+        "findings": [
+          {
+            "version": "2.0.7",
+            "paths": [
+              ".>@modelcontextprotocol/sdk>express>proxy-addr"
+            ]
+          }
+        ]
+      }
+    ],
+    "interpretation": "Registry findings, not confirmed application exploits or an installer SBOM."
+  },
+  "probes": {
+    "initial": {
+      "plugin": {
+        "result": {
+          "content": "{\"mediatedDenied\":true,\"directWriteSucceeded\":true}"
+        },
+        "mediatedCalls": 1,
+        "markerExists": true,
+        "markerContent": "direct Node write from plugin"
+      },
+      "verification": {
+        "status": "fresh",
+        "changedFiles": [
+          "src/a.ts"
+        ],
+        "lastWriteSeq": 1,
+        "lastValidationSeq": 3,
+        "lastSuccessfulValidationSeq": 2,
+        "validationSignals": [
+          "test"
+        ],
+        "persisted": null,
+        "source": "ledger"
+      },
+      "expectedVerificationStatus": "stale"
+    },
+    "additional": {
+      "echoRecognizedAsValidation": {
+        "entries": [
+          {
+            "seq": 1,
+            "timestampMs": 1793755566253,
+            "name": "edit_file",
+            "logicalOperationId": "edit_file:85f76667",
+            "productive": true,
+            "isError": false,
+            "resultFingerprint": "663437af",
+            "outcome": "success",
+            "durationMs": 0,
+            "executionClass": "write",
+            "resultNovel": true,
+            "coverageNovel": false
+          },
+          {
+            "seq": 2,
+            "timestampMs": 1793755566254,
+            "name": "run_command",
+            "logicalOperationId": "run_command:2185447e",
+            "productive": true,
+            "isError": false,
+            "resultFingerprint": "dc5964d6",
+            "outcome": "success",
+            "durationMs": 0,
+            "executionClass": "execute",
+            "resultNovel": true,
+            "coverageNovel": false,
+            "validationSignal": "npm test"
+          }
+        ],
+        "readiness": {
+          "status": "fresh",
+          "changedFiles": [
+            "src/a.ts"
+          ],
+          "lastWriteSeq": 1,
+          "lastValidationSeq": 2,
+          "lastSuccessfulValidationSeq": 2,
+          "validationSignals": [
+            "npm test"
+          ],
+          "persisted": null,
+          "source": "ledger"
+        },
+        "expectedStatus": "missing"
+      },
+      "wrapperDropsReasoningMetadata": {
+        "original": {
+          "canReason": true,
+          "supportedLevels": [
+            "low",
+            "high"
+          ]
+        },
+        "wrapped": null
+      }
+    }
+  },
+  "sourceHashesSha256": {
+    "package.json": "0b817904a48afd48a365746ac09b15652a8de5b989d5db28925b6d21985ead7e",
+    "pnpm-lock.yaml": "d30a7563ebbedbae707d10192c770ed9ae2de9c5b573694e43f6c09c89ce0a0d",
+    "packages/code-agent/src/core/tool-call-ledger.ts": "2e4c29101a445178ea09514a97078f41cbe5260fac6245130b114e307a525ceb",
+    "packages/code-agent/src/core/runner/nodes/executing-verification-gate.ts": "07d7b83808ac887cb16c1c7283420d23ea47573e4ab81c93fea0786999f49bbc",
+    "packages/provider-sdk/src/stream-resilience.ts": "eea3efe0c8250344fb901d2188d21e086ba14a27f85938eac66808eb909b358a",
+    "packages/services/src/providers/factory.ts": "dcd94de95a70aae385009a7d477fe27d27eecdb3974f72fef292d5421a584921",
+    "apps/http-api/sse/PluginWorkerHost.ts": "7496dcc7326845726cd9e132cee18723857ab11e04c4770c877281758a60b345",
+    "packages/plugin-host/src/import-plugin-bundle.ts": "9d9e1ebd0716901d365dc9ba7219bb5ec02f55e232b1d93a75276e24394658ff",
+    "packages/plugin-host/src/worker/sandbox-ctx.ts": "492e3bc718fe64b42a0443c76780226bb381419a5a7c2ab2ae9ff958211ef3ea",
+    "scripts/test-workspace.mjs": "4b13146f5bc142d077990e594056dd21b26b497e74b18704afbb1fa0ff730388",
+    "scripts/release.mjs": "3a7efe4ed96369f9c51d2a0ff65dbd2df96967fc305a39b4a0a00f3ca67ec180",
+    "scripts/build-electron.mjs": "0f3c4b911b81656a4f4da44a5b689f9e8aec3cacd755ce43378326197937a9da"
+  },
+  "excluded": [
+    "external cloud/site/Unity repositories",
+    "live paid LLM evaluation",
+    "external database homologation",
+    "new installer on a clean machine",
+    "semantic latency benchmark"
+  ]
+}

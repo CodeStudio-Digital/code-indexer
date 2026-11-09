@@ -112,6 +112,19 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       if (typeof query !== 'string') throw new ApiError('bad_request', 400, 'query must be a string');
       return db.searchFilePaths(projectId, query, limit, fuzzy);
     },
+    async searchPathsPage({ projectId, query, limit, fuzzy }, ctx) {
+      requireProject(projectId);
+      ctx.signal?.throwIfAborted();
+      if (typeof query !== 'string') throw new ApiError('bad_request', 400, 'query must be a string');
+      const take = Math.max(1, Math.min(300, Math.floor(limit ?? 50) || 50));
+      const items = db.searchFilePaths(projectId, query, take, fuzzy);
+      const raw = db.projectScopedDb(projectId);
+      const overBudget = raw.prepare('SELECT 1 FROM files WHERE project_id=? LIMIT 1 OFFSET 5000').get(projectId) !== undefined;
+      const partial = overBudget || items.length >= take;
+      return { items, completeness: partial ? 'partial' : 'complete', source: 'structural_index',
+        revision: db.getStructuralRevision(projectId), candidateLimit: 5000,
+        ...(partial ? { reason: 'candidate_or_result_budget' as const } : {}) };
+    },
     async list({ projectId }) {
       return db.listFiles(projectId);
     },

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Loader2, RefreshCcw, Sparkles, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
@@ -26,7 +27,7 @@ function countIssues(p: HygieneProject): number {
     p.orphan_semantic_items +
     p.stale_runs +
     p.mixed_case_languages +
-    (p.missing_on_disk ? 1 : 0)
+    (p.missing_on_disk || p.disk_error ? 1 : 0)
   );
 }
 
@@ -43,19 +44,20 @@ const SEVERITY_CLASS: Record<'ok' | 'warn' | 'bad', string> = {
 };
 
 export function HygienePanel() {
+  const { t } = useTranslation('admin');
   const [status, setStatus] = useState<HygieneStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
 
-  async function load() {
+  async function load(clearError = true) {
     setLoading(true);
-    setError(null);
+    if (clearError) setError(null);
     try {
       setStatus(await fetchHygieneStatus());
     } catch (e) {
-      setError((e as Error).message);
+      setError(previous => [previous, (e as Error).message].filter(Boolean).join('\n'));
     } finally {
       setLoading(false);
     }
@@ -73,20 +75,23 @@ export function HygienePanel() {
         acc.stale += p.stale_runs;
         acc.langs += p.mixed_case_languages;
         if (p.missing_on_disk) acc.missing += 1;
+        if (p.disk_error) acc.diskErrors += 1;
         return acc;
       },
-      { orphans: 0, stale: 0, langs: 0, missing: 0 },
+      { orphans: 0, stale: 0, langs: 0, missing: 0, diskErrors: 0 },
     );
   }, [status]);
 
-  async function withBusy<T>(label: string, fn: () => Promise<T>, summarize: (r: T) => string): Promise<void> {
+  async function withBusy<T>(label: string, fn: () => Promise<T>, summarize: (r: T) => string | { message: string | null; errors: string[] }): Promise<void> {
     setBusy(label);
     setLastResult(null);
     setError(null);
     try {
       const result = await fn();
-      setLastResult(summarize(result));
-      await load();
+      const summary = summarize(result);
+      setLastResult(typeof summary === 'string' ? summary : summary.message);
+      if (typeof summary !== 'string' && summary.errors.length) setError(summary.errors.join('\n'));
+      await load(false);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -122,8 +127,12 @@ export function HygienePanel() {
     }
     await withBusy('purge', () => purgeProjects(ids), (r) => {
       const vectors = r.summaries.reduce((acc, s) => acc + s.vectors_deleted, 0);
-      const errors = r.summaries.filter((s) => s.vector_error).length;
-      return `${r.purged} projeto(s) apagado(s), ${vectors} vetores locais removidos${errors > 0 ? `, ${errors} com erro` : ''}.`;
+      const errors = r.summaries.filter(s => s.vector_error).map(s =>
+        t('hygiene.projectError', { project: s.project_name ?? s.project_id, error: s.vector_error }));
+      return {
+        message: r.purged > 0 || errors.length === 0 ? t('hygiene.purgeResult', { count: r.purged, vectors }) : null,
+        errors,
+      };
     });
   }
 
@@ -145,8 +154,11 @@ export function HygienePanel() {
       return;
     }
     await withBusy('clear-all', clearAllProjectData, (r) => {
-      const errs = r.errors.length > 0 ? `, ${r.errors.length} com erro` : '';
-      return `${r.projects_cleared} projeto(s) limpo(s), ${r.vectors_deleted} vetores locais removidos${errs}. Re-indexe quando quiser.`;
+      return {
+        message: r.projects_cleared > 0 || r.errors.length === 0
+          ? t('hygiene.clearResult', { count: r.projects_cleared, vectors: r.vectors_deleted }) : null,
+        errors: r.errors.map(item => t('hygiene.projectError', item)),
+      };
     });
   }
 
@@ -207,7 +219,7 @@ export function HygienePanel() {
             <CardContent className="py-3 px-3">
               <div className="text-muted-foreground">Issues totais</div>
               <div className="font-medium">
-                {totals ? totals.orphans + totals.stale + totals.langs + totals.missing : 0}
+                {totals ? totals.orphans + totals.stale + totals.langs + totals.missing + totals.diskErrors : 0}
               </div>
             </CardContent>
           </Card>
@@ -262,15 +274,15 @@ export function HygienePanel() {
       </div>
 
       {lastResult && (
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs flex items-start gap-2">
+        <div role="status" className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs flex items-start gap-2">
           <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
           <span>{lastResult}</span>
         </div>
       )}
       {error && (
-        <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs flex items-start gap-2">
+        <div role="alert" className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
-          <span>{error}</span>
+          <span className="whitespace-pre-line">{error}</span>
         </div>
       )}
 
@@ -329,6 +341,7 @@ export function HygienePanel() {
                   <p className="text-[11px] text-muted-foreground font-mono truncate">{p.root_path}</p>
                 </CardHeader>
                 <CardContent className="pt-0 pb-3 space-y-2">
+                  {p.disk_error && <p className="text-xs text-amber-500">{t('hygiene.diskError', { error: p.disk_error })}</p>}
                   <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-[11px]">
                     <Counter label="files" value={p.file_count} />
                     <Counter label="vectors" value={p.vector_count} />

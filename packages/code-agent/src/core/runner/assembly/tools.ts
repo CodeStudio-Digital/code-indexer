@@ -43,7 +43,7 @@ export interface BuildToolsArgs {
   /**
    * Hidden tools the model called by name (dispatch pinned them). Bypass
    * ONLY the tier filter and the model cap — disabled filters, the
-   * tool-filter hook and atomic goal-tool pairing still apply every turn.
+   * tool-filter hook still applies every turn.
    */
   pinnedTools?: ReadonlySet<string>;
   /** Explicit agent/host pins. Unlike runtime promotions, these are permanent. */
@@ -113,37 +113,6 @@ const BUILD_TASK_LIST_SCHEMA: JsonSchema = {
   additionalProperties: false,
 } as unknown as JsonSchema;
 
-/**
- * Goal creation and completion form one capability. Preserve the original
- * array reference when the pair is already coherent so memoized tool JSON and
- * prompt-cache fingerprints remain reusable.
- */
-export function enforceAtomicGoalToolPair<T extends { name: string }>(
-  tools: T[],
-  authoritativeTools?: readonly T[],
-): T[] {
-  const hasCreateGoal = tools.some((tool) => tool.name === 'create_goal');
-  const hasUpdateGoal = tools.some((tool) => tool.name === 'update_goal');
-  const authorityHasPair = authoritativeTools
-    && authoritativeTools.some((tool) => tool.name === 'create_goal')
-    && authoritativeTools.some((tool) => tool.name === 'update_goal');
-  if (authorityHasPair && (!hasCreateGoal || !hasUpdateGoal)) {
-    const selectedByName = new Map(tools.map((tool) => [tool.name, tool]));
-    return authoritativeTools
-      .filter(
-        (tool) =>
-          selectedByName.has(tool.name)
-          || tool.name === 'create_goal'
-          || tool.name === 'update_goal',
-      )
-      .map((tool) => selectedByName.get(tool.name) ?? tool);
-  }
-  if (hasCreateGoal === hasUpdateGoal) return tools;
-  return tools.filter(
-    (tool) => tool.name !== 'create_goal' && tool.name !== 'update_goal',
-  );
-}
-
 export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   let filtered = args.registry.list();
   // submit_plan is an execution gate, not a generic planning aid. Advertising
@@ -171,7 +140,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // Pins: union past the tier filter. Re-pulled from the registry (the
   // tier filter dropped them from `filtered`) with the disabled filters
   // re-applied — a disabled tool can never re-enter via a pin. The hook
-  // and atomic goal-tool pairing below still see (and may re-drop) pins.
+  // and filtering below still see (and may re-drop) pins.
   if (args.pinnedTools?.size) {
     const present = new Set(filtered.map((t) => t.name));
     for (const t of args.registry.list()) {
@@ -201,21 +170,6 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     }
   }
 
-  // Goal lifecycle is one atomic capability: advertising create_goal without
-  // update_goal can leave a durable in_progress goal that the model has no way
-  // to close, while update_goal alone recreates the original "No goal set"
-  // failure. Disabled sets, tiering, pins and project hooks all converge here,
-  // so drop BOTH transitions whenever either one is unavailable.
-  filtered = enforceAtomicGoalToolPair(filtered);
-
-  // NOTE: `create_goal` stays in the tool surface for the ENTIRE run — we
-  // deliberately do NOT remove it once a goal is in_progress. Tool-array
-  // membership is the first segment of the provider prompt-cache prefix;
-  // dropping a tool mid-run changes the serialized bytes and invalidates the
-  // whole prefix (measured: a full ~50–80k-token re-write on the turn after
-  // the goal is created, every round). Redundant create_goal calls are
-  // idempotent and leave the active objective unchanged.
-
   const eligibleBeforeCap = [...filtered];
 
   // Protection partition BEFORE truncation. Required/configured pins are a
@@ -239,7 +193,9 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     else if (args.pinnedTools?.has(t.name)) dynamicPinnedByName.set(t.name, t);
     else others.push(t);
   }
-  const modelMaxTools = getModelMaxTools(args.provider.model ?? '');
+  const hardLimit = args.provider.toolLimits?.maxCount;
+  if (hardLimit !== undefined && (!Number.isSafeInteger(hardLimit) || hardLimit < 1)) throw new Error('Invalid verified provider tool limit');
+  const modelMaxTools = Math.min(getModelMaxTools(args.provider.model ?? ''), hardLimit ?? Infinity);
   // Perf W3 — default session ceiling. `getModelMaxTools` falls back to 200
   // for models missing from the registry, and sessions without a preflight
   // cap shipped the whole catalog (telemetry: 1319 turns >96 visible tools,
@@ -263,6 +219,9 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     .map((name) => dynamicPinnedByName.get(name))
     .filter((tool): tool is typeof filtered[number] => tool !== undefined);
   const totalBefore = hardProtectedBucket.length + dynamicPinnedByName.size + others.length;
+  if (hardLimit !== undefined && hardProtectedBucket.length > hardLimit) {
+    throw new Error(`Tool projection cannot fit required capabilities: ${hardProtectedBucket.length} required, verified provider limit ${hardLimit}. Adjust the model or required tool configuration.`);
+  }
   let protectedBucket: typeof filtered = hardProtectedBucket;
   let capInfo: BuildToolsCapInfo | null = null;
   if (totalBefore > maxTools) {
@@ -369,10 +328,7 @@ export interface BuildToolsCacheKeyArgs {
 }
 
 /**
- * Cache key driving `buildTools` re-runs. Goal status is intentionally NOT
- * part of the key: `create_goal` now stays visible for the whole run, so the
- * tool membership no longer depends on goal lifecycle. Keeping the key
- * goal-independent keeps the provider prompt-cache prefix byte-stable.
+ * Cache key driving `buildTools` re-runs.
  * Pins contribute their sorted names: a promotion/eviction swap = a new key
  * (one rebuild, then stable). LRU touches alone do not change membership.
  */

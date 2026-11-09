@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, Check, Circle, ListChecks, Loader2, Target } from 'lucide-react';
+import { AlertCircle, Check, Circle, ListChecks, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import type {
   ActiveProcess,
@@ -8,15 +8,6 @@ import type {
 } from '../../hooks/agent-stream/types.js';
 import { ActiveProcessesSection } from './sidebar/ActiveProcessesSection.js';
 import { CollapsibleSection } from './sidebar/CollapsibleSection.js';
-
-interface GoalSummary {
-  text: string;
-  status: 'in_progress' | 'complete' | 'superseded';
-  budget_tokens: number | null;
-  completion_note: string | null;
-  created_at: string;
-  updated_at: string;
-}
 
 interface TaskRow {
   id: string;
@@ -34,7 +25,6 @@ interface TasksSummary {
 }
 
 interface StateSummary {
-  goal: GoalSummary | null;
   tasks: TasksSummary | null;
   /** Persisted todos rehydrated from the bundle state projection, used as a fallback
    *  on session mount before any todos_updated SSE event arrives. */
@@ -58,7 +48,7 @@ interface SessionStateSidebarProps {
 }
 
 /**
- * Session progress: goal, tasks, todos and live processes.
+ * Session progress: tasks, todos and live processes.
  */
 export function SessionStateSidebar({
   sessionId,
@@ -89,8 +79,6 @@ export function SessionStateSidebar({
       cancelled = true;
     };
   }, [sessionId, refreshKey, onActiveTaskChange]);
-
-  const goal = data?.goal ?? null;
   const tasks = data?.tasks ?? null;
 
   // Prefer the live SSE-driven prop. Fall back to the snapshot returned by
@@ -112,62 +100,7 @@ export function SessionStateSidebar({
   const sections = (
     <>
       <ActiveProcessesSection sessionId={sessionId} processes={activeProcesses} />
-      {data && !goal && !tasks && effectiveTodos.length === 0 && activeProcesses.length === 0 && <p className="px-3 py-4 text-xs text-muted-foreground">{t("chat:state.empty")}</p>}
-      {goal && (
-        <CollapsibleSection
-          id="goal"
-          sessionId={sessionId}
-          title={t('chat:state.goalLabel')}
-          icon={
-            <Target
-              className={cn(
-                'h-3.5 w-3.5',
-                goal.status === 'complete'
-                  ? 'text-success'
-                  : goal.status === 'superseded'
-                    ? 'text-muted-foreground'
-                    : 'text-warning',
-              )}
-            />
-          }
-          headerExtra={
-            <span
-              className={cn(
-                'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                goal.status === 'complete'
-                  ? 'bg-success/15 text-success'
-                  : goal.status === 'superseded'
-                    ? 'bg-muted text-muted-foreground'
-                    : 'bg-warning/15 text-warning',
-              )}
-            >
-              {goal.status === 'complete'
-                ? t('chat:state.goalDone')
-                : goal.status === 'superseded'
-                  ? t('chat:state.goalSuperseded')
-                  : t('chat:state.goalActive')}
-            </span>
-          }
-          defaultOpen
-        >
-          <div className="px-3 py-2 text-xs space-y-1">
-            <div className="text-foreground" title={goal.text}>
-              {goal.text}
-            </div>
-            {goal.budget_tokens != null && (
-              <div className="text-muted-foreground">
-                {t('chat:state.goalBudget', { tokens: formatK(goal.budget_tokens) })}
-              </div>
-            )}
-            {goal.completion_note && (
-              <div className="text-muted-foreground italic" title={goal.completion_note}>
-                {goal.completion_note}
-              </div>
-            )}
-          </div>
-        </CollapsibleSection>
-      )}
-
+      {data && !tasks && effectiveTodos.length === 0 && activeProcesses.length === 0 && <p className="px-3 py-4 text-xs text-muted-foreground">{t("chat:state.empty")}</p>}
       {tasks && (
         <CollapsibleSection
           id="tasks"
@@ -281,12 +214,6 @@ function countByStatus(tasks: TaskRow[]): Record<string, number> {
     out[k] = (out[k] ?? 0) + 1;
   }
   return out;
-}
-
-function formatK(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1000)}k`;
-  return String(n);
 }
 
 function TaskRows({ items, currentTaskId }: { items: TaskRow[]; currentTaskId: string | null }) {

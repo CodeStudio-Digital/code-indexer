@@ -1,13 +1,43 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   advanceCompanyStreamCursor,
+  beginCompanyStreamRequest,
   createCompanyStreamEventPump,
   disposeCompanyStreamLifecycle,
   isCompanyStreamOwner,
   resolveCompanyStreamTransport,
+  unconfirmedCompanyLiveness,
 } from '../useCompanyStream.js';
 
 describe('resolveCompanyStreamTransport', () => {
+  it('invalidates an older preflight and final hydration when another intent starts in the same mount', async () => {
+    const lifecycle = { current: 1 }, requests = { current: 0 };
+    const controller = { current: new AbortController() as AbortController | null };
+    const aborted = controller.current!;
+    const previous = beginCompanyStreamRequest(lifecycle, requests, controller);
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const hydrate = vi.fn();
+    const lateResponse = pending.then(() => { if (previous()) hydrate(); });
+    const replacement = beginCompanyStreamRequest(lifecycle, requests, controller);
+    finish(); await lateResponse;
+    expect(aborted.signal.aborted).toBe(true);
+    expect(previous()).toBe(false);
+    expect(replacement()).toBe(true);
+    expect(hydrate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a late resumed response from opening a stream after unmount', () => {
+    const mounted = { current: false };
+    const current = beginCompanyStreamRequest({ current: 2 }, { current: 5 }, { current: null }, mounted);
+    expect(current()).toBe(false);
+  });
+
+  it('clears unconfirmed/failed start liveness while preserving the pending inbox', () => {
+    expect(unconfirmedCompanyLiveness({ pendingMasterInboxCount: 3 })).toEqual({
+      masterAlive: false, liveOrchestrator: false, pendingMasterInboxCount: 3,
+    });
+  });
   it('preserves the generic Company transport for Company mode', () => {
     const companySessionId = '0000005a-0000-4000-8000-000000000000';
     expect(resolveCompanyStreamTransport(companySessionId)).toEqual({
@@ -16,7 +46,7 @@ describe('resolveCompanyStreamTransport', () => {
       includeKanban: true,
       allowDirectAgentControls: true,
       allowRuntimeSwitch: true,
-      keepAttachedWhileOrchestratorLive: false,
+      keepAttachedWhileOrchestratorLive: true,
     });
   });
 

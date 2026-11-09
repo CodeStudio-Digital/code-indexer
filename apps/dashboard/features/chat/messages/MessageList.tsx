@@ -45,14 +45,15 @@ import {
 import {
   buildChapterTranscript,
   sortChaptersChronologically,
-  visualGroupKey,
 } from './chapter-transcript.js';
 import { activeChapterIdAtScrollOffset } from './chapter-markers.js';
 import { useFollowOutput } from './useFollowOutput.js';
+import { splitTranscriptGroup, type AssistantTurnHeader } from './transcript-segments.js';
+import { ChapterSourcePager, CHAPTER_SOURCE_PAGE_SIZE, MAX_OPEN_CHAPTER_SOURCES, type ChapterSourceState } from './chapter-source-pager.js';
+import { useTranscriptSelection } from './transcript-selection.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
-const CHAPTER_SOURCE_PAGE_SIZE = 100;
 const MAX_DUPLICATE_PAGE_HOPS = 8;
 
 /** Negative values cover elastic overscroll on touch devices. */
@@ -88,13 +89,6 @@ export interface MessageListProps {
   snapshotFiles?: Map<string, SnapshotFileSummary>;
 }
 
-interface ChapterSourceState {
-  expanded: boolean;
-  loading: boolean;
-  error: boolean;
-  items: ConversationChapterSourceMessage[];
-}
-
 interface PaginationState {
   sessionId: string | null;
   nextBeforeSeq: number | null;
@@ -109,12 +103,14 @@ type TurnSummary = TurnEditSummary;
 type TranscriptRow =
   | { kind: 'history-control'; key: string }
   | { kind: 'chapter'; key: string; chapter: ConversationChapter }
+  | { kind: 'chapter-source-control'; key: string; chapterId: string }
   | {
       kind: 'message';
       key: string;
       group: VisualGroup;
       resultsById: ReadonlyMap<string, ToolResultView>;
       summary?: TurnSummary;
+      header?: AssistantTurnHeader | false;
       sourceChapterId?: string;
     }
   | { kind: 'live-block'; key: string; index: number }
@@ -158,11 +154,23 @@ function parseSelectedSkills(raw: string | null | undefined): string[] | undefin
   }
 }
 
-function projectChapterSource(items: readonly ConversationChapterSourceMessage[]): {
+interface ChapterSourceProjection {
   groups: VisualGroup[];
   resultsById: Map<string, ToolResultView>;
   summaries: Map<number, TurnSummary>;
-} {
+}
+const sourceProjectionCache = new WeakMap<readonly ConversationChapterSourceMessage[], {
+  toolResults: ConversationChapterSourcePage['tool_results'];
+  precedingUserSeq: number | null | undefined;
+  projection: ChapterSourceProjection;
+}>();
+export function projectChapterSource(
+  items: readonly ConversationChapterSourceMessage[],
+  toolResults: ConversationChapterSourcePage['tool_results'] = [],
+  precedingUserSeq?: number | null,
+): ChapterSourceProjection {
+  const cached = sourceProjectionCache.get(items);
+  if (cached && cached.toolResults === toolResults && cached.precedingUserSeq === precedingUserSeq) return cached.projection;
   const messages: PersistedMessage[] = items.map((item) => {
     const selectedSkillIds = parseSelectedSkills(item.selected_skill_ids_json);
     return {
@@ -181,6 +189,10 @@ function projectChapterSource(items: readonly ConversationChapterSourceMessage[]
     cache_creation_tokens: item.cache_creation_tokens ?? 0,
   }));
   const resultsById = new Map<string, ToolResultView>();
+  for (const result of toolResults) resultsById.set(result.tool_use_id, {
+    content: result.content, isError: result.is_error,
+    truncated: result._truncated, originalLength: result._originalLength,
+  });
   for (const message of messages) {
     if (message.role !== 'tool') continue;
     for (const block of message.content) {
@@ -194,11 +206,13 @@ function projectChapterSource(items: readonly ConversationChapterSourceMessage[]
     }
   }
   const groups = mergeConsecutiveAssistantGroups(groupMessages(messages, rows));
-  return {
+  const projected = {
     groups,
     resultsById,
-    summaries: computeTurnEditSummaries(groups),
+    summaries: computeTurnEditSummaries(groups, precedingUserSeq),
   };
+  sourceProjectionCache.set(items, { toolResults, precedingUserSeq, projection: projected });
+  return projected;
 }
 
 const TranscriptMessage = React.memo(function TranscriptMessage({
@@ -209,6 +223,7 @@ const TranscriptMessage = React.memo(function TranscriptMessage({
   tasksState,
   activeTasksToolUseId,
   summary,
+  header,
 }: {
   group: VisualGroup;
   resultsById: ReadonlyMap<string, ToolResultView>;
@@ -217,6 +232,7 @@ const TranscriptMessage = React.memo(function TranscriptMessage({
   tasksState: PersistedTasksState | null;
   activeTasksToolUseId: string | null;
   summary?: TurnSummary;
+  header?: AssistantTurnHeader | false;
 }) {
   let content: React.ReactNode;
   if (group.kind === 'user') {
@@ -238,7 +254,7 @@ const TranscriptMessage = React.memo(function TranscriptMessage({
         tasksState={tasksState}
       />
     );
-  } else if (group.hasText && group.messages.length === 1) {
+  } else if (header === undefined && group.hasText && group.messages.length === 1) {
     content = (
       <MessageView
         message={group.messages[0]}
@@ -261,6 +277,7 @@ const TranscriptMessage = React.memo(function TranscriptMessage({
   } else {
     content = (
       <GroupedToolBubble
+        header={header}
         group={group}
         toolResultsById={resultsById}
         sessionId={sessionId}
@@ -355,7 +372,14 @@ export const MessageList = React.memo(function MessageList({
   const [chapterDetails, setChapterDetails] = useState<Record<string, ConversationChapter>>({});
   const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
   const [chapterSources, setChapterSources] = useState<Record<string, ChapterSourceState>>({});
-  const sourceControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const sourcePager = useMemo(() => new ChapterSourcePager(async (chapterId, cursor, signal) => {
+    const query = new URLSearchParams({ limit: String(CHAPTER_SOURCE_PAGE_SIZE) });
+    if (cursor) query.set('cursor', cursor);
+    const response = await fetch(`/api/coder/sessions/${sessionId}/chapters/${chapterId}/messages?${query}`, { signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json() as Promise<ConversationChapterSourcePage>;
+  }, setChapterSources), [sessionId]);
+  useEffect(() => () => sourcePager.dispose(), [sourcePager]);
   const detailControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   const totalMessages = sessionData?.total_messages ?? sessionData?.message_rows.length ?? 0;
@@ -405,14 +429,12 @@ export const MessageList = React.memo(function MessageList({
     setChapterDetails({});
     setDetailLoading(new Set());
     setChapterSources({});
-    for (const controller of sourceControllersRef.current.values()) controller.abort();
+    sourcePager.dispose();
     for (const controller of detailControllersRef.current.values()) controller.abort();
-    sourceControllersRef.current.clear();
     detailControllersRef.current.clear();
-  }, [commitPagination, initialCursor, initialHasMore, loadedCount, sessionId]);
+  }, [commitPagination, initialCursor, initialHasMore, loadedCount, sessionId, sourcePager]);
 
   useEffect(() => () => {
-    for (const controller of sourceControllersRef.current.values()) controller.abort();
     for (const controller of detailControllersRef.current.values()) controller.abort();
   }, []);
 
@@ -485,9 +507,14 @@ export const MessageList = React.memo(function MessageList({
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json() as Promise<ConversationChapter>;
       })
-      .then((detail) => setChapterDetails((current) => ({ ...current, [chapter.id]: detail })))
+      .then((detail) => {
+        if (!controller.signal.aborted && detailControllersRef.current.get(chapter.id) === controller) {
+          setChapterDetails((current) => ({ ...current, [chapter.id]: detail }));
+        }
+      })
       .catch(() => {})
       .finally(() => {
+        if (detailControllersRef.current.get(chapter.id) !== controller) return;
         detailControllersRef.current.delete(chapter.id);
         setDetailLoading((current) => {
           const next = new Set(current);
@@ -497,80 +524,50 @@ export const MessageList = React.memo(function MessageList({
       });
   }, [chapterDetails, sessionId]);
 
-  const toggleChapter = useCallback((chapter: ConversationChapter) => {
-    setActiveChapterId(chapter.id);
-    setExpandedSummaries((current) => {
-      const next = new Set(current);
-      if (next.has(chapter.id)) next.delete(chapter.id);
-      else {
-        next.add(chapter.id);
-        fetchChapterDetail(chapter);
-      }
+  const releaseChapterDetails = useCallback((ids: string[]) => {
+    for (const id of ids) {
+      detailControllersRef.current.get(id)?.abort();
+      detailControllersRef.current.delete(id);
+    }
+    setChapterDetails(current => {
+      const next = { ...current };
+      for (const id of ids) delete next[id];
       return next;
     });
-  }, [fetchChapterDetail]);
+    setDetailLoading(current => {
+      const next = new Set(current);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
+  }, []);
+  const expandChapter = useCallback((chapter: ConversationChapter) => {
+    const next = new Set(expandedSummaries);
+    const evicted: string[] = [];
+    if (!next.has(chapter.id)) {
+      while (next.size >= MAX_OPEN_CHAPTER_SOURCES) {
+        const oldest = next.values().next().value!;
+        next.delete(oldest);
+        evicted.push(oldest);
+      }
+      next.add(chapter.id);
+    }
+    if (evicted.length) releaseChapterDetails(evicted);
+    setExpandedSummaries(next);
+    fetchChapterDetail(chapter);
+  }, [expandedSummaries, fetchChapterDetail, releaseChapterDetails]);
+  const toggleChapter = useCallback((chapter: ConversationChapter) => {
+    setActiveChapterId(chapter.id);
+    if (!expandedSummaries.has(chapter.id)) { expandChapter(chapter); return; }
+    const next = new Set(expandedSummaries);
+    next.delete(chapter.id);
+    setExpandedSummaries(next);
+    releaseChapterDetails([chapter.id]);
+  }, [expandedSummaries, expandChapter, releaseChapterDetails]);
 
-  const loadChapterSource = useCallback(async (chapter: ConversationChapter) => {
-    if (!sessionId) return;
-    const existing = chapterSources[chapter.id];
-    if (existing?.loading) return;
-    if (existing?.items.length) {
-      setChapterSources((current) => ({
-        ...current,
-        [chapter.id]: { ...current[chapter.id], expanded: !current[chapter.id].expanded },
-      }));
-      return;
-    }
-    const controller = new AbortController();
-    sourceControllersRef.current.get(chapter.id)?.abort();
-    sourceControllersRef.current.set(chapter.id, controller);
-    setChapterSources((current) => ({
-      ...current,
-      [chapter.id]: { expanded: true, loading: true, error: false, items: [] },
-    }));
-    try {
-      const collected: ConversationChapterSourceMessage[] = [];
-      const seenRows = new Set<string>();
-      const seenCursors = new Set<string>();
-      let cursor: string | null = null;
-      do {
-        if (cursor && seenCursors.has(cursor)) throw new Error('chapter cursor did not advance');
-        if (cursor) seenCursors.add(cursor);
-        const query = new URLSearchParams({ limit: String(CHAPTER_SOURCE_PAGE_SIZE) });
-        if (cursor) query.set('cursor', cursor);
-        const response = await fetch(
-          `/api/coder/sessions/${sessionId}/chapters/${chapter.id}/messages?${query}`,
-          { signal: controller.signal },
-        );
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const page = await response.json() as ConversationChapterSourcePage;
-        for (const item of page.items) {
-          if (seenRows.has(item.id)) continue;
-          seenRows.add(item.id);
-          collected.push(item);
-        }
-        cursor = page.next_cursor ?? null;
-      } while (cursor);
-      collected.sort((left, right) => left.seq - right.seq);
-      setChapterSources((current) => ({
-        ...current,
-        [chapter.id]: { expanded: true, loading: false, error: false, items: collected },
-      }));
-    } catch (sourceError) {
-      if ((sourceError as { name?: string })?.name === 'AbortError') return;
-      setChapterSources((current) => ({
-        ...current,
-        [chapter.id]: {
-          expanded: true,
-          loading: false,
-          error: true,
-          items: current[chapter.id]?.items ?? [],
-        },
-      }));
-    } finally {
-      sourceControllersRef.current.delete(chapter.id);
-    }
-  }, [chapterSources, sessionId]);
+  const loadChapterSource = useCallback((chapter: ConversationChapter) => {
+    if (!sessionId) return Promise.resolve();
+    return sourcePager.toggle(chapter.id);
+  }, [sourcePager, sessionId]);
 
   const displayGroups = useMemo(() => sessionData
     ? projectTranscriptHistory(
@@ -586,7 +583,7 @@ export const MessageList = React.memo(function MessageList({
   const sourceProjections = useMemo(() => {
     const projected = new Map<string, ReturnType<typeof projectChapterSource>>();
     for (const [chapterId, source] of Object.entries(chapterSources)) {
-      if (source.items.length > 0) projected.set(chapterId, projectChapterSource(source.items));
+      if (source.items.length > 0) projected.set(chapterId, projectChapterSource(source.items, source.toolResults, source.precedingUserSeq));
     }
     return projected;
   }, [chapterSources]);
@@ -613,12 +610,10 @@ export const MessageList = React.memo(function MessageList({
     for (const item of historyItems) {
       if (item.kind === 'message') {
         const groupIndex = displayGroupIndexes.get(item.group) ?? -1;
-        result.push({
-          kind: 'message',
-          key: item.key,
-          group: item.group,
+        for (const segment of splitTranscriptGroup(item.group)) result.push({
+          kind: 'message', key: segment.key, group: segment.group, header: segment.header,
           resultsById: projection.toolResultsById,
-          summary: turnSummaries.get(groupIndex),
+          summary: segment.last ? turnSummaries.get(groupIndex) : undefined,
         });
         continue;
       }
@@ -626,15 +621,18 @@ export const MessageList = React.memo(function MessageList({
       result.push({ kind: 'chapter', key: item.key, chapter });
       const source = chapterSources[chapter.id];
       const sourceProjection = sourceProjections.get(chapter.id);
-      if (!source?.expanded || !sourceProjection) continue;
-      sourceProjection.groups.forEach((group, index) => result.push({
-        kind: 'message',
-        key: `chapter-source:${chapter.id}:${visualGroupKey(group)}`,
-        group,
-        resultsById: sourceProjection.resultsById,
-        summary: sourceProjection.summaries.get(index),
-        sourceChapterId: chapter.id,
-      }));
+      if (!source?.expanded) continue;
+      result.push({ kind: 'chapter-source-control', key: `chapter-controls:${chapter.id}`, chapterId: chapter.id });
+      if (!sourceProjection) continue;
+      sourceProjection.groups.forEach((group, index) => {
+        for (const segment of splitTranscriptGroup(group)) result.push({
+          kind: 'message', key: `chapter-source:${chapter.id}:${segment.key}`,
+          group: segment.group, header: segment.header,
+          resultsById: sourceProjection.resultsById,
+          summary: segment.last ? sourceProjection.summaries.get(index) : undefined,
+          sourceChapterId: chapter.id,
+        });
+      });
     }
     projection.live.blocks.forEach((block, index) => {
       const id = liveBlockPersistedId(block)
@@ -666,13 +664,15 @@ export const MessageList = React.memo(function MessageList({
   ]);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
+  const rangeExtractor = useTranscriptSelection(scrollRef, rows);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     getItemKey: (index) => rowsRef.current[index]?.key ?? index,
+    rangeExtractor,
     estimateSize: (index) => {
       const row = rowsRef.current[index];
-      if (row?.kind === 'history-control') return 48;
+      if (row?.kind === 'history-control' || row?.kind === 'chapter-source-control') return 48;
       if (row?.kind === 'chapter') return expandedSummaries.has(row.chapter.id) ? 300 : 68;
       if (row?.kind === 'tail') return 24;
       if (row?.kind === 'live-block') return 40;
@@ -728,8 +728,7 @@ export const MessageList = React.memo(function MessageList({
       if (!detail || detail.sessionId !== sessionId) return;
       const chapter = chapters.find((candidate) => candidate.id === detail.chapterId);
       if (!chapter) return;
-      setExpandedSummaries((current) => new Set(current).add(chapter.id));
-      fetchChapterDetail(chapter);
+      expandChapter(chapter);
       if (detail.expandConversation && !chapterSources[chapter.id]?.expanded) {
         void loadChapterSource(chapter);
       }
@@ -737,7 +736,7 @@ export const MessageList = React.memo(function MessageList({
     };
     window.addEventListener('coder:chapter-source', navigate);
     return () => window.removeEventListener('coder:chapter-source', navigate);
-  }, [chapterSources, chapters, fetchChapterDetail, loadChapterSource, scrollToChapter, sessionId]);
+  }, [chapterSources, chapters, expandChapter, loadChapterSource, scrollToChapter, sessionId]);
 
   useEffect(() => {
     const root = scrollRef.current;
@@ -750,14 +749,16 @@ export const MessageList = React.memo(function MessageList({
   }, [loadEarlier, onLoadEarlier]);
 
   const liveEditRefs = useMemo<EditFileRef[]>(() => {
-    if (!currentTurn) return [];
+    // This summary is only visible after completion. Text frames must never
+    // walk historical edit calls or parse their patches again.
+    if (streaming || !doneReason || projection.live.duplicated || !currentTurn) return [];
     const byPath = new Map<string, EditFileRef>();
     for (const block of currentTurn.blocks) {
       if (block.type !== 'tool') continue;
       for (const ref of filesFromEditToolCall(block.call.name, block.call.input)) byPath.set(ref.path, ref);
     }
     return [...byPath.values()];
-  }, [currentTurn]);
+  }, [currentTurn, streaming, doneReason, projection.live.duplicated]);
   const showLiveSummary = !streaming
     && !!doneReason
     && !projection.live.duplicated
@@ -872,12 +873,17 @@ export const MessageList = React.memo(function MessageList({
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index];
               if (!row) return null;
+              // Virtual row boundaries can split consecutive calls. Assistant
+              // blocks own their spacing, independently of persistence batches.
+              const assistantRow = row.kind === 'live-block'
+                || (row.kind === 'message' && row.group.kind === 'assistant');
               return (
                 <div
                   key={row.key}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  className="absolute left-0 top-0 w-full px-3 pb-1 sm:px-6 lg:px-8"
+                  data-transcript-row-key={row.key}
+                  className={`absolute left-0 top-0 w-full px-3 sm:px-6 lg:px-8${assistantRow ? '' : ' pb-1'}`}
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
                   {row.kind === 'history-control' && renderHistoryControl()}
@@ -896,6 +902,22 @@ export const MessageList = React.memo(function MessageList({
                       onToggleConversation={(chapter) => void loadChapterSource(chapter)}
                     />
                   )}
+                  {row.kind === 'chapter-source-control' && (() => {
+                    const source = chapterSources[row.chapterId];
+                    if (!source) return null;
+                    return <div className="flex items-center justify-center gap-3 py-2 text-xs">
+                      <button type="button" disabled={source.loading || source.pageIndex === 0}
+                        onClick={() => void sourcePager.previous(row.chapterId)} className="rounded px-2 py-1 hover:bg-muted disabled:opacity-40">
+                        {t('messages.chapterPreviousPage')}
+                      </button>
+                      <span aria-live="polite">{source.loading ? t('messages.loading') : t('messages.chapterPage', { page: source.pageIndex + 1 })}</span>
+                      <button type="button" disabled={source.loading || !source.nextCursor}
+                        onClick={() => void sourcePager.next(row.chapterId)} className="rounded px-2 py-1 hover:bg-muted disabled:opacity-40">
+                        {t('messages.chapterNextPage')}
+                      </button>
+                      {source.error && <button type="button" onClick={() => void sourcePager.retry(row.chapterId)} className="rounded px-2 py-1 text-destructive hover:bg-muted">{t('messages.retry')}</button>}
+                    </div>;
+                  })()}
                   {row.kind === 'message' && (
                     <div className={row.sourceChapterId ? 'pl-10' : chapters.length > 0 ? 'pl-8' : ''}>
                       <TranscriptMessage
@@ -906,6 +928,7 @@ export const MessageList = React.memo(function MessageList({
                         tasksState={row.sourceChapterId ? null : tasksState}
                         activeTasksToolUseId={row.sourceChapterId ? null : projection.activeTasksToolUseId}
                         summary={row.summary}
+                        header={row.header}
                       />
                     </div>
                   )}

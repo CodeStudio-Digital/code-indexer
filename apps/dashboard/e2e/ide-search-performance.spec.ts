@@ -16,6 +16,7 @@ test('keeps file search bounded, ignores stale responses and virtualizes matches
       body = url.searchParams.get('fuzzy') === 'false'
         ? Array.from({ length: 300 }, (_, i) => ({ path: `src/${query}-${i}.ts` }))
         : [{ path: `src/${query}.tsx` }];
+      if (url.searchParams.get('format') === 'page') body = { items: body, source: 'structural_index', completeness: 'complete', revision: 'fixture:1' };
     } else if (url.pathname.endsWith('/files')) fullListings++;
     else if (url.pathname.endsWith('/file-tree')) body = { name: '.', path: '', type: 'dir', children: [] };
     else if (url.pathname.includes('git')) body = { files: [], notARepo: true, repoRoot: null };

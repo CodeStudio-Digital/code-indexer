@@ -3,6 +3,7 @@ import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
 import { cancellableToolRpc } from '../cancellable-rpc.js';
 import { assertMutationFence } from '../../core/mutation-fence.js';
 import { BrowserOutcomeUnknownError } from './failure.js';
+import { isConfirmedRpcFailure } from '@mcp/shared/rpc-response-error.js';
 import type {
   IResearchBrowser,
   ResearchBrowserInvoke,
@@ -55,7 +56,7 @@ export async function invokeResearchBrowser(
       return browser.invoke({ key, method, args, requestId });
     }, () => browser.cancel?.(requestId), signal, 'Research browser operation aborted.');
   } catch (error) {
-    if (dispatched && ['open', 'click', 'fill', 'press', 'close'].includes(method)) {
+    if (dispatched && ['open', 'click', 'fill', 'press', 'close'].includes(method) && !isConfirmedRpcFailure(error)) {
       throw new BrowserOutcomeUnknownError(error);
     }
     throw error;

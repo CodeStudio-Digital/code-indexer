@@ -14,9 +14,8 @@ import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapte
 import type { ToolContext, CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
-import { goalTools } from '@mcp/code-agent/tools/goal.js';
 import { ExecutingNode } from '../executing.js';
-import { consumeStream, thinkingOnlyBudgetMs } from '../executing-stream.js';
+import { consumeStream } from '../executing-stream.js';
 import { makeTestContext } from './test-helpers.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { HookBus, type HookDefinition } from '@mcp/code-agent/core/hook-bus.js';
@@ -79,6 +78,50 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('ExecutingNode', () => {
+  it('resets consecutive retries only on a committed response and retains run totals', async () => {
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([{ type: 'text_delta', text: 'complete' }, { type: 'done' }]),
+      registry: makeRegistry({}), toolContext: emptyToolContext(),
+    });
+    ctx.transportRetriesThisTurn = 3;
+    ctx.transientRetriesThisTurn = 1;
+    ctx.recovery.set('provider-transport-retry', 7);
+    await new ExecutingNode().execute(ctx, null);
+    expect(ctx.transportRetriesThisTurn).toBe(0);
+    expect(ctx.transientRetriesThisTurn).toBe(0);
+    expect(ctx.recovery.get('provider-transport-retry')).toBe(7);
+  });
+
+  it('does not dispatch streamed tools on disconnect and records the safe nested cause', async () => {
+    const effect = vi.fn(() => 'written');
+    let attempt = 0;
+    const provider: ChatProvider = {
+      name: 'mock', model: 'mock', setModel() {},
+      async *chat() {
+        yield { type: 'tool_call_end', id: 'write_once', name: 'echo', input: {} };
+        if (++attempt === 1) throw new TypeError('terminated', {
+          cause: Object.assign(new Error('https://private/?key=secret'), { code: 'UND_ERR_SOCKET' }),
+        });
+        yield { type: 'done', stop_reason: 'tool_use' };
+      },
+    };
+    const recordProviderAttempt = vi.fn();
+    const { ctx } = makeTestContext({ provider, registry: makeRegistry({ echo: effect }), toolContext: emptyToolContext() });
+    ctx.opts.sessionStore = { recordProviderAttempt } as never;
+    ctx.transportRetriesThisTurn = 2;
+    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('ProviderError');
+    expect(effect).not.toHaveBeenCalled();
+    expect(ctx.messages).toHaveLength(0);
+    expect(ctx.transportRetriesThisTurn).toBe(2);
+    expect(recordProviderAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      ok: false, error_code: 'UND_ERR_SOCKET',
+      error_message: 'Provider connection interrupted before the response completed (UND_ERR_SOCKET)',
+    }));
+    await new ExecutingNode().execute(ctx, null);
+    expect(effect).toHaveBeenCalledTimes(1);
+    expect(ctx.transportRetriesThisTurn).toBe(0);
+  });
+
   it('commits an image-only generation to the assistant message and dashboard event', async () => {
     const image: ChatDelta = { type: 'image_generated', id: 'img_1', mediaType: 'image/png', base64: Buffer.from('pixels').toString('base64') };
     const { ctx, recordedEvents } = makeTestContext({
@@ -292,31 +335,6 @@ describe('ExecutingNode', () => {
     expect(ctx.transientRetriesThisTurn).toBe(0);
   });
 
-  it('restores protected goal transitions omitted by a post-build selector', async () => {
-    const visibleNames: string[] = [];
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider(
-        [
-          { type: 'text_delta', text: 'done' },
-          { type: 'done', stop_reason: 'end_turn' },
-        ],
-        (request) => visibleNames.push(...request.tools.map((tool) => tool.name)),
-      ),
-      registry: makeRegistry({
-        create_goal: () => 'created',
-        read_file: () => 'read',
-        update_goal: () => 'completed',
-      }),
-      toolContext: emptyToolContext(),
-    });
-    ctx.opts.toolSelectionFilter = async (tools) =>
-      tools.filter((tool) => tool.name === 'create_goal');
-
-    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('CleanFinish');
-    expect(visibleNames).toContain('create_goal');
-    expect(visibleNames).toContain('update_goal');
-  });
-
   it('forwards the filesystem session UUID to tool-selection telemetry', async () => {
     const sessionId = asSessionId('018f0f5e-7b2d-7a45-8c11-0123456789ab');
     let observedSessionId: string | undefined;
@@ -337,41 +355,6 @@ describe('ExecutingNode', () => {
     expect((await new ExecutingNode().execute(ctx, null)).kind)
       .toBe('CleanFinish');
     expect(observedSessionId).toBe(sessionId);
-  });
-
-  it('blocks a hallucinated create_goal when update_goal is unavailable', async () => {
-    let createCalls = 0;
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider([
-        { type: 'tool_call_start', id: 'tu-create', name: 'create_goal' },
-        {
-          type: 'tool_call_end',
-          id: 'tu-create',
-          name: 'create_goal',
-          input: { goal: 'Unclosable objective' },
-        },
-        { type: 'done', stop_reason: 'tool_use' },
-      ]),
-      registry: makeRegistry({
-        create_goal: () => {
-          createCalls += 1;
-          return 'created';
-        },
-        update_goal: () => 'completed',
-      }),
-      toolContext: emptyToolContext(),
-    });
-    ctx.opts.sessionDisabledTools = new Set(['update_goal']);
-
-    try {
-      expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('TurnSucceeded');
-      expect(createCalls).toBe(0);
-      expect(JSON.stringify(ctx.messages.at(-1)?.content))
-        .toContain('[goal-lifecycle-disabled]');
-      expect(ctx.pinnedTools.has('create_goal')).toBe(false);
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 
   it('gives an unverified write one bounded chance to run validation', async () => {
@@ -409,7 +392,6 @@ describe('ExecutingNode', () => {
     ctx.opts.verificationEvidenceEnabled = true;
     ctx.bridge = {
       getSessionStateData: () => ({
-        goal: null,
         activePlan: null,
         todos: [],
         notes: [],
@@ -430,470 +412,6 @@ describe('ExecutingNode', () => {
     expect(ctx.stopReason).toBe('completed');
     expect(ctx.messages.at(-1)?.role).toBe('assistant');
     expect(ctx.verification.nudges).toBe(1);
-  });
-
-  it('clean-finishes substantive work without requiring a goal', async () => {
-    const ledger = new ToolCallLedger();
-    const { ctx } = makeTestContext({
-      provider: makeSequencedProvider([
-        [
-          { type: 'tool_call_start', id: 'tu-read', name: 'read_file' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-read',
-            name: 'read_file',
-            input: { path: 'src/index.ts' },
-          },
-          { type: 'tool_call_start', id: 'tu-read-2', name: 'read_file' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-read-2',
-            name: 'read_file',
-            input: { path: 'src/runner.ts' },
-          },
-          { type: 'tool_call_start', id: 'tu-read-3', name: 'read_file' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-read-3',
-            name: 'read_file',
-            input: { path: 'src/store.ts' },
-          },
-          { type: 'done', stop_reason: 'tool_use' },
-        ],
-        [
-          { type: 'text_delta', text: 'The investigation is complete.' },
-          { type: 'done', stop_reason: 'end_turn' },
-        ],
-      ]),
-      registry: makeRegistry({
-        create_goal: () => 'Goal set',
-        read_file: () => 'novel source',
-        update_goal: () => 'Goal marked complete',
-      }),
-      toolContext: {
-        ...emptyToolContext(),
-        toolCallLedger: ledger,
-        getGoalState: () => null,
-      } as ToolContext,
-    });
-    const node = new ExecutingNode();
-
-    expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
-    const finishAttempt = await node.execute(ctx, null);
-
-    expect(finishAttempt.kind).toBe('CleanFinish');
-    expect(ctx.stopReason).toBe('completed');
-    expect(ctx.messages.at(-1)?.role).toBe('assistant');
-  });
-
-  it('does not turn an absent goal into a bounded-nudge terminal error', async () => {
-    const ledger = new ToolCallLedger();
-    const { ctx } = makeTestContext({
-      provider: makeSequencedProvider([
-        [
-          { type: 'text_delta', text: 'Done without a goal.' },
-          { type: 'done', stop_reason: 'end_turn' },
-        ],
-        [
-          { type: 'text_delta', text: 'Still done without a goal.' },
-          { type: 'done', stop_reason: 'end_turn' },
-        ],
-        [
-          { type: 'text_delta', text: 'Trying to finish anyway.' },
-          { type: 'done', stop_reason: 'end_turn' },
-        ],
-      ]),
-      registry: makeRegistry({
-        create_goal: () => 'Goal set',
-        edit_file: () => 'updated',
-        update_goal: () => 'Goal marked complete',
-      }),
-      toolContext: {
-        ...emptyToolContext(),
-        toolCallLedger: ledger,
-        getGoalState: () => null,
-      } as ToolContext,
-    });
-    ledger.record({
-      name: 'edit_file',
-      args: { path: 'src/index.ts' },
-      content: 'updated',
-      isError: false,
-      mutates: true,
-      executionClass: 'write',
-    });
-    const node = new ExecutingNode();
-
-    const terminal = await node.execute(ctx, null);
-
-    expect(terminal.kind).toBe('CleanFinish');
-    expect(ctx.stopReason).toBe('completed');
-    expect(ctx.error).toBeNull();
-  });
-
-  it('supports create_goal, work, then update_goal in the same assistant tool-call batch', async () => {
-    type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
-    let goal: GoalSnapshot | null = null;
-    let editCalls = 0;
-    const persistedStatuses: GoalSnapshot['status'][] = [];
-    const persistedAttributions: Array<{
-      toolUseId: string;
-      toolName: 'create_goal' | 'update_goal';
-    }> = [];
-    const registry = new ToolRegistry();
-    registry.registerAll(goalTools);
-    registry.register({
-      name: 'edit_file',
-      description: 'test write',
-      parameters: { type: 'object', properties: {} },
-      source: 'native',
-      mutates: true,
-      riskLevel: 'write',
-      handler: async () => {
-        editCalls += 1;
-        return { content: 'updated' };
-      },
-    });
-    const ledger = new ToolCallLedger();
-    const { ctx } = makeTestContext({
-      provider: makeSequencedProvider([
-        [
-          { type: 'tool_call_start', id: 'tu-create', name: 'create_goal' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-create',
-            name: 'create_goal',
-            input: { goal: 'Fix and verify the lifecycle' },
-          },
-          { type: 'tool_call_start', id: 'tu-edit', name: 'edit_file' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-edit',
-            name: 'edit_file',
-            input: { path: 'src/index.ts' },
-          },
-          { type: 'tool_call_start', id: 'tu-complete', name: 'update_goal' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-complete',
-            name: 'update_goal',
-            input: { status: 'complete', note: 'Verified.' },
-          },
-          { type: 'done', stop_reason: 'tool_use' },
-        ],
-        [
-          { type: 'text_delta', text: 'Done and verified.' },
-          { type: 'done', stop_reason: 'end_turn' },
-        ],
-      ]),
-      registry,
-      toolContext: {
-        ...emptyToolContext(),
-        toolCallLedger: ledger,
-        getGoalState: () => goal,
-        upsertGoalState: async (next, attribution) => {
-          await Promise.resolve();
-          goal = {
-            ...next,
-            budgetTokens: next.budgetTokens ?? null,
-            completionNote: next.completionNote ?? null,
-          };
-          persistedStatuses.push(next.status);
-          persistedAttributions.push(attribution);
-        },
-      } as ToolContext,
-    });
-    const node = new ExecutingNode();
-
-    expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(persistedStatuses).toEqual(['in_progress', 'complete']);
-    expect(persistedAttributions).toEqual([
-      { toolUseId: 'tu-create', toolName: 'create_goal' },
-      { toolUseId: 'tu-complete', toolName: 'update_goal' },
-    ]);
-    expect(editCalls).toBe(1);
-    expect((goal as GoalSnapshot | null)?.status).toBe('complete');
-    expect((await node.execute(ctx, null)).kind).toBe('CleanFinish');
-  });
-
-  it('persists completion before scheduling an independent advisory review', async () => {
-    type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
-    let goal: GoalSnapshot = {
-      text: 'Finish the requested correction',
-      status: 'in_progress',
-      budgetTokens: null,
-      completionNote: null,
-      createdAt: '2026-07-23T00:00:00.000Z',
-      updatedAt: '2026-07-23T00:00:00.000Z',
-    };
-    const upsertGoalState = vi.fn((next: GoalSnapshot) => {
-      goal = next;
-    });
-    const registry = new ToolRegistry();
-    registry.registerAll(goalTools);
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider([
-        { type: 'tool_call_start', id: 'tu-complete-rejected', name: 'update_goal' },
-        {
-          type: 'tool_call_end',
-          id: 'tu-complete-rejected',
-          name: 'update_goal',
-          input: { status: 'complete', note: 'Claimed complete.' },
-        },
-        { type: 'done', stop_reason: 'tool_use' },
-      ]),
-      registry,
-      toolContext: {
-        ...emptyToolContext(),
-        getGoalState: () => goal,
-        upsertGoalState,
-      } as ToolContext,
-    });
-    const verifyGoalCompletion = vi.fn(async () => ({
-      goalMet: false,
-      gaps: [{ description: 'Regression proof is missing', severity: 'high' as const }],
-    }));
-    ctx.bridge = { verifyGoalCompletion } as never;
-
-    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(verifyGoalCompletion).toHaveBeenCalledTimes(1);
-    expect(upsertGoalState).toHaveBeenCalledTimes(1);
-    expect(goal.status).toBe('complete');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('Completion health: unverified');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('scheduled asynchronously');
-  });
-
-  it('supersedes an inherited goal on explicit pivot without asking the completion verifier to lie', async () => {
-    type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
-    let goal: GoalSnapshot = {
-      text: 'Old unfinished objective',
-      status: 'in_progress',
-      budgetTokens: null,
-      completionNote: null,
-      createdAt: '2026-07-23T00:00:00.000Z',
-      updatedAt: '2026-07-23T00:00:00.000Z',
-    };
-    const registry = new ToolRegistry();
-    registry.registerAll(goalTools);
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider([
-        { type: 'tool_call_start', id: 'tu-supersede', name: 'update_goal' },
-        {
-          type: 'tool_call_end',
-          id: 'tu-supersede',
-          name: 'update_goal',
-          input: {
-            status: 'superseded',
-            note: 'The user explicitly requested a replacement objective.',
-          },
-        },
-        { type: 'done', stop_reason: 'tool_use' },
-      ]),
-      registry,
-      toolContext: {
-        ...emptyToolContext(),
-        goalLifecycleIntent: 'required_pivot',
-        goalLifecyclePivotGoalCreatedAt: goal.createdAt,
-        getGoalState: () => goal,
-        upsertGoalState: (next) => {
-          goal = {
-            ...next,
-            budgetTokens: next.budgetTokens ?? null,
-            completionNote: next.completionNote ?? null,
-          };
-        },
-      } as ToolContext,
-    });
-    ctx.opts.goalLifecycleIntent = 'required_pivot';
-    const verifyGoalCompletion = vi.fn(async () => ({
-      goalMet: false,
-      gaps: [{ description: 'Old objective was not completed', severity: 'high' as const }],
-    }));
-    ctx.bridge = { verifyGoalCompletion } as never;
-
-    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(verifyGoalCompletion).not.toHaveBeenCalled();
-    expect(goal.status).toBe('superseded');
-    expect(goal.completionNote).toContain('replacement objective');
-  });
-
-  it('persists early completion with warnings and accepts later validation', async () => {
-    type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
-    let goal: GoalSnapshot | null = null;
-    const persistedStatuses: GoalSnapshot['status'][] = [];
-    const registry = new ToolRegistry();
-    registry.registerAll(goalTools);
-    registry.register({
-      name: 'edit_file',
-      description: 'test write',
-      parameters: { type: 'object', properties: {} },
-      source: 'native',
-      mutates: true,
-      riskLevel: 'write',
-      executionClass: 'write',
-      handler: async () => ({ content: 'updated' }),
-    });
-    registry.register({
-      name: 'run_command',
-      description: 'test validation',
-      parameters: { type: 'object', properties: {} },
-      source: 'native',
-      riskLevel: 'execute',
-      executionClass: 'execute',
-      handler: async () => ({ content: 'tests passed' }),
-    });
-    const ledger = new ToolCallLedger();
-    const { ctx } = makeTestContext({
-      provider: makeSequencedProvider([
-        [
-          { type: 'tool_call_start', id: 'tu-create', name: 'create_goal' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-create',
-            name: 'create_goal',
-            input: { goal: 'Fix and validate the lifecycle' },
-          },
-          { type: 'tool_call_start', id: 'tu-edit', name: 'edit_file' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-edit',
-            name: 'edit_file',
-            input: { path: 'src/index.ts' },
-          },
-          { type: 'tool_call_start', id: 'tu-early-complete', name: 'update_goal' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-early-complete',
-            name: 'update_goal',
-            input: { status: 'complete' },
-          },
-          { type: 'done', stop_reason: 'tool_use' },
-        ],
-        [
-          { type: 'tool_call_start', id: 'tu-validate', name: 'run_command' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-validate',
-            name: 'run_command',
-            input: { command: 'pnpm test' },
-          },
-          { type: 'tool_call_start', id: 'tu-complete', name: 'update_goal' },
-          {
-            type: 'tool_call_end',
-            id: 'tu-complete',
-            name: 'update_goal',
-            input: { status: 'complete', note: 'Validated.' },
-          },
-          { type: 'done', stop_reason: 'tool_use' },
-        ],
-        [
-          { type: 'text_delta', text: 'Done and validated.' },
-          { type: 'done', stop_reason: 'end_turn' },
-        ],
-      ]),
-      registry,
-      toolContext: {
-        ...emptyToolContext(),
-        toolCallLedger: ledger,
-        getGoalState: () => goal,
-        upsertGoalState: (next) => {
-          goal = {
-            ...next,
-            budgetTokens: next.budgetTokens ?? null,
-            completionNote: next.completionNote ?? null,
-          };
-          persistedStatuses.push(next.status);
-        },
-      } as ToolContext,
-    });
-    ctx.opts.verificationEvidenceEnabled = true;
-    ctx.bridge = {
-      getSessionStateData: () => ({
-        goal: null,
-        activePlan: null,
-        todos: [],
-        notes: [],
-        filesChanged: ['src/index.ts'],
-        investigationCount: 0,
-      }),
-    };
-    const node = new ExecutingNode();
-
-    expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(persistedStatuses).toEqual(['in_progress', 'complete']);
-    expect((goal as GoalSnapshot | null)?.status).toBe('complete');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content))
-      .toContain('Completion health: completed_with_warnings');
-
-    expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(persistedStatuses).toEqual(['in_progress', 'complete']);
-    expect((goal as GoalSnapshot | null)?.status).toBe('complete');
-
-    expect((await node.execute(ctx, null)).kind).toBe('CleanFinish');
-  });
-
-  it('persists update_goal with advisory health when substantive work failed', async () => {
-    type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
-    let goal: GoalSnapshot | null = null;
-    const persistedStatuses: GoalSnapshot['status'][] = [];
-    const registry = new ToolRegistry();
-    registry.registerAll(goalTools);
-    registry.register({
-      name: 'edit_file',
-      description: 'failing test write',
-      parameters: { type: 'object', properties: {} },
-      source: 'native',
-      mutates: true,
-      riskLevel: 'write',
-      handler: async () => ({ content: 'old string not found', isError: true }),
-    });
-    const ledger = new ToolCallLedger();
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider([
-        { type: 'tool_call_start', id: 'tu-create', name: 'create_goal' },
-        {
-          type: 'tool_call_end',
-          id: 'tu-create',
-          name: 'create_goal',
-          input: { goal: 'Fix the failing edit' },
-        },
-        { type: 'tool_call_start', id: 'tu-edit', name: 'edit_file' },
-        {
-          type: 'tool_call_end',
-          id: 'tu-edit',
-          name: 'edit_file',
-          input: { path: 'src/index.ts' },
-        },
-        { type: 'tool_call_start', id: 'tu-complete', name: 'update_goal' },
-        {
-          type: 'tool_call_end',
-          id: 'tu-complete',
-          name: 'update_goal',
-          input: { status: 'complete' },
-        },
-        { type: 'done', stop_reason: 'tool_use' },
-      ]),
-      registry,
-      toolContext: {
-        ...emptyToolContext(),
-        toolCallLedger: ledger,
-        getGoalState: () => goal,
-        upsertGoalState: (next) => {
-          goal = {
-            ...next,
-            budgetTokens: next.budgetTokens ?? null,
-            completionNote: next.completionNote ?? null,
-          };
-          persistedStatuses.push(next.status);
-        },
-      } as ToolContext,
-    });
-
-    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(persistedStatuses).toEqual(['in_progress', 'complete']);
-    expect((goal as GoalSnapshot | null)?.status).toBe('complete');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content))
-      .toContain('Completion health: unverified');
   });
 
   it('compacts from the tokenizer estimate when the provider omits usage (Fix B regression)', async () => {
@@ -1421,20 +939,6 @@ describe('ExecutingNode', () => {
     expect(recordedEvents.map((e) => e.event)).not.toContain('stream_rollback');
   });
 
-  it('times out thinking-only provider streams', async () => {
-    async function* thinkingOnly(): AsyncIterable<ChatDelta> {
-      yield { type: 'thinking_delta', text: 'still thinking' };
-      await sleep(20);
-      yield { type: 'thinking_delta', text: 'still only thinking' };
-    }
-
-    await expect(consumeStream({
-      stream: thinkingOnly(),
-      idleTimeoutMs: 1_000,
-      thinkingOnlyTimeoutMs: 1,
-    })).rejects.toMatchObject({ name: 'TimeoutError', code: 'TIMEOUT' });
-  });
-
   it('tolerates a long time-to-first-byte (first-byte budget > idle budget)', async () => {
     async function* slowFirstByte(): AsyncIterable<ChatDelta> {
       // Silent longer than the inter-delta idle budget, but within first-byte.
@@ -1645,37 +1149,5 @@ describe('ExecutingNode', () => {
 
     const event = await new ExecutingNode().execute(ctx, null);
     expect(event.kind).toBe('TokenThresholdHit'); // routes (eventually aborts), never sends
-  });
-});
-
-describe('thinkingOnlyBudgetMs', () => {
-  afterEach(() => vi.unstubAllEnvs());
-
-  it('returns the base budget for the first attempt at default effort', () => {
-    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(240_000);
-    expect(thinkingOnlyBudgetMs('medium', 0)).toBe(240_000);
-  });
-
-  it('scales the base by reasoning effort (high 1.5x, xhigh 2x)', () => {
-    expect(thinkingOnlyBudgetMs('high', 0)).toBe(360_000);
-    expect(thinkingOnlyBudgetMs('xhigh', 0)).toBe(480_000);
-  });
-
-  it('doubles per prior attempt so a retry gets strictly more time', () => {
-    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(240_000);
-    expect(thinkingOnlyBudgetMs(undefined, 1)).toBe(480_000);
-    expect(thinkingOnlyBudgetMs(undefined, 2)).toBe(960_000);
-  });
-
-  it('bounds the attempt multiplier at 4x so a degenerate loop stays bounded', () => {
-    // attempts beyond 2 do not keep doubling.
-    expect(thinkingOnlyBudgetMs(undefined, 3)).toBe(960_000);
-    expect(thinkingOnlyBudgetMs(undefined, 10)).toBe(960_000);
-  });
-
-  it('uses the fixed thinking-only budget despite retired env overrides', () => {
-    vi.stubEnv('CODER_STREAM_THINKING_ONLY_TIMEOUT_MS', '60000');
-    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(240_000);
-    expect(thinkingOnlyBudgetMs('high', 1)).toBe(720_000); // 240k * 1.5 * 2
   });
 });

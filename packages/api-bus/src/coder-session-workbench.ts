@@ -182,7 +182,6 @@ export type SessionWorkbenchProcessState =
 export interface SessionWorkbenchSummaryResource {
   sessionId: SessionId;
   revision: number;
-  goal: string | null;
   tasks: SessionWorkbenchTaskSummary[];
   processes: SessionWorkbenchProcessState;
 }
@@ -474,7 +473,6 @@ export interface SessionWorkbenchSummaryChangedEvent extends SessionWorkbenchEve
   type: 'summary.changed';
   resource: 'summary';
   data: {
-    goalChanged: boolean;
     tasksChanged: boolean;
     processesChanged: boolean;
   };

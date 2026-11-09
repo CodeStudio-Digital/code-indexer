@@ -7,7 +7,6 @@ import { FsAdvancedStateRepository } from './advanced-state-repository.js';
 import { FsDriveRepository } from './drive-repository.js';
 import { FsSessionEntityFiles } from './entity-files.js';
 import { FsFilesystemRootRepository } from './filesystem-root-repository.js';
-import { FsGoalRepository } from './goal-repository.js';
 import { FsPlanningRepository } from './planning-repository.js';
 import { FsSessionDirectory } from './session-directory.js';
 import { FsSessionGroupRepository } from './session-group-repository.js';
@@ -18,21 +17,10 @@ import {
   installSecondaryOperationalApi,
   type FsSecondaryOperationalApi,
 } from './operational-secondary-api.js';
-import type {
-  CoderExecutionMode,
-  CoderPlanStatus,
-  FsRecordInvestigationInput,
-  FsRecordPlanInput,
-  FsRecordSessionInput,
-  FsRememberInput,
-  FsToolOutputCapLevel,
-  FsUpsertGoalInput,
-  FsSessionGoal,
-} from './operational-types.js';
+import type { CoderExecutionMode, CoderPlanStatus, FsRecordInvestigationInput, FsRecordPlanInput, FsRecordSessionInput, FsRememberInput, FsToolOutputCapLevel } from './operational-types.js';
 
 export class FsOperationalSessionStore {
   readonly advanced: FsAdvancedStateRepository;
-  readonly goals: FsGoalRepository;
   readonly planning: FsPlanningRepository;
   readonly tasks: FsTaskRepository;
   readonly taskRuns: FsTaskRunRepository;
@@ -44,7 +32,6 @@ export class FsOperationalSessionStore {
   constructor(directory: FsSessionDirectory) {
     const entities = new FsSessionEntityFiles(directory);
     this.advanced = new FsAdvancedStateRepository(directory, entities);
-    this.goals = new FsGoalRepository(directory);
     this.planning = new FsPlanningRepository(entities);
     this.tasks = new FsTaskRepository(entities);
     this.taskRuns = new FsTaskRunRepository(directory, entities);
@@ -53,7 +40,6 @@ export class FsOperationalSessionStore {
       entities,
       this.planning,
       this.tasks,
-      this.goals,
     );
     this.tools = new FsToolStateRepository(directory, entities);
     this.groups = new FsSessionGroupRepository(directory);
@@ -253,24 +239,6 @@ export class FsOperationalSessionStore {
   getConfigLock = this.getSessionConfigLock;
   setConfigLock = this.setSessionConfigLock;
 
-  getSessionGoal = thisCall(
-    (self, id: SessionId | string) => self.goals.get(id),
-    this,
-  );
-  upsertSessionGoal = thisCall(
-    (self, id: SessionId | string, input: FsUpsertGoalInput) =>
-      self.goals.upsert(id, input),
-    this,
-  );
-  clearSessionGoal = thisCall(
-    (
-      self,
-      id: SessionId | string,
-      options?: { expected_revision?: number; operation_id?: string },
-    ) => self.goals.clear(id, options),
-    this,
-  );
-
   recordPlan = thisCall(
     (self, input: FsRecordPlanInput) => self.planning.recordPlan(input),
     this,
@@ -449,7 +417,6 @@ export type FsOperationalSessionApi = Pick<
   Exclude<
     keyof FsOperationalSessionStore,
     | 'advanced'
-    | 'goals'
     | 'planning'
     | 'tasks'
     | 'taskRuns'

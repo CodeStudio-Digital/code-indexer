@@ -41,7 +41,7 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDA
 /**
  * PR-6 (Row 23) — short agent-loop framing intended for SUBAGENT system
  * prompts. Subagents don't receive the live `<active-context>` injection
- * (no persistent goal/todos), so this block omits the active-context
+ * (no persistent todos), so this block omits the active-context
  * pointer but keeps the discipline rules: persist end-to-end, do not
  * re-read already-fetched files. Append to a subagent's domain-specific
  * system prompt when `agentLoopV2` is on.
@@ -50,7 +50,7 @@ export function buildSubagentLoopFraming(): string {
   return `
 
 # Subagent contract
-Stay inside the delegated scope. An investigation returns evidence and citations without edits; an implementation delivers the scoped change plus verification. Reuse content already in context, retry one recoverable tool failure, and use \`find_tools\` instead of guessing names. Do not spawn children. Stop when the requested result is complete or a concrete parent-owned blocker is identified.`;
+Stay inside the delegated scope: investigate without edits, or implement and verify the assigned change. Reuse evidence. Discover tools by schema, never guess names. Retry a transient failure once only when replay is safe; reconcile unknown effects before another mutation. Respect refusals and permission gates. Do not spawn children. Return the result or a concrete parent-owned blocker.`;
 }
 
 export type ProviderFamily =
@@ -162,7 +162,7 @@ export interface PromptContext {
   /**
    * Opt-in to Agent Loop v2 framing — adds a static "Agent loop" + "Active
    * context" block to the system prompt. The runner pairs this with a live
-   * <active-context> user-message injection each turn (goal, todos, active
+   * <active-context> user-message injection each turn (todos, active
    * task scope). Gated per session so existing sessions keep their original
    * prompt on resume; index.ts sets this for newly-created sessions.
    */
@@ -259,6 +259,7 @@ export interface PromptContext {
    * advertising a capability the runner cannot provide.
    */
   multiAgentMode?: 'proactive' | 'explicit_request_only';
+  ultraPolicy?: import('@mcp/agent-runtime-contracts').PresetResolution;
   /**
    * Final registry membership after role/specialist filtering. When supplied,
    * the composer advertises only capabilities the session can actually call.
@@ -280,7 +281,7 @@ function providerPreamble(family: ProviderFamily): string {
       // Claude already obeys XML tags and handles long contexts — keep it brief.
       return `<role>Coding agent (Claude family).</role>
 <formatting>
-- Use tool calls aggressively; prefer parallel independent tool calls in one turn.
+- Batch independent reads when supported; serialize dependent calls and effects.
 - Text output to the user is rendered as markdown. Keep it terse.
 - When you cite code, use \`file:line\` format.
 </formatting>
@@ -290,22 +291,19 @@ function providerPreamble(family: ProviderFamily): string {
 You are a coding agent (OpenAI Codex family).
 
 # Formatting rules
-- Use tools for actions and emit short public commentary around substantial tool work.
-- Independent tool calls SHOULD be emitted in parallel when supported.
-- Keep commentary factual and concise; never expose hidden chain-of-thought.
-- End completed work with a distinct final answer. Cite code as \`file:line\`.
+- Use tools for actions; give concise public progress updates.
+- Batch independent reads when supported; serialize dependencies and effects.
+- Keep reasoning private. End with a distinct final answer and \`file:line\` citations.
 `;
     case 'openai':
-    case 'openrouter':
       // OpenAI-compatible models respond well to explicit checklist-style cues.
       return `# Role
 You are a coding agent (OpenAI GPT family).
 
 # Formatting rules
 - Use tools for actions and accompany substantial work with concise progress updates.
-- Independent tool calls MUST be emitted in parallel in the same turn.
+- Batch independent reads when supported; serialize dependencies and effects.
 - Terse markdown replies. Cite code as \`file:line\`.
-- Never apologize or restate the user's request.
 `;
     case 'zai':
       // ZAI/GLM is very sensitive to prefix drift — bit-stable header matters.
@@ -325,14 +323,14 @@ Coding agent (Gemini family).
 
 # Formatting
 - Use tools for actions and emit concise progress updates around substantial work.
-- Emit independent tool calls in parallel in one turn.
+- Batch independent reads when supported; serialize dependencies and effects.
 - Markdown, terse. Cite code as \`file:line\`.
 `;
     case 'deepseek':
       return `# Role: Coding agent (DeepSeek family)
 
 # Rules
-- Use tools for actions and concise progress updates. Parallelize independent calls in one turn.
+- Use tools and concise progress updates. Batch independent reads when supported; serialize dependencies and effects.
 - Terse markdown. Code citations as \`file:line\`.
 - No redundant recap unless asked.
 `;
@@ -344,6 +342,7 @@ Coding agent (Gemini family).
 - Preserve useful reasoning internally, but keep user-facing text concise.
 - Markdown, terse. Cite code as \`file:line\`.
 `;
+    case 'openrouter': // The configured route may serve any model family.
     case 'generic':
     default:
       return `# Role
@@ -362,15 +361,6 @@ function toolAvailable(available: ReadonlySet<string> | undefined, name: string)
 
 function anyToolAvailable(available: ReadonlySet<string> | undefined, names: readonly string[]): boolean {
   return available === undefined || names.some((name) => available.has(name));
-}
-
-function goalLifecycleSection(available?: ReadonlySet<string>): string {
-  if (!toolAvailable(available, 'create_goal') || !toolAvailable(available, 'update_goal')) {
-    return '';
-  }
-  return `# Goal lifecycle
-Use goals only when durable continuity across turns is useful. They do not authorize work or block a response.
-  `;
 }
 
 function nativeToolsSection(available?: ReadonlySet<string>): string {
@@ -427,17 +417,20 @@ Delegate only independent work that saves context or wall time; work locally for
 function multiAgentModeSection(
   mode: PromptContext['multiAgentMode'],
   available?: ReadonlySet<string>,
+  policy?: PromptContext['ultraPolicy'],
 ): string {
   if (!mode) return '';
 
-  if (mode !== 'proactive' || !toolAvailable(available, 'spawn_agent')) {
+  if (mode !== 'proactive' || !toolAvailable(available, 'spawn_agent')
+    || policy?.effective.orchestration === 'off'
+    || (policy?.effective.parallelism.maxAgents ?? 3) <= 0) {
     return `
 
 # Multi-agent mode (explicit request only)
 Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.`;
   }
 
-  return ultraCoordinationPrompt(3);
+  return ultraCoordinationPrompt(policy?.effective.parallelism.maxAgents ?? 3);
 }
 
 /** Insert a session-fixed extension immediately before the cache boundary. */
@@ -495,7 +488,6 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   // Main body — loaded from src/core/coder/prompts/base.txt. Placeholders:
   //   {{projectName}}, {{projectRoot}}, {{os}}, {{tierHint}}, {{mcpSection}},
-  //   {{goalLifecycleSection}}
   // tierHint here is the profile-only text; customTiers render below the
   // boundary because the registered MCP-server tier set is volatile.
   const displayName = ctx.workspace?.displayName ?? ctx.projectName;
@@ -525,13 +517,12 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     // ~69% run_command failure rate from Unix idioms on Windows.
     os: describeShell(ctx.os),
     tierHint: toolAvailable(ctx.availableTools, 'expand_toolset') ? tierHint(ctx.profile) : '',
-    mcpSection: hasCodeNavigation ? mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive) : '',
+    mcpSection: hasCodeNavigation ? mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive, ctx.availableTools) : '',
     nativeToolsSection: nativeToolsSection(ctx.availableTools),
     overlaySection: overlaySection(ctx.availableTools),
     subagentsSection: subagentsSection(ctx.availableTools),
     visionSection: toolAvailable(ctx.availableTools, 'view_image') ? visionSection(ctx.modelCanSeeImages) : '',
     memorySection: hasMemory ? memorySection(ctx.sessionDrive) : '',
-    goalLifecycleSection: goalLifecycleSection(ctx.availableTools),
   });
 
   // Plan section — optional, only when planMode is true AND the active agent
@@ -593,7 +584,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     : '';
 
   // Static "agent loop" + "do not re-read" + "active context pointer". The
-  // dynamic payload (live goal / todos / active task scope) is injected as
+  // dynamic payload (todos / active task scope) is injected as
   // the last user message each turn under <active-context>...</active-context>
   // by the runner — see buildActiveContextBlock in runner.ts. Keeping the
   // pointer here static preserves prefix-cache stability; only the trailing
@@ -610,15 +601,14 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // when not applicable so the prefix stays byte-stable for sessions that share
   // the same (project, provider, profile, language, style, unsupervised) tuple.
   const languageBlock = languageSection(ctx.responseLanguage);
-  // 'learning' injects a `TODO(human)` hand-off — meaningless and directly
-  // contradictory in an unsupervised run (autonomousSection says "no human is
-  // watching, do the work instead of stopping"). Suppress it there.
+  // Interactive learning exercises are not useful without a human watching.
+  // Suppress that style in unsupervised runs; it never changes task authority.
   const effectiveStyle =
     ctx.unsupervised && ctx.outputStyle === 'learning' ? 'proactive' : ctx.outputStyle;
   const outputStyleBlock = outputStyleSection(effectiveStyle);
   const codeCommentsBlock = codeCommentsSection(ctx.blockCodeComments);
   const autonomousBlock = autonomousSection(ctx.unsupervised);
-  const multiAgentModeBlock = multiAgentModeSection(ctx.multiAgentMode, ctx.availableTools);
+  const multiAgentModeBlock = multiAgentModeSection(ctx.multiAgentMode, ctx.availableTools, ctx.ultraPolicy);
   // Permissions/sandbox policy + AGENTS.md project instructions. Both
   // session-fixed → cache-stable, above the boundary. Collapse to '' when not
   // supplied so prompts that omit them stay byte-identical to before.
@@ -686,7 +676,7 @@ function agentsMdSection(agentsMd?: string): string {
   return `
 
 # Project instructions (AGENTS.md)
-The following instructions come from this project's AGENTS.md file(s). Treat them as authoritative project conventions; follow them unless they conflict with a direct user request.
+Project conventions from AGENTS.md follow. Respect them within the active mode and permission boundary; a direct user request takes precedence over project conventions.
 ${trimmed}`;
 }
 
@@ -722,10 +712,10 @@ function buildAgentLoopBlock(): string {
   return `
 
 # Execution contract
-Match the deliverable to intent: answer questions without mutation; carry explicit change requests through implementation and verification. Proceed on reversible in-scope work, but stop for destructive actions, missing authority or a genuine user-owned decision. Respect Plan/Spec approval gates. Retry one recoverable tool failure, then use another supported route and report the degradation. Reuse evidence already in context.
+Carry authorized action requests through implementation and verification. Respect Plan/Spec gates; ask only for missing authority or a user-owned decision. Retry a transient failure once only if replay is safe. Reconcile unknown effects before another mutation; never bypass refusals by switching tools. Reuse evidence and continue independent safe work when blocked.
 
 # Active context
-The latest \`<active-context>\` contains the live scope and state; it overrides older history.`;
+Use \`<active-context>\` for live state, subject to current user instructions and permissions; retain the main objective.`;
 }
 
 /**
@@ -764,7 +754,7 @@ Add only the codebase insight needed to understand the implementation choice; do
     return `
 
 # Learning output
-Complete the task except for one meaningful, well-scoped design decision presented as \`TODO(human)\` with enough context for the user to implement it.`;
+Complete the task. Explain one meaningful design choice and offer an optional exercise in the final prose; never leave required code unfinished.`;
   }
   return '';
 }
@@ -789,7 +779,7 @@ function autonomousSection(unsupervised?: boolean): string {
   return `
 
 # Operating autonomously
-Proceed with reversible in-scope work without asking. Stop only for destructive action, missing authority or a genuine scope decision; otherwise finish the work or report the concrete blocker.`;
+Complete authorized work within mode and permission gates. No human is watching: report missing authority or a user-owned decision as a blocker, continue independent safe work, and never invent approval.`;
 }
 
 /**
@@ -872,10 +862,15 @@ function customTiersBlock(
  * memory section, and offering two names for the same thing makes weak
  * models bounce between them. Session-fixed → cache-stable.
  */
-function mcpSection(mcpAvailable?: boolean, isIndexed?: boolean, sessionDrive?: boolean): string {
+function mcpSection(mcpAvailable?: boolean, isIndexed?: boolean, sessionDrive?: boolean, available?: ReadonlySet<string>): string {
   if (mcpAvailable === false) {
     return `# Tool strategy — native only (MCP bridge unavailable)
 MCP tools are unavailable. Use the visible native list/glob/read tools and shell text search; do not call \`mcp__*\`.
+`;
+  }
+  if (available && (!available.has('mcp__search') || !available.has('mcp__grep_code'))) {
+    return `# Code retrieval
+Use the visible search/read tools for focused discovery and exact text. Inspect the best hit; expand references only for impact. Missing capabilities require discovery, not guessed tool names. Stop when evidence covers the change and verification.
 `;
   }
   if (isIndexed === false) {
@@ -895,7 +890,7 @@ Use \`mcp__search\` in \`auto\` for discovery; use \`mcp__grep_code\` for exact 
 function visionSection(modelCanSeeImages?: boolean): string {
   return `
 # Images & vision
-Image references do not contain pixels. Use \`view_image\` with an attachment_id or any authorized project/local path to inspect them. Use action=list to find saved images after compaction. Pixels are included only on the next inference; revisit images when needed. Use crop for detail, \`view_video\` for selected video frames, and browser/preview screenshot tools for captures.${modelCanSeeImages === true ? '' : ' Images may arrive as [Image description]; provide a task-specific describe hint for the vision fallback.'}
+References lack pixels. Use \`view_image\` (attachment_id/authorized path; action=list after compaction). Pixels last one inference; reopen as needed. Crop for detail; \`view_video\` selects frames; browser/preview tools capture screenshots.${modelCanSeeImages === true ? '' : ' For [Image description] fallback, supply a task-specific describe hint.'}
 `;
 }
 

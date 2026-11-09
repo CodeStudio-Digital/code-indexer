@@ -27,7 +27,7 @@
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell, Notification, protocol, session } from 'electron';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { seedBundledPlugins } from '@apps/http-api/server/bundled-plugins.js';
 import { installLlmDispatcher } from '@apps/http-api/install-llm-dispatcher.js';
@@ -57,6 +57,9 @@ import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
 import { mountCloudIpc } from './src/cloud/cloud-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
+import { installRendererPermissions } from './src/renderer-permissions.js';
+import { installWindowNavigation, isBrowserLink, isDocumentLink } from './src/window-navigation.js';
+import { installEditContextMenu } from './src/edit-menu.js';
 import { APP_IDENTITY, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
 import { enrichElectronProcessMetrics } from './src/process-metrics.js';
@@ -129,6 +132,7 @@ process.on('exit', () => {
 });
 
 const DEV_URL = process.env.MCP_ELECTRON_DEV_URL;
+const APP_RENDERER_URL = DEV_URL || pathToFileURL(path.join(__dirname, '../../dashboard/index.html')).href;
 // `.cjs` (not `.js`) because root package.json has "type": "module";
 // Electron's preload loader respects that and would otherwise try to
 // parse the file as ESM, silently failing to expose contextBridge.
@@ -200,29 +204,7 @@ async function bootstrap() {
     app.setAppUserModelId(APP_IDENTITY.userModelId);
   }
 
-  // Allow microphone capture for the composer voice-dictation button. Electron
-  // denies `media`/`audioCapture` by default, so getUserMedia would reject
-  // silently without this grant. Two layers of scoping:
-  //   1. audio-only — camera/geolocation/etc. stay denied.
-  //   2. origin-gated — only the trusted app origins (packaged file://, the
-  //      in-process mcp:// backend, or the dev server) may capture the mic.
-  //      Preview/loopback windows share this default session but load arbitrary
-  //      localhost content, so a stray/over-permissive page there must NOT be
-  //      able to open the mic without a prompt.
-  // OS-level mic permission (Windows privacy / macOS prompt) still applies on top.
-  const allowMic = (permission: string) => permission === 'media' || permission === 'audioCapture';
-  const micOriginAllowed = (url: string | undefined | null): boolean => {
-    if (!url) return false;
-    return url.startsWith('mcp://') || url.startsWith('file://') || (!!DEV_URL && url.startsWith(DEV_URL));
-  };
-  session.defaultSession.setPermissionRequestHandler((wc, permission, cb, details) => {
-    const url = wc?.getURL() || details?.requestingUrl || '';
-    cb(allowMic(permission) && micOriginAllowed(url));
-  });
-  session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
-    const url = requestingOrigin || wc?.getURL() || '';
-    return allowMic(permission) && micOriginAllowed(url);
-  });
+  installRendererPermissions(session.defaultSession, APP_RENDERER_URL);
 
   // Pin the local-embedding model cache to a stable per-user dir so the
   // transformers.js model downloads once and survives app updates — never
@@ -320,7 +302,7 @@ async function bootstrap() {
   // Production lockdown: strip the application menu + install the renderer
   // CSP. No-op in dev (gated on app.isPackaged inside). Runs before the
   // main window loads so the CSP header applies to the document.
-  installGlobalHardening();
+  installGlobalHardening(pathToFileURL(path.join(__dirname, '../../dashboard/index.html')).href);
 
   // Pass the Hono app so handlers-mount can register a fallback for
   // every IPC channel not yet covered by a pure handler in
@@ -437,71 +419,34 @@ async function bootstrap() {
   });
 }
 
-/**
- * Decide whether a URL belongs to the in-app surface or should be
- * treated as "external" (and therefore opened in the user's default
- * browser instead of an Electron window).
- *
- * Internal protocols:
- *   - `mcp://`        — our in-process backend (prod renderer hits this).
- *   - `file://`       — bundled dashboard assets in production.
- *   - `about:blank`   — Chromium internal, harmless.
- *
- * Plus the Vite dev server URL when running `npm run electron:dev`, so
- * that internal SPA navigation in development isn't mistaken for an
- * external link.
- */
-function isInternalUrl(rawUrl: string): boolean {
-  if (!rawUrl) return false;
-  if (rawUrl === 'about:blank') return true;
-  if (rawUrl.startsWith('mcp://')) return true;
-  if (rawUrl.startsWith('file://')) return true;
-  if (DEV_URL && rawUrl.startsWith(DEV_URL)) return true;
-  // Local dev-server previews (the project preview pane's "open in new
-  // window"). Restricted to loopback hosts so only local dev servers can
-  // open inside our shell — never an arbitrary remote URL.
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(rawUrl)) return true;
-  return false;
+function openBrowserLink(url: string): void {
+  if (isBrowserLink(url)) void shell.openExternal(url).catch(error => console.error('[links] Open failed:', error));
 }
 
-/**
- * Attach the window-open + navigation handlers that route external
- * URLs to the OS default browser. Without this, `<a target="_blank">`
- * and `window.open(...)` would spawn a chromeless popup INSIDE Electron
- * — bad UX (no address bar, no history, no extensions) and a security
- * footgun (the popup inherits our preload bridge).
- *
- * The preview pane of the builder is the one place we intentionally
- * WANT an in-Electron window — callers pass `features: 'newWindow'`
- * (or any feature string at all, since regular SPA navigation never
- * sets features) to opt into that path. Anything else with an
- * external URL goes to the OS browser.
- */
-function attachWindowHandlers(win: BrowserWindow) {
-  win.webContents.setWindowOpenHandler(({ url, features }) => {
-    // Internal URL + caller asked for a real window → let Electron
-    // open it (e.g. preview pane's "open in new tab" inside our shell).
-    if (isInternalUrl(url)) {
-      if (features && features.length > 0) {
-        return { action: 'allow' };
-      }
-      // Stray popup attempt without features — block; SPA nav should
-      // use router instead of window.open.
-      return { action: 'deny' };
-    }
-    // External URL → user's default browser.
-    void shell.openExternal(url);
-    return { action: 'deny' };
+/** Documents use a separate, unprivileged viewer; they never replace the IDE. */
+function openDocumentWindow(url: string): void {
+  if (!isDocumentLink(url)) return;
+  const viewer = new BrowserWindow({ width: 1000, height: 760, autoHideMenuBar: true,
+    webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true, javascript: false } });
+  viewer.webContents.setWindowOpenHandler(({ url: target }) => { openBrowserLink(target); return { action: 'deny' }; });
+  viewer.webContents.on('will-navigate', (event, target) => { event.preventDefault(); openBrowserLink(target); });
+  viewer.webContents.on('will-redirect', (event, target, _same, main) => {
+    if (main) { event.preventDefault(); openBrowserLink(target); }
   });
+  installEditContextMenu(viewer);
+  applyProductionHardening(viewer);
+  void viewer.loadURL(url).catch(error => console.error('[documents] Open failed:', error));
+}
 
-  // Catches `<a href="https://...">` clicks (top-level nav) that bypass
-  // setWindowOpenHandler. Without this, clicking such a link replaces
-  // the dashboard with the external page inside our window.
-  win.webContents.on('will-navigate', (event, url) => {
-    if (isInternalUrl(url)) return;
-    event.preventDefault();
-    void shell.openExternal(url);
+function attachWindowHandlers(win: BrowserWindow) {
+  installWindowNavigation(win.webContents, {
+    appUrl: APP_RENDERER_URL,
+    openExternal: openBrowserLink,
+    openDocument: openDocumentWindow,
+    openAppRoute: route => { void createAppWindow(route).catch(error => console.error('[window] Open failed:', error)); },
+    onPreviewCreated: preview => { installEditContextMenu(preview); applyProductionHardening(preview); },
   });
+  installEditContextMenu(win);
 
   // Push window-state changes to the renderer so the custom title bar can
   // (a) swap the maximize⇄restore icon and (b) dim the bar when the window
@@ -690,6 +635,10 @@ async function focusOrOpenRoute(route?: string): Promise<void> {
 function registerOAuthLoopbackIpc(dispatch: BackendDispatch) {
   ipcMain.handle('oauth:loopback:start', () => startOAuthLoopback(dispatch));
   ipcMain.on('oauth:loopback:stop', () => stopOAuthLoopback());
+  ipcMain.handle('oauth:open-external', async (_event, url: string) => {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || !isBrowserLink(url)) throw new Error('Invalid OAuth authorization URL');
+    await shell.openExternal(url);
+  });
 }
 
 /**
@@ -719,12 +668,10 @@ function registerNativeIpc() {
   });
 
   ipcMain.on('shell:openExternal', (_event, url: string) => {
-    // Safety: only http/https. The api-bus billing flow only ever passes
+    // Safety: only http/https/mailto. The api-bus billing flow only ever passes
     // Stripe URLs but the renderer is the source of strings here — guard
     // against `javascript:` / `file:` payloads regardless of intent.
-    if (/^https?:\/\//i.test(url)) {
-      void shell.openExternal(url);
-    }
+    openBrowserLink(url);
   });
 
   // Reveal a local folder/file in the OS file manager (Explorer/Finder/…).

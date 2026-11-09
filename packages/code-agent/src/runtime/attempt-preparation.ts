@@ -35,7 +35,7 @@ export async function admitCoderAttempt(
   preparation: CoderAttemptPreparationV1,
   admit: (facts: CoderAttemptPreparationV1) => Promise<CoderAttemptAdmissionV1>,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<CoderAttemptAdmissionV1> {
   signal?.throwIfAborted();
   const expectedDigest = preparationSha256(preparation);
   const pending = admit(preparation);
@@ -60,4 +60,5 @@ export async function admitCoderAttempt(
     || !Number.isSafeInteger(receipt.fencingEpoch) || receipt.fencingEpoch <= 0) {
     throw new Error('Attempt admission receipt does not match the prepared legacy execution');
   }
+  return receipt;
 }

@@ -74,7 +74,10 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     pinnedTools: args.initialPins ?? new Set<string>(),
     terseDescriptionsLock: null,
     recovery: new Map(),
+    rejectedToolSchemas: new Map(),
+    lastProviderToolNames: new Set(),
     transientRetriesThisTurn: 0,
+    transportRetriesThisTurn: 0,
     providerAttempts: 0,
     consecutiveLargePromptCacheMisses: 0,
     cacheMissGuardError: null,
@@ -84,19 +87,10 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     preEmitCompactions: 0,
     consecutiveNoopCompactions: 0,
     planNudges: 0,
-    goalLifecycle: {
-      ledgerStartSeq: args.opts.toolContext.toolCallLedger?.lastSeq ?? 0,
-      createdGoalInRun: false,
-      missingNudges: 0,
-      inProgressNudges: 0,
-      preDispatchPending: new Map<string, number>(),
-    },
     verification: {
       ledgerStartSeq: args.opts.toolContext.toolCallLedger?.lastSeq ?? 0,
       nudges: 0,
     },
-    goalVerifyAttempts: 0,
-    goalVerifyEvidenceFingerprint: null,
     lastStrategyNudgeTurnByKey: new Map(),
     // Perf W1 — background summary precompute + buildTools memo start empty.
     summaryPrecompute: null,
@@ -180,6 +174,12 @@ export function bumpRecovery(ctx: RunContext, kind: RecoveryKind): number {
   const next = (ctx.recovery.get(kind) ?? 0) + 1;
   ctx.recovery.set(kind, next);
   return next;
+}
+
+/** Reset only after a usable terminal response; run totals remain intact. */
+export function resetProviderRetrySequence(ctx: RunContext): void {
+  ctx.transientRetriesThisTurn = 0;
+  ctx.transportRetriesThisTurn = 0;
 }
 
 /** Append-only usage accumulator. Mirrors `runner.ts` totalUsage handling. */

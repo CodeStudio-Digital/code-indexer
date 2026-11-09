@@ -182,14 +182,11 @@ body {
 
 /* Electron text-selection policy
    --------------------------------
-   Desktop chrome behaves like a native application: navigation, rails,
-   headers, empty states and other UI copy are not accidentally selectable.
-   Content surfaces opt back in through semantic elements or the shared
-   `data-text-selectable` contract. The browser dashboard keeps normal web
-   selection because every rule is runtime-gated on the <html> marker. */
+   Content remains selectable by default, including logs and status text.
+   Only actual controls opt out below. The browser dashboard is unchanged. */
 html[data-app-runtime='electron'] body {
-  -webkit-user-select: none;
-  user-select: none;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 html[data-app-runtime='electron'] :where(

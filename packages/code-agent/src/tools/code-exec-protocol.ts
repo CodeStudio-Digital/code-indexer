@@ -26,4 +26,5 @@ export interface CodeExecBootstrap {
   listing: unknown;
   changes: string[];
   stash: Array<[string, unknown]>;
+  stashMaxBytes?: number;
 }

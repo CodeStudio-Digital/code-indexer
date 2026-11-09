@@ -36,8 +36,7 @@ function patchText(input: Record<string, unknown>): string {
   return '';
 }
 
-function filesFromPatch(input: Record<string, unknown>): EditFileRef[] {
-  const text = patchText(input);
+function filesFromPatch(text: string): EditFileRef[] {
   if (!text) return [];
   const byPath = new Map<string, EditFileRef>();
   const lines = text.split('\n');
@@ -58,6 +57,16 @@ function filesFromPatch(input: Record<string, unknown>): EditFileRef[] {
   return [...byPath.values()];
 }
 
+// Tool inputs outlive hundreds of text-only stream frames. Keep parsed paths
+// with the input, without retaining completed turns globally. The source value
+// is checked too, so an updated input object cannot return obsolete file paths.
+const editFileCache = new WeakMap<Record<string, unknown>, {
+  name: string;
+  source: string;
+  files: EditFileRef[];
+}>();
+const NO_EDIT_FILES: EditFileRef[] = [];
+
 /** File(s) mutated by an edit tool call. `op` is a fallback badge hint — the
  *  authoritative A/M/D status comes from the session snapshot when available. */
 export function filesFromEditToolCall(
@@ -66,10 +75,13 @@ export function filesFromEditToolCall(
 ): EditFileRef[] {
   // Guard: callers pass EVERY tool block (turn summaries, live refs), so a
   // non-edit tool that happens to carry a `path` (e.g. read_file) must yield [].
-  if (!isEditTool(name) || !input) return [];
-  if (name === 'apply_patch') return filesFromPatch(input);
-  const p = typeof input.path === 'string' ? input.path : '';
-  if (!p) return [];
-  const op: FileEditOp = name === 'create_file' ? 'add' : 'edit';
-  return [{ path: p, op }];
+  if (!isEditTool(name) || !input) return NO_EDIT_FILES;
+  const source = name === 'apply_patch' ? patchText(input) : typeof input.path === 'string' ? input.path : '';
+  const cached = editFileCache.get(input);
+  if (cached && cached.name === name && cached.source === source) return cached.files;
+  const files = name === 'apply_patch' ? filesFromPatch(source) : source
+    ? [{ path: source, op: (name === 'create_file' ? 'add' : 'edit') as FileEditOp }]
+    : NO_EDIT_FILES;
+  editFileCache.set(input, { name: name!, source, files });
+  return files;
 }

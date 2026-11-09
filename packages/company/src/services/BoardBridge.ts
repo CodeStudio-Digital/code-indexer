@@ -46,6 +46,7 @@ export class BoardBridge implements IBoardPoster {
     kind: BoardKind,
     content: string,
     mentions?: string[],
+    attachments?: BoardEntry['attachments'],
   ): void {
     const extractedMentions = mentions ?? [];
     if (!mentions) {
@@ -60,6 +61,7 @@ export class BoardBridge implements IBoardPoster {
       kind,
       content,
       mentions: extractedMentions,
+      ...(attachments?.length ? { attachments } : {}),
     });
 
     // Master "sees" its own posts and system announcements — advance watermark
@@ -75,6 +77,7 @@ export class BoardBridge implements IBoardPoster {
       agent_run_id: entry.agent_run_id,
       kind: entry.kind,
       content: entry.content,
+      ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
       mentions: entry.mentions,
       created_at: entry.created_at,
     });

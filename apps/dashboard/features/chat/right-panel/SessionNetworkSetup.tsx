@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiPost, apiPut, useApi } from '../../../hooks/useApi.js';
-import type { ChatSpawnInput } from '@mcp/session-storage/collaboration/network-types.js';
+import type { ChatSpawnInput } from '@mcp/api-bus';
 import type { NetworkData } from './network-types.js';
+import { UltraPolicyStatus } from './UltraPolicyStatus.js';
 
 export function SessionNetworkSetup({ sessionId, data, changed }: { sessionId: string; data: NetworkData; changed: () => void }) {
   const { t } = useTranslation('chat');
@@ -29,6 +30,7 @@ export function SessionNetworkSetup({ sessionId, data, changed }: { sessionId: s
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
   return <div className="space-y-3">
+    <UltraPolicyStatus sessionId={sessionId} />
     <label className="flex items-center gap-2 font-medium"><input type="checkbox" checked={config.enabled} disabled={busy} onChange={event => void update({ enabled: event.target.checked })} />{t('network.mode')}</label>
     <p className="text-muted-foreground">{t('network.modeHint')}</p>
     <div className="grid grid-cols-2 gap-2">

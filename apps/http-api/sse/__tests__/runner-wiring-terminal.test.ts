@@ -20,57 +20,6 @@ describe('wireRunnerEventsToBus terminal ordering', () => {
     expect(bus.buffer.some((event) => event.event === 'done')).toBe(false);
   });
 
-  it('marks goal-tool success provisional and publishes its durable ack after runner done', () => {
-    const runner = fakeRunner();
-    const bus = createBus(new AbortController());
-    wireRunnerEventsToBus(runner, bus, { deferTerminalEvent: true });
-
-    runner.emit('tool_call_start', 'goal-1', 'update_goal', { status: 'complete' });
-    runner.emit(
-      'tool_call_result',
-      'goal-1',
-      'update_goal',
-      { content: 'Goal marked complete.' },
-      4,
-    );
-    runner.emit('done', 'completed');
-    runner.emit('goal_mutations_persisted', { toolUseIds: ['goal-1'] });
-
-    expect(bus.buffer.find((event) => event.event === 'tool_call_result')).toMatchObject({
-      data: {
-        id: 'goal-1',
-        name: 'update_goal',
-        persistence: 'pending',
-      },
-    });
-    expect(bus.buffer.at(-1)).toMatchObject({
-      event: 'goal_mutations_persisted',
-      data: { toolUseIds: ['goal-1'] },
-    });
-    expect(bus.ended).toBe(false);
-  });
-
-  it('publishes a compensating goal persistence failure during the deferred terminal window', () => {
-    const runner = fakeRunner();
-    const bus = createBus(new AbortController());
-    wireRunnerEventsToBus(runner, bus, { deferTerminalEvent: true });
-
-    runner.emit('tool_call_result', 'goal-2', 'create_goal', { content: 'Goal set.' }, 1);
-    runner.emit('done', 'completed');
-    runner.emit('goal_mutations_persistence_failed', {
-      toolUseIds: ['goal-2'],
-      message: 'database write failed',
-    });
-
-    expect(bus.buffer.at(-1)).toMatchObject({
-      event: 'goal_mutations_persistence_failed',
-      data: {
-        toolUseIds: ['goal-2'],
-        message: 'database write failed',
-      },
-    });
-  });
-
   it('preserves the legacy immediate terminal event by default', () => {
     const runner = fakeRunner();
     const bus = createBus(new AbortController());

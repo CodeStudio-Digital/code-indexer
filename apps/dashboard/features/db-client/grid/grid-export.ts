@@ -69,6 +69,14 @@ export function cellToCopy(v: unknown): string {
   return asText(v);
 }
 
+/** Presentation-only SQL template; execution validates identifiers in the driver. */
+export function quoteGridRelation(engine: string, schema: string | undefined, table: string): string {
+  const quote = engine === 'mysql' || engine === 'mariadb'
+    ? (s: string) => '`' + s.replace(/`/g, '``') + '`'
+    : (s: string) => '"' + s.replace(/"/g, '""') + '"';
+  return schema && engine !== 'sqlite' ? `${quote(schema)}.${quote(table)}` : quote(table);
+}
+
 /**
  * Engine-aware INSERT statements for a `.sql` dump — MySQL/MariaDB quote with
  * backticks, everyone else with double-quotes. (Kept here, dep-free, rather than

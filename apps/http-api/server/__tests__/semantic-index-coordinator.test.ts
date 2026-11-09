@@ -2090,6 +2090,35 @@ describe('SemanticIndexCoordinator code generations', () => {
     expect(h.store.retireUnreferencedGenerations).toHaveBeenCalledWith('memory');
   });
 
+  it('explicit memory repair runs even when the namespace reports no pending deltas', async () => {
+    const h = makeHarness();
+    await h.coordinator.ensureMemoryNamespace('memory:project:p1');
+    h.agentMemoryService.backfillEmbeddings.mockClear();
+    await h.coordinator.ensureMemoryNamespace('memory:project:p1');
+    expect(h.agentMemoryService.backfillEmbeddings).not.toHaveBeenCalled();
+    const guard = vi.fn();
+    await h.coordinator.ensureMemoryNamespace('memory:project:p1', true, guard);
+    expect(guard).toHaveBeenCalledTimes(2);
+    expect(h.agentMemoryService.backfillEmbeddings).toHaveBeenCalledOnce();
+    expect(h.namespaces.get('memory:project:p1')).toMatchObject({delta_items:0,failed_items:0});
+  });
+
+  it('revalidates the confirmed target inside the namespace queue before probing', async () => {
+    const h = makeHarness();
+    const guard = vi.fn(() => { throw new Error('target changed while queued'); });
+    await expect(h.coordinator.ensureMemoryNamespace('memory:project:p1',true,guard)).rejects.toThrow('target changed');
+    expect(h.embedding.embedQuery).not.toHaveBeenCalled();
+    expect(h.agentMemoryService.backfillEmbeddings).not.toHaveBeenCalled();
+  });
+
+  it('does not automatically consume an explicit memory repair after restart', async () => {
+    const h = makeHarness();
+    Object.assign(h.store,{requiresExplicitNamespaceReindex:vi.fn(() => true)});
+    await expect(h.coordinator.ensureMemoryNamespace('memory:project:p1')).rejects.toThrow('retry manually');
+    expect(h.agentMemoryService.backfillEmbeddings).not.toHaveBeenCalled();
+    await expect(h.coordinator.ensureMemoryNamespace('memory:project:p1',true)).resolves.toBeUndefined();
+  });
+
   it('activates empty memory namespaces instead of pre-staging them forever', async () => {
     const h = makeHarness({ projects: [1], fileCounts: { 1: 0 } });
 

@@ -51,7 +51,7 @@ export function ChromeServicePanel() {
   }
 
   // Visibility-aware status poll — pauses while the window is hidden.
-  usePolling(() => void refresh(), REFRESH_INTERVAL_MS);
+  usePolling(refresh, REFRESH_INTERVAL_MS);
 
   async function withBusy(fn: () => Promise<void>) {
     setBusy(true);

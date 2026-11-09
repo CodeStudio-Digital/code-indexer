@@ -102,6 +102,7 @@ export interface ToolSourceTruncation {
 }
 
 export interface ToolResult {
+  evidence?: import('./invocation-evidence.js').ResultEvidenceV2;
   content: string;
   isError?: boolean;
   /** Dispatch occurred but its effect cannot be confirmed. Never retry automatically. */

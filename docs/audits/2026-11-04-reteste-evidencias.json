@@ -1,0 +1,962 @@
+{
+  "date": "2026-11-04T16:51:00.443Z",
+  "workspace": "D:/MCP",
+  "head": "448d526dd2e24247617938721c0d8cf18ce850cf",
+  "version": "3.15.7",
+  "preexistingGitStatusEntries": 501,
+  "source": {
+    "snapshot": "25e1a45de0ad63d6a0ba98df5504d6bda8e860848f910ad36a9a6c1a93c9dd8d",
+    "after": "93c2aa63715e0074802b27d1233d802ed258739a417b855de467ecc4eb5fe317",
+    "files": 6053,
+    "changedAfterFreeze": [
+      "apps/dashboard/i18n/__tests__/i18n-coverage.test.ts"
+    ],
+    "note": "Code/config snapshot excludes SVG; the changed asset has separate hashes and packaged-byte verification.",
+    "logo": {
+      ".tmp/harness-retest-2026-11-04/static-logo/comparison.png": "C67EC536FA215CF7DA909472105E0BE930AF8C77625377F815E31522A44986FB",
+      "apps/dashboard/public/brand/logo-mark.svg": "E7F18C023CF6F9499DCA0E8FB2B785C5A508BB4C487469033D8DC7A989A56522",
+      ".tmp/harness-retest-2026-11-04/before-static-logo/logo-mark.svg": "5666F1D9BD2285074D0804C2E98BEF2E55FF0007BDC516D8392F3D298DB6656B",
+      ".tmp/harness-retest-2026-11-04/static-logo/cleanup.json": "38F1F9B67BEDCA57ED6D240A49DEEDBFFB35E06A3C27E325561CD9C140787EFE",
+      ".tmp/harness-retest-2026-11-04/logo-causal-comparison.json": "05DEBD7A2A9E1E1452DEF6D06744B7213A7D102D0B58EAF12DE2825E59B2D499",
+      ".tmp/harness-retest-2026-11-04/static-logo/verify-visual.mjs": "C1AC1E6F355B160D24C569A3723530A011A635A1395203088113D4D383FEFB03",
+      ".tmp/harness-retest-2026-11-04/static-logo/result.json": "613D9468A03D57BE2E6488AB278A2C9785AEBC003286CC512EFCB43DF1AE096A"
+    }
+  },
+  "tests": {
+    "exhaustive": {
+      "passed": 11680,
+      "failed": 37,
+      "skipped": 34,
+      "total": 11751,
+      "limitation": "Started before fixes and overlapped source edits; not a green final full-suite run."
+    },
+    "integrated": {
+      "total": 1505,
+      "passed": 1502,
+      "failed": 3,
+      "files": 172,
+      "artifact": "final-regression.json"
+    },
+    "latestPerFile": {
+      "total": 1506,
+      "files": 172,
+      "passed": 1506,
+      "failed": 0,
+      "pending": 0,
+      "skipped": 0,
+      "todo": 0,
+      "reconciliations": [
+        "i18n-focused-final.json",
+        "git-contention-reconciled.json"
+      ],
+      "limitation": "Consolidated last result per file, not a single green run of the entire repository."
+    },
+    "originalFailures": [
+      {
+        "path": "src/__tests__/tiers.test.ts",
+        "previousFailures": 2,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "src/__tests__/wait-agents.test.ts",
+        "previousFailures": 1,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "apps/dashboard/i18n/__tests__/i18n-coverage.test.ts",
+        "previousFailures": 1,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "packages/provider-sdk/src/__tests__/stream-resilience.test.ts",
+        "previousFailures": 1,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "packages/code-agent/src/core/__tests__/prompt-budget.test.ts",
+        "previousFailures": 1,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "packages/code-agent/src/core/__tests__/review-evidence.test.ts",
+        "previousFailures": 9,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "packages/code-agent/src/core/__tests__/system-prompt-multi-agent-mode.test.ts",
+        "previousFailures": 3,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "packages/code-agent/src/core/__tests__/tool-call-ledger.test.ts",
+        "previousFailures": 13,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "packages/services/src/pipelines/__tests__/catalog.test.ts",
+        "previousFailures": 1,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "apps/http-api/server/routes/coder/__tests__/chat-collaboration-wake.test.ts",
+        "previousFailures": 1,
+        "finalStatus": "passed"
+      },
+      {
+        "path": "packages/code-agent/src/core/runner/nodes/__tests__/executing-verification-gate.test.ts",
+        "previousFailures": 4,
+        "finalStatus": "passed"
+      }
+    ],
+    "ui": {
+      "changes": [
+        "Shared snapshots between API, API-bus, renderer and typed fixtures, including budget rootId and complete BudgetLimits.",
+        "Malformed network and policy bodies render a retryable error instead of crashing.",
+        "Real collaboration API reports stopped; the panel exposes Resume after Pause.",
+        "Fixtures follow current network/policy routes and message tabs, and screenshots use unique per-test output paths.",
+        "Isolated backend fixture exercises real filesystem storage and routes while preventing provider execution.",
+        "Renderer-only types are reexported through API-bus to respect package boundaries."
+      ],
+      "testsPassed": 12,
+      "testsSkipped": 0,
+      "viewports": [
+        "1280x720",
+        "1440x900",
+        "1920x1080"
+      ],
+      "scenarios": [
+        "links, messages, pause/resume and Ultra reasoning",
+        "malformed payload recovery",
+        "real local creation/link/policy/pause/resume",
+        "mentions, five prepared roles/models and trigger graph"
+      ],
+      "pageErrors": 0,
+      "dashboardHostTypecheck": "passed",
+      "sandboxTypecheck": "invalid environment evidence: missing dependency exports; host succeeded",
+      "evidence": "ui-playwright.json",
+      "screenshotInspected": "playwright/regression-ultra-collabora-e5f55-s-through-real-local-routes-1280x720-dark/real-network.png",
+      "fixtureProcesses": [
+        57720,
+        61516,
+        6000,
+        59028,
+        43004,
+        69268
+      ],
+      "cleanup": "Helpers stopped their own processes; subsequent CIM inventory found none of those PIDs or their children, and Get-Process found none of the six PIDs."
+    }
+  },
+  "checks": [
+    {
+      "name": "final-build-electron",
+      "command": [
+        "node",
+        "scripts/build-electron.mjs",
+        "--no-package"
+      ],
+      "startedAt": "2026-11-04T16:05:23.276Z",
+      "finishedAt": "2026-11-04T16:08:49.822Z",
+      "durationSeconds": 206.546,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\final-build-electron.log"
+    },
+    {
+      "name": "final-typecheck-backend",
+      "command": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "startedAt": "2026-11-04T16:08:15.198Z",
+      "finishedAt": "2026-11-04T16:08:45.769Z",
+      "durationSeconds": 30.571,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\final-typecheck-backend.log"
+    },
+    {
+      "name": "final-typecheck-dashboard",
+      "command": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "apps/dashboard/tsconfig.json"
+      ],
+      "startedAt": "2026-11-04T16:05:25.610Z",
+      "finishedAt": "2026-11-04T16:06:00.673Z",
+      "durationSeconds": 35.063,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\final-typecheck-dashboard.log"
+    },
+    {
+      "name": "final-package-electron",
+      "command": [
+        "node",
+        "scripts/build-electron.mjs",
+        "--skip-tsc",
+        "--skip-dashboard",
+        "--target=nsis",
+        "--output=dist/electron-harness-retest-20261104"
+      ],
+      "startedAt": "2026-11-04T16:11:06.505Z",
+      "finishedAt": "2026-11-04T16:17:45.538Z",
+      "durationSeconds": 399.033,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\final-package-electron.log"
+    },
+    {
+      "name": "static-logo-build",
+      "command": [
+        "node",
+        "node_modules/vite/bin/vite.js",
+        "build",
+        "apps/dashboard"
+      ],
+      "startedAt": "2026-11-04T16:40:16.851Z",
+      "finishedAt": "2026-11-04T16:40:23.321Z",
+      "durationSeconds": 6.47,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\static-logo-build.log"
+    },
+    {
+      "name": "static-logo-package",
+      "command": [
+        "node",
+        "scripts/build-electron.mjs",
+        "--skip-tsc",
+        "--skip-dashboard",
+        "--target=nsis",
+        "--output=dist/electron-harness-retest-20261104-static"
+      ],
+      "startedAt": "2026-11-04T16:44:10.043Z",
+      "finishedAt": "2026-11-04T16:47:17.816Z",
+      "durationSeconds": 187.773,
+      "exitCode": 0,
+      "signal": null,
+      "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\static-logo-package.log"
+    }
+  ],
+  "guards": {
+    "results": [
+      {
+        "name": "boundaries-host",
+        "command": [
+          "node",
+          "node_modules/tsx/dist/cli.mjs",
+          "scripts/check-repository-boundaries.ts"
+        ],
+        "startedAt": "2026-11-04T16:04:17.346Z",
+        "finishedAt": "2026-11-04T16:04:25.674Z",
+        "durationSeconds": 8.328,
+        "exitCode": 0,
+        "signal": null,
+        "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\boundaries-host.log"
+      },
+      {
+        "name": "loc-host",
+        "command": [
+          "node",
+          "node_modules/tsx/dist/cli.mjs",
+          "scripts/check-loc-cap.ts"
+        ],
+        "startedAt": "2026-11-04T16:02:18.303Z",
+        "finishedAt": "2026-11-04T16:02:22.704Z",
+        "durationSeconds": 4.401,
+        "exitCode": 0,
+        "signal": null,
+        "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\loc-host.log"
+      },
+      {
+        "name": "cycles-host",
+        "command": [
+          "node",
+          "node_modules/tsx/dist/cli.mjs",
+          "scripts/check-circular-imports.ts"
+        ],
+        "startedAt": "2026-11-04T16:02:19.311Z",
+        "finishedAt": "2026-11-04T16:02:25.329Z",
+        "durationSeconds": 6.018,
+        "exitCode": 0,
+        "signal": null,
+        "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\cycles-host.log"
+      },
+      {
+        "name": "deadcode-host",
+        "command": [
+          "node",
+          "node_modules/knip/bin/knip.js"
+        ],
+        "startedAt": "2026-11-04T16:04:15.104Z",
+        "finishedAt": "2026-11-04T16:04:43.979Z",
+        "durationSeconds": 28.875,
+        "exitCode": 0,
+        "signal": null,
+        "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\deadcode-host.log"
+      },
+      {
+        "name": "env-host",
+        "command": [
+          "node",
+          "node_modules/tsx/dist/cli.mjs",
+          "scripts/audit-env-vars.ts",
+          "--check"
+        ],
+        "startedAt": "2026-11-04T16:02:22.430Z",
+        "finishedAt": "2026-11-04T16:02:35.283Z",
+        "durationSeconds": 12.853,
+        "exitCode": 0,
+        "signal": null,
+        "logPath": "D:\\MCP\\.tmp\\harness-retest-2026-11-04\\env-host.log"
+      }
+    ],
+    "envSnapshotRestored": true,
+    "envBeforeSha256": "686900feaf3e29d4ec86e8fe3d85d4a7ea63e7da80d817aeb01a3c1bc79d7867",
+    "envAfterSha256": "686900feaf3e29d4ec86e8fe3d85d4a7ea63e7da80d817aeb01a3c1bc79d7867",
+    "dependencyTests": {
+      "total": 15,
+      "passed": 15,
+      "failed": 0,
+      "success": true
+    },
+    "corrections": [
+      "Named createRequire consumerLoader to distinguish consumer resolution from a direct root CommonJS import.",
+      "Registered the exact Markdown HTML fixture entry in knip.json; no broad ignores or dependency exceptions."
+    ]
+  },
+  "whitespace": {
+    "exitCode": 0,
+    "bytes": 46083
+  },
+  "cleanup": {
+    "At": "2026-11-04T16:50:14.1852421Z",
+    "CheckedPidCount": 52,
+    "CurrentlyPresentPids": [],
+    "ClosedProfiles": [
+      {
+        "pid": 61592,
+        "closed": "2026-11-04T14:51:37.507Z",
+        "exitCode": 0
+      },
+      {
+        "pid": 21988,
+        "closed": "2026-11-04T14:56:57.957Z",
+        "exitCode": 0
+      },
+      {
+        "pid": 70932,
+        "closed": "2026-11-04T15:35:57.433Z",
+        "exitCode": 0
+      },
+      {
+        "pid": 67032,
+        "closed": "2026-11-04T15:39:29.033Z",
+        "exitCode": 0
+      },
+      {
+        "pid": 74260,
+        "closed": "2026-11-04T16:26:40.275Z",
+        "exitCode": 0
+      },
+      {
+        "pid": 65464,
+        "closed": "2026-11-04T16:37:48.972Z",
+        "exitCode": 0
+      },
+      {
+        "pid": 74556,
+        "closed": "2026-11-04T16:43:38.701Z",
+        "exitCode": 0
+      }
+    ],
+    "ReadOnly": true,
+    "ProcessesTerminated": []
+  },
+  "performance": {
+    "idle": {
+      "measuredAt": "2026-11-04T16:44:05.851Z",
+      "scope": "Synthetic local profiles; 15-second settling then 30-second sampling; Electron metrics omit non-Electron external helpers. One sample per scenario, not a percentile or sustained-load certification.",
+      "rows": [
+        {
+          "label": "quiet-baseline",
+          "scenario": "home",
+          "seconds": 30.009,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 1.4675797260821764,
+          "rendererOneCorePercent": 6.7661234962844485,
+          "electronMachinePercent": 0.5481253540604487,
+          "mainWorkingSetMB": 251.08984375,
+          "mainPeakWorkingSetMB": 340.0390625,
+          "rendererWorkingSetMB": 341.1796875,
+          "rendererTaskMs": 1400.7189999999998,
+          "rendererScriptMs": 0,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-baseline",
+          "scenario": "project",
+          "seconds": 30.008,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 6.309247533990934,
+          "rendererOneCorePercent": 8.521740869101572,
+          "electronMachinePercent": 0.7497686033724338,
+          "mainWorkingSetMB": 1206.7578125,
+          "mainPeakWorkingSetMB": 1468.0859375,
+          "rendererWorkingSetMB": 428.02734375,
+          "rendererTaskMs": 1232.6860000000001,
+          "rendererScriptMs": 0.7670000000000177,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-baseline",
+          "scenario": "chat",
+          "seconds": 30.012,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 0.8117186458749829,
+          "rendererOneCorePercent": 8.088054778088763,
+          "electronMachinePercent": 0.5499979174996668,
+          "mainWorkingSetMB": 1206.765625,
+          "mainPeakWorkingSetMB": 1468.0859375,
+          "rendererWorkingSetMB": 267.71484375,
+          "rendererTaskMs": 1241.9149999999997,
+          "rendererScriptMs": 0.42200000000003346,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-after",
+          "scenario": "home",
+          "seconds": 30.008,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 2.160700479872034,
+          "rendererOneCorePercent": 13.693285123966941,
+          "electronMachinePercent": 1.0890125133297786,
+          "mainWorkingSetMB": 249.1015625,
+          "mainPeakWorkingSetMB": 316.64453125,
+          "rendererWorkingSetMB": 361.86328125,
+          "rendererTaskMs": 2696.869,
+          "rendererScriptMs": 0,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-after",
+          "scenario": "project",
+          "seconds": 30.006,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 6.666596680663863,
+          "rendererOneCorePercent": 12.625008331666997,
+          "electronMachinePercent": 1.086846380723855,
+          "mainWorkingSetMB": 624.14453125,
+          "mainPeakWorkingSetMB": 875.01171875,
+          "rendererWorkingSetMB": 457.10546875,
+          "rendererTaskMs": 2007.0699999999997,
+          "rendererScriptMs": 0.9070000000000467,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-after",
+          "scenario": "chat",
+          "seconds": 30.016,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 1.6203924573560797,
+          "rendererOneCorePercent": 11.165175239872067,
+          "electronMachinePercent": 0.8193297949426974,
+          "mainWorkingSetMB": 626.76171875,
+          "mainPeakWorkingSetMB": 875.01171875,
+          "rendererWorkingSetMB": 455.6875,
+          "rendererTaskMs": 1613.1229999999998,
+          "rendererScriptMs": 2.6809999999999334,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-final-static",
+          "scenario": "home",
+          "seconds": 30.016,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 1.8263392857142846,
+          "rendererOneCorePercent": 0.27583955223880613,
+          "electronMachinePercent": 0.06797697478011724,
+          "mainWorkingSetMB": 254.88671875,
+          "mainPeakWorkingSetMB": 341.0703125,
+          "rendererWorkingSetMB": 136.60546875,
+          "rendererTaskMs": 17.240000000000002,
+          "rendererScriptMs": 0,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-final-static",
+          "scenario": "project",
+          "seconds": 30.014,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 5.5621576597587845,
+          "rendererOneCorePercent": 0.49281002198973756,
+          "electronMachinePercent": 0.19168231908442743,
+          "mainWorkingSetMB": 629.4609375,
+          "mainPeakWorkingSetMB": 891.21484375,
+          "rendererWorkingSetMB": 244.02734375,
+          "rendererTaskMs": 4.336999999999924,
+          "rendererScriptMs": 1.3499999999999623,
+          "pageErrors": []
+        },
+        {
+          "label": "quiet-final-static",
+          "scenario": "chat",
+          "seconds": 30.017,
+          "logicalCpus": 32,
+          "profiling": false,
+          "mainOneCorePercent": 1.0103208182030157,
+          "rendererOneCorePercent": 0.012386314421827997,
+          "electronMachinePercent": 0.03636887014025377,
+          "mainWorkingSetMB": 631.84375,
+          "mainPeakWorkingSetMB": 891.21484375,
+          "rendererWorkingSetMB": 248.42578125,
+          "rendererTaskMs": 1.786999999999983,
+          "rendererScriptMs": 0.14100000000000223,
+          "pageErrors": []
+        }
+      ]
+    },
+    "logoCausality": {
+      "method": "Same runtime/process, normal logo -> blank image at same size -> restored logo; 10-second settling + 20-second sampling per state, no profiler/tests/builds.",
+      "rows": [
+        {
+          "scenario": "logo-normal",
+          "seconds": 20.011,
+          "machineCpuPercent": 0.8183286692319225,
+          "mainOneCorePercent": 1.948948078556795,
+          "rendererOneCorePercent": 9.879966018689721,
+          "gpuOneCorePercent": 14.355979211433711,
+          "rendererTaskMs": 1214.3039999999999,
+          "pageErrors": []
+        },
+        {
+          "scenario": "logo-removed",
+          "seconds": 20.015,
+          "machineCpuPercent": 0.05395937421933547,
+          "mainOneCorePercent": 0.8924706470147378,
+          "rendererOneCorePercent": 0.7602148388708463,
+          "gpuOneCorePercent": 0.0668348738446175,
+          "rendererTaskMs": 56.97300000000016,
+          "pageErrors": []
+        },
+        {
+          "scenario": "logo-restored",
+          "seconds": 20.018,
+          "machineCpuPercent": 0.7167916063043263,
+          "mainOneCorePercent": 0.7964332101108977,
+          "rendererOneCorePercent": 8.859786192426817,
+          "gpuOneCorePercent": 13.27966330302728,
+          "rendererTaskMs": 915.6250000000003,
+          "pageErrors": []
+        }
+      ]
+    },
+    "markdown": {
+      "createdAt": "2026-11-04T15:52:32.935Z",
+      "synthetic": true,
+      "note": "Three 1500-line code fences; isolated Chromium, no app/account/provider. Alternating cold browser runs; no profiler attached.",
+      "results": [
+        {
+          "variant": "before",
+          "round": 0,
+          "chromium": "149.0.7827.55",
+          "collapsed": {
+            "sourceChars": 422107,
+            "codeChars": 140669,
+            "longTasks": {
+              "count": 4,
+              "totalMs": 754,
+              "p95Ms": 220,
+              "maxMs": 220
+            },
+            "nodes": 54067,
+            "codeTextChars": 422007,
+            "inputRoundTrip": {
+              "count": 30,
+              "totalMs": 1591.6167000000005,
+              "p95Ms": 103.66009999999915,
+              "maxMs": 767.1905999999999
+            },
+            "copyComplete": true
+          },
+          "expanded": {
+            "longTasks": {
+              "count": 1,
+              "totalMs": 89,
+              "p95Ms": 89,
+              "maxMs": 89
+            },
+            "lastLineVisible": true,
+            "copyComplete": true
+          },
+          "errors": []
+        },
+        {
+          "variant": "after",
+          "round": 1,
+          "chromium": "149.0.7827.55",
+          "collapsed": {
+            "sourceChars": 422107,
+            "codeChars": 140669,
+            "longTasks": {
+              "count": 0,
+              "totalMs": 0,
+              "p95Ms": 0,
+              "maxMs": 0
+            },
+            "nodes": 931,
+            "codeTextChars": 6387,
+            "inputRoundTrip": {
+              "count": 30,
+              "totalMs": 277.2295000000122,
+              "p95Ms": 29.40520000000106,
+              "maxMs": 88.41300000000047
+            },
+            "copyComplete": true
+          },
+          "expanded": {
+            "longTasks": {
+              "count": 0,
+              "totalMs": 0,
+              "p95Ms": 0,
+              "maxMs": 0
+            },
+            "lastLineVisible": true,
+            "copyComplete": true
+          },
+          "errors": []
+        },
+        {
+          "variant": "after",
+          "round": 2,
+          "chromium": "149.0.7827.55",
+          "collapsed": {
+            "sourceChars": 422107,
+            "codeChars": 140669,
+            "longTasks": {
+              "count": 0,
+              "totalMs": 0,
+              "p95Ms": 0,
+              "maxMs": 0
+            },
+            "nodes": 931,
+            "codeTextChars": 6387,
+            "inputRoundTrip": {
+              "count": 30,
+              "totalMs": 287.4275999999918,
+              "p95Ms": 33.462899999998626,
+              "maxMs": 86.9320000000007
+            },
+            "copyComplete": true
+          },
+          "expanded": {
+            "longTasks": {
+              "count": 0,
+              "totalMs": 0,
+              "p95Ms": 0,
+              "maxMs": 0
+            },
+            "lastLineVisible": true,
+            "copyComplete": true
+          },
+          "errors": []
+        },
+        {
+          "variant": "before",
+          "round": 3,
+          "chromium": "149.0.7827.55",
+          "collapsed": {
+            "sourceChars": 422107,
+            "codeChars": 140669,
+            "longTasks": {
+              "count": 4,
+              "totalMs": 761,
+              "p95Ms": 220,
+              "maxMs": 220
+            },
+            "nodes": 54067,
+            "codeTextChars": 422007,
+            "inputRoundTrip": {
+              "count": 30,
+              "totalMs": 1609.8515999999836,
+              "p95Ms": 108.25909999999931,
+              "maxMs": 767.0714000000007
+            },
+            "copyComplete": true
+          },
+          "expanded": {
+            "longTasks": {
+              "count": 1,
+              "totalMs": 87,
+              "p95Ms": 87,
+              "maxMs": 87
+            },
+            "lastLineVisible": true,
+            "copyComplete": true
+          },
+          "errors": []
+        }
+      ]
+    },
+    "messageList": {
+      "synthetic": true,
+      "createdAt": "2026-11-04T15:53:23.899Z",
+      "chromium": "149.0.7827.55",
+      "viewport": "1280x720",
+      "blocks": 5000,
+      "mountedRows": {
+        "top": 22,
+        "bottom": 24
+      },
+      "frameTimes": {
+        "samples": 120,
+        "p95Ms": 17.69999999552965,
+        "maxMs": 18.899999998509884
+      },
+      "inputRoundTrip": {
+        "samples": 12,
+        "p95Ms": 6.992399999999179,
+        "maxMs": 6.992399999999179
+      },
+      "rendererErrors": [],
+      "scope": "MessageList isolated in Chromium; no Electron startup or installed application"
+    },
+    "backend": {
+      "schemaVersion": 1,
+      "measuredAt": "2026-11-04T15:55:07.091Z",
+      "node": "v22.20.0",
+      "platform": "win32",
+      "architecture": "x64",
+      "head": "448d526dd2e24247617938721c0d8cf18ce850cf",
+      "synthetic": true,
+      "persistence": [
+        {
+          "turns": 100,
+          "coldOpenAndProjectionMs": 18.751,
+          "warmCommitAndRead": {
+            "samples": 20,
+            "p50Ms": 4.2,
+            "p95Ms": 4.542
+          },
+          "applications": 120
+        },
+        {
+          "turns": 1000,
+          "coldOpenAndProjectionMs": 20.48,
+          "warmCommitAndRead": {
+            "samples": 20,
+            "p50Ms": 4.891,
+            "p95Ms": 5.64
+          },
+          "applications": 1020
+        },
+        {
+          "turns": 10000,
+          "coldOpenAndProjectionMs": 108.075,
+          "warmCommitAndRead": {
+            "samples": 20,
+            "p50Ms": 4.125,
+            "p95Ms": 4.742
+          },
+          "applications": 10020
+        }
+      ],
+      "streaming": [
+        {
+          "existingBlocks": 50,
+          "deltas": 10000,
+          "handlerMs": 2.674,
+          "includesDom": false
+        },
+        {
+          "existingBlocks": 1000,
+          "deltas": 10000,
+          "handlerMs": 2.822,
+          "includesDom": false
+        },
+        {
+          "existingBlocks": 5000,
+          "deltas": 10000,
+          "handlerMs": 1.722,
+          "includesDom": false
+        }
+      ],
+      "dispatch": {
+        "runtime": "legacy_ts",
+        "maximumConcurrency": 2,
+        "batchMs": 208.517,
+        "results": [
+          {
+            "name": "fast",
+            "visibleMs": 34.858
+          },
+          {
+            "name": "slow",
+            "visibleMs": 208.294
+          }
+        ]
+      },
+      "independentReadBatch": {
+        "runtime": "legacy_ts",
+        "maximumConcurrency": 4,
+        "batchMs": 109.518,
+        "results": [
+          {
+            "name": "read_0",
+            "visibleMs": 109.252
+          },
+          {
+            "name": "read_1",
+            "visibleMs": 109.302
+          },
+          {
+            "name": "read_2",
+            "visibleMs": 109.333
+          },
+          {
+            "name": "read_3",
+            "visibleMs": 109.462
+          }
+        ]
+      }
+    }
+  },
+  "dependencies": {
+    "auditCounts": {
+      "info": 0,
+      "low": 13,
+      "moderate": 83,
+      "high": 75,
+      "critical": 0
+    },
+    "patched": {
+      "shell-quote": "1.11.0",
+      "proxy-addr": "2.0.8"
+    }
+  },
+  "artifact": {
+    "candidate": "D:\\MCP\\dist\\electron-harness-retest-20261104-static",
+    "version": "3.15.7",
+    "asarSha256": "1d5c35506003411686ded128b7bf563cd9888d68250ff0d85d023408e312cca8",
+    "reports": {
+      "reliability": "candidate-static-reliability/report.json",
+      "git": "candidate-static-git/report.json"
+    },
+    "verified": true,
+    "installers": [
+      {
+        "path": "D:\\MCP\\dist\\electron-harness-retest-20261104-static\\CodeStudio Setup 3.15.7.exe",
+        "bytes": 340937388,
+        "sha256": "4204a4782201f7a1f7c4cad4009e974fd7f08d87fe6a43615ce884fc1b503b93"
+      }
+    ],
+    "signature": {
+      "Status": "NotSigned"
+    },
+    "verification": {
+      "startedAt": "2026-11-04T16:47:40.623Z",
+      "finishedAt": "2026-11-04T16:48:04.967Z",
+      "ok": true,
+      "checks": [
+        {
+          "name": "module closure",
+          "ok": true,
+          "detail": "2445 modules reachable, 43 packages, none missing"
+        },
+        {
+          "name": "renderer paints",
+          "ok": true,
+          "detail": "mounted (3 nodes), location intact, assets and mcp:// images load"
+        },
+        {
+          "name": "deep link",
+          "ok": true,
+          "detail": "hash #/popout/task-manager"
+        },
+        {
+          "name": "indexer parses",
+          "ok": true,
+          "detail": "tree-sitter loads wasm from asar in a worker"
+        },
+        {
+          "name": "API script execution",
+          "ok": true,
+          "detail": "QuickJS WASM executes pm.* inside a terminated worker"
+        },
+        {
+          "name": "Web content conversion",
+          "ok": true,
+          "detail": "HTML converts to markdown in a terminated worker"
+        },
+        {
+          "name": "Image and video vision",
+          "ok": true,
+          "detail": "Sharp decodes a local image and packaged FFmpeg extracts a video frame"
+        }
+      ]
+    },
+    "reliability": {
+      "at": "2026-11-04T16:48:19.185Z",
+      "executable": "D:\\MCP\\dist\\electron-harness-retest-20261104-static\\win-unpacked\\CodeStudio.exe",
+      "resources": "D:\\MCP\\dist\\electron-harness-retest-20261104-static\\win-unpacked\\resources",
+      "electron": "42.5.0",
+      "results": [
+        {
+          "configurationRepoMap": "passed",
+          "mcpCatalogParity": "passed",
+          "mcpPathHints": "passed"
+        },
+        {
+          "codeExec": "passed",
+          "postAwaitSpin": "contained",
+          "ownedPids": [
+            59756,
+            72072,
+            70708
+          ],
+          "hostTicks": 20,
+          "cleanup": "confirmed"
+        },
+        {
+          "sqlite": "passed",
+          "nativeCancellation": "passed",
+          "reopen": "passed"
+        },
+        {
+          "unicodeOutput": "passed",
+          "ownerIsolation": "passed",
+          "outputId": "a10018a4-6216-45f1-9fa7-1f43c50f05f4"
+        }
+      ]
+    },
+    "git": {
+      "at": "2026-11-04T16:48:20.739Z",
+      "executable": "D:\\MCP\\dist\\electron-harness-retest-20261104-static\\win-unpacked\\CodeStudio.exe",
+      "electron": "42.5.0",
+      "resources": "D:\\MCP\\dist\\electron-harness-retest-20261104-static\\win-unpacked\\resources",
+      "reads": 8,
+      "rejectedMutation": true,
+      "registryEmpty": true,
+      "disposed": true,
+      "logoSha256": "e7f18c023cf6f9499dca0e8fb2b785c5a508bb4c487469033d8dc7a989a56522"
+    },
+    "installedOrPublished": false
+  },
+  "limitations": [
+    "Only local synthetic scenarios were profiled; external helpers and real large projects require separate measurements.",
+    "No paired efficacy benchmark or paid provider/model matrix was run.",
+    "171 non-critical dependency advisories and architectural backlog remain.",
+    "Installed user application and sessions were preserved."
+  ]
+}

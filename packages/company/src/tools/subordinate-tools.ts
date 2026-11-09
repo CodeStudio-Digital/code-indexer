@@ -349,6 +349,10 @@ export const sendToAgent: CoderTool = {
         type: 'string',
         description: 'Recipient role (e.g. "backend"). The inbox picks the run with the smallest backlog.',
       },
+      target_session_id: {
+        type: 'string',
+        description: 'Optional explicit destination session UUID in this company. Omit to message this session. Cross-session messages keep their durable destination and can wait for an answer.',
+      },
       target_agent_run_id: {
         type: 'string',
         description: 'Optional: pin to a specific agent run UUID when several agents share a role.',
@@ -383,6 +387,7 @@ export const sendToAgent: CoderTool = {
     const priority = (args.priority as 'low' | 'normal' | 'urgent' | undefined) ?? 'normal';
     const targetRole = args.target_role as string | undefined;
     const targetAgentRunId = args.target_agent_run_id as string | undefined;
+    const targetSessionId = args.target_session_id as string | undefined;
 
     const company = ctx.companyContext;
     if (!company) return err('send_to_agent requires a company orchestrator context');
@@ -392,6 +397,16 @@ export const sendToAgent: CoderTool = {
     }
 
     try {
+      if (targetSessionId && targetSessionId !== company.companySessionId) {
+        if (!company.sessionMessenger) return err('Company session messaging is unavailable in this runtime');
+        const message = await company.sessionMessenger.send({
+          targetSessionId, targetAgentRunId, targetRole, fromAgentRunId: company.agentRunId,
+          body, kind, idempotencyKey: ctx.currentToolUseId ?? `${company.agentRunId}:${Date.now()}`,
+        });
+        if (!wait) return ok(`Message ${message.id} queued for session ${targetSessionId} / @${targetRole ?? targetAgentRunId}.`);
+        const answer = await company.sessionMessenger.wait(targetSessionId, message.id, ctx.signal);
+        return ok(`Session ${targetSessionId} answered: ${answer}`);
+      }
       const sent = company.orchestrator.inboxSend({
         fromAgentRunId: company.agentRunId,
         fromRole: company.agentRole,

@@ -7,6 +7,7 @@ export interface DcrRequest {
 }
 
 export interface DcrResponse {
+  tokenEndpointAuthMethod?: string;
   clientId: string;
   clientSecret: string | null;
 }

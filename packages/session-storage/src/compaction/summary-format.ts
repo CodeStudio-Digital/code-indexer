@@ -40,7 +40,6 @@ export function renderResumeV3(summary: CompactionSummaryV3 | CompactionResumeV3
     if (!body.trim()) return;
     lines.push(`<${tag}>`, body.trimEnd(), `</${tag}>`, '');
   };
-  if (resume.active_goal) block('active_goal', resume.active_goal);
   if (resume.objective) block('primary_request', resume.objective);
   if (resume.current_focus || resume.next_step) {
     block('current_focus', [

@@ -1,5 +1,6 @@
 import type { AssistantTurn, SessionId } from './types.js';
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback } from 'react';
+import { useVisibleExternalStore } from '../../lib/surface-visibility.js';
 import { getAgentCurrentTurnSnapshot, subscribeAgentCurrentTurn } from './session-stream-store.js';
 
 export const ABORT_TERMINAL_EVENT_GRACE_MS = 2_000;
@@ -14,5 +15,5 @@ export function useAgentCurrentTurn(sessionId: SessionId | null): AssistantTurn 
     () => getAgentCurrentTurnSnapshot(sessionId),
     [sessionId],
   );
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return useVisibleExternalStore(subscribe, getSnapshot);
 }

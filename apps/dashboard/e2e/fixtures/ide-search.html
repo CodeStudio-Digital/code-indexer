@@ -11,5 +11,5 @@ createRoot(document.getElementById('root')).render(React.createElement(React.Fra
     React.createElement(FileTreeView, { projectId: 1, active: true, activePath: null, onOpen: p => document.body.dataset.opened = p })),
   React.createElement(SearchEverywhere, { projectId: 1, onOpenFile: p => document.body.dataset.opened = p })
 ));
-window.openSearch = () => useSeStore.getState().openWith('files');
+window.openSearch = (tab = 'files') => useSeStore.getState().openWith(tab);
 </script></body></html>

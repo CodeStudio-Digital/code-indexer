@@ -1,0 +1,3420 @@
+{
+  "version": 1,
+  "source": "frozen first-party MCP and DB descriptors at baseline 448d526 + reliability changes",
+  "tools": [
+    {
+      "name": "db_command",
+      "description": "Run a document/key-value command on a MongoDB or Redis connection (relational engines must use db_query). Shape: {op, collection?, payload?} for Mongo (find/aggregate/insertOne/…, payload carries filter/pipeline/document) or {args: ['GET','key']} for Redis. Read-only connections refuse mutating commands.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Connection name from db_list ('<label>', or '<project>:<label>' in company sessions). Optional when exactly one connection is registered."
+          },
+          "command": {
+            "type": "object",
+            "description": "The command: {op?, collection?, args?, payload?} (engine-specific).",
+            "properties": {
+              "op": {
+                "type": "string",
+                "description": "Mongo operation (find/aggregate/insertOne/…)."
+              },
+              "collection": {
+                "type": "string",
+                "description": "Mongo target collection."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Redis command+args, e.g. ['GET','key']."
+              },
+              "payload": {
+                "description": "Operation payload (filter/pipeline/document/value/…)."
+              }
+            },
+            "additionalProperties": false
+          },
+          "max_rows": {
+            "type": "number",
+            "description": "Row/document cap (default 200, max 1000)."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "db_list",
+      "description": "List the database connections registered in the Databases tab: name, engine, host/file, database, read-only flag and kind (relational/document/keyvalue). Never returns credentials and does NOT connect. Call this before db_query/db_schema/db_command when unsure which connection to target.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "db_query",
+      "description": "Execute ONE SQL statement against a registered relational connection. Reads AND writes are allowed unless the connection is marked read-only in the Databases tab. Use `params` for values derived from user/agent input (Postgres $1…, MySQL ?). Results are capped — paginate with LIMIT/OFFSET. Pass `connection` when more than one is registered.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Connection name from db_list ('<label>', or '<project>:<label>' in company sessions). Optional when exactly one connection is registered."
+          },
+          "sql": {
+            "type": "string",
+            "description": "A single SQL statement to execute."
+          },
+          "params": {
+            "type": "array",
+            "description": "Positional parameters for the statement.",
+            "items": {}
+          },
+          "max_rows": {
+            "type": "number",
+            "description": "Row cap (default 200, max 1000)."
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "db_schema",
+      "description": "Progressively inspect a relational database without flooding context. With no `table`, returns a compact paginated catalog of table/view names only (default 40, max 100); use `search` to narrow. Pass exactly one `table` to fetch its columns, nullability and PK flags. `schema` defaults to the connection filter or the engine default. Never try to load every table definition at once.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Connection name from db_list ('<label>', or '<project>:<label>' in company sessions). Optional when exactly one connection is registered."
+          },
+          "schema": {
+            "type": "string",
+            "description": "Schema / database name (defaults per engine)."
+          },
+          "table": {
+            "type": "string",
+            "description": "One exact table/view name to expand with columns and keys."
+          },
+          "search": {
+            "type": "string",
+            "description": "Case-insensitive substring filter for the compact catalog."
+          },
+          "offset": {
+            "type": "number",
+            "description": "Catalog offset for pagination (default 0)."
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation from the previous catalog page; preserve schema and search."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Catalog page size (default 40, max 100)."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "exec_command",
+      "description": "Spawn a shell command as a PERSISTENT session and return whatever it emits within a short yield window. If the process is still alive when yield expires, you get back a `session_id` you can drive with `write_stdin`.\n\nUSE: when the command needs to interact across multiple turns — REPLs (`node`, `python -i`, `psql`), interactive scaffolders (`npm init`, `gh auth login`), TUI commands that prompt for choices.\nUSE: when you need to send several lines of stdin separated by reading responses.\nDON'T: use as a replacement for `run_command` — one-shot commands are cheaper there. exec_command holds resources open until you `write_stdin({chars:''})` to confirm exit or the TTL reaps it.\nDON'T: spawn long-running servers (`npm run dev`, watch modes) here — the session will be evicted after 10 min of model inactivity even if the server is healthy. Use a background terminal for those.\nAn evicted session is GONE (process killed, no reconnect) — call `list_sessions` to check which session_ids are still alive before writing to one.\nThe shell is the platform default (cmd.exe on Windows, /bin/sh on POSIX) — see the system prompt's OS line for shell-specific dos/don'ts.\n\nDefaults: tty=false (pipe); yields after ~10000ms; output capped at ~20000 chars. Output beyond cap preserves a bounded beginning and the true final output; `output_truncated=true` and `output_omitted_chars=N` report when and how much was omitted.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "object",
+            "description": "Explicit CommandSpec: {kind:\"argv\",executable,args} bypasses shell quoting; {kind:\"shell\",script,shell} selects cmd, powershell, pwsh, sh or bash.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "argv",
+                  "shell"
+                ]
+              },
+              "executable": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "script": {
+                "type": "string"
+              },
+              "shell": {
+                "type": "string",
+                "enum": [
+                  "cmd",
+                  "powershell",
+                  "pwsh",
+                  "sh",
+                  "bash"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "cmd": {
+            "type": "string",
+            "description": "Shell command line. Passed to /bin/sh -c (or cmd.exe /c on Windows)."
+          },
+          "workdir": {
+            "type": "string",
+            "description": "Working directory. Relative paths resolve against the primary project; in a global session use \"<project-slug>/subdir\"."
+          },
+          "tty": {
+            "type": "boolean",
+            "description": "Force a real pty (node-pty). Use only when the command gates on isatty(). Default false (pipe)."
+          },
+          "yield_time_ms": {
+            "type": "number",
+            "description": "Maximum time to collect output before returning the session id. Default 10000, maximum 60000."
+          },
+          "cols": {
+            "type": "number",
+            "description": "PTY columns. Defaults to 120."
+          },
+          "rows": {
+            "type": "number",
+            "description": "PTY rows. Defaults to 30."
+          },
+          "max_output_chars": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 200000,
+            "description": "Maximum inline characters per drain."
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "minimum": 250,
+            "description": "Deprecated approximate alias: each requested token reserves 4 characters."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "glob",
+      "description": "Fast filename pattern matching across the project tree. Returns paths ordered by most-recent mtime.\nUSE: \"show me every **/*.test.ts\", \"all markdown under docs/\", \"which config files live in src/**\", as a first step before reading or editing a set of files.\nUSE: with mcp__grep_code when you need files matching a NAME pattern AND a content regex — glob first, then grep.\nDON'T: use for content search — use mcp__grep_code (indexer-aware) or Grep.\nDON'T: glob for one known path — just read_file it.\nDON'T: pass absolute patterns — patterns stay relative to the selected project or authorized external root.\nRespects .gitignore + .mcpindexignore by default (matching the indexer). Pass respect_ignore:false to bypass.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Glob pattern. Examples: \"**/*.ts\", \"src/**/*.test.*\", \"docs/**/*.md\", \"**/package.json\"."
+          },
+          "path": {
+            "type": "string",
+            "description": "Optional project-relative subdirectory or absolute path under an authorized external root. In a global session use \"<project-slug>/subdir\"."
+          },
+          "respect_ignore": {
+            "type": "boolean",
+            "description": "Whether to respect .gitignore and .mcpindexignore. Default true. Set false for admin-style sweeps."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Max paths to return (default 200, hard max 1000)."
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_sessions",
+      "description": "List the active exec_command sessions in this runner (id, status, age, idle). Use BEFORE `write_stdin` to confirm the session you want still exists. Returns `(no active sessions)` when the registry is empty.\n\nUSE: when you forgot the session_id, or when write_stdin returned \"session not active\" and you want to know which ids ARE valid.\nDON'T: poll this in a loop — sessions only change when YOU call exec_command / write_stdin.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "mcp__cancel_agent_run",
+      "description": "Cancel an active asynchronous CodeStudio agent run owned by the current MCP principal.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ]
+      }
+    },
+    {
+      "name": "mcp__export_docs",
+      "description": "Export structural project documentation (overview, directory tree, files, symbols and optional snapshots) as one document.\nDefault format is markdown; pass format=\"json\" for structured output, and sections to limit which parts are included.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "json"
+            ]
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "overview",
+                "architecture",
+                "files",
+                "symbols",
+                "api",
+                "snapshots"
+              ]
+            }
+          }
+        },
+        "required": [
+          "project_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__find_implementations",
+      "description": "Page through classes implementing an interface in the structural index, with file and line. Default 100, maximum 500; follow offset for the tail. Relations are name-based, not compiler-resolved. Use get_hierarchy for parents, traits and subclasses.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "interface_name": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_name",
+          "interface_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__find_references",
+      "description": "Page through indexed occurrences of a symbol name (default 50, max 500). Definitions are listed for ambiguous names. file_path identifies the requested definition but incoming references remain name-based; use LSP for exact resolution. If the index has no references, scans current source files with explicit file/line cursors, time and byte budgets. Disk hits include declarations, comments and imports. Follow recovery, or narrow search_path; restart disk cursors after filesystem edits.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "symbol_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "index",
+              "disk"
+            ]
+          },
+          "reference_kind": {
+            "type": "string",
+            "enum": [
+              "all",
+              "call",
+              "import",
+              "unknown"
+            ],
+            "description": "Index classification filter. Old unclassified rows remain unknown until reindexing. Disk fallback supports all only."
+          },
+          "search_path": {
+            "type": "string"
+          },
+          "scan_file_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "scan_line_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_name",
+          "symbol_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_agent_result",
+      "description": "Return the terminal answer for a completed agent run, or its current status while still running.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_agent_run",
+      "description": "Read status and metadata for an asynchronous CodeStudio agent run.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_costs",
+      "description": "Read the historical provider-cost ledger (USD and tokens). Local structural indexing, ONNX embeddings and local reranking have no provider charge and are not represented as indexer cost here. Scope to one project via project_name or omit it for the global total; pass since (ISO date) to bound the window.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp__get_dependencies",
+      "description": "Page through the imports of a file, with resolved in-project targets. Default 200, maximum 500. Use offset to continue.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "number",
+            "description": "Result offset, default 0. Restart from 0 after index changes."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Page size, default 200, maximum 500."
+          }
+        },
+        "required": [
+          "project_name",
+          "file_path"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_dependents",
+      "description": "Page through the files that import this file (reverse dependencies). Default 200, maximum 500. Use offset to continue.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "number",
+            "description": "Result offset, default 0. Restart from 0 after index changes."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Page size, default 200, maximum 500."
+          }
+        },
+        "required": [
+          "project_name",
+          "file_path"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_file_skeleton",
+      "description": "Page through a file outline or exported declarations in an indexed directory. Default 100 symbols, maximum 500. Follow offset for the tail. kind filters the query; filter is a bounded regex applied to each candidate page, so filtered totals are not global totals. Unindexed files up to 1 MiB use a bounded tree-sitter outline; larger files should be indexed or read in ranges.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "filter": {
+            "type": "string"
+          },
+          "max_symbols": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_name",
+          "file_path"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_hierarchy",
+      "description": "Page through indexed parents, traits, subclasses and implementors of a type. Includes a cycle-guarded extends chain up to five hops with an explicit stop reason. Ambiguous definitions require file_path. Default 100 relations, maximum 500; follow offset for all edges. Incoming edges are name-based, not compiler-resolved.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "symbol_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "declaration_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_name",
+          "symbol_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_project_overview",
+      "description": "Get a structural project overview with files, symbols, languages and semantic-generation status. File pages default to 500 entries (compact: 50). Use offset to continue; max_files is capped at 500.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "compact": {
+            "type": "boolean"
+          },
+          "max_tokens": {
+            "type": "number"
+          },
+          "max_files": {
+            "type": "number",
+            "description": "Files per page (compact default 50, otherwise 500; max 500). Zero omits file listing."
+          },
+          "offset": {
+            "type": "number",
+            "description": "File offset; restart at 0 after index changes."
+          }
+        },
+        "required": [
+          "project_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_project_pulse",
+      "description": "Ultra-compact index-health and project-shape overview (~250 tokens). For code questions, start with mcp__search; use this only when index readiness or the broad project shape is unknown. Pass format=\"json\" for a structured response.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ],
+            "description": "Response format (default text)"
+          }
+        },
+        "required": [
+          "project_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_recently_modified_files",
+      "description": "Page through recently modified indexed files, newest first. Default 20, maximum 500. Timestamp, path and line count are returned; use offset to continue.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "number",
+            "description": "Result offset, default 0. Restart from 0 after index changes."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Page size, default 200, maximum 500."
+          }
+        },
+        "required": [
+          "project_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_repo_map",
+      "description": "Page through an architecture map ranked by dependency hubs, entrypoint-like paths and symbol richness. Default 100 files, max 500; each shows up to three supported symbols with short signatures. Recover complete outlines with get_file_skeleton/read_file. Use offset for remaining files and restart after index changes. max_tokens optionally shortens text only; JSON preserves the structured page.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          }
+        },
+        "required": [
+          "project_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__get_symbol_body",
+      "description": "Read a symbol from current file bytes. Indexed line numbers are revalidated; file_path never falls back to another file. Ambiguous definitions require file_path/declaration_line. Returns up to 500 lines with line_offset recovery. Current files up to 1 MiB use a bounded parser; larger/unsupported files use a labelled heuristic. New declarations absent from the index can be located in bounded file pages via file_scan_offset. Use read_file byte pages beyond 16 MiB.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "symbol_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "declaration_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "line_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_lines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "file_scan_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_name",
+          "symbol_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__grep_code",
+      "description": "Textual search across project files with language/glob filters. Results capped at max_results (default 20). Use literal=true for exact string matching.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "literal": {
+            "type": "boolean"
+          },
+          "case_sensitive": {
+            "type": "boolean"
+          },
+          "language": {
+            "type": "string"
+          },
+          "glob": {
+            "type": "string"
+          },
+          "max_results": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "project_name",
+          "pattern"
+        ]
+      }
+    },
+    {
+      "name": "mcp__index_project",
+      "description": "Reconcile the structural index for one project, then start its configured semantic generation. Structural indexing extracts files, symbols, references and dependencies; semantic work runs in the server-owned worker. Use rebuild_semantic only when you intentionally want to replace the active vector generation.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_path": {
+            "type": "string",
+            "description": "Path to project root"
+          },
+          "rebuild_semantic": {
+            "type": "boolean",
+            "description": "Build a replacement semantic generation instead of starting/catching up the current one."
+          }
+        },
+        "required": [
+          "project_path"
+        ]
+      }
+    },
+    {
+      "name": "mcp__list_agent_runs",
+      "description": "List recent asynchronous agent runs owned by the current MCP principal.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp__list_agents",
+      "description": "List CodeStudio built-in/custom agents and configured provider/model choices available for start_agent_run.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "mcp__list_directory",
+      "description": "List a page of files under a project directory (default 500 entries). Uses bounded index metadata, or streams the disk when no indexed rows match. Follow offset for the tail. Disk pages use filesystem order; restart at zero if files change.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "project_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__list_models",
+      "description": "List one page of LLM models from this profile. Default listing is local, with no network or cache writes.\nFilter with provider; live=true requests bounded public catalog reads using environment credentials. OAuth/custom providers use their local catalog; refresh them in provider settings. Follow next_offset for more models.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp__prepare_edit",
+      "description": "Fetch the current symbol body, a page of indexed name-based callers ordered by proximity, nearby declarations, imports and covering test files. Explicit file_path never changes scope. Counts and recovery offsets describe omitted callers/imports/tests; missing ranges or incomplete disk scans are labelled. Default 10 callers (max 50), 50 imports (max 100), five tests (max 50). Unindexed projects use a bounded disk fallback; imports/tests require the index. Use file_path/declaration_line for ambiguous symbols.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "symbol_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "search_path": {
+            "type": "string"
+          },
+          "declaration_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_callers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "callers_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_imports": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "imports_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_tests": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "tests_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_lines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "line_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_name",
+          "symbol_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__rag_doc_outline",
+      "description": "Browse a collection source list or source heading pages. Follow next_offset/recovery until exhausted. Counts refer to this page; a heading split across pages may appear on both. Restart at zero after index changes.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "source_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Page offset from next_offset. Restart at zero if the index changed."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Rows per page; sections cap at 64, outlines at 500."
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp__rag_read_doc",
+      "description": "Read indexed documentation pages by chunk_id. Follow next_char_offset for long text, next_offset for section pages, and recovery for neighbor previews. Character offsets use Unicode code points. Counts/tokens refer to the current page; restart at zero after index changes.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "chunk_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "chunk",
+              "section"
+            ]
+          },
+          "window": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3,
+            "description": "Neighbor previews per side, default 1."
+          },
+          "char_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200000,
+            "description": "Default 65536."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Page offset from next_offset. Restart at zero if the index changed."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Rows per page; sections cap at 64, outlines at 500."
+          }
+        },
+        "required": [
+          "chunk_id"
+        ]
+      }
+    },
+    {
+      "name": "mcp__rag_search_docs",
+      "description": "Search indexed documentation. HTTP uses its configured search backend; standalone stdio uses local lexical search (diag.mode). Results are previews: read chunk_id with rag_read_doc to recover full text. Optional project_name prefers linked collections; collection explicitly selects a corpus.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "collection": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "project_name": {
+            "type": "string",
+            "description": "Prefer documentation linked to this project."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "all"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Default 8."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "mcp__read_file",
+      "description": "Read current file contents within the project. Files up to 800 lines are returned in full unless a range or search is requested. Use symbol/around_line for a declaration, search_term for the first regex match, or force=true for all text (up to 16 MiB). Larger files support byte_offset/max_bytes pages, with UTF-8 boundaries preserved; encoding=base64 preserves arbitrary bytes. Follow recovery offsets for omitted content.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "around_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "search_term": {
+            "type": "string"
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_lines": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Default 400."
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "force_reread": {
+            "type": "boolean"
+          },
+          "byte_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 1048576
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          }
+        },
+        "required": [
+          "project_name",
+          "file_path"
+        ]
+      }
+    },
+    {
+      "name": "mcp__save_memory",
+      "description": "Save a DURABLE fact to PROJECT MEMORY so future sessions can recall it.\nGood memories: a decision (and why), a convention, a non-obvious gotcha/constraint, a reusable how-to recipe, an architecture note. Provide a specific title + 1-4 sentence content.\nUSE: for things that stay true beyond the current task.\nDON'T: use for transient task state — that belongs in the task list, not memory.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "architecture",
+              "decision",
+              "pattern",
+              "convention",
+              "todo",
+              "note",
+              "gotcha",
+              "procedure"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "referenced_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Project-relative paths this memory depends on (staleness tracking)."
+          },
+          "importance": {
+            "type": "number",
+            "description": "0..1 salience — how reusable/durable. Decisions/conventions high."
+          }
+        },
+        "required": [
+          "project_name",
+          "title",
+          "category",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "mcp__search",
+      "description": "Hybrid code search. Ask a natural-language question with mode=auto to use vectors; use grep_code for exact identifiers or literals.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fts",
+              "vector",
+              "hybrid"
+            ],
+            "description": "Use auto by default. FTS is for exact identifiers/literals; vector/hybrid are diagnostic overrides for conceptual or cross-language retrieval."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "files",
+              "symbols",
+              "all"
+            ]
+          },
+          "limit": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "project_name",
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "mcp__search_memory",
+      "description": "Search durable project memories such as decisions, conventions and gotchas through the semantic owner, with local FTS fallback. Default five results (max 50), each with 4000 content characters (max 16384). Follow a result recovery using memory_id/content_offset to read the complete current memory without repeating semantic retrieval. All IDs are checked against the live project store. Search results are ranked candidates, not an exhaustive count. Use read_file for current source code.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "memory_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "content_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16384
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          }
+        },
+        "required": [
+          "project_name"
+        ]
+      }
+    },
+    {
+      "name": "mcp__semantic_neighbors",
+      "description": "Find between 1 and 50 semantically related symbols (default 10). Use project_name + symbol_name, optionally file_path to disambiguate; legacy symbol_id is also accepted. A bounded current-body excerpt and structural metadata form the query; missing/large files use structural context. Embedding/vector work runs in the semantic owner process; unavailable vectors return explicitly labelled lexical fallback. Results are verified against the same project index and deleted/foreign symbols are excluded.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "symbol_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "symbol_name": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp__start_agent_run",
+      "description": "Start a CodeStudio agent asynchronously and return a persistent run_id immediately. Use get_agent_run/get_agent_result to poll it. execution_mode selects the provider-independent host orchestration profile; reasoning_effort remains a native provider control. Connection profiles restrict projects, agents, concurrency and runtime.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "ultra"
+            ],
+            "default": "standard",
+            "description": "Host execution profile. Ultra never becomes a provider reasoning-effort value."
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "description": "Optional native provider reasoning effort. Legacy value \"ultra\" is accepted and converted to execution_mode=ultra."
+          }
+        },
+        "required": [
+          "project_name",
+          "task",
+          "agent_id",
+          "provider",
+          "model"
+        ]
+      }
+    },
+    {
+      "name": "mcp__trace_usage",
+      "description": "Trace a bounded name-based usage graph through the declaration containing each call, including calls in the definition file. Depth 1..5 (default 3), five callers per branch, at most 100 call-site nodes and a 100 ms traversal budget. Every omitted branch has a recovery query. Unindexed projects use cancellable disk lexical hits at depth 1. This is not compiler-resolved call analysis.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_name": {
+            "type": "string"
+          },
+          "symbol_name": {
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json"
+            ]
+          },
+          "force_reread": {
+            "type": "boolean"
+          },
+          "search_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_name",
+          "symbol_name"
+        ]
+      }
+    },
+    {
+      "name": "poll_session",
+      "description": "Collect new output from an owned command session without writing stdin.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "yield_time_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60000
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_process_output",
+      "description": "Read retained command output using output_ref. A cursor continues the same byte snapshot; omitted bytes beyond the spool quota are unrecoverable.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "output_ref": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 65536
+          }
+        },
+        "required": [
+          "output_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stop_session",
+      "description": "Stop one owned command process tree and collect its final output. A stopping receipt means physical cleanup is still pending.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "write_stdin",
+      "description": "Send bytes to an exec_command session's stdin, then yield briefly to collect new output. Use `chars=\"\"` (default) as a non-destructive poll to check whether the session is still alive and pick up output emitted since the last read.\n\nUSE: after `exec_command` returned with status=running and you have an answer/command to push.\nUSE: with empty chars to poll a session that needs more time to produce its prompt.\nDON'T: forget the trailing newline if the REPL expects line-buffered input — pass `chars: '5+5\\n'`, not `'5+5'`. The tool does NOT auto-append newlines.\nDON'T: call after `status=exited` — the session_id has been reaped. exec_command a new session.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "Session id returned by a prior `exec_command`."
+          },
+          "chars": {
+            "type": "string",
+            "description": "Bytes to write to stdin (no newline auto-appended). Empty string = background poll."
+          },
+          "yield_time_ms": {
+            "type": "number",
+            "description": "How long to wait for output after writing. Default 250, max 60000."
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "queries": [
+    {
+      "id": "discovery-0-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "db_command",
+      "expected": [
+        "db_command"
+      ]
+    },
+    {
+      "id": "discovery-0-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "DB_COMMAND",
+      "expected": [
+        "db_command"
+      ]
+    },
+    {
+      "id": "discovery-0-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "db command",
+      "expected": [
+        "db_command"
+      ]
+    },
+    {
+      "id": "discovery-0-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "db command",
+      "expected": [
+        "db_command"
+      ]
+    },
+    {
+      "id": "discovery-0-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq0xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-1-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "db_list",
+      "expected": [
+        "db_list"
+      ]
+    },
+    {
+      "id": "discovery-1-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "DB_LIST",
+      "expected": [
+        "db_list"
+      ]
+    },
+    {
+      "id": "discovery-1-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "db list",
+      "expected": [
+        "db_list"
+      ]
+    },
+    {
+      "id": "discovery-1-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "db listar",
+      "expected": [
+        "db_list"
+      ]
+    },
+    {
+      "id": "discovery-1-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq1xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-2-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "db_query",
+      "expected": [
+        "db_query"
+      ]
+    },
+    {
+      "id": "discovery-2-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "DB_QUERY",
+      "expected": [
+        "db_query"
+      ]
+    },
+    {
+      "id": "discovery-2-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "db query",
+      "expected": [
+        "db_query"
+      ]
+    },
+    {
+      "id": "discovery-2-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "db consulta",
+      "expected": [
+        "db_query"
+      ]
+    },
+    {
+      "id": "discovery-2-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq2xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-3-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "db_schema",
+      "expected": [
+        "db_schema"
+      ]
+    },
+    {
+      "id": "discovery-3-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "DB_SCHEMA",
+      "expected": [
+        "db_schema"
+      ]
+    },
+    {
+      "id": "discovery-3-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "db schema",
+      "expected": [
+        "db_schema"
+      ]
+    },
+    {
+      "id": "discovery-3-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "db esquema",
+      "expected": [
+        "db_schema"
+      ]
+    },
+    {
+      "id": "discovery-3-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq3xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-4-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "exec_command",
+      "expected": [
+        "exec_command"
+      ]
+    },
+    {
+      "id": "discovery-4-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "EXEC_COMMAND",
+      "expected": [
+        "exec_command"
+      ]
+    },
+    {
+      "id": "discovery-4-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "exec command",
+      "expected": [
+        "exec_command"
+      ]
+    },
+    {
+      "id": "discovery-4-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "exec command",
+      "expected": [
+        "exec_command"
+      ]
+    },
+    {
+      "id": "discovery-4-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq4xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-5-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "glob",
+      "expected": [
+        "glob"
+      ]
+    },
+    {
+      "id": "discovery-5-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "GLOB",
+      "expected": [
+        "glob"
+      ]
+    },
+    {
+      "id": "discovery-5-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "glob",
+      "expected": [
+        "glob"
+      ]
+    },
+    {
+      "id": "discovery-5-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "glob",
+      "expected": [
+        "glob"
+      ]
+    },
+    {
+      "id": "discovery-5-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq5xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-6-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "list_sessions",
+      "expected": [
+        "list_sessions"
+      ]
+    },
+    {
+      "id": "discovery-6-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "LIST_SESSIONS",
+      "expected": [
+        "list_sessions"
+      ]
+    },
+    {
+      "id": "discovery-6-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "list sessions",
+      "expected": [
+        "list_sessions"
+      ]
+    },
+    {
+      "id": "discovery-6-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "listar sessions",
+      "expected": [
+        "list_sessions"
+      ]
+    },
+    {
+      "id": "discovery-6-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq6xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-7-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__cancel_agent_run",
+      "expected": [
+        "mcp__cancel_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-7-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__CANCEL_AGENT_RUN",
+      "expected": [
+        "mcp__cancel_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-7-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "cancel agent run",
+      "expected": [
+        "mcp__cancel_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-7-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "cancelar agent run",
+      "expected": [
+        "mcp__cancel_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-7-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq7xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-8-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__export_docs",
+      "expected": [
+        "mcp__export_docs"
+      ]
+    },
+    {
+      "id": "discovery-8-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__EXPORT_DOCS",
+      "expected": [
+        "mcp__export_docs"
+      ]
+    },
+    {
+      "id": "discovery-8-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "export docs",
+      "expected": [
+        "mcp__export_docs"
+      ]
+    },
+    {
+      "id": "discovery-8-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "export docs",
+      "expected": [
+        "mcp__export_docs"
+      ]
+    },
+    {
+      "id": "discovery-8-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq8xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-9-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__find_implementations",
+      "expected": [
+        "mcp__find_implementations"
+      ]
+    },
+    {
+      "id": "discovery-9-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__FIND_IMPLEMENTATIONS",
+      "expected": [
+        "mcp__find_implementations"
+      ]
+    },
+    {
+      "id": "discovery-9-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "find implementations",
+      "expected": [
+        "mcp__find_implementations"
+      ]
+    },
+    {
+      "id": "discovery-9-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "encontrar implementations",
+      "expected": [
+        "mcp__find_implementations"
+      ]
+    },
+    {
+      "id": "discovery-9-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq9xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-10-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__find_references",
+      "expected": [
+        "mcp__find_references"
+      ]
+    },
+    {
+      "id": "discovery-10-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__FIND_REFERENCES",
+      "expected": [
+        "mcp__find_references"
+      ]
+    },
+    {
+      "id": "discovery-10-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "find references",
+      "expected": [
+        "mcp__find_references"
+      ]
+    },
+    {
+      "id": "discovery-10-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "encontrar referencias",
+      "expected": [
+        "mcp__find_references"
+      ]
+    },
+    {
+      "id": "discovery-10-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq10xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-11-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_agent_result",
+      "expected": [
+        "mcp__get_agent_result"
+      ]
+    },
+    {
+      "id": "discovery-11-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_AGENT_RESULT",
+      "expected": [
+        "mcp__get_agent_result"
+      ]
+    },
+    {
+      "id": "discovery-11-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get agent result",
+      "expected": [
+        "mcp__get_agent_result"
+      ]
+    },
+    {
+      "id": "discovery-11-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get agent result",
+      "expected": [
+        "mcp__get_agent_result"
+      ]
+    },
+    {
+      "id": "discovery-11-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq11xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-12-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_agent_run",
+      "expected": [
+        "mcp__get_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-12-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_AGENT_RUN",
+      "expected": [
+        "mcp__get_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-12-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get agent run",
+      "expected": [
+        "mcp__get_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-12-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get agent run",
+      "expected": [
+        "mcp__get_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-12-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq12xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-13-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_costs",
+      "expected": [
+        "mcp__get_costs"
+      ]
+    },
+    {
+      "id": "discovery-13-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_COSTS",
+      "expected": [
+        "mcp__get_costs"
+      ]
+    },
+    {
+      "id": "discovery-13-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get costs",
+      "expected": [
+        "mcp__get_costs"
+      ]
+    },
+    {
+      "id": "discovery-13-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get costs",
+      "expected": [
+        "mcp__get_costs"
+      ]
+    },
+    {
+      "id": "discovery-13-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq13xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-14-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_dependencies",
+      "expected": [
+        "mcp__get_dependencies"
+      ]
+    },
+    {
+      "id": "discovery-14-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_DEPENDENCIES",
+      "expected": [
+        "mcp__get_dependencies"
+      ]
+    },
+    {
+      "id": "discovery-14-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get dependencies",
+      "expected": [
+        "mcp__get_dependencies"
+      ]
+    },
+    {
+      "id": "discovery-14-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get dependencias",
+      "expected": [
+        "mcp__get_dependencies"
+      ]
+    },
+    {
+      "id": "discovery-14-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq14xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-15-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_dependents",
+      "expected": [
+        "mcp__get_dependents"
+      ]
+    },
+    {
+      "id": "discovery-15-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_DEPENDENTS",
+      "expected": [
+        "mcp__get_dependents"
+      ]
+    },
+    {
+      "id": "discovery-15-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "get dependents",
+      "expected": [
+        "mcp__get_dependents"
+      ]
+    },
+    {
+      "id": "discovery-15-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get dependents",
+      "expected": [
+        "mcp__get_dependents"
+      ]
+    },
+    {
+      "id": "discovery-15-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq15xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-16-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_file_skeleton",
+      "expected": [
+        "mcp__get_file_skeleton"
+      ]
+    },
+    {
+      "id": "discovery-16-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_FILE_SKELETON",
+      "expected": [
+        "mcp__get_file_skeleton"
+      ]
+    },
+    {
+      "id": "discovery-16-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get file skeleton",
+      "expected": [
+        "mcp__get_file_skeleton"
+      ]
+    },
+    {
+      "id": "discovery-16-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get arquivo skeleton",
+      "expected": [
+        "mcp__get_file_skeleton"
+      ]
+    },
+    {
+      "id": "discovery-16-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq16xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-17-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_hierarchy",
+      "expected": [
+        "mcp__get_hierarchy"
+      ]
+    },
+    {
+      "id": "discovery-17-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_HIERARCHY",
+      "expected": [
+        "mcp__get_hierarchy"
+      ]
+    },
+    {
+      "id": "discovery-17-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get hierarchy",
+      "expected": [
+        "mcp__get_hierarchy"
+      ]
+    },
+    {
+      "id": "discovery-17-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get hierarchy",
+      "expected": [
+        "mcp__get_hierarchy"
+      ]
+    },
+    {
+      "id": "discovery-17-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq17xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-18-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_project_overview",
+      "expected": [
+        "mcp__get_project_overview"
+      ]
+    },
+    {
+      "id": "discovery-18-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_PROJECT_OVERVIEW",
+      "expected": [
+        "mcp__get_project_overview"
+      ]
+    },
+    {
+      "id": "discovery-18-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get project overview",
+      "expected": [
+        "mcp__get_project_overview"
+      ]
+    },
+    {
+      "id": "discovery-18-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get projeto overview",
+      "expected": [
+        "mcp__get_project_overview"
+      ]
+    },
+    {
+      "id": "discovery-18-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq18xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-19-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_project_pulse",
+      "expected": [
+        "mcp__get_project_pulse"
+      ]
+    },
+    {
+      "id": "discovery-19-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_PROJECT_PULSE",
+      "expected": [
+        "mcp__get_project_pulse"
+      ]
+    },
+    {
+      "id": "discovery-19-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get project pulse",
+      "expected": [
+        "mcp__get_project_pulse"
+      ]
+    },
+    {
+      "id": "discovery-19-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get projeto pulse",
+      "expected": [
+        "mcp__get_project_pulse"
+      ]
+    },
+    {
+      "id": "discovery-19-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq19xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-20-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_recently_modified_files",
+      "expected": [
+        "mcp__get_recently_modified_files"
+      ]
+    },
+    {
+      "id": "discovery-20-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_RECENTLY_MODIFIED_FILES",
+      "expected": [
+        "mcp__get_recently_modified_files"
+      ]
+    },
+    {
+      "id": "discovery-20-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "get recently modified files",
+      "expected": [
+        "mcp__get_recently_modified_files"
+      ]
+    },
+    {
+      "id": "discovery-20-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get recently modified arquivos",
+      "expected": [
+        "mcp__get_recently_modified_files"
+      ]
+    },
+    {
+      "id": "discovery-20-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq20xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-21-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_repo_map",
+      "expected": [
+        "mcp__get_repo_map"
+      ]
+    },
+    {
+      "id": "discovery-21-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_REPO_MAP",
+      "expected": [
+        "mcp__get_repo_map"
+      ]
+    },
+    {
+      "id": "discovery-21-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get repo map",
+      "expected": [
+        "mcp__get_repo_map"
+      ]
+    },
+    {
+      "id": "discovery-21-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get repo map",
+      "expected": [
+        "mcp__get_repo_map"
+      ]
+    },
+    {
+      "id": "discovery-21-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq21xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-22-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__get_symbol_body",
+      "expected": [
+        "mcp__get_symbol_body"
+      ]
+    },
+    {
+      "id": "discovery-22-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GET_SYMBOL_BODY",
+      "expected": [
+        "mcp__get_symbol_body"
+      ]
+    },
+    {
+      "id": "discovery-22-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "get symbol body",
+      "expected": [
+        "mcp__get_symbol_body"
+      ]
+    },
+    {
+      "id": "discovery-22-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "get simbolo body",
+      "expected": [
+        "mcp__get_symbol_body"
+      ]
+    },
+    {
+      "id": "discovery-22-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq22xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-23-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__grep_code",
+      "expected": [
+        "mcp__grep_code"
+      ]
+    },
+    {
+      "id": "discovery-23-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__GREP_CODE",
+      "expected": [
+        "mcp__grep_code"
+      ]
+    },
+    {
+      "id": "discovery-23-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "grep code",
+      "expected": [
+        "mcp__grep_code"
+      ]
+    },
+    {
+      "id": "discovery-23-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "grep code",
+      "expected": [
+        "mcp__grep_code"
+      ]
+    },
+    {
+      "id": "discovery-23-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq23xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-24-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__index_project",
+      "expected": [
+        "mcp__index_project"
+      ]
+    },
+    {
+      "id": "discovery-24-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__INDEX_PROJECT",
+      "expected": [
+        "mcp__index_project"
+      ]
+    },
+    {
+      "id": "discovery-24-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "index project",
+      "expected": [
+        "mcp__index_project"
+      ]
+    },
+    {
+      "id": "discovery-24-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "index projeto",
+      "expected": [
+        "mcp__index_project"
+      ]
+    },
+    {
+      "id": "discovery-24-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq24xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-25-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__list_agent_runs",
+      "expected": [
+        "mcp__list_agent_runs"
+      ]
+    },
+    {
+      "id": "discovery-25-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__LIST_AGENT_RUNS",
+      "expected": [
+        "mcp__list_agent_runs"
+      ]
+    },
+    {
+      "id": "discovery-25-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "list agent runs",
+      "expected": [
+        "mcp__list_agent_runs"
+      ]
+    },
+    {
+      "id": "discovery-25-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "listar agent runs",
+      "expected": [
+        "mcp__list_agent_runs"
+      ]
+    },
+    {
+      "id": "discovery-25-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq25xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-26-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__list_agents",
+      "expected": [
+        "mcp__list_agents"
+      ]
+    },
+    {
+      "id": "discovery-26-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__LIST_AGENTS",
+      "expected": [
+        "mcp__list_agents"
+      ]
+    },
+    {
+      "id": "discovery-26-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "list agents",
+      "expected": [
+        "mcp__list_agents"
+      ]
+    },
+    {
+      "id": "discovery-26-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "listar agents",
+      "expected": [
+        "mcp__list_agents"
+      ]
+    },
+    {
+      "id": "discovery-26-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq26xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-27-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__list_directory",
+      "expected": [
+        "mcp__list_directory"
+      ]
+    },
+    {
+      "id": "discovery-27-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__LIST_DIRECTORY",
+      "expected": [
+        "mcp__list_directory"
+      ]
+    },
+    {
+      "id": "discovery-27-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "list directory",
+      "expected": [
+        "mcp__list_directory"
+      ]
+    },
+    {
+      "id": "discovery-27-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "listar directory",
+      "expected": [
+        "mcp__list_directory"
+      ]
+    },
+    {
+      "id": "discovery-27-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq27xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-28-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__list_models",
+      "expected": [
+        "mcp__list_models"
+      ]
+    },
+    {
+      "id": "discovery-28-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__LIST_MODELS",
+      "expected": [
+        "mcp__list_models"
+      ]
+    },
+    {
+      "id": "discovery-28-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "list models",
+      "expected": [
+        "mcp__list_models"
+      ]
+    },
+    {
+      "id": "discovery-28-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "listar models",
+      "expected": [
+        "mcp__list_models"
+      ]
+    },
+    {
+      "id": "discovery-28-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq28xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-29-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__prepare_edit",
+      "expected": [
+        "mcp__prepare_edit"
+      ]
+    },
+    {
+      "id": "discovery-29-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__PREPARE_EDIT",
+      "expected": [
+        "mcp__prepare_edit"
+      ]
+    },
+    {
+      "id": "discovery-29-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "prepare edit",
+      "expected": [
+        "mcp__prepare_edit"
+      ]
+    },
+    {
+      "id": "discovery-29-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "prepare edit",
+      "expected": [
+        "mcp__prepare_edit"
+      ]
+    },
+    {
+      "id": "discovery-29-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq29xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-30-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__rag_doc_outline",
+      "expected": [
+        "mcp__rag_doc_outline"
+      ]
+    },
+    {
+      "id": "discovery-30-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__RAG_DOC_OUTLINE",
+      "expected": [
+        "mcp__rag_doc_outline"
+      ]
+    },
+    {
+      "id": "discovery-30-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "rag doc outline",
+      "expected": [
+        "mcp__rag_doc_outline"
+      ]
+    },
+    {
+      "id": "discovery-30-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "rag doc outline",
+      "expected": [
+        "mcp__rag_doc_outline"
+      ]
+    },
+    {
+      "id": "discovery-30-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq30xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-31-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__rag_read_doc",
+      "expected": [
+        "mcp__rag_read_doc"
+      ]
+    },
+    {
+      "id": "discovery-31-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__RAG_READ_DOC",
+      "expected": [
+        "mcp__rag_read_doc"
+      ]
+    },
+    {
+      "id": "discovery-31-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "rag read doc",
+      "expected": [
+        "mcp__rag_read_doc"
+      ]
+    },
+    {
+      "id": "discovery-31-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "rag ler doc",
+      "expected": [
+        "mcp__rag_read_doc"
+      ]
+    },
+    {
+      "id": "discovery-31-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq31xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-32-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__rag_search_docs",
+      "expected": [
+        "mcp__rag_search_docs"
+      ]
+    },
+    {
+      "id": "discovery-32-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__RAG_SEARCH_DOCS",
+      "expected": [
+        "mcp__rag_search_docs"
+      ]
+    },
+    {
+      "id": "discovery-32-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "rag search docs",
+      "expected": [
+        "mcp__rag_search_docs"
+      ]
+    },
+    {
+      "id": "discovery-32-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "rag buscar docs",
+      "expected": [
+        "mcp__rag_search_docs"
+      ]
+    },
+    {
+      "id": "discovery-32-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq32xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-33-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__read_file",
+      "expected": [
+        "mcp__read_file"
+      ]
+    },
+    {
+      "id": "discovery-33-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__READ_FILE",
+      "expected": [
+        "mcp__read_file"
+      ]
+    },
+    {
+      "id": "discovery-33-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "read file",
+      "expected": [
+        "mcp__read_file"
+      ]
+    },
+    {
+      "id": "discovery-33-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "ler arquivo",
+      "expected": [
+        "mcp__read_file"
+      ]
+    },
+    {
+      "id": "discovery-33-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq33xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-34-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__save_memory",
+      "expected": [
+        "mcp__save_memory"
+      ]
+    },
+    {
+      "id": "discovery-34-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__SAVE_MEMORY",
+      "expected": [
+        "mcp__save_memory"
+      ]
+    },
+    {
+      "id": "discovery-34-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "save memory",
+      "expected": [
+        "mcp__save_memory"
+      ]
+    },
+    {
+      "id": "discovery-34-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "save memory",
+      "expected": [
+        "mcp__save_memory"
+      ]
+    },
+    {
+      "id": "discovery-34-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq34xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-35-exact",
+      "split": "tuning",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__search",
+      "expected": [
+        "mcp__search"
+      ]
+    },
+    {
+      "id": "discovery-35-case",
+      "split": "tuning",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__SEARCH",
+      "expected": [
+        "mcp__search"
+      ]
+    },
+    {
+      "id": "discovery-35-words",
+      "split": "tuning",
+      "class": "words",
+      "language": "en",
+      "query": "search",
+      "expected": [
+        "mcp__search"
+      ]
+    },
+    {
+      "id": "discovery-35-pt",
+      "split": "tuning",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "buscar",
+      "expected": [
+        "mcp__search"
+      ]
+    },
+    {
+      "id": "discovery-35-absent",
+      "split": "tuning",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq35xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-36-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__search_memory",
+      "expected": [
+        "mcp__search_memory"
+      ]
+    },
+    {
+      "id": "discovery-36-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__SEARCH_MEMORY",
+      "expected": [
+        "mcp__search_memory"
+      ]
+    },
+    {
+      "id": "discovery-36-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "search memory",
+      "expected": [
+        "mcp__search_memory"
+      ]
+    },
+    {
+      "id": "discovery-36-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "buscar memory",
+      "expected": [
+        "mcp__search_memory"
+      ]
+    },
+    {
+      "id": "discovery-36-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq36xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-37-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__semantic_neighbors",
+      "expected": [
+        "mcp__semantic_neighbors"
+      ]
+    },
+    {
+      "id": "discovery-37-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__SEMANTIC_NEIGHBORS",
+      "expected": [
+        "mcp__semantic_neighbors"
+      ]
+    },
+    {
+      "id": "discovery-37-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "semantic neighbors",
+      "expected": [
+        "mcp__semantic_neighbors"
+      ]
+    },
+    {
+      "id": "discovery-37-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "semantic neighbors",
+      "expected": [
+        "mcp__semantic_neighbors"
+      ]
+    },
+    {
+      "id": "discovery-37-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq37xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-38-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__start_agent_run",
+      "expected": [
+        "mcp__start_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-38-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__START_AGENT_RUN",
+      "expected": [
+        "mcp__start_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-38-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "start agent run",
+      "expected": [
+        "mcp__start_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-38-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "start agent run",
+      "expected": [
+        "mcp__start_agent_run"
+      ]
+    },
+    {
+      "id": "discovery-38-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq38xx",
+      "expected": []
+    },
+    {
+      "id": "discovery-39-exact",
+      "split": "acceptance",
+      "class": "exact",
+      "language": "en",
+      "query": "mcp__trace_usage",
+      "expected": [
+        "mcp__trace_usage"
+      ]
+    },
+    {
+      "id": "discovery-39-case",
+      "split": "acceptance",
+      "class": "case",
+      "language": "en",
+      "query": "MCP__TRACE_USAGE",
+      "expected": [
+        "mcp__trace_usage"
+      ]
+    },
+    {
+      "id": "discovery-39-words",
+      "split": "acceptance",
+      "class": "words",
+      "language": "en",
+      "query": "trace usage",
+      "expected": [
+        "mcp__trace_usage"
+      ]
+    },
+    {
+      "id": "discovery-39-pt",
+      "split": "acceptance",
+      "class": "pt",
+      "language": "pt-BR",
+      "query": "trace usage",
+      "expected": [
+        "mcp__trace_usage"
+      ]
+    },
+    {
+      "id": "discovery-39-absent",
+      "split": "acceptance",
+      "class": "absent",
+      "language": "en",
+      "query": "zzunavailableq39xx",
+      "expected": []
+    }
+  ]
+}

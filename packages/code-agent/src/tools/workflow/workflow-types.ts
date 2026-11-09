@@ -39,6 +39,8 @@ export interface WorkflowStepInput {
   prompt: string;
   profile?: string;
   depends_on?: string[];
+  accept_partial?: string[];
+  acceptance?: string[];
   files?: string[];
 }
 
@@ -48,12 +50,17 @@ export interface WorkflowStepState {
   prompt: string;
   profileId: MicroAgentProfileId;
   dependsOn: string[];
+  acceptPartial?: string[];
+  acceptance?: string[];
+  result?: import('@mcp/agent-runtime-contracts').AgentWorkResult;
+  integration?: { chatId: string; state: 'pending' | 'integrated' };
   files?: string[];
   /** 1-based wave index assigned by planWaves. */
   wave: number;
   status: WorkflowStepStatus;
   /** agents_group id of the wave dispatch — links UI lanes + resume registry. */
   groupId?: string;
+  childChatId?: string;
   summary?: string;
   error?: string;
   effectOutcome?: 'unknown';
@@ -62,6 +69,8 @@ export interface WorkflowStepState {
 }
 
 export interface WorkflowRecord {
+  planRevision?: number;
+  planHistory?: Array<{ revision: number; at: number; stepIds: string[] }>;
   /** Missing on historical checkpoints means the legacy executor. */
   runtimeGeneration?: 'legacy_ts';
   id: string;
@@ -96,6 +105,9 @@ export function validateWorkflowSteps(steps: readonly WorkflowStepInput[]): Work
   }
   const ids = new Set<string>();
   for (const step of steps) {
+    for (const dep of step.accept_partial ?? []) {
+      if (!(step.depends_on ?? []).includes(dep)) issues.push({ stepId: step.id, message: `accept_partial '${dep}' must be a dependency` });
+    }
     if (!STEP_ID_RE.test(step.id ?? '')) {
       issues.push({ stepId: step.id, message: `invalid step id '${step.id ?? ''}' — use 1-40 chars of [a-zA-Z0-9_-].` });
       continue;
@@ -197,6 +209,8 @@ export function countWorkflowOutcomes(record: WorkflowRecord): {
 export function workflowStatusFromSteps(record: WorkflowRecord): WorkflowStatus {
   const counts = countWorkflowOutcomes(record);
   if (counts.failed > 0 || counts.skipped > 0) return 'failed';
+  if (record.steps.some(step => step.integration?.state === 'pending')) return 'partial';
   if (counts.partial > 0) return 'partial';
+  if (counts.pending > 0) return 'partial';
   return 'completed';
 }

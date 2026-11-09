@@ -15,6 +15,7 @@ export const RECOVERY_KINDS = [
   'provider-401-refresh',
   'provider-transient-retry',
   'provider-unknown-retry',
+  'provider-transport-retry',
   'provider-thinking-timeout',
   'provider-fallback',
   'compact-failure',
@@ -36,10 +37,11 @@ export const RECOVERY_CAP_DEFAULTS: Record<RecoveryKind, number> = {
   // 5xx these usually repeat identically, so a small cap fails fast (~4
   // attempts / <1min) with the real message instead of looping ~5min.
   'provider-unknown-retry': 4,
-  // Thinking-only watchdog trips (reasoning ran past the budget without
-  // producing text/tools). Own low cap so legit-but-slow reasoning gets a few
-  // budget-doubling retries (see `thinkingOnlyBudgetMs`) without sharing — and
-  // prematurely tripping — the `provider-unknown-retry` bucket.
+  // Transport failures have a consecutive bound, reset only after a committed
+  // usable response. They ALSO share the existing transient run budget (30).
+  'provider-transport-retry': 4,
+  // Legacy provider/plugin errors may still carry THINKING_TIMEOUT. The host
+  // no longer imposes a wall-clock deadline on an active reasoning stream.
   'provider-thinking-timeout': 2,
   'provider-fallback': 5,
   'compact-failure': 3,

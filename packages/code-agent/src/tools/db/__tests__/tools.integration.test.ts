@@ -108,7 +108,7 @@ describe('db_query', () => {
         outputSize: 2,
         inputSizeExact: false,
         unit: 'rows',
-        recoverable: true,
+        recoverable: false,
       }),
     ]);
   });

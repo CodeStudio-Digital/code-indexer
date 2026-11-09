@@ -28,7 +28,7 @@ describe('killProcessTree on Windows', () => {
     Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
   });
 
-  it('returns without synchronously waiting for taskkill', async () => {
+  it('returns asynchronously while keeping taskkill referenced until completion', async () => {
     const child = new FakeChild();
     spawnMock.mockReturnValue(child as unknown as ChildProcess);
     const { killProcessTree } = await import('../process-tree.js');
@@ -40,7 +40,7 @@ describe('killProcessTree on Windows', () => {
       ['/PID', '41001', '/T', '/F'],
       { stdio: 'ignore', windowsHide: true },
     );
-    expect(child.unref).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
     child.emit('exit', 0, null);
     await completion;
   });

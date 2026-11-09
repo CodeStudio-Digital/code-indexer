@@ -249,7 +249,6 @@ export class SessionWorkbenchQueryService {
       summary: {
         sessionId: session.id,
         revision: projected.resourceRevisions.summary,
-        goal: projected.goal?.text ?? null,
         tasks: (projected.tasks?.tasks ?? []).map((task) => ({
           id: task.id,
           title: task.title,

@@ -27,6 +27,21 @@ async function fixture() {
   return { source, ctx };
 }
 describe('Ultra implementation isolation', () => {
+  it('integrates an LF source even when autocrlf checks the child out with CRLF', async () => {
+    const { source, ctx } = await fixture();
+    execFileSync('git', ['config', 'core.autocrlf', 'true'], { cwd: source, windowsHide: true });
+    await writeFile(join(source, 'lf.txt'), 'original\n');
+    execFileSync('git', ['add', 'lf.txt'], { cwd: source, windowsHide: true, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'LF source'], { cwd: source, windowsHide: true, stdio: 'pipe' });
+    const workspace = await prepareUltraWorkspace(ctx, 'crlf-child');
+    expect(await readFile(join(source, 'lf.txt'), 'utf8')).toBe('original\n');
+    expect(await readFile(join(workspace.path, 'lf.txt'), 'utf8')).toBe('original\r\n');
+    await writeFile(join(workspace.path, 'lf.txt'), 'updated\r\n');
+    const captured = await captureUltraWorkspace(workspace);
+    await integrateUltraWorkspace(ctx, captured);
+    expect(await readFile(join(source, 'lf.txt'), 'utf8')).toBe('updated\r\n');
+    await archiveIntegratedWorkspace(captured);
+  }, 60000);
   it('copies current work, confines native writes, integrates once and preserves the source index', async () => {
     const { source, ctx } = await fixture();
     const workspace = await prepareUltraWorkspace(ctx, 'child');

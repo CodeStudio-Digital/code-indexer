@@ -1,10 +1,7 @@
-/**
- * Read-only Test Plan view (v1). Renders the parsed sections with each
- * scenario annotated by its latest verdict (cross-referenced with the
- * most recent run's results). The future inline editor swaps this
- * component out — the hook (`useTestPlan`) already exposes `save`.
- */
+/** Plan criteria and verdicts from the same persisted QA run. */
 import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { Markdown } from '../../../chat/messages/Markdown.js';
 import {
   AnnotatedSection,
   AnnotatedScenario,
@@ -17,42 +14,42 @@ import { useTestPlan } from './useTestPlan.js';
 
 interface Props {
   sessionId: string;
+  serviceId?: string;
 }
 
-export function TestPlanView({ sessionId }: Props) {
-  const { loading, error, exists, sections, refresh } = useTestPlan(sessionId);
+export function TestPlanView({ sessionId, serviceId }: Props) {
+  const { t } = useTranslation('agents');
+  const { loading, error, data, refresh } = useTestPlan(sessionId, serviceId);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-        Loading test plan…
+        {t('qa.planLoading')}
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="p-4 text-sm text-red-600">
-        Failed: {error}
+      <div role="alert" className="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
+        <p className="font-medium text-destructive">{t('qa.planError')}</p>
+        <p className="mt-1 break-words text-xs text-muted-foreground">{error}</p>
         <button onClick={() => void refresh()} className="ml-2 underline">
-          Retry
+          {t('qa.planRetry')}
         </button>
       </div>
     );
   }
 
-  if (!exists || sections.length === 0) {
+  if (!data?.plan.exists) {
     return (
       <div className="flex flex-col items-center justify-center px-6 py-8 text-center">
-        <h3 className="text-sm font-semibold">Test plan</h3>
+        <h3 className="text-sm font-semibold">{t('qa.planEmpty')}</h3>
         <p className="text-sm text-muted-foreground mt-2 max-w-md">
-          The QA agent persists the plan at{' '}
-          <code className="bg-muted px-1 rounded text-xs">tests/e2e/TEST_PLAN.md</code>{' '}
-          inside the sandbox. Spawn the QA agent — it will draft the plan and submit it
-          for your approval.
+          {t('qa.planEmptyHint')}
         </p>
         <button onClick={() => void refresh()} className="text-xs underline mt-3">
-          Refresh
+          {t('qa.planRefresh')}
         </button>
       </div>
     );
@@ -60,7 +57,15 @@ export function TestPlanView({ sessionId }: Props) {
 
   return (
     <div className="overflow-auto p-4 space-y-5">
-      {sections.map((s) => (
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-muted-foreground">{t(data.plan.source === 'preview' ? 'qa.planPreview' : 'qa.planWorkspace')}</p>
+          {data.plan.target_url && <p className="mt-1 break-all text-xs text-muted-foreground">{data.plan.target_url}</p>}
+        </div>
+        <button type="button" onClick={() => void refresh()} className="shrink-0 text-xs underline">{t('qa.planRefresh')}</button>
+      </div>
+      {data.resultsUnavailable && <p role="status" className="text-xs text-muted-foreground">{t('qa.planResultsUnavailable')}</p>}
+      {data.sections.length === 0 ? <Markdown text={data.plan.content} /> : data.sections.map((s) => (
         <PlanSection key={s.heading} section={s} />
       ))}
     </div>

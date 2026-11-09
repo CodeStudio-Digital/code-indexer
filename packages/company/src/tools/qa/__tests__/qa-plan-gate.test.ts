@@ -14,6 +14,9 @@ const CONFIG = JSON.stringify({
 });
 
 describe('roleHasQaPlaywrightSkill', () => {
+  it('applies the same approval gate to preview QA', () => {
+    expect(roleHasQaPlaywrightSkill(JSON.stringify({ role_assignments: [{ role: 'qa', skills: ['qa-preview'] }] }), 'qa')).toBe(true);
+  });
   it('true only for the role carrying qa-playwright', () => {
     expect(roleHasQaPlaywrightSkill(CONFIG, 'qa')).toBe(true);
     expect(roleHasQaPlaywrightSkill(CONFIG, 'frontend')).toBe(false);

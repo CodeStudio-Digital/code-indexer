@@ -3,6 +3,7 @@
  * client and the `db_*` agent tools. One implementation, two consumers.
  */
 export * from './types.js';
+export { DbBatchError, type BatchOutcome } from './batch-outcome.js';
 export { createDriver } from './factory.js';
 export { DbConnectionManager, sharedDbConnectionManager, type AcquireOptions, type ConnMeta } from './manager.js';
 export { createPostgresDriver } from './postgres.js';

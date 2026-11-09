@@ -57,6 +57,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
     opts: {
       maxFiles?: number;
       allowEmptyWipe?: boolean;
+      forceReparse?: boolean;
       onProgress?: (p: StructuralProgressFrame) => void;
       onChanges?: StructuralChangeHandler;
     },
@@ -70,6 +71,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
           projectId,
           maxFiles: opts.maxFiles,
           allowEmptyWipe: opts.allowEmptyWipe,
+          forceReparse: opts.forceReparse,
           reportChanges: Boolean(opts.onChanges),
         },
         RUN_TIMEOUT_MS,

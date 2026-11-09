@@ -32,7 +32,7 @@ export interface DrivePlan {
   created_at: string;
 }
 
-export interface DriveTaskItem {
+interface DriveTaskItem {
   id: string;
   title: string;
   status?: string;

@@ -102,6 +102,8 @@ export async function buildMasterPromptInputs(
     : null;
 
   const companyContext: CompanyContext = {
+    workspaceMutationGate: ctx.workspaceMutationGate,
+    sessionMessenger: ctx.sessionMessenger,
     orchestrator: orchestratorRef as never,
     companySessionId: ctx.companySessionId,
     runtimeKind: ctx.runtimeKind,

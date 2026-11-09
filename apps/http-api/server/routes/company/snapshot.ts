@@ -34,17 +34,19 @@ async function listCoderSessionIdsForCompany(
   companySessionId: string,
 ): Promise<SessionId[]> {
   await sessionStore.refresh();
-  return sessionStore.catalog
-    .list()
+  const entries = sessionStore.catalog.list();
+  const companyIds = new Set(entries.filter((entry) => entry.session.kind === 'company' || entry.session.kind === 'app_studio').map((entry) => String(entry.session.id)));
+  return entries
     .filter((entry) => {
       if (entry.session.kind !== 'coder') return false;
       const metadata = entry.session.metadata;
-      return (
-        entry.session.parent_session_id === companySessionId ||
-        metadata.company_session_id === companySessionId ||
-        metadata.companySessionId === companySessionId ||
-        metadata.group_id === companySessionId
-      );
+      // The current execution owns its coder sessions. A legacy root group_id
+      // is not sufficient: it can point at a company containing sibling runs.
+      const parent = entry.session.parent_session_id;
+      const owner = parent && companyIds.has(parent)
+        ? parent
+        : metadata.company_session_id ?? metadata.companySessionId;
+      return owner === companySessionId;
     })
     .map((entry) => entry.session.id);
 }
@@ -60,6 +62,13 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
     const p = db.getProject(s.project_id);
     return p?.root_path ?? null;
   });
+
+  async function ownsBaseline(companySessionId: string, baselineId: string): Promise<boolean> {
+    const baseline = await snapshotStore.getBaselineById(baselineId);
+    if (!baseline || baseline.session_kind !== 'coder') return false;
+    const members = await listCoderSessionIdsForCompany(sessionStore, companySessionId);
+    return members.some((id) => id === baseline.session_id);
+  }
 
   app.get('/api/company/sessions/:id/snapshot', async (c) => {
     const companySessionId = parseCompanySessionIdParam(c);
@@ -96,8 +105,9 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:id/snapshot/file/:baselineId/diff', async (c) => {
-    parseCompanySessionIdParam(c);
+    const companySessionId = parseCompanySessionIdParam(c);
     const baselineId = parseSessionRecordIdParam(c, 'baselineId');
+    if (!await ownsBaseline(companySessionId, baselineId)) return notFound(c, 'baseline not found in this session');
     const context = Number(c.req.query('context') ?? 3);
     const contextBeforeRaw = c.req.query('contextBefore');
     const contextAfterRaw = c.req.query('contextAfter');
@@ -111,8 +121,9 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/snapshot/file/:baselineId/accept-hunk', async (c) => {
-    parseCompanySessionIdParam(c);
+    const companySessionId = parseCompanySessionIdParam(c);
     const baselineId = parseSessionRecordIdParam(c, 'baselineId');
+    if (!await ownsBaseline(companySessionId, baselineId)) return notFound(c, 'baseline not found in this session');
     const body = await parseJsonBody<{ fingerprint: string }>(c);
     if (!body.fingerprint) return c.json({ error: 'fingerprint required' }, 400);
     const r = await service.acceptHunk(baselineId, body.fingerprint);
@@ -120,8 +131,9 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/snapshot/file/:baselineId/revert-hunk', async (c) => {
-    parseCompanySessionIdParam(c);
+    const companySessionId = parseCompanySessionIdParam(c);
     const baselineId = parseSessionRecordIdParam(c, 'baselineId');
+    if (!await ownsBaseline(companySessionId, baselineId)) return notFound(c, 'baseline not found in this session');
     const body = await parseJsonBody<{ fingerprint: string }>(c);
     if (!body.fingerprint) return c.json({ error: 'fingerprint required' }, 400);
     const r = await service.revertHunk(baselineId, body.fingerprint);
@@ -129,15 +141,17 @@ export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/snapshot/file/:baselineId/accept', async (c) => {
-    parseCompanySessionIdParam(c);
+    const companySessionId = parseCompanySessionIdParam(c);
     const baselineId = parseSessionRecordIdParam(c, 'baselineId');
+    if (!await ownsBaseline(companySessionId, baselineId)) return notFound(c, 'baseline not found in this session');
     const r = await service.acceptFile(baselineId);
     return c.json(r);
   });
 
   app.post('/api/company/sessions/:id/snapshot/file/:baselineId/revert', async (c) => {
-    parseCompanySessionIdParam(c);
+    const companySessionId = parseCompanySessionIdParam(c);
     const baselineId = parseSessionRecordIdParam(c, 'baselineId');
+    if (!await ownsBaseline(companySessionId, baselineId)) return notFound(c, 'baseline not found in this session');
     const r = await service.revertFile(baselineId);
     return c.json(r);
   });

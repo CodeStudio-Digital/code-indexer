@@ -379,16 +379,21 @@ describe('AgentMemoryService active-generation queries', () => {
       generationId: namespace === 'memory:user' ? 29 : 27,
     }));
     const query = embedding({ embedQueryForNamespace });
-    const search = vi.fn(async (_vector: number[], _options: VectorSearchOptions) => []);
+    const projectRow = memoryRow(7);
+    const userRow = { ...memoryRow(8), project_id: 0, scope: 'user' as const };
+    const search = vi.fn(async (_vector: number[], options: VectorSearchOptions) => [{
+      id: 'memory', score: 0.9, metadata: { ref_id: options.namespace === 'memory:user' ? '8' : '7' },
+    }]);
     const db = {
       searchAgentMemoryFts: vi.fn(() => []),
       getProject: vi.fn(() => ({ id: 7, name: 'project-seven' })),
+      getAgentMemoriesByIds: vi.fn((ids: readonly number[]) => [projectRow, userRow].filter(row => ids.includes(row.id))),
     } as unknown as CodeIndexDB;
     const vectors = { search } as unknown as VectorStore;
     const service = new AgentMemoryService(db, desired, vectors, query);
 
-    await service.search('project', 7, 'where is it', 5);
-    await service.search('user', 0, 'my preference', 5);
+    expect(await service.search('project', 7, 'where is it', 5)).toMatchObject([{ id: 7, scope: 'project' }]);
+    expect(await service.search('user', 0, 'my preference', 5)).toMatchObject([{ id: 8, scope: 'user' }]);
 
     expect(embedQueryForNamespace.mock.calls.map(([namespace]) => namespace)).toEqual([
       'memory:project:p7',

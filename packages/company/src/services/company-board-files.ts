@@ -1,7 +1,7 @@
 import { toBoardEntry, parseBoardItemFile } from './company-session-file-codecs.js';
 import { nonNegativeSafeInteger } from './company-session-file-values.js';
 import type { ReadCompanyBoardFileOptions } from './company-session-file-types.js';
-import { asAgentRunId, type AgentRunId, type EntityRecord } from '@mcp/session-storage';
+import { asAgentRunId, assertUuid, type AgentRunId, type EntityRecord } from '@mcp/session-storage';
 import { readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -15,12 +15,20 @@ export class CompanyBoardFiles {
 
   private nextBoardSequence: number | null = null;
 
+  getBoardEntrySync(id: string): BoardEntry | null {
+    assertUuid(id, 'Company board item id');
+    const directory = this.context.ensureCompanyEntityDirectorySync('board-items');
+    try { return parseBoardItemFile(this.context.companySessionId, join(directory, `${id}.json`)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+  }
+
   createBoardEntry(input: {
     authorRole: string;
     agentRunId: AgentRunId | string | null;
     kind: BoardKind;
     content: string;
     mentions?: readonly string[];
+    attachments?: BoardEntry['attachments'];
   }): BoardEntry {
     const normalizedAgentRunId =
       input.agentRunId == null
@@ -53,6 +61,7 @@ export class CompanyBoardFiles {
         agent_run_id: normalizedAgentRunId,
         kind: input.kind,
         content: input.content,
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         mentions: [...new Set(input.mentions ?? [])],
         archive_id: null,
       },

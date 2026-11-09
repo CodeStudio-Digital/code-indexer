@@ -62,8 +62,11 @@ export async function deleteMcpServer(id: string): Promise<void> {
 }
 
 export async function testMcpServer(id: string): Promise<McpServerTestResult> {
-  const r = await fetch(`/api/admin/mcp-servers/${id}/test`, { method: 'POST' });
-  return (await r.json()) as McpServerTestResult;
+  // Connection (30s) + catalogue (30s) + bounded transport cleanup.
+  const r = await fetch(`/api/admin/mcp-servers/${id}/test`, { method: 'POST', signal: AbortSignal.timeout(75_000) });
+  const result = await r.json() as McpServerTestResult;
+  if (!r.ok) throw new Error(result.error ?? `MCP connection failed (${r.status})`);
+  return result;
 }
 
 async function fetchServerTools(id: string): Promise<McpServerToolInfo[]> {
@@ -80,6 +83,8 @@ export interface McpOAuthStatus {
   status: 'registered' | 'not_registered';
   /** True once consent completed and tokens are stored. Polled by the dialog. */
   connected: boolean;
+  authenticated: boolean;
+  attempt?: { state?: string; status: 'pending' | 'exchanging' | 'authenticated' | 'error' | 'expired'; error?: string };
   /** Access-token expiry (epoch ms), or null if none/unknown. */
   expires_at: number | null;
   /** When the tokens were last written (epoch ms), or null if none. */
@@ -93,8 +98,9 @@ export interface McpOAuthStatus {
   } | null;
 }
 
-export async function fetchOAuthStatus(serverId: string): Promise<McpOAuthStatus> {
-  const r = await fetch(`/api/admin/mcp-servers/${serverId}/oauth/status`);
+export async function fetchOAuthStatus(serverId: string, state?: string): Promise<McpOAuthStatus> {
+  const r = await fetch(`/api/admin/mcp-servers/${serverId}/oauth/status${state ? `?state=${encodeURIComponent(state)}` : ''}`, { signal: AbortSignal.timeout(10_000) });
+  if (!r.ok) throw new Error(`OAuth status failed (${r.status})`);
   return (await r.json()) as McpOAuthStatus;
 }
 
@@ -153,6 +159,7 @@ export async function registerOAuthClient(
     | { mode: 'dcr'; resource_url: string; client_name?: string; scopes?: string[] }
     | {
         mode: 'manual';
+        resource_url?: string;
         as: Record<string, unknown>;
         client_id: string;
         client_secret?: string;
@@ -168,6 +175,7 @@ export async function registerOAuthClient(
         }
       : {
           as: input.as,
+          resource_url: input.resource_url,
           client_id: input.client_id,
           client_secret: input.client_secret,
           scopes: input.scopes,
@@ -207,5 +215,10 @@ export async function startOAuthAuthorize(
 }
 
 export async function revokeMcpOAuth(serverId: string): Promise<void> {
-  await fetch(`/api/admin/mcp-servers/${serverId}/oauth`, { method: 'DELETE' });
+  const r = await fetch(`/api/admin/mcp-servers/${serverId}/oauth`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`OAuth disconnect failed (${r.status})`);
+}
+
+export async function cancelOAuthAuthorize(serverId: string, state: string): Promise<void> {
+  await fetch(`/api/admin/mcp-servers/${serverId}/oauth/authorize?state=${encodeURIComponent(state)}`, { method: 'DELETE' });
 }

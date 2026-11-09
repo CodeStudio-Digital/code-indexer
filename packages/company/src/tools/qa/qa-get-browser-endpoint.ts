@@ -45,14 +45,13 @@ const PARAMETERS: JsonSchema = {
  * `formatBrowserEndpointReply` so the agent sees the URLs it must
  * navigate to alongside the wsEndpoint.
  */
-export function collectPlaywrightBaseUrls(
+export async function collectPlaywrightBaseUrls(
   store: CompanySessionEnvStore | null,
   sessionId: string | null,
-): Array<{ key: string; value: string }> {
+): Promise<Array<{ key: string; value: string }>> {
   if (!store || sessionId == null) return [];
   try {
-    return store
-      .list(sessionId)
+    return (await store.listAsync(sessionId))
       .filter((row) => row.key === 'PLAYWRIGHT_BASE_URL' || row.key.startsWith('PLAYWRIGHT_BASE_URL_'))
       .map((row) => ({ key: row.key, value: row.value }))
       .sort((a, b) => a.key.localeCompare(b.key));
@@ -171,7 +170,7 @@ export function qaGetBrowserEndpoint(
     handler: async () => {
       try {
         const sessionId = orchestrator.companySessionId;
-        const previewUrls = collectPlaywrightBaseUrls(getQaEndpointEnvStore(), sessionId);
+        const previewUrls = await collectPlaywrightBaseUrls(getQaEndpointEnvStore(), sessionId);
         const svc = tryGetChromeService();
         if (!svc) {
           // B7 — worker path: the singleton doesn't cross worker threads,

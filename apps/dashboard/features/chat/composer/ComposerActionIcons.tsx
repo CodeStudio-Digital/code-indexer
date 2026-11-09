@@ -259,7 +259,7 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
                 toolPermissionMode === 'ask'
                   ? 'toda ferramenta de escrita/execução/admin pausa e pede sua aprovação.'
                   : toolPermissionMode === 'unrestricted'
-                    ? 'nunca pergunta — o agente executa tudo livremente.'
+                    ? 'novas ações executam sem pedir aprovação; repetir uma ação incerta e escrever em banco exigem autorização específica.'
                     : 'edições de arquivos rodam livres; shell, git e ações administrativas pedem aprovação.',
             })}{' '}
             {t('toolbar.permissionModeCycle', { defaultValue: 'Clique para alternar.' })}

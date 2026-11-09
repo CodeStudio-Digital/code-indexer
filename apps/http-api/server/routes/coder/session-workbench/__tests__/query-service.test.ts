@@ -5,10 +5,7 @@ import {
   FsSessionWorkbenchBootstrapProjectionReader,
   type FsSessionWorkbenchBootstrapSource,
 } from '@mcp/session-storage/fs-store/session-workbench-bootstrap-projection.js';
-import type {
-  FsSessionGoal,
-  FsTasksRow,
-} from '@mcp/session-storage/fs-store/operational-types.js';
+import type { FsTasksRow } from '@mcp/session-storage/fs-store/operational-types.js';
 import {
   FsSessionWorkbenchProjection,
   FsSessionWorkbenchProjectionError,
@@ -75,7 +72,6 @@ function catalogEntry(index: number, overrides: {
       status: overrides.status ?? 'idle',
       updated_at: timestamp,
       archived_at: overrides.archived ? timestamp : null,
-      goal: null,
       todos: [],
       permissions: {},
       tools: {},
@@ -213,17 +209,6 @@ describe('SessionWorkbenchQueryService', () => {
     const session = hydratedSession(entry);
     const bootstrapSource: FsSessionWorkbenchBootstrapSource = {
       getSession: vi.fn(async () => session),
-      getSessionGoal: vi.fn(async (): Promise<FsSessionGoal> => ({
-        id: 'goal-1',
-        text: 'Refactor the workbench',
-        status: 'in_progress',
-        budget_tokens: null,
-        completion_note: null,
-        created_at: '2026-01-01T00:00:00.000Z',
-        updated_at: '2026-01-01T00:00:02.000Z',
-        revision: 2,
-        mutation_seq: 2,
-      })),
       getTasksRow: vi.fn(async (): Promise<FsTasksRow> => ({
         id: 'tasks-1',
         seq: 1,
@@ -274,9 +259,9 @@ describe('SessionWorkbenchQueryService', () => {
 
     expect(first).toEqual(second);
     expect(bootstrapSource.getSession).toHaveBeenCalledTimes(1);
-    expect(bootstrapSource.getSessionGoal).toHaveBeenCalledTimes(1);
     expect(bootstrapSource.getTasksRow).toHaveBeenCalledTimes(1);
     expect(bootstrapSource.countConversationChapters).toHaveBeenCalledTimes(1);
+    expect(first.summary).not.toHaveProperty('goal');
     expect(first.summary.tasks).toEqual([
       expect.objectContaining({ id: 'task-1', status: 'in_progress' }),
     ]);
@@ -375,7 +360,6 @@ describe('Session Workbench routes', () => {
       summary: {
         sessionId: id,
         revision: 17,
-        goal: null,
         tasks: [],
         processes: { availability: 'pending' as const, reason: 'execution_resource_not_loaded' as const },
       },

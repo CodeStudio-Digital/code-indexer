@@ -49,6 +49,7 @@ export interface BoardEntryEvent {
   agent_run_id: string | null;
   kind: BoardEntry['kind'] | string;
   content: string;
+  attachments?: BoardEntry['attachments'];
   mentions: string[];
   created_at: string;
 }

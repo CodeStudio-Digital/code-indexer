@@ -22,6 +22,8 @@ export interface CreateAgentMemoryData {
   sourceSnapshotId?: number | null;
   importance?: number;
   referencedFiles?: string[];
+  /** Internal import/edit path: retain historical staleness baselines. */
+  referencedFileSnapshots?: ReferencedFileSnapshot[];
   /** Sync intent; ignored (forced 0) for local scope. */
   sync?: boolean;
 }
@@ -65,7 +67,7 @@ export interface AgentMemoryStats {
   liveUser: number;
   /** Telemetry event counts by type (remember/recall/forget/selector/…). */
   events: Record<string, number>;
-  /** Recall events that injected ≥1 memory — the "actually used" signal. */
+  /** Proactive retrievals returning ≥1 candidate, not proof of injection/use. */
   recallHits: number;
   /** Recall events that returned nothing (cold/irrelevant store). */
   recallEmpty: number;

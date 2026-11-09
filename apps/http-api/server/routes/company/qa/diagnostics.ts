@@ -98,8 +98,8 @@ export function mountQaDiagnosticsRoute(app: Hono, deps: ServerDeps): void {
 
 async function readReporterDrift(sessionId: string): Promise<ReporterDrift> {
   const out: ReporterDrift = {
-    reporter_template_match: true,
-    global_setup_match: true,
+    reporter_template_match: false,
+    global_setup_match: false,
     config_missing: [],
     config_recommendations: [],
     config_present: false,

@@ -49,8 +49,21 @@ export async function prepareUltraWorkspace(ctx: ToolContext, spawnId: string): 
   await safeWorkspacePath(source, '.mcp-indexer/worktrees');
   await mkdir(managed, { recursive: true });
   const path = join(managed, `ultra-${randomUUID()}`);
-  const patch = await git(source, ['diff', '--binary', 'HEAD', '--'], ctx.signal);
+  const hashAlgorithm = (await git(source, ['rev-parse', '--show-object-format'], ctx.signal)).trim();
+  const tracked = (await git(source, ['ls-files', '--cached', '-z'], ctx.signal)).split('\0').filter(Boolean);
   const untracked = (await git(source, ['ls-files', '--others', '--exclude-standard', '-z'], ctx.signal)).split('\0').filter(Boolean);
+  // Fence against bytes in the ORIGINAL checkout before capturing the patch.
+  // Git can convert LF/CRLF or apply checkout filters in the child; hashing that
+  // child would falsely report a conflict against an unchanged source on Windows.
+  const hashes: Record<string, string> = {};
+  for (const file of new Set([...tracked, ...untracked])) {
+    if (file.startsWith('.mcp-indexer/')) continue;
+    const bytes = await readFile(await safeWorkspacePath(source, file)).catch(error => {
+      if (error.code === 'ENOENT') return null; throw error;
+    });
+    if (bytes !== null) hashes[file] = gitBlobHash(bytes, hashAlgorithm);
+  }
+  const patch = await git(source, ['diff', '--binary', 'HEAD', '--'], ctx.signal);
   await git(source, ['worktree', 'add', '--detach', '--', path, 'HEAD'], ctx.signal);
   try {
     if (patch.trim()) await git(path, ['apply', '--binary', '-'], ctx.signal, patch);
@@ -63,14 +76,8 @@ export async function prepareUltraWorkspace(ctx: ToolContext, spawnId: string): 
     }
     await git(path, ['add', '--all', '--', '.'], ctx.signal);
     const baseTree = (await git(path, ['write-tree'], ctx.signal)).trim();
-    const hashes: Record<string, string> = {};
-    for (const entry of (await git(path, ['ls-files', '--stage', '-z'], ctx.signal)).split('\0')) {
-      const match = /^\d+ ([a-f0-9]+) 0\t([\s\S]+)$/.exec(entry);
-      if (match) hashes[match[2]] = gitBlobHash(await readFile(await safeWorkspacePath(path, match[2])),
-        match[1].length === 64 ? 'sha256' : 'sha1');
-    }
     return { actor: childChatId(ctx.sessionId, spawnId), source, path, baseTree, hashes,
-      hashAlgorithm: (await git(path, ['rev-parse', '--show-object-format'], ctx.signal)).trim(), files: [], diff: '', integrated: false };
+      hashAlgorithm, files: [], diff: '', integrated: false };
   } catch (error) {
     // Failed preparation never produced agent changes; removal stays under the verified managed root.
     if (inside(managed, path)) await git(source, ['worktree', 'remove', '--force', '--', path]).catch(() => undefined);

@@ -24,6 +24,7 @@ export function stashMaxBytes(): number {
 }
 
 export interface CodeExecStash {
+  maxBytes?(): number;
   get(key: string): unknown;
   set(key: string, value: unknown): void;
   delete(key: string): boolean;
@@ -44,6 +45,7 @@ export function createCodeExecStash(maxBytes: number = stashMaxBytes()): CodeExe
       .join(', ') || '(empty)';
 
   return {
+    maxBytes: () => maxBytes,
     get(key) {
       const raw = store.get(String(key));
       return raw === undefined ? undefined : (JSON.parse(raw) as unknown);
@@ -65,8 +67,9 @@ export function createCodeExecStash(maxBytes: number = stashMaxBytes()): CodeExe
         // JSON.stringify(function/symbol) → undefined.
         throw new Error(`stash.set: value for "${k}" is not JSON-serializable (functions/symbols cannot be stashed)`);
       }
-      const prevLen = store.get(k)?.length ?? 0;
-      const next = used - prevLen + raw.length;
+      const previous = store.get(k);
+      const prevLen = previous === undefined ? 0 : Buffer.byteLength(previous, 'utf8') + Buffer.byteLength(k, 'utf8');
+      const next = used - prevLen + Buffer.byteLength(raw, 'utf8') + Buffer.byteLength(k, 'utf8');
       if (next > maxBytes) {
         throw new Error(
           `stash.set: cap ${maxBytes} bytes exceeded (would use ${next}; largest keys: ${sizeSummary()}). ` +
@@ -80,7 +83,7 @@ export function createCodeExecStash(maxBytes: number = stashMaxBytes()): CodeExe
       const k = String(key);
       const raw = store.get(k);
       if (raw === undefined) return false;
-      used -= raw.length;
+      used -= Buffer.byteLength(raw, 'utf8') + Buffer.byteLength(k, 'utf8');
       store.delete(k);
       return true;
     },

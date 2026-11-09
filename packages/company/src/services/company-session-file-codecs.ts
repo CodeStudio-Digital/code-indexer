@@ -60,6 +60,7 @@ export function toBoardEntry(
       rawAgentRunId == null ? null : asAgentRunId(rawAgentRunId),
     kind: boardKind(data.kind),
     content: stringValue(data.content),
+    ...(Array.isArray(data.attachments) ? { attachments: data.attachments as NonNullable<BoardEntry['attachments']> } : {}),
     mentions: stringArray(data.mentions),
     created_at: record.createdAt,
     archive_id:
@@ -104,6 +105,9 @@ export function toInboxMessage(
       stringValue(data.from_agent_run_id),
     ),
     from_role: stringValue(data.from_role),
+      from_session_id: nullableString(data.from_session_id) ?? companySessionId,
+      to_session_id: companySessionId,
+      origin: data.origin === 'operator' ? 'operator' : 'agent',
     to_role: nullableString(data.to_role),
     to_agent_run_id:
       nullableString(data.to_agent_run_id) == null

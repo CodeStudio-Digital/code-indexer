@@ -234,8 +234,8 @@
   "mcpServer.transportHttp": "Streamable HTTP",
   "mcpServer.command": "Command",
   "mcpServer.commandPlaceholder": "npx",
-  "mcpServer.args": "Arguments (space-separated)",
-  "mcpServer.argsPlaceholder": "-y @modelcontextprotocol/server-github",
+  "mcpServer.args": "Arguments (JSON array)",
+  "mcpServer.argsPlaceholder": "[\"-y\", \"@example/mcp-server\"]",
   "mcpServer.envVars": "Environment variables (JSON)",
   "mcpServer.envVarsPlaceholder": "{\"GITHUB_PERSONAL_ACCESS_TOKEN\": \"ghp_...\"}",
   "mcpServer.url": "URL",
@@ -264,7 +264,7 @@
   "mcpServer.oauth.waiting": "Waiting for consent…",
   "mcpServer.oauth.disconnect": "Disconnect",
   "mcpServer.oauth.close": "Close",
-  "mcpServer.oauth.connected": "Connected successfully.",
+  "mcpServer.oauth.connected": "MCP connected and tools available.",
   "mcpServer.oauth.popupBlocked": "Couldn't open the sign-in window. Allow pop-ups for this app and try again.",
   "mcpServer.oauth.popupHint": "We opened your browser to finish sign-in. Complete consent there — this dialog updates automatically.",
   "mcpServer.oauth.loopbackError": "Couldn't start the local sign-in listener (port busy). Close whatever is using it and try again.",
@@ -1002,5 +1002,12 @@
   "mcpHttp.toolAllowlistPlaceholder": "search, read_file, start_agent_run",
   "lspServers.profileCount_one": "{{count}} profile",
   "lspServers.profileCount_other": "{{count}} profiles",
-  "lspServers.legacy": "legacy"
+  "lspServers.legacy": "legacy",
+  "mcpServer.oauth.finishConnection": "Connect with saved authorization",
+  "mcpServer.oauth.connecting": "Connecting to MCP and loading tools…",
+  "mcpServer.stdioJsonError": "Use a JSON string array for arguments and a JSON object with string values for environment variables.",
+  "hygiene.purgeResult": "{{count}} project(s) deleted, {{vectors}} local vectors removed.",
+  "hygiene.clearResult": "{{count}} project(s) cleared, {{vectors}} local vectors removed. Re-index when needed.",
+  "hygiene.projectError": "{{project}}: {{error}}",
+  "hygiene.diskError": "Could not check the directory: {{error}}"
 }

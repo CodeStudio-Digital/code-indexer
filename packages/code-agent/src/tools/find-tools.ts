@@ -1,9 +1,11 @@
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { capabilityDiscoveryEntries } from '@mcp/code-agent/core/capability-discovery.js';
 import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import {
   getToolText,
+  rankDiscoveryCandidates,
   passesRelaxed,
   passesStrict,
   scoreTool,
@@ -66,9 +68,8 @@ export function buildFindToolsTool(
       '(lazy discovery for tools NOT in your visible list).\n\n' +
       'Use when you suspect a tool exists for a task but cannot see it in your current tools array. ' +
       'Returns up to 5 candidates with their `name`, `tier`, `source`, argument summary, and a ' +
-      'short description. A strong top hidden match is activated automatically for your next turn. ' +
-      '`expand_toolset(<tier>)` unlocks a ' +
-      'whole tier at once when you need several of its tools.\n\n' +
+      'short description. A strong unambiguous match requests activation; the next outgoing projection confirms visibility. ' +
+      '`expand_toolset(<tier>)` requests a whole tier when you need several of its tools.\n\n' +
       'QUERY TIPS: concept nouns ("worktree", "spec revision"), verbs ("edit", "spawn"), and exact ' +
       'argument names seen in other tool results ("evolution_id") all match; filler words are ' +
       'ignored. When nothing matches strongly, the closest weak candidates are returned, labeled ' +
@@ -114,6 +115,8 @@ export function buildFindToolsTool(
           pinnedTools?: ReadonlySet<string>;
           visibleToolNames?: ReadonlySet<string> | null;
           promoteTool?: (name: string) => string[];
+          projectionReceipt?: import('../core/tool-projection.js').ToolProjectionReceipt;
+          discoveryState?: (name: string) => { authorization: string; visible: boolean; reason?: string };
           }
         | undefined;
       const active = runner?.activeTiers ?? null;
@@ -151,9 +154,11 @@ export function buildFindToolsTool(
         params: string;
         score: ToolScore;
         visible: boolean;
+        blocked: boolean;
+        schemaRejected: boolean;
       };
       const all: Scored[] = [];
-      for (const t of registry.list()) {
+      for (const { tool: t } of capabilityDiscoveryEntries(registry)) {
 
         const score = scoreTool(tokens, getToolText(t));
         if (score.hitCount === 0) continue;
@@ -165,6 +170,8 @@ export function buildFindToolsTool(
           description: t.description ?? '',
           params: paramSummary(t.parameters),
           score,
+          blocked: runner?.discoveryState?.(t.name).authorization === 'blocked',
+          schemaRejected: runner?.projectionReceipt?.deferred.some(entry => entry.name === t.name && entry.reason === 'provider_schema_rejected') ?? false,
           visible: visibleToolNames
             ? visibleToolNames.has(t.name)
             : active
@@ -175,28 +182,21 @@ export function buildFindToolsTool(
 
       // Pass A (strict), and only when it comes back empty, pass B (relaxed,
       // labeled weak). One scoring sweep, two filters.
-      const strict = all.filter((c) => passesStrict(c.score, tokens.length, coverage));
-      const weak = strict.length === 0;
-      const pool = weak
-        ? all.filter((c) => passesRelaxed(c.score, tokens.length, coverage))
-        : strict;
+      const { weak, candidates: pool } = rankDiscoveryCandidates(query, all, tokens.length);
 
       if (pool.length === 0) {
-        return ok(
+        return { ...ok(
           `No tools matched "${query}". Retry with exact argument names you know ` +
             `(e.g. "evolution_id"), concept nouns ("worktree", "spec revision"), or verbs ` +
             `("edit", "spawn") — or run list_tools() inside code_exec for the full catalog.`,
-        );
+        ), structuredData: { discovery: { schemaVersion: 1, revision: JSON.stringify(runner?.projectionReceipt ?? null), tools: [] },
+          coverage: 'authorized_attempt_catalog', reason: 'no_match_in_snapshot', matchedCandidates: all.length,
+          next: 'Refine the query or inspect MCP server status if a provider is still connecting.' } };
       }
 
       // Sort by score desc, then prefer hidden tools (the whole point of this
       // tool is surfacing tools the agent cannot already see). Tie-break by
       // alphabetical name for determinism.
-      pool.sort((a, b) => {
-        if (b.score.total !== a.score.total) return b.score.total - a.score.total;
-        if (a.visible !== b.visible) return a.visible ? 1 : -1;
-        return a.name.localeCompare(b.name);
-      });
       const top = pool.slice(0, limit);
 
       // A provider can only emit tool calls whose schemas it received. The
@@ -204,7 +204,11 @@ export function buildFindToolsTool(
       // on strict providers: discovery named the tool, but never put its
       // schema into the next request. Promote only the strong top result —
       // never weak/ambiguous matches — keeping discovery precise and bounded.
-      const autoPromoted = !weak && top[0] && !top[0].visible && runner?.promoteTool
+      const unambiguous = !!top[0] && (pool.length === 1
+        || top[0].name.toLowerCase() === query.toLowerCase().trim()
+        || top[0].score.total >= pool[1].score.total + Math.max(2, pool[1].score.total * 0.25));
+      const autoPromoted = !weak && unambiguous && !top[0]?.blocked && !top[0]?.schemaRejected && top[0]?.score.nameHit
+        && top[0].score.hitCount === tokens.length && !top[0].visible && runner?.promoteTool
         ? top[0]
         : null;
       const evicted = autoPromoted && runner?.promoteTool
@@ -216,10 +220,12 @@ export function buildFindToolsTool(
       // economy goal of Camada 3. Weak candidates always say WHY they matched
       // (strong ones only when the match came via an argument name).
       const renderCandidate = (r: Scored): string => {
-        const visTag = r.visible
+        const visTag = r.blocked ? ' [blocked by session configuration; activation unavailable]'
+          : r.schemaRejected ? ' [schema rejected by current provider; use another tool or the code_exec bridge]'
+          : r.visible
           ? ''
           : autoPromoted?.name === r.name
-            ? ' [activated for next turn]'
+            ? ' [activation requested; pending projection]'
             : ` [hidden — refine search to activate or expand_toolset('${r.tier}')]`;
         // Trim description to one sentence-ish for compactness.
         const shortDesc = r.description.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '';
@@ -243,13 +249,13 @@ export function buildFindToolsTool(
       if (autoPromoted) {
         lines.push('');
         lines.push(
-          `Activated ${autoPromoted.name} for the next turn` +
+          `Requested activation of ${autoPromoted.name}` +
             (evicted.length > 0 ? ` (replaced least-recently-used: ${evicted.join(', ')})` : '') +
-            `. Call it directly with the args above. Use \`expand_toolset({ tier: "${autoPromoted.tier}" })\` ` +
+            `. Availability is confirmed by the schemas in the next turn. Use \`expand_toolset({ tier: "${autoPromoted.tier}" })\` ` +
             `instead if you need several ${autoPromoted.tier}-tier tools.`,
         );
       } else {
-        const firstHidden = top.find((r) => !r.visible);
+        const firstHidden = top.find((r) => !r.visible && !r.blocked && !r.schemaRejected);
         if (firstHidden) {
           lines.push('');
           lines.push(firstHidden.tier === 'bootstrap'
@@ -265,7 +271,15 @@ export function buildFindToolsTool(
             'or verbs — or run list_tools() inside code_exec for the full catalog.',
         );
       }
-      return ok(lines.join('\n'));
+      return { ...ok(lines.join('\n')), structuredData: {
+        discovery: { schemaVersion: 1, revision: JSON.stringify(runner?.projectionReceipt ?? null),
+          tools: top.map(r => ({ name: r.name, state: r.blocked ? 'denied' : r.visible ? 'callable' : autoPromoted?.name === r.name ? 'activated' : 'deferred',
+            ...(r.schemaRejected && !r.blocked ? { reason: 'provider_schema_rejected' } : {}) })) },
+        candidates: top.map((r) => ({ name: r.name, score: r.score.total, visible: !r.blocked && r.visible, authorization: r.blocked ? 'blocked' : 'requires_dispatch_validation', availability: 'attempt_snapshot' })),
+        activation: autoPromoted ? { requested: [autoPromoted.name], state: 'pending_projection', evicted } : null,
+        ambiguous: !unambiguous,
+        projection: runner?.projectionReceipt ?? null,
+      } };
     },
   };
 }

@@ -5,6 +5,7 @@ import type {
   ProviderKind,
   ProviderModel,
 } from './types.js';
+import { getOpenAIApiModelMetadata, isPublicOpenAIApi } from '@mcp/shared/providers/openai-api-models.js';
 
 function normalizeNativeReasoningLevel(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -31,6 +32,8 @@ export interface ProviderConfigRaw {
 }
 
 export interface ProviderModelRaw {
+  provider_kind?: string;
+  provider_base_url?: string | null;
   provider_id: string;
   model_id: string;
   mode: string;
@@ -112,35 +115,43 @@ function normalizeStoredLevels(levels: unknown[] | null): string[] | null {
 }
 
 export function hydrateModel(r: ProviderModelRaw): ProviderModel {
+  const published = isPublicOpenAIApi(r.provider_kind, r.provider_base_url)
+    ? getOpenAIApiModelMetadata(r.model_id) : undefined;
   const defaultReasoningLevel = normalizeNativeReasoningLevel(r.default_reasoning_level);
   const supportedReasoningLevels = normalizeStoredLevels(
     parseJson<unknown[] | null>(r.supported_reasoning_levels, null),
-  );
+  ) ?? published?.supportedReasoningLevels ?? null;
+  // Repair pre-fix API catalogs at the read boundary: no network, polling or
+  // destructive migration. Preserve manual limits and real upstream metadata.
+  const legacyWindow = r.context_window == null || r.context_window === 272_000 || r.context_window === 372_000;
+  const contextWindow = published && !r.context_window_overridden
+    && !(r.source === 'manual' && r.context_window != null) && legacyWindow
+    ? published.contextWindow : r.context_window;
   return {
     provider_id: r.provider_id,
     model_id: r.model_id,
     mode: r.mode,
     name: r.name,
-    context_window: r.context_window,
+    context_window: contextWindow,
     context_window_overridden: !!r.context_window_overridden,
     default_max_tokens: r.default_max_tokens,
     // Infer capability from native metadata as a read-boundary repair for
     // older catalogs that persisted levels while leaving can_reason at 0.
-    can_reason: !!r.can_reason || defaultReasoningLevel !== null || supportedReasoningLevels !== null,
-    supports_attachments: !!r.supports_attachments,
+    can_reason: !!r.can_reason || defaultReasoningLevel !== null || supportedReasoningLevels !== null || published?.canReason === true,
+    supports_attachments: !!r.supports_attachments || published?.supportsAttachments === true,
     enabled: !!r.enabled,
     source: r.source,
     updated_at: r.updated_at,
     display_name: r.display_name,
     description: r.description,
     default_reasoning_level: defaultReasoningLevel,
-    supported_reasoning_levels: supportedReasoningLevels,
+    supported_reasoning_levels: supportedReasoningLevels ? [...supportedReasoningLevels] : null,
     apply_patch_tool_type: r.apply_patch_tool_type,
     available_in_plans: parseJson<string[] | null>(r.available_in_plans, null),
     minimal_client_version: r.minimal_client_version,
     visibility: r.visibility,
     supported_in_api: r.supported_in_api === null ? null : !!r.supported_in_api,
-    input_modalities: parseJson<string[] | null>(r.input_modalities, null),
+    input_modalities: parseJson<string[] | null>(r.input_modalities, null) ?? (published ? [...published.inputModalities] : null),
     max_tools: r.max_tools ?? null,
   };
 }

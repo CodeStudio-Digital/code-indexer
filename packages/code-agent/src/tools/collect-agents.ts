@@ -69,6 +69,7 @@ function terminalResult(job: SubagentJob): ToolResult {
     failedCount,
     stillFailed,
     resumableCount: job.resumableCount,
+    results: job.agents.flatMap(agent => agent.result ? [agent.result] : []),
   };
   const content = job.resultText ?? '(background job produced no result)';
   if (status === 'completed') {
@@ -129,7 +130,7 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
       if (jobId && !manager.get(sessionId, jobId)) {
         return err(
           `collect_agents: job '${jobId}' not found — it may have been collected and expired, ` +
-          `or the session worker restarted (background jobs are in-memory). Re-spawn if still needed.`,
+          `or the session worker restarted. Inspect the retained child checkpoint and reconcile its effects before resuming; do not re-spawn an unknown execution.`,
         );
       }
 
@@ -149,10 +150,10 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
             return terminalResult(res.job);
           case 'timeout': {
             const jobs = jobId ? manager.list(sessionId).filter((j) => j.jobId === jobId) : manager.list(sessionId).filter((j) => j.status === 'running');
-            return ok(renderSnapshot(jobs, wait));
+            return { ...ok(renderSnapshot(jobs, wait)), structuredData: { schemaVersion: 1, reason: 'timeout', items: jobs.map(job => ({ id: job.jobId, state: job.status })), cursor: null } };
           }
           case 'aborted':
-            return ok('[collect_agents: wait aborted]');
+            return { ...ok('[collect_agents: wait aborted]'), structuredData: { schemaVersion: 1, reason: 'aborted', items: [], cursor: null } };
           case 'empty':
             return ok('collect_agents: no outstanding background jobs.');
           case 'not_found':

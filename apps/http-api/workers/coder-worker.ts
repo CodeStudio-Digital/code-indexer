@@ -1219,7 +1219,7 @@ bridge.handle('stop', async () => {
   // the next open. Explicit user aborts go through the separate `abort` RPC.
   await prepareWorkerStop();
   try { await workerDocSearch.dispose(); } catch { /* telemetry is best-effort */ }
-  try { disposeExecCommandSessions('coder-worker-stop'); } catch { /* best-effort */ }
+  try { await disposeExecCommandSessions('coder-worker-stop'); } catch { /* best-effort */ }
   try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
   return { ok: true };
 });

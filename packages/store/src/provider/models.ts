@@ -3,9 +3,11 @@ import type { ProviderModel, UpsertModelInput } from './types.js';
 import { hydrateModel, type ProviderModelRaw } from './hydrators.js';
 
 export function list(db: DB, providerId: string, onlyEnabled = false): ProviderModel[] {
-  const where = onlyEnabled ? 'AND enabled = 1' : '';
+  const where = onlyEnabled ? 'AND m.enabled = 1' : '';
   const rows = db
-    .prepare(`SELECT * FROM provider_models WHERE provider_id = ? ${where} ORDER BY name, mode`)
+    .prepare(`SELECT m.*, p.kind AS provider_kind, p.base_url AS provider_base_url
+      FROM provider_models m JOIN provider_configs p ON p.id = m.provider_id
+      WHERE m.provider_id = ? ${where} ORDER BY m.name, m.mode`)
     .all(providerId) as ProviderModelRaw[];
   return rows.map(hydrateModel);
 }
@@ -13,7 +15,9 @@ export function list(db: DB, providerId: string, onlyEnabled = false): ProviderM
 /** Every model row across all providers. Used to hydrate the capability cache on startup. */
 export function listAll(db: DB): ProviderModel[] {
   const rows = db
-    .prepare('SELECT * FROM provider_models ORDER BY provider_id, name, mode')
+    .prepare(`SELECT m.*, p.kind AS provider_kind, p.base_url AS provider_base_url
+      FROM provider_models m JOIN provider_configs p ON p.id = m.provider_id
+      ORDER BY m.provider_id, m.name, m.mode`)
     .all() as ProviderModelRaw[];
   return rows.map(hydrateModel);
 }

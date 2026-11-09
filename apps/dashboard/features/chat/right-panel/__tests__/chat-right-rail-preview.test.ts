@@ -17,12 +17,13 @@ function render(activePanelId: RightPanelId | null = null, extras = {}) {
 }
 
 describe('ChatRightRail navigation', () => {
-  it('keeps four primary entries and configuration, with specialist tools in More', () => {
+  it('keeps primary entries, network and configuration, with specialist tools in More', () => {
     const html = render(null, { previewAvailable: true });
     for (const name of ['state', 'context', 'changes', 'more', 'config']) {
       expect(html).toContain(`aria-label="rightRail.${name}"`);
     }
-    expect(html.match(/<button /g)).toHaveLength(5);
+    expect(html.match(/<button /g)).toHaveLength(6);
+    expect(html).toContain('aria-label="collaboration.title"');
     expect(html).not.toContain('aria-label="rightRail.preview"');
   });
   it.each(['plans', 'chapters'] as const)('recognizes legacy grouped panel %s', (id) => {

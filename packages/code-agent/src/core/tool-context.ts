@@ -1,4 +1,14 @@
 export interface ToolContextServices {
+  invocation?: import('@mcp/agent-runtime-host/invocation-evidence.js').InvocationContextV2;
+  onOperationalToolEvent?: (event: import('@mcp/agent-runtime-host/invocation-evidence.js').OperationalToolEvent) => void;
+  /** Host-only terminal evidence, including results arriving after a lost wait. */
+  onToolOutcomeTerminal?: (receipt: import('./tool-outcome-observer.js').ToolOutcomeTerminalReceipt, originRunId?: string) => void | Promise<void>;
+  /** Host durability barrier for direct AND nested incidents before automatic inspection. */
+  commitToolOutcomeRecovery?: () => Promise<void>;
+  /** Internal RAW invocation ownership; inherited by nested contexts. */
+  toolOutcomeScope?: import('./tool-outcome-observer.js').ToolOutcomeScope;
+  /** Runner-local handle consumed by one registry invocation, never its children. */
+  toolOutcomeControl?: { scope?: import('./tool-outcome-observer.js').ToolOutcomeScope };
   sessionNetwork?: import('../runtime/session-network.js').SessionNetwork;
   ultraBudget?: import('../runtime/ultra-budget.js').UltraAgentBudget;
   ultraPolicy?: import('@mcp/agent-runtime-contracts').PresetResolution;
@@ -89,6 +99,8 @@ export interface ToolContextServices {
   toolOutputInlineCap?: number;
   /** Shared direct+nested accounting; it does not enforce budgets. */
   toolCallLedger?: import('./tool-call-ledger.js').ToolCallLedger;
+  /** Host-derived unresolved history. Inherited by nested calls; never cleared by model text. */
+  outcomeRecovery?: import('./outcome-recovery-state.js').OutcomeRecoveryState;
   /**
    * Per-session tool-output cap LEVEL (economic|medium|high|extra|max|ultra).
    * Replaces the legacy binary `unrestrictedToolOutput`. Each cap site calls
@@ -148,6 +160,10 @@ export interface ToolContextServices {
   };
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
+  /** Physical completion receipt for a yielded command in a shared Company workspace. */
+  retainWorkspaceMutationUntil?: (completion: Promise<void>) => void;
+  /** Absolute host deadline shared by queued and nested work. */
+  deadlineAtEpochMs?: number;
   /**
    * Long-running tools can call this to surface progress to the user mid-run.
    * Emits a `tool_progress` runner event with the supplied note (truncated
@@ -231,32 +247,6 @@ export interface ToolContextServices {
   } | null>;
   clearTasksState?: () => boolean | Promise<boolean>;
   /**
-   * Declares that a SUCCESSFUL goal tool call intentionally changed no state
-   * (redundant create against an in_progress goal, update to the status the
-   * goal already has). Without it the persistence invariant — every successful
-   * goal tool must carry a staged mutation — treats the idempotent success as
-   * a lost write and fails the whole turn.
-   */
-  noteGoalUnchanged?: (attribution: {
-    toolUseId: string;
-    toolName: 'create_goal' | 'update_goal';
-  }) => void;
-  /**
-   * Runtime-owned objective authority. `update_goal(status="superseded")`
-   * is accepted only for an explicit user pivot classified required_pivot.
-   */
-  goalLifecycleIntent?:
-    | 'required_fresh'
-    | 'required_pivot'
-    | 'required_resume'
-    | 'ledger';
-  /**
-   * Exact inherited goal generation that an explicit pivot may supersede.
-   * Kept separate from required_fresh so a goal created during this run can
-   * never inherit authority intended for the previous objective.
-   */
-  goalLifecyclePivotGoalCreatedAt?: string;
-  /**
    * Session Drive sinks — the session's durable working memory (migrations
    * 125/126). Wired by `runCoder` for non-company sessions so the
    * `read_plan` / `remember` / `list_memory` / `recall_investigations`
@@ -335,6 +325,8 @@ export interface ToolContextServices {
    * clear message instead of throwing.
    */
   userMemory?: {
+    recall?: NonNullable<ToolContextServices['projectMemory']>['recall'];
+    list?: NonNullable<ToolContextServices['projectMemory']>['list'];
     save(entry: {
       title: string;
       content: string;

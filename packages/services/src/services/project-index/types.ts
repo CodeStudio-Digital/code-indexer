@@ -97,6 +97,7 @@ export interface StructuralRunSummary {
 }
 
 export interface IndexFilesSummary {
+  failedPaths?: string[];
   indexed: number;
   skippedUnchanged: number;
   skippedIgnored: number;
@@ -135,6 +136,7 @@ export interface StructuralExecutor {
       maxFiles?: number;
       /** Manual reindex bypasses the empty-scan anti-wipe guard. */
       allowEmptyWipe?: boolean;
+      forceReparse?: boolean;
       onProgress?: (p: StructuralProgressFrame) => void;
       /** Exact scanner delta, acknowledged before structural rows mutate. */
       onChanges?: StructuralChangeHandler;

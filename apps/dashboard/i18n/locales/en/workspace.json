@@ -336,6 +336,9 @@
   "git.branch.updated": "Updated {{branch}}",
   "git.branch.updateIssues": "Update had issues",
   "git.branch.updateFailed": "Update failed",
+  "git.branch.projectUpdated": "Project updated",
+  "git.branch.updateConflicts": "Update needs conflict resolution",
+  "git.branch.updateConflictsDescription": "Review the files in the Conflicts tab. If a rebase is in progress, continue it after resolving the files.",
   "git.branch.noDifferences": "No differences",
   "git.branch.worktreeMatches": "The working tree matches {{branch}}.",
   "git.branch.matchesCurrent": "{{branch}} matches the current branch.",
@@ -499,8 +502,8 @@
   "lspInstall.notNow": "Not now",
   "lspInstall.dismiss": "Dismiss",
   "lspStatus.onDemandSuffix": "LSP on demand",
-  "lspStatus.idleDescription": "{{server}} is installed and stopped. The structural index responds now; the server starts on the first interactive IntelliSense use."
-  ,"autocompleteSetup.enabledMessage": "Ghost text is on — Tab accepts, Alt+\\ triggers manually.",
+  "lspStatus.idleDescription": "{{server}} is installed and stopped. The structural index responds now; the server starts on the first interactive IntelliSense use.",
+  "autocompleteSetup.enabledMessage": "Ghost text is on — Tab accepts, Alt+\\ triggers manually.",
   "autocompleteSetup.relatedCodeConsent": "Use indexed related code. Up to three relevant windows (700 tokens total) from other project files may be sent to this provider.",
   "fileTree.explorer": "Explorer",
   "fileTree.reload": "Reload file tree",
@@ -558,5 +561,8 @@
   "mediaPreview.pdfFrameTitle": "PDF preview: {{file}}",
   "mediaPreview.preparing": "Preparing preview…",
   "mediaPreview.invalidSvg": "Invalid SVG",
-  "mediaPreview.invalidSvgHint": "Fix the XML in Edit mode and the preview will refresh."
+  "mediaPreview.invalidSvgHint": "Fix the XML in Edit mode and the preview will refresh.",
+  "fileTree": {
+    "pathsPartial": "Partial indexed paths. Refine your search."
+  }
 }

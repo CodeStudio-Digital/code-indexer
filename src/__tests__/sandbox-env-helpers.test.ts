@@ -169,23 +169,18 @@ describe('resolveHostWorkdirMount', () => {
 // ─── resolveSessionEnvs ─────────────────────────────────────────
 
 describe('resolveSessionEnvs', () => {
-  it('returns empty record when store is null', () => {
-    expect(resolveSessionEnvs(null, SESSION_ID)).toEqual({});
+  it('returns empty record when store is null', async () => {
+    await expect(resolveSessionEnvs(null, SESSION_ID)).resolves.toEqual({});
   });
-
-  it('passes the opaque session UUID to the store unchanged', () => {
-    const asRecord = vi.fn().mockReturnValue({ FOO: 'bar' });
-    const store = { asRecord } as unknown as CompanySessionEnvStore;
-    expect(resolveSessionEnvs(store, SESSION_ID)).toEqual({ FOO: 'bar' });
-    expect(asRecord).toHaveBeenCalledWith(SESSION_ID);
+  it('hydrates the latest snapshot and enforces service scope', async () => {
+    const listAsync = vi.fn(async () => [{ key: 'FOO', value: 'bar', service_scope: 'api' }]);
+    const store = { listAsync } as unknown as CompanySessionEnvStore;
+    await expect(resolveSessionEnvs(store, SESSION_ID, 'api')).resolves.toEqual({ FOO: 'bar' });
+    await expect(resolveSessionEnvs(store, SESSION_ID, 'main')).resolves.toEqual({});
+    expect(listAsync).toHaveBeenCalledWith(SESSION_ID);
   });
-
-  it('returns empty record when asRecord throws', () => {
-    const store = {
-      asRecord: vi.fn(() => {
-        throw new Error('db unreachable');
-      }),
-    } as unknown as CompanySessionEnvStore;
-    expect(resolveSessionEnvs(store, SESSION_ID)).toEqual({});
+  it('propagates read failures instead of overwriting containers with empty envs', async () => {
+    const store = { listAsync: vi.fn(async () => { throw new Error('unavailable'); }) } as unknown as CompanySessionEnvStore;
+    await expect(resolveSessionEnvs(store, SESSION_ID)).rejects.toThrow('unavailable');
   });
 });

@@ -81,6 +81,9 @@ describe('bounded shell output', () => {
     ].join('');
     const result = await adapter.spawn(process.execPath, ['-e', script], {
       cwd: process.cwd(),
+      // This suite also runs inside Electron's Node runtime. The production
+      // adapter correctly strips its dev flag unless the caller supplies env.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       timeoutMs: 5_000,
       maxOutputBytes: 256,
     });
@@ -112,6 +115,7 @@ describe('bounded shell output', () => {
 
     const result = await adapter.spawn(process.execPath, ['-e', parentScript], {
       cwd: process.cwd(),
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       // Allow the real interpreter to start before testing descendant cleanup.
       timeoutMs: 3_000,
       maxOutputBytes: 1_024,

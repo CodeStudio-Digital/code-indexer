@@ -21,6 +21,7 @@ import {
   rerankDocumentText,
   RerankerHydrator,
   RrfFusionScorer,
+  SearchCandidateSelector,
   runHybridSearchPipeline,
   type HybridSearchPipelineCandidate,
   type HybridSearchPipelineQuery,
@@ -151,6 +152,29 @@ describe('RrfFusionScorer', () => {
 });
 
 describe('hybrid pipeline source fusion', () => {
+  it('does not give repeated chunks extra RRF votes within one vector query', async () => {
+    const pipeline = createHybridSearchPipeline({
+      db: {
+        searchFiles: () => [], searchSymbols: () => [],
+        getSymbolById: (id: number) => ({ id, project_id: 1, file_path: `${id}.ts` }),
+      } as unknown as CodeIndexDB,
+      vectorStore: { search: async () => [
+        { score: .95, metadata: { type: 'symbol', ref_id: '1' } },
+        { score: .9, metadata: { type: 'symbol_body', ref_id: '2' } },
+        { score: .8, metadata: { type: 'symbol_body', ref_id: '2' } },
+        { score: .7, metadata: { type: 'symbol_group', ref_id: '2' } },
+      ] } as unknown as VectorStore,
+      embeddingService: {
+        embed: async () => ({ vectors: [[1]], tokens: 1 }),
+        embedQuery: async () => ({ vector: [1], tokens: 1 }),
+      },
+      hyde: null, reranker: new NullReranker(), recentFilesSource: null,
+      ftsSanitize: query => query,
+    });
+    const results = await runHybridSearchPipeline(pipeline, { ...emptyQuery, query: 'lookupName', type: 'symbols', diag: {} });
+    expect(results.map(row => row.id)).toEqual([1, 2]);
+    expect(results[1].vector_score).toBe(.9);
+  });
   it('sums FTS and vector ranks for the same candidate before deduplication', async () => {
     const file = {
       id: 7,
@@ -256,6 +280,48 @@ describe('hybrid pipeline source fusion', () => {
   });
 });
 
+describe('concept candidate diversity', () => {
+  it('preserves file diversity through final selection when reranking is skipped', async () => {
+    const files = [{ id: 1, path: 'same.ts' }, { id: 2, path: 'other.ts' }];
+    const symbols = [{ id: 3, file_path: 'same.ts', name: 'repeated' }];
+    for (const reranker of [new NullReranker(), { name: 'unsupported', queryBlockReason: () => 'unsupported:pt', rerank: vi.fn() }]) {
+      const pipeline = createHybridSearchPipeline({
+        db: { searchFiles: () => files, searchSymbols: () => symbols } as unknown as CodeIndexDB,
+        vectorStore: null, embeddingService: new NullEmbeddingService(), hyde: null,
+        reranker, recentFilesSource: null, ftsSanitize: query => query,
+      });
+      const results = await runHybridSearchPipeline(pipeline, {
+        ...emptyQuery, query: 'where is the session expiry checked?', limit: 3, diag: {},
+      });
+      expect(results.map(result => result.id)).toEqual([1, 2, 3]);
+    }
+  });
+  it('records an unsupported-language skip without invoking the model', () => {
+    const rerank = vi.fn();
+    const hydrator = new RerankerHydrator({ name: 'local', queryBlockReason: () => 'unsupported:pt', rerank });
+    const query = { ...emptyQuery, query: 'Onde fica a sessão?', diag: {} };
+    expect(hydrator.enable(query)).toBe(false);
+    expect(query.diag).toMatchObject({ rerankerApplied: false, rerankerSkippedReason: 'unsupported:pt' });
+    expect(rerank).not.toHaveBeenCalled();
+  });
+  const selector = new SearchCandidateSelector('test', query => query.limit);
+  const candidates = [1, 2, 3, 4].map(id => {
+    const candidate = makeCandidate(id);
+    candidate.score = 1 / (60 + id);
+    candidate.result.data = { id, path: id < 4 ? 'same.ts' : 'other.ts' } as HybridSearchResult['data'];
+    return candidate;
+  });
+  it('retains another file before spending the pool on repeated symbols', () => {
+    expect(selector.select({ ...emptyQuery, query: 'where is session expiry?', limit: 2 }, candidates)
+      .selected.map(candidate => candidate.result.id)).toEqual([1, 4]);
+  });
+  it('preserves exact-name and explicit symbol ordering', () => {
+    for (const query of [{ ...emptyQuery, query: 'SessionPolicy' }, { ...emptyQuery, query: 'where is session expiry?', type: 'symbols' as const }]) {
+      expect(selector.select({ ...query, limit: 2 }, candidates).selected.map(candidate => candidate.result.id)).toEqual([1, 2]);
+    }
+  });
+});
+
 describe('DedupFilter', () => {
   const filter = new DedupFilter();
 
@@ -312,7 +378,7 @@ describe('RerankerHydrator', () => {
       async rerank() { return []; },
     };
     const hydrator = new RerankerHydrator(reranker);
-    expect(hydrator.enable()).toBe(true);
+    expect(hydrator.enable(emptyQuery)).toBe(true);
   });
 
   it('rewrites scores from reranker output', async () => {

@@ -55,6 +55,31 @@ function seedProjectWithFiles(db: any, name: string, root: string): number {
 }
 
 describe('CodeIndexDB tiered-hybrid integration', () => {
+  it('observes a split committed by another handle after the reader cached central routing', async () => {
+    process.env.MCP_PROJECT_DB = '1';
+    process.env.MCP_PROJECT_DB_SPLIT = '1';
+    process.env.MCP_PROJECT_DB_ROUTE = '1';
+    const dir = freshDir();
+    const path = join(dir, 'index.db');
+    const reader = await freshDb(path);
+    const id = reader.createProject('cross-handle', join(dir, 'project')).id;
+    const writer = await freshDb(path);
+    try {
+      expect(reader.searchFilePaths(id, 'AfterSplit')).toEqual([]);
+      expect(reader.getStructuralRevision(id)).toBe('empty');
+      expect(writer.ensureProjectSplit(id)?.status).toBe('done');
+      writer.upsertFileStructural(id, { path: 'AfterSplit.ts', language: 'typescript',
+        size: 12, lineCount: 1, contentHash: 'new', mtimeMs: null });
+      expect(reader.searchFilePaths(id, 'AfterSplit')).toEqual([{ path: 'AfterSplit.ts' }]);
+      expect(reader.getStructuralRevision(id)).toBe(writer.getStructuralRevision(id));
+      expect(reader.getStructuralRevision(id)).not.toBe('empty');
+      // A rollback of routing in another connection must invalidate a cached
+      // positive decision too, without relying on a main-thread callback.
+      writer.setProjectSplitStatus(id, 'pending');
+      expect(reader.useProjectDb(id)).toBe(false);
+      expect(reader.searchFilePaths(id, 'AfterSplit')).toEqual([]);
+    } finally { writer.close(); reader.close(); }
+  });
   it('flag OFF: ensureProjectSplit is inert, useProjectDb=false, no project DB file', async () => {
     const dir = freshDir();
     const db = await freshDb(join(dir, 'index.db'));

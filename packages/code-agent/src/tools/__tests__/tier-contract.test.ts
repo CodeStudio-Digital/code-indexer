@@ -55,7 +55,6 @@ import { todoTools } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { browserTools } from '@mcp/code-agent/tools/browser/index.js';
-import { goalTools } from '@mcp/code-agent/tools/goal.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
 import { waitAgentsTools } from '@mcp/code-agent/tools/wait-agents.js';
 import { sendMessageTools } from '@mcp/code-agent/tools/send-message.js';
@@ -78,7 +77,7 @@ const STATIC_TOOLS: NamedTool[] = [
   ...tasksTools, ...interactionTools, ...toolOutputTools, ...diagnosticsTools, ...lspTools,
   ...execCommandTools, ...webTools, ...httpTools, ...globTools, ...ragSearchDocsTools,
   ...ragReadDocTools,
-  ...todoTools, ...viewImageTools, ...previewTools, ...browserTools, ...goalTools, ...listAgentsTools,
+  ...todoTools, ...viewImageTools, ...previewTools, ...browserTools, ...listAgentsTools,
   ...waitAgentsTools, ...sendMessageTools, ...sendInputTools, ...followupTaskTools,
   ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools,
   ...apiClientTools, ...dbTools,
@@ -134,7 +133,7 @@ describe('tier contract — every registered tool has an explicit tier', () => {
 
 describe('tier contract — Phase A/B placements are locked', () => {
   it('keeps the workhorses + anti-deadlock tools always-on (bootstrap)', () => {
-    for (const n of ['code_exec', 'view_image', 'submit_spec', 'create_goal', 'update_goal', 'glob', 'mcp__read_file']) {
+    for (const n of ['code_exec', 'view_image', 'submit_spec', 'glob', 'mcp__read_file']) {
       expect(getToolTier(n), n).toBe('bootstrap');
     }
   });
@@ -142,7 +141,7 @@ describe('tier contract — Phase A/B placements are locked', () => {
   it('demotes the cold tools to navigate (off turn-1 surface)', () => {
     for (const n of [
       'list_tasks', 'cancel_tasks', 'delete_tasks', 'archive_task_list', 'update_task',
-      'read_plan', 'list_notes', 'get_goal',
+      'read_plan', 'list_notes',
       // mcp__get_repo_map: explicitly tiered so it no longer rides the
       // getToolTier bootstrap fallback (regression guard for the leak fix).
       'mcp__search_memory', 'mcp__get_repo_map', 'mcp_list_resources',
@@ -185,7 +184,7 @@ describe('tier contract — Phase A/B placements are locked', () => {
     expect(getToolTier('write_shared_file')).toBe('company');
     expect(getToolTier('send_message')).toBe('company');
     expect(getToolTier('env_set')).toBe('company');
-    expect(getToolTier('docs_write')).toBe('sandbox');
+    expect(getToolTier('docs_write')).toBe('company');
     expect(getToolTier('service_restart')).toBe('sandbox');
     expect(getToolTier('qa_start_run')).toBe('qa');
   });

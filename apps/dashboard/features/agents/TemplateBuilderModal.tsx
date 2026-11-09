@@ -14,6 +14,7 @@ import {
 import { apiPost, apiPatch, useApi } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import { RoleEditModal, type RoleConfig, type SkillDef } from './RoleEditModal.js';
+import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 
 interface TemplateBuilderProps {
   onClose: () => void;
@@ -84,7 +85,7 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
       if (existingTemplate) {
         await apiPatch(`/company/templates/${existingTemplate.id}`, { name, description, roles });
       } else {
-        await apiPost('/company/templates', { name, description, roles });
+        await apiPost('/company/templates', { name, description, roles: roles.map(withDefaultQaSkill) });
       }
       onSaved();
       onClose();
@@ -270,7 +271,7 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
           onClose={() => setEditingRoleIdx(null)}
           inheritedToolTiers={[
             'company',
-            ...(roles[editingRoleIdx].role === 'qa' || roles[editingRoleIdx].skills?.includes('qa-playwright') ? ['qa'] : []),
+            ...(roles[editingRoleIdx].role === 'qa' || roles[editingRoleIdx].skills?.some((skill) => skill === 'qa-playwright' || skill === 'qa-preview') ? ['qa'] : []),
             ...(['qa', 'frontend', 'ux', 'fullstack'].includes(roles[editingRoleIdx].role) ? ['preview'] : []),
             ...(roles[editingRoleIdx].role === 'database' ? ['db'] : []),
           ]}

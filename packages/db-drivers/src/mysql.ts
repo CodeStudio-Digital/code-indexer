@@ -7,6 +7,9 @@
  * For MySQL a "schema" is a database, so `listSchemas` returns the database.
  */
 import { DEFAULT_MAX_ROWS } from './types.js';
+import { timedDatabaseStage } from './query-timing.js';
+import { ResultWindow } from './result-window.js';
+import type { EventEmitter } from 'node:events';
 import { assertDatabaseDispatch } from './dispatch.js';
 import { buildTablePreview } from './sql/preview.js';
 import type {
@@ -25,6 +28,7 @@ import type {
 } from './types.js';
 
 interface MysqlConn {
+  connection?: { query(sql: string, params?: unknown[]): EventEmitter };
   threadId: number;
   query(sql: string, params?: unknown[]): Promise<[unknown, unknown]>;
   release(): void;
@@ -81,11 +85,30 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
     createPool(c: unknown): MysqlPool;
   };
   const pool = mysql.createPool(buildPoolConfig(config));
+  const control = mysql.createPool({ ...buildPoolConfig(config), connectionLimit: 1, queueLimit: 16 });
+  async function boundedQuery(conn: MysqlConn, sql: string, params: unknown[] | undefined, max: number): Promise<QueryResult> {
+    if (!conn.connection) { const [rows, fields] = await conn.query(sql, params); return shapeMysqlResult(rows, fields, max); }
+    const window = new ResultWindow(max);
+    let fields: Array<{ name: string; columnType?: number }> = [], affected = 0;
+    return new Promise((resolve, reject) => {
+      const query = conn.connection!.query(sql, params);
+      // mysql2 emits `fields` with undefined for OK/DDL packets as well.
+      query.on('fields', value => { fields = Array.isArray(value) ? value : []; });
+      query.on('result', row => {
+        if (fields.length) window.push(row);
+        else affected += Number(row.affectedRows ?? 0);
+      });
+      query.once('error', reject);
+      query.once('end', () => resolve({ rows: window.rows, rowCount: fields.length ? window.observed : affected,
+        fields: fields.map(f => ({ name: f.name, dataTypeId: f.columnType })),
+        truncated: window.truncated, acquisition: window.acquisition }));
+    });
+  }
 
   async function runQuery(sql: string, opts: RunQueryOptions = {}): Promise<QueryResult> {
     assertDatabaseDispatch(opts);
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
-    const conn = await pool.getConnection();
+    const conn = await timedDatabaseStage('acquireMs', () => pool.getConnection());
     let onAbort: (() => void) | null = null;
     try {
       assertDatabaseDispatch(opts);
@@ -96,7 +119,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
         if (opts.signal.aborted) throw new Error('query cancelled');
         const threadId = Number(conn.threadId);
         onAbort = (): void => {
-          pool.query(`KILL QUERY ${threadId}`).catch(() => void 0);
+          control.query(`KILL QUERY ${threadId}`).catch(() => void 0);
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
@@ -106,8 +129,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
         await conn.query(`USE ${qIdent(opts.schema)}`);
       }
       assertDatabaseDispatch(opts);
-      const [rows, fields] = await conn.query(sql, opts.params);
-      return shapeMysqlResult(rows, fields, max);
+      return await timedDatabaseStage('executeFetchMs', () => boundedQuery(conn, sql, opts.params, max));
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
       // A `USE <schema>` switch must not leak to the next pooled borrower. Restore
@@ -134,13 +156,15 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
   }
 
   async function runBatch(statements: RunBatchStatement[], opts: RunBatchOptions = {}): Promise<QueryResult> {
-    if (config.readOnly) throw new Error('Connection is read-only — batch execution is blocked.');
+    validateBatch(statements, config.readOnly);
+    const tracker = new BatchTracker('best_effort', opts);
+    tracker.dispatch();
     const max = opts.maxRows ?? DEFAULT_MAX_ROWS;
     // ONE pooled connection for the whole batch so START TRANSACTION/COMMIT and
     // every statement share a backend (a runQuery loop could pool-hop between them).
     // CAVEAT: MySQL/MariaDB implicitly COMMIT on DDL, so this rolls back DML only —
     // a mid-batch failure after a DDL statement can't undo the already-applied DDL.
-    const conn = await pool.getConnection();
+    const conn = await timedDatabaseStage('acquireMs', () => pool.getConnection());
     let onAbort: (() => void) | null = null;
     let inTxn = false;
     let dirty = false;
@@ -149,36 +173,45 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
         if (opts.signal.aborted) throw new Error('query cancelled');
         const threadId = Number(conn.threadId);
         onAbort = (): void => {
-          pool.query(`KILL QUERY ${threadId}`).catch(() => void 0);
+          control.query(`KILL QUERY ${threadId}`).catch(() => void 0);
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
-      await conn.query('START TRANSACTION');
+      if (opts.schema) await conn.query(`USE ${quoteIdent('mysql', opts.schema)}`);
+      await conn.query(config.readOnly ? 'START TRANSACTION READ ONLY' : 'START TRANSACTION');
       inTxn = true;
+      tracker.started = true;
       let last: QueryResult = { rows: [], rowCount: 0, fields: [] };
       for (let index = 0; index < statements.length; index += 1) {
+        tracker.dispatch();
         const stmt = statements[index];
-        const [rows, fields] = await conn.query(
+        last = await timedDatabaseStage('executeFetchMs', () => boundedQuery(conn,
           typeof stmt === 'string' ? stmt : stmt.sql,
-          typeof stmt === 'string' ? undefined : stmt.params,
-        );
-        last = shapeMysqlResult(rows, fields, max);
+          typeof stmt === 'string' ? undefined : stmt.params, max,
+        ));
         opts.onResult?.(last, index);
+        tracker.completed++;
       }
+      tracker.dispatch();
+      tracker.committing = true;
       await conn.query('COMMIT');
       inTxn = false;
-      return last;
+      return { ...last, batchOutcome: tracker.success() };
     } catch (err) {
+      let rolledBack = false;
       if (inTxn) {
         try {
           await conn.query('ROLLBACK');
+          rolledBack = true;
         } catch {
           dirty = true; // rollback failed — don't recycle a connection mid-txn
         }
       }
-      throw err;
+      throw tracker.failure(err, rolledBack);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      // USE changes session state; never return it to an unscoped borrower.
+      if (opts.schema) dirty = true;
       if (dirty) conn.destroy();
       else conn.release();
     }
@@ -364,7 +397,7 @@ export async function createMysqlDriver(config: DbConnectConfig): Promise<Databa
       return runQuery(sql, { params });
     },
     async close() {
-      await pool.end();
+      await Promise.all([pool.end(), control.end()]);
     },
   };
   return driver;
@@ -440,3 +473,5 @@ function groupForeignKeys(
   }
   return [...map.values()];
 }
+import { BatchTracker, validateBatch } from './batch-outcome.js';
+import { quoteIdent } from './sql/identifiers.js';

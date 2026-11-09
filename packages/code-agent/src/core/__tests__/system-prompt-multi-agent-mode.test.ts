@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveUltraPreset } from '../../sessions/ultra-policy.js';
 import {
   buildSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
@@ -50,5 +51,22 @@ describe('system prompt — multi-agent execution mode', () => {
 
   it('preserves the legacy prompt when no mode override is supplied', () => {
     expect(buildSystemPrompt(baseCtx())).not.toContain('# Multi-agent mode');
+  });
+
+  it.each([{ maxParallel: 0 }, { canDelegate: false }])('honors the resolved delegation limit %j', (limits: { maxParallel?: number; canDelegate?: boolean }) => {
+    const prompt = buildSystemPrompt(baseCtx({
+      multiAgentMode: 'proactive',
+      ultraPolicy: resolveUltraPreset({ enabled: true, ...limits }),
+    }));
+    expect(prompt).not.toContain('# Ultra collaboration');
+    expect(prompt).not.toContain('at most 0 children');
+  });
+
+  it('renders the effective child cap rather than the requested preset cap', () => {
+    const prompt = buildSystemPrompt(baseCtx({
+      multiAgentMode: 'proactive',
+      ultraPolicy: resolveUltraPreset({ enabled: true, maxParallel: 1 }),
+    }));
+    expect(prompt).toContain('at most 1 children');
   });
 });

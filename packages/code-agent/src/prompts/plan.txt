@@ -1,14 +1,15 @@
 # Plan mode is ACTIVE
-Produce an evidence-backed implementation plan and submit it for approval before mutation. The runner enforces the gate; greetings and factual answers do not need a plan.
+Submit an evidence-backed plan for approval before mutation. The runner enforces the gate; greetings and factual answers need no plan.
 
 ## Investigation
 
-- When the task asks for a central or reusable pattern, run one `mcp__search` before choosing a file; use grep only for exact identifiers.
+- For central files or reusable patterns, use available semantic search; fall back to native search/read when unavailable.
 - Locate the responsible symbols, existing configuration seams and nearest tests. Trace callers or dependencies only when the proposed contract crosses a boundary.
+- Before centralizing a setting, inspect configuration modules and verify which declarations the runtime consumes.
 - For bugs, identify a deterministic reproduction and the smallest root-cause seam.
-- Identify reusable patterns, affected files, risks and a concrete verification oracle.
+- Identify reusable patterns, files, risks and verification.
 - Ask with `decision_gate` only when two materially different, user-owned choices remain. Resolve technical details from evidence.
-- Stop investigating when one defensible approach and its blast radius are known. Do not run validation unless reproducing a reported failure.
+- Stop once one approach and its impact are supported. Use bounded read-only checks only to resolve a relevant uncertainty.
 
 ## Submission
 

@@ -147,18 +147,27 @@ export function buildExpandTools(
       }
       const before = runner.activeTiers ? Array.from(runner.activeTiers).sort().join(',') : '?';
       runner.promoteTier(tier);
+      for (const name of options?.toolNamesForTier?.(tier) ?? []) runner.requestedToolNames?.add(name);
       const after = runner.activeTiers ? Array.from(runner.activeTiers).sort().join(',') : '?';
+      const discovery: import('@mcp/agent-runtime-contracts').DiscoveryReceipt = {
+        schemaVersion: 1, revision: runner.projectionReceipt?.discovery?.revision ?? 'pending',
+        tools: (options?.toolNamesForTier?.(tier) ?? []).map(name => ({ name,
+          state: runner.visibleToolNames?.has(name) ? 'callable' : 'activated',
+          ...(!runner.visibleToolNames?.has(name) ? { reason: 'pending_projection' } : {}) })),
+      };
       if (before === after) {
-        return ok(`Tier '${tier}' was already active. No change. Current tiers: ${after}.`);
+        return { ...ok(`Tier '${tier}' was already active. Current tiers: ${after}. Consult the projection receipt for actual visibility.`),
+          structuredData: { tier, state: 'already_active', discovery, projection: runner.projectionReceipt ?? null } };
       }
       const tail = reason ? ` Reason: ${reason}` : '';
       const isCustom = !CORE_TIER_NAMES.has(tier);
       const toolNote = isCustom && customTiers?.has(tier)
         ? ` (${customTiers.get(tier)!.toolCount} tools from ${customTiers.get(tier)!.displayName})`
         : '';
-      return ok(
-        `Tier '${tier}'${toolNote} unlocked. Active tiers: ${after}. The expanded tool list is visible starting next turn.${tail}`,
-      );
+      return {
+        ...ok(`Tier '${tier}'${toolNote} requested. Active tiers: ${after}. Projection is pending; the next turn includes the tools that fit the provider limits.${tail}`),
+        structuredData: { tier, state: 'pending_projection', discovery, requested: options?.toolNamesForTier?.(tier) ?? [] },
+      };
     },
   };
 

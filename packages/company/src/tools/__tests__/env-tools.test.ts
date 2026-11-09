@@ -47,6 +47,9 @@ function makeStore(rows: CompanySessionEnvRow[] = []) {
   const upsert = vi.fn();
   const store = {
     list: vi.fn(() => rows),
+    listMetadata: vi.fn(() => rows),
+    listAsync: vi.fn(async () => rows),
+    getAsync: vi.fn(async () => rows[0] ?? null),
     get: vi.fn(() => null),
     upsert,
     delete: vi.fn(),
@@ -127,8 +130,36 @@ describe('env_list — scope suffix', () => {
     const res = await tool('env_list').handler({}, ctx);
     expect(res.isError).toBeFalsy();
     const text = String(res.content);
-    expect(text).toContain('API_ONLY=y [scope: api]');
-    expect(text).toContain('SHARED=x');
+    expect(text).toContain('API_ONLY [plain; source: user] [scope: api]');
+    expect(text).not.toContain('=y');
+    expect(text).toContain('SHARED [plain; source: user]');
     expect(text).not.toContain('SHARED=x [scope');
+  });
+});
+
+describe('env tools protection and freshness', () => {
+  it('never exposes secret values during discovery', async () => {
+    makeStore([row({ key: 'TOKEN', value: 'do-not-expose', is_secret: 1 })]);
+    const result = await tool('env_list').handler({}, ctx);
+    expect(String(result.content)).toContain('TOKEN');
+    expect(String(result.content)).not.toContain('do-not-expose');
+  });
+  it('blocks deleting operator-owned env without explicit override', async () => {
+    const { store } = makeStore([row({ key: 'K' })]);
+    const result = await tool('env_delete').handler({ key: 'K' }, ctx);
+    expect(result.isError).toBe(true);
+    expect(store.delete).not.toHaveBeenCalled();
+  });
+  it('validates only the selected service', async () => {
+    makeStore([row({ key: 'TOKEN', service_scope: 'api' })]);
+    const result = await tool('env_validate').handler({ required: ['TOKEN'], service: 'main' }, ctx);
+    expect(result.isError).toBe(true);
+  });
+  it('reports persistence separately from application failure', async () => {
+    makeStore();
+    setSandboxManagerForTests({ syncEnvsToAllContainers: vi.fn(async () => { throw Error('secret in driver error'); }) } as unknown as SandboxManager);
+    const result = await tool('env_set').handler({ key: 'K', value: 'v' }, ctx);
+    expect(String(result.content)).toContain('failed');
+    expect(String(result.content)).not.toContain('secret in driver error');
   });
 });

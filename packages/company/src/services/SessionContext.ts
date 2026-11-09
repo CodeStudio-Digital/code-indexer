@@ -20,6 +20,8 @@ import type {
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
 import type { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import { CompanyWorkspaceCoordinator } from './workspace-coordinator.js';
+import { CompanySessionMessenger } from './session-messenger.js';
 
 export interface SessionContextOpts {
   companySessionId: CompanySessionId | string;
@@ -50,6 +52,12 @@ export class SessionContext {
   readonly companySessionId: CompanySessionId;
   readonly companyFiles: CompanySessionFiles;
   readonly effectiveCompanyFiles: CompanySessionFiles;
+  private workspaceCoordinator: CompanyWorkspaceCoordinator | undefined;
+  get workspaceMutationGate(): CompanyWorkspaceCoordinator {
+    return this.workspaceCoordinator ??= new CompanyWorkspaceCoordinator(this.effectiveCompanyFiles.location.bundle_path);
+  }
+  private messenger: CompanySessionMessenger | undefined;
+  get sessionMessenger(): CompanySessionMessenger { return this.messenger ??= new CompanySessionMessenger(this.companyFiles); }
   readonly companyStore: CompanyStore;
   readonly db: CodeIndexDB;
   readonly metaBus: CoderRunBus;

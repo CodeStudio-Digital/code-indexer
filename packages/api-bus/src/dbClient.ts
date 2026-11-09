@@ -175,6 +175,8 @@ export interface DbQueryField {
 }
 
 export interface DbQueryResult {
+  jobId?: string;
+  acquisition?: { mode: 'stream' | 'cursor'; observedRows: number; returnedRows: number; retainedBytes: number; maxBytes: number; maxCellBytes: number; cellsTruncated: number; observedRowsExact: boolean };
   rows: Array<Record<string, unknown>>;
   rowCount: number;
   fields: DbQueryField[];
@@ -184,6 +186,7 @@ export interface DbQueryResult {
   cursor?: string;
   /** Wall-clock execution time in ms (filled by the handler). */
   durationMs?: number;
+  timings?: { version: 1; totalMs: number; queueMs?: number; acquireMs?: number; executeFetchMs?: number; unmeasured: string[] };
 }
 
 export interface DbIntrospectResult {
@@ -200,6 +203,10 @@ export interface DbCatalogObject {
 export interface DbCatalogSnapshot {
   objects: DbCatalogObject[];
   refreshedAt: number;
+  complete?: boolean;
+  nextCursor?: string;
+  consistency?: 'best_effort';
+  scope?: string | null;
 }
 
 export interface DbSchemaSnapshot {
@@ -275,12 +282,20 @@ export interface DbEditResult {
 
 /** Results from an atomic, single-session statement batch. */
 export interface DbQueryBatchResult {
+  outcome?: {
+    state: 'completed' | 'failed' | 'cancelled';
+    effect: 'not_started' | 'committed' | 'rolled_back' | 'partial' | 'unknown';
+    atomicity: 'transactional' | 'best_effort';
+    completedStatements: number;
+    failedStatement?: number;
+  };
   results: DbQueryResult[];
   durationMs: number;
 }
 
 /** Parameterized row mutation used by the atomic multi-row editor endpoint. */
 export interface DbRowChangeInput {
+  original?: Record<string, unknown>;
   op: DbRowChangeKind;
   schema?: string;
   table: string;
@@ -307,7 +322,21 @@ export interface DbMigrationResult extends DbEditResult {
   atomic: boolean;
 }
 
+export interface DbJobStatus {
+  version: 1;
+  jobId: string;
+  kind: 'export' | 'import';
+  state: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  effect: 'none' | 'confirmed' | 'unknown';
+  completed: number;
+  total?: number;
+  startedAt: number;
+  updatedAt: number;
+}
+
 export interface DbClientApi {
+  jobStatus(input: { connectionId: string; jobId: string }, ctx: ApiContext): Promise<DbJobStatus>;
+  cancelJob(input: { connectionId: string; jobId: string }, ctx: ApiContext): Promise<DbJobStatus>;
   /** Open + ping + close — a pre-flight for the editor; never keeps a pool. */
   testConnection(
     input: { spec: DbConnectSpec },
@@ -332,9 +361,9 @@ export interface DbClientApi {
     ctx: ApiContext,
   ): Promise<DbIntrospectResult>;
 
-  /** Build/read a connection-wide names catalog, independent of expanded tree nodes. */
+  /** Read one bounded names page, independent of expanded tree nodes. */
   catalog(
-    input: { connectionId: string; force?: boolean },
+    input: { connectionId: string; force?: boolean; schema?: string; query?: string; cursor?: string; limit?: number },
     ctx: ApiContext,
   ): Promise<DbCatalogSnapshot>;
 
@@ -421,6 +450,7 @@ export interface DbClientApi {
    */
   editRow(
     input: {
+      original?: Record<string, unknown>;
       connectionId: string;
       op: DbRowChangeKind;
       schema?: string;
@@ -460,7 +490,7 @@ export interface DbClientApi {
    * unlike the row-capped `query`/`tableRows`.
    */
   exportStream(
-    input: { connectionId: string; schema?: string; table: string; batchRows?: number },
+    input: { connectionId: string; schema?: string; table: string; batchRows?: number; jobId?: string },
     ctx: ApiContext,
   ): AsyncStream<DbRowBatch>;
 
@@ -470,7 +500,7 @@ export interface DbClientApi {
    * client appends each `sql` chunk to a file. Relational connections only.
    */
   dumpStream(
-    input: { connectionId: string; schema?: string; tables?: string[]; includeData?: boolean; batchRows?: number },
+    input: { connectionId: string; schema?: string; tables?: string[]; includeData?: boolean; batchRows?: number; jobId?: string },
     ctx: ApiContext,
   ): AsyncStream<DbDumpFrame>;
 
@@ -480,7 +510,7 @@ export interface DbClientApi {
    * on a read-only connection. Returns the last statement's result.
    */
   runScript(
-    input: { connectionId: string; statements: string[] },
+    input: { connectionId: string; statements: string[]; jobId?: string },
     ctx: ApiContext,
   ): Promise<DbQueryResult>;
 
@@ -501,6 +531,10 @@ export interface DbClientApi {
 }
 
 export interface DbRowBatch {
+  jobId?: string;
+  consistency?: 'best_effort' | 'snapshot';
+  pagination?: 'keyset' | 'cursor';
+  observedAt?: number;
   /** Column names (stable across batches; sent on every frame for convenience). */
   columns: string[];
   rows: Array<Record<string, unknown>>;
@@ -511,6 +545,7 @@ export interface DbRowBatch {
 }
 
 export interface DbDumpFrame {
+  consistency?: 'best_effort' | 'snapshot';
   /** A chunk of `.sql` text to append to the output file (may be empty on the final frame). */
   sql: string;
   /** The table this chunk belongs to (absent for the header frame). */

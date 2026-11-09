@@ -109,7 +109,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
     // `wait=true` has its own 30-minute deadline below. Keep the runner's
     // generic 5-minute native-tool timeout from cutting that healthy wait off.
     timeoutMs: Infinity,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       try {
         const role = args.role as string;
         let kanbanCardId = args.kanban_card_id as string | undefined;
@@ -222,6 +222,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
         }
 
         const waitOutcome = await runAgentWaitLoop(orchestrator, {
+          signal: ctx.signal,
           targetIds: new Set([result.agentRunId]),
           isMaster: true,
           deadlineMs: Date.now() + 30 * 60_000,
@@ -320,7 +321,7 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
     // master gets a false failure. Re-calling it just reconciles live state.
     repeatable: true,
     timeoutMs: Infinity,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const timeoutMs = ((args.timeout_minutes as number | undefined) ?? 30) * 60 * 1000;
       const deadline = Date.now() + timeoutMs;
 
@@ -332,6 +333,7 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
       // null` = wait for the whole running fleet. The loop's safety poll fixes
       // the deadlock where the LAST subordinate's `finished` signal was lost.
       const outcome = await runAgentWaitLoop(orchestrator, {
+        signal: ctx.signal,
         targetIds: null,
         isMaster: true,
         deadlineMs: deadline,
@@ -340,6 +342,8 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
         heartbeatAgentRunId: orchestrator.getMasterAgentRunId() ?? undefined,
       });
       switch (outcome.kind) {
+        case 'aborted':
+          return okStructured({ schemaVersion: 1, reason: 'aborted', items: [], cursor: null });
         case 'pending_messages':
           return ok(
             'You have queued message(s) to read — handle them now, then call ' +

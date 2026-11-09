@@ -4,6 +4,7 @@ import { recencyDecay } from '@mcp/candidate-pipeline';
 import type { AgentMemoryService } from './agent-memory-service.js';
 import type { RecallFilterFn, RecalledMemory, RetrievedMemory } from './retriever.js';
 import { blendedMemoryScore, diversify, PIN_IMPORTANCE } from './scoring.js';
+import { recordMemoryAccess } from './access-telemetry.js';
 
 /**
  * Retrieves relevant Agent Memory (the dedicated `agent_memory` table) for the
@@ -42,6 +43,7 @@ export interface AgentMemoryRetrieverOptions {
 interface Scored {
   row: import('@mcp/shared/types.js').AgentMemoryRow & { score?: number };
   stale?: string[];
+  unknown?: number;
   type: string;
   score: number;
 }
@@ -60,7 +62,7 @@ export class AgentMemoryRetriever {
     this.recallFilter = fn;
   }
 
-  /** Proactive retrieval for injection. Marks access only on the kept items. */
+  /** Candidates for injection. The caller records access AFTER prompt assembly. */
   async retrieve(
     scope: AgentMemoryScope,
     projectId: number,
@@ -89,7 +91,7 @@ export class AgentMemoryRetriever {
       title: t.row.name,
       content: t.row.content,
       importance: clamp01(t.row.importance ?? 0.5),
-      staleNote: buildStaleNote(t.stale),
+      staleNote: buildStaleNote(t.stale, t.unknown),
     }));
     // LLM aboutness pass (fail-open) — only worth a (paid) call when there are
     // MORE candidates than we'll keep, i.e. something to actually discriminate.
@@ -101,8 +103,6 @@ export class AgentMemoryRetriever {
       }
     }
     const items = candidates.slice(0, topK);
-    // Mark access only on the items actually injected.
-    this.markAccessed(items.map((m) => Number(m.id)).filter((n) => Number.isFinite(n)));
     return items;
   }
 
@@ -127,7 +127,7 @@ export class AgentMemoryRetriever {
       return [];
     }
     const top = this.scoreHits(hits).slice(0, k);
-    this.markAccessed(top.map((t) => t.row.id));
+    recordMemoryAccess(this.db, top.map((t) => t.row.id), 'explicit_read');
     return top.map((t) => ({
       id: String(t.row.id),
       title: t.row.name,
@@ -135,14 +135,14 @@ export class AgentMemoryRetriever {
       category: t.type,
       source: t.row.source,
       importance: clamp01(t.row.importance ?? 0.5),
-      staleNote: buildStaleNote(t.stale),
+      staleNote: buildStaleNote(t.stale, t.unknown),
     }));
   }
 
   private scoreHits(
     hits: Array<import('@mcp/shared/types.js').AgentMemoryRow & { score?: number }>,
   ): Scored[] {
-    let staleMap: Map<number, { stale: string[]; total: number }> | null = null;
+    let staleMap: Map<number, { stale: string[]; total: number; unknown?: number }> | null = null;
     try {
       staleMap = this.db.getAgentMemoryStaleBatch(hits.map((h) => h.id));
     } catch {
@@ -161,6 +161,7 @@ export class AgentMemoryRetriever {
       return {
         row,
         stale: st?.stale,
+        unknown: st?.unknown,
         type: row.type,
         score: blendedMemoryScore({
           relevance, importance: imp, recency: rec, usage: use, type: row.type, staleMult,
@@ -184,19 +185,6 @@ export class AgentMemoryRetriever {
     });
   }
 
-  private markAccessed(ids: number[]): void {
-    try {
-      // Access counters are best-effort telemetry. They must never inherit the
-      // worker-oriented 5s busy timeout on Electron-main.
-      if (typeof this.db.withBusyTimeout === 'function') {
-        this.db.withBusyTimeout(0, () => this.db.bumpAgentMemoryAccess(ids));
-      } else {
-        this.db.bumpAgentMemoryAccess(ids);
-      }
-    } catch {
-      /* best-effort */
-    }
-  }
 }
 
 function clamp01(n: number): number {
@@ -210,9 +198,13 @@ function toMs(s: string | null): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-function buildStaleNote(stale: string[] | undefined): string | undefined {
-  if (!stale || stale.length === 0) return undefined;
-  const shown = stale.slice(0, 3).join(', ');
-  const extra = stale.length > 3 ? ` (+${stale.length - 3} more)` : '';
-  return `${shown}${extra} changed since recorded`;
+function buildStaleNote(stale: string[] | undefined, unknown = 0): string | undefined {
+  const parts: string[] = [];
+  if (stale?.length) {
+    const shown = stale.slice(0, 3).join(', ');
+    const extra = stale.length > 3 ? ` (+${stale.length - 3} more)` : '';
+    parts.push(`${shown}${extra} changed since recorded`);
+  }
+  if (unknown > 0) parts.push(`${unknown} file reference(s) could not be verified; re-read current source`);
+  return parts.length ? parts.join('; ') : undefined;
 }

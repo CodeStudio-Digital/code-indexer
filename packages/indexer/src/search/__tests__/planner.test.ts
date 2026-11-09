@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { planQuery } from '../planner.js';
+import { lexicalQuery, planQuery } from '../planner.js';
 
 describe('semantic search planner', () => {
+  it('removes prose stopwords without erasing literal lookups', () => {
+    expect(lexicalQuery('Where is the session expiration policy?')).toBe('session expiration policy?');
+    expect(lexicalQuery('Onde a sessão do usuário é validada?')).toBe('sessão usuário validada?');
+    expect(lexicalQuery('a')).toBe('a');
+    expect(lexicalQuery('auth.api_client')).toBe('auth.api_client');
+  });
   it('routes conceptual keyword bags to hybrid retrieval', () => {
     expect(planQuery('session expiration token timeout')).toEqual({
       mode: 'hybrid',

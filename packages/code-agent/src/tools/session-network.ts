@@ -1,4 +1,5 @@
-import { err, ok, type CoderTool } from '../core/tool.js';
+import { err, type CoderTool } from '../core/tool.js';
+import { okStructured } from '../core/model-output.js';
 import type { ChatSpawnInput, ChatTrigger } from '@mcp/session-storage/collaboration/network-types.js';
 
 const str = { type: 'string' };
@@ -18,7 +19,7 @@ export const sessionNetworkTools: CoderTool[] = definitions.map(({ action, ...de
         : action === 'read' ? await ctx.sessionNetwork.read(ctx.sessionId, target, args.final_only !== false, args.before_seq as number | undefined)
         : action === 'create' ? await ctx.sessionNetwork.create(ctx.sessionId, args as unknown as ChatSpawnInput, ctx.currentToolUseId ?? '')
         : await ctx.sessionNetwork.trigger(ctx.sessionId, args as unknown as Pick<ChatTrigger, 'sourceSessionId' | 'targetSessionId' | 'event' | 'prompt' | 'includeFinal'>, ctx.currentToolUseId ?? '');
-      return ok(JSON.stringify(result));
+      return okStructured(result);
     } catch (error) { return err(error instanceof Error ? error.message : String(error)); }
   },
 }));

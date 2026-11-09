@@ -11,6 +11,7 @@ import { err, ok, type Result } from './result.js';
  * re-auth. Refresh is implicit and silent.
  */
 export class ResolveMcpBearer {
+  private readonly rejected = new Map<string, string>();
   constructor(
     private readonly tokens: McpOAuthTokensReaderRepo,
     private readonly refresh: RefreshMcpAccessToken,
@@ -22,10 +23,15 @@ export class ResolveMcpBearer {
     if (!existing) return err({ kind: 'tokens_not_found', serverId });
 
     const now = this.clock.now();
-    if (!existing.needsRefresh(now)) return ok(existing.accessToken);
+    const rejected = this.rejected.get(serverId) === existing.accessToken;
+    if (!rejected && (!existing.needsRefresh(now) || (!existing.refreshRaw && !existing.isExpired(now)))) return ok(existing.accessToken);
 
     const refreshed = await this.refresh.execute({ serverId });
     if (!refreshed.ok) return err(refreshed.error);
+    this.rejected.delete(serverId);
     return ok(refreshed.value.accessToken);
   }
+
+  /** A 401 invalidates this bearer for the next request; the failed call is never replayed. */
+  rejectToken(serverId: string, token: string): void { this.rejected.set(serverId, token); }
 }

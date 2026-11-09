@@ -2,7 +2,7 @@
  * Agent Memory health card — sits beside MemoryHealthCard on the project Memory
  * surface and answers "is the dedicated agent_memory (migration 181) actually
  * being USED?". Shows live project/user memory counts + the decisive signal:
- * how many proactive recalls injected ≥1 memory (vs. came back empty), plus
+ * how many proactive recalls retrieved ≥1 memory (vs. came back empty), plus
  * save/forget telemetry. Read-only over GET /projects/:id/agent-memory/stats.
  */
 import { useTranslation } from 'react-i18next';
@@ -35,11 +35,11 @@ const pct = (v: number | null): string => (v == null ? '—' : `${Math.round(v *
 
 export function AgentMemoryHealthCard({ projectId }: { projectId: number }) {
   const { t } = useTranslation('projects');
-  const { data, refetch } = useApi<AgentMemoryStats>(`/projects/${projectId}/agent-memory/stats`);
+  const { data, error, refetch } = useApi<AgentMemoryStats>(`/projects/${projectId}/agent-memory/stats`);
   // Light live refresh so saves/recalls show up while you watch a session run.
   usePolling(() => refetch(), 8000, { immediate: false });
 
-  if (!data) return null;
+  if (!data) return error ? <p role="alert" className="px-3 py-2 text-xs text-destructive">{error}<button type="button" onClick={refetch} className="ml-2 underline">{t('memory.curation.retry')}</button></p> : null;
   const { liveProject, liveUser, events, recallHits, recallEmpty } = data;
   const used = recallHits > 0;
 
@@ -73,6 +73,8 @@ export function AgentMemoryHealthCard({ projectId }: { projectId: number }) {
       </div>
 
       <div className="text-[10px] text-muted-foreground">
+        <p>{t('memory.agent.confirmed', { injected: events.injected ?? 0, read: events.explicit_read ?? 0 })}</p>
+        <p>{t('memory.agent.evidenceHint')}</p>
         {t('memory.agent.events', {
           remember: events.remember ?? 0,
           forget: events.forget ?? 0,

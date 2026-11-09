@@ -6,42 +6,67 @@ import type { DirtyEvent, DirtyKind } from './types.js';
  * Paths are normalized to the index form (relative, forward slashes) by
  * the caller — this structure is transport-dumb.
  */
+export interface DirtyRecord { path: string; kind: DirtyKind; version: number }
+export interface DirtyJournal {
+  load(projectId: number): DirtyRecord[];
+  put(projectId: number, entries: DirtyRecord[]): void;
+  ack(projectId: number, entries: DirtyRecord[]): void;
+  clear(projectId: number): void;
+}
+export interface DirtyBatch { upserts: string[]; deletes: string[]; total: number; entries: DirtyRecord[] }
+
 export class DirtyQueue {
-  private byProject = new Map<number, Map<string, DirtyKind>>();
+  private byProject = new Map<number, Map<string, DirtyRecord>>();
+  private sequence = 0;
+  constructor(private journal?: DirtyJournal) {}
+
+  private entries(projectId: number): Map<string, DirtyRecord> {
+    let map = this.byProject.get(projectId);
+    if (!map) {
+      map = new Map((this.journal?.load(projectId) ?? []).map((e) => [e.path, e]));
+      for (const e of map.values()) this.sequence = Math.max(this.sequence, e.version);
+      this.byProject.set(projectId, map);
+    }
+    return map;
+  }
 
   add(projectId: number, events: DirtyEvent[]): void {
     if (events.length === 0) return;
-    let map = this.byProject.get(projectId);
-    if (!map) {
-      map = new Map();
-      this.byProject.set(projectId, map);
-    }
-    for (const e of events) map.set(e.path, e.kind);
+    const map = this.entries(projectId);
+    const entries = events.map((e) => ({ ...e, version: ++this.sequence }));
+    // Persist before publishing. Unacknowledged work is replayed after restart.
+    this.journal?.put(projectId, entries);
+    for (const e of entries) map.set(e.path, e);
   }
 
   size(projectId: number): number {
-    return this.byProject.get(projectId)?.size ?? 0;
+    return this.entries(projectId).size;
   }
 
   /**
-   * Remove and return up to `max` entries, split by kind. Entries added
-   * while a drain is running stay queued for the next batch.
+   * Snapshot up to max entries. Only ack removes them, after a successful commit.
    */
-  takeBatch(projectId: number, max: number): { upserts: string[]; deletes: string[]; total: number } {
-    const map = this.byProject.get(projectId);
-    const upserts: string[] = [];
-    const deletes: string[] = [];
-    if (!map) return { upserts, deletes, total: 0 };
-    for (const [path, kind] of map) {
-      if (upserts.length + deletes.length >= max) break;
-      (kind === 'delete' ? deletes : upserts).push(path);
-      map.delete(path);
+  takeBatch(projectId: number, max: number): DirtyBatch {
+    const entries: DirtyRecord[] = [];
+    for (const e of this.entries(projectId).values()) {
+      if (entries.length >= max) break;
+      entries.push(e);
     }
-    if (map.size === 0) this.byProject.delete(projectId);
-    return { upserts, deletes, total: upserts.length + deletes.length };
+    return { entries, total: entries.length,
+      upserts: entries.filter((e) => e.kind === 'upsert').map((e) => e.path),
+      deletes: entries.filter((e) => e.kind === 'delete').map((e) => e.path) };
+  }
+
+  ack(projectId: number, batch: DirtyBatch, failedPaths: readonly string[] = []): void {
+    const failed = new Set(failedPaths);
+    const entries = batch.entries.filter((e) => !failed.has(e.path));
+    this.journal?.ack(projectId, entries);
+    const map = this.entries(projectId);
+    for (const e of entries) if (map.get(e.path)?.version === e.version) map.delete(e.path);
   }
 
   clear(projectId: number): void {
+    this.journal?.clear(projectId);
     this.byProject.delete(projectId);
   }
 }

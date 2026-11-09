@@ -1,4 +1,5 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
+import { OPENAI_API_MODELS } from '@mcp/shared/providers/openai-api-models.js';
 
 /**
  * Declarative specs for the OpenAI-compatible built-ins. Provider-specific
@@ -46,35 +47,7 @@ export const openaiSpec: ProviderSpec = {
   },
   discovery: { from: 'openai-models' },
   test: { from: 'openai-models', fallbackBaseURL: 'https://api.openai.com/v1' },
-  models: {
-    'gpt-5.6-sol': {
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-      canReason: true,
-      supportsAttachments: true,
-      supportedReasoningLevels: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-      defaultReasoningLevel: 'medium',
-      applyPatchToolType: 'freeform',
-    },
-    'gpt-5.6-terra': {
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-      canReason: true,
-      supportsAttachments: true,
-      supportedReasoningLevels: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-      defaultReasoningLevel: 'medium',
-      applyPatchToolType: 'freeform',
-    },
-    'gpt-5.6-luna': {
-      contextWindow: 1_050_000,
-      maxTokens: 128_000,
-      canReason: true,
-      supportsAttachments: true,
-      supportedReasoningLevels: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
-      defaultReasoningLevel: 'medium',
-      applyPatchToolType: 'freeform',
-    },
-  },
+  models: OPENAI_API_MODELS,
 };
 
 export const deepseekSpec: ProviderSpec = {

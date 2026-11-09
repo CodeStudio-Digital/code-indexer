@@ -10,6 +10,7 @@ import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapte
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 
 export class OpenAIChatProvider implements ChatProvider {
+  readonly toolLimits: ChatProvider['toolLimits'];
   readonly name: string;
   model: string;
   private client: OpenAI;
@@ -45,6 +46,9 @@ export class OpenAIChatProvider implements ChatProvider {
     this.name = opts.name ?? 'openai';
     this.model = opts.model;
     this.vendor = opts.vendor ?? 'openai';
+    this.toolLimits = this.vendor === 'openai' && (!opts.baseURL || new URL(opts.baseURL).hostname === 'api.openai.com')
+      ? { maxNameChars: 64, source: 'https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create' }
+      : undefined;
     this.bodyInject = opts.bodyInject;
     this.bodyRemove = opts.bodyRemove;
     this.reasoningDeltaKey = opts.reasoningDeltaKey;

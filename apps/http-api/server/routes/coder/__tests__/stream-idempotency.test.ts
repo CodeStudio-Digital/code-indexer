@@ -330,7 +330,7 @@ describe('POST /messages idempotency', () => {
     expect(poolMock.runFresh).toHaveBeenCalledOnce();
   });
 
-  it('upgrades a matching legacy fresh preflight cache before the run starts', async () => {
+  it('reuses a matching fresh preflight cache without adding lifecycle metadata', async () => {
     vi.stubEnv('CODER_PREFLIGHT', '1');
     const content = 'fix the retry race';
     const seed = { taskKind: 'bugfix', profile: 'navigate' as const };
@@ -350,16 +350,7 @@ describe('POST /messages idempotency', () => {
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
     expect(h.taskPreflightRun).not.toHaveBeenCalled();
-    expect(h.preflightSeedWrites).toHaveLength(1);
-    const upgradedCache = JSON.parse(h.preflightSeedWrites[0]!) as Record<string, unknown>;
-    expect(upgradedCache).toMatchObject({
-      h: preflightHash(`${content}\0`),
-      seed,
-      goalLifecycleIntentVersion: 1,
-      goalLifecycleRequired: true,
-    });
-    expect(typeof upgradedCache.goalLifecyclePendingSince).toBe('string');
-    expect(Number.isFinite(Date.parse(String(upgradedCache.goalLifecyclePendingSince)))).toBe(true);
+    expect(h.preflightSeedWrites).toHaveLength(0);
     expect(poolMock.runFresh).toHaveBeenCalledWith(
       SESSION_ID,
       expect.objectContaining({ preflight: seed }),
@@ -961,13 +952,13 @@ describe('uncertain tool effect admission', () => {
     expect(await retry.text()).toContain('original-attempt-reconciled');
   });
 
-  it('rejects continue from durable evidence before admitting another run', async () => {
+  it('admits explicit continue so bootstrap can restore recovery restrictions from durable evidence', async () => {
     const h = setup(new RecentMessageKeys(), { unresolvedToolOutcome: true });
     const response = await h.post('/api/coder/sessions/' + SESSION_ID + '/continue', {});
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: 'TOOL_OUTCOME_UNKNOWN', retryable: false });
-    expect(poolMock.runFresh).not.toHaveBeenCalled();
-    expect(h.acceptCalls).toHaveLength(0);
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(poolMock.runFresh.mock.calls[0][1]).toMatchObject({ resume: true });
+    expect(h.acceptCalls).toHaveLength(1);
   });
 
   it.each(['messages', 'continue'])('preserves a typed uncertain-effect worker failure on %s', async path => {

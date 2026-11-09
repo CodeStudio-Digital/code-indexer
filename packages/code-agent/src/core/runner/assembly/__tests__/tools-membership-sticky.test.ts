@@ -1,17 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { tmpdir } from 'node:os';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import {
-  buildTools,
-  enforceAtomicGoalToolPair,
-  fingerprintTools,
-} from '@mcp/code-agent/core/runner/assembly/tools.js';
+import { buildTools, fingerprintTools } from '@mcp/code-agent/core/runner/assembly/tools.js';
 import { profileToTiers } from '@mcp/code-agent/tools/tiers.js';
 import { resolveSessionProfile, type PersistedToolsetState } from '@mcp/code-agent/tools/profile-resolution.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 
 /**
- * Cross-RUN membership stability (mig 142). The create_goal incident pinned
+ * Cross-RUN membership stability (mig 142). A previous tool membership incident pinned
  * the within-run invariant (tools-array-stability.test.ts); session 991
  * showed the cross-run version: re-inferring the profile from whatever tail
  * was loaded flipped the tool array between rounds (118 ↔ ~60), busting the
@@ -86,61 +82,5 @@ describe('sticky toolset — byte-identical array across resumes with different 
       provider: { name: 'chatgpt', model: 'gpt-5.5' } as unknown as Parameters<typeof buildTools>[0]['provider'],
     });
     expect(built.tools.map((t) => t.name)).toContain('mcp__search');
-  });
-
-  it('removes both goal transitions when update_goal is disabled', () => {
-    const registry = new ToolRegistry();
-    registry.registerAll([
-      makeTool('create_goal'),
-      makeTool('update_goal'),
-      makeTool('read_file'),
-    ]);
-    const built = buildTools({
-      registry,
-      sessionDisabledTools: new Set(['update_goal']),
-      activeTiers: null,
-      toolContext: { cwd: tmpdir(), projectName: 'test' } as unknown as ToolContext,
-      provider: { name: 'chatgpt', model: 'gpt-5.5' } as unknown as Parameters<typeof buildTools>[0]['provider'],
-    });
-
-    expect(built.tools.map((tool) => tool.name)).toEqual(['read_file']);
-  });
-
-  it('removes both goal transitions when create_goal is disabled', () => {
-    const registry = new ToolRegistry();
-    registry.registerAll([
-      makeTool('create_goal'),
-      makeTool('update_goal'),
-      makeTool('read_file'),
-    ]);
-    const built = buildTools({
-      registry,
-      globalDisabledTools: new Set(['create_goal']),
-      activeTiers: null,
-      toolContext: { cwd: tmpdir(), projectName: 'test' } as unknown as ToolContext,
-      provider: { name: 'chatgpt', model: 'gpt-5.5' } as unknown as Parameters<typeof buildTools>[0]['provider'],
-    });
-
-    expect(built.tools.map((tool) => tool.name)).toEqual(['read_file']);
-  });
-
-  it('normalizes arbitrary post-build subsets without perturbing coherent arrays', () => {
-    const both = [{ name: 'create_goal' }, { name: 'read_file' }, { name: 'update_goal' }];
-    const neither = [{ name: 'read_file' }];
-
-    expect(enforceAtomicGoalToolPair(both)).toBe(both);
-    expect(enforceAtomicGoalToolPair(neither)).toBe(neither);
-    expect(enforceAtomicGoalToolPair([
-      { name: 'create_goal' },
-      { name: 'read_file' },
-    ])).toEqual([{ name: 'read_file' }]);
-    expect(enforceAtomicGoalToolPair([
-      { name: 'read_file' },
-      { name: 'update_goal' },
-    ])).toEqual([{ name: 'read_file' }]);
-    expect(enforceAtomicGoalToolPair(
-      [{ name: 'read_file' }],
-      both,
-    )).toEqual(both);
   });
 });

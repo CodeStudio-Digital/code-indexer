@@ -27,6 +27,7 @@ const H = vi.hoisted(() => ({
   resolveAndRunMaster: vi.fn(async () => {}),
   ensureCompanyMasterLive: vi.fn(),
   normalizeAttachments: vi.fn(async (attachments: unknown) => attachments),
+  persistAttachments: vi.fn(async () => [{ name: 'a.txt', mediaType: 'text/plain', size: 4, sha256: 'a'.repeat(64) }]),
   companyFiles: null as Record<string, (...args: any[]) => any> | null,
 }));
 
@@ -43,6 +44,7 @@ vi.mock('../../../../sse/companyOrchestrator.js', () => ({
   },
 }));
 vi.mock('../master-resolve.js', () => ({ resolveAndRunMaster: H.resolveAndRunMaster }));
+vi.mock('@mcp/company/services/board-attachments.js', () => ({ persistBoardAttachments: H.persistAttachments }));
 vi.mock('../ensure-master-live.js', () => ({
   ensureCompanyMasterLive: H.ensureCompanyMasterLive,
   ensureCompanyMasterLiveLocked: H.ensureCompanyMasterLive,
@@ -370,6 +372,7 @@ beforeEach(() => {
   H.ensureCompanyMasterLive.mockReset();
   H.ensureCompanyMasterLive.mockImplementation(async () => ({ orchestrator: H.orch }));
   H.normalizeAttachments.mockReset();
+  H.persistAttachments.mockClear();
   H.normalizeAttachments.mockImplementation(async (attachments: unknown) => attachments);
 });
 
@@ -831,6 +834,18 @@ describe('company persisted prompt delivery', () => {
 });
 
 describe('company POST /start idempotency', () => {
+  it.each(['start', 'resume'])('preserves the real %s failure through idempotent SSE retries', async endpoint => {
+    H.onSpawn = makeOrch;
+    H.resolveAndRunMaster.mockRejectedValueOnce(new Error('Session writer unavailable'));
+    const h = setup();
+    const body = { ...(endpoint === 'start' ? { user_message: 'once' } : { message: 'once' }), client_msg_id: `failure-detail-${endpoint}` };
+    const first = await h.post(sessionPath(`/${endpoint}`), body);
+    expect(first.status).toBe(500);
+    expect((await first.json()).error).toContain('Session writer unavailable');
+    const replay = await h.post(sessionPath(`/${endpoint}`), body);
+    expect(await replay.text()).toContain('Session writer unavailable');
+    expect(H.resolveAndRunMaster).toHaveBeenCalledTimes(1);
+  });
   it('classifies a start request timeout as OUTCOME_UNKNOWN and never auto-replays it', async () => {
     H.onSpawn = makeOrch;
     H.resolveAndRunMaster.mockRejectedValueOnce(requestTimeoutError());
@@ -910,6 +925,8 @@ describe('company POST /start idempotency', () => {
     expect(H.normalizeAttachments).toHaveBeenCalledTimes(1);
     expect(h.acceptCalls).toHaveLength(1);
     expect(H.resolveAndRunMaster).toHaveBeenCalledTimes(1);
+    expect(H.persistAttachments).toHaveBeenCalledTimes(1);
+    expect(H.resolveAndRunMaster.mock.calls[0]).toEqual(expect.arrayContaining([expect.objectContaining({ boardAttachments: [expect.objectContaining({ name: 'a.txt', size: 4 })] })]));
     markEnded(H.orch!.metaBus as CoderRunBus, 'done', {});
   });
 

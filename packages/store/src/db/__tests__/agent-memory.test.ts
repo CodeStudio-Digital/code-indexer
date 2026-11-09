@@ -57,6 +57,22 @@ describe('agent_memory store (migration 181)', () => {
     expect(m.archived_at).toBeNull();
   });
 
+  it('ranks by recency and source before limiting index candidates', () => {
+    db.raw().transaction(() => {
+      for (let i = 0; i < 101; i++) {
+        const old = db.createAgentMemory({ projectId, name: `ancient ${i}`, content: 'old', importance: 1, source: 'session' });
+        db.raw().prepare("UPDATE agent_memory SET created_at='2000-01-01 00:00:00' WHERE id=?").run(old.id);
+      }
+    })();
+    const fresh = db.createAgentMemory({ projectId, name: 'current user convention', content: 'current', source: 'user', importance: 0.5 });
+    expect(db.listAgentMemoryIndex('project', projectId, 1)[0]?.id).toBe(fresh.id);
+  });
+  it('keeps human-curated memories at explicit intent priority after editing', () => {
+    const agent = db.createAgentMemory({ projectId, name: 'agent suggestion', content: 'suggestion', source: 'agent' });
+    const manual = db.createAgentMemory({ projectId, name: 'human constraint', content: 'constraint', source: 'manual' });
+    expect(db.listAgentMemoryIndex('project', projectId, 2).map(row => row.id)).toEqual([manual.id, agent.id]);
+  });
+
   it('partial unique index allows archive + recreate same name', () => {
     const a = db.createAgentMemory({ projectId, name: 'auth flow', content: 'v1' });
     db.archiveAgentMemory(a.id, 'test');
@@ -103,6 +119,28 @@ describe('agent_memory store (migration 181)', () => {
   it('local scope can never sync', () => {
     const m = db.createAgentMemory({ scope: 'local', projectId, name: 'machine path', content: 'C:/x', sync: true });
     expect(m.sync).toBe(0);
+  });
+
+  it('counts project/local curation stock while retrieval keeps its exact scope', () => {
+    const project = db.createAgentMemory({ scope: 'project', projectId, name: 'project preference', content: 'project', type: 'preference' });
+    const local = db.createAgentMemory({ scope: 'local', projectId, name: 'local preference', content: 'local', type: 'preference' });
+    const user = db.createAgentMemory({ scope: 'user', projectId, name: 'user preference', content: 'user', type: 'preference' });
+    const other = db.createProject('other', join(dir, 'other')).id;
+    for (const scope of ['project', 'local'] as const) {
+      db.createAgentMemory({ scope, projectId: other, name: `${scope} elsewhere`, content: 'other', type: 'preference' });
+      const archived = db.createAgentMemory({ scope, projectId, name: `${scope} archived`, content: 'old', type: 'preference' });
+      db.archiveAgentMemory(archived.id, 'test');
+    }
+    db.bumpAgentMemoryAccess([local.id]);
+
+    expect(db.getAgentMemoryStats(projectId)).toMatchObject({ liveProject: 2, liveUser: 1 });
+    expect(db.getAgentMemoryStats()).toMatchObject({ liveProject: 4, liveUser: 1 });
+    expect(db.getMemoryEffectivenessKpis(projectId, {
+      windowDays: 30, sessionsInWindow: 0, learnedSessions: 0, explicitCalls: {},
+    })).toMatchObject({ liveStock: 2, usageCoverage: 0.5, goldStock: 3 });
+    expect(db.listAgentMemoryIndex('project', projectId).map(row => row.id)).toEqual([project.id]);
+    expect(db.listAgentMemoryIndex('local', projectId).map(row => row.id)).toEqual([local.id]);
+    expect(db.listAgentMemoryIndex('user', projectId).map(row => row.id)).toEqual([user.id]);
   });
 
   it('user scope normalizes to project 0', () => {

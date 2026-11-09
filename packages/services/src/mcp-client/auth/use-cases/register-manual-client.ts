@@ -6,6 +6,7 @@ import type { McpOAuthRegistrationAdminRepo } from '../ports/oauth-registration-
 
 export interface RegisterManualInput {
   serverId: string;
+  resourceUrl?: string;
   asMetadata: AuthorizationServerMetadata;
   clientId: string;
   clientSecret: string | null;
@@ -27,6 +28,9 @@ export class RegisterManualClient {
   execute(input: RegisterManualInput): McpOAuthRegistration {
     const registration = McpOAuthRegistration.create({
       serverId: input.serverId,
+      resourceUrl: input.resourceUrl,
+      tokenEndpointAuthMethod: !input.clientSecret ? 'none'
+        : input.asMetadata.tokenEndpointAuthMethodsSupported.includes('client_secret_basic') ? 'client_secret_basic' : 'client_secret_post',
       issuer: input.asMetadata.issuer,
       authorizationEndpoint: input.asMetadata.authorizationEndpoint,
       tokenEndpoint: input.asMetadata.tokenEndpoint,

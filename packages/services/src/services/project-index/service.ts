@@ -1,15 +1,61 @@
+import { drainDirtyQueue } from './service-drain.js';
 
 
 import { isUnityProjectRoot } from '@mcp/shared/utils/project-ignore.js';
 
 import { type ActiveIndexRun, type DirtyEvent, type ProjectIndexSettings, type ProjectIndexStatus, type StructuralProgressFrame } from './types.js';
 import { isStructurallyReady, waitForStructuralReadiness, type StructuralReadinessResult } from './structural-readiness.js';
-import { type EnsureFreshReason, type SemanticCatchupHooks, DRAIN_BATCH, PROGRESS_MIN_INTERVAL_MS, LARGE_PROJECT_FILE_COUNT, envDelay, yieldToEventLoop, msg } from './service-support.js';
+import { type EnsureFreshReason, type SemanticCatchupHooks, PROGRESS_MIN_INTERVAL_MS, LARGE_PROJECT_FILE_COUNT, envDelay, yieldToEventLoop, msg } from './service-support.js';
 import { ProjectIndexWatchers } from './service-watchers.js';
 export type { EnsureFreshReason, SemanticCatchupHooks } from './service-support.js';
 
 /** Coordinates structural indexing and semantic catch-up for active projects. */
 export class ProjectIndexService extends ProjectIndexWatchers {
+  private readonly structuralRuns = new Map<number, Promise<StructuralReadinessResult>>();
+
+  /** Explicit repair waits for its own pass, not a previously usable baseline.
+   * Cancellation/timeout stops this caller's wait and any queued request; an
+   * already running shared index publication is allowed to finish atomically. */
+  reconcileStructural(projectId: number, timeoutMs: number, signal?: AbortSignal, beforeStart?: () => void): Promise<StructuralReadinessResult> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: StructuralReadinessResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        resolve(result);
+      };
+      const current = (status: StructuralReadinessResult['status']): StructuralReadinessResult => ({
+        status, phase: this.getStatus(projectId).phase,
+      });
+      const onAbort = () => finish(current('aborted'));
+      const timer = setTimeout(() => finish(current('timeout')), Math.max(1, timeoutMs));
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) { onAbort(); return; }
+      void (async () => {
+        // A pass already scanning may have visited the changed file before
+        // this request. Wait for it, then request a new repair pass.
+        while (!settled && this.structuralRuns.has(projectId)) {
+          await this.structuralRuns.get(projectId);
+        }
+        if (settled) return;
+        if (this.disposed) { finish(current('disabled')); return; }
+        this.startStructuralRun(projectId, this.settings(), true, 'manual', () => {
+          if (settled) return false;
+          beforeStart?.();
+          return true;
+        });
+        let result: StructuralReadinessResult = current('disabled');
+        // A branch/workspace event can supersede the pass. Follow its queued
+        // replacement through the watcher barrier instead of acknowledging it.
+        while (!settled && this.structuralRuns.has(projectId)) {
+          result = await this.structuralRuns.get(projectId)!;
+        }
+        finish(result);
+      })().catch((error) => finish({ ...current('error'), error: msg(error) }));
+    });
+  }
 
   setSemanticCatchup(hooks: SemanticCatchupHooks | null): void {
     this.semanticCatchup = hooks;
@@ -212,6 +258,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     s: ProjectIndexSettings,
     manual: boolean,
     reason: EnsureFreshReason = manual ? 'manual' : 'open',
+    beforeStart?: () => boolean | void,
   ): void {
     const pending = this.pendingOpen.get(projectId);
     if (pending) {
@@ -235,15 +282,20 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     this.ensureGitMetaWatching(projectId);
     this.ensureFileWatching(projectId, 0, true);
     let reconciled = false;
-    void this.mutex
+    let run: Promise<StructuralReadinessResult>;
+    run = this.mutex
       .withLock(projectId, async () => {
         await this.waitForFileWatcherReady(projectId);
+        // Semantic jobs can own this mutex too. Recheck the requesting owner
+        // after every queue/barrier, immediately before the worker starts.
+        if (beforeStart?.() === false) return;
         const completed = await this.runStructural(projectId, s, manual);
         if (!completed) return;
         // Give watcher callbacks queued in the same event-loop turn a chance
         // to enter their debounce buffer, then flush it at the scan barrier.
         await yieldToEventLoop();
         await this.flushWatcherEvents(projectId);
+        if (this.queuedReconcile.has(projectId)) return;
         await this.drainDirtyLocked(projectId);
         this.status.refreshFromDb(projectId);
         reconciled = true;
@@ -252,7 +304,16 @@ export class ProjectIndexService extends ProjectIndexWatchers {
           console.warn(`[project-index] semantic project catch-up paused for ${projectId}: ${msg(error)}`));
       })
       .catch((err) => this.status.setPhase(projectId, 'error', msg(err)))
+      .then((): StructuralReadinessResult => {
+        const status = this.getStatus(projectId);
+        return {
+          status: reconciled ? 'ready' : status.phase === 'too_large' ? 'too_large' : 'error',
+          phase: status.phase,
+          ...(!reconciled ? { error: status.error ?? 'Structural reconciliation did not settle.' } : {}),
+        };
+      })
       .finally(() => {
+        if (this.structuralRuns.get(projectId) === run) this.structuralRuns.delete(projectId);
         this.fallbackReconcileAt.set(projectId, Date.now());
         this.running.delete(projectId);
         this.runReason.delete(projectId);
@@ -272,12 +333,14 @@ export class ProjectIndexService extends ProjectIndexWatchers {
           if (!this.shouldKeepWatcher(projectId)) this.scheduleFileWatcherStop(projectId);
         }
       });
+    this.structuralRuns.set(projectId, run);
   }
 
   /** Known changes (Monaco save/rename/delete, scaffold) — index-form rel paths. */
   markDirty(projectId: number, events: DirtyEvent[]): void {
     if (this.disposed || events.length === 0) return;
     this.dirty.add(projectId, events);
+    this.drainFailures.delete(projectId);
     this.semanticCatchup?.noteDelta(projectId, events);
     this.status.setDirtyPending(projectId, this.dirty.size(projectId));
     // Every indexable change is also a UI-visible change — markDirty is the
@@ -361,13 +424,27 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   // ─── Internals ────────────────────────────────────────────────────
 
   protected async runStructural(projectId: number, s: ProjectIndexSettings, manual = false): Promise<boolean> {
+    const beforeScan = this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER);
     this.status.setPhase(projectId, 'scanning');
     const result = await this.executor.runStructuralIndex(projectId, {
       maxFiles: s.maxFiles,
       allowEmptyWipe: manual,
+      forceReparse: manual,
       onProgress: (p) => this.publishStructuralProgress(projectId, p),
-      onChanges: (events, previousItemKeys) =>
-        this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys),
+      onChanges: async (events, previousItemKeys) => {
+        // A cold scan also owns durable deltas: watcher history may not include
+        // files that predate startup. Failed publication must leave them replayable.
+        const pending = this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER);
+        const pendingPaths = new Set(pending.entries.map(entry => entry.path));
+        const discovered = events.filter(event => !pendingPaths.has(event.path));
+        this.dirty.add(projectId, discovered);
+        const discoveredPaths = new Set(discovered.map(event => event.path));
+        beforeScan.entries.push(...this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER).entries
+          .filter(entry => discoveredPaths.has(entry.path)));
+        // Only scan-owned versions may be acknowledged. Watcher events arriving
+        // during the scan remain pending, even when their path occurs in events.
+        await this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys);
+      },
     });
     if (result.aborted === 'too_large') {
       this.status.setPhase(projectId, 'too_large');
@@ -381,6 +458,11 @@ export class ProjectIndexService extends ProjectIndexWatchers {
       );
       return false;
     }
+    if (result.aborted || result.errorCount > 0) {
+      this.status.setPhase(projectId, 'error', 'Structural publication did not complete; the previous index and pending deltas were preserved.');
+      return false;
+    }
+    this.dirty.ack(projectId, beforeScan);
     return true;
   }
 
@@ -410,33 +492,9 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   }
 
   protected async drainDirtyLocked(projectId: number): Promise<void> {
-    while (this.dirty.size(projectId) > 0) {
-      const batch = this.dirty.takeBatch(projectId, DRAIN_BATCH);
-      if (batch.total === 0) break;
-      const capturePreviousItems = (
-        events: readonly DirtyEvent[],
-        previousItemKeys: readonly string[],
-      ): void => {
-        // markDirty already persisted the path fence before this worker RPC.
-        // Merge the worker-captured pre-mutation keys only when there is old
-        // structural ownership to preserve for stale-vector cleanup.
-        if (previousItemKeys.length > 0) {
-          this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys);
-        }
-      };
-      if (batch.deletes.length > 0) {
-        await this.executor.removeFiles(projectId, batch.deletes, {
-          onChanges: capturePreviousItems,
-        });
-      }
-      if (batch.upserts.length > 0) {
-        await this.executor.indexFiles(projectId, batch.upserts, {
-          onChanges: capturePreviousItems,
-        });
-      }
-      this.status.setDirtyPending(projectId, this.dirty.size(projectId));
-      if (this.dirty.size(projectId) > 0) await yieldToEventLoop();
-    }
+    await drainDirtyQueue(projectId, this.dirty, () => this.executor, this.status, (events, previousItemKeys) => {
+      this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys);
+    });
   }
 
   protected notifyProjectReady(projectId: number): void {
@@ -454,16 +512,32 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   }
 
   protected scheduleDrain(projectId: number): void {
-    if (this.disposed || this.running.has(projectId) || this.draining.has(projectId) || this.dirty.size(projectId) === 0) return;
+    if (this.disposed || this.running.has(projectId) || this.draining.has(projectId) || this.drainRetries.has(projectId)
+      || (this.drainFailures.get(projectId) ?? 0) >= 5 || this.dirty.size(projectId) === 0) return;
     this.draining.add(projectId);
     void this.mutex
       .withLock(projectId, async () => {
+        if (this.disposed || this.running.has(projectId)) return;
         await this.drainDirtyLocked(projectId);
+        this.drainFailures.delete(projectId);
         this.status.refreshFromDb(projectId);
         void this.semanticCatchup?.ensureProject(projectId).catch((error) =>
           console.warn(`[project-index] semantic watcher catch-up paused for ${projectId}: ${msg(error)}`));
       })
-      .catch((err) => console.warn(`[project-index] drain failed for project ${projectId}: ${msg(err)}`))
+      .catch((err) => {
+        const failures = (this.drainFailures.get(projectId) ?? 0) + 1;
+        this.drainFailures.set(projectId, failures);
+        this.status.setPhase(projectId, 'error', `${msg(err)}; ${this.dirty.size(projectId)} pending`);
+        if (!this.disposed && failures < 5) {
+          const timer = setTimeout(() => {
+            this.drainRetries.delete(projectId);
+            this.scheduleDrain(projectId);
+          }, Math.min(30_000, 500 * 2 ** (failures - 1)));
+          timer.unref?.();
+          this.drainRetries.set(projectId, timer);
+        }
+        console.warn(`[project-index] drain failed for project ${projectId}: ${msg(err)}`);
+      })
       .finally(() => {
         this.draining.delete(projectId);
         // Items that arrived between the loop exit and the flag reset.

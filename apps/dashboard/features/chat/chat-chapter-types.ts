@@ -25,7 +25,6 @@ export interface ConversationResumeContent {
   constraints?: string[];
   pending_tasks?: string[];
   next_step?: string;
-  active_goal?: string;
 }
 
 /** Append-only chapter row returned by the conversation chapter API. */
@@ -111,4 +110,7 @@ export interface ConversationChapterSourceMessage {
 export interface ConversationChapterSourcePage {
   items: ConversationChapterSourceMessage[];
   next_cursor: string | null;
+  /** Results outside the page window, paired by the server with visible calls. */
+  tool_results?: Array<{ tool_use_id: string; content: string; is_error: boolean; _truncated?: boolean; _originalLength?: number }>;
+  preceding_user_seq?: number | null;
 }

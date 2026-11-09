@@ -22,7 +22,6 @@ describe('renderPreflightHint', () => {
     expect(hint).toBe([
       '<preflight>',
       'task_kind: bugfix',
-      'goal_lifecycle: optional durable context and telemetry only; it never authorizes tools or blocks completion. Use create_goal when cross-turn continuity is useful. update_goal completion persists immediately and any verification health is advisory.',
       'bug_workflow: reproduce the defect BEFORE touching production code. ' +
         '1) build a reproduction that fails for the expected reason; ' +
         '2) find the root cause with evidence; ' +
@@ -59,7 +58,6 @@ describe('renderPreflightHint', () => {
     const hint = renderPreflightHint({ memories: [{ title: 'X', reason: 'y' }] });
     expect(hint).not.toContain('toolset seeded');
     expect(hint).not.toContain('task_kind');
-    expect(hint).not.toContain('goal_lifecycle');
     expect(hint).toContain('- "X" — y');
   });
 

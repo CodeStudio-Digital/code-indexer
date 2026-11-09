@@ -15,7 +15,7 @@
 import { apiCall, apiStream } from '../../lib/api-client.js';
 import { confirm as hostConfirm, prompt as hostPrompt, toast } from '../../components/ui/prompt-dialog.js';
 import i18n from '../../i18n/index.js';
-import { registerPluginFrame, resolveFrame, unregisterPluginFrame } from './webview-frame-registry.js';
+import { onPluginFrameDisposed, registerPluginFrame, resolveFrame, unregisterPluginFrame } from './webview-frame-registry.js';
 
 // Frame identity lives in webview-frame-registry; re-exported so existing
 // importers (WebviewWindow) keep a single import surface.
@@ -43,9 +43,6 @@ const NS_BOUND = new Set<string>([
 
 /** Namespace-bound STREAMING methods (iframe `openStream`). */
 const NS_BOUND_STREAM = new Set<string>(['plugins.execStream', 'plugins.assistantStream']);
-
-/** AbortControllers for live iframe streams, per source frame then stream id. */
-const liveStreams = new WeakMap<MessageEventSource, Map<number, AbortController>>();
 
 interface InvokeMessage {
   __mcpPlugin: 'invoke';
@@ -76,52 +73,88 @@ function streamKind(d: unknown): StreamKind | null {
   return k === 'openStream' || k === 'closeStream' ? k : null;
 }
 
-function closeStream(source: MessageEventSource, id: number): void {
-  const m = liveStreams.get(source);
-  m?.get(id)?.abort();
-  m?.delete(id);
-}
-
-/** Pump a namespace-bound api-bus stream to the iframe; abortable via closeStream. */
-async function runStream(source: WindowProxy, msg: StreamMessage): Promise<void> {
-  const post = (body: Record<string, unknown>): void =>
-    source.postMessage({ __mcpPlugin: 'stream', id: msg.id, ...body }, '*');
-  const method = msg.method ?? '';
-  if (!NS_BOUND_STREAM.has(method)) {
-    post({ event: 'error', error: i18n.t('plugins:bridge.streamMethodNotAllowed', { method }) });
-    return;
-  }
-  const frame = await resolveFrame(source);
-  if (!frame) {
-    post({ event: 'error', error: i18n.t('plugins:bridge.frameNotRegistered') });
-    return;
-  }
-  const merged: Record<string, unknown> = {
-    ...(typeof msg.payload === 'object' && msg.payload ? msg.payload : {}),
-    namespace: frame.namespace,
+/** Each installed bridge owns its active iterators and releases them on unload. */
+function createStreamBridge() {
+  interface Entry { close(): void }
+  const live = new Map<MessageEventSource, Map<number, Entry>>();
+  const close = (source: MessageEventSource, id: number) => live.get(source)?.get(id)?.close();
+  const closeFrame = (source: MessageEventSource) => {
+    for (const entry of live.get(source)?.values() ?? []) entry.close();
+    live.delete(source);
   };
-  if (merged.projectId == null && frame.projectId != null) merged.projectId = frame.projectId;
+  const closeAll = () => { for (const source of live.keys()) closeFrame(source); };
 
-  const ac = new AbortController();
-  let perSource = liveStreams.get(source);
-  if (!perSource) {
-    perSource = new Map();
-    liveStreams.set(source, perSource);
-  }
-  perSource.set(msg.id, ac);
-  try {
-    for await (const value of apiStream(method, merged)) {
-      if (ac.signal.aborted) break;
-      post({ event: 'data', value });
+  async function open(source: WindowProxy, msg: StreamMessage): Promise<void> {
+    close(source, msg.id);
+    let perSource = live.get(source);
+    if (!perSource) { perSource = new Map(); live.set(source, perSource); }
+    let closed = false;
+    let iterator: AsyncIterator<unknown> | undefined;
+    let finishRead: ((value: IteratorResult<unknown>) => void) | undefined;
+    let returned = false;
+    const releaseIterator = () => {
+      if (returned || !iterator) return;
+      returned = true;
+      try { void Promise.resolve(iterator.return?.()).catch(() => undefined); } catch { /* already closed */ }
+    };
+    const remove = () => {
+      if (perSource.get(msg.id) !== entry) return;
+      perSource.delete(msg.id);
+      if (perSource.size === 0 && live.get(source) === perSource) live.delete(source);
+    };
+    const entry: Entry = { close() {
+      if (closed) return;
+      closed = true;
+      finishRead?.({ value: undefined, done: true });
+      finishRead = undefined;
+      releaseIterator();
+      remove();
+    } };
+    perSource.set(msg.id, entry);
+    const post = (body: Record<string, unknown>): void => {
+      if (!closed) source.postMessage({ __mcpPlugin: 'stream', id: msg.id, ...body }, '*');
+    };
+    let completed = false;
+    try {
+      const method = msg.method ?? '';
+      if (!NS_BOUND_STREAM.has(method)) {
+        post({ event: 'error', error: i18n.t('plugins:bridge.streamMethodNotAllowed', { method }) });
+        return;
+      }
+      const frame = await resolveFrame(source);
+      if (closed) return;
+      if (!frame) {
+        post({ event: 'error', error: i18n.t('plugins:bridge.frameNotRegistered') });
+        return;
+      }
+      const merged: Record<string, unknown> = {
+        ...(typeof msg.payload === 'object' && msg.payload ? msg.payload : {}),
+        namespace: frame.namespace,
+      };
+      if (merged.projectId == null && frame.projectId != null) merged.projectId = frame.projectId;
+      iterator = apiStream(method, merged)[Symbol.asyncIterator]();
+      while (!closed) {
+        // Only the current read owns a cancellation waiter. Reusing a single
+        // never-settling promise would retain one reaction for every frame.
+        const cancelled = new Promise<IteratorResult<unknown>>((resolve) => { finishRead = resolve; });
+        const step = await Promise.race([iterator.next(), cancelled]);
+        finishRead = undefined;
+        if (closed) break;
+        if (step.done) { completed = true; break; }
+        post({ event: 'data', value: step.value });
+      }
+      if (!closed) post({ event: 'end' });
+    } catch (err) {
+      post({ event: 'error', error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      finishRead = undefined;
+      if (!completed) releaseIterator();
+      closed = true;
+      remove();
     }
-    if (!ac.signal.aborted) post({ event: 'end' });
-  } catch (err) {
-    post({ event: 'error', error: err instanceof Error ? err.message : String(err) });
-  } finally {
-    perSource.delete(msg.id);
   }
+  return { open, close, closeFrame, closeAll };
 }
-
 /**
  * Host-rendered dialogs/toasts for plugin webviews. A sandboxed iframe
  * (`allow-scripts`, no `allow-modals`) can't use window.confirm/alert/prompt —
@@ -175,14 +208,16 @@ async function handlePluginUi(method: string, payload: unknown): Promise<unknown
 
 /** Install the global listener. Returns a disposer. Mounted once on app load. */
 export function installWebviewBridge(): () => void {
+  const streams = createStreamBridge();
+  const unbindFrames = onPluginFrameDisposed(streams.closeFrame);
   const onMessage = async (e: MessageEvent): Promise<void> => {
     const sk = streamKind(e.data);
     if (sk) {
       const source = e.source as WindowProxy | null;
       if (!source) return;
       const msg = e.data as StreamMessage;
-      if (sk === 'openStream') void runStream(source, msg);
-      else closeStream(source, msg.id);
+      if (sk === 'openStream') void streams.open(source, msg);
+      else streams.close(source, msg.id);
       return;
     }
     if (!isInvoke(e.data)) return;
@@ -221,5 +256,9 @@ export function installWebviewBridge(): () => void {
     }
   };
   window.addEventListener('message', onMessage);
-  return () => window.removeEventListener('message', onMessage);
+  return () => {
+    window.removeEventListener('message', onMessage);
+    unbindFrames();
+    streams.closeAll();
+  };
 }

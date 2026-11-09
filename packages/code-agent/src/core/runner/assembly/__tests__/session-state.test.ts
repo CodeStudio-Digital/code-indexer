@@ -7,13 +7,13 @@ import {
   renderSessionStateBlock,
   renderMemoryIndex,
   renderConversationChapterIndex,
+  renderUserMemoryBlock,
   hashSessionState,
   type SessionStateData,
   type SessionStateBudget,
 } from '../session-state.js';
 
 const FULL: SessionStateData = {
-  goal: { text: 'Fix the OAuth refresh loop', status: 'in_progress' },
   activePlan: { text: '1) Reproduce 2) Add mutex 3) Regression test', status: 'approved' },
   todos: [
     { status: 'completed', label: 'Reproduce the bug' },
@@ -29,7 +29,7 @@ const FULL: SessionStateData = {
 };
 
 const BUDGET: SessionStateBudget = {
-  planChars: 700, goalChars: 300, noteSlots: 4, noteChars: 280,
+  planChars: 700, noteSlots: 4, noteChars: 280,
   todoLines: 8, fileSlots: 6, includeLiveState: true,
 };
 
@@ -38,7 +38,6 @@ describe('renderSessionStateBlock', () => {
     const block = renderSessionStateBlock(FULL, BUDGET)!;
     expect(block.startsWith('<session-state>')).toBe(true);
     expect(block.endsWith('</session-state>')).toBe(true);
-    expect(block).toContain('goal: Fix the OAuth refresh loop (status=in_progress)');
     expect(block).toContain('plan [approved]:');
     expect(block).toContain('(call read_plan for full text)');
     expect(block).toContain('[in_progress] Adding refresh mutex');
@@ -47,7 +46,7 @@ describe('renderSessionStateBlock', () => {
     expect(block).toContain('recall: 2 prior investigation(s)');
   });
 
-  it('omits goal/todos when includeLiveState=false (active-context covers them)', () => {
+  it('omits todos when includeLiveState=false (active-context covers them)', () => {
     const block = renderSessionStateBlock(FULL, { ...BUDGET, includeLiveState: false })!;
     expect(block).not.toContain('goal:');
     expect(block).not.toContain('todos:');
@@ -56,8 +55,7 @@ describe('renderSessionStateBlock', () => {
   });
 
   it('returns null when nothing material exists', () => {
-    const empty: SessionStateData = {
-      goal: null, activePlan: null, todos: [], notes: [], filesChanged: [], investigationCount: 0,
+    const empty: SessionStateData = { activePlan: null, todos: [], notes: [], filesChanged: [], investigationCount: 0,
     };
     expect(renderSessionStateBlock(empty, BUDGET)).toBeNull();
   });
@@ -114,6 +112,19 @@ describe('renderMemoryIndex', () => {
   it('returns null for empty entries or zero budget', () => {
     expect(renderMemoryIndex([], 1000)).toBeNull();
     expect(renderMemoryIndex([{ title: 'x', category: 'note' }], 0)).toBeNull();
+  });
+});
+
+describe('global preference budgets', () => {
+  it.each([200, 300, 600])('includes an oversized first preference within %i characters', budget => {
+    const text = renderUserMemoryBlock([
+      { title: 'A durable user preference', excerpt: 'Always inspect the real workspace before changing its configuration. '.repeat(10) },
+      { title: 'Language', excerpt: 'Portuguese' },
+    ], budget);
+    expect(text).not.toBeNull();
+    expect(text!.length).toBeLessThanOrEqual(budget);
+    expect(text).toContain('A durable user preference');
+    expect(text).toContain('scope:"user"');
   });
 });
 

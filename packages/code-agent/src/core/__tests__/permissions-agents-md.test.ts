@@ -29,7 +29,7 @@ describe('permissionsSection', () => {
 
   it('varies the guidance per mode and pluralizes multiple roots', () => {
     expect(permissionsSection({ writableRoots: ['a'], approvalMode: 'auto' })).toContain('without prompting');
-    expect(permissionsSection({ writableRoots: ['a'], approvalMode: 'unrestricted' })).toContain('No approval prompts');
+    expect(permissionsSection({ writableRoots: ['a'], approvalMode: 'unrestricted' })).toContain('Standard tool approvals are disabled');
     expect(permissionsSection({ writableRoots: ['a', 'b'], approvalMode: 'ask' })).toContain('Writable roots: `a`, `b`');
   });
 
@@ -49,6 +49,19 @@ describe('permissionsSection', () => {
   it('is empty when no policy or no roots', () => {
     expect(permissionsSection(undefined)).toBe('');
     expect(permissionsSection({ writableRoots: [], approvalMode: 'auto' })).toBe('');
+  });
+
+  it.each(['ask', 'auto', 'unrestricted'] as const)('preserves special approval boundaries in %s mode', (approvalMode: 'ask' | 'auto' | 'unrestricted') => {
+    const out = permissionsSection({ writableRoots: ['a'], approvalMode });
+    expect(out).toContain('Database writes require their explicit approval');
+    if (approvalMode === 'unrestricted') {
+      expect(out).toContain('Historical unknown outcomes do not revoke unrestricted permission for new work');
+      expect(out).toContain('Exact replay of an uncertain operation remains separately guarded');
+    } else {
+      expect(out).toContain('Pending unknown outcomes require recovery approval for new effects');
+    }
+    expect(out).toContain('Review is not proof of success');
+    expect(out).not.toContain('every tool runs immediately');
   });
 });
 

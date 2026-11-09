@@ -38,19 +38,53 @@ function isProcessEnv(node: ts.Node): boolean {
 
 function envKey(node: ts.Node): string | null {
   if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) {
-    return /^[A-Z][A-Z0-9_]+$/.test(node.name.text) ? node.name.text : null;
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(node.name.text) ? node.name.text : null;
   }
   if (ts.isElementAccessExpression(node) && isProcessEnv(node.expression)) {
     const argument = node.argumentExpression;
     if (argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
-      return /^[A-Z][A-Z0-9_]+$/.test(argument.text) ? argument.text : null;
+      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(argument.text) ? argument.text : null;
     }
+  }
+  return null;
+}
+
+/** Resolve only a const for-of binding over an inline list of literal names.
+ * Mutable bindings, runtime lists and shadowed variables remain dynamic. */
+function literalLoopKeys(node: ts.Node): string[] | null {
+  if (!ts.isElementAccessExpression(node) || !isProcessEnv(node.expression)
+    || !node.argumentExpression || !ts.isIdentifier(node.argumentExpression)) return null;
+  const name = node.argumentExpression.text;
+  for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
+    if (ts.isFunctionLike(scope)) return null;
+    if (!ts.isForOfStatement(scope) || node.pos < scope.statement.pos) continue;
+    const declarations = scope.initializer;
+    if (!ts.isVariableDeclarationList(declarations) || !(declarations.flags & ts.NodeFlags.Const)
+      || declarations.declarations.length !== 1 || !ts.isIdentifier(declarations.declarations[0]!.name)
+      || declarations.declarations[0]!.name.text !== name || !ts.isArrayLiteralExpression(scope.expression)) return null;
+    if (!scope.expression.elements.every(value => ts.isStringLiteral(value)
+      && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value.text))) return null;
+    let shadowed = false;
+    const inspect = (child: ts.Node): void => {
+      if (ts.isVariableDeclaration(child) || ts.isFunctionDeclaration(child) || ts.isClassDeclaration(child)) {
+        const binding = (part: ts.Node): void => {
+          if (ts.isIdentifier(part) && part.text === name) shadowed = true;
+          ts.forEachChild(part, binding);
+        };
+        if (child.name) binding(child.name);
+      }
+      ts.forEachChild(child, inspect);
+    };
+    inspect(scope.statement);
+    if (shadowed) return null;
+    return scope.expression.elements.map(value => (value as ts.StringLiteral).text);
   }
   return null;
 }
 
 function isWrite(node: ts.Node): boolean {
   const parent = node.parent;
+  if (!parent) return false;
   if (ts.isDeleteExpression(parent)) return true;
   return ts.isBinaryExpression(parent)
     && parent.left === node
@@ -101,9 +135,10 @@ export function collectEnvReads(repoRoot: string, roots: readonly string[]): {
       const source = readFileSync(file, 'utf8');
       const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
       const visit = (node: ts.Node): void => {
-        const key = envKey(node);
+        const directKey = envKey(node);
+        const keys = directKey ? [directKey] : literalLoopKeys(node);
         if (
-          !key
+          !keys
           && ts.isElementAccessExpression(node)
           && isProcessEnv(node.expression)
           && !isWrite(node)
@@ -117,7 +152,7 @@ export function collectEnvReads(repoRoot: string, roots: readonly string[]): {
             expression: node.parent.getText(sourceFile).replace(/\s+/g, ' ').slice(0, 240),
           });
         }
-        if (key && !isWrite(node)) {
+        for (const key of keys && !isWrite(node) ? keys : []) {
           const parentText = node.parent.getText(sourceFile).replace(/\s+/g, ' ').slice(0, 240);
           const inferred = inferType(parentText, key);
           const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));

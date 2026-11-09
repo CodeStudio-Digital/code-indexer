@@ -6,6 +6,7 @@ import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js
 import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
+import { FileSemanticSearchTelemetryStore } from '@mcp/indexer/search/search-telemetry.js';
 import { ModelDiscovery } from '@mcp/indexer/indexer/providers/model-discovery.js';
 import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { SemanticStore } from '@mcp/store/semantic-store.js';
@@ -43,7 +44,13 @@ export function buildContext(): ToolContext {
   // or opening a vector database. Semantic reads go through localhost RPC;
   // this tiny HybridSearch instance exists only for the always-available FTS
   // fallback when the app/server is stopped.
-  const hybridSearch = new HybridSearch(db, null, new NullEmbeddingService());
+  const searchTelemetry = new FileSemanticSearchTelemetryStore((projectId) => {
+    const project = db.getProject(projectId);
+    return project && !project.is_synthetic ? project.root_path : null;
+  });
+  const hybridSearch = new HybridSearch(
+    db, null, new NullEmbeddingService(), null, null, null, null, null, null, searchTelemetry,
+  );
   const semanticMutationSink = createMcpSemanticMutationSink(semanticStore);
 
   return {

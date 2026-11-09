@@ -47,20 +47,26 @@ function renderDbResult(result: QueryResult, ctx: ToolContext, sourceRecoverable
       recoverable &&= info.recoverable;
     },
   });
-  if (result.truncated === true) {
+  if (result.truncated === true && (!result.acquisition || result.acquisition.observedRows > result.rows.length)) {
     sourceTruncations.push({
-      technique: 'db-driver-row-cap',
+      technique: result.acquisition?.cellsTruncated ? 'db-driver-window-cap' : 'db-driver-row-cap',
       // Drivers often cannot know the exact total without a second COUNT.
       // rowCount may be exact; otherwise +1 is the smallest truthful proof
       // that at least one row was omitted.
-      inputSize: Math.max(result.rowCount, result.rows.length + 1),
-      inputSizeExact: false,
+      inputSize: result.acquisition?.observedRows ?? Math.max(result.rowCount, result.rows.length + 1),
+      inputSizeExact: result.acquisition?.observedRowsExact ?? false,
       outputSize: result.rows.length,
       unit: 'rows',
       // Re-running a SELECT/read command with pagination is safe. Re-running
       // INSERT/UPDATE/DELETE or a mutating document command is not recovery.
-      recoverable: sourceRecoverable,
+      recoverable: !result.acquisition && sourceRecoverable,
     });
+  }
+  if (result.acquisition?.cellsTruncated) {
+    const cells = result.rows.reduce((count, row) => count + Object.keys(row).length, 0);
+    sourceTruncations.push({ technique: 'db-driver-cell-cap', unit: 'items',
+      inputSize: Math.max(cells, result.acquisition.cellsTruncated), inputSizeExact: false,
+      outputSize: Math.max(0, cells - result.acquisition.cellsTruncated), recoverable: false });
   }
   if (cappedCells > 0) {
     sourceTruncations.push({
@@ -73,6 +79,7 @@ function renderDbResult(result: QueryResult, ctx: ToolContext, sourceRecoverable
   }
   return {
     content,
+    structuredData: result,
     ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),
   };
 }
@@ -107,6 +114,22 @@ export async function inspectRelationalSchemaResult(
   signal?: AbortSignal,
 ): Promise<ToolResult> {
   const schema = typeof args.schema === 'string' && args.schema.trim() ? args.schema.trim() : undefined;
+  if (driver.catalogPage) {
+    signal?.throwIfAborted();
+    if (typeof args.table === 'string' && args.table.trim()) {
+      const info = await driver.describeTable(schema ?? '', args.table.trim());
+      signal?.throwIfAborted();
+      return { content: renderSchema([info]), structuredData: info };
+    }
+    if (schemaPageOffset(args.offset) > 0) throw new Error('Use the cursor from the preceding db_schema page instead of an offset.');
+    const page = await driver.catalogPage({ schema, query: typeof args.search === 'string' ? args.search : undefined,
+      cursor: typeof args.cursor === 'string' ? args.cursor : undefined, limit: schemaPageLimit(args.limit), signal });
+    return { content: 'SCHEMA CATALOG\n' + page.objects.map(o => `${o.schema}.${o.name} (${o.kind})`).join('\n') +
+        `\ncomplete=${page.complete}; next_cursor=${page.nextCursor ?? 'end'}; consistency=best_effort`,
+      structuredData: page,
+      ...(!page.complete ? { sourceTruncations: [{ technique: 'db-catalog-page', unit: 'items' as const,
+        inputSize: page.objects.length + 1, inputSizeExact: false, outputSize: page.objects.length, recoverable: false }] } : {}) };
+  }
   // Drivers without cancellable metadata APIs may finish in the background.
   // Stop awaiting them, ignore their late result, and never start a second read.
   const refs = await abortableRead(() => driver.listTables(schema), signal);
@@ -208,6 +231,7 @@ const dbSchema: CoderTool = {
       table: { type: 'string', description: 'One exact table/view name to expand with columns and keys.' },
       search: { type: 'string', description: 'Case-insensitive substring filter for the compact catalog.' },
       offset: { type: 'number', description: 'Catalog offset for pagination (default 0).' },
+      cursor: { type: 'string', description: 'Opaque continuation from the previous catalog page; preserve schema and search.' },
       limit: { type: 'number', description: 'Catalog page size (default 40, max 100).' },
     },
     additionalProperties: false,
@@ -300,7 +324,7 @@ const dbQuery: CoderTool = {
       const driver = acquired.driver;
       const result = await cancellableToolRpc(() => {
         dispatched = true;
-        return driver.runQuery(sql, { params, maxRows: clampMaxRows(args.max_rows), signal, beforeDispatch });
+        return driver.runQuery(sql, { params, maxRows: clampMaxRows(args.max_rows), signal, beforeDispatch, deadlineAtEpochMs: ctx.deadlineAtEpochMs });
       }, () => { /* Driver cancellation consumes signal; failure after dispatch is uncertain. */ }, signal, 'Database query cancelled.');
       return renderDbResult(result, ctx, isReadStatement(sql));
     } catch (e) {
@@ -404,7 +428,7 @@ const dbCommand: CoderTool = {
       const driver = acquired.driver;
       const result = await cancellableToolRpc(() => {
         dispatched = true;
-        return driver.runCommand!(command, { maxRows: clampMaxRows(args.max_rows), signal, beforeDispatch });
+        return driver.runCommand!(command, { maxRows: clampMaxRows(args.max_rows), signal, beforeDispatch, deadlineAtEpochMs: ctx.deadlineAtEpochMs });
       }, () => { /* Driver cancellation consumes signal; it does not prove rollback. */ }, signal, 'Database command cancelled.');
       return renderDbResult(result, ctx, !mutates);
     } catch (e) {

@@ -140,7 +140,7 @@ export const recallMemoryTool: CoderTool = {
   // Repeatable: legitimate to call with different queries while researching.
   name: 'recall_memory',
   description:
-    "Read this project's durable AGENT MEMORY (past decisions and their why, conventions, non-obvious gotchas, " +
+    "Read durable AGENT MEMORY: scope 'project' (default) or scope 'user' for global preferences (past decisions and their why, conventions, non-obvious gotchas, " +
     'how-to recipes — learned across ALL previous sessions).\n' +
     "mode 'search' (default): semantic search, returns FULL content. USE before re-exploring something this " +
     'project likely already learned, or when the user references a past decision.\n' +
@@ -155,6 +155,7 @@ export const recallMemoryTool: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
+      scope: { type: 'string', enum: ['project', 'user'], description: 'Project facts or global user preferences. Default project.' },
       mode: { type: 'string', enum: ['search', 'list'], description: "Default 'search'." },
       query: { type: 'string', description: "What to recall (required for mode 'search')." },
       type: { type: 'string', enum: [...MEMORY_TYPES], description: "Optional type filter (mode 'list')." },
@@ -164,7 +165,9 @@ export const recallMemoryTool: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const pm = ctx.projectMemory;
+    if (args.scope !== undefined && args.scope !== 'project' && args.scope !== 'user') return err('recall_memory: scope must be project or user.');
+    const scope = args.scope === 'user' ? 'user' : 'project';
+    const pm = scope === 'user' ? ctx.userMemory : ctx.projectMemory;
     if (!pm) return err(UNAVAILABLE);
     if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || Number(args.limit) < 1 || Number(args.limit) > MAX_LIMIT)) return err(`recall_memory: limit must be an integer from 1 to ${MAX_LIMIT}.`);
     if (args.mode !== undefined && args.mode !== 'search' && args.mode !== 'list') return err('recall_memory: mode must be search or list.');
@@ -180,12 +183,12 @@ export const recallMemoryTool: CoderTool = {
         const rows = await pm.list(limit, type, ctx.signal);
         ctx.signal?.throwIfAborted();
         if (rows.length === 0) {
-          return ok('Agent memory is empty for this project. Save durable facts with `remember` as you learn them.');
+          return ok(`No ${scope} memories are listed. Save durable facts with remember using the same scope.`);
         }
         const body = rows
           .map((m) => `- [${m.type}] ${m.name}${m.description ? ` — ${m.description}` : ''}`)
           .join('\n');
-        return ok(`Agent memory index (${rows.length}):\n${body}\n\nFetch full content with recall_memory({query:"<title>"}).`);
+        return ok(`Agent memory index (${scope}, ${rows.length}):\n${body}\n\nFetch full content with recall_memory({scope:"${scope}",query:"<title>"}).`);
       } catch (e) {
         return err(`recall_memory(list) failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -196,11 +199,12 @@ export const recallMemoryTool: CoderTool = {
     if (query.length > 2000) return err('recall_memory: query exceeds 2000 characters.');
     try {
       ctx.signal?.throwIfAborted();
+      if (!pm.recall) return err(`recall_memory (${scope}) search is unavailable.`);
       const rows = await pm.recall(query, limit, ctx.signal);
       ctx.signal?.throwIfAborted();
       if (rows.length === 0) {
         return ok(
-          `No agent memory matches "${query}". Browse what IS stored with recall_memory({mode:'list'}) — ` +
+          `No ${scope} memory matches "${query}". Browse stored entries with recall_memory({scope:'${scope}',mode:'list'}) — ` +
           'a different title may cover it. If you learn something durable here, save it with `remember`.',
         );
       }

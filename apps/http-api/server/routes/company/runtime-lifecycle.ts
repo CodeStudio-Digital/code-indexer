@@ -26,11 +26,14 @@ type AbortCompanyRuntimeResult =
  */
 export async function abortCompanyRuntime(
   companySessionId: CompanySessionId,
+  options: { finalStatus?: 'error' | 'idle' | 'paused' } = {},
 ): Promise<AbortCompanyRuntimeResult> {
   const orchestrator = getCompanyOrchestrator(companySessionId);
   if (!orchestrator) return { ok: false, reason: 'not_active' };
   try {
-    await orchestrator.abortAll();
+    // A session does not own the shared company container. Explicit company
+    // deletion owns teardown; stopping one conversation preserves siblings.
+    await orchestrator.abortAll({ teardownSandbox: false, ...options });
   } catch (error) {
     // A timeout/closed port does not cancel the worker-side abort. Fence the
     // executor before reporting the ambiguity and never replay the RPC.

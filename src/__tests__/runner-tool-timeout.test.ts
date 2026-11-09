@@ -91,7 +91,10 @@ describe('runner — universal tool timeout', () => {
     expect(starts).toEqual(['call-1']);
     expect(results).toHaveLength(1);
     expect(results[0].isError).toBe(true);
-    expect(results[0].content).toContain('`hangs` exceeded 50ms');
+    expect(results[0].content).toMatch(/`hangs` exceeded \d+ms/);
+    const remainingMs = Number(results[0].content.match(/exceeded (\d+)ms/)?.[1]);
+    expect(remainingMs).toBeGreaterThan(0);
+    expect(remainingMs).toBeLessThanOrEqual(50);
     expect(res.reason).toBe('completed');
     // A recovered tool error does not become the terminal run transition.
     expect(res.transition).toBeNull();
@@ -114,7 +117,10 @@ describe('runner — universal tool timeout', () => {
       if (m) observedTimeoutMs = Number(m[1]);
     });
     await runner.run();
-    expect(observedTimeoutMs).toBe(80);
+    // The shared deadline includes dispatch/queue time. The handler receives
+    // the remaining budget, which can be below 80ms even without contention.
+    expect(observedTimeoutMs).toBeGreaterThan(0);
+    expect(observedTimeoutMs).toBeLessThanOrEqual(80);
   });
 
   it('timeoutMs: Infinity opts out — runner does not race the handler', async () => {

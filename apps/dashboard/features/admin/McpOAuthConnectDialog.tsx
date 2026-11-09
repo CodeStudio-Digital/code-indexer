@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ExternalLink } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
@@ -8,18 +8,19 @@ import {
 } from '../../components/ui/dialog.js';
 import {
   discoverOAuthMetadata, fetchOAuthStatus, registerOAuthClient,
-  revokeMcpOAuth,
+  revokeMcpOAuth, testMcpServer, type McpServerTestResult,
   type DiscoveredOAuthMetadata, type McpOAuthStatus, type RegisterDcrError,
 } from './mcp-servers-api.js';
 import { useMcpOAuthFlow } from './useMcpOAuthFlow.js';
 
-type Phase = 'idle' | 'registering' | 'ready' | 'awaiting-consent' | 'connected' | 'error';
+type Phase = 'idle' | 'registering' | 'ready' | 'awaiting-consent' | 'connecting' | 'connected' | 'error';
 
 interface Props {
   serverId: string;
   serverUrl: string;  // used to derive resource_url for discovery
   onClose: () => void;
-  onConnected?: () => void;
+  onConnected?: (result: McpServerTestResult) => void;
+  onDisconnected?: () => void;
 }
 
 /**
@@ -30,15 +31,40 @@ interface Props {
  *   2. Authorize: open the provider login in the browser. On desktop this
  *      goes to the user's real browser and the redirect is captured by an
  *      ephemeral loopback (see useMcpOAuthFlow); on web it's a popup.
- *   3. Detect completion (status polling on desktop, postMessage on web).
- *   4. Show connected status (scopes)
+ *   3. Confirm the exact authorization attempt through backend polling.
+ *   4. Initialize MCP, load its tools, update the panel and close.
  */
-export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnected }: Props) {
+export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnected, onDisconnected }: Props) {
   const { t } = useTranslation(['admin']);
   const [status, setStatus] = useState<McpOAuthStatus | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [resourceUrl, setResourceUrl] = useState(serverUrl);
+  const mounted = useRef(true);
+  const operation = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    // Invalidate work from an earlier effect lifetime, including StrictMode remounts.
+    operation.current++;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const connect = async (): Promise<void> => {
+    const ticket = ++operation.current;
+    setPhase('connecting'); setError(null);
+    try {
+      const result = await testMcpServer(serverId);
+      if (!mounted.current || operation.current !== ticket) return;
+      if (!result.ok) throw new Error(result.error ?? 'MCP connection failed');
+      setPhase('connected');
+      onConnected?.(result);
+      onClose();
+    } catch (e) {
+      if (mounted.current && operation.current === ticket) {
+        setPhase('error'); setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  };
 
   // Manual-registration sub-form state. Activated either explicitly by
   // the user, or automatically after a DCR failure (we keep the
@@ -50,7 +76,7 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   const [discoveredAs, setDiscoveredAs] = useState<DiscoveredOAuthMetadata['as'] | null>(null);
 
   const oauth = useMcpOAuthFlow({
-    onConnected: () => { setPhase('connected'); setError(null); onConnected?.(); },
+    onConnected: () => { setStatus(s => s ? { ...s, authenticated: true } : s); void connect(); },
     onError: (msg) => { setPhase('error'); setError(msg); },
     texts: {
       loopbackError: t('admin:mcpServer.oauth.loopbackError') as string,
@@ -67,6 +93,7 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   const refresh = async (): Promise<void> => {
     try {
       const s = await fetchOAuthStatus(serverId);
+      if (!mounted.current) return;
       setStatus(s);
       if (s.status === 'registered' && phase === 'idle') setPhase('ready');
     } catch (e) {
@@ -124,6 +151,7 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
       const scopes = manualScopes.trim() ? manualScopes.trim().split(/\s+/) : undefined;
       await registerOAuthClient(serverId, {
         mode: 'manual',
+        resource_url: resourceUrl,
         as: discoveredAs,
         client_id: manualClientId.trim(),
         client_secret: manualClientSecret.trim() || undefined,
@@ -145,9 +173,13 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   };
 
   const doDisconnect = async (): Promise<void> => {
+    operation.current++;
     oauth.cancel();
-    await revokeMcpOAuth(serverId);
+    try { await revokeMcpOAuth(serverId); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase('error'); return; }
+    if (!mounted.current) return;
     setStatus(null);
+    onDisconnected?.();
     setPhase('idle');
     setManualOpen(false);
     setDiscoveredAs(null);
@@ -157,6 +189,7 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
   };
 
   const handleClose = (): void => {
+    operation.current++;
     oauth.cancel();
     onClose();
   };
@@ -254,13 +287,16 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
                 <div><strong>{t('admin:mcpServer.oauth.source')}:</strong> {status.registration?.source}</div>
               </div>
               <div className="flex gap-2 pt-2">
-                <Button onClick={doAuthorize} disabled={phase === 'awaiting-consent'}>
+                {status.authenticated && <Button onClick={() => void connect()} disabled={phase === 'connecting' || phase === 'awaiting-consent'}>
+                  {t('admin:mcpServer.oauth.finishConnection')}
+                </Button>}
+                <Button onClick={doAuthorize} disabled={phase === 'awaiting-consent' || phase === 'connecting'}>
                   <ExternalLink className="h-4 w-4 mr-2" />
                   {phase === 'awaiting-consent'
                     ? t('admin:mcpServer.oauth.waiting')
                     : t('admin:mcpServer.oauth.authorize')}
                 </Button>
-                <Button variant="outline" onClick={doDisconnect}>
+                <Button variant="outline" onClick={doDisconnect} disabled={phase === 'connecting'}>
                   {t('admin:mcpServer.oauth.disconnect')}
                 </Button>
               </div>
@@ -272,6 +308,8 @@ export function McpOAuthConnectDialog({ serverId, serverUrl, onClose, onConnecte
               {t('admin:mcpServer.oauth.connected')}
             </p>
           )}
+
+          {phase === 'connecting' && <p role="status" className="text-sm text-muted-foreground">{t('admin:mcpServer.oauth.connecting')}</p>}
 
           {phase === 'awaiting-consent' && (
             <p className="text-xs text-muted-foreground">

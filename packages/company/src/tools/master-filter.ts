@@ -43,14 +43,14 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   // (set goal once, re-read after compaction; load a screenshot the user
   // attached). Both are read-only and don't touch code.
   'goal',
-  'create_goal',
-  'get_goal',
-  'update_goal',
   'view_image',
   // MCP resource discovery — read-only static content, doesn't expose code.
   'mcp_list_resources',
   'mcp_read_resource',
   'docs_deep_research',
+  'docs_list', 'docs_read', 'docs_search', 'docs_write', 'docs_index_update', 'docs_delete',
+  'rag_search_docs',
+  'qa_check_preview',
   // Session env — read-only for the master. It orchestrates, so it may
   // ANSWER a subordinate's env question (read/list/validate) but must not
   // mutate the shared store (no env_set / env_delete).
@@ -117,6 +117,7 @@ export const MASTER_ALLOWED_MCP_SUFFIXES: ReadonlySet<string> = new Set([
  * These are board, kanban, and master delegation tools.
  */
 const COMPANY_TOOL_PREFIXES = [
+  'preview_',
   'spawn_subordinate',
   'wait_for_subordinates',
   'resume_subordinate',

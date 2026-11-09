@@ -206,7 +206,7 @@ export function deriveCapabilityDescriptor(
     requirements,
     riskClassifierRef: `risk:${riskLevel}`,
     outputPolicyRef: 'output:default',
-    enabled: true,
+    enabled: !('schemaError' in sanitized && sanitized.schemaError),
   };
 
   return { descriptor, optimisticExternalMetadata };

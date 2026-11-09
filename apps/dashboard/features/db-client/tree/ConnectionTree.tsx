@@ -16,8 +16,9 @@ import {
 import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import { useContextMenu, type ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { copyText } from '../../../lib/clipboard.js';
-import { downloadBlob } from '../../api-client/download.js';
 import { toCsv, toCsvBody, toDumpInserts } from '../grid/grid-export.js';
+import { beginUiDatabaseJob, DatabaseJobProgress } from '../job-progress.js';
+import { createExportWriter } from '../export-writer.js';
 import { splitStatements } from '../query/sql-split.js';
 import * as api from '../api.js';
 import { engineKindFor } from '../engines.js';
@@ -38,29 +39,33 @@ async function exportTable(
 ): Promise<void> {
   const tbl = node.table ?? '';
   const engine = db.connections.find((c) => c.id === node.connectionId)?.engine ?? 'postgres';
+  const ext = format === 'csv' ? 'csv' : 'sql';
+  let writer: Awaited<ReturnType<typeof createExportWriter>> = null;
+  let job: ReturnType<typeof beginUiDatabaseJob> | undefined;
   try {
-    const parts: string[] = [];
+    writer = await createExportWriter(tbl + '.' + ext, format === 'csv' ? 'text/csv' : 'application/sql');
+    if (!writer) return;
+    job = beginUiDatabaseJob(cid, t('node.dumpSql'));
     if (format === 'sql') {
       const { sql: createSql } = await api.generateSql(cid, node.schema, tbl, 'create');
-      parts.push(`${createSql.trim()}\n`);
+      await writer.write(createSql.trim() + '\n');
     }
-    let total = 0;
-    let csvHeaderDone = false;
-    for await (const batch of api.exportStream(cid, node.schema, tbl, 2000)) {
-      total = batch.total;
-      if (batch.rows.length === 0) continue;
-      if (format === 'csv') {
-        parts.push(csvHeaderDone ? toCsvBody(batch.columns, batch.rows) : toCsv(batch.columns, batch.rows));
-        csvHeaderDone = true;
-      } else {
-        parts.push(toDumpInserts(engine, tbl, batch.columns, batch.rows));
-      }
+    let total = 0, csvHeaderDone = false;
+    job.signal.throwIfAborted();
+    for await (const batch of api.exportStream(cid, node.schema, tbl, 1000, job.id)) {
+      job.signal.throwIfAborted();
+      total = batch.total; job.progress(total);
+      if (!batch.rows.length) continue;
+      await writer.write((format === 'csv'
+        ? csvHeaderDone ? toCsvBody(batch.columns, batch.rows) : toCsv(batch.columns, batch.rows)
+        : toDumpInserts(engine, tbl, batch.columns, batch.rows)) + '\n');
+      csvHeaderDone = true;
     }
-    const ext = format === 'csv' ? 'csv' : 'sql';
-    const mime = format === 'csv' ? 'text/csv' : 'application/sql';
-    downloadBlob(`${tbl}.${ext}`, new Blob([`${parts.join('\n')}\n`], { type: mime }));
+    job.signal.throwIfAborted();
+    await writer.close(); job.finish(true);
     toast.success(t('node.dumpDone', { n: total }));
   } catch (e) {
+    job?.finish(false); await writer?.abort().catch(() => undefined);
     toast.error(t('node.dumpSql'), { description: e instanceof Error ? e.message : String(e) });
   }
 }
@@ -85,40 +90,23 @@ function pickFile(accept: string): Promise<File | null> {
  * unavailable (browser-dev).
  */
 async function dumpSchema(node: DbTreeNode, cid: string, t: (k: string, o?: Record<string, unknown>) => string): Promise<void> {
-  const suggestedName = `${node.schema || 'dump'}.sql`;
-  const picker = (window as unknown as {
-    showSaveFilePicker?: (o: unknown) => Promise<{ createWritable: () => Promise<{ write: (s: string) => Promise<void>; close: () => Promise<void> }> }>;
-  }).showSaveFilePicker;
+  let writer: Awaited<ReturnType<typeof createExportWriter>> = null;
+  let job: ReturnType<typeof beginUiDatabaseJob> | undefined;
   try {
+    writer = await createExportWriter((node.schema || 'dump') + '.sql', 'application/sql');
+    if (!writer) return;
+    job = beginUiDatabaseJob(cid, t('node.dumpSchema'));
+    job.signal.throwIfAborted();
     let total = 0;
-    if (typeof picker === 'function') {
-      let handle;
-      try {
-        handle = await picker({ suggestedName, types: [{ description: 'SQL', accept: { 'application/sql': ['.sql'] } }] });
-      } catch {
-        return; // user dismissed the save dialog
-      }
-      const writable = await handle.createWritable();
-      try {
-        for await (const frame of api.dumpStream(cid, { schema: node.schema })) {
-          if (frame.sql) await writable.write(frame.sql);
-          total = frame.total;
-          if (frame.done) break;
-        }
-      } finally {
-        await writable.close();
-      }
-    } else {
-      const parts: string[] = [];
-      for await (const frame of api.dumpStream(cid, { schema: node.schema })) {
-        if (frame.sql) parts.push(frame.sql);
-        total = frame.total;
-        if (frame.done) break;
-      }
-      downloadBlob(suggestedName, new Blob([parts.join('')], { type: 'application/sql' }));
+    for await (const frame of api.dumpStream(cid, { schema: node.schema, jobId: job.id })) {
+      job.signal.throwIfAborted();
+      if (frame.sql) await writer.write(frame.sql);
+      total = frame.total; job.progress(total);
     }
+    job.signal.throwIfAborted(); await writer.close(); job.finish(true);
     toast.success(t('node.dumpDone', { n: total }));
   } catch (e) {
+    job?.finish(false); await writer?.abort().catch(() => undefined);
     toast.error(t('node.dumpSchema'), { description: e instanceof Error ? e.message : String(e) });
   }
 }
@@ -128,10 +116,13 @@ async function restoreScript(node: DbTreeNode, cid: string, db: UseDbClient, t: 
   const file = await pickFile('.sql,application/sql,text/plain');
   if (!file) return;
   try {
+    if (file.size > 16 * 1024 * 1024) throw new Error('Import exceeds 16 MiB. Split the import into reviewed batches.');
     const stmts = splitStatements(await file.text());
     if (stmts.length === 0) { toast.warning(t('node.restoreEmpty')); return; }
     if (!(await confirm({ title: t('node.restore'), description: t('node.restoreConfirm', { n: stmts.length }), tone: 'destructive' }))) return;
-    await api.runScript(cid, stmts);
+    const job = beginUiDatabaseJob(cid, t('node.restore'), 'import');
+    try { await api.runScript(cid, stmts, { jobId: job.id, signal: job.signal }); job.finish(true); }
+    catch (error) { job.finish(false); throw error; }
     toast.success(t('node.restoreDone', { n: stmts.length }));
     db.refreshNode(node.id);
   } catch (e) {
@@ -144,6 +135,7 @@ async function importJson(node: DbTreeNode, cid: string, t: (k: string, o?: Reco
   const file = await pickFile('.json,application/json');
   if (!file) return;
   try {
+    if (file.size > 16 * 1024 * 1024) throw new Error('Import exceeds 16 MiB. Split the import into reviewed batches.');
     const parsed = JSON.parse(await file.text()) as unknown;
     const docs = Array.isArray(parsed) ? parsed : [parsed];
     const res = await api.runCommand(cid, {
@@ -468,6 +460,7 @@ export function ConnectionTree({
   const [filter, setFilter] = useState('');
   const [catalogRows, setCatalogRows] = useState<DbTreeNode[]>([]);
   const [catalogSearching, setCatalogSearching] = useState(false);
+  const [catalogPartial, setCatalogPartial] = useState(false);
   // Per-schema table filter (keyed by the schema node id) — the input that
   // appears right above a schema's tables once it's expanded.
   const [schemaFilters, setSchemaFilters] = useState<Record<string, string>>({});
@@ -479,6 +472,7 @@ export function ConnectionTree({
 
   useEffect(() => {
     const query = filter.trim();
+    setCatalogPartial(false);
     if (query.length < 2) {
       setCatalogRows([]);
       setCatalogSearching(false);
@@ -487,15 +481,26 @@ export function ConnectionTree({
     const connected = db.connections.filter((connection) =>
       db.statusById[connection.id] === 'connected' && engineKindFor(connection.engine) === 'relational',
     );
-    if (connected.length === 0) return;
+    setCatalogRows([]);
+    if (connected.length === 0) { setCatalogSearching(false); return; }
     let cancelled = false;
+    const controller = new AbortController();
     setCatalogSearching(true);
     const timer = window.setTimeout(() => {
-      void Promise.all(connected.map(async (connection) => ({
-        connection,
-        objects: await api.searchCatalog(String(connection.id), query, 100),
-      }))).then((groups) => {
+      // Limit physical catalogue requests; superseded searches release their drivers.
+      const groups: Array<{ connection: typeof connected[number]; objects: Awaited<ReturnType<typeof api.searchCatalog>> }> = [];
+      let next = 0, failedSources = 0;
+      void Promise.all(Array.from({ length: Math.min(4, connected.length) }, async () => {
+        while (!controller.signal.aborted && next < connected.length) {
+          const connection = connected[next++];
+          try {
+            const objects = await api.searchCatalog(api.connectionKey(connection.project_id, connection.id), query, 100, controller.signal);
+            groups.push({ connection, objects });
+          } catch { if (!controller.signal.aborted) failedSources++; }
+        }
+      })).then(() => {
         if (cancelled) return;
+        setCatalogPartial(failedSources > 0);
         setCatalogRows(groups.flatMap(({ connection, objects }) => objects.map((object) => ({
           id: `catalog:${connection.id}:${object.kind}:${object.schema ?? ''}:${object.name}`,
           kind: object.kind === 'function' ? 'function' as const
@@ -510,13 +515,14 @@ export function ConnectionTree({
           expandable: object.kind === 'schema' || object.kind === 'table' || object.kind === 'view',
         }))));
       }).catch(() => {
-        if (!cancelled) setCatalogRows([]);
+        if (!cancelled) { setCatalogRows([]); setCatalogPartial(true); }
       }).finally(() => {
         if (!cancelled) setCatalogSearching(false);
       });
     }, 250);
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [db.connections, db.statusById, filter]);
@@ -603,6 +609,7 @@ export function ConnectionTree({
         </button>
       </div>
 
+      <DatabaseJobProgress connectionIds={db.connections.map(connection => db.connKeyFor(connection.id))} />
       <div className="border-b px-2 py-1">
         <input
           className="h-6 w-full rounded border bg-background px-2 text-xs"
@@ -616,7 +623,8 @@ export function ConnectionTree({
         {db.connections.length === 0 && !db.loading && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">{t('connections.empty')}</div>
         )}
-        {deferredFilter.trim() && visibleRows.length === 0 && db.connections.length > 0 && !catalogSearching && (
+        {catalogPartial && <div role="status" className="px-3 py-2 text-xs text-amber-600">{t('connections.partialSearch')}</div>}
+        {deferredFilter.trim() && visibleRows.length === 0 && db.connections.length > 0 && !catalogSearching && !catalogPartial && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
             {t('connections.noSearchResults', { query: deferredFilter.trim() })}
           </div>

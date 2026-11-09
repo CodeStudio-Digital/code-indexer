@@ -17,6 +17,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { createRendererStream } from './src/renderer-stream.js';
 import {
   toSerializableAsyncIterator,
   type SerializableAsyncIterator,
@@ -29,12 +30,6 @@ import {
 // and keeps `port2` to push frames. We register a one-shot listener for
 // the matching `stream-port:<requestId>` event, then wrap the received
 // port as an AsyncIterable.
-
-interface StreamFrame<T> {
-  type: 'value' | 'error' | 'done';
-  value?: T;
-  error?: { message: string; code?: string; status?: number };
-}
 
 interface DesktopNotificationOptions {
   title: string;
@@ -54,77 +49,21 @@ function nextRequestId(): string {
 
 function openStream<T>(channel: string, payload: unknown): AsyncIterable<T> {
   const requestId = nextRequestId();
-  const portPromise = new Promise<MessagePort>((resolve) => {
+  return createRendererStream<T>((accept) => {
+    const replyChannel = `stream-port:${requestId}`;
     const handler = (event: Electron.IpcRendererEvent) => {
       const port = event.ports?.[0];
-      if (!port) return;
-      ipcRenderer.removeListener(`stream-port:${requestId}`, handler);
-      resolve(port);
+      if (port) accept(port);
     };
-    ipcRenderer.on(`stream-port:${requestId}`, handler);
-  });
-  // Kick off the stream — main listens on `stream:<channel>` and
-  // immediately replies with the MessagePort, then writes frames.
-  ipcRenderer.send(`stream:${channel}`, { requestId, payload });
-
-  return {
-    [Symbol.asyncIterator](): AsyncIterator<T> {
-      const queue: StreamFrame<T>[] = [];
-      const waiters: Array<(r: IteratorResult<T>) => void> = [];
-      let ended = false;
-      let errorObj: unknown = null;
-
-      void portPromise.then((port) => {
-        port.onmessage = (msg) => {
-          const frame = msg.data as StreamFrame<T>;
-          if (frame.type === 'value') {
-            const v = frame.value!;
-            if (waiters.length > 0) {
-              waiters.shift()!({ value: v, done: false });
-            } else {
-              queue.push(frame);
-            }
-          } else if (frame.type === 'error') {
-            errorObj = new Error(frame.error?.message ?? 'stream error');
-            ended = true;
-            // Wake any waiter so they observe the error on next().
-            while (waiters.length > 0) {
-              waiters.shift()!({ value: undefined as never, done: true });
-            }
-            port.close();
-          } else if (frame.type === 'done') {
-            ended = true;
-            while (waiters.length > 0) {
-              waiters.shift()!({ value: undefined as never, done: true });
-            }
-            port.close();
-          }
-        };
-        port.start?.();
-      });
-
-      return {
-        async next(): Promise<IteratorResult<T>> {
-          if (queue.length > 0) {
-            const frame = queue.shift()!;
-            if (frame.type === 'value') return { value: frame.value!, done: false };
-          }
-          if (errorObj) throw errorObj;
-          if (ended) return { value: undefined as never, done: true };
-          return new Promise<IteratorResult<T>>((resolve) => {
-            waiters.push(resolve);
-          }).then((r) => {
-            if (errorObj) throw errorObj;
-            return r;
-          });
-        },
-        async return(): Promise<IteratorResult<T>> {
-          ended = true;
-          return { value: undefined as never, done: true };
-        },
-      };
-    },
-  };
+    ipcRenderer.on(replyChannel, handler);
+    try {
+      ipcRenderer.send(`stream:${channel}`, { requestId, payload });
+    } catch (error) {
+      ipcRenderer.removeListener(replyChannel, handler);
+      throw error;
+    }
+    return () => { ipcRenderer.removeListener(replyChannel, handler); };
+  }, () => { ipcRenderer.send('api:cancel-stream', requestId); });
 }
 
 // ─── IPC primitives exposed via contextBridge ─────────────────
@@ -403,6 +342,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       error?: string;
     }>,
   oauthLoopbackStop: () => ipcRenderer.send('oauth:loopback:stop'),
+  oauthOpenExternal: (url: string) => ipcRenderer.invoke('oauth:open-external', url),
   /**
    * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`).
    * Returns `{ ok, windowId? , error? }`. The new window inherits the
