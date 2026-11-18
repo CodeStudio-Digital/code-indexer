@@ -247,6 +247,8 @@ async function exerciseCopilotLogin() {
     const { CopilotClient } = await import(pathToFileURL(entry).href);
     const prototype = CopilotClient.prototype;
     const state = { steps: 0 };
+    let allowAccountChoice;
+    const deviceInspected = new Promise(resolve => { allowAccountChoice = resolve; });
     const methods = {
       async start() { state.mode = this.options.mode; },
       async stop() {},
@@ -269,10 +271,13 @@ async function exerciseCopilotLogin() {
             async advance({ input }) {
               state.steps++;
               if (state.steps === 1) return { kind: 'awaiting' };
-              if (!input) return { kind: 'completed', result: { status: 'needs-account-selection', accounts: [
-                { selectionId: 'first', login: 'first-fixture', host: 'github.com' },
-                { selectionId: 'chosen', login: 'chosen-fixture', host: 'github.com' },
-              ] } };
+              if (!input) {
+                await deviceInspected;
+                return { kind: 'completed', result: { status: 'needs-account-selection', accounts: [
+                  { selectionId: 'first', login: 'first-fixture', host: 'github.com' },
+                  { selectionId: 'chosen', login: 'chosen-fixture', host: 'github.com' },
+                ] } };
+              }
               state.choice = input;
               return { kind: 'completed', result: { status: 'completed', login: 'chosen-fixture', host: 'github.com' } };
             },
@@ -283,7 +288,7 @@ async function exerciseCopilotLogin() {
     };
     const originals = Object.fromEntries(Object.keys(methods).map(key => [key, prototype[key]]));
     Object.assign(prototype, methods);
-    globalThis.copilotLoginFixture = { state, restore: () => Object.assign(prototype, originals) };
+    globalThis.copilotLoginFixture = { state, allowAccountChoice, restore: () => Object.assign(prototype, originals) };
   }));
 
   await app.evaluate(async ({ app }, fixtureFile) => {
@@ -298,6 +303,7 @@ async function exerciseCopilotLogin() {
     const dialog = page.getByRole('dialog', { name: /^(Conectar|Connect) GitHub Copilot$/ });
     await dialog.getByRole('button', { name: 'Individual / Business' }).click();
     await expect(dialog.getByText('ABCD-EFGH')).toBeVisible();
+    await app.evaluate(() => { globalThis.copilotLoginFixture.allowAccountChoice(); });
     await dialog.getByRole('button', { name: 'chosen-fixture · github.com' }).click();
     await expect(dialog).toBeHidden();
     assert.deepEqual(await app.evaluate(() => globalThis.copilotLoginFixture.state),
@@ -309,7 +315,10 @@ async function exerciseCopilotLogin() {
     await page.evaluate(hash => { location.hash = hash; }, projectHash);
     await expect.poll(() => page.url()).toMatch(/#\/projects\/\d+/);
   } finally {
-    await app.evaluate(() => { globalThis.copilotLoginFixture.restore(); });
+    await app.evaluate(() => {
+      globalThis.copilotLoginFixture.allowAccountChoice();
+      globalThis.copilotLoginFixture.restore();
+    });
   }
 }
 
