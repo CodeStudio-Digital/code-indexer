@@ -28,6 +28,8 @@ Browser tools and documentation rendering use the Chromium bundled with Electron
 
 Open the **Figma** panel to connect a personal access token with `current_user:read` and `file_content:read`. The bundled Figma MCP tools can inspect a file or frame link, render PNG previews, and return asset export URLs. Reading Enterprise variables also requires `file_variables:read`.
 
+Project chats reuse Figma layers, design tokens and PNG previews from the CodeStudio profile across chats, worktrees and restarts. Export links are reused while valid. The cache lives in the profile’s `cache/figma-v1` directory, outside the Git checkout. Tools default to `prefer_cache`. Use `cache_only` for local reads or `refresh` to fetch the selected resource again. Disconnecting Figma or replacing its token clears the previous connection’s cache.
+
 ## Quick start
 
 ```bash

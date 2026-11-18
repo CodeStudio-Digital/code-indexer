@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import type { Database } from 'better-sqlite3';
 import { ApiError, type FigmaConnectionCommand, type FigmaConnectionStatus } from '@mcp/api-bus';
 import type { EmbeddedMcpConfig } from '@mcp/code-agent/tools/mcp-connection-types.js';
 import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import { PluginStorageStore } from '@mcp/store/plugin-storage-store.js';
+import { mcpDataDir } from '@mcp/shared/utils/config.js';
 import { getMainSecretDecryptor, getMainSecretEncryptor } from '../secret-decrypt-port.js';
 import { FigmaApiError, FigmaClient, object } from './client.js';
 import { FIGMA_TOOLS, openFigmaMcp } from './mcp-tools.js';
+import { FigmaProjectCache } from './project-cache.js';
 
 export const FIGMA_PLUGIN = 'figma';
 export const FIGMA_SERVER_ID = 'codestudio-figma';
@@ -23,7 +26,8 @@ export class BundledFigmaMcp {
   /** Set by the application after the shared MCP pool is available. */
   refresh?: () => Promise<unknown>;
 
-  constructor(db: Database, private readonly fetcher?: typeof fetch) {
+  constructor(db: Database, private readonly fetcher?: typeof fetch,
+    private readonly cache = new FigmaProjectCache(join(mcpDataDir(), 'cache', 'figma-v1'))) {
     this.installed = new InstalledPluginStore(db);
     this.storage = new PluginStorageStore(db);
     this.registeredServers = new McpServerStore(db);
@@ -65,6 +69,11 @@ export class BundledFigmaMcp {
     return new FigmaClient(token, this.fetcher);
   }
 
+  private async sameToken(previous: StoredConnection, token: string): Promise<boolean> {
+    try { return await getMainSecretDecryptor()(previous.encryptedToken) === token; }
+    catch { return false; }
+  }
+
   private async checkAccount(client: FigmaClient, signal: AbortSignal): Promise<string> {
     try { return await client.account(signal); }
     catch (error) {
@@ -84,7 +93,9 @@ export class BundledFigmaMcp {
     }
     if (command.action === 'disconnect') {
       this.pendingChange++;
+      const previous = this.stored();
       this.storage.delete(FIGMA_PLUGIN, CONNECTION_KEY);
+      if (previous) await this.cache.retire(previous.revision);
       await this.refresh?.();
       return this.status();
     }
@@ -97,16 +108,19 @@ export class BundledFigmaMcp {
       throw new ApiError('figma_mcp_conflict', 409, 'The MCP server ID codestudio-figma is already in use.');
     }
     const change = ++this.pendingChange;
+    const previous = this.stored();
     const account = await this.checkAccount(new FigmaClient(token, this.fetcher), signal);
     let encryptedToken: string;
     try { encryptedToken = await getMainSecretEncryptor()(token); }
     catch { throw new ApiError('figma_keychain', 503, 'Enable the desktop keychain to save the Figma token.'); }
     if (!encryptedToken.startsWith('enc:')) throw new ApiError('figma_keychain', 503, 'Enable the desktop keychain to save the Figma token.');
+    const revision = previous && await this.sameToken(previous, token) ? previous.revision : randomUUID();
     signal.throwIfAborted();
     if (this.pendingChange !== change || !this.available()) {
       throw new ApiError('figma_connection_changed', 409, 'The Figma connection was changed while verification was running.');
     }
-    this.storage.set(FIGMA_PLUGIN, CONNECTION_KEY, JSON.stringify({ encryptedToken, account, revision: randomUUID() }));
+    this.storage.set(FIGMA_PLUGIN, CONNECTION_KEY, JSON.stringify({ encryptedToken, account, revision }));
+    if (previous && previous.revision !== revision) await this.cache.retire(previous.revision);
     await this.refresh?.();
     return this.status();
   }
@@ -124,6 +138,10 @@ export class BundledFigmaMcp {
   connect(config: EmbeddedMcpConfig) {
     const revision = config.config.revision;
     if (config.id !== FIGMA_SERVER_ID || typeof revision !== 'string') throw new Error('Invalid embedded Figma MCP source.');
-    return openFigmaMcp(() => this.client(revision));
+    return openFigmaMcp(this.cache, revision, () => {
+      if (this.stored()?.revision !== revision) {
+        throw new ApiError('figma_disconnected', 409, 'The Figma connection changed. Retry with its current configuration.');
+      }
+    }, () => this.client(revision));
   }
 }

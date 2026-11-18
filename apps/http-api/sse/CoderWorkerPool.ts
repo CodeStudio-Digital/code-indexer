@@ -1780,7 +1780,7 @@ export class CoderWorkerPool {
       };
       assertOwner();
       if (request.authority !== undefined) throw new Error('External MCP request contains unsupported authority');
-      return assertOwner;
+      return { assertDispatch: assertOwner, projectId: owner?.sessionContext.projectId ?? undefined };
     });
 
     const offEvent = bridge.on('bus.event', (payload) => {

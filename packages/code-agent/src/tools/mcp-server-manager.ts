@@ -20,7 +20,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolResult, ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
@@ -246,7 +246,7 @@ export class McpServerManager {
           if (ctx.signal?.aborted || this.connections.get(serverId) !== admitted || admitted.state !== 'connected'
             || mcpServerConfigurationKey(admitted.config) !== configKey) throw new Error('MCP connection retired.');
           ctx.assertExternalMcpDispatch?.();
-        }, () => this.callToolOnce(admitted, toolName, args, ctx.signal, ctx.deadlineAtEpochMs));
+        }, () => this.callToolOnce(admitted, toolName, args, ctx));
       } catch (e) {
         if (e instanceof McpDispatchRejected) return err(e.message);
         conn.state = 'disconnected';
@@ -283,12 +283,14 @@ export class McpServerManager {
     conn: ServerConnection,
     toolName: string,
     args: Record<string, unknown>,
-    signal?: AbortSignal,
-    deadlineAtEpochMs?: number,
+    ctx: ToolContext,
   ): Promise<ToolResult> {
+    const { signal, deadlineAtEpochMs, projectId } = ctx;
     const remaining = Math.min(60_000, (deadlineAtEpochMs ?? Date.now() + 60_000) - Date.now());
     if (remaining <= 0) throw new Error("MCP deadline expired before dispatch");
-    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, { signal, timeout: remaining });
+    const meta = conn.config.transport === 'embedded' && projectId != null
+      ? { _meta: { 'codestudio/projectId': projectId } } : {};
+    const result = await conn.client.callTool({ name: toolName, arguments: args, ...meta }, undefined, { signal, timeout: remaining });
     return mcpResultToToolResult(result, toolName);
   }
 

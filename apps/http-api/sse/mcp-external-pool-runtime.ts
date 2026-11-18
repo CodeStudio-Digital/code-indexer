@@ -169,7 +169,7 @@ export class McpExternalPool implements IMcpServerManager {
 
   /** Dispatch through the cached catalogue; discovery never runs per invocation. */
   async callTool(serverId: string, toolName: string, args: Record<string, unknown>,
-    signal?: AbortSignal, catalogueRevision?: string, assertDispatch?: () => void): Promise<{ ok: boolean; text: string; result: ToolResult }> {
+    signal?: AbortSignal, catalogueRevision?: string, assertDispatch?: () => void, projectId?: number): Promise<{ ok: boolean; text: string; result: ToolResult }> {
     if (signal?.aborted) {
       const result = err('External MCP call cancelled before dispatch.');
       return { ok: false, text: result.content, result };
@@ -209,7 +209,7 @@ export class McpExternalPool implements IMcpServerManager {
         { code: 'MCP_UNAVAILABLE', kind: 'network', retryable: !this.shuttingDown,
           suggestedAction: 'Wait for the server to become ready and retry; a new chat is not required.' })
       : signal?.aborted ? err('External MCP call cancelled before dispatch.')
-      : await tool.handler(args, { signal, assertExternalMcpDispatch: assertWireDispatch } as ToolContext);
+      : await tool.handler(args, { signal, projectId, assertExternalMcpDispatch: assertWireDispatch } as ToolContext);
     // Keep the legacy envelope while carrying the full result through new workers.
     return { ok: !result.isError, text: result.content, result };
   }
@@ -254,7 +254,8 @@ export class McpExternalPool implements IMcpServerManager {
     return { tools: snapshot.tools.flatMap(entry => {
       const live = this.liveTools.get(entry.name);
       return live ? [{ ...live, handler: async (args, ctx) =>
-        (await this.callTool(entry.serverId, entry.toolName, args, ctx.signal, entry.catalogueRevision)).result }] : [];
+        (await this.callTool(entry.serverId, entry.toolName, args, ctx.signal, entry.catalogueRevision,
+          ctx.assertExternalMcpDispatch, ctx.projectId)).result }] : [];
     }), tierMap: new Map(snapshot.tierMap) };
   }
 

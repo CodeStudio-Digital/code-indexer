@@ -50,13 +50,15 @@ it('rejects old run IDs and retains the owner check through delayed wire dispatc
     try { assertDispatch(); } catch { return { ok: false, text: 'inactive', result: { isError: true, content: 'inactive' } }; }
     effects++; return { ok: true, text: 'ok', result: { content: 'ok' } };
   });
-  const off = registerWorkerMcpCalls(main, () => ({ callTool } as unknown as McpExternalPool), ({ runId }) => () => {
-    if (runId !== currentRun) throw Error('stale run');
-  });
+  const off = registerWorkerMcpCalls(main, () => ({ callTool } as unknown as McpExternalPool), ({ runId }) => ({
+    assertDispatch() { if (runId !== currentRun) throw Error('stale run'); },
+    projectId: 42,
+  }));
   const payload = { serverId: 'fixture', toolName: 'write', args: {}, callId: 'request-12345', runId: 1 };
   try {
     const pending = worker.request('mcpExt.callTool', payload);
     await vi.waitFor(() => expect(callTool).toHaveBeenCalledTimes(1));
+    expect(callTool).toHaveBeenCalledWith('fixture', 'write', {}, expect.any(AbortSignal), undefined, expect.any(Function), 42);
     currentRun = 2; release();
     expect(await pending).toMatchObject({ ok: false });
     expect(await worker.request('mcpExt.callTool', { ...payload, callId: 'request-23456' })).toMatchObject({ ok: false });
@@ -71,7 +73,7 @@ it('cancels an ownership lookup before it can dispatch to the pool', async () =>
   let release!: () => void;
   const callTool = vi.fn();
   const off = registerWorkerMcpCalls(main, () => ({ callTool } as unknown as McpExternalPool), async () => {
-    await new Promise<void>(r => { release = r; }); return () => {};
+    await new Promise<void>(r => { release = r; }); return { assertDispatch() {} };
   });
   try {
     const pending = worker.request('mcpExt.callTool', { callId: 'waiting-owner-1', serverId: 'fixture', toolName: 'write', args: {} });

@@ -118,7 +118,7 @@ export class FigmaClient {
     });
     if (!response.ok) {
       await response.body?.cancel();
-      throw new Error(`Figma image download failed (HTTP ${response.status}).`);
+      throw new FigmaApiError(response.status, `Figma image download failed (HTTP ${response.status}).`);
     }
     const png = await readBody(response, IMAGE_LIMIT, 'Screenshot exceeds 6 MiB. Try a smaller frame or a lower scale.');
     if (!png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {

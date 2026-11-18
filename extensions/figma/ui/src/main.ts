@@ -14,7 +14,7 @@ const t = mcp.i18n.translator({
     disconnect: 'Disconnect',
     working: 'Checking connection…',
     verified: 'Connection verified.',
-    usage: 'Paste a Figma file or frame link into a chat to inspect the design or export assets.',
+    usage: 'Paste a Figma link into a project chat. Saved layers, design tokens and PNG previews are reused across chats. Ask for a refresh to read the latest design.',
   },
   'pt-BR': {
     disconnected: 'Figma desconectado',
@@ -28,7 +28,7 @@ const t = mcp.i18n.translator({
     disconnect: 'Desconectar',
     working: 'Verificando conexão…',
     verified: 'Conexão verificada.',
-    usage: 'Cole o link de um arquivo ou frame do Figma no chat para consultar o design ou exportar assets.',
+    usage: 'Cole um link do Figma no chat do projeto. Camadas, tokens de design e prévias em PNG ficam guardados para outros chats. Peça uma atualização para consultar o design atual.',
   },
 });
 
