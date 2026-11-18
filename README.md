@@ -26,6 +26,8 @@ The standalone edition lives on `codex/codestudio-local`. To build the Windows i
 
 Browser tools and documentation rendering use the Chromium bundled with Electron. Container Playwright suites can use a configured PLAYWRIGHT_WS_ENDPOINT.
 
+Open the **Figma** panel to connect a personal access token with `current_user:read` and `file_content:read`. The bundled Figma MCP tools can inspect a file or frame link, render PNG previews, and return asset export URLs. Reading Enterprise variables also requires `file_variables:read`.
+
 ## Quick start
 
 ```bash

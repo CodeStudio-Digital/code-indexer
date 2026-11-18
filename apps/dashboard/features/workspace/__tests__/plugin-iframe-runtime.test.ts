@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import { injectIntoHtml } from '../plugin-iframe-runtime.js';
 import { PLUGIN_UI_KIT_CSS } from '../plugin-ui-kit/index.js';
 import { KIT } from '@mcp/plugin-sdk/ui/classes.js';
@@ -35,6 +36,18 @@ describe('injectIntoHtml', () => {
     const out = injectIntoHtml(html, CTX, TOKENS);
     expect(out.indexOf('id="mcp-ui-kit"')).toBeGreaterThan(out.indexOf('<head lang="en">'));
     expect(out.indexOf('id="mcp-ui-kit"')).toBeLessThan(out.indexOf('.a{'));
+  });
+
+  it('interpolates account and tool counts in the injected translator', () => {
+    const out = injectIntoHtml('<html><head></head></html>', CTX, TOKENS);
+    const window = { addEventListener() {} };
+    const context = { window, setTimeout() {} };
+    for (const [, script] of out.matchAll(/<script>([\s\S]*?)<\/script>/g)) runInNewContext(script, context);
+    const actual = runInNewContext(
+      "window.mcp.i18n.translator({ en: { status: '{account} has {count} tools' } })('status', {account:'Figma', count:6})",
+      context,
+    );
+    expect(actual).toBe('Figma has 6 tools');
   });
 
   it('without a <head>: shim first, then kit, then the original markup', () => {

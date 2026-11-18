@@ -19,8 +19,15 @@ await writeFile(join(project, 'example.txt'), 'local file\n');
 let cloudCalls = 0;
 let modelCalls = 0;
 let anthropicCalls = 0;
+let figmaProviderCalls = 0;
+let figmaSecretSeen = false;
 const reply = 'Resposta do endpoint local.';
 const anthropicReply = 'Resposta do endpoint Anthropic local.';
+const figmaToken = 'figma-fixture-local-pat';
+const figmaFile = 'https://www.figma.com/design/FixtureDesign1/Smoke';
+const figmaFileName = 'Figma MCP fixture file';
+const figmaReply = 'Figma MCP fixture validated.';
+const figmaTool = 'ext_codestudio-figma__get_metadata';
 const server = createServer(async (req, res) => {
   if (req.url === '/ping') return res.end('local API response');
   if (req.url === '/favicon.ico') { res.writeHead(204); return res.end(); }
@@ -37,6 +44,29 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) raw += chunk;
     const request = JSON.parse(raw);
     if (request.model !== 'local-test') { res.writeHead(400); return res.end(); }
+    if (raw.includes(figmaToken)) figmaSecretSeen = true;
+    if (request.stream && request.messages?.some(message =>
+      message.role === 'user' && JSON.stringify(message.content).includes(figmaFile))) {
+      figmaProviderCalls++;
+      const seen = request.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes(figmaFileName));
+      const hasSchema = request.tools?.some(tool => tool.function?.name === figmaTool);
+      const searched = request.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes(figmaTool));
+      const call = hasSchema || searched ? { name: figmaTool, input: { file: figmaFile } }
+        : { name: 'find_tools', input: { query: 'codestudio figma get_metadata' } };
+      const delta = seen ? { role: 'assistant', content: figmaReply } : {
+        role: 'assistant',
+        tool_calls: [{ index: 0, id: 'figma-call-' + figmaProviderCalls, type: 'function',
+          function: { name: call.name, arguments: JSON.stringify(call.input) } }],
+      };
+      const chunk = { id: 'figma-msg', object: 'chat.completion.chunk', model: request.model, created: 1 };
+      res.setHeader('content-type', 'text/event-stream');
+      for (const payload of [
+        { ...chunk, choices: [{ index: 0, delta, finish_reason: null }] },
+        { ...chunk, choices: [{ index: 0, delta: {}, finish_reason: seen ? 'stop' : 'tool_calls' }],
+          usage: { prompt_tokens: 45, completion_tokens: 8, total_tokens: 53 } },
+      ]) res.write('data: ' + JSON.stringify(payload) + '\n\n');
+      return res.end('data: [DONE]\n\n');
+    }
     modelCalls++;
     const choice = { index: 0, finish_reason: 'stop' };
     const usage = { prompt_tokens: 24, completion_tokens: 6, total_tokens: 30 };
@@ -94,11 +124,15 @@ let app, page;
 let passed = false;
 const errors = [];
 let electronStderr = '';
+let electronLogs = '';
 async function boot() {
   app = await electron.launch({ executablePath: binary, cwd: root, env, timeout: 90000,
     args: ['--user-data-dir=' + profile, '--disable-background-networking', '--disable-gpu'] });
   app.process().stderr?.on('data', data => {
     electronStderr = (electronStderr + data.toString()).slice(-8000);
+  });
+  app.process().stdout?.on('data', data => {
+    electronLogs = (electronLogs + data.toString()).slice(-8000);
   });
   await expect.poll(() => app.windows().some(win => win.url().includes('/dashboard/index.html')), { timeout: 90000 }).toBe(true);
   page = app.windows().find(win => win.url().includes('/dashboard/index.html'));
@@ -137,7 +171,7 @@ async function assertProviderSurface() {
   assert.deepEqual(retired, [404, 400, 400]);
   assert.deepEqual((await ipc('system.preflight')).checks.map(check => check.id).sort(), ['disk', 'git']);
   assert.deepEqual((await readdir(join(dirname(binary), 'resources', 'bundled-plugins'))).sort(),
-    ['angular', 'javascript-debugger']);
+    ['angular', 'figma', 'javascript-debugger']);
 }
 
 async function exerciseElectronChromium() {
@@ -203,6 +237,34 @@ async function exerciseCopilotRuntime() {
   assert.equal(result, 'function');
 }
 
+async function exerciseFigmaPanel() {
+  await app.evaluate((_electron, { token, fileName }) => {
+    const fetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname !== 'api.figma.com') return fetch(input, init);
+      if (new Headers(init?.headers).get('X-Figma-Token') !== token) return Response.json({}, { status: 403 });
+      if (url.pathname === '/v1/me') return Response.json({ id: 'fixture-account', handle: 'Figma Fixture' });
+      if (url.pathname === '/v1/files/FixtureDesign1') return Response.json({ name: fileName, document: {
+        children: [{ id: '0:1', type: 'CANVAS', name: 'Overview' }],
+      } });
+      return Response.json({}, { status: 404 });
+    };
+  }, { token: figmaToken, fileName: figmaFileName });
+  const plugin = await ipc('plugins.get', { namespace: 'figma' });
+  assert.equal(plugin?.enabled, true);
+  await page.evaluate(() => { location.hash = location.hash.split('?')[0] + '?tab=figma'; });
+  const panel = page.frameLocator('iframe[title="plugin:figma:Figma"]');
+  await panel.getByLabel(/^(Personal access token|Token de acesso pessoal)$/).fill(figmaToken);
+  await panel.getByRole('button', { name: /^(Connect|Conectar)$/ }).click();
+  await expect(panel.getByText(/Figma Fixture/)).toBeVisible({ timeout: 15000 });
+  const connection = await ipc('plugins.figmaConnection', { namespace: 'figma', action: 'status' });
+  assert.deepEqual(connection, { connected: true, account: 'Figma Fixture', toolCount: 6 });
+  const { value } = await ipc('plugins.storageGet', { namespace: 'figma', key: 'mcp.connection' });
+  assert.match(value, /"encryptedToken":"enc:/);
+  assert.ok(!value.includes(figmaToken));
+}
+
 try {
   await boot();
   await page.getByRole('button', { name: /^(Continue|Continuar)$/ }).click({ timeout: 60000 });
@@ -214,6 +276,7 @@ try {
   await assertProviderSurface();
   await exerciseElectronChromium();
   await exerciseCopilotRuntime();
+  await exerciseFigmaPanel();
   const projectId = Number(page.url().match(/#\/projects\/(\d+)/)[1]);
   const area = 'projects/' + projectId;
   assert.equal((await ipc('files.read', { projectId, path: 'example.txt' })).content, 'local file\n');
@@ -231,6 +294,12 @@ try {
   await api(sessionPath + '/messages', { content: 'Responda em uma frase.', response_mode: 'json', max_turns: 1 });
   await expect.poll(async () => JSON.stringify(await api(sessionPath + '/messages')), { timeout: 90000 }).toContain(reply);
   assert.ok(modelCalls > 0);
+  const figmaChat = await api('coder/sessions', { project_id: projectId, title: 'Figma agent test', provider: 'local-test', model: 'local-test' });
+  const figmaSessionPath = 'coder/sessions/' + figmaChat.id;
+  await api(figmaSessionPath + '/messages', { content: 'Consulte o Figma em ' + figmaFile, response_mode: 'json', max_turns: 4 });
+  await expect.poll(async () => JSON.stringify(await api(figmaSessionPath + '/messages')), { timeout: 45000 }).toContain(figmaReply);
+  assert.ok(figmaProviderCalls >= 2);
+  assert.equal(figmaSecretSeen, false);
   await api('admin/providers', { id: 'local-anthropic', name: 'Local Anthropic endpoint', kind: 'anthropic',
     base_url: local + '/v1', api_key: 'local-fixture', enabled: true, use_for_coder: true });
   await api('admin/providers/local-anthropic/models', { model_id: 'local-test', name: 'Local Anthropic model', enabled: true, context_window: 128000 });
@@ -242,6 +311,8 @@ try {
   await app.close();
   app = undefined;
   await boot();
+  assert.deepEqual(await ipc('plugins.figmaConnection', { namespace: 'figma', action: 'status' }),
+    { connected: true, account: 'Figma Fixture', toolCount: 6 });
   assert.ok((await api(area + '/api-client/collections')).collections.some(item => item.id === collection.id));
   assert.ok((await api(area + '/ssh/hosts')).hosts.some(item => item.id === host.id));
   assert.ok(JSON.stringify(await api(sessionPath + '/messages')).includes(reply));
@@ -252,10 +323,13 @@ try {
   passed = true;
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
     electronChromium: true, copilotRuntime: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
+    figmaPanel: true, figmaProviderCalls, figmaSecretSeen,
     persistedReply: true, cloudCalls, rendererErrors: errors }));
 } catch (error) {
   console.error('Isolated profile:', root);
+  console.error('Figma provider calls in fixture:', figmaProviderCalls);
   if (electronStderr) console.error(electronStderr);
+  if (electronLogs) console.error(electronLogs);
   if (page && !page.isClosed()) {
     console.error((await page.locator('body').innerText().catch(() => '')).slice(-1500));
   }

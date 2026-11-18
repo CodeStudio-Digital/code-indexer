@@ -5,6 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
+import type { McpRuntimeConfig } from './mcp-connection-types.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 import { mcpAuthClientErrorMessage } from '@mcp/services/mcp-client/auth/domain/errors.js';
 /** Upper bound for the DELETE that ends a streamable HTTP session; cleanup never waits longer. */
@@ -124,7 +125,7 @@ export function authenticatedMcpFetch(config: McpServerConfig, resolver: Resolve
   };
 }
 
-export function mcpServerConfigurationKey(config: McpServerConfig): string {
+export function mcpServerConfigurationKey(config: McpRuntimeConfig): string {
   // Servers can register again after a reload without changing their connection settings.
   const { updated_at: _updatedAt, ...settings } = config;
   return createHash('sha256').update(JSON.stringify(settings)).digest('hex');

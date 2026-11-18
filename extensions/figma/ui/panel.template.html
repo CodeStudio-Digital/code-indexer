@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    .figma-panel { display: grid; gap: 14px; padding: 16px; max-width: 560px; }
+    .figma-state { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+    .figma-state strong { overflow-wrap: anywhere; }
+    .figma-form { display: grid; gap: 9px; }
+    .figma-panel [hidden] { display: none; }
+    .figma-panel input { width: 100%; box-sizing: border-box; }
+    .figma-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .figma-error { color: var(--destructive); overflow-wrap: anywhere; }
+    .figma-help { color: var(--muted-foreground); line-height: 1.55; margin: 0; }
+  </style>
+</head>
+<body>
+  <main id="root" class="mcp-app figma-panel"></main>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "figma",
+  "version": "1.0.0",
+  "description": "Figma design context, screenshots and assets through the embedded CodeStudio MCP server",
+  "author": { "name": "CodeStudio" },
+  "apps": ".app.json",
+  "interface": {
+    "displayName": "Figma",
+    "shortDescription": "Connect Figma to CodeStudio agents with a personal access token",
+    "category": "design"
+  }
+}

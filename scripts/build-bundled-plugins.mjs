@@ -31,7 +31,7 @@ function run(cmd, args) {
   }
 }
 
-const plugins = ['angular', 'javascript-debugger'];
+const plugins = ['angular', 'figma', 'javascript-debugger'];
 
 rmSync(stageRoot, { recursive: true, force: true });
 mkdirSync(stageRoot, { recursive: true });
@@ -62,6 +62,11 @@ for (const ns of plugins) {
   if (existsSync(thirdPartyNotices)) copyFileSync(thirdPartyNotices, join(dest, 'THIRD_PARTY_NOTICES.md'));
   const distDir = join(srcDir, 'dist');
   if (existsSync(distDir)) cpSync(distDir, join(dest, 'dist'), { recursive: true });
+
+  if (ns === 'figma') {
+    mkdirSync(join(dest, 'ui'), { recursive: true });
+    copyFileSync(join(srcDir, 'ui', 'panel.html'), join(dest, 'ui', 'panel.html'));
+  }
 
   if (ns === 'javascript-debugger') {
     const adapterDest = join(dest, 'adapter');

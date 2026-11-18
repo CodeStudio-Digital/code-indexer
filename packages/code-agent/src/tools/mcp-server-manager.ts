@@ -1,7 +1,7 @@
 import { mcpResultToToolResult } from './mcp-result.js';
 import type { ExternalMcpContent } from './mcp-content-types.js';
 import { mcpServerConfigurationKey } from './mcp-transport.js';
-import type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
+import type { EmbeddedMcpConfig, McpConnectionState, McpRuntimeConfig, ServerConnection } from './mcp-connection-types.js';
 export type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
 import { terminateSession, createTransport } from './mcp-transport.js';
 import { listToolsFromConnection } from './mcp-catalog-listing.js';
@@ -20,7 +20,6 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
@@ -47,13 +46,16 @@ export class McpServerManager {
    *                        servers attempt to connect unauthenticated and
    *                        the dashboard guides re-auth on failure.
    */
-  constructor(private readonly bearerResolver: ResolveMcpBearer | null = null) {}
+  constructor(
+    private readonly bearerResolver: ResolveMcpBearer | null = null,
+    private readonly connectEmbedded?: (config: EmbeddedMcpConfig) => Promise<Transport>,
+  ) {}
 
   /**
    * Connect to all provided server configs in parallel, with per-server timeout.
    * Failures are isolated — a failing server logs a warning but doesn't block others.
    */
-  async connectAll(configs: McpServerConfig[]): Promise<void> {
+  async connectAll(configs: McpRuntimeConfig[]): Promise<void> {
     if (new Set(configs.map(config => config.id)).size !== configs.length) throw new Error('Duplicate MCP server ids');
     const results = await mapMcpSources(configs, cfg => this.connectServer(cfg));
     for (let i = 0; i < results.length; i++) {
@@ -70,7 +72,7 @@ export class McpServerManager {
   /**
    * Connect to a single external MCP server.
    */
-  connectServer(config: McpServerConfig): Promise<void> {
+  connectServer(config: McpRuntimeConfig): Promise<void> {
     const cleanupFailure = this.cleanupFailures.get(config.id);
     if (cleanupFailure) return Promise.reject(cleanupFailure);
     const frozen = structuredClone(config);
@@ -87,7 +89,7 @@ export class McpServerManager {
     return attempt.promise;
   }
 
-  private async openConnection(config: McpServerConfig,
+  private async openConnection(config: McpRuntimeConfig,
     attempt: { key: string; controller: AbortController; promise: Promise<void> },
     retired: Promise<void>): Promise<void> {
     const { signal } = attempt.controller;
@@ -100,7 +102,11 @@ export class McpServerManager {
       signal.throwIfAborted();
       const cleanupFailure = this.cleanupFailures.get(config.id);
       if (cleanupFailure) throw cleanupFailure;
-      transport = await awaitMcpConnection<Transport>(createTransport(config, this.bearerResolver).then(async transport => {
+      const opened = config.transport === 'embedded'
+        ? this.connectEmbedded?.(config)
+        : createTransport(config, this.bearerResolver);
+      if (!opened) throw new Error(`Embedded MCP server "${config.id}" is unavailable`);
+      transport = await awaitMcpConnection<Transport>(opened.then(async transport => {
         if (signal.aborted) { await this.closeTransport(config.id, transport); signal.throwIfAborted(); }
         return transport;
       }), signal);
@@ -203,7 +209,7 @@ export class McpServerManager {
   }
 
   /** Reconcile by source. Unchanged transports (and their in-flight calls) survive. */
-  async refreshAll(configs: McpServerConfig[]): Promise<void> {
+  async refreshAll(configs: McpRuntimeConfig[]): Promise<void> {
     const next = new Map(configs.map(config => [config.id, config]));
     if (next.size !== configs.length) throw new Error('Duplicate MCP server ids in configuration');
     const removed = [...new Set([...this.connections.keys(), ...this.connecting.keys()])].filter(id => !next.has(id));
@@ -211,7 +217,7 @@ export class McpServerManager {
     await this.connectAll(configs.filter(config => !this.isConnectedWith(config)));
   }
 
-  isConnectedWith(config: McpServerConfig): boolean {
+  isConnectedWith(config: McpRuntimeConfig): boolean {
     const current = this.connections.get(config.id);
     return current?.state === 'connected'
       && mcpServerConfigurationKey(current.config) === mcpServerConfigurationKey(config);

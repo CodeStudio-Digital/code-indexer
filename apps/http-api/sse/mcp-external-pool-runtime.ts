@@ -1,7 +1,9 @@
 import type { IMcpServerManager } from '@mcp/code-agent/tools/mcp-server-manager-interface.js';
 import { McpServerManager, mcpServerConfigurationKey } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
-import { McpServerStore, type McpServerConfig } from '@mcp/store/mcp-server-store.js';
+import { McpServerStore } from '@mcp/store/mcp-server-store.js';
+import type { EmbeddedMcpConfig, McpRuntimeConfig } from '@mcp/code-agent/tools/mcp-connection-types.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
 import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 import { err } from "@mcp/agent-runtime-host/tool-result.js";
@@ -48,7 +50,7 @@ export class McpExternalPool implements IMcpServerManager {
   private readonly manager: McpServerManager;
   private readonly dbPath: string;
   private readonly bearerResolver: ResolveMcpBearer | null;
-  private readonly loadEnabledServers: () => McpServerConfig[];
+  private readonly loadEnabledServers: () => McpRuntimeConfig[];
   private snapshot: McpExternalSnapshot | null = null;
   private liveTools = new Map<string, CoderTool>();
   private readonly toolRevisions = new McpCatalogueRevisions();
@@ -64,15 +66,19 @@ export class McpExternalPool implements IMcpServerManager {
     /** Test seam; production always uses the real manager. */
     manager?: McpServerManager;
     /** Test seam; production reads enabled configs from McpServerStore. */
-    loadEnabledServers?: () => McpServerConfig[];
+    loadEnabledServers?: () => McpRuntimeConfig[];
+    embedded?: { readConfig(): EmbeddedMcpConfig | null; connect(config: EmbeddedMcpConfig): Promise<Transport> };
   }) {
     this.dbPath = opts.dbPath;
     this.bearerResolver = opts.bearerResolver ?? null;
-    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver);
+    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver, opts.embedded?.connect.bind(opts.embedded));
     this.loadEnabledServers = opts.loadEnabledServers ?? (() => {
       const store = new McpServerStore(this.dbPath);
       try {
-        return store.listServers({ enabled: true });
+        const persisted: McpRuntimeConfig[] = store.listServers({ enabled: true });
+        const embedded = opts.embedded?.readConfig();
+        if (embedded && !persisted.some(server => server.id === embedded.id)) persisted.push(embedded);
+        return persisted;
       } finally {
         store.close();
       }
@@ -224,7 +230,7 @@ export class McpExternalPool implements IMcpServerManager {
    * the snapshot; the runner uses external tools when present and
    * proceeds without them otherwise.
    */
-  async connectAll(_configs: McpServerConfig[]): Promise<void> {
+  async connectAll(_configs: McpRuntimeConfig[]): Promise<void> {
     await this.getReadySnapshot();
     if (this.booted) {
       console.log(
@@ -235,7 +241,7 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   /** Reconcile pool state without blindly reopening healthy transports. */
-  async refreshAll(_configs: McpServerConfig[]): Promise<void> {
+  async refreshAll(_configs: McpRuntimeConfig[]): Promise<void> {
     await this.getReadySnapshot();
   }
 
@@ -308,19 +314,19 @@ export class McpExternalPool implements IMcpServerManager {
     return run;
   }
 
-  private fingerprint(configs: McpServerConfig[]): string {
+  private fingerprint(configs: McpRuntimeConfig[]): string {
     return configs
       .map((config) => `${config.id}:${mcpServerConfigurationKey(config)}`)
       .sort()
       .join('|');
   }
 
-  private connectionsHealthy(configs: McpServerConfig[]): boolean {
+  private connectionsHealthy(configs: McpRuntimeConfig[]): boolean {
     const states = this.manager.getConnectionStates();
     return configs.every((config) => states.get(config.id)?.state === 'connected');
   }
 
-  private needsFullRebuild(configs: McpServerConfig[]): boolean {
+  private needsFullRebuild(configs: McpRuntimeConfig[]): boolean {
     return !this.booted
       || this.snapshot === null
       || this.configFingerprint !== this.fingerprint(configs);
@@ -328,7 +334,7 @@ export class McpExternalPool implements IMcpServerManager {
 
   /** Retry only failed/missing servers so one offline integration does not
    * tear down every healthy MCP transport on each new agent run. */
-  private async reconnectUnhealthy(configs: McpServerConfig[]): Promise<void> {
+  private async reconnectUnhealthy(configs: McpRuntimeConfig[]): Promise<void> {
     const states = this.manager.getConnectionStates();
     const unhealthy = configs.filter(
       (config) => states.get(config.id)?.state !== 'connected',
@@ -349,7 +355,7 @@ export class McpExternalPool implements IMcpServerManager {
     this.snapshot = await this.buildSnapshot(configs);
   }
 
-  private async rebuild(configs: McpServerConfig[], closeExisting: boolean): Promise<void> {
+  private async rebuild(configs: McpRuntimeConfig[], closeExisting: boolean): Promise<void> {
     this.toolRevisions.reconcileConfigurations(configs);
     if (closeExisting) {
       // Retire changed/disabled admissions synchronously, but do not close
@@ -393,7 +399,7 @@ export class McpExternalPool implements IMcpServerManager {
     );
   }
 
-  private async buildSnapshot(configs: McpServerConfig[], serverId?: string): Promise<McpExternalSnapshot> {
+  private async buildSnapshot(configs: McpRuntimeConfig[], serverId?: string): Promise<McpExternalSnapshot> {
     const { tools, tierMap } = await this.manager.listAllTools(serverId ? { serverId } : undefined);
     if (serverId) {
       const prefix = `ext_${serverId}__`;

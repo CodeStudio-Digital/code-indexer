@@ -51,6 +51,7 @@ import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
 import { setCompanyDocCorpus } from '@mcp/company/services/company-doc-corpus.js';
 import { setDbToolsStores, setDbSecretDecryptor } from '@mcp/code-agent/tools/db/index.js';
 import { getMainSecretDecryptor } from './server/secret-decrypt-port.js';
+import { FIGMA_SERVER_ID } from './server/figma/integration.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
 import {
   createFileInboxWatchdogSource,
@@ -1068,7 +1069,9 @@ export function createApp(browser: ResearchBrowserHost | null = null) {
   const mcpPool = new McpExternalPool({
     dbPath: deps.config.dbPath,
     bearerResolver: deps.mcpBearerResolver ?? null,
+    embedded: deps.figmaMcp,
   });
+  deps.figmaMcp.refresh = () => mcpPool.refreshServer(FIGMA_SERVER_ID);
   setCoderWorkerMcpPool(mcpPool);
   // Also publish through the shared singleton for non-runner MCP consumers.
   setGlobalMcpExternalPool(mcpPool);

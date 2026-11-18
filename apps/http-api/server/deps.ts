@@ -177,6 +177,7 @@ import { setBuilderCheckpointDeps } from '../sse/builder-checkpoint.js';
 import { SemanticVectorWorkerClient } from '../sse/SemanticVectorWorkerClient.js';
 import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
 import { invokePluginTool, type PluginToolInvokeFn } from '../sse/PluginHostSingleton.js';
+import { BundledFigmaMcp } from './figma/integration.js';
 import { SemanticIndexCoordinator } from './semantic-index-coordinator.js';
 import {
   createDurableSemanticMutationSink,
@@ -538,6 +539,7 @@ export interface CompanyDeps {
 export interface PluginRuntimeDeps {
   /** Invoke an installed plugin's tool from the UI (outside a coder run). */
   invokePluginTool: PluginToolInvokeFn;
+  figmaMcp: BundledFigmaMcp;
 }
 
 export type ServerDeps = CoreDeps
@@ -1643,6 +1645,7 @@ export function createDeps(browser: import('@mcp/services/research-browser/types
     indexDocsUseCase,
     docProgressTracker,
     invokePluginTool,
+    figmaMcp: new BundledFigmaMcp(db.raw()),
     mcpBearerResolver: null,
   };
 }

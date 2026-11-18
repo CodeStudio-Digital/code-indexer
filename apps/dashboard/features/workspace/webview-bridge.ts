@@ -35,6 +35,7 @@ const READ_ONLY = new Set<string>([
 
 const NS_BOUND = new Set<string>([
   'plugins.invokeTool',
+  'plugins.figmaConnection',
   'plugins.getPermissions',
   'plugins.storageGet',
   'plugins.storageSet',
@@ -235,6 +236,10 @@ export function installWebviewBridge(): () => void {
         const frame = await resolveFrame(source);
         if (!frame) {
           reply({ ok: false, error: i18n.t('plugins:bridge.frameNotRegistered') });
+          return;
+        }
+        if (method === 'plugins.figmaConnection' && frame.namespace !== 'figma') {
+          reply({ ok: false, error: i18n.t('plugins:bridge.methodNotAllowed', { method }) });
           return;
         }
         // Force the bound namespace; fill projectId when the frame knows it.

@@ -202,6 +202,13 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
       return deps.invokePluginTool(namespace, tool, args ?? {}, { projectName, cwd });
     },
 
+    async figmaConnection(input, ctx) {
+      if (ctx.clientInfo?.sourceType !== 'electron' || input?.namespace !== 'figma') {
+        throw new ApiError('forbidden', 403, 'Manage Figma from its desktop plugin panel.');
+      }
+      return deps.figmaMcp.manage(input, ctx.signal);
+    },
+
     async *execStream({ namespace, cmd, args, projectId }): AsyncGenerator<PluginExecChunk> {
       let cwd = process.cwd();
       if (projectId != null) {

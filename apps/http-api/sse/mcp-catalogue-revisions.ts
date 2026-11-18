@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { mcpServerConfigurationKey } from '@mcp/code-agent/tools/mcp-server-manager.js';
-import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
+import type { McpRuntimeConfig } from '@mcp/code-agent/tools/mcp-connection-types.js';
 
 interface ToolRevision {
   serverId: string;
@@ -18,7 +18,7 @@ export class McpCatalogueRevisions {
 
   get(name: string): ToolRevision | undefined { return this.entries.get(name); }
 
-  reconcileConfigurations(configs: McpServerConfig[]): void {
+  reconcileConfigurations(configs: McpRuntimeConfig[]): void {
     const next = new Map(configs.map(config => [config.id, mcpServerConfigurationKey(config)]));
     for (const [name, entry] of this.entries) {
       if (!next.has(entry.serverId) || next.get(entry.serverId) !== this.configurations.get(entry.serverId)) {
@@ -28,7 +28,7 @@ export class McpCatalogueRevisions {
     this.configurations = next;
   }
 
-  update(tools: CoderTool[], configs: McpServerConfig[],
+  update(tools: CoderTool[], configs: McpRuntimeConfig[],
     states: ReadonlyMap<string, { state: string }>): void {
     this.reconcileConfigurations(configs);
     const names = new Set(tools.map(tool => tool.name));

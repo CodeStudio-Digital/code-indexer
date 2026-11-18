@@ -12,7 +12,7 @@
  */
 import { PLUGIN_UI_KIT_CSS } from './plugin-ui-kit/index.js';
 
-const PLUGIN_IFRAME_RUNTIME = `(function () {
+const PLUGIN_IFRAME_RUNTIME = String.raw`(function () {
   var seq = 0;
   var pending = {};
   var streams = {};
@@ -68,6 +68,7 @@ const PLUGIN_IFRAME_RUNTIME = `(function () {
   window.mcp = {
     context: window.__pluginContext || {},
     invokeTool: function (tool, args) { return call('plugins.invokeTool', { tool: tool, args: args || {} }); },
+    figmaConnection: function (command) { return call('plugins.figmaConnection', command); },
     getPermissions: function () { return call('plugins.getPermissions', {}); },
     storage: {
       get: function (key) { return call('plugins.storageGet', { key: key }).then(function (r) { return r.value; }); },
