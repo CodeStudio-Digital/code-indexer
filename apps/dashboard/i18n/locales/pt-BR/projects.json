@@ -522,7 +522,7 @@
   "settings.editorTheme.previewHint": "Prévia da paleta de sintaxe. Funções, métodos e propriedades recebem as cores distintas completas do language server no editor real.",
   "registerExisting": "Registrar pasta",
   "wizard.title": "Novo projeto",
-  "wizard.description": "Escolha uma stack, clone um repositório ou comece vazio. Criado em ~/.mcp-code-indexer/projects.",
+  "wizard.description": "Escolha uma stack, clone um repositório ou comece vazio.",
   "wizard.create": "Criar projeto",
   "wizard.importFromCloud": "Importar da nuvem",
   "wizard.importLoading": "Carregando seus projetos da nuvem…",

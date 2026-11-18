@@ -55,7 +55,6 @@ import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
 import { registerWindowRegistryIpc } from './src/window-registry-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
-import { mountCloudIpc } from './src/cloud/cloud-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
 import { installRendererPermissions } from './src/renderer-permissions.js';
 import { installWindowNavigation, isBrowserLink, isDocumentLink } from './src/window-navigation.js';
@@ -350,8 +349,6 @@ async function bootstrap() {
   // Region screenshot of the inline preview iframe (captures the dashboard
   // window's painted pixels clipped to the marquee box).
   mountPreviewCaptureIpc();
-  // Cloud account/login transport (separate HTTPS surface to the deployed Worker).
-  mountCloudIpc();
   app.on('before-quit', () => stopOAuthLoopback());
 
   // The shared PTY manager backs the api `terminal` + `runner` namespaces —
@@ -439,7 +436,7 @@ function openDocumentWindow(url: string): void {
     if (viewer.isDestroyed()) return;
     viewer.destroy();
     const pt = app.getLocale().startsWith('pt');
-    void dialog.showMessageBox({ type: 'warning', title: 'CodeStudio',
+    void dialog.showMessageBox({ type: 'warning', title: APP_IDENTITY.displayName,
       message: pt ? 'Não foi possível abrir o documento.' : 'The document could not be opened.',
       detail: pt ? 'Verifique se o arquivo ainda existe e se você tem acesso a ele.'
         : 'Check that the file still exists and you have access to it.' });
@@ -491,7 +488,7 @@ async function createAppWindow(
     height: geometry?.height ?? 900,
     minWidth: geometry ? 520 : 1024,
     minHeight: geometry ? 320 : 720,
-    title: 'CodeStudio',
+    title: APP_IDENTITY.displayName,
     ...(appIconPath ? { icon: appIconPath } : {}),
     autoHideMenuBar: true,
     // Frameless title bar: the dashboard's top `<header>` IS the title bar
@@ -604,7 +601,7 @@ async function openTaskManagerWindow(): Promise<void> {
     return;
   }
   const win = await createAppWindow(TASK_MANAGER_ROUTE, undefined, TASK_MANAGER_WINDOW);
-  win.setTitle('CodeStudio — Task Manager');
+  win.setTitle(APP_IDENTITY.displayName + ' — Task Manager');
   taskManagerWindow = win;
   win.once('closed', () => {
     taskManagerWindow = null;

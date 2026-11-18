@@ -19,8 +19,6 @@ import { useApi } from './hooks/useApi.js';
 import { AppShell } from './AppShell.js';
 import { buildAgentsDefaultUrl } from './features/agents/routing.js';
 import { isOnboarded, resetOnboarding } from './features/onboarding/storage.js';
-import { AccountGate } from './features/account/AccountGate.js';
-import { useAccountGate } from './features/account/useAccountGate.js';
 import { isPreflightDone, isElectronRenderer, resetPreflight } from './features/preflight/storage.js';
 import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
@@ -140,17 +138,6 @@ function AppRoot() {
         resetPreflight();
         setShowPreflight(true);
       },
-      // Recovery valve: disable the cloud sign-in/subscription gate. DEV ONLY —
-      // a no-op in production builds so it can't be used to crack the paywall.
-      bypassCloudGate: () => {
-        if (!(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) return;
-        try {
-          window.localStorage.setItem('mcp-cloud:gate-bypass', '1');
-        } catch {
-          /* ignore */
-        }
-        window.location.reload();
-      },
     };
   }, []);
 
@@ -172,35 +159,21 @@ function AppRoot() {
   // mount is dead. Returns a disposer.
   useEffect(() => installWebviewBridge(), []);
 
-  // Sign-in gate (lifted here so the app SHELL only mounts once signed in — the
-  // login screen shows BEFORE the app, not as a translucent overlay over it). When
-  // the cloud bridge is absent (browser dev) the gate resolves to 'allow', so the
-  // app renders normally.
-  const gate = useAccountGate();
-  const signedIn = gate.decision === 'allow';
-
   return (
     <>
-      {signedIn ? (
-        <>
-          <GlobalNotificationListener />
-          <AppShell />
-          {showPreflight ? (
-            <Suspense fallback={<WizardFallback />}>
-              <PreflightWizard onDone={() => setShowPreflight(false)} />
-            </Suspense>
-          ) : (
-            showOnboarding && (
-              <Suspense fallback={<WizardFallback />}>
-                <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
-              </Suspense>
-            )
-          )}
-        </>
-      ) : null}
-      {/* Full-screen sign-in/loading screen until signed in; renders nothing once
-          allowed (then AppShell above is shown). */}
-      <AccountGate gate={gate} />
+      <GlobalNotificationListener />
+      <AppShell />
+      {showPreflight ? (
+        <Suspense fallback={<WizardFallback />}>
+          <PreflightWizard onDone={() => setShowPreflight(false)} />
+        </Suspense>
+      ) : (
+        showOnboarding && (
+          <Suspense fallback={<WizardFallback />}>
+            <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+          </Suspense>
+        )
+      )}
     </>
   );
 }

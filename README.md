@@ -1,10 +1,8 @@
-# CodeStudio (Desktop)
+# CodeStudio Local
 
-An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, let agents reason over your codebase.
+This edition opens directly into the desktop IDE. Projects, chats, settings, API collections and saved SSH hosts live on the machine. Agents use the model endpoint or provider credentials you configure. Local multi-agent collaboration, Git, terminals and the editor run independently of the CodeStudio account service.
 
-> This is the **desktop** repository (Electron IDE + agent runtime + indexer). The
-> former monorepo has been decomposed into three independent repositories — see
-> [docs/REPO_SPLIT.md](docs/REPO_SPLIT.md) for the full topology and runbook.
+The Windows installer is **CodeStudio Local Setup**. This edition uses its own application identity, Electron profile and default data directory (`~/.codestudio-local`). For a local model, add an OpenAI-compatible provider in Settings, enter the server URL and add its model ID. Cloud providers use the credentials you supply. The CLI shim beside the executable is `codestudio-local.cmd`. Set `MCP_DATA_DIR` to choose a different local data directory.
 
 ## Related repositories
 
@@ -15,16 +13,16 @@ An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, 
 | **codestudio-unity** | Unity Editor plugin (`com.maicon.scene-analyzer`) — Scene Analyzer / Asset Modeler | `D:\repos\codestudio-unity` |
 | **codestudio-web** | Public React/Vite institutional and product website | `D:\repos\codestudio-web` |
 
-> Status: **alpha**. Active development on the `feature/ide-mvp` branch (this branch). The Electron shell, file tree, Monaco editor, terminal, agent chat, snapshots, and git tool windows are wired end-to-end. Billing/auth, packaging, and the marketing surface are the next milestones.
+The standalone edition lives on `codex/codestudio-local`. To build the Windows installer from this checkout, use `node scripts/build-electron.mjs --target=nsis` after installing the workspace dependencies and the vendored Draw.io distribution.
 
 ## What's in the box
 
 - **Workspace** — JetBrains-style IDE shell with two activity rails (Files · Search · Snapshots · Git on the left, Agent chat · Sessions · Inbox on the right), a Monaco editor with multi-tab editing + LSP completion / hover / Ctrl+Click / diagnostics, a bottom panel hosting an integrated terminal (PTY rooted at the project), and a status bar.
 - **Agent chat** — multi-provider (Claude · OpenAI · Gemini · ZAI · DeepSeek · Bedrock · Kimi-Code · Cloudflare) with extended thinking, compaction, smart reducers, tool calling, sub-agent spawning. BYOK — your tokens, your costs.
-- **Project understanding** — built on the MCP Code Indexer: hybrid FTS5 + vector search over the codebase, dependency graph, symbol hierarchy, snapshots (curated project notes), and a docs RAG corpus (Pro feature).
+- **Project understanding** — hybrid FTS5 and vector search, dependency graphs, symbol hierarchies, project snapshots and a local documentation corpus.
 - **Local first** — the backend runs in-process inside Electron. No HTTP loopback is exposed in production (a Hono port can be enabled with `MCP_DEV_HTTP=1` for debugging). API surface lives in `@mcp/api-bus`; handlers in `@mcp/api-handlers`; transport adapters mount them on `ipcMain.handle` (Electron) or Hono routes (dev / external clients).
 - **Multi-platform** — Windows, macOS, Linux via `electron-builder` (release pipeline in progress).
-- **Plugins** — extend the agent + workspace with installable plugins: agent tools (run isolated in a worker thread), MCP servers, skills, sandboxed webview tool windows, command-palette commands, and themes. Authored with a typed SDK + CLI, Claude Code-compatible, and distributed through a hosted Market (Cloudflare Worker + D1 + R2, Ed25519-signed bundles). See [docs/PLUGINS.md](docs/PLUGINS.md).
+- **Plugins** — extend the agent + workspace with installable plugins: agent tools (run isolated in a worker thread), MCP servers, skills, sandboxed webview tool windows, command-palette commands, and themes. Install a plugin from disk or configure your own registry. See [docs/PLUGINS.md](docs/PLUGINS.md).
 
 ## Quick start
 
@@ -99,7 +97,6 @@ packages/
   shared/              Types + utilities shared across packages
   candidate-pipeline/  ML classifiers (quality, tool-selection)
   orchestrator-host/   Host orchestration
-worker-license/        Cloudflare Worker — auth + billing (planned, Week 3)
 docs/                  Internal + user docs
 ```
 

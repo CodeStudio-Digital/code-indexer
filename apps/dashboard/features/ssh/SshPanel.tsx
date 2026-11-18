@@ -18,7 +18,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
-import { Plus, X, AlertCircle, Server, Pencil, Trash2, Loader2, ChevronRight, TerminalSquare, ArrowRightLeft, Play, FolderOpen, ShieldCheck, RotateCw, Repeat, Search, Import, Share2, Columns2 } from 'lucide-react';
+import { Plus, X, AlertCircle, Server, Pencil, Trash2, Loader2, ChevronRight, TerminalSquare, ArrowRightLeft, Play, FolderOpen, RotateCw, Repeat, Search, Import, Share2, Columns2 } from 'lucide-react';
 import type { SshConnectSpec, SshHostKeyInfo } from '@mcp/api-bus';
 import { ExponentialBackoff, sleep } from '@mcp/shared/sse/BackoffStrategy.js';
 import { isUnencryptedSecret } from '@mcp/secret-box';
@@ -49,7 +49,6 @@ import { HostKeyTrustPrompt } from './HostKeyTrustPrompt.js';
 import { TunnelsPanel } from './tunnels/TunnelsPanel.js';
 import { SnippetsPanel } from './snippets/SnippetsPanel.js';
 import { DualPaneFiles } from './files/DualPaneFiles.js';
-import { CloudVaultDialog } from './vault/CloudVaultDialog.js';
 import type { SshHost, SshIdentity, SshSnippet } from './types.js';
 
 type SshView = 'terminals' | 'files' | 'tunnels' | 'snippets';
@@ -90,7 +89,6 @@ function ProjectSshPanel({ projectId, workspaceId = projectId }: SshPanelProps) 
   const [hosts, setHosts] = useState<SshHost[]>([]);
   const [identities, setIdentities] = useState<SshIdentity[]>([]);
   const [dialog, setDialog] = useState<{ open: boolean; editing: SshHost | null }>({ open: false, editing: null });
-  const [vaultOpen, setVaultOpen] = useState(false);
   const [trust, setTrust] = useState<TrustRequest | null>(null);
   const trustQueue = useRef<TrustRequest[]>([]);
   const mounted = useRef(false);
@@ -368,15 +366,6 @@ function ProjectSshPanel({ projectId, workspaceId = projectId }: SshPanelProps) 
             </button>
             <button
               type="button"
-              aria-label={t('vault.open')}
-              title={t('vault.open')}
-              onClick={() => setVaultOpen(true)}
-              className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
               aria-label={t('panel.newHost')}
               onClick={() => setDialog({ open: true, editing: null })}
               className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -519,15 +508,6 @@ function ProjectSshPanel({ projectId, workspaceId = projectId }: SshPanelProps) 
         hosts={hosts}
         onOpenChange={(o) => setDialog((d) => ({ ...d, open: o }))}
         onSaved={reload}
-      />
-
-      <CloudVaultDialog
-        projectId={projectId}
-        open={vaultOpen}
-        onOpenChange={(o) => {
-          setVaultOpen(o);
-          if (!o) reload(); // a pull may have created/updated hosts
-        }}
       />
 
       {trust && (

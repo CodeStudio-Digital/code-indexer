@@ -118,7 +118,7 @@ export function LspServersPanel() {
           </h2>
           <p className="text-xs text-muted-foreground mt-1">
             Inteligência real (completion, hover, diagnostics) por linguagem. Instalação local em
-            <code className="mx-1">~/.mcp-code-indexer/lsp-servers</code> — nada baixa sem clique.
+            <code className="mx-1">~/.codestudio-local/lsp-servers</code> — nada baixa sem clique.
             Sem server instalado, o índice estrutural cobre navegação básica.
           </p>
         </div>

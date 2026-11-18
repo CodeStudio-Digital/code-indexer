@@ -12,7 +12,7 @@ import { _electron as electron } from 'playwright-core';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(process.argv[2] ?? 'scratch/harness-electron-preview');
-const executablePath = resolve(process.argv[3] ?? 'dist/electron-builder/win-unpacked/CodeStudio.exe');
+const executablePath = resolve(process.argv[3] ?? 'dist/electron-builder/win-unpacked/CodeStudio Local.exe');
 const unpackaged = process.argv.includes('--unpackaged');
 await mkdir(output, { recursive: true });
 const isolated = await mkdtemp(join(tmpdir(), 'codestudio-preview-'));

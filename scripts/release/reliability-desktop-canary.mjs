@@ -50,7 +50,7 @@ let startupMs;
 let application, child, closed, page;
 let failure;
 try {
-  child = spawn(resolve('.tmp/agent-ide-reliability/candidate/win-unpacked/CodeStudio.exe'),
+  child = spawn(resolve('.tmp/agent-ide-reliability/candidate/win-unpacked/CodeStudio Local.exe'),
     [`--user-data-dir=${chromiumProfile}`, '--disable-gpu', '--remote-debugging-port=0',
       ...(process.env.RELIABILITY_INSPECT ? ['--inspect=0'] : [])],
     { cwd: output, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });

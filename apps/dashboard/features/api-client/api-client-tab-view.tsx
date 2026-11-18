@@ -15,7 +15,7 @@ import { downloadJson } from './download.js';
 import { jsonShape } from './ai/response-shape.js';
 import { parseRows } from './kv-grid/kv-utils.js';
 import * as docsApi from './docs-studio/docs-studio-api.js';
-import { Activity, Loader2, Settings2, Download, Upload, Play, ChevronDown, Plus, Library, Globe, RefreshCw, Webhook } from 'lucide-react';
+import { Activity, Loader2, Settings2, Download, Upload, Play, ChevronDown, Plus, Library, Globe, Webhook } from 'lucide-react';
 import { WorkbenchPanelHeader } from '../../components/workbench/index.js';
 import { Button } from '../../components/ui/button.js';
 import { SubTabs } from './SubTabs.js';
@@ -37,8 +37,6 @@ import { ImportOpenApiDialog } from './ImportOpenApiDialog.js';
 import { ImportCurlDialog } from './ImportCurlDialog.js';
 import { ImportPostmanDialog } from './ImportPostmanDialog.js';
 import { CodeDialog } from './CodeDialog.js';
-import { PublishDocsDialog } from './PublishDocsDialog.js';
-import { CloudSyncDialog } from './CloudSyncDialog.js';
 import { RegressionPanel } from './RegressionPanel.js';
 import { useDockPortalRoot, ModeBtn } from './api-client-tab-controls.js';
 import { useRequestDeletion } from './use-request-deletion.js';
@@ -73,8 +71,6 @@ function ApiClientWorkspace({ projectId, docsAccess = false, workbenchSlots }: A
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeRid, setCodeRid] = useState<number | null>(null);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
-  const [publishDocsOpen, setPublishDocsOpen] = useState(false);
-  const [cloudSyncOpen, setCloudSyncOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveDraftObj, setSaveDraftObj] = useState<ApiRequest | null>(null);
   const leftPortalRoot = useDockPortalRoot(workbenchSlots?.leftHost ?? null, 'left');
@@ -216,9 +212,6 @@ function ApiClientWorkspace({ projectId, docsAccess = false, workbenchSlots }: A
           <>
             <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.newEnvironment')} onClick={() => openEnvEditor(null)}>
               <Plus className="h-3.5 w-3.5" />
-            </Button>
-            <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.sync')} onClick={() => setCloudSyncOpen(true)}>
-              <RefreshCw className="h-3.5 w-3.5" />
             </Button>
             <Button size="icon" variant="ghost" className="h-6 w-6" title={t('toolbar.environments')} onClick={() => setEnvManagerOpen(true)}>
               <Settings2 className="h-3.5 w-3.5" />
@@ -366,7 +359,6 @@ function ApiClientWorkspace({ projectId, docsAccess = false, workbenchSlots }: A
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={() => void exportCollection('postman')}>Postman v2.1</DropdownMenuItem>
           <DropdownMenuItem onClick={() => void exportCollection('openapi')}>OpenAPI 3.1</DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setPublishDocsOpen(true)}><Globe className="mr-2 h-3.5 w-3.5" /> {t('toolbar.publishDocs')}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <Button size="sm" variant="outline" className="h-7 gap-1" disabled={state.activeCollectionId == null} onClick={() => setRegressionOpen(true)}>
@@ -479,14 +471,6 @@ function ApiClientWorkspace({ projectId, docsAccess = false, workbenchSlots }: A
         open={codeOpen}
         onOpenChange={setCodeOpen}
       />
-      <PublishDocsDialog
-        projectId={projectId}
-        collectionId={state.activeCollectionId}
-        collectionName={state.collections.find((col) => col.id === state.activeCollectionId)?.name ?? t('toolbar.importedCollectionName')}
-        open={publishDocsOpen}
-        onOpenChange={setPublishDocsOpen}
-      />
-      <CloudSyncDialog projectId={projectId} open={cloudSyncOpen} onOpenChange={setCloudSyncOpen} />
       <RegressionPanel
         projectId={projectId}
         collectionId={state.activeCollectionId}

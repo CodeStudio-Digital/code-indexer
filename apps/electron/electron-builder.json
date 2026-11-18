@@ -1,6 +1,7 @@
 {
-  "appId": "studio.codestudio.app",
-  "productName": "CodeStudio",
+  "appId": "studio.codestudio.local",
+  "productName": "CodeStudio Local",
+  "extraMetadata": { "name": "codestudio-local" },
   "npmRebuild": false,
   "directories": {
     "output": "dist/electron-builder",
@@ -15,6 +16,8 @@
     "dist/packages/**/*",
     "package.json",
     "!dist/apps/electron/native-agent-runtime-integrity.json",
+    "!dist/apps/electron/src/cloud/**/*",
+    "!dist/apps/http-api/server/github-app-managed-git/**/*",
     "!**/*.map"
   ],
   "asar": true,
@@ -83,15 +86,11 @@
     "allowToChangeInstallationDirectory": true,
     "include": "apps/electron/build/installer.nsh"
   },
-  "publish": [
-    {
-      "provider": "github"
-    }
-  ],
+  "publish": null,
   "extraFiles": [
     {
-      "from": "apps/electron/build/codestudio.cmd",
-      "to": "codestudio.cmd"
+      "from": "apps/electron/build/codestudio-local.cmd",
+      "to": "codestudio-local.cmd"
     }
   ]
 }

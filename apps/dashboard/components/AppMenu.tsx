@@ -34,7 +34,7 @@ export function AppMenu() {
             className="no-drag inline-flex h-7 items-center gap-1.5 rounded px-2 text-[12px] font-semibold text-foreground hover:bg-muted"
           >
             <img src={LOGO_MARK_URL} alt="" className="h-5 w-5 shrink-0" draggable={false} />
-            <span>CodeStudio</span>
+            <span>CodeStudio Local</span>
             <span className="text-[9px] font-normal uppercase tracking-wider text-muted-foreground">
               v{__APP_VERSION__}
             </span>

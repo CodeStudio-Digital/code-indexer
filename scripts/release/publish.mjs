@@ -5,10 +5,7 @@
  * builder uploads DURING packaging, so nothing could be verified first. Here
  * publishing is a separate, final step that only runs on a verified artifact.
  *
- * The three assets are exactly what electron-updater needs on Windows:
- * the installer, `latest.yml` (the update feed) and the `.blockmap`
- * (differential download). Publishing the installer alone silently breaks
- * auto-update for every existing user.
+ * Local releases publish the independently named installer under a local-v tag.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -19,12 +16,10 @@ function gh(args, options = {}) {
   return spawnSync('gh', args, { shell: true, encoding: 'utf8', ...options });
 }
 
-/** Assets electron-updater needs, in the order they should be uploaded. */
+/** Windows installer for the standalone edition. */
 export function releaseAssets(outputDir, version) {
-  const installer = path.join(outputDir, `CodeStudio Setup ${version}.exe`);
-  return [installer, `${installer}.blockmap`, path.join(outputDir, 'latest.yml')].filter((f) =>
-    existsSync(f),
-  );
+  const installer = path.join(outputDir, `CodeStudio Local Setup ${version}.exe`);
+  return existsSync(installer) ? [installer] : [];
 }
 
 export function releaseExists(tag) {
@@ -46,7 +41,7 @@ export async function confirm(question) {
 }
 
 export function publishRelease({ tag, title, notes, assets, draft, prerelease }) {
-  const args = ['release', 'create', tag, ...assets.map((a) => `"${a}"`), '--title', `"${title}"`];
+  const args = ['release', 'create', tag, '--latest=false', ...assets.map((a) => `"${a}"`), '--title', `"${title}"`];
   if (notes) args.push('--notes', `"${notes.replace(/"/g, "'")}"`);
   else args.push('--generate-notes');
   if (draft) args.push('--draft');

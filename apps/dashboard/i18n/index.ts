@@ -35,7 +35,7 @@ const lazyLocaleBackend: BackendModule = {
 // These namespaces are consumed before or during the first project-list paint.
 // Product-area catalogs (Admin, Agents, Docs, editors, etc.) are requested by
 // react-i18next only when their lazy route mounts.
-const BOOTSTRAP_NAMESPACES = ['common', 'cloud', 'pins', 'workspace', 'projects'] as const;
+const BOOTSTRAP_NAMESPACES = ['common', 'pins', 'workspace', 'projects'] as const;
 
 function detectInitialLanguage(): 'pt-BR' | 'en' {
   try {

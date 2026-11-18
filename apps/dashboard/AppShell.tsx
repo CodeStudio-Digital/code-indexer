@@ -28,7 +28,6 @@ import {
 } from 'lucide-react';
 import { Button } from './components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from './components/ui/tooltip.js';
-import { CloudStatusButton } from './features/account/CloudStatusButton.js';
 import { LanguageSwitcher } from './components/LanguageSwitcher.js';
 import { RunningTasksDropdown } from './components/RunningTasksDropdown.js';
 import { AppMenu } from './components/AppMenu.js';
@@ -326,7 +325,6 @@ export function AppShell() {
           )}
           <RunningTasksDropdown />
           {!isWorkbenchView && <LanguageSwitcher />}
-          <CloudStatusButton />
           {!isWorkbenchView && <Tooltip>
             <TooltipTrigger asChild>
               <Button

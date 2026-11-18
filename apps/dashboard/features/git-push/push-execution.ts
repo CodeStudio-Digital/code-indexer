@@ -1,5 +1,5 @@
 import { type PushDialogRequest } from './push-dialog-store.js';
-import type { GitCommitDetail, GitDiffResult, GitIdentityMode, GitPushActionRequired, GitPushPreview, GitRunResult } from '@mcp/api-bus';
+import type { GitCommitDetail, GitDiffResult, GitPushActionRequired, GitPushPreview, GitRunResult } from '@mcp/api-bus';
 import { workspaceApi } from '../builder/preview/api.js';
 import { apiCall } from '../../lib/api-client.js';
 
@@ -51,8 +51,6 @@ export async function executePush(
   request: PushDialogRequest,
   preview: GitPushPreview,
   pushTags: boolean,
-  identityMode: GitIdentityMode,
-  managedGrant?: string,
 ): Promise<PushExecutionResult> {
   if (request.kind === 'workspace') {
     const result = await workspaceApi.gitPush(request.sessionId, request.projectId, {
@@ -75,8 +73,6 @@ export async function executePush(
     setUpstream: preview.setUpstream,
     force: request.force,
     pushTags,
-    identityMode,
-    managedGrant,
   });
   if (!result.ok) {
     throw pushError(

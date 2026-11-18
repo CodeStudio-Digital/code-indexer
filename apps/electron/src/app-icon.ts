@@ -7,10 +7,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const APP_IDENTITY = {
-  displayName: 'CodeStudio',
+  displayName: 'CodeStudio Local',
   // Must match electron-builder's appId and the installer shortcuts so pinned
   // launchers, running windows and notifications share one Windows identity.
-  userModelId: 'studio.codestudio.app',
+  userModelId: 'studio.codestudio.local',
 } as const;
 
 export function resolveAppIconPath(): string | undefined {

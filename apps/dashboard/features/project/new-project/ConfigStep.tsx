@@ -57,7 +57,7 @@ export function ConfigStep({ template, value, onChange }: ConfigStepProps) {
         />
         <p className="text-xs text-muted-foreground">
           {t('wizard.locationHint')}{' '}
-          <code className="font-mono">~/.mcp-code-indexer/projects/{slug}</code>
+          <code className="font-mono">~/.codestudio-local/projects/{slug}</code>
         </p>
       </div>
 

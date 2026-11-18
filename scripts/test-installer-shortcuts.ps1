@@ -26,12 +26,12 @@ foreach ($name in @('userPrograms', 'commonPrograms', 'userDesktop', 'commonDesk
     $dirs[$name] = Join-Path $testRoot $name
     $null = New-Item -ItemType Directory -Path $dirs[$name] -Force
 }
-$null = New-Item -ItemType Directory -Path (Join-Path $dirs.userPrograms 'CodeStudio')
+$null = New-Item -ItemType Directory -Path (Join-Path $dirs.userPrograms 'CodeStudio Local')
 $implicitApp = Join-Path $dirs.implicit '1234abcd'
 $null = New-Item -ItemType Directory -Path $implicitApp
-$oldExe = Join-Path $dirs.old 'CodeStudio.exe'
-$newExe = Join-Path $dirs['new version ação'] 'CodeStudio.exe'
-$otherExe = Join-Path $dirs.old 'OtherApp.exe'
+$oldExe = Join-Path $dirs.old 'CodeStudio Local.exe'
+$newExe = Join-Path $dirs['new version ação'] 'CodeStudio Local.exe'
+$otherExe = Join-Path $dirs.old 'CodeStudio.exe'
 foreach ($file in @($oldExe, $newExe, $otherExe)) { [IO.File]::WriteAllText($file, 'shortcut fixture; never executed') }
 $customIcon = Join-Path $dirs.custom 'custom.ico'
 Copy-Item -LiteralPath (Join-Path $projectRoot 'apps\electron\build\icon.ico') -Destination $customIcon
@@ -52,16 +52,16 @@ function Add-TestShortcut($name, $folder, $fileName, $target, $workingDirectory,
     $records.Add([pscustomobject]@{ name = $name; path = $linkPath; target = $target; cwd = $workingDirectory; icon = $icon; args = $arguments; hotkey = $link.Hotkey })
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link)
 }
-Add-TestShortcut 'per-user shadow of common menu' $dirs.userPrograms 'CodeStudio.lnk' $oldExe $dirs.old $oldExe
-Add-TestShortcut 'all-users Start Menu' $dirs.commonPrograms 'CodeStudio.lnk' $oldExe $dirs.old $oldExe
-Add-TestShortcut 'public desktop' $dirs.commonDesktop 'CodeStudio.lnk' $oldExe $dirs.old $oldExe
-Add-TestShortcut 'renamed user desktop' $dirs.userDesktop 'My CodeStudio.lnk' $oldExe $dirs.old $oldExe
-Add-TestShortcut 'legacy menu folder' (Join-Path $dirs.userPrograms 'CodeStudio') 'CodeStudio.lnk' $oldExe $dirs.old $oldExe
-Add-TestShortcut 'pinned taskbar link' $dirs.pinned 'CodeStudio.lnk' $oldExe $dirs.old $oldExe
-Add-TestShortcut 'implicit pin from a running app' $implicitApp 'CodeStudio.lnk' $oldExe $dirs.old $oldExe
-$missingExe = Join-Path $testRoot 'removed build\CodeStudio.exe'
+Add-TestShortcut 'per-user shadow of common menu' $dirs.userPrograms 'CodeStudio Local.lnk' $oldExe $dirs.old $oldExe
+Add-TestShortcut 'all-users Start Menu' $dirs.commonPrograms 'CodeStudio Local.lnk' $oldExe $dirs.old $oldExe
+Add-TestShortcut 'public desktop' $dirs.commonDesktop 'CodeStudio Local.lnk' $oldExe $dirs.old $oldExe
+Add-TestShortcut 'renamed user desktop' $dirs.userDesktop 'My CodeStudio Local.lnk' $oldExe $dirs.old $oldExe
+Add-TestShortcut 'legacy menu folder' (Join-Path $dirs.userPrograms 'CodeStudio Local') 'CodeStudio Local.lnk' $oldExe $dirs.old $oldExe
+Add-TestShortcut 'pinned taskbar link' $dirs.pinned 'CodeStudio Local.lnk' $oldExe $dirs.old $oldExe
+Add-TestShortcut 'implicit pin from a running app' $implicitApp 'CodeStudio Local.lnk' $oldExe $dirs.old $oldExe
+$missingExe = Join-Path $testRoot 'removed build\CodeStudio Local.exe'
 Add-TestShortcut 'removed old executable' $dirs.userPrograms 'Old build.lnk' $missingExe (Split-Path $missingExe) $missingExe
-Add-TestShortcut 'unrelated app with CodeStudio label' $dirs.userDesktop 'CodeStudio.lnk' $otherExe $dirs.old $otherExe
+Add-TestShortcut 'standard edition with local shortcut label' $dirs.userDesktop 'CodeStudio Local.lnk' $otherExe $dirs.old $otherExe
 Add-TestShortcut 'custom arguments and project location' $dirs.userPrograms 'Project.lnk' $oldExe $dirs.custom $customIcon '--user-data-dir="D:\custom profile" "D:\project with spaces"'
 Add-TestShortcut 'already up to date' $dirs.commonPrograms 'Current.lnk' $newExe $dirs['new version ação'] $newExe
 $corruptLink = Join-Path $dirs.userDesktop 'Broken.lnk'
@@ -84,9 +84,9 @@ Unicode true
 RequestExecutionLevel user
 SilentInstall silent
 OutFile "$testExe"
-!define PRODUCT_FILENAME "CodeStudio"
-!define SHORTCUT_NAME "CodeStudio"
-!define APP_ID "studio.codestudio.app"
+!define PRODUCT_FILENAME "CodeStudio Local"
+!define SHORTCUT_NAME "CodeStudio Local"
+!define APP_ID "studio.codestudio.local"
 !include "$include"
 !addplugindir "$plugins"
 !insertmacro customHeader
@@ -127,7 +127,7 @@ foreach ($record in $records) {
     if ($record.target -ne $otherExe) {
         $folder = $shellNamespace.Namespace((Split-Path $record.path))
         $item = $folder.ParseName((Split-Path $record.path -Leaf))
-        Assert-Equal ($item.ExtendedProperty('System.AppUserModel.ID')) 'studio.codestudio.app' "$($record.name) Windows app identity"
+        Assert-Equal ($item.ExtendedProperty('System.AppUserModel.ID')) 'studio.codestudio.local' "$($record.name) Windows app identity"
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($item)
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($folder)
     }

@@ -268,28 +268,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ) => subscribe('window:open-projects-changed', cb),
   },
   /**
-   * Cloud account/login — a SEPARATE HTTPS surface (the deployed Worker), not the
-   * in-process api bus. The refresh token stays in main; the renderer only ever
-   * sends an opaque op + receives `{ ok, status, body }` (tokens stripped).
-   */
-  cloud: {
-    fetch: (op: string, input: unknown) =>
-      ipcRenderer.invoke('cloud:fetch', op, input) as Promise<{ ok: boolean; status: number; body: unknown }>,
-    getAuthState: () => ipcRenderer.invoke('cloud:auth-state') as Promise<{ state: string; account: unknown }>,
-    logout: () => ipcRenderer.invoke('cloud:logout') as Promise<{ ok: true }>,
-    // Browser OAuth: opens the system browser, returns once the loopback handoff
-    // is redeemed (tokens handled in main). Renderer only learns ok/error.
-    startBrowserLogin: (provider: string) =>
-      ipcRenderer.invoke('cloud:startBrowserLogin', provider) as Promise<{ ok: boolean; error?: string }>,
-    // Enterprise SSO: same loopback handoff, keyed by org id.
-    startSsoLogin: (orgId: string) =>
-      ipcRenderer.invoke('cloud:startSsoLogin', orgId) as Promise<{ ok: boolean; error?: string }>,
-    // Device login via the browser by ANY method (email/password or OAuth).
-    startPortalLogin: () =>
-      ipcRenderer.invoke('cloud:startPortalLogin') as Promise<{ ok: boolean; error?: string }>,
-    onAuthChanged: (cb: (state: { state: string; account: unknown }) => void) => subscribe('cloud:auth-changed', cb),
-  },
-  /**
    * SSH credential shim — encrypt/decrypt saved-host secrets with the OS
    * keychain (`safeStorage`). The renderer encrypts before persisting a host
    * and decrypts just before connecting; SQLite only ever holds ciphertext.

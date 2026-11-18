@@ -39,7 +39,7 @@ const value = (name) => {
 
 if (has('--help') || has('-h')) {
   console.log(`
-CodeStudio release — preflight → build → verify → publish
+CodeStudio Local release — preflight → build → verify → publish
 
   pnpm release                     preflight, build and verify (publishes nothing)
   pnpm release --publish           ...and create the GitHub Release
@@ -53,8 +53,7 @@ Options
   --prerelease        mark the release as a prerelease
   --yes               skip the confirmation prompt (required for non-interactive runs)
 
-Publishing uploads the installer, its .blockmap and latest.yml — all three are
-required for auto-update to work. It always runs last, on a verified artifact.
+Publishing uploads the verified standalone installer under a local-v tag.
 `);
   process.exit(0);
 }
@@ -65,7 +64,7 @@ const dryRun = has('--dry-run');
 const outputDir = path.join(root, 'dist/electron-builder');
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 const version = value('--version') ?? pkg.version;
-const tag = `v${version}`;
+const tag = `local-v${version}`;
 
 const ICON = { ok: '✓', bad: '✗', warn: '!' };
 let failed = false;
@@ -84,7 +83,7 @@ function die(message) {
 }
 
 // ── 1. Preflight ────────────────────────────────────────────────
-step(`Preflight — CodeStudio ${version}`);
+step(`Preflight — CodeStudio Local ${version}`);
 
 const git = gitState(root);
 line(true, `git ${git.branch} @ ${git.head}`, git.dirtyFiles > 0 ? `${git.dirtyFiles} uncommitted file(s)` : '');
@@ -154,9 +153,6 @@ if (!wantPublish) {
 
 step(`Publish → ${targetRepo()}`);
 for (const asset of assets) console.log(`  · ${path.basename(asset)}`);
-if (assets.length < 3) {
-  line('warn', 'fewer than 3 assets', 'auto-update needs the installer, its .blockmap and latest.yml');
-}
 
 const approved = has('--yes') || (await confirm(`\nCreate release ${tag} on ${targetRepo()}?`));
 if (!approved) {
@@ -166,7 +162,7 @@ if (!approved) {
 
 const url = publishRelease({
   tag,
-  title: `CodeStudio ${version}`,
+  title: `CodeStudio Local ${version}`,
   notes: value('--notes'),
   assets,
   draft: has('--draft'),

@@ -62,12 +62,12 @@ export interface IndexerConfig {
 /**
  * Canonical MCP data directory — holds `index.db`, `exports/`, and
  * host-scaffolded projects (`projects/`). Single source of truth so the
- * various features stop re-joining `~/.mcp-code-indexer` independently.
+ * all local-edition features resolve the same profile.
  * Overridable with `MCP_DATA_DIR`.
  */
 export function mcpDataDir(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.MCP_DATA_DIR?.trim();
-  return override ? resolve(override) : join(homedir(), '.mcp-code-indexer');
+  return override ? resolve(override) : join(homedir(), '.codestudio-local');
 }
 
 /** Workspace effects belong to the OS user, not to a database/profile. Tests

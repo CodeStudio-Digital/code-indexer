@@ -522,7 +522,7 @@
   "settings.editorTheme.previewHint": "Syntax palette preview. Functions, methods and properties get their full distinct colors from the language server in the real editor.",
   "registerExisting": "Register folder",
   "wizard.title": "New project",
-  "wizard.description": "Pick a stack, clone a repo, or start empty. Created under ~/.mcp-code-indexer/projects.",
+  "wizard.description": "Pick a stack, clone a repo, or start empty.",
   "wizard.create": "Create project",
   "wizard.importFromCloud": "Import from cloud",
   "wizard.importLoading": "Loading your cloud projects…",

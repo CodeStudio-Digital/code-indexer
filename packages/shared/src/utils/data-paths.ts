@@ -1,6 +1,6 @@
 /**
  * Per-subsystem subdirectories under the canonical MCP data dir
- * (`mcpDataDir()` → `~/.mcp-code-indexer`, overridable via `MCP_DATA_DIR`).
+ * (`mcpDataDir()` → `~/.codestudio-local`, overridable via `MCP_DATA_DIR`).
  *
  * Single source of truth so features stop hardcoding
  * `join(process.cwd(), 'data', …)` — which scattered runtime state into

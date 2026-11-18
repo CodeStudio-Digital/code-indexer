@@ -40,6 +40,7 @@ import type { HandlerDeps } from '../types.js';
 import { callGeneralAiJson, stripJsonFences } from '../aiJson.js';
 import { durationToBucket } from '@mcp/store/pipeline-telemetry-store.js';
 import { pushWithAutoUpdate } from '@mcp/shared/git/push-with-auto-update.js';
+import type { ManagedGitClient } from '@mcp/shared/git/managed-git.js';
 import { createConflictHandlers } from './conflicts.js';
 import { createGitOptimizationHandlers } from './git-optimizations.js';
 import { createRepoResolver } from './repos.js';
@@ -511,7 +512,7 @@ function commandPreview(operation: GitPlanOperation): string {
   return `git ${buildOperation(operation).args.map(quote).join(' ')}`;
 }
 
-export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
+export function createProjectGitHandlers(deps: HandlerDeps & { managedGit?: ManagedGitClient }): ProjectGitApi {
   const { db } = deps;
   const managedGit = deps.managedGit;
   const withInteractiveGitPriority = <T>(

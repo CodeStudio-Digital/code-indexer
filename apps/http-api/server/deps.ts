@@ -53,7 +53,6 @@ import {
   mcpDataDir,
   type IndexerConfig,
 } from '@mcp/shared/utils/config.js';
-import type { ManagedGitClient } from '@mcp/shared/git/managed-git.js';
 import { projectMemoryNamespace } from '@mcp/shared/vector-namespace.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { CostTracker } from '@mcp/services/services/costs.js';
@@ -136,7 +135,6 @@ import {
   buildPreflightToolCatalog,
   buildPreflightSkillCatalog,
 } from './preflight-capability-catalog.js';
-import { createGitHubAppManagedGitClient } from './github-app-managed-git/client.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import { SubAgentResultCacheStore } from '@mcp/store/sub-agent-result-cache-store.js';
 import { DocStore } from '@mcp/store/doc-store.js';
@@ -572,11 +570,6 @@ export interface PluginRuntimeDeps {
   syncPluginProviders: () => void;
 }
 
-export interface ManagedGitDeps {
-  /** Optional GitHub App identity. Native project Git remains the default path. */
-  managedGit: ManagedGitClient;
-}
-
 export type ServerDeps = CoreDeps
   & ProviderDeps
   & SearchDeps
@@ -590,12 +583,10 @@ export type ServerDeps = CoreDeps
   & ApiClientDeps
   & PipelineDeps
   & DocCorpusDeps
-  & PluginRuntimeDeps
-  & ManagedGitDeps;
+  & PluginRuntimeDeps;
 
 export function createDeps(): ServerDeps {
   const config = loadConfig();
-  const managedGit = createGitHubAppManagedGitClient();
   // This is the ONE main-process handle: make it the WAL checkpoint owner so the
   // central -wal can't bloat under multi-agent worker write load (see db.ts).
   // Perf W2 — the periodic PASSIVE checkpoint itself moves to the
@@ -1703,7 +1694,6 @@ export function createDeps(): ServerDeps {
     docProgressTracker,
     invokePluginTool,
     syncPluginProviders,
-    managedGit,
     mcpBearerResolver: null,
   };
 }

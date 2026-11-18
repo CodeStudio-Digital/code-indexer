@@ -144,10 +144,9 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
           {t('onboarding.welcome.description')}
         </p>
       </div>
-      <div className="grid grid-cols-3 gap-3 text-left w-full max-w-lg">
+      <div className="grid grid-cols-2 gap-3 text-left w-full max-w-lg">
         <Highlight title={t('onboarding.welcome.keys.title')} body={t('onboarding.welcome.keys.body')} />
         <Highlight title={t('onboarding.welcome.local.title')} body={t('onboarding.welcome.local.body')} />
-        <Highlight title={t('onboarding.welcome.free.title')} body={t('onboarding.welcome.free.body')} />
       </div>
       <Button size="lg" onClick={onNext} className="mt-2">
         {t('onboarding.welcome.cta')}
