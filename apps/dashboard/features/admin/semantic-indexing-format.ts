@@ -161,10 +161,8 @@ export function targetForKind(
   }
   const provider = providers.find((item) => item.enabled) ?? providers[0];
   const protocol =
-    provider?.kind === 'cloudflare'
-      ? 'cloudflare'
-      : provider?.kind === 'bedrock'
-        ? 'bedrock'
+    provider?.kind === 'bedrock'
+      ? 'bedrock'
         : capability === 'embedding'
           ? 'openai-embeddings'
           : 'openai-rerank';

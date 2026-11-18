@@ -15,6 +15,7 @@ export interface ResolvedCreds {
   /** Optional provider-specific fetch implementation (proxy/retry/auth parity). */
   fetch?: typeof fetch;
   aws?: {
+    apiKey?: string;
     accessKeyId?: string;
     secretAccessKey?: string;
     sessionToken?: string;
@@ -70,18 +71,39 @@ export async function resolveAwsConfigCredentials(
   config: ProviderConfigLike,
   credentials: ProviderSecretReaderLike,
 ): Promise<ResolvedCreds> {
-  const aws: NonNullable<ResolvedCreds['aws']> = {};
   const tokens = await credentials.get();
-  const extra = tokens?.extra ?? {};
+  return { aws: readBedrockCredentials(tokens?.extra, config.extra?.aws_region) };
+}
 
-  aws.accessKeyId = readString(extra.accessKeyId);
-  aws.secretAccessKey = readString(extra.secretAccessKey);
-  aws.sessionToken = readString(extra.sessionToken);
-  aws.region = readString(extra.region) ?? readString(config.extra?.aws_region);
-
-  return { aws };
+export function readBedrockCredentials(
+  secret?: Record<string, unknown> | null,
+  region?: unknown,
+): NonNullable<ResolvedCreds['aws']> {
+  return {
+    apiKey: readString(secret?.bedrockApiKey),
+    accessKeyId: readString(secret?.accessKeyId),
+    secretAccessKey: readString(secret?.secretAccessKey),
+    sessionToken: readString(secret?.sessionToken),
+    region: readString(secret?.region) ?? readString(secret?.aws_region) ?? readString(region),
+  };
 }
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/** Shared AWS SDK options for Bedrock control-plane and Converse clients. */
+export function bedrockClientConfig(aws: ResolvedCreds['aws'] = {}) {
+  const region = aws.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1';
+  if (aws.apiKey) {
+    return { region, token: { token: aws.apiKey }, authSchemePreference: ['httpBearerAuth'] };
+  }
+  if (aws.accessKeyId && aws.secretAccessKey) {
+    return {
+      region,
+      credentials: { accessKeyId: aws.accessKeyId, secretAccessKey: aws.secretAccessKey, sessionToken: aws.sessionToken },
+      authSchemePreference: ['sigv4'],
+    };
+  }
+  return { region };
 }

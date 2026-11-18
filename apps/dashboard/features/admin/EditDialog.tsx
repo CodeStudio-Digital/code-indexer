@@ -46,12 +46,13 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
       .catch(() => setKnown([]));
   }, []);
   const kindOptions: Array<{ value: string; label: string }> =
-    known.length > 0
-      ? known.map((k) => ({ value: k.kind, label: k.displayName || k.kind }))
-      : KINDS.map((k) => ({ value: k, label: k }));
+    KINDS.filter(kind => kind === 'openai' || kind === 'anthropic' || kind === form.kind).map(kind => ({
+      value: kind,
+      label: known.find(provider => provider.kind === kind)?.displayName ?? kind,
+    }));
 
   const selected = known.find((k) => k.kind === form.kind);
-  const isOauth = selected?.credKind === 'oauth' || selected?.credKind === 'aws';
+  const isOauth = form.kind === 'copilot' || form.kind === 'bedrock';
   const configFields = selected?.config?.fields ?? [];
 
   function update<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
@@ -111,7 +112,7 @@ export function EditDialog({ initial, onClose, onSave }: EditDialogProps) {
           </div>
           <div>
             <label className="text-xs font-medium">{t('admin:editProvider.kind')}</label>
-            <Select value={form.kind} onValueChange={(v) => update('kind', v as ProviderKind)}>
+            <Select disabled={!isNew} value={form.kind} onValueChange={(v) => update('kind', v as ProviderKind)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>

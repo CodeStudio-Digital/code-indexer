@@ -150,7 +150,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Global mode: which linked project the right-rail file tree is rooted at.
   // Defaults to the selected session's primary; reset when the session changes.
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
-  const [provider, setProvider] = useState('zai');
+  const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('');
 
   // Live diagram updates: the draw.io agent's diagram_create/update emits

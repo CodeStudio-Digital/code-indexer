@@ -1,7 +1,6 @@
 import type { ProviderDefinition, ProviderCredentials, ResolvedCreds, StoredOAuth } from '../types.js';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 import {
-  resolveCopilotCreds,
   resolveChatGPTCreds,
   resolveGoogleOAuthCreds,
   resolveClaudeCodeCreds,
@@ -84,6 +83,8 @@ export async function resolveCreds(
   def: ProviderDefinition,
   cfg: ProviderConfig | null,
 ): Promise<ResolvedCreds> {
+  // The official Copilot runtime owns login and credential storage.
+  if (def.kind === 'copilot') return {};
   if (def.resolveCredentials) {
     if (!cfg) {
       throw new Error(
@@ -123,7 +124,6 @@ export async function resolveCreds(
       // to the SAME resolve*Creds below — so the legacy path stays the fallback
       // and behavior is identical until per-kind E2E flips a kind on.
       if (genericOAuthEnabled(def.kind)) return runOAuthRefresh(def, cfg);
-      if (def.kind === 'copilot') return resolveCopilotCreds(cfg);
       if (def.kind === 'chatgpt') return resolveChatGPTCreds(cfg);
       if (def.kind === 'google-oauth') return resolveGoogleOAuthCreds(cfg);
       if (def.kind === 'claude-code') return resolveClaudeCodeCreds(cfg);

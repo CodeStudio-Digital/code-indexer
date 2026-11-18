@@ -3,7 +3,7 @@ import { BUILTIN_SPECS } from '@mcp/provider-engine/specs/index.js';
 
 type ProviderSeedDefinition = Pick<
   ProviderDefinition,
-  'kind' | 'displayName' | 'envVars' | 'defaultBaseURL' | 'capabilities'
+  'kind' | 'displayName' | 'envVars' | 'defaultBaseURL' | 'credKind'
 >;
 
 let resolveDefinitions: () => readonly ProviderSeedDefinition[] = () => BUILTIN_SPECS;

@@ -1,3 +1,4 @@
+import { getGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/bridge.js';
 import type { Hono } from 'hono';
 import { sessionRecoveryFailure } from '../../../control-plane-recovery-error.js';
 import { bodyLimit } from 'hono/body-limit';
@@ -634,12 +635,7 @@ export function mountCoderStreamRoutes(
   }
 
   function resolveBrowserAvailable(): boolean | undefined {
-    try {
-      const config = deps.chromeServiceStore.getConfig();
-      return config.enabled && config.status === 'running' ? true : undefined;
-    } catch {
-      return undefined;
-    }
+    return getGlobalResearchBrowser() ? true : undefined;
   }
 
   async function applyGeneratedSessionTitle(

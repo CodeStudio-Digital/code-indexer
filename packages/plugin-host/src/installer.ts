@@ -2,6 +2,7 @@ import { mkdir, rm, rename, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from '@mcp/shared/utils/config.js';
+import { isRetiredPlugin } from '@mcp/shared/providers/local-edition.js';
 import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
 import type { PluginSource } from '@mcp/plugin-sdk';
 import { materialize } from './sources/index.js';
@@ -49,6 +50,9 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<Install
     const trustFirstParty = opts.source.source === 'bundled';
     const { manifest, app } = await loadManifest(stagingDir, { trustFirstParty });
     const namespace = (opts.namespace ?? manifest.name).toLowerCase();
+    if (isRetiredPlugin(namespace) || isRetiredPlugin(manifest.name) || app?.providers?.length) {
+      throw new Error('This plugin is unavailable in CodeStudio Local.');
+    }
 
     const baseDir = pluginDir(namespace);
     const exists = await pathExists(baseDir);

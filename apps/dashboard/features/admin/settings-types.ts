@@ -20,7 +20,6 @@ export type SectionId =
   | 'plugins'
   | 'ai-geral'
   | 'lsp-servers'
-  | 'chrome-service'
   | 'pipeline-bindings'
   | 'perf'
   | 'auth';

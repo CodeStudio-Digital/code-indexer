@@ -511,7 +511,7 @@
   "qa.suite": "suite",
   "qa.started": "Started {{date}} · {{summary}}",
   "qa.error": "Error",
-  "qa.errorClass.sidecar_down": "Chrome Service unavailable — restart it in Admin → Chrome Service.",
+  "qa.errorClass.sidecar_down": "The Playwright browser connection was interrupted. Check the endpoint configured for the suite.",
   "qa.errorClass.reporter_unreachable": "The test reporter could not reach the dashboard — check MCP_PUBLIC_URL and that the container can reach the http-api.",
   "qa.errorClass.config_invalid": "playwright.config.ts breaks the QA contract — use \"Restore QA config\" on this tab.",
   "qa.errorClass.orphan": "No reporter progress for 10 minutes — the watchdog closed this run. Check the reporter wiring before re-running.",

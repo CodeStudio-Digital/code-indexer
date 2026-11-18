@@ -167,10 +167,7 @@ describe('qa_start_run — config + preflight gates (no orphan rows)', () => {
   it('refuses typed when the browser preflight fails', async () => {
     mocks.preflightBrowser.mockResolvedValueOnce({
       ok: false,
-      source: 'chrome_service',
-      attempts: 4,
-      breakerOpen: false,
-      message: 'Chrome Service did not answer. Ask the operator…',
+      message: 'Configure PLAYWRIGHT_WS_ENDPOINT.',
     } as never);
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
@@ -181,7 +178,7 @@ describe('qa_start_run — config + preflight gates (no orphan rows)', () => {
     );
     const result = await tool.handler({ executor: 'playwright', suite: 'login' }, CTX);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('sidecar_down');
+    expect(result.content).toContain('browser_unconfigured');
     expect(startRun).not.toHaveBeenCalled();
   });
 });

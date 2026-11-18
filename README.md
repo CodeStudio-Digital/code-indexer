@@ -18,11 +18,13 @@ The standalone edition lives on `codex/codestudio-local`. To build the Windows i
 ## What's in the box
 
 - **Workspace** — JetBrains-style IDE shell with two activity rails (Files · Search · Snapshots · Git on the left, Agent chat · Sessions · Inbox on the right), a Monaco editor with multi-tab editing + LSP completion / hover / Ctrl+Click / diagnostics, a bottom panel hosting an integrated terminal (PTY rooted at the project), and a status bar.
-- **Agent chat** — multi-provider (Claude · OpenAI · Gemini · ZAI · DeepSeek · Bedrock · Kimi-Code · Cloudflare) with extended thinking, compaction, smart reducers, tool calling, sub-agent spawning. BYOK — your tokens, your costs.
+- **Agent chat** — GitHub Copilot, AWS Bedrock, OpenAI-compatible endpoints and Anthropic-compatible endpoints with extended thinking, compaction, smart reducers, tool calling, sub-agent spawning. BYOK — your tokens, your costs.
 - **Project understanding** — hybrid FTS5 and vector search, dependency graphs, symbol hierarchies, project snapshots and a local documentation corpus.
 - **Local first** — the backend runs in-process inside Electron. No HTTP loopback is exposed in production (a Hono port can be enabled with `MCP_DEV_HTTP=1` for debugging). API surface lives in `@mcp/api-bus`; handlers in `@mcp/api-handlers`; transport adapters mount them on `ipcMain.handle` (Electron) or Hono routes (dev / external clients).
 - **Multi-platform** — Windows, macOS, Linux via `electron-builder` (release pipeline in progress).
 - **Plugins** — extend the agent + workspace with installable plugins: agent tools (run isolated in a worker thread), MCP servers, skills, sandboxed webview tool windows, command-palette commands, and themes. Install a plugin from disk or configure your own registry. See [docs/PLUGINS.md](docs/PLUGINS.md).
+
+Browser tools and documentation rendering use the Chromium bundled with Electron. Container Playwright suites can use a configured PLAYWRIGHT_WS_ENDPOINT.
 
 ## Quick start
 

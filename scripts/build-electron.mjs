@@ -128,6 +128,7 @@ if (!skipTsc) {
   // maps via tsconfig.json.) tsc-alias rewrites the same dist with the prod
   // config's paths.
   runTool('typescript', 'tsc', ['-p', 'tsconfig.prod.json']);
+  run('node', ['scripts/prune-build-output.mjs']);
   run('node', ['scripts/resolve-build-aliases.mjs', 'tsconfig.prod.json']);
   run('node', ['scripts/copy-prompts.mjs']);
 }

@@ -1,8 +1,6 @@
 /**
  * Seed the FIRST-PARTY plugins that ship inside the app into the
- * installed-plugins store on first boot, so they register through the normal
- * plugin path (syncPluginProviders) with NO new runtime code path — zero UX
- * regression vs. shipping them as built-ins.
+ * installed-plugins store on first boot.
  *
  * Idempotent + boot-safe:
  *   - installs a bundled plugin only when absent, when the shipped version
@@ -13,10 +11,7 @@
  *     its files, but restores the disabled flag and prior permissions;
  *   - swallows per-plugin failures (the built-ins remain as the safety net).
  *
- * Must run BEFORE syncPluginProviders so the seeded specs are visible when the
- * registry reconciles. The staged tree is produced by
- * scripts/build-bundled-plugins.mjs and shipped via electron-builder
- * extraResources (desktop) / the deploy bundle (cloud).
+ * The release bundles these plugins under resources/bundled-plugins.
  */
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';

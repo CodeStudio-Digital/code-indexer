@@ -49,7 +49,6 @@ export const bedrockSpec: ProviderSpec = {
   },
   wire: 'bedrock',
   discovery: { from: 'sdk:bedrock' },
-  test: { from: 'unsupported', message: 'bedrock test not implemented' },
   models: {
     'anthropic.claude-sonnet-5': {
       contextWindow: 1_000_000,

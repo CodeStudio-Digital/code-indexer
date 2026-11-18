@@ -1,5 +1,6 @@
 import type { ProviderSpec, ProviderDefinition } from '@mcp/provider-sdk';
 import { BedrockChatProvider } from '@mcp/code-agent/providers/bedrock.js';
+import { fetchBedrockCatalog } from '../discovery/bedrock-models.js';
 
 type WireParts = Pick<
   ProviderDefinition,
@@ -17,9 +18,11 @@ type WireParts = Pick<
  */
 export function buildBedrock(_spec: ProviderSpec): WireParts {
   return {
+    testConnection: async ({ creds }) => { await fetchBedrockCatalog(creds.aws); },
     createCoder: (creds, model) =>
       new BedrockChatProvider({
         model,
+        apiKey: creds.aws?.apiKey,
         region: creds.aws?.region,
         accessKeyId: creds.aws?.accessKeyId,
         secretAccessKey: creds.aws?.secretAccessKey,

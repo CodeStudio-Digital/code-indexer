@@ -12,6 +12,8 @@
     "./tools/preview/contracts.js": "./src/tools/preview/contracts.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "3.1172.0",
+    "@microsoft/copilot-sdk": "2.0.1",
     "@mcp/agent-runtime-contracts": "workspace:*",
     "@mcp/agent-runtime-host": "workspace:*",
     "@mcp/candidate-pipeline": "workspace:*",

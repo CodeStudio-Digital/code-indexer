@@ -117,7 +117,6 @@ import { materializePendingAgentTransition } from './coder-agent-transition.js';
 import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
-import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
 import { buildWorkerDocSearch } from './worker-doc-search.js';
 import { requestDocsResearchOverBridge } from './docs-research-rpc.js';
 import { PluginWorkerHost } from '../sse/PluginWorkerHost.js';
@@ -216,7 +215,6 @@ hydrateWorkerCapabilities(dbConn.handle, `coder-worker ${sessionId}`);
 
 // Overlay declarative plugin providers into this worker's registry so the agent
 // can resolve a plugin-contributed provider kind (best-effort; built-ins always work).
-registerWorkerPluginProviders();
 
 const bridge = new MessageBridge({
   port: port as unknown as MessageBridgeOpts['port'],

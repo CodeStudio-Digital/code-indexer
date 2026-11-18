@@ -776,7 +776,10 @@ function registerMcpProtocol(dispatch: BackendDispatch) {
   });
 }
 
-void bootstrap().catch((err) => {
+const start = app.commandLine.hasSwitch('codestudio-browser-worker')
+  ? import('./src/browser-worker.js').then(({ runBrowserWorker }) => runBrowserWorker())
+  : bootstrap();
+void start.catch((err) => {
   console.error('[electron] bootstrap failed:', err);
   process.exitCode = 1;
 });

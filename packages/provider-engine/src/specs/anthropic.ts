@@ -12,7 +12,7 @@ import type { ProviderSpec } from '@mcp/provider-sdk';
  */
 export const anthropicSpec: ProviderSpec = {
   kind: 'anthropic',
-  displayName: 'Anthropic (Claude)',
+  displayName: 'Anthropic Compatible',
   visual: { icon: 'Sparkles', fg: 'text-orange-500', bg: 'bg-orange-500/15' },
   credKind: 'api-key',
   envVars: ['ANTHROPIC_API_KEY'],

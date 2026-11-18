@@ -23,19 +23,8 @@ interface Preset {
 
 /** Which capability buckets each provider KIND can serve (no per-model probing). */
 const PROVIDER_CAPABILITIES: Record<string, CapabilityKind[]> = {
-  cloudflare:     ['text_llm', 'embeddings', 'reranking', 'vision'],
   openai:         ['text_llm', 'embeddings', 'reranking', 'vision', 'voice', 'autocomplete'],
-  chatgpt:        ['text_llm', 'reranking', 'vision', 'autocomplete'],
-  gemini:         ['text_llm', 'embeddings', 'reranking', 'vision', 'voice'],
-  'google-oauth': ['text_llm', 'reranking', 'vision', 'voice'],
   anthropic:      ['text_llm', 'reranking', 'vision'],
-  'claude-code':  ['text_llm', 'reranking', 'vision'],
-  deepseek:       ['text_llm', 'reranking', 'autocomplete'],
-  mistral:        ['text_llm', 'reranking', 'autocomplete'],
-  zai:            ['text_llm', 'reranking'],
-  moonshot:       ['text_llm', 'reranking'],
-  'kimi-code':    ['text_llm', 'reranking'],
-  openrouter:     ['text_llm', 'reranking', 'vision'],
   copilot:        ['text_llm', 'reranking', 'autocomplete'],
   bedrock:        ['text_llm', 'embeddings', 'reranking', 'vision'],
 };
@@ -50,7 +39,7 @@ export const PRESETS: Preset[] = [
     id: 'economy',
     optionalOn: [],
     buckets: {
-      text_llm:   { providerKind: 'cloudflare', modelHint: '@cf/meta/llama-3.1-8b-instruct' },
+      text_llm:   { providerKind: 'openai', modelHint: 'gpt-4o-mini' },
     },
   },
   {
@@ -60,7 +49,7 @@ export const PRESETS: Preset[] = [
       text_llm:     { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
       vision:       { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
       voice:        { providerKind: 'openai',     modelHint: 'whisper-1' },
-      autocomplete: { providerKind: 'mistral',    modelHint: 'codestral-latest' },
+      autocomplete: { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
     },
   },
   {
@@ -70,7 +59,7 @@ export const PRESETS: Preset[] = [
       text_llm:     { providerKind: 'anthropic',  modelHint: 'claude-sonnet-4' },
       vision:       { providerKind: 'openai',     modelHint: 'gpt-4o' },
       voice:        { providerKind: 'openai',     modelHint: 'whisper-1' },
-      autocomplete: { providerKind: 'mistral',    modelHint: 'codestral-latest' },
+      autocomplete: { providerKind: 'openai',     modelHint: 'gpt-4o-mini' },
     },
   },
 ];
@@ -79,7 +68,7 @@ export function presetById(id: PresetId): Preset {
   return PRESETS.find((p) => p.id === id) ?? PRESETS[0];
 }
 
-/** Pick a configured provider for a bucket: exact kind → free Cloudflare → any. */
+/** Pick a configured provider for a bucket: exact kind → any eligible provider. */
 export function pickProvider(
   kind: CapabilityKind,
   hint: PresetBucketHint | undefined,
@@ -89,10 +78,6 @@ export function pickProvider(
   if (hint) {
     const exact = eligible.find((p) => p.kind === hint.providerKind);
     if (exact) return exact;
-  }
-  if (kind === 'embeddings' || kind === 'reranking') {
-    const cf = eligible.find((p) => p.kind === 'cloudflare');
-    if (cf) return cf;
   }
   return eligible[0] ?? null;
 }

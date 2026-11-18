@@ -1,71 +1,51 @@
-/**
- * Bedrock AWS credential stash — /oauth/bedrock/credentials.
- *
- * Not OAuth in the strict sense: the user pastes access_key_id +
- * secret_access_key (+ optional session_token) in the admin UI and we store
- * them in oauth_tokens.extra so the Bedrock chat adapter + model discovery
- * can pick them up with the same lookup shape.
- *
- * We also refresh the provider row's `extra.aws_region` so the factory can
- * resolve region without touching oauth_tokens when credentials come from
- * the AWS default provider chain.
- */
 import { Hono } from 'hono';
+import { isRetiredProviderId } from '@mcp/shared/providers/local-edition.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 
 export function bedrockOAuthRouter(store: ProviderStore): Hono {
   const app = new Hono();
-
-  app.post('/oauth/bedrock/credentials', async (c) => {
+  app.post('/oauth/bedrock/credentials', async c => {
     const body = await c.req.json<{
-      provider_id?: string;
-      access_key_id: string;
-      secret_access_key: string;
-      session_token?: string;
-      region: string;
+      provider_id?: string; method?: 'default' | 'iam' | 'api-key'; access_key_id?: string;
+      secret_access_key?: string; session_token?: string; bedrock_api_key?: string; region?: string;
     }>();
-    if (!body.access_key_id || !body.secret_access_key || !body.region) {
-      return c.json({ error: 'access_key_id, secret_access_key, region required' }, 400);
+    const region = body.region?.trim();
+    const method = body.method ?? 'iam';
+    if (!region || !/^[a-z]{2}(?:-[a-z\d]+)+-\d+$/.test(region)) {
+      return c.json({ error: 'A valid AWS region is required.' }, 400);
     }
-    const providerId = body.provider_id ?? 'bedrock';
-
-    if (!store.getProvider(providerId)) {
-      store.upsertProvider({
-        id: providerId,
-        name: 'Amazon Bedrock',
-        kind: 'bedrock',
-        auth_mode: 'aws_sigv4',
-        enabled: true,
-        use_for_coder: true,
-        use_for_agent: false, // Indexer doesn't yet have a Bedrock adapter.
-        extra: { aws_region: body.region },
-      });
-    } else {
-      const existing = store.getProvider(providerId)!;
-      store.upsertProvider({
-        ...existing,
-        extra: { ...existing.extra, aws_region: body.region },
-      });
+    if (!['default', 'iam', 'api-key'].includes(method)) return c.json({ error: 'Invalid AWS auth method.' }, 400);
+    const accessKeyId = body.access_key_id?.trim();
+    const secretAccessKey = body.secret_access_key?.trim();
+    const bedrockApiKey = body.bedrock_api_key?.trim();
+    if (method === 'iam' && (!accessKeyId || !secretAccessKey)) {
+      return c.json({ error: 'IAM access key and secret access key are required.' }, 400);
     }
+    if (method === 'api-key' && !bedrockApiKey) return c.json({ error: 'A Bedrock API key is required.' }, 400);
 
-    store.setOAuth({
-      provider_id: providerId,
-      // We don't have a real "access token" for AWS SigV4; store a dummy
-      // marker so the row exists and getOAuth returns non-null.
-      access_token: 'aws-sigv4',
-      refresh_token: null,
-      expires_at: null,
-      scope: 'bedrock',
-      extra: {
-        accessKeyId: body.access_key_id,
-        secretAccessKey: body.secret_access_key,
-        sessionToken: body.session_token,
-        region: body.region,
-      },
+    const id = body.provider_id ?? 'bedrock';
+    const existing = store.getProvider(id);
+    if (isRetiredProviderId(id) || (existing && existing.kind !== 'bedrock')) {
+      return c.json({ error: 'Invalid Bedrock provider.' }, 409);
+    }
+    store.upsertProvider({
+      ...existing, id, kind: 'bedrock', name: existing?.name ?? 'AWS Bedrock',
+      auth_mode: 'aws_sigv4', api_key: null, enabled: true,
+      use_for_coder: true, use_for_agent: existing?.use_for_agent ?? false,
+      extra: { ...existing?.extra, aws_region: region, aws_credential_method: method },
     });
-
-    return c.json({ ok: true, provider_id: providerId });
+    if (method === 'default') {
+      store.deleteOAuth(id);
+    } else {
+      store.setOAuth({
+        provider_id: id, access_token: 'bedrock-credentials', refresh_token: null,
+        expires_at: null, scope: 'bedrock',
+        extra: method === 'api-key'
+          ? { bedrockApiKey, region }
+          : { accessKeyId, secretAccessKey, sessionToken: body.session_token?.trim() || undefined, region },
+      });
+    }
+    return c.json({ ok: true, provider_id: id });
   });
-
   return app;
 }

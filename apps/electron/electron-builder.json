@@ -26,6 +26,8 @@
     "onlyLoadAppFromAsar": true
   },
   "asarUnpack": [
+    "node_modules/@microsoft/copilot-sdk-*/**/*",
+    "node_modules/koffi/**/*",
     "node_modules/better-sqlite3/**/*",
     "node_modules/node-pty/**/*",
     "node_modules/sqlite-vec/**/*",

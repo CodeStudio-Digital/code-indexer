@@ -1,4 +1,5 @@
 import type { VectorWriteTarget } from '@mcp/store/vectors.js';
+import { bedrockClientConfig, type ResolvedCreds } from '@mcp/provider-sdk';
 import { noteFreeModelRateLimit, waitForFreeModelSlot } from './free-model-rate-limit.js';
 
 export interface QueryEmbeddingOptions {
@@ -326,27 +327,17 @@ function isAbortError(err: unknown): boolean {
  * wrapper; the indexer caller batches at a higher level and amortizes.
  */
 export class BedrockTitanEmbeddingService implements EmbeddingService {
-  private region: string;
   private modelId: string;
-  private accessKeyId?: string;
-  private secretAccessKey?: string;
-  private sessionToken?: string;
+  private readonly config: ReturnType<typeof bedrockClientConfig>;
   private requestTimeoutMs: number;
   private clientPromise: Promise<unknown> | null = null;
 
-  constructor(opts: {
-    region: string;
+  constructor(opts: NonNullable<ResolvedCreds['aws']> & {
     modelId?: string;
-    accessKeyId?: string;
-    secretAccessKey?: string;
-    sessionToken?: string;
     requestTimeoutMs?: number;
   }) {
-    this.region = opts.region;
+    this.config = bedrockClientConfig(opts);
     this.modelId = opts.modelId ?? 'amazon.titan-embed-text-v2:0';
-    this.accessKeyId = opts.accessKeyId;
-    this.secretAccessKey = opts.secretAccessKey;
-    this.sessionToken = opts.sessionToken;
     const envTimeout = Number(process.env.MCP_EMBED_TIMEOUT_MS);
     this.requestTimeoutMs = opts.requestTimeoutMs
       ?? (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 60_000);
@@ -366,25 +357,8 @@ export class BedrockTitanEmbeddingService implements EmbeddingService {
             BedrockRuntimeClient: new (cfg: unknown) => { send: (cmd: unknown) => Promise<{ body: Uint8Array }> };
             InvokeModelCommand: new (input: unknown) => unknown;
           };
-          // Use the SDK's built-in request timeout. Bedrock doesn't fall
-          // back to a default — without this the SDK can hang on a stuck
-          // socket, same failure mode as the original Cloudflare bug. We
-          // shape it like the @smithy/node-http-handler config; older
-          // SDK versions accept it via `requestHandler` too.
-          // Cast to `unknown` first — `BedrockRuntimeClient`'s constructor
-          // is typed too loosely to satisfy `Parameters<typeof Class>[0]`.
-          const credentials = this.accessKeyId && this.secretAccessKey
-            ? {
-                accessKeyId: this.accessKeyId,
-                secretAccessKey: this.secretAccessKey,
-                sessionToken: this.sessionToken,
-              }
-            : undefined;
           const clientCfg = {
-            region: this.region,
-            // Omit credentials to preserve the AWS SDK default credential
-            // chain (profiles, SSO, web identity, EC2/ECS roles, and env).
-            credentials,
+            ...this.config,
             requestHandler: {
               requestTimeout: this.requestTimeoutMs,
               connectionTimeout: Math.min(10_000, this.requestTimeoutMs),

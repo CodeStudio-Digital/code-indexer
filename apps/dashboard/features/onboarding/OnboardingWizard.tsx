@@ -3,7 +3,7 @@
  * first time they open MCP IDE.
  *
  *   1. Welcome — brand mark, value props, "Get started" CTA.
- *   2. Provider — pick a provider (Anthropic / OpenAI / Google / …),
+ *   2. Provider — pick a provider (Anthropic / OpenAI),
  *      paste an API key. Saved to the local providers store on next.
  *      Skippable (BYOK is the model — but every provider's `enabled`
  *      flag still has to be flipped at least once for chat to work).
@@ -177,10 +177,8 @@ interface ProviderOption {
 }
 
 const PROVIDERS: ProviderOption[] = [
-  { id: 'anthropic', label: 'Anthropic',     keyExample: 'sk-ant-…',  defaultModel: 'claude-sonnet-5' },
-  { id: 'openai',    label: 'OpenAI',        keyExample: 'sk-…',      defaultModel: 'gpt-5' },
-  { id: 'google',    label: 'Google AI',     keyExample: 'AIza…',     defaultModel: 'gemini-2.5-pro' },
-  { id: 'bedrock',   label: 'AWS Bedrock',   keyExample: 'IAM access keys configured separately' },
+  { id: 'anthropic', label: 'Anthropic-compatible',     keyExample: 'sk-ant-…',  defaultModel: 'claude-sonnet-5' },
+  { id: 'openai',    label: 'OpenAI-compatible',        keyExample: 'sk-…',      defaultModel: 'gpt-5' },
 ];
 
 function ProviderStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {

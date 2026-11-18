@@ -2,14 +2,6 @@ import type { Database as DB } from 'better-sqlite3';
 import { listProviderSeedDefinitions as listProviderDefinitions } from '@mcp/services/providers/seed-catalog.js';
 import * as providers from './providers.js';
 
-type SeedBuiltin = {
-  id: string;
-  name: string;
-  kind: string;
-  base_url?: string;
-  extra?: Record<string, unknown>;
-};
-
 /**
  * Ensure the built-in providers exist as rows so they're visible in the admin
  * UI even before the user sets any API key. Idempotent per-id: only inserts
@@ -25,38 +17,20 @@ type SeedBuiltin = {
 export function seedFromEnvIfEmpty(db: DB): void {
   const env = process.env;
 
-  // Each api-key definition gets a visible row so the admin UI can surface it,
-  // but always disabled with no key — env vars do not activate providers.
-  //
-  // The instance id matches the shape kind for built-ins, preserving backwards
-  // compatibility with existing callers that use -p anthropic.
-  const builtins: SeedBuiltin[] = listProviderDefinitions()
-    .filter((def) => def.envVars.length > 0)  // only api-key shapes get a row
-    .map((def) => {
-      const extra: Record<string, unknown> = {};
-      if (def.capabilities?.zaiCodingMode) extra.zai_has_coding_mode = true;
-      return {
-        id: def.kind,
-        name: def.displayName,
-        kind: def.kind,
-        base_url: def.defaultBaseURL,
-        extra,
-      };
-    });
-
-  for (const b of builtins) {
-    if (providers.get(db, b.id)) continue;
+  for (const definition of listProviderDefinitions()) {
+    if (providers.get(db, definition.kind)) continue;
+    const authMode = definition.credKind === 'aws' ? 'aws_sigv4' : definition.credKind === 'oauth' ? 'oauth' : 'api_key';
     providers.upsert(db, {
-      id: b.id,
-      name: b.name,
-      kind: b.kind,
-      base_url: b.base_url ?? null,
+      id: definition.kind,
+      name: definition.displayName,
+      kind: definition.kind,
+      base_url: definition.defaultBaseURL ?? null,
       api_key: null,
+      auth_mode: authMode,
       enabled: false,
-      use_for_agent: true,
+      use_for_agent: authMode === 'api_key',
       use_for_coder: true,
       is_default: false,
-      extra: b.extra ?? {},
     });
   }
 

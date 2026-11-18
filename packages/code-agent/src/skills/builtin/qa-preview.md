@@ -77,7 +77,7 @@ Não repita automaticamente operações com resultado desconhecido. Inspecione o
 
 ## Playwright opcional
 
-Use `executor:"playwright"` em `qa_start_run` para regressões repetíveis, suites já existentes ou CI. Nessa modalidade o sandbox usa o Chrome Service remoto e o reporter gerenciado. Verifique `qa_get_browser_endpoint` quando houver dúvida sobre conectividade; não inicie um browser local no container.
+Use `executor:"playwright"` em `qa_start_run` para regressões repetíveis, suites já existentes ou CI. Nessa modalidade o sandbox usa o endpoint configurado em PLAYWRIGHT_WS_ENDPOINT e o reporter gerenciado. Use `qa_get_browser_endpoint` para obter a configuração da suíte.
 
 Crie specs com `import {test,expect} from '@playwright/test'` e `test.describe`. Execute `npx playwright test` com filtro de spec/grep se necessário. Não passe `--reporter`: isso remove o reporter que persiste os resultados no CodeStudio.
 

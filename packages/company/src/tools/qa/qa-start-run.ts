@@ -283,10 +283,10 @@ export function qaStartRun(
           if (!verdict.ok) return err(formatConfigRefusal(verdict));
         }
 
-        // ── B7 gate 3: browser preflight (retry + breaker; no orphan row) ──
+        // ── Require a configured Playwright transport before creating a run ──
         const preflight = await preflightBrowser({ sessionId });
         if (!preflight.ok) {
-          return err(`qa_start_run refused (error_class=sidecar_down): ${preflight.message}`);
+          return err(`qa_start_run refused (error_class=browser_unconfigured): ${preflight.message}`);
         }
 
         const run = await store.startRun({

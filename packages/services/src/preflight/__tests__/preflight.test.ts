@@ -128,20 +128,13 @@ describe('runMachineSetup', () => {
 });
 
 describe('runPreflight', () => {
-  it('assembles 6 checks and is unblocked when podman is present', async () => {
-    const report = await runPreflight({ dbPath: `${process.cwd()}/index.db`, shell: mockShell(PODMAN_PRESENT) });
-    expect(report.checks).toHaveLength(6);
-    expect(report.checks.find((c) => c.id === 'podman')?.status).toBe('ok');
-    expect(report.blocked).toBe(false);
-    expect(report.ok).toBe(true);
-  });
-
-  it('is blocked when podman is missing', async () => {
-    const report = await runPreflight({
-      dbPath: `${process.cwd()}/index.db`,
-      shell: mockShell((p, a) => (p === 'podman' && a[0] === 'version' ? { exitCode: 127 } : { exitCode: 0, stdout: '' })),
+  it('checks Git and disk without probing container dependencies', async () => {
+    const shell = mockShell((program) => {
+      expect(program).toBe('git');
+      return { exitCode: 127, stderr: 'git not found' };
     });
-    expect(report.blocked).toBe(true);
-    expect(report.ok).toBe(false);
+    const report = await runPreflight({ dbPath: process.cwd() + '/index.db', shell });
+    expect(report.checks.map(check => check.id)).toEqual(['git', 'disk']);
+    expect(report.blocked).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { bedrockClientConfig, type ResolvedCreds } from '@mcp/provider-sdk';
 import type { RerankCandidate, RerankResult, RerankerService } from './reranker.js';
 
 interface RerankClient {
@@ -15,44 +16,34 @@ const MAX_TEXT_CHARS = 4_000;
  * probes opt into strict errors so a broken target can never be saved. */
 export class BedrockReranker implements RerankerService {
   readonly name = 'bedrock';
-  private readonly region: string;
   private readonly modelArn: string;
   private readonly strict: boolean;
-  private readonly credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+  private readonly usesBedrockApiKey: boolean;
+  private readonly config: ReturnType<typeof bedrockClientConfig>;
   private clientPromise: Promise<{ client: RerankClient; sdk: BedrockAgentSdk }> | null = null;
 
-  constructor(options: {
+  constructor(options: NonNullable<ResolvedCreds['aws']> & {
     model: string;
-    region?: string;
-    accessKeyId?: string;
-    secretAccessKey?: string;
-    sessionToken?: string;
     strict?: boolean;
   }) {
-    this.region = options.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1';
+    this.config = bedrockClientConfig(options);
+    this.usesBedrockApiKey = !!options.apiKey;
     this.modelArn = options.model.startsWith('arn:')
       ? options.model
-      : `arn:aws:bedrock:${this.region}::foundation-model/${options.model}`;
+      : `arn:aws:bedrock:${this.config.region}::foundation-model/${options.model}`;
     this.strict = options.strict ?? false;
-    if (options.accessKeyId && options.secretAccessKey) {
-      this.credentials = {
-        accessKeyId: options.accessKeyId,
-        secretAccessKey: options.secretAccessKey,
-        sessionToken: options.sessionToken,
-      };
-    }
   }
 
   private async client(): Promise<{ client: RerankClient; sdk: BedrockAgentSdk }> {
+    if (this.usesBedrockApiKey) {
+      throw new Error('Bedrock reranking requires an AWS profile or IAM credentials.');
+    }
     if (!this.clientPromise) {
       this.clientPromise = (async () => {
         const sdk = await import(/* @vite-ignore */ '@aws-sdk/client-bedrock-agent-runtime') as unknown as BedrockAgentSdk;
         return {
           sdk,
-          client: new sdk.BedrockAgentRuntimeClient({
-            region: this.region,
-            credentials: this.credentials,
-          }),
+          client: new sdk.BedrockAgentRuntimeClient(this.config),
         };
       })();
     }

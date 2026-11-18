@@ -84,7 +84,6 @@ import { mergeDBCapabilities } from '@mcp/code-agent/providers/capabilities.js';
 import { mergeDBPricing } from '@mcp/code-agent/providers/pricing-cache.js';
 import { hardcodedPriceSeed } from '@mcp/code-agent/providers/pricing.js';
 import { startProviderRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-refresh.js';
-import { syncPluginProviders } from './server/plugin-providers.js';
 import { seedBundledPlugins } from './server/bundled-plugins.js';
 import { startModelPricingRefreshScheduler } from '@mcp/indexer/indexer/providers/scheduled-pricing-refresh.js';
 import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js';
@@ -95,8 +94,8 @@ import {
 } from '@mcp/company/tools/qa/index.js';
 import { startQaWatchdog } from '@mcp/services/qa/watchdog.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
-import { ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { ResearchBrowserService } from '@mcp/services/research-browser/service.js';
+import type { ResearchBrowserHost } from '@mcp/services/research-browser/types.js';
 import { setGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/index.js';
 import {
   setSandboxServiceEnvStore,
@@ -106,7 +105,6 @@ import { setQaPreviewConfig } from '@mcp/services/sandbox/sandbox-manager.js';
 import { mountConfigRoutes } from './server/routes/config.js';
 import { mountDocsRoutes } from './server/routes/docs/index.js';
 import { mountDocsAgentRoutes } from './server/routes/docs-agent/index.js';
-import { setChromeServiceForDocs } from './server/deps.js';
 import { setGlobalDocSearch } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { recommendRolesForSession } from './server/routes/company/recommend-core.js';
 import { setGlobalDocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
@@ -231,7 +229,7 @@ function scheduleCompanyAutoResume(sessionIds: CompanySessionId[]): void {
   (timer as { unref?: () => void }).unref?.();
 }
 
-export function createApp() {
+export function createApp(browser: ResearchBrowserHost | null = null) {
   registerShutdownTask('exec-command-sessions-stop', () => disposeExecCommandSessions('app-shutdown'));
   if (heapLogTimer) {
     registerShutdownTask('heap-monitor-stop', () => {
@@ -277,7 +275,7 @@ export function createApp() {
       'In-process coder execution is not supported.',
     );
   }
-  const deps = createDeps();
+  const deps = createDeps(browser);
   // createDeps migrates a fresh database before the worker pool reads its
   // persisted runtime policy. Still fail before mounting any routes.
   getCoderWorkerPool();
@@ -375,7 +373,7 @@ export function createApp() {
 
   // Wire QA preview-routing config (v4.3). Lets `syncManagedEnvs` mint
   // long-lived `PLAYWRIGHT_BASE_URL_*` URLs pointing at this http-api
-  // process from sibling containers (the Chrome Service). Gated by
+  // process from sibling containers. Gated by
   // `hasQaPlaywrightSkill` so non-QA sessions don't get the env vars.
   setQaPreviewConfig({
     httpApiPort: deps.config.dashboard.port,
@@ -392,46 +390,7 @@ export function createApp() {
     },
   });
 
-  // Wire the Chrome Service singleton so the admin routes + the QA
-  // tools can observe lifecycle. Boot recovery (auto-start when
-  // `enabled=true` in the DB) runs below after migrations finish.
-  const chromeService = new ChromeService({
-    store: deps.chromeServiceStore,
-    listCompanySessions: () => {
-      const sessions: Array<{ id: string; status: string; configJson: string }> = [];
-      for (const entry of deps.sessionStore.catalog.list()) {
-        if (entry.session.kind !== 'company') {
-          continue;
-        }
-        try {
-          const session = new CompanySessionFiles({
-            companySessionId: entry.session.id,
-            sessionStore: deps.sessionStore,
-          }).getSession();
-          sessions.push({
-            id: session.id,
-            status: session.status,
-            configJson: session.config_json,
-          });
-        } catch {
-          // A concurrently unavailable project root fails closed for this sweep.
-        }
-      }
-      return sessions;
-    },
-    envStore: deps.companySessionEnvStore,
-    httpApiPort: deps.config.dashboard.port,
-    // B7 — lets lifecycle transitions to stopped/error fail in-flight
-    // QA runs fast with error_class='sidecar_down'.
-    qaRunStore: deps.qaTestRunStore,
-  });
-  setChromeService(chromeService);
-  setGlobalResearchBrowser(new ResearchBrowserService(() => chromeService.connectBrowser()));
-  // Hand the same ChromeService to the doc indexer's BrowserBackend so
-  // bot-blocked fetches can escalate to Chromium via the existing WS
-  // endpoint instead of spinning up a private browser per request.
-  setChromeServiceForDocs(chromeService);
-
+  setGlobalResearchBrowser(browser ? new ResearchBrowserService(async () => browser) : null);
 
   // Boot reconciliation for host-process runs. Anything left in a live
   // state by the previous server instance is impossible to re-attach
@@ -471,20 +430,6 @@ export function createApp() {
 
   // Start background model refresh (populates context_window in DB from APIs).
   startProviderRefreshScheduler(deps.providerStore);
-
-  // Register LLM providers contributed by enabled plugins. V1 providers ship
-  // only ProviderSpec DATA; bundled V2 providers also expose a plugin-owned
-  // adapter that loads lazily on use. Same reconcile the plugins handler runs
-  // after every install/enable/disable, so the set stays live without a restart. NOTE: the
-  // provider-resolving workers (coder/company) run the same reconcile at their
-  // boot (see the worker entries) so the agent can resolve plugin providers too.
-  try {
-    syncPluginProviders();
-  } catch (err) {
-    console.warn(
-      `[provider-plugin] load failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
 
   // Seed the offline hardcoded price table into model_prices (idempotent) and
   // hydrate the in-memory price cache so estimateCost() is accurate from the
@@ -1135,7 +1080,7 @@ export function createApp() {
       );
     });
 
-  return { app, db: deps.db, chromeService, deps, mcpPool };
+  return { app, db: deps.db, deps, mcpPool };
 }
 
 export async function startServer(port: number, host: string) {
@@ -1154,15 +1099,13 @@ export async function startServer(port: number, host: string) {
     );
     process.exit(1);
   }
-  // Seed the first-party bundled provider plugins into the installed-plugins
-  // store BEFORE createApp() runs syncPluginProviders, so they register on this
-  // very boot. Idempotent + best-effort (built-ins remain if it fails).
+  // Load the release’s bundled editor plugins.
   try {
     await seedBundledPlugins();
   } catch (err) {
     console.warn(`[bundled-plugins] seed failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const { app, chromeService, deps, mcpPool } = createApp();
+  const { app, deps, mcpPool } = createApp();
   console.log(`MCP Code Indexer API running at http://${host}:${port}`);
   const coder = describeCoderWorkerStatus();
   const fmtCompany = (s: { enabled: boolean; reason: string | null }): string =>
@@ -1210,19 +1153,11 @@ export async function startServer(port: number, host: string) {
     db: deps.db,
   });
 
-  // Chrome Service auto-start deferred until after serve() so the
-  // /api/health reachability probe inside recoverOnBoot finds the port open.
-  void chromeService.recoverOnBoot().catch((e) => {
-    console.warn(
-      `[chrome-service] Boot recovery failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  });
-
   standaloneShutdown = async (reason) => {
     // Stop accepting new requests before draining workers. Upgraded/SSE
     // connections are force-closed after their owning runtimes are disposed.
     try { server.close(); } catch { /* already closed */ }
-    await shutdownAppRuntime({ deps, mcpPool, chromeService, reason });
+    await shutdownAppRuntime({ deps, mcpPool, reason });
     try { (server as unknown as import('node:http').Server).closeAllConnections?.(); } catch { /* old Node */ }
   };
 }

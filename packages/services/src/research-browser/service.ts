@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isPrivateHost } from '@mcp/shared/utils/ssrf.js';
-import type { Browser, BrowserContext, ElementHandle, Page, Route } from 'playwright-core';
-import type { IResearchBrowser, ResearchBrowserConnector, ResearchBrowserHostResolver, ResearchBrowserInvoke } from './types.js';
+import type { ElementHandle, Page, Route } from 'playwright-core';
+import type { IResearchBrowser, ResearchBrowserConnector, ResearchBrowserContext, ResearchBrowserHostResolver, ResearchBrowserInvoke } from './types.js';
 import { ResearchBrowserOperations } from './operations.js';
 import type { HostUiDispatchScope } from '@mcp/shared/host-ui-dispatch.js';
 import { assertBrowserDispatch, browserLifetimeGuard, runBrowserDispatch } from './dispatch-scope.js';
@@ -15,7 +15,7 @@ const MAX_REFS = 120;
 const MAX_TEXT_CHARS = 40_000;
 
 interface BrowserSession {
-  context: BrowserContext;
+  context: ResearchBrowserContext;
   page: Page;
   refs: Map<string, ElementHandle<HTMLElement | SVGElement>>;
 }
@@ -62,11 +62,10 @@ export async function requirePublicHttpsUrl(
 export class ResearchBrowserService implements IResearchBrowser {
   readonly authorityAttested = true as const;
   private readonly scopeOwners = new Map<string, object>();
-  private browser: Browser | null = null;
-  private connecting: Promise<Browser> | null = null;
   private readonly sessions = new Map<string, BrowserSession>();
-  private readonly ownedContexts = new Map<string, Set<BrowserContext>>();
+  private readonly ownedContexts = new Map<string, Set<ResearchBrowserContext>>();
   private readonly operations = new ResearchBrowserOperations();
+  private connecting: ReturnType<ResearchBrowserConnector> | undefined;
   private closing: Promise<void> | null = null;
 
   constructor(
@@ -128,6 +127,12 @@ export class ResearchBrowserService implements IResearchBrowser {
     finally { if (this.closing === closing) this.closing = null; }
   }
 
+  private async getHost() {
+    const pending = this.connecting ??= this.connect();
+    try { return await pending; }
+    finally { if (this.connecting === pending) this.connecting = undefined; }
+  }
+
   private async dispatch({ key, method, args = {} }: ResearchBrowserInvoke, signal: AbortSignal): Promise<unknown> {
     assertBrowserDispatch();
     signal.throwIfAborted();
@@ -144,20 +149,6 @@ export class ResearchBrowserService implements IResearchBrowser {
       case 'screenshot': return this.screenshot(session, args.fullPage === true);
       default: throw new Error(`Unsupported research browser method: ${method}`);
     }
-  }
-
-  private async getBrowser(): Promise<Browser> {
-    if (this.browser?.isConnected()) return this.browser;
-    if (this.connecting) return this.connecting;
-    const connecting = this.connect().then(browser => {
-      if (!browser) throw new Error('Research browser unavailable. Enable and start Chrome Service in Settings.');
-      browser.once('disconnected', () => { if (this.browser === browser) this.browser = null; });
-      this.browser = browser;
-      return browser;
-    });
-    this.connecting = connecting;
-    try { return await connecting; }
-    finally { if (this.connecting === connecting) this.connecting = null; }
   }
 
   private async open(key: string, rawUrl: string, signal: AbortSignal): Promise<unknown> {
@@ -177,7 +168,8 @@ export class ResearchBrowserService implements IResearchBrowser {
       }
     }
 
-    const browser = await this.getBrowser();
+    const browser = await this.getHost();
+    if (!browser) throw new Error('Research browser is available in the Electron desktop app.');
     signal.throwIfAborted();
     assertBrowserDispatch();
     const context = await browser.newContext({
@@ -186,14 +178,12 @@ export class ResearchBrowserService implements IResearchBrowser {
       serviceWorkers: 'block',
       viewport: { width: 1366, height: 768 },
     });
-    const owned = this.ownedContexts.get(key) ?? new Set<BrowserContext>();
+    const owned = this.ownedContexts.get(key) ?? new Set<ResearchBrowserContext>();
     owned.add(context);
     this.ownedContexts.set(key, owned);
     // From this point the context is owned even before newPage completes.
     // Every failure/cancel path must close it; closeKey cannot see it yet.
     try {
-      signal.throwIfAborted();
-      await context.clearPermissions();
       signal.throwIfAborted();
       const assertLifetime = browserLifetimeGuard();
       await context.route('**/*', (route) => this.guardRoute(route, assertLifetime));
@@ -362,7 +352,7 @@ export class ResearchBrowserService implements IResearchBrowser {
     return { closed: contexts.length > 0 };
   }
 
-  private async releaseContext(key: string, context: BrowserContext): Promise<void> {
+  private async releaseContext(key: string, context: ResearchBrowserContext): Promise<void> {
     await context.close();
     const owned = this.ownedContexts.get(key);
     owned?.delete(context);

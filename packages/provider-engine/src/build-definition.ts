@@ -3,6 +3,7 @@ import { buildOpenAICompat } from './wires/openai-compat.js';
 import { buildAnthropic } from './wires/anthropic.js';
 import { buildGemini } from './wires/gemini.js';
 import { buildBedrock } from './wires/bedrock.js';
+import { buildCopilot } from './wires/copilot.js';
 import { buildKimi } from './wires/kimi.js';
 import { buildCodex } from './wires/codex.js';
 import { buildTestConnection } from './wire-helpers/test-connection.js';
@@ -12,12 +13,12 @@ type WireBuilder = (spec: ProviderSpec) => Pick<
   'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
-/** wire → builder. All 6 wires registered. */
 const WIRES: Partial<Record<WireKind, WireBuilder>> = {
   'openai-compat': buildOpenAICompat,
   anthropic: buildAnthropic,
   gemini: buildGemini,
   bedrock: buildBedrock,
+  copilot: buildCopilot,
   kimi: buildKimi,
   codex: buildCodex,
 };
@@ -54,6 +55,6 @@ export function buildProviderDefinition(spec: ProviderSpec): ProviderDefinition 
     // single wrap site and no double-wrapping.
     // testConnection is wire-orthogonal (driven by spec.test); set last so it
     // wins over any wire default. Undefined when no `test` is declared.
-    testConnection: buildTestConnection(spec),
+    testConnection: buildTestConnection(spec) ?? built.testConnection,
   };
 }

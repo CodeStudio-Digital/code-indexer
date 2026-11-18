@@ -148,7 +148,6 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
           overwrite: input.overwrite,
         });
         // Register any declarative provider the plugin contributes, live.
-        deps.syncPluginProviders();
         await syncLanguageServerContributions();
         return {
           namespace: r.namespace,
@@ -169,14 +168,12 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
 
     async uninstall({ namespace }) {
       const r = await uninstallPlugin(namespace);
-      deps.syncPluginProviders();
       await syncLanguageServerContributions();
       return { ok: true as const, skillsRemoved: r.skillsRemoved, mcpRemoved: r.mcpRemoved };
     },
 
     async setEnabled({ namespace, enabled }) {
       installed.setEnabled(namespace, enabled);
-      deps.syncPluginProviders();
       await syncLanguageServerContributions();
       return { ok: true as const };
     },

@@ -1,6 +1,7 @@
 import type { ChatProvider, ProviderDefinition, CreateCoderOpts } from './types.js';
 import type { ProviderConfig } from '@mcp/store/provider-store.js';
 import { withReasoningCapabilities, withStreamResilience } from '@mcp/provider-sdk';
+import { isLocalProviderKind, isRetiredProviderId } from '@mcp/shared/providers/local-edition.js';
 import { getRegistry, getDefinition } from './registry.js';
 import { getStore } from './shared/store.js';
 import { resolveCreds } from './shared/resolver.js';
@@ -10,37 +11,15 @@ export interface LookupResult {
   cfg: ProviderConfig | null;
 }
 
-/**
- * Legacy ProviderStore rows encoded Z.AI as `kind='openai'` with the marker
- * `extra.zai_has_coding_mode=true` (because the old coder factory had no
- * dedicated ZAI case in its switch — it detected this flag inside the
- * OpenAI branch). New seeds use `kind='zai'` directly, but existing DBs
- * need this rewrite so dispatch reaches the proper ZAI definition.
- */
-function effectiveKind(cfg: ProviderConfig): string {
-  if (cfg.kind === 'openai' && (cfg.id === 'zai' || cfg.extra?.zai_has_coding_mode === true)) {
-    return 'zai';
-  }
-  if (
-    cfg.kind === 'openai'
-    && cfg.id === 'kimi-code'
-    && (
-      cfg.base_url?.replace(/\/$/, '').toLowerCase() === 'https://api.kimi.com/coding/v1'
-      || cfg.extra?.oauth_key === 'oauth/kimi-code'
-    )
-  ) {
-    return 'kimi-code';
-  }
-  return cfg.kind;
-}
-
 function lookupByCfg(
   registry: Map<string, ProviderDefinition>,
   cfg: ProviderConfig,
   hint: string,
 ): LookupResult {
-  const kind = effectiveKind(cfg);
-  const def = registry.get(kind);
+  if (!isLocalProviderKind(cfg.kind) || isRetiredProviderId(cfg.id) || cfg.extra?.zai_has_coding_mode === true) {
+    throw new Error(`Provider '${hint}' is unavailable in CodeStudio Local.`);
+  }
+  const def = registry.get(cfg.kind);
   if (!def) {
     throw new Error(
       `Instance '${hint}' declares kind='${cfg.kind}', but that shape is not ` +
@@ -88,7 +67,7 @@ export async function lookupProvider(name?: string): Promise<LookupResult> {
   }
 
   // 3. Legacy: name matches a shape directly, no DB row (no credential).
-  if (name) {
+  if (name && isLocalProviderKind(name)) {
     const def = registry.get(name);
     if (def) return { def, cfg: null };
   }
@@ -121,7 +100,6 @@ export async function createCoderProvider(
       def.createCoder(creds, model, { ...opts, providerId, providerModels }),
       providerModels,
       model,
-      { useModelDefault: def.kind === 'zai' },
     ),
   );
 }

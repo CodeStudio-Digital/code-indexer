@@ -9,11 +9,10 @@
  *   - desktop: electron-builder `extraResources` → resourcesPath/bundled-plugins
  *   - cloud:   the same dist/bundled-plugins/ is included in the deploy bundle
  *
- * Discovers `extensions/provider-*` automatically and includes explicit
- * product plugins whose executable runtime is gated by bundled provenance.
+ * CodeStudio Local ships its provider integrations in the host.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, copyFileSync, cpSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, copyFileSync, cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { patchJsDebugWorkerHandoff, stageJsDebugAdapter } from './js-debug-adapter-artifact.mjs';
@@ -32,16 +31,7 @@ function run(cmd, args) {
   }
 }
 
-const bundledProductPlugins = new Set(['angular', 'javascript-debugger']);
-const plugins = readdirSync(extDir, { withFileTypes: true })
-  .filter((d) => d.isDirectory() && (d.name.startsWith('provider-') || bundledProductPlugins.has(d.name)))
-  .map((d) => d.name)
-  .sort();
-
-if (plugins.length === 0) {
-  console.error('No bundled plugin packages found.');
-  process.exit(1);
-}
+const plugins = ['angular', 'javascript-debugger'];
 
 rmSync(stageRoot, { recursive: true, force: true });
 mkdirSync(stageRoot, { recursive: true });
@@ -94,8 +84,8 @@ for (const ns of plugins) {
   const count = Array.isArray(app.providers) ? app.providers.length : 0;
   const debuggerCount = Array.isArray(app.debuggers) ? app.debuggers.length : 0;
   const languageServerCount = Array.isArray(app.languageServers) ? app.languageServers.length : 0;
-  if (ns.startsWith('provider-') && count === 0) {
-    console.error(`✗ ${ns}: bundled provider has no provider specs`);
+  if (count !== 0) {
+    console.error(`✗ ${ns}: local product plugins cannot register providers`);
     process.exit(1);
   }
   if (ns === 'javascript-debugger' && debuggerCount === 0) {

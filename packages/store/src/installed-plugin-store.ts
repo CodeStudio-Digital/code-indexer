@@ -8,6 +8,7 @@
  */
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
+import { isRetiredPlugin } from '@mcp/shared/providers/local-edition.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
@@ -88,6 +89,12 @@ function hydrate(r: InstalledPluginRaw): InstalledPlugin {
   };
 }
 
+function isAvailable(row: InstalledPlugin): boolean {
+  const providers = row.contributions?.providers;
+  return !isRetiredPlugin(row.namespace) && !isRetiredPlugin(row.name)
+    && !(Array.isArray(providers) && providers.length > 0);
+}
+
 /** Serialize a JSON column: undefined → keep `fallback`, null → SQL NULL. */
 function jsonCol(v: Json | null | undefined, fallback: Json | null): string | null {
   if (v === undefined) return fallback ? JSON.stringify(fallback) : null;
@@ -120,10 +127,15 @@ export class InstalledPluginStore {
     const rows = this.db
       .prepare(`SELECT * FROM installed_plugins ${where} ORDER BY name`)
       .all() as InstalledPluginRaw[];
-    return rows.map(hydrate);
+    return rows.map(hydrate).filter(isAvailable);
   }
 
   get(namespace: string): InstalledPlugin | null {
+    const plugin = this.getStored(namespace);
+    return plugin && isAvailable(plugin) ? plugin : null;
+  }
+
+  private getStored(namespace: string): InstalledPlugin | null {
     const row = this.db
       .prepare('SELECT * FROM installed_plugins WHERE namespace = ?')
       .get(namespace) as InstalledPluginRaw | undefined;
@@ -137,7 +149,7 @@ export class InstalledPluginStore {
       );
     }
     const now = new Date().toISOString();
-    const existing = this.get(input.namespace);
+    const existing = this.getStored(input.namespace);
 
     if (existing) {
       this.db
@@ -181,7 +193,7 @@ export class InstalledPluginStore {
           now,
         );
     }
-    return this.get(input.namespace)!;
+    return this.getStored(input.namespace)!;
   }
 
   setEnabled(namespace: string, enabled: boolean): void {

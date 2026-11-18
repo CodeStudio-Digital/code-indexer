@@ -75,7 +75,7 @@ export function validateQaRunConfig(content: string): QaConfigValidation {
   if (!hasEnvBaseUrl(content)) {
     problems.push(
       'baseURL is not read from process.env.PLAYWRIGHT_BASE_URL — hardcoded hosts resolve ' +
-        'to the Chrome Service container, not your app.',
+        'to the browser host.',
     );
   }
 

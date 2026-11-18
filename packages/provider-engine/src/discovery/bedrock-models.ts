@@ -1,131 +1,84 @@
-/**
- * Live model discovery for the `sdk:bedrock` format.
- *
- * Uses dynamic `import('@aws-sdk/client-bedrock')`,
- * `ListFoundationModelsCommand({ byOutputModality: 'TEXT' })`, provider-row
- * region/credential resolution, ON_DEMAND/TEXT filters, and maps the result to
- * `UpsertModelInput[]`.
- *
- * Bedrock takes no parameters from `spec.discovery` (region + creds come from the
- * provider row / OAuth extra / env), so `spec` is unused beyond the signature.
- */
-import type {
-  ProviderConfig,
-  ProviderStore,
-  UpsertModelInput,
-} from '@mcp/store/provider-store.js';
+import {
+  BedrockClient, ListFoundationModelsCommand, paginateListInferenceProfiles,
+  type FoundationModelSummary,
+} from '@aws-sdk/client-bedrock';
+import { bedrockClientConfig, resolveAwsConfigCredentials, type ProviderSpec, type ResolvedCreds } from '@mcp/provider-sdk';
+import type { ProviderConfig, ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { getRegistryContextWindow } from '@mcp/code-agent/providers/capabilities.js';
-import type { ProviderSpec } from '@mcp/provider-sdk';
 
-type BedrockExtra = {
-  region?: string;
-  aws_region?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
-  sessionToken?: string;
-};
-
-type BedrockModelSummary = {
-  modelId?: string;
-  modelName?: string;
-  providerName?: string;
-  inputModalities?: string[];
-  outputModalities?: string[];
-  inferenceTypesSupported?: string[];
-};
-
-type BedrockControlClient = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  send: (cmd: unknown) => Promise<any>;
-};
-
-type BedrockSdk = {
-  BedrockClient: new (cfg: unknown) => BedrockControlClient;
-  ListFoundationModelsCommand: new (input: unknown) => unknown;
-};
-
-async function loadSdk(): Promise<BedrockSdk> {
-  const modName = '@aws-sdk/client-bedrock';
+export async function fetchBedrockCatalog(aws: ResolvedCreds['aws']): Promise<UpsertModelInput[]> {
+  const client = new BedrockClient({ ...bedrockClientConfig(aws), maxAttempts: 2 });
+  const abortSignal = AbortSignal.timeout(25_000);
   try {
-    return (await import(/* @vite-ignore */ modName)) as BedrockSdk;
-  } catch (e) {
-    throw new Error(
-      `Bedrock control-plane operations require @aws-sdk/client-bedrock. ` +
-        `Install with: pnpm add @aws-sdk/client-bedrock (${(e as Error).message})`
-    );
+    const [foundations, inference] = await Promise.allSettled([
+      client.send(new ListFoundationModelsCommand({ byOutputModality: 'TEXT' }), { abortSignal }),
+      collectInferenceProfiles(client, abortSignal),
+    ]);
+    if (foundations.status === 'rejected' && inference.status === 'rejected') throw foundations.reason;
+    // A role may allow one of the two listing calls. Other failures should
+    // leave the stored catalog intact so a transient outage doesn't wipe it.
+    for (const result of [foundations, inference]) {
+      if (result.status === 'rejected' && result.reason?.name !== 'AccessDeniedException') throw result.reason;
+    }
+    const summaries = foundations.status === 'fulfilled' ? foundations.value.modelSummaries ?? [] : [];
+    const lookup = new Map(summaries.map(model => [model.modelId, model]));
+    const catalog = new Map<string, UpsertModelInput>();
+    for (const model of summaries) {
+      if (model.modelId && model.inferenceTypesSupported?.includes('ON_DEMAND') && supportsConverse(model)) {
+        catalog.set(model.modelId, catalogEntry(model.modelId, model.modelName ?? model.modelId, model));
+      }
+    }
+    for (const profile of inference.status === 'fulfilled' ? inference.value : []) {
+      if (profile.status !== 'ACTIVE' || !profile.inferenceProfileId) continue;
+      const base = profile.models?.[0]?.modelArn?.split('foundation-model/')[1];
+      if (!base || /(?:embed|rerank)/i.test(base)) continue;
+      const model = lookup.get(base);
+      if (model && !supportsConverse(model)) continue;
+      const id = profile.type === 'APPLICATION' ? profile.inferenceProfileArn ?? profile.inferenceProfileId : profile.inferenceProfileId;
+      catalog.set(id, catalogEntry(id, profile.inferenceProfileName ?? id, model, base));
+    }
+    return [...catalog.values()];
+  } finally {
+    client.destroy();
   }
 }
 
-function makeClient(sdk: BedrockSdk, region: string, tok: BedrockExtra): BedrockControlClient {
-  return new sdk.BedrockClient({
-    region,
-    credentials:
-      tok.accessKeyId && tok.secretAccessKey
-        ? {
-            accessKeyId: tok.accessKeyId,
-            secretAccessKey: tok.secretAccessKey,
-            sessionToken: tok.sessionToken,
-          }
-        : undefined,
-  });
-}
-
-function resolveRegionAndCreds(
-  store: ProviderStore,
-  cfg: ProviderConfig
-): { region: string; tok: BedrockExtra } {
-  const oauth = store.getOAuth(cfg.id);
-  const tok = (oauth?.extra || {}) as BedrockExtra;
-  const cfgExtra = (cfg.extra || {}) as BedrockExtra;
-  const region = tok.region ?? tok.aws_region ?? cfgExtra.aws_region ?? process.env.AWS_REGION ?? 'us-east-1';
-  return { region, tok };
-}
-
-export async function discoverBedrockModels(
-  _spec: ProviderSpec,
-  cfg: ProviderConfig,
-  store: ProviderStore
-): Promise<UpsertModelInput[]> {
-  const { region, tok } = resolveRegionAndCreds(store, cfg);
-  try {
-    const sdk = await loadSdk();
-    const client = makeClient(sdk, region, tok);
-    const cmd = new sdk.ListFoundationModelsCommand({ byOutputModality: 'TEXT' });
-    const resp = await client.send(cmd);
-    const models: BedrockModelSummary[] = resp.modelSummaries ?? [];
-    return models
-      // Only list text-generation models that are actually invokable; some
-      // rows are embedding-only or marked for provisioned throughput only.
-      .filter((m) => m.inferenceTypesSupported?.includes('ON_DEMAND') ?? true)
-      .filter((m) => m.outputModalities?.includes('TEXT') ?? true)
-      .map((m): UpsertModelInput => {
-        const id = m.modelId ?? 'unknown';
-        const metadata = bedrockModelMetadata(id);
-        const name = `${m.providerName ?? ''} ${m.modelName ?? id}`.trim();
-        return {
-          model_id: id,
-          name,
-          display_name: name,
-          context_window: metadata.contextWindow ?? getRegistryContextWindow(id),
-          default_max_tokens: metadata.maxTokens,
-          can_reason: metadata.canReason,
-          supports_attachments:
-            metadata.supportsAttachments
-            || (m.inputModalities ?? []).some((modality) => modality !== 'TEXT'),
-          supported_reasoning_levels: metadata.supportedReasoningLevels,
-          default_reasoning_level: metadata.defaultReasoningLevel,
-          input_modalities: (m.inputModalities ?? ['TEXT']).map((value) => value.toLowerCase()),
-          visibility: 'list',
-          supported_in_api: true,
-          source: 'live' as const,
-        };
-      });
-  } catch (e) {
-    throw new Error(
-      `Bedrock model discovery failed. Install @aws-sdk/client-bedrock ` +
-        `and verify credentials + region (${region}): ${(e as Error).message}`
-    );
+async function collectInferenceProfiles(client: BedrockClient, abortSignal: AbortSignal) {
+  const profiles = [];
+  for await (const page of paginateListInferenceProfiles({ client, stopOnSameToken: true }, {}, { abortSignal })) {
+    profiles.push(...(page.inferenceProfileSummaries ?? []));
   }
+  return profiles;
+}
+
+function supportsConverse(model: FoundationModelSummary) {
+  return model.responseStreamingSupported !== false
+    && model.modelLifecycle?.status !== 'LEGACY'
+    && (model.outputModalities?.includes('TEXT') ?? true);
+}
+
+function catalogEntry(id: string, name: string, model?: FoundationModelSummary, baseId = id): UpsertModelInput {
+  const metadata = bedrockModelMetadata(baseId);
+  return {
+    model_id: id,
+    name,
+    display_name: name,
+    context_window: metadata.contextWindow,
+    default_max_tokens: metadata.maxTokens,
+    can_reason: metadata.canReason,
+    supports_attachments: metadata.supportsAttachments || (model?.inputModalities?.includes('IMAGE') ?? false),
+    supported_reasoning_levels: metadata.supportedReasoningLevels,
+    default_reasoning_level: metadata.defaultReasoningLevel,
+    input_modalities: (model?.inputModalities ?? ['TEXT']).map(value => value.toLowerCase()),
+    visibility: 'list',
+    supported_in_api: true,
+    source: 'live',
+  };
+}
+
+export async function discoverBedrockModels(_spec: ProviderSpec, cfg: ProviderConfig, store: ProviderStore) {
+  const creds = await resolveAwsConfigCredentials(cfg, { get: async () => store.getOAuth(cfg.id) });
+  return fetchBedrockCatalog(creds.aws);
 }
 
 export function bedrockModelMetadata(model: string): {

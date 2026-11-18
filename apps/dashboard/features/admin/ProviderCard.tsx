@@ -5,14 +5,11 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import { Switch } from '../../components/ui/switch.js';
-import { ClaudeCodeUsagePanel } from './ClaudeCodeUsagePanel.js';
-import { GoogleQuotaPanel } from './GoogleQuotaPanel.js';
 import { FallbackChainPanel } from './FallbackChainPanel.js';
 import { SubagentProfilesPanel } from './SubagentProfilesPanel.js';
 import { AddModelForm, type AddModelInput } from './providers/AddModelForm.js';
 import { SubagentTargetSelect } from './providers/SubagentTargetSelect.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
-import { sortClaudeCodeModels } from '../../lib/claude-code-model-order.js';
 
 interface ProviderCardProps {
   provider: AdminProvider;
@@ -90,10 +87,6 @@ export function ProviderCard({
   const enabledSubagentProviderOptions = allProviders.filter((candidate) => (
     candidate.id !== p.id && candidate.enabled && candidate.use_for_coder
   ));
-  const displayedModels = p.kind === 'claude-code'
-    ? sortClaudeCodeModels(models, (model) => model.model_id, (model) => model.name)
-    : models;
-
   return (
     // `provider-card-shell` is a sentinel class that the new
     // `ProviderModal` uses to strip the outer border/shadow when the
@@ -109,9 +102,9 @@ export function ProviderCard({
             {!p.enabled && <Badge variant="secondary">{t('admin:provider.disabled')}</Badge>}
             {p.has_key ? (
               <span className="text-xs text-muted-foreground font-mono">{p.api_key_masked}</span>
-            ) : (
+            ) : p.auth_mode === 'api_key' ? (
               <span className="text-xs text-amber-600">{t('admin:provider.noKey')}</span>
-            )}
+            ) : null}
             {tr &&
               (tr.ok ? (
                 <span className="flex items-center gap-1 text-xs text-emerald-600">
@@ -151,12 +144,6 @@ export function ProviderCard({
       </CardHeader>
       {isExpanded && (
         <CardContent className="pt-0 border-t bg-muted/20">
-          {p.kind === 'google-oauth' && (
-            <GoogleQuotaPanel providerId={p.id} />
-          )}
-          {p.kind === 'claude-code' && (
-            <ClaudeCodeUsagePanel providerId={p.id} />
-          )}
           <AddModelForm onAdd={onAddModel} />
           {models.length === 0 ? (
             <div className="py-3 text-sm text-muted-foreground">
@@ -164,7 +151,7 @@ export function ProviderCard({
             </div>
           ) : (
             <div className="divide-y">
-              {displayedModels.map((m) => (
+              {models.map((m) => (
                 <div
                   key={`${m.model_id}:${m.mode}`}
                   className="flex items-center justify-between py-2 text-sm"

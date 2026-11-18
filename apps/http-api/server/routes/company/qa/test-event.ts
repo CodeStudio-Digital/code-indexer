@@ -270,7 +270,7 @@ function normaliseStatus(raw: unknown): QaTestStatus | null {
 }
 
 /**
- * B7 — complete a run EARLY because the shared Chrome Service died mid-
+ * B7 — complete a run EARLY because the Playwright browser disconnected mid-
  * suite (2 consecutive `sidecar_down` spec failures). Counts are
  * recomputed from the results already streamed in; the same
  * `qa_run_completed` bus event the UI already consumes is published so
@@ -306,7 +306,7 @@ async function completeRunSidecarDown(opts: {
     skipped,
     duration_ms: null,
     last_error:
-      'Chrome Service connection lost mid-run (2+ consecutive specs failed with browser-connection errors). Remaining specs were not executed.',
+      'Playwright browser connection lost mid-run (2+ consecutive specs failed with browser-connection errors). Remaining specs were not executed.',
     error_class: 'sidecar_down',
   });
   if (!updated || updated.status !== 'error') return false;

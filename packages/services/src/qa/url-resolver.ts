@@ -1,47 +1,9 @@
-/**
- * Pure helpers for the QA preview-URL routing introduced in v4.3.
- *
- * Why this exists:
- *   The Chrome Service container (singleton, on its own podman/docker
- *   network) cannot reach a project sandbox container by `localhost` —
- *   the sandbox dev-server is bound to `127.0.0.1:<hostPort>` on the
- *   host's loopback, which is unreachable from a sibling container's
- *   gateway-routed traffic. The chosen route is to send Playwright
- *   navigations through the http-api preview proxy
- *   (`http://<host-alias>:<httpApiPort>/preview/<sessionId>/...`),
- *   where:
- *     - `<host-alias>` is the runtime-specific gateway alias
- *       (`host.containers.internal` for Podman, `host.docker.internal`
- *       for Docker; same logic as `chrome-service/host-alias.ts`).
- *     - `<httpApiPort>` is the operator-chosen port the http-api binds.
- *     - `/preview/<sessionId>/` (or `/preview/<sessionId>/_svc/<svc>/`
- *       for secondaries) is the Vite `base` path the proxy enforces.
- *
- * All exports here are pure + side-effect-free so they can be reused
- * by `SandboxManager.syncManagedEnvs`, the `qa_get_browser_endpoint`
- * tool reply, and the Tab Testes "URLs" drawer without dragging in
- * driver state.
- */
+/** Resolve preview proxy URLs reachable by container-based QA suites. */
 
-import type { ContainerRuntime } from '../chrome-service/host-alias.js';
+type ContainerRuntime = 'docker' | 'podman' | 'e2b' | null | undefined;
 
 export type QaApiHostAlias = 'host.containers.internal' | 'host.docker.internal' | string;
 
-/**
- * Pure: choose the host alias the Chrome Service container must use to
- * reach the http-api process running on the host loopback.
- *
- * Mirrors `resolveHostAlias` inside `chrome-service/host-alias.ts` but
- * lives in the QA layer so we don't import the chrome-service module
- * for tools that only need address resolution.
- *
- * - `podman` rootless → `host.containers.internal` (slirp4netns DNS).
- * - `docker` (Desktop or rootless w/ `--add-host=host-gateway`) →
- *   `host.docker.internal`.
- * - `e2b` / `null` → `host.docker.internal` (same default — E2B
- *   doesn't host a loopback bridge anyway; this only matters in tests
- *   where the runtime hasn't been resolved yet).
- */
 export function resolveQaApiHostAlias(runtime: ContainerRuntime): QaApiHostAlias {
   return runtime === 'podman' ? 'host.containers.internal' : 'host.docker.internal';
 }

@@ -73,10 +73,8 @@ export function TargetEditor({ capability, target, providers, onChange }: Target
   function updateProvider(nextProviderId: string) {
     const provider = providers.find((item) => item.id === nextProviderId);
     const protocol =
-      provider?.kind === 'cloudflare'
-        ? 'cloudflare'
-        : provider?.kind === 'bedrock'
-          ? 'bedrock'
+      provider?.kind === 'bedrock'
+      ? 'bedrock'
           : capability === 'embedding'
             ? 'openai-embeddings'
             : 'openai-rerank';
@@ -276,7 +274,6 @@ export function TargetEditor({ capability, target, providers, onChange }: Target
                   )}
                   {target.kind === 'provider' && (
                     <>
-                      <SelectItem value="cloudflare">{t('semantic.protocol.cloudflare')}</SelectItem>
                       <SelectItem value="bedrock">{t('semantic.protocol.bedrock')}</SelectItem>
                     </>
                   )}

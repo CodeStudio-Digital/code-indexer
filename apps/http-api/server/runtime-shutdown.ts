@@ -35,7 +35,6 @@ import {
   setCompanyLocalProjectStore,
   tryGetLocalProcessManager,
 } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
-import { type ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
 import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
@@ -43,9 +42,9 @@ import { setDbSecretDecryptor, setDbToolsStores } from '@mcp/code-agent/tools/db
 import { setQaEndpointEnvStore, setQaTestRunStore } from '@mcp/company/tools/qa/index.js';
 import { setApiClientStore } from '@mcp/code-agent/tools/api-client/index.js';
 import { setSandboxServiceEnvStore } from '@mcp/company/services/SandboxService.js';
-import { setChromeServiceForDocs } from './deps.js';
 import { setGlobalDocSearch } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { setGlobalDocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
+import { setGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/index.js';
 import { setGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import { setGlobalDocsResearcher } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { setGlobalAgentLspBackend } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
@@ -62,7 +61,6 @@ import { stopPersistentPerfDiagnostics } from './perf/persistent-diagnostics.js'
 interface RuntimeShutdownResources {
   deps: ServerDeps;
   mcpPool: McpExternalPool;
-  chromeService: ChromeService;
   reason?: string;
 }
 
@@ -141,7 +139,6 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
       ['plugin tool worker', disposePluginToolHost()],
       ['local project processes', localProcesses?.killAll(resources.reason ?? 'app-quit')],
       ['sandbox containers', sandboxes?.destroyAll(resources.reason ?? 'app-quit')],
-      ['Chrome Service', resources.chromeService.shutdown()],
     ]);
     await settleNamed(workerShutdowns);
 
@@ -159,7 +156,6 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
     setCoderWorkerControlPlaneStore(null);
     setCompanyWorkerDocDeps(null);
     setGlobalMcpExternalPool(null);
-    setChromeService(null);
     setCompanyLocalProjectStore(null);
     setCompanySandboxStore(null);
     setCompanySandboxServicesStore(null);
@@ -178,7 +174,7 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
     setQaEndpointEnvStore(null);
     setApiClientStore(null);
     setSandboxServiceEnvStore(null);
-    setChromeServiceForDocs(null);
+    setGlobalResearchBrowser(null);
     setGlobalDocSearch(null);
     setGlobalDocsHintProvider(null);
     setGlobalDocsResearcher(null);

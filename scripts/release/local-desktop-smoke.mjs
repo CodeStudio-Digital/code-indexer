@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -18,9 +18,16 @@ await writeFile(join(project, 'example.txt'), 'local file\n');
 
 let cloudCalls = 0;
 let modelCalls = 0;
+let anthropicCalls = 0;
 const reply = 'Resposta do endpoint local.';
+const anthropicReply = 'Resposta do endpoint Anthropic local.';
 const server = createServer(async (req, res) => {
   if (req.url === '/ping') return res.end('local API response');
+  if (req.url === '/favicon.ico') { res.writeHead(204); return res.end(); }
+  if (req.url === '/page') {
+    res.setHeader('content-type', 'text/html');
+    return res.end('<title>Local Chromium</title><main></main><script>document.querySelector("main").textContent="Rendered by Chromium"</script>');
+  }
   if (req.url === '/v1/models') {
     res.setHeader('content-type', 'application/json');
     return res.end(JSON.stringify({ data: [{ id: 'local-test' }] }));
@@ -45,6 +52,27 @@ const server = createServer(async (req, res) => {
     ]) res.write('data: ' + JSON.stringify(payload) + '\n\n');
     return res.end('data: [DONE]\n\n');
   }
+  if (req.url === '/v1/messages') {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const request = JSON.parse(raw);
+    if (request.model !== 'local-test' || req.headers['x-api-key'] !== 'local-fixture') {
+      res.writeHead(400);
+      return res.end();
+    }
+    anthropicCalls++;
+    res.setHeader('content-type', 'text/event-stream');
+    for (const event of [
+      { type: 'message_start', message: { id: 'msg-local', type: 'message', role: 'assistant', model: request.model,
+        content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 25, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: anthropicReply } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 7 } },
+      { type: 'message_stop' },
+    ]) res.write('event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n');
+    return res.end();
+  }
   cloudCalls++;
   res.writeHead(503);
   res.end();
@@ -53,7 +81,10 @@ await new Promise(done => server.listen(0, '127.0.0.1', done));
 const local = 'http://127.0.0.1:' + server.address().port;
 const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
   /^(PATH|SYSTEMROOT|WINDIR|TEMP|TMP|USERPROFILE|APPDATA|LOCALAPPDATA|COMSPEC|PATHEXT|NUMBER_OF_PROCESSORS|PROCESSOR_ARCHITECTURE)$/i.test(key)));
+// Copilot's native runtime cache is also scoped to the smoke profile.
+await mkdir(join(root, 'local-app-data'));
 Object.assign(env, {
+  LOCALAPPDATA: join(root, 'local-app-data'),
   MCP_DATA_DIR: data, MCP_MODEL_CACHE_DIR: join(root, 'models'),
   MCP_RUNTIME_COORDINATION_DIR: join(root, 'coordination'), PROVIDER_REFRESH_INTERVAL_MS: '0',
   CODESTUDIO_CLOUD_URL: local + '/unavailable', CODESTUDIO_PORTAL_URL: local + '/unavailable',
@@ -62,10 +93,13 @@ Object.assign(env, {
 let app, page;
 let passed = false;
 const errors = [];
+let electronStderr = '';
 async function boot() {
   app = await electron.launch({ executablePath: binary, cwd: root, env, timeout: 90000,
     args: ['--user-data-dir=' + profile, '--disable-background-networking', '--disable-gpu'] });
-  app.process().stderr?.resume();
+  app.process().stderr?.on('data', data => {
+    electronStderr = (electronStderr + data.toString()).slice(-8000);
+  });
   await expect.poll(() => app.windows().some(win => win.url().includes('/dashboard/index.html')), { timeout: 90000 }).toBe(true);
   page = app.windows().find(win => win.url().includes('/dashboard/index.html'));
   page.on('pageerror', error => { if (error.name !== 'Canceled') errors.push(error.message); });
@@ -87,6 +121,88 @@ async function ipc(name, input) {
   return response.value;
 }
 
+async function assertProviderSurface() {
+  const kinds = ['anthropic', 'bedrock', 'copilot', 'openai'];
+  assert.deepEqual((await api('admin/providers/known')).map(item => item.kind).sort(), kinds);
+  assert.deepEqual((await api('admin/providers')).providers.map(item => item.kind).sort(), kinds);
+  const retired = await page.evaluate(async () => {
+    const base = 'mcp://app/api/admin/';
+    const status = route => fetch(base + route).then(res => res.status);
+    const create = kind => fetch(base + 'providers', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: kind, kind, name: kind }),
+    }).then(res => res.status);
+    return Promise.all([status('chrome-service'), create('chatgpt'), create('gemini')]);
+  });
+  assert.deepEqual(retired, [404, 400, 400]);
+  assert.deepEqual((await ipc('system.preflight')).checks.map(check => check.id).sort(), ['disk', 'git']);
+  assert.deepEqual((await readdir(join(dirname(binary), 'resources', 'bundled-plugins'))).sort(),
+    ['angular', 'javascript-debugger']);
+}
+
+async function exerciseElectronChromium() {
+  const result = await app.evaluate(async ({ app }, local) => {
+    const { join } = process.getBuiltinModule('node:path');
+    const { createRequire } = process.getBuiltinModule('node:module');
+    const require = createRequire(join(app.getAppPath(), 'package.json'));
+    const { createElectronBrowserHost } = require('./dist/apps/electron/src/browser-context-host.js');
+    const { BrowserBackend } = require('./dist/packages/services/src/services/docs/render-backend.js');
+    const host = createElectronBrowserHost();
+    try {
+      const renderer = new BrowserBackend(async () => host);
+      const result = await renderer.render(local + '/page');
+      return { via: result.via, status: result.status, html: result.html };
+    } finally {
+      await host.dispose();
+    }
+  }, local);
+  assert.equal(result.via, 'browser');
+  assert.equal(result.status, 200);
+  assert.ok(result.html.includes('<main>Rendered by Chromium</main>'));
+}
+
+async function exerciseCopilotRuntime() {
+  const result = await app.evaluate(({ app }, baseUrl) => {
+    const { join } = process.getBuiltinModule('node:path');
+    const { Worker } = process.getBuiltinModule('node:worker_threads');
+    const entry = join(app.getAppPath(), 'dist/packages/code-agent/src/providers/copilot-sdk-client.js');
+    const script = 'const run = ' + String(async function run({ entry, baseUrl }) {
+      const { pathToFileURL } = process.getBuiltinModule('node:url');
+      const { startCopilotClient, stopCopilotClient } = await import(pathToFileURL(entry).href);
+      const client = await startCopilotClient('release-smoke');
+      try {
+        const session = await client.createSession({
+          model: 'fixture/local-test',
+          inference: {
+            providers: [{ name: 'fixture', type: 'openai', baseUrl, apiKey: 'local-fixture', wireApi: 'completions' }],
+            models: [{ provider: 'fixture', id: 'local-test', modelId: 'gpt-4o' }],
+          },
+          tools: { availableTools: [] },
+          github: { telemetryEnabled: false, capi: { enabled: false } },
+        });
+        try { return typeof session.rpc.accounts.login.begin; }
+        finally { await client.deleteSession(session.sessionId); }
+      } finally {
+        await stopCopilotClient(client);
+      }
+    }) + `;
+      import { parentPort, workerData } from 'node:worker_threads';
+      run(workerData).then(value => parentPort.postMessage({ value }),
+        error => parentPort.postMessage({ error: error.message }));
+    `;
+    const worker = new Worker(new URL('data:text/javascript,' + encodeURIComponent(script)), { workerData: { entry, baseUrl } });
+    return new Promise((resolve, reject) => {
+      worker.once('error', reject);
+      worker.once('exit', code => reject(new Error('Copilot test worker exited with ' + code)));
+      worker.once('message', ({ value, error }) => {
+        if (error) reject(new Error(error));
+        else resolve(value);
+      });
+    });
+  }, local + '/v1');
+  assert.equal(result, 'function');
+}
+
 try {
   await boot();
   await page.getByRole('button', { name: /^(Continue|Continuar)$/ }).click({ timeout: 60000 });
@@ -95,6 +211,9 @@ try {
   await page.getByPlaceholder('D:\\Projects\\my-app').fill(project);
   await page.getByRole('button', { name: /^(Open project|Abrir projeto)$/ }).click();
   await expect.poll(() => page.url(), { timeout: 60000 }).toMatch(/#\/projects\/\d+/);
+  await assertProviderSurface();
+  await exerciseElectronChromium();
+  await exerciseCopilotRuntime();
   const projectId = Number(page.url().match(/#\/projects\/(\d+)/)[1]);
   const area = 'projects/' + projectId;
   assert.equal((await ipc('files.read', { projectId, path: 'example.txt' })).content, 'local file\n');
@@ -112,20 +231,31 @@ try {
   await api(sessionPath + '/messages', { content: 'Responda em uma frase.', response_mode: 'json', max_turns: 1 });
   await expect.poll(async () => JSON.stringify(await api(sessionPath + '/messages')), { timeout: 90000 }).toContain(reply);
   assert.ok(modelCalls > 0);
+  await api('admin/providers', { id: 'local-anthropic', name: 'Local Anthropic endpoint', kind: 'anthropic',
+    base_url: local + '/v1', api_key: 'local-fixture', enabled: true, use_for_coder: true });
+  await api('admin/providers/local-anthropic/models', { model_id: 'local-test', name: 'Local Anthropic model', enabled: true, context_window: 128000 });
+  const anthropicChat = await api('coder/sessions', { project_id: projectId, title: 'Local Anthropic chat', provider: 'local-anthropic', model: 'local-test' });
+  const anthropicSessionPath = 'coder/sessions/' + anthropicChat.id;
+  await api(anthropicSessionPath + '/messages', { content: 'Responda em uma frase.', response_mode: 'json', max_turns: 1 });
+  await expect.poll(async () => JSON.stringify(await api(anthropicSessionPath + '/messages')), { timeout: 90000 }).toContain(anthropicReply);
+  assert.ok(anthropicCalls > 0);
   await app.close();
   app = undefined;
   await boot();
   assert.ok((await api(area + '/api-client/collections')).collections.some(item => item.id === collection.id));
   assert.ok((await api(area + '/ssh/hosts')).hosts.some(item => item.id === host.id));
   assert.ok(JSON.stringify(await api(sessionPath + '/messages')).includes(reply));
+  assert.ok(JSON.stringify(await api(anthropicSessionPath + '/messages')).includes(anthropicReply));
   assert.equal(existsSync(join(profile, 'cloud', 'account.json')), false);
   assert.equal(cloudCalls, 0);
   assert.deepEqual(errors, []);
   passed = true;
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
-    modelCalls, persistedReply: true, cloudCalls, rendererErrors: errors }));
+    electronChromium: true, copilotRuntime: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
+    persistedReply: true, cloudCalls, rendererErrors: errors }));
 } catch (error) {
   console.error('Isolated profile:', root);
+  if (electronStderr) console.error(electronStderr);
   if (page && !page.isClosed()) {
     console.error((await page.locator('body').innerText().catch(() => '')).slice(-1500));
   }

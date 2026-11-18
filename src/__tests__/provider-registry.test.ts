@@ -153,7 +153,7 @@ describe('zai.createCoder — URL switching', () => {
 });
 
 // ─── lookupProvider — ZAI masquerade rewrite ────────────────────────────
-describe('lookupProvider — ZAI masquerade rewrite', () => {
+describe('lookupProvider — CodeStudio Local formats', () => {
   const origBaseURL = process.env.ZAI_BASE_URL;
   beforeEach(() => { delete process.env.ZAI_BASE_URL; });
   afterEach(() => {
@@ -161,7 +161,7 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
     else delete process.env.ZAI_BASE_URL;
   });
 
-  it('rewrites cfg.kind="openai" + id="zai" to the zai shape', async () => {
+  it('rejects retired Z.AI rows stored as OpenAI', async () => {
     const store = {
       getProvider: (): ProviderConfig => ({
         id: 'zai',
@@ -185,13 +185,11 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
 
     const { lookupProvider } = await import('@mcp/services/providers/factory.js');
     await withMockedStore(store, async () => {
-      const { def } = await lookupProvider('zai');
-      // Must dispatch to the zai shape so the coder URL heuristic runs.
-      expect(def.kind).toBe('zai');
+      await expect(lookupProvider('zai')).rejects.toThrow('unavailable in CodeStudio Local');
     });
   });
 
-  it('rewrites cfg.kind="openai" + extra.zai_has_coding_mode=true to zai', async () => {
+  it('rejects renamed legacy Z.AI coding rows', async () => {
     const store = {
       getProvider: (): ProviderConfig => ({
         id: 'my-zai',
@@ -215,8 +213,7 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
 
     const { lookupProvider } = await import('@mcp/services/providers/factory.js');
     await withMockedStore(store, async () => {
-      const { def } = await lookupProvider('my-zai');
-      expect(def.kind).toBe('zai');
+      await expect(lookupProvider('my-zai')).rejects.toThrow('unavailable in CodeStudio Local');
     });
   });
 
@@ -249,7 +246,7 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
     });
   });
 
-  it('rewrites the legacy kimi-code instance from openai to its dedicated shape', async () => {
+  it('rejects retired Kimi Code rows stored as OpenAI', async () => {
     const store = {
       getProvider: (): ProviderConfig => ({
         id: 'kimi-code',
@@ -273,8 +270,7 @@ describe('lookupProvider — ZAI masquerade rewrite', () => {
 
     const { lookupProvider } = await import('@mcp/services/providers/factory.js');
     await withMockedStore(store, async () => {
-      const { def } = await lookupProvider('kimi-code');
-      expect(def.kind).toBe('kimi-code');
+      await expect(lookupProvider('kimi-code')).rejects.toThrow('unavailable in CodeStudio Local');
     });
   });
 });

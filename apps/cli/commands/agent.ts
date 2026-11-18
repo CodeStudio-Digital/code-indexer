@@ -5,7 +5,7 @@ import type { AgentCliOptions } from './agent-session-client.js';
 export function register(program: Command): void {
   program.command('agent [task...]')
     .description('Run the coding agent: read code, edit files, run shell, git')
-    .option('-p, --provider <name>', 'Provider instance id or shape (built-in shapes listed via `mcp-code-indexer models`)', 'zai')
+    .option('-p, --provider <name>', 'Provider instance id or shape (built-in shapes listed via `mcp-code-indexer models`)', 'openai')
     .option('-m, --model <model>', 'Model name (provider-specific)')
     .option('--project <name>', 'Project name (default: resolve from cwd)')
     .option(

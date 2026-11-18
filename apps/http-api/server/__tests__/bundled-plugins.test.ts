@@ -77,6 +77,28 @@ afterAll(() => {
   else process.env.MCP_BUNDLED_PLUGINS_DIR = previousBundledRoot;
 });
 
+describe('retired plugins', () => {
+  it('keeps old Cloudflare and Podman installs out of runtime discovery', () => {
+    const store = new InstalledPluginStore(dbPath);
+    try {
+      for (const namespace of ['cloudflare', 'podman']) {
+        store.upsert({ namespace, name: namespace, version: '1.0.0', source: 'bundled', enabled: true });
+        expect(store.get(namespace)).toBeNull();
+      }
+      expect(store.list({ enabled: true }).map(plugin => plugin.namespace)).toEqual([NS]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('rejects a retired plugin installed under an alias', async () => {
+    const manifest = JSON.parse(readFileSync(join(fixtureDir, 'plugin.json'), 'utf8'));
+    writeFileSync(join(fixtureDir, 'plugin.json'), JSON.stringify({ ...manifest, name: 'cloudflare' }));
+    await expect(installPlugin({ source: { source: 'local', path: fixtureDir }, namespace: 'old-cloud' }))
+      .rejects.toThrow('unavailable in CodeStudio Local');
+  });
+});
+
 describe('seedBundledPlugins runtime format migration', () => {
   it('refreshes a cachebusted manifest and preserves user grants', async () => {
     const nextVersion = `${VERSION}+codex.local-20260722004907`;

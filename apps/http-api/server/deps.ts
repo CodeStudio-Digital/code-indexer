@@ -120,7 +120,6 @@ import { FileLocalHistoryStore } from '@mcp/store/file-local-history-store.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
 import { QaTestResultStore } from '@mcp/services/qa/store/qa-test-result-store.js';
-import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
 import { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { SshStore } from '@mcp/store/ssh-store.js';
 import { DbClientStore } from '@mcp/store/db-client-store.js';
@@ -177,9 +176,7 @@ import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-rece
 import { setBuilderCheckpointDeps } from '../sse/builder-checkpoint.js';
 import { SemanticVectorWorkerClient } from '../sse/SemanticVectorWorkerClient.js';
 import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
-import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { invokePluginTool, type PluginToolInvokeFn } from '../sse/PluginHostSingleton.js';
-import { syncPluginProviders } from './plugin-providers.js';
 import { SemanticIndexCoordinator } from './semantic-index-coordinator.js';
 import {
   createDurableSemanticMutationSink,
@@ -192,17 +189,6 @@ import { CoderPreferencesFile } from './coder-preferences-file.js';
 interface EmbeddingFn {
   (text: string): Promise<Float32Array>;
   readonly fingerprint?: () => string;
-}
-
-/**
- * Late-bound ChromeService reference shared with the doc indexer's
- * `BrowserBackend`. Populated by `server.ts` after the ChromeService
- * singleton is constructed. Null = browser escalation unavailable; the
- * EscalatingFetcher silently degrades to plain results.
- */
-let chromeServiceForDocs: ChromeService | null = null;
-export function setChromeServiceForDocs(svc: ChromeService | null): void {
-  chromeServiceForDocs = svc;
 }
 
 /**
@@ -387,15 +373,6 @@ export interface QaDeps {
   qaTestResultStore: QaTestResultStore;
 }
 
-export interface ChromeServiceDeps {
-  /**
-   * Singleton-row config for the SHARED Playwright/Chromium container
-   * (admin-managed). The runtime `ChromeService` class operates on
-   * this store; the admin routes read it directly.
-   */
-  chromeServiceStore: ChromeServiceStore;
-}
-
 export interface ApiClientDeps {
   /**
    * CRUD store for the in-app Postman tables (migration 147): collections,
@@ -561,13 +538,6 @@ export interface CompanyDeps {
 export interface PluginRuntimeDeps {
   /** Invoke an installed plugin's tool from the UI (outside a coder run). */
   invokePluginTool: PluginToolInvokeFn;
-  /**
-   * Reconcile the provider registry with the currently-enabled declarative
-   * provider plugins. Called at boot AND after any install/enable/disable/
-   * uninstall so a plugin-contributed provider appears (or disappears) live —
-   * no restart, no flags.
-   */
-  syncPluginProviders: () => void;
 }
 
 export type ServerDeps = CoreDeps
@@ -579,13 +549,12 @@ export type ServerDeps = CoreDeps
   & OperationalSessionDeps
   & CompanyDeps
   & QaDeps
-  & ChromeServiceDeps
   & ApiClientDeps
   & PipelineDeps
   & DocCorpusDeps
   & PluginRuntimeDeps;
 
-export function createDeps(): ServerDeps {
+export function createDeps(browser: import('@mcp/services/research-browser/types.js').ResearchBrowserHost | null = null): ServerDeps {
   const config = loadConfig();
   // This is the ONE main-process handle: make it the WAL checkpoint owner so the
   // central -wal can't bloat under multi-agent worker write load (see db.ts).
@@ -1103,7 +1072,6 @@ export function createDeps(): ServerDeps {
   const skillStore = new SkillStore(db.raw());
   const qaTestRunStore = new QaTestRunStore(sessionStore);
   const qaTestResultStore = new QaTestResultStore(sessionStore);
-  const chromeServiceStore = new ChromeServiceStore(db.raw());
   const apiClientStore = new ApiClientStore(db.raw());
   // R1 — per-project feature stores. The ProjectDbPool caches the live SQLite
   // connection; wrappers must be recreated on access because an idle/LRU
@@ -1346,16 +1314,7 @@ export function createDeps(): ServerDeps {
   // Reuses the embedding service / vector store that the indexer pipeline
   // already wired; collections are tenant-wide, so no per-project state.
   //
-  // Render pipeline: plain fetch first; auto-escalate to headless Chrome
-  // (via the existing ChromeService WS endpoint) when bot-detection signals
-  // fire. The browser connector is lazy — it only spins up Playwright when
-  // a fetch actually trips the detector AND ChromeService is running. With
-  // ChromeService off, the connector returns null and the EscalatingFetcher
-  // silently keeps the plain result (annotated with `blockedSignals`).
-  //
-  // `docFetcher` is shared by every ingestion run so the per-host throttle
-  // + robots cache + cookie jar are reused across collections. If memory
-  // pressure becomes an issue, swap to per-source instances.
+  // Escalate blocked fetches through the isolated Electron browser when available.
   const docStore = new DocStore(db.raw());
   const docFetcher = new UrlFetcher();
   const plainRender = new PlainFetchBackend(docFetcher);
@@ -1363,15 +1322,7 @@ export function createDeps(): ServerDeps {
   // crawl shares the per-host throttle (penalty, Retry-After, jitter)
   // with the plain path. Without this the browser path would `page.goto`
   // unbounded and trip 429s much faster than the polite plain fetcher.
-  const browserRender = new BrowserBackend(async () => {
-    // Late-bound: chromeService isn't constructed yet at this point in
-    // createDeps (it's owned by server.ts and only assigned after the
-    // sandbox manager wires). The closure captures `chromeServiceRef`
-    // populated by setChromeServiceForDocs below.
-    const svc = chromeServiceForDocs;
-    if (!svc) return null;
-    return svc.connectBrowser();
-  }, docFetcher);
+  const browserRender = new BrowserBackend(async () => browser, docFetcher);
   const docRenderer = new EscalatingFetcher(plainRender, browserRender, detectBlocked);
 
   // ─── Doc-search enhancements (Phase 10): query rewriter + reranker ──
@@ -1666,7 +1617,6 @@ export function createDeps(): ServerDeps {
     skillStore,
     qaTestRunStore,
     qaTestResultStore,
-    chromeServiceStore,
     apiClientStore,
     apiClientFor,
     sshStore,
@@ -1693,7 +1643,6 @@ export function createDeps(): ServerDeps {
     indexDocsUseCase,
     docProgressTracker,
     invokePluginTool,
-    syncPluginProviders,
     mcpBearerResolver: null,
   };
 }

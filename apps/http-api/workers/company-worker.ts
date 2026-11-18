@@ -113,7 +113,6 @@ import { installWorkerLspShim } from './lsp-shim.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 import { buildWorkerDocSearch } from './worker-doc-search.js';
 import { requestDocsResearchOverBridge } from './docs-research-rpc.js';
-import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
 import { mergeAdjacentStreamDeltas } from './stream-delta-coalescer.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
@@ -174,7 +173,6 @@ hydrateWorkerCapabilities(dbConn.handle, `company-worker ${companySessionId}`);
 
 // Overlay declarative plugin providers into this worker's registry so the agent
 // can resolve a plugin-contributed provider kind (best-effort; built-ins always work).
-registerWorkerPluginProviders();
 
 // The bridge wires its message listener inside the constructor, so
 // any request that races the orchestrator construction will be

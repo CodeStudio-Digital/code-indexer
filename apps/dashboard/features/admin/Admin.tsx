@@ -4,7 +4,6 @@ import { useSearchParams } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
-  AppWindow,
   Blocks,
   Bot,
   BookOpen,
@@ -40,11 +39,7 @@ import {
 import { SettingsRail } from './SettingsRail.js';
 import type { GroupDef, SectionDef, SectionId } from './settings-types.js';
 import { BedrockCredentialsDialog } from './BedrockCredentialsDialog.js';
-import { ChatgptConnectionDialog } from './ChatgptConnectionDialog.js';
-import { ClaudeCodeConnectionDialog } from './ClaudeCodeConnectionDialog.js';
 import { CopilotConnectionDialog } from './CopilotConnectionDialog.js';
-import { GoogleConnectionDialog } from './GoogleConnectionDialog.js';
-import { KimiCodeConnectionDialog } from './KimiCodeConnectionDialog.js';
 import { EditDialog } from './EditDialog.js';
 import { ProviderTile } from './providers/ProviderTile.js';
 import { ProviderModal } from './providers/ProviderModal.js';
@@ -61,7 +56,6 @@ import { LspServersPanel } from './LspServersPanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
 import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
-import { ChromeServicePanel } from './ChromeServicePanel.js';
 import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
 import PerfMonitorPanel from './perf/PerfMonitorPanel.js';
 // Pipeline telemetry moved to `/telemetry`; the Pipelines configuration
@@ -129,11 +123,6 @@ export default function Admin() {
   const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
   const [bedrockOpen, setBedrockOpen] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(false);
-  const [claudeCodeProviderId, setClaudeCodeProviderId] = useState<string | null>(null);
-  const [claudeCodeOpen, setClaudeCodeOpen] = useState(false);
-  const [chatgptOpen, setChatgptOpen] = useState(false);
-  const [googleOpen, setGoogleOpen] = useState(false);
-  const [kimiCodeOpen, setKimiCodeOpen] = useState(false);
 
   const handleConnected = async (providerId?: string) => {
     await load();
@@ -186,8 +175,6 @@ export default function Admin() {
     // Serviços
     { id: 'lsp-servers',       label: 'Language Servers',         icon: Languages,     group: 'services',
       hint: 'LSP por linguagem (PHP, Python, …) — instalar/gerenciar' },
-    { id: 'chrome-service',    label: 'Chrome Service',           icon: AppWindow,     group: 'services',
-      hint: 'Browser headless pra docs / web tools' },
     // Sistema
     { id: 'app-settings',      label: 'Configurações',            icon: Settings2,     group: 'system',
       hint: 'Env vars persistidas: limites, flags, tuning' },
@@ -243,12 +230,8 @@ export default function Admin() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-56">
-                            <DropdownMenuItem onSelect={() => setCopilotOpen(true)}>{t('admin:connectCopilot')}</DropdownMenuItem>
-                            <DropdownMenuItem onSelect={() => { setClaudeCodeProviderId(null); setClaudeCodeOpen(true); }}>{t('admin:connectClaudeCode')}</DropdownMenuItem>
-                            <DropdownMenuItem onSelect={() => setGoogleOpen(true)}>{t('admin:connectGoogle')}</DropdownMenuItem>
-                            <DropdownMenuItem onSelect={() => setChatgptOpen(true)}>{t('admin:connectChatgpt')}</DropdownMenuItem>
-                            <DropdownMenuItem onSelect={() => setKimiCodeOpen(true)}>{t('admin:connectKimiCode')}</DropdownMenuItem>
-                            <DropdownMenuItem onSelect={() => setBedrockOpen(true)}>{t('admin:awsBedrock')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => { setExpanded(null); setCopilotOpen(true); }}>{t('admin:connectCopilot')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => { setExpanded(null); setBedrockOpen(true); }}>{t('admin:awsBedrock')}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                         <Button
@@ -327,13 +310,8 @@ export default function Admin() {
                 onConnect={(() => {
                   const p = providers.find((x) => x.id === expanded);
                   if (!p) return undefined;
-                  if (p.kind === 'kimi-code') return () => setKimiCodeOpen(true);
-                  if (p.kind === 'claude-code') {
-                    return () => {
-                      setClaudeCodeProviderId(p.id);
-                      setClaudeCodeOpen(true);
-                    };
-                  }
+                  if (p.kind === 'copilot') return () => setCopilotOpen(true);
+                  if (p.kind === 'bedrock') return () => setBedrockOpen(true);
                   return undefined;
                 })()}
                 onRemove={() => {
@@ -377,7 +355,6 @@ export default function Admin() {
           {section === 'plugins'           && <PluginsPanel />}
           {section === 'ai-geral'          && <GeneralAiPanel />}
           {section === 'lsp-servers'       && <LspServersPanel />}
-          {section === 'chrome-service'    && <ChromeServicePanel />}
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
           {section === 'perf'              && <PerfMonitorPanel />}
           {section === 'auth'              && <AuthPanel />}
@@ -399,45 +376,20 @@ export default function Admin() {
       )}
       {copilotOpen && (
         <CopilotConnectionDialog
+          providerId={providers.find(p => p.id === expanded && p.kind === 'copilot')?.id}
+          initialHost={providers.find(p => p.id === expanded)?.extra.githubHost as string | undefined}
           onClose={() => setCopilotOpen(false)}
-          onConnected={handleConnected}
-        />
-      )}
-      {chatgptOpen && (
-        <ChatgptConnectionDialog
-          onClose={() => setChatgptOpen(false)}
-          onConnected={handleConnected}
-        />
-      )}
-      {claudeCodeOpen && (
-        <ClaudeCodeConnectionDialog
-          providerId={claudeCodeProviderId ?? undefined}
-          onClose={() => {
-            setClaudeCodeOpen(false);
-            setClaudeCodeProviderId(null);
-          }}
-          onConnected={handleConnected}
-        />
-      )}
-      {googleOpen && (
-        <GoogleConnectionDialog
-          onClose={() => setGoogleOpen(false)}
-          onConnected={handleConnected}
-        />
-      )}
-      {kimiCodeOpen && (
-        <KimiCodeConnectionDialog
-          provider={providers.find((provider) => provider.kind === 'kimi-code')}
-          onClose={() => setKimiCodeOpen(false)}
           onConnected={handleConnected}
         />
       )}
       {bedrockOpen && (
         <BedrockCredentialsDialog
+          providerId={providers.find(p => p.id === expanded && p.kind === 'bedrock')?.id}
+          initialRegion={providers.find(p => p.id === expanded)?.extra.aws_region as string | undefined}
           onClose={() => setBedrockOpen(false)}
-          onSaved={() => {
+          onSaved={(id) => {
             setBedrockOpen(false);
-            void load();
+            void handleConnected(id);
           }}
         />
       )}

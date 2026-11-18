@@ -114,7 +114,7 @@
   "projectSwitcher.action.copied": "Path copied",
   "projectSwitcher.action.focusWindow": "Switch to its window",
   "preflight.title": "Set up CodeStudio",
-  "preflight.subtitle": "CodeStudio runs your code in containers — let's make sure the runtime is ready.",
+  "preflight.subtitle": "Check Git and available disk space.",
   "preflight.recheck": "Re-check",
   "preflight.continue": "Continue",
   "preflight.back": "Back",

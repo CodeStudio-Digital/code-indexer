@@ -14,19 +14,11 @@ export { qaPublishResult } from '@mcp/company/tools/qa/qa-publish-result.js';
 export { qaStartRun, setQaTestRunStore } from '@mcp/company/tools/qa/qa-start-run.js';
 export {
   qaGetBrowserEndpoint,
-  fetchSidecarVersion,
-  formatBrowserEndpointReply,
-  formatEnvProbeReply,
   collectPlaywrightBaseUrls,
   setQaEndpointEnvStore,
   getQaEndpointEnvStore,
 } from '@mcp/company/tools/qa/qa-get-browser-endpoint.js';
-export {
-  preflightBrowser,
-  planRetry,
-  probeUrlFromWsEndpoint,
-  resetAllBreakers,
-} from '@mcp/company/tools/qa/qa-preflight.js';
+export { preflightBrowser } from '@mcp/company/tools/qa/qa-preflight.js';
 export { resolvePlanGate, roleHasQaPlaywrightSkill } from '@mcp/company/tools/qa/qa-plan-gate.js';
 export type * from '@mcp/company/tools/qa/qa-event-types.js';
 

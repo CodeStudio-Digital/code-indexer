@@ -1,6 +1,7 @@
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { renderTextDocument } from './document-utils.js';
+import { bedrockClientConfig } from '@mcp/provider-sdk';
 
 /**
  * Amazon Bedrock chat adapter using the Converse/ConverseStream API.
@@ -25,7 +26,7 @@ import { renderTextDocument } from './document-utils.js';
 
 // Minimal local types to avoid needing @aws-sdk types at build time.
 interface ConverseStreamClient {
-  send: (cmd: unknown) => Promise<{ stream: AsyncIterable<ConverseStreamEvent> }>;
+  send: (cmd: unknown, options?: { abortSignal?: AbortSignal }) => Promise<{ stream?: AsyncIterable<ConverseStreamEvent> }>;
 }
 
 interface ConverseStreamEvent {
@@ -68,6 +69,7 @@ export class BedrockChatProvider implements ChatProvider {
   readonly name = 'bedrock';
   model: string;
   private region: string;
+  private apiKey?: string;
   private credentials?: {
     accessKeyId: string;
     secretAccessKey: string;
@@ -77,6 +79,7 @@ export class BedrockChatProvider implements ChatProvider {
 
   constructor(opts: {
     model?: string;
+    apiKey?: string;
     region?: string;
     accessKeyId?: string;
     secretAccessKey?: string;
@@ -84,6 +87,7 @@ export class BedrockChatProvider implements ChatProvider {
   }) {
     this.model = opts.model ?? 'anthropic.claude-sonnet-5';
     this.region = opts.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1';
+    this.apiKey = opts.apiKey;
     if (opts.accessKeyId && opts.secretAccessKey) {
       this.credentials = {
         accessKeyId: opts.accessKeyId,
@@ -111,12 +115,9 @@ export class BedrockChatProvider implements ChatProvider {
           );
         }
         const client = new sdk.BedrockRuntimeClient({
-          region: this.region,
+          ...bedrockClientConfig({ ...this.credentials, apiKey: this.apiKey, region: this.region }),
           // Retry/backoff belongs to the behavior-tree runner.
           maxAttempts: 1,
-          // Passing `undefined` lets the SDK fall back to its default provider
-          // chain (env, shared credentials file, instance role).
-          credentials: this.credentials,
         });
         return { client, sdk };
       })();
@@ -162,7 +163,8 @@ export class BedrockChatProvider implements ChatProvider {
           ? { additionalModelRequestFields: reasoningFields }
           : {}),
       });
-      const resp = await client.send(cmd);
+      const resp = await client.send(cmd, { abortSignal: req.signal });
+      if (!resp.stream) throw new Error('Bedrock returned no ConverseStream body');
       stream = resp.stream;
     } catch (e) {
       throw new Error(humanizeBedrockError(e, this.model));
@@ -180,6 +182,8 @@ export class BedrockChatProvider implements ChatProvider {
 
     try {
       for await (const event of stream) {
+        req.signal?.throwIfAborted();
+        req.onTransportActivity?.();
         if (event.contentBlockStart?.start?.toolUse) {
           const idx = event.contentBlockStart.contentBlockIndex;
           const tu = event.contentBlockStart.start.toolUse;

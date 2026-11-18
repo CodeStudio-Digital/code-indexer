@@ -313,7 +313,7 @@ function specSchema<
       pricingPriority: z.number().optional(),
       capabilities: capabilitiesSchema.optional(),
       semantic: semanticDescriptorSchema.optional(),
-      wire: z.enum(['openai-compat', 'anthropic', 'gemini', 'bedrock', 'codex', 'kimi']),
+      wire: z.enum(['openai-compat', 'anthropic', 'gemini', 'bedrock', 'copilot', 'codex', 'kimi']),
       wireOpts: wireOptsSchema.optional(),
       request: requestDescriptorSchema.optional(),
       discovery: discoveryDescriptorSchema(opts.discoveryFormats).optional(),

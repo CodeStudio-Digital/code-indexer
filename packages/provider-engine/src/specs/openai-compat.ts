@@ -9,7 +9,7 @@ import { ZAI_MODELS } from '@mcp/shared/providers/zai-models.js';
 
 export const openaiSpec: ProviderSpec = {
   kind: 'openai',
-  displayName: 'OpenAI',
+  displayName: 'OpenAI Compatible',
   visual: { icon: 'Brain', fg: 'text-emerald-500', bg: 'bg-emerald-500/15' },
   credKind: 'api-key',
   envVars: ['OPENAI_API_KEY'],

@@ -2,12 +2,18 @@ import type { Database as DB } from 'better-sqlite3';
 import type { ProviderConfig, UpsertProviderInput } from './types.js';
 import { hydrateProvider, type ProviderConfigRaw } from './hydrators.js';
 import * as models from './models.js';
+import { isLocalProviderKind, isRetiredProviderId } from '@mcp/shared/providers/local-edition.js';
 
 export interface ListProvidersFilter {
   use_for_coder?: boolean;
   use_for_agent?: boolean;
   use_for_general?: boolean;
   enabled?: boolean;
+}
+
+function isAvailable(provider: ProviderConfig): boolean {
+  return isLocalProviderKind(provider.kind) && !isRetiredProviderId(provider.id)
+    && provider.extra.zai_has_coding_mode !== true;
 }
 
 export function list(db: DB, filter?: ListProvidersFilter): ProviderConfig[] {
@@ -20,7 +26,7 @@ export function list(db: DB, filter?: ListProvidersFilter): ProviderConfig[] {
   const rows = db
     .prepare(`SELECT * FROM provider_configs ${where} ORDER BY name`)
     .all() as ProviderConfigRaw[];
-  return rows.map(hydrateProvider);
+  return rows.map(hydrateProvider).filter(isAvailable);
 }
 
 /**
@@ -28,38 +34,37 @@ export function list(db: DB, filter?: ListProvidersFilter): ProviderConfig[] {
  * is explicitly marked as default. Returns null when no providers are configured.
  */
 export function getDefault(db: DB): ProviderConfig | null {
-  const row = db
-    .prepare('SELECT * FROM provider_configs WHERE is_default = 1 AND enabled = 1 LIMIT 1')
-    .get() as ProviderConfigRaw | undefined;
-  if (row) return hydrateProvider(row);
-  const first = db
-    .prepare('SELECT * FROM provider_configs WHERE enabled = 1 ORDER BY name LIMIT 1')
-    .get() as ProviderConfigRaw | undefined;
-  return first ? hydrateProvider(first) : null;
+  const available = list(db, { enabled: true });
+  return available.find((provider) => provider.is_default) ?? available[0] ?? null;
 }
 
 /**
  * Convenience: return `{ kind, model }` for the default provider, picking
- * the first enabled model when available. Returns `{ kind: 'zai', model: undefined }`
- * as ultimate fallback.
+ * the first enabled model when available. Returns `{ kind: 'openai', model: undefined }`
+ * as the default format.
  */
 export function getDefaultAndModel(db: DB): { kind: string; model: string | undefined } {
   const prov = getDefault(db);
-  if (!prov) return { kind: 'zai', model: undefined };
+  if (!prov) return { kind: 'openai', model: undefined };
   const list = models.list(db, prov.id, true);
-  return { kind: prov.kind, model: list[0]?.model_id };
+  return { kind: prov.id, model: list[0]?.model_id };
 }
 
-export function get(db: DB, id: string): ProviderConfig | null {
+function getStored(db: DB, id: string): ProviderConfig | null {
   const row = db
     .prepare('SELECT * FROM provider_configs WHERE id = ?')
     .get(id) as ProviderConfigRaw | undefined;
   return row ? hydrateProvider(row) : null;
 }
 
+export function get(db: DB, id: string): ProviderConfig | null {
+  const provider = getStored(db, id);
+  return provider && isAvailable(provider) ? provider : null;
+}
+
 export function upsert(db: DB, input: UpsertProviderInput): ProviderConfig {
   const now = new Date().toISOString();
-  const existing = get(db, input.id);
+  const existing = getStored(db, input.id);
 
   if (existing) {
     db
@@ -118,7 +123,7 @@ export function upsert(db: DB, input: UpsertProviderInput): ProviderConfig {
       .run(input.id);
   }
 
-  return get(db, input.id)!;
+  return getStored(db, input.id)!;
 }
 
 export function del(db: DB, id: string): void {

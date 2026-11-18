@@ -36,7 +36,6 @@ import { getSandboxManager, resolveDriver } from '@mcp/services/sandbox/index.js
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 import type { NodeManifest } from '@mcp/services/sandbox/manifest-detector/types.js';
-import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import type { SandboxManager } from '@mcp/services/sandbox/sandbox-manager.js';
 import { getServiceSupervisorStores } from '@mcp/company/services/service-supervisor/stores.js';
 import { validateQaRunConfig } from '@mcp/services/qa/config-validator.js';
@@ -64,67 +63,6 @@ function inferExternalNodePort(stack: SandboxStack, manifest: NodeManifest): num
   if (stack === 'angular' || /\bng\s+serve\b/.test(script)) return 4200;
   if (/\bnext\s+(dev|start)\b/.test(script)) return 3000;
   return 5173;
-}
-
-/**
- * Wire a session to the SHARED Chrome Service singleton (v4.0).
- *
- * - When the service is enabled and running: persist
- *   `PLAYWRIGHT_WS_ENDPOINT` (auto-source) into the session's env
- *   store and trigger a `.env` sync on any live container so the
- *   value is available to `npx playwright test` immediately.
- * - When the service is absent / disabled / errored: log a warning
- *   and continue. The QA agent will surface a clear diagnosis via
- *   `qa_get_browser_endpoint`.
- *
- * B7 fix: the `.env` sync runs UNCONDITIONALLY. Only the
- * `PLAYWRIGHT_WS_ENDPOINT` upsert depends on the Chrome Service being
- * up — the `PLAYWRIGHT_BASE_URL_*` / `SERVICE_URL_*` family is minted
- * independently (`syncManagedEnvs`) and used to be silently dropped
- * from containers when this function early-returned on a stopped
- * Chrome Service. Both upsert and sync are idempotent, so re-running
- * the wiring is safe.
- *
- * Best-effort throughout: never throws to the provision path.
- */
-async function wireSessionToChromeService(
-  companySessionId: string,
-  manager: SandboxManager,
-): Promise<void> {
-  const svc = tryGetChromeService();
-  if (!svc) {
-    console.warn(
-      `[sandbox-service] chrome service singleton not wired — session ${companySessionId} will not have PLAYWRIGHT_WS_ENDPOINT`,
-    );
-  } else {
-    const state = await svc.getEndpoint();
-    if (state.status !== 'running') {
-      console.log(
-        `[sandbox-service] chrome service status=${state.status} — session ${companySessionId} provisions without PLAYWRIGHT_WS_ENDPOINT (operator must enable in Admin)`,
-      );
-    } else {
-      // Write the endpoint directly so brand-new sessions (not yet seen by
-      // the backfill loop in `ChromeService.enable`) get it before the
-      // first .env sync. The auto source means env_set tools won't
-      // surface this row as user-editable.
-      const envStore = getCompanySessionEnvStore();
-      if (envStore) {
-        try {
-          await envStore.upsert(companySessionId, 'PLAYWRIGHT_WS_ENDPOINT', state.wsEndpoint, false, {
-            source: 'auto',
-          });
-        } catch (e) {
-          console.warn(
-            `[sandbox-service] env upsert ${companySessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
-          );
-        }
-      }
-    }
-  }
-  // Push to live containers so .env is up-to-date — ALWAYS, so the
-  // PLAYWRIGHT_BASE_URL_* / SERVICE_URL_* rows reach the container even
-  // when the Chrome Service is down.
-  await manager.syncEnvsToAllContainers(String(companySessionId));
 }
 
 // Module-level binding for the env store, wired at boot from server.ts
@@ -427,22 +365,10 @@ export class SandboxService {
       return null;
     }
 
-    // QA wiring v4.0: when the session has a role with the
-    // `qa-playwright` skill (`includeE2e=true`), point it at the
-    // SHARED Chrome Service singleton. The Chrome Service container
-    // is provisioned independently by the operator via the Admin
-    // Panel — we just inject `PLAYWRIGHT_WS_ENDPOINT` into the
-    // session env. When the service is disabled, the agent will get
-    // a clear `alive:false` from `qa_get_browser_endpoint` instead
-    // of a confusing connection error mid-spec.
     if (includeE2e) {
-      try {
-        await wireSessionToChromeService(this.ctx.companySessionId, manager);
-      } catch (e) {
-        console.warn(
-          `[sandbox-service] chrome service wiring failed for session ${this.sessionKey}: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
+      await manager.syncEnvsToAllContainers(this.ctx.companySessionId).catch((error: unknown) => {
+        console.warn('[sandbox-service] QA environment sync failed:', error);
+      });
       // B7 — validate the playwright.config.ts contract right after the
       // E2E bootstrap so drifted configs surface on the board at
       // provision time (non-fatal warning), not only when qa_start_run

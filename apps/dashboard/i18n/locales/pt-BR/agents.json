@@ -511,7 +511,7 @@
   "qa.suite": "suíte",
   "qa.started": "Iniciada em {{date}} · {{summary}}",
   "qa.error": "Erro",
-  "qa.errorClass.sidecar_down": "Chrome Service indisponível — reinicie em Admin → Chrome Service.",
+  "qa.errorClass.sidecar_down": "A conexão com o navegador Playwright caiu. Confira o endpoint configurado para a suíte.",
   "qa.errorClass.reporter_unreachable": "O reporter de testes não conseguiu alcançar o dashboard — confira MCP_PUBLIC_URL e se o container acessa a http-api.",
   "qa.errorClass.config_invalid": "playwright.config.ts quebra o contrato de QA — use \"Restaurar config QA\" nesta aba.",
   "qa.errorClass.orphan": "Sem progresso do reporter por 10 minutos — o watchdog encerrou esta execução. Verifique o wiring do reporter antes de rodar de novo.",

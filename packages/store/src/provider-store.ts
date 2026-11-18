@@ -73,8 +73,13 @@ export class ProviderStore {
   deleteProvider(id: string): void { providers.del(this.db, id); }
 
   // ─── Models ────────────────────────────────────────────────────
-  listModels(providerId: string, onlyEnabled = false): ProviderModel[] { return models.list(this.db, providerId, onlyEnabled); }
-  listAllModels(): ProviderModel[] { return models.listAll(this.db); }
+  listModels(providerId: string, onlyEnabled = false): ProviderModel[] {
+    return this.getProvider(providerId) ? models.list(this.db, providerId, onlyEnabled) : [];
+  }
+  listAllModels(): ProviderModel[] {
+    const available = new Set(this.listProviders().map(provider => provider.id));
+    return models.listAll(this.db).filter(model => available.has(model.provider_id));
+  }
   replaceModelsFromSource(providerId: string, source: string, modelInputs: UpsertModelInput[]): void { models.replaceFromSource(this.db, providerId, source, modelInputs); }
   updateModel(providerId: string, modelId: string, mode: string, patch: Parameters<typeof models.update>[4]): void { models.update(this.db, providerId, modelId, mode, patch); }
   deleteManualModel(providerId: string, modelId: string, mode: string): number { return models.remove(this.db, providerId, modelId, mode); }

@@ -8,14 +8,12 @@
  * Three concrete implementations:
  *   - `PlainFetchBackend`   — wraps the existing `UrlFetcher` (fast,
  *                              same network behavior as before).
- *   - `BrowserBackend`      — connects to `ChromeService`'s Playwright
- *                              WebSocket endpoint and lets Chromium load
- *                              the page (slow, handles SPAs/Cloudflare).
+ *   - `BrowserBackend`      — renders dynamic pages in desktop Chromium.
  *   - `EscalatingFetcher`   — composite. Always tries plain first; falls
  *                              back to browser only when `detectBlocked`
  *                              flags the result.
  *
- * `BrowserBackend` degrades gracefully when ChromeService is disabled —
+ * `BrowserBackend` falls back to plain fetching when no browser is available —
  * `isAvailable()` returns false and the escalating wrapper keeps the
  * original plain result (annotated with `blockedSignals` for visibility).
  *
@@ -101,18 +99,13 @@ function fetchedToResult(page: FetchedPage, via: 'plain' | 'browser'): RenderRes
 // ─── BrowserBackend ───────────────────────────────────────────────────
 
 /**
- * Connection provider for the browser backend. Returns a usable Playwright
- * `Browser` instance OR null when the underlying ChromeService is disabled
- * / unhealthy. Kept as an injected function so the backend stays decoupled
- * from `ChromeService` and is trivially testable with a fake browser.
+ * Returns the available desktop browser host. Injected so the crawler
+ * can run headlessly and tests can provide a fixture.
  */
 export type BrowserConnector = () => Promise<BrowserHandle | null>;
 
 /**
- * Minimal Playwright surface area we need. Avoids depending on
- * `playwright-core` types at compile time in this file — the real
- * `ChromeService.connectBrowser` returns a real `playwright.Browser`
- * which structurally satisfies this shape.
+ * Minimal browser surface used by document rendering.
  */
 export interface BrowserHandle {
   newContext(opts: {
@@ -176,8 +169,7 @@ export class BrowserBackend implements RenderBackend {
     try {
       const browser = await this.connect();
       if (!browser) return false;
-      // Don't `browser.close()` — connector owns lifecycle (likely a long-
-      // lived ChromeService instance). Just confirming we could connect.
+      // The connector owns the browser host lifecycle.
       return true;
     } catch {
       return false;
@@ -201,7 +193,7 @@ export class BrowserBackend implements RenderBackend {
     // `opts.forceBrowser` ignored here — we're already the browser path.
     const browser = await this.connect();
     if (!browser) {
-      throw new Error('browser backend unavailable: ChromeService not connected');
+      throw new Error('Electron browser backend unavailable');
     }
     const timeoutMs = opts.timeoutMs ?? 30_000;
     let context: BrowserContextHandle | null = null;

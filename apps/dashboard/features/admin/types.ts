@@ -1,19 +1,4 @@
-export type ProviderKind =
-  | 'anthropic'
-  | 'claude-code'
-  | 'openai'
-  | 'deepseek'
-  | 'zai'
-  | 'gemini'
-  | 'bedrock'
-  | 'copilot'
-  | 'chatgpt'
-  | 'google-oauth'
-  | 'openrouter'
-  | 'kimi-code'
-  | 'cloudflare'
-  | 'moonshot'
-  | 'mistral';
+export type ProviderKind = import('@mcp/shared/providers/local-edition.js').LocalProviderKind;
 
 /**
  * Renderer-safe provider visual identity, shipped by the backend from the
@@ -90,20 +75,7 @@ export interface TestResult {
   error?: string;
 }
 
-export const KINDS: ProviderKind[] = [
-  'anthropic',
-  'claude-code',
-  'openai',
-  'gemini',
-  'bedrock',
-  'copilot',
-  'chatgpt',
-  'google-oauth',
-  'openrouter',
-  'kimi-code',
-  'cloudflare',
-  'moonshot',
-];
+export { LOCAL_PROVIDER_KINDS as KINDS } from '@mcp/shared/providers/local-edition.js';
 
 export interface CopilotOpts {
   edition: 'individual' | 'enterprise';
