@@ -88,7 +88,7 @@ describe('active memory curation and preserved legacy import', () => {
     expect((await app.request(`/api/agent-memory/${row.id}/archive`, jsonRequest('POST', {}))).status).toBe(200);
     expect(db.getAgentMemoryById(row.id)?.archived_at).not.toBeNull();
     expect((await app.request(`/api/agent-memory/${row.id}/restore`, jsonRequest('POST', {}))).status).toBe(200);
-    expect(db.getAgentMemoryById(row.id)?.archived_at).toBeNull(); expect(embed).not.toHaveBeenCalled();
+    expect(db.getAgentMemoryById(row.id)).toMatchObject({ archived_at: null, source: 'manual' }); expect(embed).not.toHaveBeenCalled();
   });
 
   it('imports manual/index notes once, preserving originals, versions, tags, file hashes and category provenance', async () => {

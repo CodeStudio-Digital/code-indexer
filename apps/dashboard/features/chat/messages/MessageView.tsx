@@ -11,7 +11,6 @@ import { SpecPromptView } from '../prompts/SpecPromptView.js';
 import { TaskListReview } from '../prompts/TaskListReview.js';
 import type {
   ContentBlock,
-  MessageRow,
   PersistedMessage,
   PersistedTasksState,
   PromptHandlers,
@@ -62,151 +61,15 @@ export function taskListIsApprove(input: unknown): boolean {
   });
 }
 
-interface MessageViewProps {
-  message: PersistedMessage;
-  /** DB id of the persisted message row — used to fork from a user turn. */
-  messageId?: number;
-  /** Session id — needed to lazy-fetch attachment base64 stripped from the
-   *  list payload (see sessions.ts trimMessageBlocks). */
-  sessionId?: string;
-  toolResultsById: ReadonlyMap<string, ToolResultView>;
-  usage?: MessageRow;
-  onAnswer: PromptHandlers['onAnswer'];
-  onPlanResponse: PromptHandlers['onPlanResponse'];
-  onTasksResponse: PromptHandlers['onTasksResponse'];
-  onDecide?: PromptHandlers['onDecide'];
-  onSpecResponse?: PromptHandlers['onSpecResponse'];
-  onFork?: PromptHandlers['onFork'];
-  onRollback?: PromptHandlers['onRollback'];
-  rollbackPendingSeq?: number | null;
-  /** Persisted task list state from the session task projection — used to overlay live
-   *  task statuses on top of the frozen tool_use input snapshot. */
-  tasksState?: PersistedTasksState | null;
-  /** tool_use id of the session's CURRENT task list. Only the card with this
-   *  id overlays `tasksState`; superseded cards render their frozen snapshot. */
-  activeTasksToolUseId?: string | null;
-}
-
-export const MessageView = React.memo(MessageViewInner, (prev, next) => {
-  // Persisted messages are immutable once committed; reference equality on
-  // `message` and `usage` is enough. `toolResultsById` / `tasksState` change
-  // refs when the session refetches, which is exactly when we WANT a rerender.
-  return (
-    prev.message === next.message &&
-    prev.messageId === next.messageId &&
-    prev.sessionId === next.sessionId &&
-    prev.usage === next.usage &&
-    prev.toolResultsById === next.toolResultsById &&
-    prev.tasksState === next.tasksState &&
-    prev.activeTasksToolUseId === next.activeTasksToolUseId &&
-    prev.onAnswer === next.onAnswer &&
-    prev.onPlanResponse === next.onPlanResponse &&
-    prev.onTasksResponse === next.onTasksResponse &&
-    // Omitting these made a changed handler identity invisible to the card that
-    // uses it — a pending decision/spec card kept calling the previous closure.
-    prev.onDecide === next.onDecide &&
-    prev.onSpecResponse === next.onSpecResponse &&
-    prev.onFork === next.onFork &&
-    prev.onRollback === next.onRollback &&
-    prev.rollbackPendingSeq === next.rollbackPendingSeq
-  );
-});
-
-function MessageViewInner({
-  message,
-  messageId,
-  sessionId,
-  toolResultsById,
-  usage,
-  onAnswer,
-  onPlanResponse,
-  onTasksResponse,
-  onDecide,
-  onSpecResponse,
-  onFork,
-  onRollback,
-  rollbackPendingSeq,
-  tasksState,
-  activeTasksToolUseId,
-}: MessageViewProps) {
-  const cacheRead = usage?.cache_read_tokens ?? 0;
-  const tokenBadge =
-    usage && (usage.input_tokens > 0 || usage.output_tokens > 0) ? (
-      <span className="text-[10px] text-muted-foreground tabular-nums ml-1.5 inline-flex items-center gap-1">
-        <span>
-          ↑{usage.input_tokens.toLocaleString()} ↓{usage.output_tokens.toLocaleString()}
-        </span>
-        {cacheRead > 0 && (
-          <span className="text-emerald-600 dark:text-emerald-400">⚡{cacheRead.toLocaleString()}</span>
-        )}
-      </span>
-    ) : null;
-
-  if (message.role === 'user')
-    return (
-      <UserMessage
-        message={message}
-        sessionId={sessionId}
-        messageId={messageId}
-        tokenBadge={tokenBadge}
-        onFork={onFork && messageId != null ? () => onFork(messageId) : undefined}
-        onRollback={onRollback && messageId != null ? () => onRollback(messageId) : undefined}
-        rollbackPending={rollbackPendingSeq === messageId}
-        rollbackDisabled={rollbackPendingSeq != null}
-      />
-    );
-  if (message.role === 'tool') return null;
-
-  // Concatenate every text block of the assistant turn into a single
-  // markdown string for the per-message copy button.
-  const assistantMarkdown = message.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text ?? '')
-    .join('\n\n');
-
-  return (
-    <div className="group/msg w-full">
-      <article className="relative w-full min-w-0 text-foreground">
-        <div className="absolute right-0 top-0 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100">
-          {tokenBadge}
-          {assistantMarkdown && <CopyMarkdownButton text={assistantMarkdown} />}
-        </div>
-        <div className="min-w-0 pr-1">
-          {message.content.map((b, i) =>
-            renderAssistantBlock(
-              b,
-              i,
-              { onAnswer, onPlanResponse, onTasksResponse, onDecide, onSpecResponse },
-              toolResultsById,
-              tasksState,
-              activeTasksToolUseId,
-              sessionId,
-            ),
-          )}
-        </div>
-      </article>
-    </div>
-  );
-}
-
-function UserMessage({
-  message,
-  sessionId,
-  messageId,
-  tokenBadge,
-  onFork,
-  onRollback,
-  rollbackPending,
-  rollbackDisabled,
+export const UserMessage = React.memo(function UserMessage({
+  message, sessionId, messageId, onFork, onRollback, rollbackPendingSeq,
 }: {
   message: PersistedMessage;
   sessionId?: string;
   messageId?: number;
-  tokenBadge: React.ReactNode;
-  onFork?: () => void;
-  onRollback?: () => void;
-  rollbackPending?: boolean;
-  rollbackDisabled?: boolean;
+  onFork?: PromptHandlers['onFork'];
+  onRollback?: PromptHandlers['onRollback'];
+  rollbackPendingSeq?: number | null;
 }) {
   const { t } = useTranslation('chat');
   // Suppress the synthetic tool-image plumbing caption ("(Image(s) attached
@@ -265,48 +128,13 @@ function UserMessage({
   const needsReadingWidth = text.length > LARGE_MARKDOWN_CHARS;
 
   return (
-    <div className="group/user group/msg flex w-full justify-end py-1">
+    <div className="flex w-full justify-end py-1">
       <article className={cn('relative min-w-0 max-w-[min(82%,42rem)]', needsReadingWidth && 'w-full')}>
-        <div className="absolute right-1 -top-5 z-10 flex h-5 items-center justify-end gap-2 text-[10px] text-muted-foreground/75 opacity-0 group-hover/user:opacity-100 focus-within:opacity-100">
-          <div className={cn(
-            'flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/user:opacity-100 focus-within:opacity-100',
-            rollbackPending && 'opacity-100',
-          )}>
-            {onFork && (
-              <button
-                type="button"
-                onClick={onFork}
-                title={t('messages.forkTitle')}
-                className="group/action inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all duration-200"
-              >
-                <GitBranch className="h-3 w-3" />
-                <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/action:max-w-24 group-hover/action:opacity-100 group-focus/action:max-w-24 group-focus/action:opacity-100">{t('messages.fork')}</span>
-              </button>
-            )}
-            {onRollback && (
-              <button
-                type="button"
-                onClick={onRollback}
-                disabled={rollbackDisabled}
-                aria-busy={rollbackPending}
-                title={t('messages.rollbackTitle')}
-                className="group/action inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all duration-200 disabled:pointer-events-none disabled:opacity-60"
-              >
-                {rollbackPending
-                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                  : <RotateCcw className="h-3 w-3" />}
-                <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/action:max-w-24 group-hover/action:opacity-100 group-focus/action:max-w-24 group-focus/action:opacity-100">{t('messages.rollback')}</span>
-              </button>
-            )}
-            {text && <CopyMarkdownButton text={text} />}
-          </div>
-          {tokenBadge}
-        </div>
         {hasUserBody && (
           <div className="rounded-2xl bg-muted/70 px-4 py-2.5 text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.35)]">
             {text && (
               <div className="text-[13px] leading-[1.45rem]">
-                <Markdown text={text} />
+                <Markdown text={text} showDocumentCopy={false} />
               </div>
             )}
             {docs.length > 0 && (
@@ -349,10 +177,31 @@ function UserMessage({
             ))}
           </div>
         )}
+        {(text || (messageId != null && (onFork || onRollback))) && (
+          <footer className="mt-0.5 flex flex-wrap items-center justify-end gap-0.5 text-muted-foreground" data-user-actions>
+            {messageId != null && onFork && (
+              <button type="button" title={t('messages.forkTitle')} aria-label={t('messages.forkTitle')}
+                className={userActionClass} onClick={() => onFork(messageId)}>
+                <GitBranch aria-hidden className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {messageId != null && onRollback && (
+              <button type="button" title={t('messages.rollbackTitle')} aria-label={t('messages.rollbackTitle')}
+                aria-busy={rollbackPendingSeq === messageId} disabled={rollbackPendingSeq != null}
+                className={userActionClass} onClick={() => onRollback(messageId)}>
+                {rollbackPendingSeq === messageId ? <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
+                  : <RotateCcw aria-hidden className="h-3.5 w-3.5" />}
+              </button>
+            )}
+            {text && <CopyMarkdownButton text={text} iconOnly />}
+          </footer>
+        )}
       </article>
     </div>
   );
-}
+});
+
+const userActionClass = 'inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50';
 
 /**
  * User-uploaded document chip. Click lazy-fetches the full base64 (when
@@ -465,7 +314,7 @@ export function renderAssistantBlock(
   if (b.type === 'text') {
     return (
       <div key={i} className="text-[13px] leading-5 text-foreground/90">
-        <Markdown text={b.text ?? ''} />
+        <Markdown text={b.text ?? ''} showDocumentCopy={false} />
       </div>
     );
   }

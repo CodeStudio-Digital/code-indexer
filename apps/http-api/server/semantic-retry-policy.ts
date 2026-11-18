@@ -24,5 +24,7 @@ export function nextSemanticRetry(error: unknown, previousAttempt = 0, now = Dat
   const ceiling = busy ? 5_000 : 15 * 60_000;
   const delay = Math.max(Math.min(ceiling, base * 2 ** Math.min(attempt - 1, 10)),
     retryAfter ? Math.min(86_400_000, Number(retryAfter[1]) * 1_000) : 0);
-  return { attempt, not_before_ms: now + delay, blocked: permanent || (!busy && attempt >= 8) };
+  // A quota window is temporary even after many requests. Keep a bounded
+  // cooldown; only permanent/unknown repeated failures require manual repair.
+  return { attempt, not_before_ms: now + delay, blocked: permanent || (!busy && !rateLimited && attempt >= 8) };
 }

@@ -4,6 +4,7 @@ import type { Migration } from './types.js';
 export const mcpOAuthResource274: Migration = {
   version: 274,
   name: 'mcp_oauth_resource',
+  scope: 'central',
   up(db) {
     // Project databases share this migration lineage but trim global OAuth tables.
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mcp_oauth_registrations'").get()) return;

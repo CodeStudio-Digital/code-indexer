@@ -29,6 +29,8 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 interface OpenStreamOpts {
+  /** A confirmed new bus supersedes the reader of the completed prior run. */
+  freshAttach?: boolean;
   url: string;
   method: 'POST' | 'GET';
   body?: Record<string, unknown>;

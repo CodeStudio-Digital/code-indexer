@@ -78,6 +78,7 @@ function makeDeps(overrides: Partial<PolicyShadowDeps> = {}, ctx: Partial<Policy
       agentRunId: ROOT_RUN_ID,
     },
     log: () => undefined,
+    mode: { shadow: true },
     ...overrides,
   };
 }
@@ -95,6 +96,14 @@ beforeEach(() => {
 });
 
 describe('createPolicyShadowPort', () => {
+  it('leaves production calls free of optional comparison writes', () => {
+    const created = createPolicyShadowPort(makeDeps({ mode: undefined }));
+    expect(created).toBeNull();
+    expect(persistence.decisions).toEqual([]);
+    expect(persistence.comparisons).toEqual([]);
+    expect(persistence.capabilitySets).toEqual([]);
+  });
+
   it('returns null when every flag is off (port absent = byte-identical path)', () => {
     expect(createPolicyShadowPort(makeDeps({
       mode: { shadow: false, catalog: false, enforce: false, resourceGrants: false },

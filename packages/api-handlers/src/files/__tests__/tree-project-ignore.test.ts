@@ -21,7 +21,7 @@ function file(root: string, rel: string): void {
 
 function handlers(root: string) {
   const deps = {
-    db: { getProject: (id: number) => id === 1 ? { id, name: 'test', root_path: root } : null },
+    db: { getProjectCatalogEntry: (id: number) => id === 1 ? { id, name: 'test', root_path: root } : null },
     fileLocalHistoryStore: {},
   } as unknown as HandlerDeps;
   return createFilesHandlers(deps);
@@ -56,5 +56,9 @@ describe('files.tree project-aware ignores', () => {
 
     const tree = await handlers(root).tree({ projectId: 1, root: 'services/App', maxDepth: 1 }, {} as never);
     expect(tree.children?.map((entry) => entry.name)).toEqual(['App.csproj', 'Program.cs']);
+    file(root, 'services/App/deeper/bin/Debug/App.dll');
+    file(root, 'services/App/deeper/Visible.cs');
+    const child = await handlers(root).tree({ projectId: 1, root: 'services/App/deeper', maxDepth: 1 }, {} as never);
+    expect(child.children?.map(entry => entry.name)).toEqual(['Visible.cs']);
   });
 });

@@ -9,6 +9,14 @@ function fakeRunner(): CoderRunner {
 }
 
 describe('wireRunnerEventsToBus terminal ordering', () => {
+  it('keeps encrypted provider continuation out of the renderer and SSE buffer', () => {
+    const runner = fakeRunner();
+    const bus = createBus(new AbortController());
+    wireRunnerEventsToBus(runner, bus);
+    runner.emit('message_complete', { role: 'assistant', content: [{ type: 'text', text: 'ok' }],
+      providerReplay: { format: 'openai-responses-v1', scope: 's', items: [{ encrypted_content: 'private' }] } }, null, 'assistant:run:message:1');
+    expect(bus.buffer[0]?.data).toEqual({ message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }, usage: null, operation_id: 'assistant:run:message:1' });
+  });
   it('keeps the bus open when the worker defers done until transcript persistence', () => {
     const runner = fakeRunner();
     const bus = createBus(new AbortController());

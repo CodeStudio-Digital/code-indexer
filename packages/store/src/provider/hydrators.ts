@@ -6,6 +6,7 @@ import type {
   ProviderModel,
 } from './types.js';
 import { getOpenAIApiModelMetadata, isPublicOpenAIApi } from '@mcp/shared/providers/openai-api-models.js';
+import { getZaiModelReasoning } from '@mcp/shared/providers/zai-models.js';
 
 function normalizeNativeReasoningLevel(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -117,8 +118,12 @@ function normalizeStoredLevels(levels: unknown[] | null): string[] | null {
 export function hydrateModel(r: ProviderModelRaw): ProviderModel {
   const published = isPublicOpenAIApi(r.provider_kind, r.provider_base_url)
     ? getOpenAIApiModelMetadata(r.model_id) : undefined;
-  const defaultReasoningLevel = normalizeNativeReasoningLevel(r.default_reasoning_level);
-  const supportedReasoningLevels = normalizeStoredLevels(
+  const zaiReasoning = r.provider_kind === 'zai' ? getZaiModelReasoning(r.model_id) : undefined;
+  const storedDefault = normalizeNativeReasoningLevel(r.default_reasoning_level);
+  const defaultReasoningLevel = zaiReasoning
+    ? zaiReasoning.supportedReasoningLevels.find(level => level === storedDefault?.toLowerCase()) ?? null
+    : storedDefault;
+  const supportedReasoningLevels = zaiReasoning?.supportedReasoningLevels ?? normalizeStoredLevels(
     parseJson<unknown[] | null>(r.supported_reasoning_levels, null),
   ) ?? published?.supportedReasoningLevels ?? null;
   // Repair pre-fix API catalogs at the read boundary: no network, polling or

@@ -3,6 +3,7 @@ import { copyFile, open, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { JsonValue, SessionStorageFaultContext, SessionStorageFaultInjector } from './types.js';
+import { measureStorage, measureStorageSync } from './storage-timing.js';
 
 const UNSUPPORTED_DIRECTORY_SYNC = new Set(['EISDIR', 'EINVAL', 'ENOTSUP', 'EPERM', 'EACCES']);
 const TRANSIENT_WINDOWS_RENAME_ERRORS = new Set(['EPERM', 'EACCES', 'EBUSY']);
@@ -113,17 +114,19 @@ export async function atomicWriteFile(
   const temporaryPath = join(parent, `.${basename(targetPath)}.tmp-${process.pid}-${randomUUID()}`);
   let handle;
   try {
-    handle = await open(temporaryPath, 'wx', options.mode ?? 0o600);
+    handle = await measureStorage('atomic.open', () => open(temporaryPath, 'wx', options.mode ?? 0o600), targetPath);
     await injectFault(options, 'atomic:before-temp-write', targetPath);
-    await handle.writeFile(data);
-    await injectFault(options, 'atomic:after-temp-write-before-fsync', targetPath);
-    await handle.sync();
+    await measureStorage('atomic.write', () => handle!.writeFile(data), targetPath);
+    await measureStorage('atomic.fsync', async () => {
+      await injectFault(options, 'atomic:after-temp-write-before-fsync', targetPath);
+      await handle!.sync();
+    }, targetPath);
     await injectFault(options, 'atomic:after-temp-fsync-before-rename', targetPath);
-    await handle.close();
+    await measureStorage('atomic.close', () => handle!.close(), targetPath);
     handle = undefined;
-    await retryTransientRename(() => { options.beforePublish?.(); return rename(temporaryPath, targetPath); });
+    await measureStorage('atomic.rename', () => retryTransientRename(() => { options.beforePublish?.(); return rename(temporaryPath, targetPath); }), targetPath);
     await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
-    await fsyncDirectory(parent);
+    await measureStorage('atomic.directory-fsync', () => fsyncDirectory(parent), targetPath);
     await injectFault(options, 'atomic:after-directory-fsync', targetPath);
   } catch (error) {
     await handle?.close().catch(() => undefined);
@@ -173,7 +176,8 @@ export async function atomicWriteJson(
   value: unknown,
   options: AtomicFileOptions = {},
 ): Promise<void> {
-  await atomicWriteFile(targetPath, `${JSON.stringify(value, null, 2)}\n`, options);
+  const serialized = measureStorageSync('atomic.serialize', () => `${JSON.stringify(value, null, 2)}\n`, targetPath);
+  await atomicWriteFile(targetPath, serialized, options);
 }
 
 function canonicalize(value: unknown, seen: Set<object>): JsonValue | undefined {

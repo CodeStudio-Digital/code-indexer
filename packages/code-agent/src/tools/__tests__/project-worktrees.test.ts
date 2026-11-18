@@ -44,6 +44,10 @@ describe('project worktree inventory and authority', () => {
     expect(await resolveProjectWorktree(repo, external)).toBe(external);
     await expect(resolveProjectWorktree(repo, root)).rejects.toThrow('does not belong');
     await expect(resolveProjectWorktree(repo, { path: external })).rejects.toThrow('non-empty');
+    const subdirectory = join(external, 'subproject');
+    await mkdir(subdirectory);
+    expect((await listProjectWorktrees(subdirectory)).worktrees.find(item => item.primary)?.branch).toBe('external');
+    expect(await resolveProjectWorktree(subdirectory, external)).toBeNull();
   });
 
   it('reports non-Git projects and rejects deleted worktrees without changing main', async () => {
@@ -54,6 +58,22 @@ describe('project worktree inventory and authority', () => {
     await rm(external, { recursive: true, force: true });
     await expect(resolveProjectWorktree(repo, external)).rejects.toThrow();
     expect(git(repo, 'branch', '--show-current')).toBe('main');
+  });
+
+  it('uses the working directory of an absorbed submodule as its primary checkout', async () => {
+    const parent = join(root, 'superproject');
+    await mkdir(parent);
+    git(parent, 'init', '-b', 'main');
+    git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--', repo, 'backend');
+    const sub = join(parent, 'backend');
+    const linked = join(root, 'backend feature');
+    git(sub, 'worktree', 'add', '-b', 'feature', linked);
+    const { worktrees } = await listProjectWorktrees(sub);
+    expect(worktrees.map(item => join(item.path)).sort()).toEqual([sub, linked].sort());
+    expect(worktrees.find(item => item.primary)?.branch).toBe('main');
+    expect(await resolveProjectWorktree(sub, sub)).toBeNull();
+    expect(await resolveProjectWorktree(sub, linked)).toBe(linked);
+    await expect(resolveProjectWorktree(sub, join(parent, '.git', 'modules', 'backend'))).rejects.toThrow();
   });
 
   it('does not accept a checkout replaced with a different Git repository', async () => {
@@ -67,7 +87,7 @@ describe('project worktree inventory and authority', () => {
   it('parses detached, missing and whitespace-bearing paths without unquoting', () => {
     expect(parseWorktrees('worktree /repo\0HEAD abc\0branch refs/heads/main\0\0worktree /repo other\0HEAD def\0detached\0prunable missing\0\0', '/repo'))
       .toEqual([
-        { path: '/repo', head: 'abc', branch: 'main', primary: true, locked: false, prunable: false },
+        { path: '/repo', head: 'abc', branch: 'main', primary: true, repositoryMain: true, locked: false, prunable: false },
         { path: '/repo other', head: 'def', branch: null, primary: false, locked: false, prunable: true },
       ]);
   });

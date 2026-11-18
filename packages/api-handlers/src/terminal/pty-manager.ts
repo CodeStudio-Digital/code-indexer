@@ -25,7 +25,7 @@ export interface IPty {
   cols: number;
   rows: number;
   onData(listener: (data: string) => void): { dispose(): void };
-  onExit(listener: (e: { exitCode: number; signal?: number }) => void): { dispose(): void };
+  onExit(listener: (e: { exitCode: number | null; signal?: number }) => void): { dispose(): void };
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(signal?: string): void;

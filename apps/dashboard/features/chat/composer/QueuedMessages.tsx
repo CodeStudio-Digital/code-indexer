@@ -1,84 +1,68 @@
-/**
- * Strip of queued follow-up messages, rendered above the composer while the
- * agent runs. Parked ('end-of-session') items wait for the run to finish;
- * 'sent' ('next-turn') items show a transient delivery confirmation. Each
- * parked item can be sent now (promote) or removed.
- */
 import { useTranslation } from 'react-i18next';
-import { ArrowRightToLine, Check, ListEnd, Paperclip, Send, X } from 'lucide-react';
+import { AlertCircle, ListEnd, Loader2, Paperclip, Play, RotateCcw, Send, X } from 'lucide-react';
 import type { QueuedMessage } from './useMessageQueue.js';
 
 interface Props {
   items: QueuedMessage[];
-  onPromote: (item: QueuedMessage) => void;
-  onRemove: (id: number) => void;
+  paused?: boolean;
+  storageError?: string;
+  onResume?: () => void;
+  onPromote: (id: string) => void;
+  onRemove: (id: string) => void;
 }
 
-export function QueuedMessages({ items, onPromote, onRemove }: Props) {
+export function QueuedMessages({ items, paused, storageError, onResume, onPromote, onRemove }: Props) {
   const { t } = useTranslation('chat');
-  if (items.length === 0) return null;
+  if (!items.length) return null;
   return (
-    <div className="flex flex-col gap-1 mb-2">
-      <div className="px-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-        {t('composer.queue.title', { defaultValue: 'Na fila' })} ({items.length})
+    <section aria-label={t('composer.queue.title')} className="mb-2 rounded-lg border bg-muted/20 text-xs">
+      <div className="flex items-center gap-2 px-2.5 py-1.5 text-muted-foreground">
+        <ListEnd className="h-3.5 w-3.5" />
+        <span className="flex-1">{t('composer.queue.title')} ({items.length})</span>
+        {paused && <span>{t('composer.queue.paused')}</span>}
+        {paused && items.some(item => item.status === 'pending') && onResume && (
+          <button type="button" className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted text-foreground"
+            onClick={onResume} aria-label={t('composer.queue.resume')}>
+            <Play className="h-3 w-3" />{t('composer.queue.resume')}
+          </button>
+        )}
       </div>
-      {items.map((it) => {
-        const sent = it.status === 'sent';
-        const isNext = it.mode === 'next-turn';
-        return (
-          <div
-            key={it.id}
-            className={`group flex items-center gap-2 h-7 pl-2 pr-1 rounded-md border text-[11px] ${
-              sent
-                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                : 'border-border bg-muted/40'
-            }`}
-          >
-            {sent ? (
-              <Check className="h-3 w-3 shrink-0" />
-            ) : isNext ? (
-              <ArrowRightToLine className="h-3 w-3 shrink-0 text-muted-foreground" />
-            ) : (
-              <ListEnd className="h-3 w-3 shrink-0 text-muted-foreground" />
-            )}
-            <span className="flex-1 min-w-0 truncate" title={it.text}>
-              {it.text}
-            </span>
-            {!!it.attachments?.length && (
-              <span
-                className="shrink-0 inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"
-                title={it.attachments.map((attachment) => attachment.name).join(', ')}
-              >
-                <Paperclip className="h-2.5 w-2.5" />
-                {it.attachments.length}
+      {storageError && <p role="status" className="px-2.5 pb-1.5 text-amber-500">{t('composer.queue.storageError')}</p>}
+      <ol className="max-h-44 overflow-y-auto overscroll-contain divide-y divide-border/60">
+        {items.map((item, index) => {
+          const sending = item.status === 'sending';
+          const accepted = item.status === 'accepted';
+          const failed = item.status === 'error';
+          const action = failed ? t('composer.queue.retry') : t('composer.queue.sendNow');
+          return (
+            <li key={item.id} data-queue-status={item.status} className="flex items-start gap-2 px-2.5 py-2">
+              <span className="w-4 shrink-0 pt-0.5 text-muted-foreground tabular-nums">
+                {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : failed ? <AlertCircle className="h-3.5 w-3.5 text-destructive" /> : index + 1}
               </span>
-            )}
-            <span className="shrink-0 text-[10px] text-muted-foreground">
-              {sent
-                ? t('composer.queue.sentNextTurn', { defaultValue: '→ próximo turno' })
-                : t('composer.queue.parkedEndOfSession', { defaultValue: '→ fim da sessão' })}
-            </span>
-            {!sent && (
-              <button
-                type="button"
-                onClick={() => onPromote(it)}
-                title={t('composer.queue.sendNow', { defaultValue: 'Enviar agora' })}
-                className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
-              >
-                <Send className="h-3 w-3" />
+              <div className="min-w-0 flex-1">
+                <p className="line-clamp-2 break-words whitespace-pre-wrap" title={item.text}>{item.text}</p>
+                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <span>{sending ? t('composer.queue.sending') : accepted ? t('composer.queue.accepted') : failed ? t('composer.queue.failed') : item.mode === 'next-turn' ? t('composer.queue.sendNow') : t('composer.queue.parkedEndOfSession')}</span>
+                  {!!item.attachments?.length && <span className="inline-flex items-center gap-0.5" title={item.attachments.map(attachment => attachment.name).join(', ')}>
+                    <Paperclip className="h-3 w-3" />{item.attachments.length}
+                  </span>}
+                </div>
+                {failed && <p role="alert" className="mt-1 break-words text-[11px] text-destructive">
+                  {item.error === 'queue-delivery-unconfirmed' ? t('composer.queue.unconfirmed') : item.error}
+                </p>}
+              </div>
+              <button type="button" disabled={sending || accepted} onClick={() => onPromote(item.id)} title={action} aria-label={action}
+                className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30">
+                {failed ? <RotateCcw className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => onRemove(it.id)}
-              title={t('composer.remove')}
-              className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        );
-      })}
-    </div>
+              <button type="button" disabled={sending || accepted} onClick={() => onRemove(item.id)} title={t('composer.remove')} aria-label={t('composer.remove')}
+                className="shrink-0 rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-30">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
   );
 }

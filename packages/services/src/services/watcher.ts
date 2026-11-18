@@ -1,12 +1,14 @@
 import { watch, type FSWatcher } from 'chokidar';
-import { basename, join, relative } from 'node:path';
-import { readdir } from 'node:fs/promises';
+import { join, relative } from 'node:path';
+import { readProjectDirectory } from '@mcp/shared/utils/project-directory-reads.js';
 import ignore from 'ignore';
 import { normalizeIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import {
   getProjectIgnoreRules,
   getProjectIgnoreRulesAsync,
+  getProjectDiscoveryCacheVersion,
   invalidateProjectDiscoveryCache,
+  isProjectDiscoveryMarker,
   shouldIgnoreProjectPath,
   type ProjectIgnoreRules,
 } from '@mcp/shared/utils/project-ignore.js';
@@ -107,21 +109,7 @@ const IGNORED_DIRS = new Set<string>([
   '.mcp-indexer',
 ]);
 
-const PROJECT_DISCOVERY_MARKERS = new Set([
-  'composer.json',
-  'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle',
-  'settings.gradle.kts', 'gradlew', 'mvnw', '.classpath',
-  'global.json', 'directory.build.props', 'directory.build.targets',
-  'directory.packages.props', 'nuget.config', 'projectversion.txt',
-]);
-
 const WATCHER_FLUSH_RETRY_MS = 250;
-
-function isProjectDiscoveryMarker(filePath: string): boolean {
-  const name = basename(filePath).toLowerCase();
-  return PROJECT_DISCOVERY_MARKERS.has(name)
-    || ['.csproj', '.fsproj', '.vbproj', '.sln', '.slnx'].some((suffix) => name.endsWith(suffix));
-}
 
 /**
  * Build the chokidar `ignored` predicate for one watched root. A dir name is
@@ -172,12 +160,15 @@ export async function countWatchedEntries(
   cap: number,
 ): Promise<number> {
   let count = 0;
+  const version = getProjectDiscoveryCacheVersion(rootPath);
   const stack: string[] = [rootPath];
+  let visited = 0;
   while (stack.length > 0) {
+    if (++visited % 32 === 0) await new Promise<void>(done => setImmediate(done));
     const dir = stack.pop()!;
     let entries;
     try {
-      entries = await readdir(dir, { withFileTypes: true });
+      entries = await readProjectDirectory(rootPath, dir, version);
     } catch {
       continue; // unreadable dir (perms/race) — skip, don't abort the probe
     }

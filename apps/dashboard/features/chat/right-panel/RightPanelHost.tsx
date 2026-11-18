@@ -152,8 +152,10 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
       return (
         <PanelBody>
           <ProjectPreview
-            key={props.projectId}
-            projectId={props.projectId}
+            key={props.preview.workspaceId ?? props.projectId}
+            projectId={props.preview.workspaceId ?? props.projectId}
+            runnerProjectId={props.projectId}
+            worktreePath={props.preview.worktreePath}
             pinnedPort={props.preview.pinnedPort}
             selectionEnabled={props.preview.selectionEnabled}
             framework={props.preview.framework}

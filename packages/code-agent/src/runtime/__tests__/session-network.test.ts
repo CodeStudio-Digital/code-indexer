@@ -39,13 +39,31 @@ describe('ordinary session networks', () => {
     expect(repeated.id).toBe(first.id);
     expect((await sessions.listSessions(2)).map(row => row.id)).toEqual([first.id]);
     expect(await network.config(first.id)).toMatchObject({ rootId: parentId, role: 'Investigate risks', enabled: true });
-    expect(await network.session(first.id)).toMatchObject({ provider: 'p2', model: 'm2', kind: 'coder', execution_mode_override: 'standard' });
+    expect(await network.session(first.id)).toMatchObject({ parent_session_id: parentId, provider: 'p2', model: 'm2', kind: 'coder', execution_mode_override: 'standard' });
     expect(await mailbox.messages(rootChatId(first.id))).toHaveLength(1);
     const second = await network.create(parentId, { title: 'Designer', role: 'Debate alternatives' }, 'b');
     expect(await mailbox.connected(first.id, second.id)).toBe(true);
     expect((await network.context(parentId))).toContain('Investigate risks');
     expect((await network.discover(parentId, 'Reviewer'))[0]?.id).toBe(first.id);
     expect((await network.session(first.id)).metadata?.network_root_id).toBe(parentId);
+  });
+
+  it('notifies after publishing a normal child and its initial task in the parent checkout', async () => {
+    const worktree = join(root, 'one', 'worktree');
+    const parent = await sessions.createSession({ project_id: 1, title: 'Worktree', provider: 'p1', model: 'm1',
+      agent: 'explore', worktree_path: worktree, metadata: { worktree_workspace: true } });
+    await network.settings(parent.id, { enabled: true });
+    const published: Array<{ session: unknown; messages: unknown }> = [];
+    const notify = vi.fn(async (id: string) => {
+      published.push({ session: await network.session(id), messages: await mailbox.pending(rootChatId(id)) });
+    });
+    const runtime = new SessionNetwork({ ...network.options, onChatCreated: notify });
+    const child = await runtime.create(parent.id, { title: 'Reviewer', role: 'Review', prompt: 'Review now', start: true }, 'reviewer');
+    expect(notify).toHaveBeenCalledWith(child.id);
+    expect(published).toEqual([{
+      session: expect.objectContaining({ parent_session_id: parent.id, worktree_path: worktree, tool_profile: null }),
+      messages: [expect.objectContaining({ kind: 'task', body: 'Review now' })],
+    }]);
   });
 
   it('enforces a durable shared creation quota even across concurrent participants', async () => {

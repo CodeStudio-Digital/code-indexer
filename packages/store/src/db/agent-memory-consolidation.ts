@@ -20,9 +20,9 @@ export interface ConsolidationResult {
   archived: number;
 }
 
-/** Normalize content for exact-duplicate grouping (case/whitespace-insensitive). */
-function normalizeContent(s: string): string {
-  return s.toLowerCase().replace(/\s+/g, ' ').trim();
+/** Never collapse distinct types, code case or historical dependency hashes. */
+function duplicateKey(row: ConsolidationRow): string {
+  return row.content.trim() ? JSON.stringify([row.type, row.content.replace(/\s+/g, ' ').trim(), row.referenced_files]) : '';
 }
 
 interface ConsolidationRow {
@@ -30,6 +30,8 @@ interface ConsolidationRow {
   content: string;
   importance: number;
   created_at: string;
+  type: string;
+  referenced_files: string;
 }
 
 function listConsolidationRows(
@@ -40,9 +42,11 @@ function listConsolidationRows(
 ): ConsolidationRow[] {
   return db
     .prepare(
-      `SELECT id, content, importance, created_at
+      `SELECT id, content, importance, created_at, type, referenced_files
          FROM agent_memory
         WHERE scope = ? AND project_id = ? AND archived_at IS NULL
+          AND source NOT IN ('manual','user') AND importance < 0.9
+          AND type NOT IN ('preference','external_pointer')
         ORDER BY id LIMIT ?`,
     )
     .all(scope, projectId, cap) as ConsolidationRow[];
@@ -61,7 +65,7 @@ export function hasHygieneCandidates(
 ): boolean {
   const seen = new Set<string>();
   for (const row of listConsolidationRows(db, scope, projectId, cap)) {
-    const key = normalizeContent(row.content);
+    const key = duplicateKey(row);
     if (!key) continue;
     if (seen.has(key)) return true;
     seen.add(key);
@@ -73,6 +77,7 @@ export function hasHygieneCandidates(
          FROM agent_memory
         WHERE scope = ? AND project_id = ? AND archived_at IS NULL
           AND type = 'note'
+          AND source NOT IN ('manual','user')
           AND access_count = 0
           AND importance < 0.4
           AND created_at < datetime('now', '-60 days')
@@ -103,6 +108,7 @@ export function decayColdNotes(
               updated_at = datetime('now')
         WHERE scope = ? AND project_id = ? AND archived_at IS NULL
           AND type = 'note'
+          AND source NOT IN ('manual','user')
           AND access_count = 0
           AND importance < ?
           AND created_at < datetime('now', '-' || ? || ' days')`,
@@ -120,7 +126,7 @@ export function consolidateProject(
 
   const groups = new Map<string, typeof rows>();
   for (const r of rows) {
-    const key = normalizeContent(r.content);
+    const key = duplicateKey(r);
     if (!key) continue;
     const g = groups.get(key);
     if (g) g.push(r);

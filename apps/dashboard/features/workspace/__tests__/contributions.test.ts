@@ -1,7 +1,21 @@
-import { describe, expect, it } from 'vitest';
-import { collectContributions } from '../../../state/contribution-registry.js';
+import { describe, expect, it, vi } from 'vitest';
+import { apiCall } from '../../../lib/api-client.js';
+import { collectContributions, hydrateContributions, useContributions } from '../../../state/contribution-registry.js';
+
+vi.mock('../../../lib/api-client.js', () => ({ apiCall: vi.fn() }));
 
 describe('collectContributions', () => {
+  it('keeps the latest checkout when the previous activation arrives late', async () => {
+    let finish!: (value: unknown) => void;
+    const earlier = new Promise(resolve => { finish = resolve; });
+    const plugin = (id: string) => [{ namespace: id, enabled: true, contributions: { commands: [{ id, label: id }] } }];
+    vi.mocked(apiCall).mockReturnValueOnce(earlier).mockResolvedValueOnce(plugin('linked'));
+    const old = hydrateContributions(1);
+    await hydrateContributions(2);
+    finish(plugin('primary'));
+    await old;
+    expect(useContributions.getState().commands.map(c => c.id)).toEqual(['linked']);
+  });
   it('flattens enabled plugins, tags namespace, skips disabled/empty', () => {
     const result = collectContributions([
       {

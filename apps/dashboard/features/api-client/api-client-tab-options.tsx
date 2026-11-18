@@ -12,6 +12,7 @@ export const DocsStudioView = lazy(() => import('./docs-studio/DocsStudioView.js
 
 export const RESP_TABS = [
   { id: 'response' as const, labelKey: 'response' },
+  { id: 'compare' as const, labelKey: 'compare' },
   { id: 'history' as const, labelKey: 'history' },
 ];
 

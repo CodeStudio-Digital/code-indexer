@@ -1,7 +1,6 @@
 /**
  * Handlers for the `plugins` namespace. Thin delegation to @mcp/plugin-host;
- * host functions resolve the DB path via loadConfig() internally. Permission
- * grants + per-plugin storage use a dedicated store (also loadConfig-resolved).
+ * Registry reads and per-plugin storage share the host's SQLite connection.
  */
 import {
   ApiError,
@@ -16,18 +15,14 @@ import {
 import {
   installPlugin,
   uninstallPlugin,
-  listInstalledPlugins,
-  getInstalledPlugin,
-  setPluginEnabled,
-  setPluginPermissionsGranted,
   readPluginAsset,
   execStream,
-  isActivated,
+  createAsyncActivationCheck,
   type InstalledPlugin,
 } from '@mcp/plugin-host';
 import type { PluginSource } from '@mcp/plugin-sdk';
 import { MarketClient } from '@mcp/plugin-market-client';
-import { loadConfig } from '@mcp/shared/utils/config.js';
+import { InstalledPluginStore } from '@mcp/store/installed-plugin-store.js';
 import { PluginStorageStore } from '@mcp/store/plugin-storage-store.js';
 import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import { syncPluginLanguageServers } from '@mcp/services/lsp/server-registry.js';
@@ -90,63 +85,58 @@ function toSource(s: PluginInstallSource): PluginSource {
 type ActivationRule = import('@mcp/plugin-host').ActivationRule;
 type Activatable = { activation?: ActivationRule };
 
-function filterActivated<T extends Activatable>(items: T[] | undefined, root: string | null): T[] | undefined {
-  return items?.filter((item) => isActivated(item.activation, root));
+type CheckActivation = ReturnType<typeof createAsyncActivationCheck>;
+async function filterActivated<T extends Activatable>(items: T[] | undefined, check: CheckActivation): Promise<T[] | undefined> {
+  if (!items) return undefined;
+  const active = await Promise.all(items.map(item => check(item.activation)));
+  return items.filter((_, i) => active[i]);
 }
 
-function filterActiveContributionShape(
-  contributions: Record<string, unknown> | null,
-  root: string | null,
-): Record<string, unknown> | null {
+interface SurfaceItems {
+  toolWindows?: Activatable[];
+  editorActions?: Activatable[];
+  statusBarItems?: Activatable[];
+  runConfigurations?: Activatable[];
+}
+
+async function activeSurface(items: SurfaceItems, check: CheckActivation): Promise<SurfaceItems> {
+  const [toolWindows, editorActions, statusBarItems, runConfigurations] = await Promise.all([
+    filterActivated(items.toolWindows, check), filterActivated(items.editorActions, check),
+    filterActivated(items.statusBarItems, check), filterActivated(items.runConfigurations, check),
+  ]);
+  return { toolWindows, editorActions, statusBarItems, runConfigurations };
+}
+
+async function filterActiveContributionShape(contributions: Record<string, unknown> | null, check: CheckActivation) {
   if (!contributions) return null;
-  const next = { ...contributions } as Record<string, unknown> & {
-    tools?: Activatable[];
-    toolWindows?: Activatable[];
-    editorActions?: Activatable[];
-    statusBarItems?: Activatable[];
-    runConfigurations?: Activatable[];
-    modules?: Array<Activatable & {
-      toolWindows?: Activatable[];
-      editorActions?: Activatable[];
-      statusBarItems?: Activatable[];
-      runConfigurations?: Activatable[];
-    }>;
-  };
-  next.tools = filterActivated(next.tools, root);
-  next.toolWindows = filterActivated(next.toolWindows, root);
-  next.editorActions = filterActivated(next.editorActions, root);
-  next.statusBarItems = filterActivated(next.statusBarItems, root);
-  next.runConfigurations = filterActivated(next.runConfigurations, root);
-  next.modules = next.modules
-    ?.filter((m) => isActivated(m.activation, root))
-    .map((m) => ({
-      ...m,
-      toolWindows: filterActivated(m.toolWindows, root),
-      editorActions: filterActivated(m.editorActions, root),
-      statusBarItems: filterActivated(m.statusBarItems, root),
-      runConfigurations: filterActivated(m.runConfigurations, root),
-    }));
-  return next;
+  const items = contributions as SurfaceItems & { tools?: Activatable[]; modules?: Array<Activatable & SurfaceItems> };
+  const [tools, surface, modules] = await Promise.all([
+    filterActivated(items.tools, check), activeSurface(items, check), filterActivated(items.modules, check),
+  ]);
+  const activeModules = modules && await Promise.all(modules.map(async m => ({ ...m, ...await activeSurface(m, check) })));
+  return { ...contributions, ...surface, tools, modules: activeModules };
 }
 
 export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
-  const storage = new PluginStorageStore(loadConfig().dbPath);
+  const installed = new InstalledPluginStore(deps.db.raw());
+  const storage = new PluginStorageStore(deps.db.raw());
   return {
     async list() {
-      return listInstalledPlugins().map(toInfo);
+      return installed.list().map(toInfo);
     },
 
     async activeContributions({ projectId }) {
-      const root = projectId != null ? (deps.db.getProject(projectId)?.root_path ?? null) : null;
-      return listInstalledPlugins().map((p) => {
+      const root = projectId != null ? (await deps.db.getProjectRootPath(projectId) ?? null) : null;
+      const check = createAsyncActivationCheck(root);
+      return Promise.all(installed.list().map(async p => {
         const info = toInfo(p);
-        info.contributions = filterActiveContributionShape(info.contributions, root);
+        info.contributions = await filterActiveContributionShape(info.contributions, check);
         return info;
-      });
+      }));
     },
 
     async get({ namespace }) {
-      const p = getInstalledPlugin(namespace);
+      const p = installed.get(namespace);
       return p ? toInfo(p) : null;
     },
 
@@ -185,7 +175,7 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
     },
 
     async setEnabled({ namespace, enabled }) {
-      setPluginEnabled(namespace, enabled);
+      installed.setEnabled(namespace, enabled);
       deps.syncPluginProviders();
       await syncLanguageServerContributions();
       return { ok: true as const };
@@ -222,14 +212,14 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
         if (!proj) throw new ApiError('not_found', 404, `project ${projectId} not found`);
         cwd = proj.root_path;
       }
-      const p = getInstalledPlugin(namespace);
+      const p = installed.get(namespace);
       if (!p || !p.enabled) throw new ApiError('not_found', 404, `plugin ${namespace} not enabled`);
       const granted = (p.permissions_granted as PluginPermissionsShape | null) ?? null;
       yield* execStream({ cmd, args, cwd, allow: granted?.exec?.allow });
     },
 
     async getPermissions({ namespace }) {
-      const p = getInstalledPlugin(namespace);
+      const p = installed.get(namespace);
       return {
         declared: declaredPermissions(p),
         granted: (p?.permissions_granted as PluginPermissionsShape | null) ?? null,
@@ -237,7 +227,7 @@ export function createPluginsHandlers(deps: HandlerDeps): PluginsApi {
     },
 
     async requestPermission({ namespace, granted }) {
-      setPluginPermissionsGranted(namespace, granted as Record<string, unknown>);
+      installed.setPermissionsGranted(namespace, granted as Record<string, unknown>);
       return { ok: true as const };
     },
 

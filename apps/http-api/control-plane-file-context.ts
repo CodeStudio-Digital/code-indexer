@@ -29,6 +29,8 @@ readonly journalEnabled: boolean;
 readonly internalSessions: FsSessionStore;
 readonly internalRepositories = new Map<string, ControlPlaneFileRepository>();
 internalRecoveryPromise: Promise<number> | null = null;
+internalRecoveryRequest: { reason: string; occurredAt: string } | null = null;
+readonly internalRecoveryFailures = new Map<string, { reason: string; occurredAt: string }>();
 constructor(
     sessions: FsSessionStore,
     options: { journalEnabled?: boolean } = {},
@@ -40,6 +42,8 @@ constructor(
 
 export interface ControlPlaneFileContext {
 internalRepository(sessionId: SessionId | string): Promise<ControlPlaneFileRepository>;
+internalRecoverSession(sessionId: SessionId, reason: string, occurredAt: string): Promise<number>;
+internalEnsureSessionRecovered(sessionId: SessionId): Promise<void>;
 internalEnqueue<T>(sessionId: SessionId | string, task: () => Promise<T>): Promise<T>;
 internalListAll<K extends ControlPlaneEntityKind>(repository: ControlPlaneFileRepository, kind: K): Promise<Array<EntityRecord<ControlPlaneEntityDataMap[K]>>>;
 internalAppendRuntimeEventUnlocked<T>(repository: ControlPlaneFileRepository, input: RuntimeEventAppendInput<T>): Promise<void>;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock, VisualGroup } from '../../types.js';
 import { mergeConsecutiveAssistantGroups } from '../../chat-message-grouping.js';
-import { MAX_TRANSCRIPT_ROW_BLOCKS, splitTranscriptGroup } from '../transcript-segments.js';
+import { liveTranscriptSegments, MAX_TRANSCRIPT_ROW_BLOCKS, splitTranscriptGroup } from '../transcript-segments.js';
 import { projectChapterSource } from '../MessageList.js';
 import { selectionRange } from '../transcript-selection.js';
 
@@ -25,14 +25,14 @@ describe('bounded persisted transcript segments', () => {
     expect(segments.every(segment => segment.group.kind === 'assistant' && segment.group.messages[0].content.length <= MAX_TRANSCRIPT_ROW_BLOCKS)).toBe(true);
     expect(new Set(segments.map(segment => segment.key)).size).toBe(segments.length);
     expect(segments.filter(segment => segment.last)).toEqual([segments.at(-1)]);
-    expect(segments[0].header).toEqual({
-      markdown: content.filter(block => block.type === 'text').map(block => block.text).join('\n\n'),
-      input_tokens: 3, output_tokens: 5, cache_read_tokens: 2,
-    });
-    expect(segments.slice(1).every(segment => segment.header === false)).toBe(true);
+    expect(segments.filter(segment => segment.frame?.first)).toEqual([segments[0]]);
+    expect(segments.filter(segment => segment.frame?.last)).toEqual([segments.at(-1)]);
+    expect(segments.every(segment => segment.frame?.tokens === group.usages[0])).toBe(true);
+    expect(segments.filter(segment => segment.copyMarkdown)).toEqual([segments.at(-1)]);
+    expect(segments.at(-1)?.copyMarkdown?.()).toBe(content.filter(block => block.type === 'text').map(block => block.text).join('\n\n'));
   });
 
-  it('keeps a single full-turn copy/usage header across many provider cycles and stable keys when prepending history', () => {
+  it('keeps one information button per provider call and one complete Markdown action for the whole reply', () => {
     const originals = Array.from({ length: 2000 }, (_, index) => assistant(index + 2, [{ type: 'text', text: `cycle-${index}` }]));
     // Production groups/messages are immutable snapshots. Merging must not edit
     // the input arrays or rebuild the growing prefix for every provider cycle.
@@ -41,13 +41,38 @@ describe('bounded persisted transcript segments', () => {
     expect(merged).toHaveLength(1);
     const segments = splitTranscriptGroup(merged[0]);
     expect(segments).toHaveLength(originals.length);
-    expect(segments[0].header).toMatchObject({ input_tokens: 6000, output_tokens: 10000, cache_read_tokens: 4000 });
-    expect(segments[0].header && segments[0].header.markdown).toBe(originals.map(group => group.messages[0].content[0].text).join('\n\n'));
+    expect(segments.map(segment => segment.frame)).toEqual(originals.map(group => ({ first: true, last: true, tokens: group.usages[0] })));
+    expect(segments.slice(0, -1).every(segment => !segment.copyMarkdown)).toBe(true);
+    expect(segments.at(-1)?.copyMarkdown?.()).toBe(originals.map(group => group.messages[0].content[0].text).join('\n\n'));
     const earlier: VisualGroup = { kind: 'user', messageId: 1, message: { role: 'user', content: [{ type: 'text', text: 'request' }] } };
     const withEarlier = mergeConsecutiveAssistantGroups([earlier, ...originals]);
     expect(splitTranscriptGroup(withEarlier[1]).map(segment => segment.key)).toEqual(segments.map(segment => segment.key));
     expect(splitTranscriptGroup(earlier)[0].group).toBe(earlier);
     originals.forEach(group => expect(group.messages).toHaveLength(1));
+  });
+
+  it('frames live reasoning and tools together while the next unfinished call keeps its own rows', () => {
+    const first = { input_tokens: 12, output_tokens: 3 };
+    const second = { input_tokens: 21, output_tokens: 4 };
+    const pending = { type: 'text' as const, text: 'Writing' };
+    const rows = liveTranscriptSegments([
+      { type: 'thinking', text: 'Reading' },
+      { type: 'tool', call: { id: 'a', name: 'read_file', status: 'done', startedAt: 0 } },
+      { type: 'usage', id: 'one', toolIds: ['a'], tokens: first },
+      { type: 'text', text: 'Read' },
+      { type: 'usage', id: 'two', toolIds: [], tokens: second },
+      pending,
+    ]);
+    expect(rows).toEqual([
+      { index: 0, frame: { first: true, last: false, tokens: first } },
+      { index: 1, frame: { first: false, last: true, tokens: first } },
+      { index: 3, frame: { first: true, last: true, tokens: second } },
+      { index: 5 },
+    ]);
+    const zero = { input_tokens: 0, output_tokens: 0 };
+    expect(liveTranscriptSegments([pending, { type: 'usage', id: 'zero', toolIds: [], tokens: zero },
+      { type: 'usage', id: 'cache', toolIds: [], tokens: { ...zero, cache_read_tokens: 1 } }]))
+      .toEqual([{ index: 0 }, { index: 2, frame: { first: true, last: true, tokens: { ...zero, cache_read_tokens: 1 } } }]);
   });
 
   it('keeps tool results paired by ID across segments and page boundaries', () => {

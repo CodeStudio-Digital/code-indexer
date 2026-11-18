@@ -111,10 +111,6 @@ export interface RunContext {
   transportRetriesThisTurn: number;
   /** Run-wide ordinal for physical upstream attempts persisted to telemetry. */
   providerAttempts: number;
-  /** Consecutive OpenRouter prompt-cache misses above the configured threshold. */
-  consecutiveLargePromptCacheMisses: number;
-  /** Latched once the long-prompt cache-miss guard trips. */
-  cacheMissGuardError: Error | null;
   /** Deprecated compatibility table; cleared while callers migrate. */
   dupCalls: Map<string, DupCallEntry>;
   /** Cross-turn post-result observation + monotonic workspace state epoch. */
@@ -185,6 +181,7 @@ export interface RunContext {
     key: string;
     built: import('../assembly/tools.js').BuildToolsResult;
     variants: Map<string, {
+      selectionApplied?: boolean;
       tools: import('../assembly/tools.js').SerializedTool[];
       json: string | null;
       fingerprint: string | null;

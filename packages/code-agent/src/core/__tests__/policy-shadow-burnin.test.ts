@@ -115,6 +115,7 @@ describe('policy shadow filesystem burn-in', () => {
     registry.registerAll([readTool, editTool, externalTool]);
 
     const created = createPolicyShadowPort({
+      mode: { shadow: true },
       persistence: new FsPolicyShadowRepository(sessions),
       registry,
       sessionContext: {

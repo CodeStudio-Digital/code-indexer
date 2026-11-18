@@ -1009,5 +1009,6 @@
   "hygiene.purgeResult": "{{count}} project(s) deleted, {{vectors}} local vectors removed.",
   "hygiene.clearResult": "{{count}} project(s) cleared, {{vectors}} local vectors removed. Re-index when needed.",
   "hygiene.projectError": "{{project}}: {{error}}",
-  "hygiene.diskError": "Could not check the directory: {{error}}"
+  "hygiene.diskError": "Could not check the directory: {{error}}",
+  "pipelines.memoryRetrievalHint": "Memory search uses embeddings and the reranker from the Memory semantic profile. This text model only learns and reviews knowledge; there is no extra LLM call to rewrite each search or filter results."
 }

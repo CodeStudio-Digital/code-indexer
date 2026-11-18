@@ -73,7 +73,7 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
       try {
         channel = await openShellChannel(client, cols, rows);
       } catch (err) {
-        manager.release(spec.hostId);
+        manager.release(spec.hostId, client);
         throw err;
       }
       // Release the pooled connection exactly once, whether the channel is
@@ -82,7 +82,7 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
       const releaseOnce = (): void => {
         if (released) return;
         released = true;
-        manager.release(spec.hostId);
+        manager.release(spec.hostId, client);
       };
       channel.once('close', releaseOnce);
 
@@ -97,14 +97,14 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
       try {
         channel = await openExecChannel(client, command, cols, rows);
       } catch (err) {
-        manager.release(spec.hostId);
+        manager.release(spec.hostId, client);
         throw err;
       }
       let released = false;
       const releaseOnce = (): void => {
         if (released) return;
         released = true;
-        manager.release(spec.hostId);
+        manager.release(spec.hostId, client);
       };
       channel.once('close', releaseOnce);
       const ipty = adaptChannelToIPty(channel, { cols, rows, onClose: releaseOnce });
@@ -118,8 +118,8 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
 
     async testConnection({ spec }) {
       try {
-        await manager.acquire(spec);
-        manager.release(spec.hostId); // we only needed to verify reachability/auth
+        const client = await manager.acquire(spec);
+        manager.release(spec.hostId, client);
         return { ok: true };
       } catch (err) {
         if (err instanceof ApiError && (err.code === 'ssh_host_key_unknown' || err.code === 'ssh_host_key_changed')) {

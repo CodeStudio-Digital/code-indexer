@@ -35,7 +35,7 @@ async buildDocsNamespace(this: SemanticCoordinatorContext, collectionId: number,
       if (activating) {
         this.prepareNamespaceGeneration(namespace, 'docs', generation.id, total);
       }
-      const job = this.deps.semanticStore.getOrCreateBuildJob({
+      const job = this.deps.semanticStore.claimBuildJob({
         generation_id: generation.id,
         namespace,
         // Mutation fences are the delta watermark. Keep this execution job
@@ -44,7 +44,7 @@ async buildDocsNamespace(this: SemanticCoordinatorContext, collectionId: number,
         expected_items: total,
         priority: 20,
       });
-      this.deps.semanticStore.updateJob(job.id, { status: 'running' });
+      if (!job) throw new DeltaBuildPendingError(namespace);
       try {
         const result = await this.deps.docsIndexer.retryEmbeddingsUnlocked({ collectionId, force }, {
           onProgress: ({ current }) => {

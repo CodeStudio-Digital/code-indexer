@@ -2,9 +2,30 @@ import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   applyRuntimeEnv,
+  cleanProcessEnv,
   boundUtf8Output,
   LocalShellAdapter,
 } from '../shell-port.js';
+
+describe('Windows command encoding', () => {
+  it('defaults Python files and streams to UTF-8 without changing the parent', () => {
+    const base = { Path: 'C:\\Windows', NODE_OPTIONS: '--import tsx', ELECTRON_RUN_AS_NODE: '1' };
+    expect(cleanProcessEnv(base, 'win32')).toEqual({ Path: 'C:\\Windows', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' });
+    expect(base.ELECTRON_RUN_AS_NODE).toBe('1');
+    expect(cleanProcessEnv(base, 'linux')).toEqual({ Path: 'C:\\Windows' });
+  });
+
+  it('preserves explicit Python encoding and project overrides', () => {
+    expect(cleanProcessEnv({ pythonutf8: '0', PYTHONIOENCODING: 'cp1252' }, 'win32'))
+      .toEqual({ pythonutf8: '0', PYTHONIOENCODING: 'cp1252' });
+    expect(applyRuntimeEnv(cleanProcessEnv({}, 'win32'), { pathPrepend: [], extraEnv: { PYTHONUTF8: '0' } }).PYTHONUTF8).toBe('0');
+    if (process.platform === 'win32') {
+      const overridden = applyRuntimeEnv(cleanProcessEnv({}, 'win32'), { pathPrepend: [], extraEnv: { pythonutf8: '0' } });
+      expect(overridden.pythonutf8).toBe('0');
+      expect(overridden.PYTHONUTF8).toBeUndefined();
+    }
+  });
+});
 
 describe('applyRuntimeEnv', () => {
   it('returns the base untouched when no runtime env is given', () => {

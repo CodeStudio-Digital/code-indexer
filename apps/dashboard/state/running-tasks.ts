@@ -12,10 +12,11 @@
  */
 
 import { create } from 'zustand';
-import type { RunnerTask, RuntimeTarget } from '@mcp/api-bus';
+import type { RunnerStartInput, RunnerTask } from '@mcp/api-bus';
 import { isDevServerCommand } from '@mcp/shared/utils/dev-server-url.js';
 import { apiCall, apiStream, electronApi } from '../lib/api-client.js';
 import { recordExecutionFailure } from './execution-output.js';
+import { worktreeKey } from './worktree-selection.js';
 
 interface RunningTasksState {
   tasks: RunnerTask[];
@@ -30,9 +31,10 @@ export const useRunningTasks = create<RunningTasksState>((set) => ({
   setTasks: (tasks) => set({ tasks }),
 }));
 
-/** Tasks for a single project (any status). */
-export function tasksForProject(tasks: RunnerTask[], projectId: number): RunnerTask[] {
-  return tasks.filter((t) => t.projectId === projectId);
+/** Omit the checkout to see the whole project. Null selects its main workspace. */
+export function tasksForProject(tasks: RunnerTask[], projectId: number, worktreePath?: string | null): RunnerTask[] {
+  const key = worktreeKey(worktreePath);
+  return tasks.filter((t) => t.projectId === projectId && (worktreePath === undefined || worktreeKey(t.worktreePath) === key));
 }
 
 /**
@@ -84,15 +86,7 @@ function rememberTask(task: RunnerTask, replacedId?: string): RunnerTask {
   return task;
 }
 
-export async function startTask(input: {
-  projectId: number;
-  command: string;
-  label: string;
-  manager: RunnerTask['manager'];
-  /** Project-relative working dir (defaults to project root); for nested manifests. */
-  cwd?: string;
-  target?: RuntimeTarget;
-}): Promise<RunnerTask> {
+export async function startTask(input: RunnerStartInput): Promise<RunnerTask> {
   try {
     return rememberTask(await apiCall<RunnerTask>('runner.start', input));
   } catch (error) {

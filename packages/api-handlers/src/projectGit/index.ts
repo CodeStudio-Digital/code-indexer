@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { realpath, rm } from 'node:fs/promises';
 import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { abortableRead } from '@mcp/shared/utils/abortable.js';
 import { disposeGitProcesses, runGitProcess, type GitResult, type GitProcessInput } from './git-process.js';
 import { disposeGitReadWorker, runGitRead } from './git-read-runner.js';
 import { isReadOnlyGit } from './git-read-protocol.js';
@@ -43,9 +44,10 @@ import { createConflictHandlers } from './conflicts.js';
 import { createGitOptimizationHandlers } from './git-optimizations.js';
 import { createRepoResolver } from './repos.js';
 import { selectHunks } from './hunk-stage.js';
-import { guardProjectGitApi, recordGitCacheDecision, recordGitProcess } from './guard.js';
+import { guardProjectGitApi, recordDiffTiming, recordGitCacheDecision, recordGitProcess } from './guard.js';
 
 interface GitRunOptions {
+  signal?: AbortSignal;
   stdin?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
@@ -126,22 +128,29 @@ function throwGitReadFailure(operation: string, result: GitResult, fallback: str
  */
 function runGit(cwd: string, args: string[], optsOrStdin?: string | GitRunOptions): Promise<GitResult> {
   const opts = typeof optsOrStdin === 'string' ? { stdin: optsOrStdin } : (optsOrStdin ?? {});
+  const read = isReadOnlyGit(args, opts.profile);
   const startedAt = Date.now();
   const input: GitProcessInput = {
     cwd, args, stdin: opts.stdin,
     timeoutMs: opts.timeoutMs ?? (opts.profile === 'network' ? GIT_NETWORK_TIMEOUT_MS : opts.profile === 'read' ? GIT_READ_TIMEOUT_MS : GIT_MUTATION_TIMEOUT_MS),
     maxOutputBytes: opts.maxOutputBytes ?? GIT_DETAIL_MAX_OUTPUT_BYTES,
-    env: safeGitEnv({ ...(opts.profile === 'network' ? { GIT_TERMINAL_PROMPT: '0' } : {}), ...opts.env }),
+    env: safeGitEnv({ ...(read ? { GIT_OPTIONAL_LOCKS: '0' } : {}), ...(opts.profile === 'network' ? { GIT_TERMINAL_PROMPT: '0' } : {}), ...opts.env }),
   };
   let untrack: (() => void) | undefined;
-  const operation = isReadOnlyGit(args, opts.profile) ? runGitRead(input)
+  const operation = read ? runGitRead(input, opts.signal)
     : runGitProcess(input, pid => { untrack = trackProcessTree(pid); });
   return operation.then(result => {
     // Keep instrumentation in the caller's AsyncLocalStorage realm.
     recordGitProcess({ outputBytes: Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8'),
       timedOut: result.timedOut, truncated: result.truncated });
-    return { ...result, durationMs: Date.now() - startedAt };
+    return { ...result, processMs: result.durationMs, durationMs: Date.now() - startedAt };
   }).finally(() => untrack?.());
+}
+
+/** Local worktree inventory and membership reads share the IDE's bounded Git worker. */
+export function readWorktreeGit(cwd: string, args: string[], signal: AbortSignal): Promise<GitResult> {
+  if (!isReadOnlyGit(args)) throw new Error('Expected a read-only Git command');
+  return runGit(cwd, args, { profile: 'read', signal, maxOutputBytes: 1024 * 1024 });
 }
 
 /**
@@ -537,8 +546,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     createdAt: number;
   }>();
 
-  function requireRoot(projectId: number): string {
-    const rootPath = db.getProjectRootPath(projectId);
+  async function requireRoot(projectId: number): Promise<string> {
+    const rootPath = await db.getProjectRootPath(projectId);
     if (!rootPath) throw new ApiError('not_found', 404, 'project not found');
     return rootPath;
   }
@@ -561,14 +570,25 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   // the caller's gitRev and recomputes. One live entry per (project,scope).
   const branchesCache = new Map<string, GitBranch[]>();
 
+  type RepoLocation = { repoRoot: string | null; gitDir: string | null; notARepo: boolean };
+  const pendingLocations = new Map<string, Promise<RepoLocation>>();
+
   async function detectRepo(
     root: string,
-  ): Promise<{ repoRoot: string | null; gitDir: string | null; notARepo: boolean }> {
+  ): Promise<RepoLocation> {
     const key = repoCacheKey(root);
     const cached = repoRootCache.get(key);
     if (cached && Date.now() - cached.at < REPO_CACHE_MS) {
       return { repoRoot: cached.repoRoot, gitDir: cached.gitDir, notARepo: false };
     }
+    const pending = pendingLocations.get(key);
+    if (pending) return pending;
+    const work = readRepoLocation(root, key).finally(() => pendingLocations.delete(key));
+    pendingLocations.set(key, work);
+    return work;
+  }
+
+  async function readRepoLocation(root: string, key: string): Promise<RepoLocation> {
     // One spawn yields BOTH the worktree root and the resolved absolute gitdir.
     // --absolute-git-dir follows the `.git` FILE of linked worktrees/submodules,
     // which is what lets the sequencer detection read state files via pure fs.
@@ -677,8 +697,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   // discard runs one git invocation per repo with repo-relative paths.
   async function groupPathsByRepo(projectId: number, paths: string[]): Promise<Map<string, string[]>> {
     const groups = new Map<string, string[]>();
-    for (const p of paths) {
-      const { cwd, repoRelPath } = await repoResolver.resolveRepoForPath(projectId, p);
+    for (const { cwd, repoRelPath } of await repoResolver.resolvePaths(projectId, paths)) {
       const arr = groups.get(cwd);
       if (arr) arr.push(repoRelPath);
       else groups.set(cwd, [repoRelPath]);
@@ -702,13 +721,23 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   async function aggregateStatus(projectId: number): Promise<GitStatus> {
     // Canonicalize the project root so per-file rebasing lines up with the
     // realpath'd repo roots discovery resolved (see repos.ts).
-    let projectRoot = requireRoot(projectId);
+    let projectRoot = await requireRoot(projectId);
     try {
       projectRoot = await realpath(projectRoot);
     } catch {
       /* keep raw root */
     }
-    const repos = await repoResolver.listRepos(projectId);
+    const readRepoStatus = (cwd: string) => runGit(cwd, ['status', '--porcelain=v2', '--branch', '-z'], {
+      timeoutMs: GIT_READ_TIMEOUT_MS,
+      maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
+    });
+    // Start the main status as soon as Git identifies the checkout. Nested
+    // discovery may traverse a monorepo and does not affect this invocation.
+    const [repos, primary] = await Promise.all([
+      repoResolver.listRepos(projectId),
+      detectRepo(projectRoot).then(async ({ repoRoot }) => repoRoot
+        ? { root: repoRoot, result: await readRepoStatus(repoRoot) } : null),
+    ]);
     if (repos.length === 0) {
       return { branch: null, upstream: null, ahead: 0, behind: 0, files: [], repoRoot: null, notARepo: true };
     }
@@ -720,10 +749,8 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     const repoPrefixes = new Set(repos.map((r) => r.projectRelPrefix).filter(Boolean));
 
     const perRepo = await mapPool(scan, GIT_AGG_CONCURRENCY, async (r) => {
-      const res = await runGit(r.absPath, ['status', '--porcelain=v2', '--branch', '-z'], {
-        timeoutMs: GIT_READ_TIMEOUT_MS,
-        maxOutputBytes: GIT_STATUS_MAX_OUTPUT_BYTES,
-      });
+      const res = primary && path.relative(primary.root, r.absPath) === ''
+        ? primary.result : await readRepoStatus(r.absPath);
       // Tolerate a single repo failing (transient lock / race) — the rest render.
       if (res.code !== 0) {
         return { repo: r, files: [] as GitStatusFile[], head: null, warning: `${r.name}: ${res.stderr.trim() || 'git status failed'}` };
@@ -792,7 +819,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       throwGitReadFailure('git_status', statusRes, 'git status failed');
     }
     const { head, files } = parsePorcelainV2Status(statusRes.stdout);
-    let projectRoot = requireRoot(projectId);
+    let projectRoot = await requireRoot(projectId);
     try { projectRoot = await realpath(projectRoot); } catch { /* keep raw root */ }
     const scopedFiles = files.map((file) => {
       const absolute = path.resolve(cwd, file.path);
@@ -949,7 +976,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     | 'configureGitOptimizations'
   > = {
     async listRepos({ projectId }) {
-      return repoResolver.listRepos(projectId);
+      return repoResolver.listRepos(projectId, { interactive: true });
     },
 
     async status({ projectId, includeFiles = true, repoPath }) {
@@ -1042,23 +1069,35 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { gitRemote, defaultBranch };
     },
 
-    async diff({ projectId, path: filePath, staged, repoPath }) {
-      // A path-scoped diff auto-routes to its containing repo (submodule-aware);
-      // a whole-repo diff (no path) uses the selected/main repo.
-      const target = filePath
-        ? await resolvePathTarget(projectId, repoPath, filePath)
-        : { cwd: await resolveCwd(projectId, repoPath), gitPath: undefined as string | undefined };
-      const args = ['diff', '--no-color'];
-      if (staged) args.push('--cached');
-      if (target.gitPath) args.push('--', target.gitPath);
-      const r = await runGit(target.cwd, args, {
-        timeoutMs: GIT_READ_TIMEOUT_MS,
-        maxOutputBytes: GIT_DETAIL_MAX_OUTPUT_BYTES,
-      });
-      if (r.code !== 0 && !r.stdout) {
-        throwGitReadFailure('git_diff', r, 'git diff failed');
+    async diff({ projectId, path: filePath, staged, repoPath }, ctx) {
+      const start = performance.now();
+      const timeout = GIT_READ_TIMEOUT_MS > 0 ? AbortSignal.timeout(GIT_READ_TIMEOUT_MS) : undefined;
+      const signal = timeout && ctx?.signal ? AbortSignal.any([timeout, ctx.signal]) : timeout ?? ctx?.signal;
+      const locate = async () => filePath && !repoPath
+        ? repoResolver.resolveDiffPath(projectId, filePath, signal)
+        : { cwd: await resolveCwd(projectId, repoPath), gitPath: filePath };
+      try {
+        const target = await abortableRead(locate, signal).finally(() => {
+          recordDiffTiming({ targetMs: Math.round(performance.now() - start) });
+        });
+        const remaining = timeout ? Math.ceil(GIT_READ_TIMEOUT_MS - (performance.now() - start)) : 0;
+        if (timeout && remaining <= 0) throw new ApiError('git_diff_timeout', 504, 'Git diff timed out while locating the repository');
+        const args = ['diff', '--no-color'];
+        if (staged) args.push('--cached');
+        if (target.gitPath) args.push('--', target.gitPath);
+        const r = await runGit(target.cwd, args, { timeoutMs: remaining, signal });
+        recordDiffTiming({ gitRoundTripMs: r.durationMs, gitProcessMs: r.processMs });
+        signal?.throwIfAborted();
+        if (r.code !== 0 && !r.stdout) throwGitReadFailure('git_diff', r, 'git diff failed');
+        return { patch: r.stdout };
+      } catch (error) {
+        if (ctx?.signal?.aborted) throw new ApiError('git_diff_cancelled', 499, 'Git diff cancelled');
+        if (timeout?.aborted || (timeout && performance.now() - start >= GIT_READ_TIMEOUT_MS)) {
+          recordDiffTiming({ timedOut: true });
+          throw new ApiError('git_diff_timeout', 504, `Git diff timed out after ${GIT_READ_TIMEOUT_MS}ms`);
+        }
+        throw error;
       }
-      return { patch: r.stdout };
     },
 
     async baseline({ projectId, path: filePath, repoPath }) {
@@ -2167,6 +2206,11 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
           output_bytes: metric.outputBytes,
           timed_out: metric.timedOut,
           truncated: metric.truncated,
+          ...(metric.method === 'diff' && {
+            target_resolve_ms: metric.targetMs,
+            git_round_trip_ms: metric.gitRoundTripMs,
+            git_process_ms: metric.gitProcessMs,
+          }),
         },
       });
     } catch { /* telemetry is fail-open and never contains refs, paths or content */ }

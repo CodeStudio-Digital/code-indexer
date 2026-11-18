@@ -16,6 +16,7 @@
  * host instantiates this engine only inside semantic-vector-worker.
  */
 import { createIdleResource, type IdleResource } from '@mcp/shared/utils/idle-disposer.js';
+import { onnxSessionOptions } from './onnx-resource-policy.js';
 import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 import { resolveModelCacheDir } from './model-cache.js';
 import { resolveOnnxIdleTtlMs } from './onnx-idle.js';
@@ -130,6 +131,7 @@ export class LocalReranker implements RerankerService {
     const tokenizerOptions = this.revision ? { revision: this.revision } : undefined;
     const modelOptions = {
       dtype: this.dtype,
+      session_options: onnxSessionOptions(),
       ...(this.revision ? { revision: this.revision } : {}),
     };
     const [tokenizer, model] = await Promise.all([

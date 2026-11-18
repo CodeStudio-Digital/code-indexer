@@ -1,6 +1,6 @@
 import { WorkerHost } from '@mcp/orchestrator-host';
 import { randomUUID } from 'node:crypto';
-import type { VectorMatch, VectorRecord } from '@mcp/shared/types.js';
+import type { AgentMemoryRow, AgentMemoryScope, VectorMatch, VectorRecord } from '@mcp/shared/types.js';
 import type {
   VectorItemState,
   VectorSearchOptions,
@@ -87,6 +87,12 @@ export class SemanticVectorWorkerClient implements VectorStore {
 
   currentProjectJobs(scopes: ProjectJobScope[], signal?: AbortSignal): Promise<Array<SemanticJobRow | null>> {
     return this.request('semantic.currentProjectJobs', scopes, signal);
+  }
+
+  searchAgentMemoryFts(
+    scope: AgentMemoryScope, projectId: number, query: string, limit: number, signal?: AbortSignal,
+  ): Promise<AgentMemoryRow[]> {
+    return this.request('memory.searchFts', { scope, projectId, query, limit }, signal, 10_000);
   }
 
   /** Bounded RPC pages keep SQLite scans and cursor JSON decoding off main. */
@@ -351,7 +357,9 @@ export class SemanticVectorWorkerClient implements VectorStore {
     this.rerankerDiagnosticInflight.clear();
   }
 
-  private async request<T>(type: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+  private async request<T>(
+    type: string, payload: unknown, signal?: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
     signal?.throwIfAborted();
     const host = await this.ensureHost();
     signal?.throwIfAborted();
@@ -371,7 +379,7 @@ export class SemanticVectorWorkerClient implements VectorStore {
     try {
       const request = bridge.request(type, inferenceRequestId
         ? { ...(payload as object), inferenceRequestId } : payload, {
-        timeoutMs: REQUEST_TIMEOUT_MS,
+        timeoutMs,
       });
       const aborted = signal ? new Promise<never>((_resolve, reject) => {
         onAbort = () => { cancel(); reject(signal.reason ?? new Error('Inference aborted')); };

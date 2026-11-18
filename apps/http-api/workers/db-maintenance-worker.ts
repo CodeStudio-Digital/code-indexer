@@ -185,7 +185,28 @@ async function bootWorker(port: MessagePort, dbPath: string): Promise<void> {
     }, checkpointMs));
   }
 
+  const pruning = new AbortController();
+  let pruningPass: Promise<void> | undefined;
+  let nextPrune: ReturnType<typeof setTimeout>;
+  const schedulePrune = (ms: number): void => {
+    nextPrune = setTimeout(() => {
+      let nextMs = 24 * 60 * 60 * 1000;
+      pruningPass = import('../../../packages/store/src/semantic-build-retention.js')
+        .then(({ pruneDuplicateSemanticBuilds }) => pruneDuplicateSemanticBuilds(db, pruning.signal))
+        .then(count => { if (count) console.info(`[db-maintenance] removed ${count} duplicate semantic build attempts`); })
+        .catch((err: unknown) => {
+          nextMs = 60_000;
+          console.warn('[db-maintenance] semantic build retention will retry:', err);
+        }).finally(() => { if (!pruning.signal.aborted) schedulePrune(nextMs); });
+    }, ms);
+    nextPrune.unref();
+  };
+  schedulePrune(10_000);
+
   bridge.handle('stop', async () => {
+    pruning.abort();
+    clearTimeout(nextPrune);
+    await pruningPass;
     for (const timer of timers) clearInterval(timer);
     conn.close();
     setImmediate(() => process.exit(0));

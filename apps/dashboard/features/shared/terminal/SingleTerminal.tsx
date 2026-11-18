@@ -18,7 +18,7 @@ import { installTerminalClipboard } from './terminal-clipboard.js';
 interface SingleTerminalProps {
   terminalId: string;
   /** Notified when the underlying PTY process exits (user typed `exit`). */
-  onProcessExited: () => void;
+  onProcessExited: (code: number | null) => void;
   /**
    * When provided, project-relative paths in the output (with optional
    * `:line:col`) become clickable links routed here. Omitted by callers with
@@ -113,7 +113,7 @@ export function SingleTerminal({ terminalId, onProcessExited, onOpenPath }: Sing
       if ((error as { code?: string })?.code === 'not_found') {
         if (terminalMissing) return;
         terminalMissing = true;
-        onExitedRef.current();
+        onExitedRef.current(null);
         return;
       }
       console.error('[terminal] PTY request failed:', error);
@@ -197,7 +197,7 @@ export function SingleTerminal({ terminalId, onProcessExited, onOpenPath }: Sing
             term.write(`\r\n\x1b[2m[process exited code=${value.code ?? '?'}]\x1b[0m\r\n`);
             // Notify the container (close an interactive shell / keep a snippet
             // tab). Via ref so a changing callback never remounts this terminal.
-            onExitedRef.current();
+            onExitedRef.current(value.code ?? null);
             break;
           }
         }

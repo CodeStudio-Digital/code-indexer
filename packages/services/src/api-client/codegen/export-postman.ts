@@ -21,7 +21,7 @@ function toItem(r: ExportRequest): unknown {
     name: r.name,
     request: {
       method: (r.method || 'GET').toUpperCase(),
-      header: normalizeKvList(r.headers_json).filter((h) => h.enabled).map((h) => ({ key: h.key, value: h.value, disabled: !h.enabled || undefined })),
+      header: normalizeKvList(r.headers_json).filter(h => h.key).map(h => ({ key: h.key, value: h.value, disabled: !h.enabled || undefined })),
       url: buildUrl(r),
       body: buildBody(r),
     },

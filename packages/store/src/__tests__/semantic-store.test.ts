@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type DatabaseConstructor from 'better-sqlite3';
 import { semanticIndexing227 } from '../migrations/227_semantic_indexing.js';
+import { semanticRecovery277 } from '../migrations/277_semantic_recovery.js';
+import { pruneDuplicateSemanticBuilds } from '../semantic-build-retention.js';
 import { SemanticStore, type EmbeddingTarget } from '../semantic-store.js';
 
 const require = createRequire(import.meta.url);
@@ -18,6 +20,74 @@ function harness() {
 }
 
 describe('SemanticStore', () => {
+  it('deletes redundant legacy attempts and atomically admits only one new build', async () => {
+    const { db, store } = harness();
+    try {
+      const namespace = 'memory:user';
+      const generation_id = store.createGeneration({ purpose: 'memory', fingerprint: 'dedup',
+        embedding_target: { kind: 'disabled' }, dimension: 4 }).id;
+      const input = { namespace, generation_id, kind: 'build' as const, expected_items: 1 };
+      const paused = (key: string) => {
+        const row = store.createJob({ ...input, cursor: { reason: 'targeted-memory-delta', item_keys: [key] } });
+        return store.updateJob(row.id, { status: 'paused', error: '429', failed_items: 1 })!;
+      };
+      for (let i = 0; i < 130; i++) paused('a');
+      const newest = paused('a'), different = paused('b');
+      const delta = store.createJob({ ...input, kind: 'delta', cursor: { reason: 'mutation-fence' } });
+      semanticRecovery277.up(db);
+      expect(() => store.createJob(input)).toThrow('semantic build already open');
+      expect(await pruneDuplicateSemanticBuilds(db)).toBe(130);
+      expect(store.listJobs({ namespace }).map(row => row.id).sort((a,b)=>a-b)).toEqual([newest.id, different.id, delta.id]);
+      expect(await pruneDuplicateSemanticBuilds(db)).toBe(0);
+      const claimed = store.claimBuildJob(input)!;
+      expect(claimed).toMatchObject({ id: different.id, status: 'running' });
+      expect(store.claimBuildJob(input)).toBeNull();
+      expect(store.getOrCreateBuildJob(input).id).toBe(claimed.id);
+      store.updateJob(claimed.id, { status: 'paused' });
+      expect(store.claimBuildJob(input)?.id).toBe(claimed.id);
+    } finally { store.close(); db.close(); }
+  });
+  it('recovers interrupted jobs atomically while preserving fences, cleanup, cursors and live generations', () => {
+    const { db, store } = harness();
+    try {
+      semanticRecovery277.up(db);
+      const namespace = 'code:p1';
+      const makeGeneration = (fingerprint: string) => store.createGeneration({
+        purpose: 'code', fingerprint, embedding_target: { kind: 'disabled' }, dimension: 4,
+      }).id;
+      const active = makeGeneration('active'), building = makeGeneration('building'), old = makeGeneration('old');
+      store.beginNamespaceGeneration({ namespace, purpose: 'code', generation_id: active });
+      store.activateNamespaceGeneration(namespace, active);
+      store.beginNamespaceGeneration({ namespace, purpose: 'code', generation_id: building });
+      const cursor = { reason: 'code-delta', events: [{ path: 'src/file.ts' }] };
+      const running = store.createJob({ namespace, kind: 'backfill', cursor });
+      store.updateJob(running.id, { status: 'running', processed_items: 7, failed_items: 2 });
+      const obsolete = store.createJob({ namespace, kind: 'build', generation_id: old, cursor: { reason: 'mutation-fence' } });
+      store.updateJob(obsolete.id, { status: 'running' });
+      const orphan = store.createJob({ namespace: 'code:p2', kind: 'backfill', generation_id: old });
+      store.updateJob(orphan.id, { status: 'paused' });
+      const keep = [
+        store.createJob({ namespace, kind: 'build', generation_id: active }),
+        store.createJob({ namespace, kind: 'build', generation_id: building }),
+        store.createJob({ namespace, kind: 'delta', cursor: { reason: 'mutation-fence' } }),
+        store.createJob({ namespace, kind: 'cleanup' }),
+        store.createJob({ namespace, kind: 'build', generation_id: old }),
+      ];
+      for (const [i, status] of (['paused', 'pending', 'running', 'running', 'completed'] as const).entries()) {
+        store.updateJob(keep[i]!.id, { status });
+      }
+      const before = keep.map(job => store.getJob(job.id));
+      store.recoverInterruptedJobs();
+      expect(store.getJob(running.id)).toMatchObject({ status: 'paused', processed_items: 0, failed_items: 2, cursor,
+        error: expect.stringContaining('waiting for an explicit resume') });
+      for (const job of [orphan, obsolete]) expect(store.getJob(job.id)).toMatchObject({
+        status: 'cancelled', completed_at: expect.any(String), error: expect.stringContaining('superseded'),
+      });
+      expect(keep.map(job => store.getJob(job.id))).toEqual(before);
+      db.pragma('query_only = ON');
+      expect(() => store.recoverInterruptedJobs()).not.toThrow();
+    } finally { store.close(); db.close(); }
+  });
   it('selects a current job without hydrating completed history or foreign generations', () => {
     const { db, store } = harness();
     try {
@@ -119,6 +189,23 @@ describe('SemanticStore', () => {
       store.updateJob(build.id, { status: 'completed' });
       expect(store.getNamespaceBuildRetry(namespace)).toBeNull();
       expect(store.getOrCreateBuildJob(input).id).not.toBe(build.id);
+    } finally { store.close(); db.close(); }
+  });
+
+  it('unblocks a legacy quota latch without erasing its retry window or its durable work', () => {
+    const { db, store } = harness();
+    try {
+      const generation = store.createGeneration({ purpose: 'memory', fingerprint: 'quota-space', dimension: 2,
+        embedding_target: { kind: 'local_http', baseUrl: 'http://localhost', model: 'm', protocol: 'openai-embeddings' } });
+      const namespace = 'memory:user';
+      store.beginNamespaceGeneration({ namespace, purpose: 'memory', generation_id: generation.id });
+      const build = store.getOrCreateBuildJob({ namespace, generation_id: generation.id, kind: 'build', expected_items: 30 });
+      const retry = { attempt: 10, not_before_ms: 123456, blocked: true };
+      store.updateJob(build.id, { status: 'paused', cursor: { retry }, error: '429 Rate limit exceeded: free-models-per-min' });
+      expect(store.getNamespaceBuildRetry(namespace)).toEqual({ ...retry, blocked: false });
+      expect(store.getJob(build.id)).toMatchObject({ status: 'paused', expected_items: 30, cursor: { retry } });
+      store.updateJob(build.id, { error: '401 invalid API key' });
+      expect(store.getNamespaceBuildRetry(namespace)!.blocked).toBe(true);
     } finally { store.close(); db.close(); }
   });
 

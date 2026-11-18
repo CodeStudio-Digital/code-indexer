@@ -13,8 +13,8 @@ interface FsEventsFrameDTO { events: FsEventDTO[] }
 
 export function useFsEvents(projectId: number | null, onEvents: (events: FsEventDTO[]) => void): void {
   // Latest-callback ref so consumers don't resubscribe per render.
-  const cb = useRef(onEvents);
-  cb.current = onEvents;
+  const latest = useRef({ projectId, onEvents });
+  latest.current = { projectId, onEvents };
 
   useEffect(() => {
     if (projectId == null) return;
@@ -33,7 +33,7 @@ export function useFsEvents(projectId: number | null, onEvents: (events: FsEvent
         replay: 'none',
       },
       (frame: FsEventsFrameDTO) => {
-        if (frame.events.length > 0) cb.current(frame.events);
+        if (latest.current.projectId === projectId && frame.events.length > 0) latest.current.onEvents(frame.events);
       },
     );
     markRouteEvent('fsEvents:subscribed', { projectId });

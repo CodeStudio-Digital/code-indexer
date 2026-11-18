@@ -125,5 +125,7 @@ export function authenticatedMcpFetch(config: McpServerConfig, resolver: Resolve
 }
 
 export function mcpServerConfigurationKey(config: McpServerConfig): string {
-  return createHash('sha256').update(JSON.stringify(config)).digest('hex');
+  // Servers can register again after a reload without changing their connection settings.
+  const { updated_at: _updatedAt, ...settings } = config;
+  return createHash('sha256').update(JSON.stringify(settings)).digest('hex');
 }

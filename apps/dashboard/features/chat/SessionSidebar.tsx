@@ -41,6 +41,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/too
 import { cn, formatRelativeTime } from '../../lib/utils.js';
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
 import { useSessionActivity } from './useSessionActivity.js';
+import { groupSessionBranches, visibleSessionBranches, type SessionBranch } from './session-lineage.js';
 export { isExecutingSessionStatus } from './session-activity.js';
 import { providerAccent, workspaceColor, type AccentColor } from './constants.js';
 import type {
@@ -177,6 +178,14 @@ export const SessionSidebar = memo(function SessionSidebar({
     setSelectMode(false);
   }, [scopeKey, view]);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(new Set());
+  const toggleBranch = useCallback((id: string) => {
+    setCollapsedBranches(previous => {
+      const next = new Set(previous);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (view === 'archived') setRunningOnly(false);
@@ -212,57 +221,64 @@ export const SessionSidebar = memo(function SessionSidebar({
   type GroupEntry = {
     key: string;
     group: CoderSessionGroup | null;
-    items: CoderSession[];
+    roots: SessionBranch[];
+    count: number;
     label?: string;
     accent?: AccentColor;
   };
-  const grouped = useMemo<GroupEntry[]>(() => {
+  const { grouped, parents } = useMemo(() => {
     const list = (sessions ?? []).filter(
       (session) => !runningOnly || executingSessionIds.has(session.id),
     );
+    const knownGroups = new Set((groups ?? []).map(group => String(group.id)));
+    const tree = groupSessionBranches(list, session => {
+      if (groupBy === 'workspace') return String(session.project_id);
+      const group = session.group_id;
+      return group && knownGroups.has(group) ? group : undefined;
+    }, UNGROUPED_KEY);
 
     // Sessões Globais: bucket by their primary real project,
     // in first-appearance order (the list is already sorted by favorite+recency).
     if (groupBy === 'workspace') {
-      const byWs = new Map<string, CoderSession[]>();
-      const order: string[] = [];
-      for (const s of list) {
-        const key = String(s.project_id);
-        if (!byWs.has(key)) { byWs.set(key, []); order.push(key); }
-        byWs.get(key)!.push(s);
-      }
-      return order.map((key) => {
-        const items = byWs.get(key)!;
-        const head = items[0];
+      const grouped = [...tree.groups].map(([key, bucket]): GroupEntry => {
+        const head = bucket.roots[0].session;
         return {
           key,
           group: null,
-          items,
+          ...bucket,
           label: head.workspace_label || head.project_name || head.title,
           accent: workspaceColor(head.project_id),
         };
       });
+      return { grouped, parents: tree.parents };
     }
 
     // Per-project: keep group sort_order, then ungrouped at the end.
-    const byGroup = new Map<string, CoderSession[]>();
-    for (const s of list) {
-      const key = s.group_id == null ? UNGROUPED_KEY : String(s.group_id);
-      const arr = byGroup.get(key) ?? [];
-      arr.push(s);
-      byGroup.set(key, arr);
-    }
     const ordered: GroupEntry[] = [];
     for (const g of groups ?? []) {
-      const items = byGroup.get(String(g.id)) ?? [];
-      if (items.length > 0) ordered.push({ key: String(g.id), group: g, items });
+      const key = String(g.id);
+      const bucket = tree.groups.get(key);
+      if (bucket) ordered.push({ key, group: g, ...bucket });
     }
-    const ungrouped = byGroup.get(UNGROUPED_KEY) ?? [];
-    if (ungrouped.length > 0) {
-      ordered.push({ key: UNGROUPED_KEY, group: null, items: ungrouped });
+    const ungrouped = tree.groups.get(UNGROUPED_KEY);
+    if (ungrouped) {
+      ordered.push({ key: UNGROUPED_KEY, group: null, ...ungrouped });
     }
-    return ordered;
+    return { grouped: ordered, parents: tree.parents };
   }, [sessions, groups, groupBy, runningOnly, executingSessionIds]);
+
+  const selectedAncestorIds: string[] = [];
+  for (let parent = parents.get(selectedId ?? ''); parent; parent = parents.get(parent)) {
+    selectedAncestorIds.push(parent);
+  }
+  const selectedAncestors = selectedAncestorIds.join(',');
+  useEffect(() => {
+    if (!selectedAncestors) return;
+    setCollapsedBranches(previous => {
+      const toExpand = selectedAncestors.split(',').filter(id => previous.has(id));
+      return toExpand.length > 0 ? new Set([...previous].filter(id => !toExpand.includes(id))) : previous;
+    });
+  }, [selectedAncestors, selectedId]);
 
   const selectedCount = selectedIds.size;
   const runningCount = useMemo(
@@ -555,7 +571,7 @@ export const SessionSidebar = memo(function SessionSidebar({
             </div>
           )}
 
-          {grouped.map(({ key, group, items, label, accent }) => {
+          {grouped.map(({ key, group, roots, count, label, accent }) => {
             const collapsed = collapsedGroups.has(key);
             const headerLabel = label ?? (group ? group.name : t('chat:sidebar.ungrouped'));
             return (
@@ -585,7 +601,7 @@ export const SessionSidebar = memo(function SessionSidebar({
                       {headerLabel}
                     </span>
                     <span className="shrink-0 ml-1 font-mono tabular-nums text-muted-foreground/45">
-                      {items.length}
+                      {count}
                     </span>
                   </button>
                   {group && (
@@ -610,7 +626,7 @@ export const SessionSidebar = memo(function SessionSidebar({
                   )}
                 </div>
                 {!collapsed &&
-                  items.map((s) => (
+                  visibleSessionBranches(roots, collapsedBranches).map(({ branch: { session: s, children }, depth }) => (
                     <SessionRow
                       key={s.id}
                       session={s}
@@ -632,6 +648,9 @@ export const SessionSidebar = memo(function SessionSidebar({
                       showGroups={showGroups}
                       accent={accent}
                       running={executingSessionIds.has(s.id)}
+                      depth={depth}
+                      expanded={children.length > 0 ? !collapsedBranches.has(s.id) : undefined}
+                      onToggleBranch={toggleBranch}
                     />
                   ))}
               </div>
@@ -676,6 +695,9 @@ const SessionRow = memo(function SessionRow({
   showGroups,
   accent,
   running,
+  depth,
+  expanded,
+  onToggleBranch,
 }: {
   session: CoderSession;
   selected: boolean;
@@ -702,6 +724,9 @@ const SessionRow = memo(function SessionRow({
   accent?: AccentColor;
   /** Authoritative persisted status combined with the renderer's live transport registry. */
   running: boolean;
+  depth: number;
+  expanded?: boolean;
+  onToggleBranch: (id: string) => void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   const pinId = sessionPinId?.(s.id);
@@ -719,8 +744,10 @@ const SessionRow = memo(function SessionRow({
   return (
     <div
       data-session-id={s.id}
+      data-session-depth={depth}
       data-session-running={running ? 'true' : 'false'}
       onClick={handleClick}
+      style={depth > 0 ? { marginInlineStart: Math.min(depth, 4) * 12 } : undefined}
       className={cn(
         // Two-line row. The 2px left accent rule is a `before:` pseudo-element
         // (transparent at rest) — a quiet edge marker instead of a heavy fill,
@@ -730,8 +757,20 @@ const SessionRow = memo(function SessionRow({
         !isActive && !isChecked && 'hover:bg-muted/50',
         isActive && 'bg-[var(--workbench-active)] before:bg-[var(--workbench-focus)] hover:bg-[var(--workbench-active)]',
         isChecked && 'bg-[var(--workbench-active)] before:bg-[var(--workbench-focus)] ring-1 ring-inset ring-[var(--workbench-focus)]/40',
+        depth > 0 && 'border-s border-[var(--workbench-border)]',
       )}
     >
+      {expanded !== undefined && (
+        <button
+          type="button"
+          className="-ml-1 grid h-6 w-4 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          aria-expanded={expanded}
+          aria-label={t(expanded ? 'chat:sidebar.collapseChildren' : 'chat:sidebar.expandChildren', { title: s.title })}
+          onClick={event => { event.stopPropagation(); onToggleBranch(s.id); }}
+        >
+          {expanded ? <ChevronDown className="h-3 w-3" aria-hidden="true" /> : <ChevronRight className="h-3 w-3" aria-hidden="true" />}
+        </button>
+      )}
       {selectMode ? (
         <div className="h-6 w-6 flex items-center justify-center shrink-0">
           {checked ? (
@@ -781,12 +820,15 @@ const SessionRow = memo(function SessionRow({
         {/* Line 1: title + right-floated token figure (Linear-style numerals).
             Native title carries the exact count; the row shows it compacted. */}
         <div className="flex items-center gap-2 min-w-0">
-          <span
-            className="font-medium text-[11px] leading-tight truncate text-foreground/95 group-hover:text-foreground"
+          <button
+            type="button"
+            className="min-w-0 rounded text-start font-medium text-[11px] leading-tight truncate text-foreground/95 group-hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             title={s.title}
+            aria-current={isActive ? 'page' : undefined}
+            aria-pressed={selectMode ? checked : undefined}
           >
             {s.title}
-          </span>
+          </button>
           {/* Tokens fade out on hover so the action cluster can take their
               place — no overlap / bleed-through. Some quando a barra aperta
               (< ~170px) — o número vai para o tooltip do wrapper. */}

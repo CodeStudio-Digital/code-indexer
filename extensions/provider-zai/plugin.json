@@ -1,6 +1,6 @@
 {
   "name": "provider-zai",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Z.AI / Zhipu GLM as a provider plugin — reference for the providers contribution point",
   "author": { "name": "mcp" },
   "apps": ".app.json",

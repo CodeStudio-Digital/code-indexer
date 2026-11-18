@@ -21,6 +21,7 @@ import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
+import type { PromptContextMeasurement } from '@mcp/provider-sdk/prompt-cache-metrics.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { admitCoderAttempt, prepareCoderAttempt } from './runtime/attempt-preparation.js';
 import { asAgentRunId } from '@mcp/agent-runtime-contracts';
@@ -31,6 +32,7 @@ import { inlineRunProjection } from './tools/execute-tasks/inline-run-projection
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { tunablesFromRuntimePolicy } from '@mcp/code-agent/core/tunables.js';
 import { FsTurnTelemetryRepository } from '@mcp/session-storage/fs-store/turn-telemetry.js';
+import { traceStorageOperation, measureStorage, recordStorageElapsed } from '@mcp/session-storage/storage-timing.js';
 import { createPolicyShadowPort } from '@mcp/code-agent/core/policy-shadow-adapter.js';
 import { hasStructuredToolTruncation } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import type {
@@ -1433,6 +1435,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     : undefined;
   const sessionNetwork = collaboration ? new SessionNetwork({ sessions: store, mailbox: collaboration.store,
     project: id => db.getProject(id),
+    onChatCreated: opts.onChatCreated,
     validateModel: (providerId, modelId) => {
       const catalog = new ProviderStore(config.dbPath);
       try {
@@ -1461,6 +1464,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   const toolContext: ToolContext = {
     sessionNetwork,
+    agenticChat: budgetNetwork?.enabled === true && budgetRoot?.enabled === true,
     collaboration,
     ultraPolicy: ultraPreset,
     ultraBudget: sharedBudget ? new UltraAgentBudget(ultraPreset.effective.parallelism.maxAgents, 24, sharedBudget) : undefined,
@@ -2541,9 +2545,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // attempt assembled by the host.
   registry.seal();
 
-  // Fase 2.5 — Policy Engine shadow composition. Returns null when every
-  // CODER_* policy flag is off, so the port is absent and dispatch stays
-  // byte-identical to legacy. The legacy context is read LIVE through
+  // Optional Policy Engine comparison diagnostics. Production defaults leave
+  // the observer absent; real permission/scope/recovery gates stay active.
+  // The legacy context for explicit diagnostic runs is read LIVE through
   // `runnerRef` (assigned right after construction) so mid-run plan/spec
   // approval applies to the next shadow evaluation.
   // ClaudeOpen exposes one ordered lifecycle registry spanning provider,
@@ -3057,6 +3061,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   interface PendingTurn {
     message: AgentMessage;
     usage: ChatUsage | null;
+    context?: PromptContextMeasurement;
     toolCalls: Array<{
       tool_use_id: string;
       tool_name: string;
@@ -3131,7 +3136,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     checkpoint?: { promise: Promise<void>; messageId: number | null };
   }
   let pendingTurn: PendingTurn | null = null;
-  let assistantMessageOrdinal = 0;
 
   const flushPendingTurn = (): Promise<void> => {
     // Detach the buffer synchronously. EventEmitter callers intentionally do
@@ -3166,6 +3170,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       operation_id: `${turn.operationId}:commit`,
       message: turn.message,
       usage: turn.usage,
+      context: turn.context,
       tool_calls: turn.toolCalls,
       nested_tool_calls: turn.nestedToolCalls.length > 0 ? turn.nestedToolCalls : undefined,
       subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
@@ -3174,8 +3179,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       existing_message_seq: turn.checkpoint?.messageId ?? undefined,
     };
     try {
-      await toolOutputStore.drain();
-      await store.persistAssistantTurn(payload);
+      await measureStorage('tool-output.drain', () => toolOutputStore.drain());
+      await measureStorage('assistant.persist', () => store.persistAssistantTurn(payload));
       if (turn.toolCalls.some(call => call.effect_outcome === 'unknown')) {
         // Recovery evidence is additive. A failed receipt commit leaves the
         // original incident pending; it never invalidates the transcript.
@@ -3195,7 +3200,14 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     };
     // Preserve assistant/tool row order and let a compaction checkpoint await
     // every earlier fire-and-forget flush before reading the visible DB span.
-    const scheduled = flushChain.then(persist, persist);
+    const queuedAt = performance.now();
+    const previousFlush = flushChain;
+    const run = () => {
+      recordStorageElapsed('transcript.queue', queuedAt);
+      return persist();
+    };
+    const scheduled = traceStorageOperation({ sessionId: session.id, operationId: turn.operationId },
+      () => previousFlush.then(run, run));
     flushChain = scheduled.catch(() => undefined);
     return scheduled;
   };
@@ -3230,6 +3242,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         operation_id: `${turn.operationId}:checkpoint`,
         message: turn.message,
         usage: null,
+        context: turn.context,
         tool_calls: [],
       };
       try {
@@ -3255,7 +3268,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   let completionFinalText: string | null = null;
   runner.on('user_message_boundary', () => { completionFinalText = null; });
-  runner.on('message_complete', (message, usage) => {
+  runner.on('message_complete', (message, usage, operationId, context) => {
     if (message.role === 'assistant' && message.phase !== 'commentary' && !message.content.some(block => block.type === 'tool_use')) {
       completionFinalText = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n').slice(0, 16000) || null;
     }
@@ -3265,8 +3278,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     flushPendingTurn();
     pendingTurn = {
       message,
-      operationId: `assistant:${runner.runId}:message:${++assistantMessageOrdinal}`,
+      operationId,
       usage: usage ?? null,
+      context,
       toolCalls: [],
       nestedToolCalls: [],
       subagentUsage: {

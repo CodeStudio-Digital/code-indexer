@@ -1,4 +1,5 @@
 import type { AssistantTurn, StreamBlock } from '../../hooks/useAgentStream.js';
+import { hasTurnTokens } from '../../lib/turn-tokens.js';
 import type { PersistedMessage, VisualGroup } from './types.js';
 import { normalizeRunText, normalizedDuplicated } from './live-run-alignment.js';
 import { type PersistedLiveReconciliation, persistedLiveReconciliation, scopeLiveTurnToLatestUser, liveBlocksCoverPersistedAssistantRun } from './chat-live-reconciliation.js';
@@ -59,6 +60,10 @@ export function isLiveTurnDuplicatedInHistory(
   let checkedThinking = false;
 
   for (const block of scopedTurn.blocks) {
+    if (block.type === 'usage') {
+      if (!hasTurnTokens(block.tokens) || reconciliation.reportedTurnIds.has(block.id)) continue;
+      return false;
+    }
     // Running agents remain live-canonical. A completed group whose tool result
     // is already durable is fully reconstructable in persisted history and
     // must not keep the accumulated live run appended after newer content.
@@ -129,6 +134,12 @@ export function liveTurnCoversPersistedAssistantRun(
   if (!turn || turn.blocks.length === 0) return false;
   const reconciliation = persistedLiveReconciliation(history, precedingUserMessageId);
   const scopedTurn = scopeLiveTurnToLatestUser(turn, reconciliation);
+  // A reconnect can replay the text but omit an earlier usage event. Keep
+  // that history visible until the live buffer can replace its footers too.
+  if (reconciliation.reportedTurnIds.size) {
+    const liveIds = new Set(scopedTurn?.blocks.flatMap(block => block.type === 'usage' && hasTurnTokens(block.tokens) ? [block.id] : []));
+    for (const id of reconciliation.reportedTurnIds) if (!liveIds.has(id)) return false;
+  }
   return Boolean(
     scopedTurn
     && liveBlocksCoverPersistedAssistantRun(

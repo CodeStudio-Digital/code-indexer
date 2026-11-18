@@ -27,7 +27,6 @@ const MAX_PERSISTED = 200;
 // Concorrência do restore da árvore. Quatro leituras mantêm o Explorer ágil sem
 // competir com o LSP/indexador durante a abertura. Ajustável em runtime via
 // `window.__MCP_TREE_QUEUE_CONCURRENCY__` para medir (espelha __MCP_API_BASE__).
-// Identical concurrent dir loads já colapsam no `dedupeInflight` de files.tree.
 function treeQueueConcurrency(): number {
   const override =
     typeof window !== 'undefined'
@@ -36,19 +35,33 @@ function treeQueueConcurrency(): number {
   return typeof override === 'number' && override > 0 ? override : 4;
 }
 
-// Fila ÚNICA do restore da árvore (W2): cap de concorrência mata o thundering herd.
-const loaderQueue = createBoundedQueue(treeQueueConcurrency());
+function createTreeLoad() {
+  return {
+    controller: new AbortController(),
+    queue: createBoundedQueue(treeQueueConcurrency()),
+    pending: new Map<string, Promise<void>>(),
+  };
+}
+let treeLoad = createTreeLoad();
 
-/** Enfileira o restore (root + dirs persistidos, rasos primeiro) na fila bounded. */
-function queueTreeRestore(expanded: Set<string>, load: (dir: string) => Promise<void>): void {
-  const depthOf = (p: string): number => (p === '' ? 0 : p.split('/').length);
-  const persisted = [...expanded].sort((a, b) => depthOf(a) - depthOf(b));
-  // Root first: do not spend all slots restoring invisible old expansions
-  // before the user can see the project at all.
-  loaderQueue.push('', 0, async () => {
-    await load('');
-    for (const dir of persisted) {
-      loaderQueue.push(dir, depthOf(dir) + 1, () => load(dir));
+function resetTreeLoad(): void {
+  treeLoad.queue.clear();
+  treeLoad.controller.abort();
+  treeLoad = createTreeLoad();
+}
+
+function restoreBranch(dir: string, get: () => FileTreeState, load = treeLoad): void {
+  const { signal } = load.controller;
+  load.queue.push(dir, dir ? dir.split('/').length : 0, async () => {
+    for (let p = dir; p; p = parentOf(p)) {
+      if (!get().expanded.has(p)) return;
+    }
+    if (signal.aborted) return;
+    await get().ensureLoaded(dir);
+    if (signal.aborted) return;
+    const { children, expanded } = get();
+    for (const child of children.get(dir) ?? []) {
+      if (child.type === 'dir' && expanded.has(child.path)) restoreBranch(child.path, get, load);
     }
   });
 }
@@ -107,7 +120,7 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
 
   init: (projectId) => {
     const expanded = new Set(loadPersisted(projectId));
-    loaderQueue.clear(); // cancela o restore do projeto anterior
+    resetTreeLoad();
     set({
       projectId,
       children: new Map(),
@@ -116,121 +129,127 @@ export const useFileTreeStore = create<FileTreeState>((set, get) => ({
       error: null,
       version: 0,
     });
-    // Root + dirs persistidos por uma fila BOUNDED ordenada por profundidade (rasos
-    // primeiro). Substitui o fan-out paralelo de até 500 readdirs que travava a
-    // abertura. O guard de projectId em ensureLoaded dropa resultados stale.
-    queueTreeRestore(expanded, (dir) => get().ensureLoaded(dir));
+    restoreBranch('', get);
   },
 
-  ensureLoaded: async (dir) => {
-    const { projectId, children, loading } = get();
-    if (projectId == null || children.has(dir) || loading.has(dir)) return;
+  ensureLoaded: (dir) => {
+    const { projectId, children } = get();
+    if (projectId == null || children.has(dir)) return Promise.resolve();
+    const { controller: { signal }, pending } = treeLoad;
+    const existing = pending.get(dir);
+    if (existing) return existing;
     set((s) => ({ loading: new Set(s.loading).add(dir) }));
-    try {
-      const node = await apiCall<TreeNodeDTO>('files.tree', {
-        projectId, root: dir === '' ? '.' : dir, maxDepth: 1,
-      });
+    const request = apiCall<TreeNodeDTO>('files.tree', {
+      projectId, root: dir === '' ? '.' : dir, maxDepth: 1,
+    }, { signal }).then(node => {
+      if (signal.aborted) return;
       const entries = (node.children ?? [])
         .map<TreeEntry>((c) => ({ name: c.name, path: c.path, type: c.type, hasChildren: c.hasChildren ?? (c.children?.length ?? 0) > 0 }))
         .sort(compareTreeEntries);
       set((s) => {
-        if (s.projectId !== projectId) return {};
         const next = new Map(s.children);
         next.set(dir, entries);
         const loadingNext = new Set(s.loading);
         loadingNext.delete(dir);
         return { children: next, loading: loadingNext, error: null, version: s.version + 1 };
       });
-    } catch (err) {
+    }).catch((err: unknown) => {
+      if (signal.aborted) return;
       set((s) => {
         const loadingNext = new Set(s.loading);
         loadingNext.delete(dir);
         return { loading: loadingNext, error: err instanceof Error ? err.message : String(err) };
       });
-    }
+    }).finally(() => pending.delete(dir));
+    pending.set(dir, request);
+    return request;
   },
 
   toggle: (dir) => {
     const { expanded, projectId } = get();
     const next = new Set(expanded);
     if (next.has(dir)) next.delete(dir);
-    else {
-      next.add(dir);
-      void get().ensureLoaded(dir);
-    }
+    else next.add(dir);
     set((s) => ({ expanded: next, version: s.version + 1 }));
+    if (next.has(dir)) restoreBranch(dir, get);
     if (projectId != null) persist(projectId, next);
   },
 
   reveal: async (path) => {
-    // Captura o projeto no início e reconfere no set final (espelha ensureLoaded).
-    // Sem isso, um reveal em voo do projeto A — após a troca para B (init resetou
-    // `expanded`) — adicionaria ancestrais de A ao set de B e os persistiria no
-    // localStorage de B. O await abaixo cede o event loop, abrindo essa janela.
-    const pid = get().projectId;
+    const { signal } = treeLoad.controller;
     const ancestors: string[] = [];
     let dir = parentOf(path);
     while (dir) { ancestors.unshift(dir); dir = parentOf(dir); }
-    for (const a of ['', ...ancestors]) await get().ensureLoaded(a);
+    for (const a of ['', ...ancestors]) {
+      if (signal.aborted) return;
+      await get().ensureLoaded(a);
+    }
+    if (signal.aborted) return;
+    const opened = ancestors.filter(path => !get().expanded.has(path));
     set((s) => {
-      if (s.projectId !== pid) return {};   // trocou de projeto mid-reveal → no-op
       const next = new Set(s.expanded);
       for (const a of ancestors) next.add(a);
       if (s.projectId != null) persist(s.projectId, next);
       return { expanded: next, version: s.version + 1 };
     });
+    if (opened[0]) restoreBranch(opened[0], get);
   },
 
   applyFsEvents: (events) => {
-    if (events.length > 500) { get().refresh(); return; }
-    // Poda a seleção quando um path some do disco (delete externo OU nosso).
-    const deleted = events.filter((e) => e.kind === 'delete').map((e) => e.path);
-    if (deleted.length) useSelectionStore.getState().prune(deleted);
+    // A checkout can emit thousands of content changes in one batch. Only
+    // membership changes in loaded directories affect the Explorer.
+    const deleted = new Set(events.filter(e => e.kind === 'delete').map(e => e.path));
+    if (deleted.size) useSelectionStore.getState().prune([...deleted]);
     set((s) => {
       const children = new Map(s.children);
       const expanded = new Set(s.expanded);
+      const lists = new Map<string, Map<string, TreeEntry>>();
+      const changedParents = new Set<string>();
       let touched = false;
-      for (const e of events) {
-        const parent = parentOf(e.path);
-        if (e.kind === 'delete') {
-          // Drop the entry from its parent (if loaded) + every loaded slice
-          // and expansion under it (dir subtree cleanup).
-          const list = children.get(parent);
-          if (list?.some((x) => x.path === e.path)) {
-            children.set(parent, list.filter((x) => x.path !== e.path));
+      if (deleted.size) {
+        for (const key of new Set([...children.keys(), ...expanded])) {
+          for (let p = key; p; p = parentOf(p)) {
+            if (!deleted.has(p)) continue;
+            children.delete(key);
+            expanded.delete(key);
             touched = true;
+            break;
           }
-          for (const key of [...children.keys()]) {
-            if (key === e.path || key.startsWith(`${e.path}/`)) { children.delete(key); touched = true; }
-          }
-          for (const key of [...expanded]) {
-            if (key === e.path || key.startsWith(`${e.path}/`)) { expanded.delete(key); touched = true; }
-          }
-        } else {
-          const list = children.get(parent);
-          if (!list) continue; // parent not loaded — will appear on expand
-          if (list.some((x) => x.path === e.path)) continue; // content change, not creation
-          const entry: TreeEntry = {
-            name: nameOf(e.path), path: e.path,
-            type: e.isDir ? 'dir' : 'file',
-            // Optimistic chevron, matching the tree handler's fast path.
-            hasChildren: e.isDir ? true : undefined,
-          };
-          const next = [...list, entry].sort(compareTreeEntries);
-          children.set(parent, next);
-          touched = true;
         }
       }
-      return touched ? { children, expanded, version: s.version + 1 } : {};
+      for (const e of events) {
+        const parent = parentOf(e.path);
+        const entries = children.get(parent);
+        if (!entries) continue;
+        let list = lists.get(parent);
+        if (!list) {
+          list = new Map(entries.map(entry => [entry.path, entry]));
+          lists.set(parent, list);
+        }
+        if (e.kind === 'delete') {
+          if (list.delete(e.path)) changedParents.add(parent);
+        } else {
+          const type = e.isDir ? 'dir' : 'file';
+          if (list.get(e.path)?.type === type) continue;
+          list.set(e.path, {
+            name: nameOf(e.path), path: e.path,
+            type,
+            hasChildren: e.isDir ? true : undefined,
+          });
+          changedParents.add(parent);
+        }
+      }
+      for (const parent of changedParents) children.set(parent, [...lists.get(parent)!.values()].sort(compareTreeEntries));
+      return touched || changedParents.size ? { children, expanded, version: s.version + 1 } : {};
     });
   },
 
   refresh: () => {
-    const { projectId, expanded } = get();
+    const { projectId } = get();
     if (projectId == null) return;
-    loaderQueue.clear();
-    set((s) => ({ children: new Map(), loading: new Set(), version: s.version + 1 }));
-    queueTreeRestore(expanded, (dir) => get().ensureLoaded(dir));
+    resetTreeLoad();
+    set((s) => ({ children: new Map(), loading: new Set(), error: null, version: s.version + 1 }));
+    restoreBranch('', get);
   },
 }));
 

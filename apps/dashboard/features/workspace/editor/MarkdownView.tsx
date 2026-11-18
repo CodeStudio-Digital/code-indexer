@@ -19,6 +19,9 @@ import { Eye, FileEdit, LayoutPanelLeft, Loader2 } from 'lucide-react';
 import type { OpenFile } from '../../../state/workspace.js';
 import { cn } from '../../../lib/utils.js';
 import { useEnsureFileContent } from './useEnsureFileContent.js';
+import { ChatFileLinks } from '../../chat/messages/ChatFileLinks.js';
+import { MarkdownLink } from '../../chat/messages/Markdown.js';
+import { markdownUrlTransform } from '../../chat/messages/markdown-links.js';
 
 const MonacoMount = lazy(() =>
   import('./MonacoMount.js').then((m) => ({ default: m.MonacoMount })),
@@ -92,7 +95,7 @@ export function MarkdownView({ file }: MarkdownViewProps) {
         {mode === 'edit' ? (
           <MarkdownEditorSurface file={file} />
         ) : mode === 'preview' ? (
-          <MarkdownRender source={file.content ?? ''} />
+          <MarkdownRender file={file} />
         ) : (
           <PanelGroup
             direction="horizontal"
@@ -104,7 +107,7 @@ export function MarkdownView({ file }: MarkdownViewProps) {
             </Panel>
             <PanelResizeHandle className="w-1.5 bg-border/70 hover:bg-primary/60 transition-colors cursor-col-resize" />
             <Panel id="markdown-preview" order={2} defaultSize={50} minSize={20} className="min-w-0">
-              <MarkdownRender source={file.content ?? ''} />
+              <MarkdownRender file={file} />
             </Panel>
           </PanelGroup>
         )}
@@ -158,15 +161,13 @@ function ModeButton({
   );
 }
 
-function MarkdownRender({ source }: { source: string }) {
+function MarkdownRender({ file }: { file: OpenFile }) {
   const components = useMemo(
     () => ({
       // Prose tweaks — Inter base, monospace for inline code, plain bg
       // for blocks since we don't have a syntax highlighter wired here.
       // Headings inherit our :root tokens from index.css.
-      a: (props: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-        <a {...props} className="text-primary underline underline-offset-2 hover:text-primary/80" />
-      ),
+      a: MarkdownLink,
       code: (props: React.HTMLAttributes<HTMLElement> & { inline?: boolean }) => {
         if (props.inline) {
           return <code {...props} className="font-mono text-[12.5px] px-1 rounded-sm bg-muted text-foreground" />;
@@ -202,12 +203,14 @@ function MarkdownRender({ source }: { source: string }) {
     // bounded height the div just grows with the document, so no scrollbar ever
     // appears and the parent (overflow-hidden) clips everything past the fold.
     // Same pairing as SvgView's canvas and the builder's file tree.
-    <div className="h-full min-h-0 overflow-y-auto px-6 py-5">
+    <ChatFileLinks endpoint={'/api/projects/' + file.projectId + '/linked-file'} sourceFile={file.path}>
+    <div data-markdown-document className="h-full min-h-0 overflow-y-auto px-6 py-5">
       <div className="prose prose-sm dark:prose-invert max-w-3xl mx-auto prose-headings:tracking-tight prose-headings:font-semibold prose-h1:text-2xl prose-h2:text-xl prose-h3:text-base prose-p:leading-relaxed prose-li:my-0.5">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-          {source}
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={markdownUrlTransform}>
+          {file.content ?? ''}
         </ReactMarkdown>
       </div>
     </div>
+    </ChatFileLinks>
   );
 }

@@ -414,6 +414,7 @@ export interface RunCoderOptions {
    * `ask_user` made on turn 1.
    */
   onRunnerReady?: (runner: CoderRunner) => void;
+  onChatCreated?: (sessionId: SessionId) => void | Promise<void>;
   /**
    * Notification callback fired whenever the SnapshotRecorder captures (or
    * appends to) a baseline for a file the agent just mutated. Lets the HTTP

@@ -85,9 +85,11 @@ function outputTheme(dark: boolean): ReturnType<typeof xtermTheme> {
 
 interface OutputPanelProps {
   projectId: number;
+  runnerProjectId?: number;
+  worktreePath?: string | null;
 }
 
-export function OutputPanel({ projectId }: OutputPanelProps) {
+export function OutputPanel({ projectId, runnerProjectId = projectId, worktreePath }: OutputPanelProps) {
   const { t } = useTranslation(['projects']);
   const tasks = useRunningTasks((state) => state.tasks);
   const debugSessions = useDebugSessions((state) => state.sessions);
@@ -95,7 +97,7 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const items = useMemo<OutputItem[]>(() => {
-    const runnerItems: OutputItem[] = tasksForProject(tasks, projectId).map((task) => ({
+    const runnerItems: OutputItem[] = tasksForProject(tasks, runnerProjectId, worktreePath).map((task) => ({
       kind: 'runner',
       key: `runner:${task.taskId}`,
       startedAt: task.startedAt,
@@ -116,7 +118,7 @@ export function OutputPanel({ projectId }: OutputPanelProps) {
       entry,
     }));
     return [...runnerItems, ...debugItems, ...finiteItems].sort((a, b) => b.startedAt - a.startedAt);
-  }, [tasks, debugSessions, executionEntries, projectId]);
+  }, [tasks, debugSessions, executionEntries, projectId, runnerProjectId, worktreePath]);
 
   // Follow the latest execution until the user explicitly chooses history.
   // If a selected item is dismissed, fall back to the current latest item.

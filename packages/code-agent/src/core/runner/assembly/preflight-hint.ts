@@ -34,12 +34,10 @@ export function renderPreflightHint(
     }
   }
 
-  const toolsetParts: string[] = [];
-  if (seed.profile) toolsetParts.push(`profile=${seed.profile}`);
-  if (seed.pinTools?.length) toolsetParts.push(`prioritized: ${seed.pinTools.join(', ')}`);
-  if (toolsetParts.length > 0) {
-    lines.push(`toolset seeded for this task: ${toolsetParts.join('; ')}`);
-  }
+  // Preflight guesses cannot promise membership in the final provider catalog.
+  // Keep the raw recommendations in telemetry, not as misleading tool aliases
+  // in the prompt (e.g. run_command when exec_command/write_stdin own execution).
+  if (seed.profile) lines.push(`profile=${seed.profile}; use the visible tool schemas as the invocation contract.`);
 
   if (seed.targetProjects?.length) {
     lines.push('likely linked projects — verify before editing:');
@@ -77,7 +75,7 @@ export function renderPreflightHint(
   lines.push(
     'note: these are suggestions from a cheap pre-analysis run before any code was read. Verify against the code; ' +
       'if a memory conflicts with what you observe, trust the code (memories age when files change); ' +
-      'find_tools / expand_toolset remain available if something is missing.',
+      'use visible tools first and find_tools for a missing capability.',
   );
   lines.push('</preflight>');
   return lines.join('\n');

@@ -27,7 +27,8 @@ describe('system prompt — tool visibility (cap) block', () => {
     expect(suffix).toContain('# Tool visibility');
     expect(suffix).toContain('capped at 32 of ~90 tools');
     expect(suffix).toContain('find_tools');
-    expect(suffix).toContain('discovered tools are pinned');
+    expect(suffix).toContain('Discovery does not replace visible tools');
+    expect(suffix).toContain('code_exec');
     expect(prefix).not.toContain('# Tool visibility');
   });
 

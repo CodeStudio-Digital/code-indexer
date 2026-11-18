@@ -247,6 +247,62 @@ html[data-app-runtime='electron'] :where(
     linear-gradient(to bottom, hsl(var(--background) / 0.12), transparent 120px),
     var(--workbench-surface);
 }
+.chat-turn-frame {
+  position: relative;
+  display: flow-root;
+  min-width: 0;
+}
+.chat-turn-frame:is([data-live], [data-turn-frame]) {
+  margin-inline-start: 4px;
+  padding-inline: 15px 8px;
+  border-inline: 1px solid transparent;
+}
+.chat-turn-frame[data-turn-frame] {
+  --turn-outline: color-mix(in srgb, var(--primary) 32%, transparent);
+  border-inline-color: var(--turn-outline);
+  border-inline-start-color: color-mix(in srgb, var(--primary) 62%, transparent);
+}
+.chat-turn-frame[data-turn-start] {
+  min-height: 24px;
+  margin-top: 3px;
+  padding-top: 1px;
+  border-top: 1px solid var(--turn-outline);
+  border-start-start-radius: 5px;
+  border-start-end-radius: 5px;
+}
+.chat-turn-frame[data-turn-end] {
+  margin-bottom: 3px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--turn-outline);
+  border-end-start-radius: 5px;
+  border-end-end-radius: 5px;
+}
+.chat-turn-info {
+  position: absolute;
+  inset-inline-start: -1px;
+  top: clamp(11px, 50%, 22px);
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  border-radius: 50%;
+  color: var(--primary);
+}
+.chat-turn-info svg {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--workbench-surface);
+}
+.chat-turn-info:is(:hover, :focus-visible, [data-state="open"]) svg {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 24%, transparent);
+}
+.chat-turn-info:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
 .workbench-panel-header {
   height: 32px;
   flex: 0 0 32px;

@@ -172,7 +172,7 @@ describe('agent_memory store (migration 181)', () => {
     expect(idx[0].source).toBe('agent');
   });
 
-  it('prefers explicit memory and removes near-duplicate auto-distilled titles', () => {
+  it('ranks explicit memory first without hiding different facts with similar titles', () => {
     db.createAgentMemory({
       projectId,
       name: 'optimistic mutation persistence disconnect',
@@ -192,7 +192,7 @@ describe('agent_memory store (migration 181)', () => {
 
     const idx = db.listAgentMemoryIndex('project', projectId, 12);
     const related = idx.filter((entry) => entry.name.startsWith('optimistic-mutation'));
-    expect(related).toHaveLength(1);
+    expect(related).toHaveLength(2);
     expect(related[0].name).toBe('optimistic-mutation-state-disconnect');
     expect(related[0].source).toBe('agent');
   });
@@ -206,7 +206,7 @@ describe('agent_memory store (migration 181)', () => {
   it('preflights deterministic hygiene and returns false again after consolidation', () => {
     expect(db.hasAgentMemoryHygieneCandidates('project', projectId)).toBe(false);
     db.createAgentMemory({ projectId, name: 'first', content: 'Use   SQLite WAL' });
-    db.createAgentMemory({ projectId, name: 'second', content: ' use sqlite wal ' });
+    db.createAgentMemory({ projectId, name: 'second', content: ' Use SQLite WAL ' });
 
     expect(db.hasAgentMemoryHygieneCandidates('project', projectId)).toBe(true);
     expect(db.consolidateAgentMemory('project', projectId).archived).toBe(1);

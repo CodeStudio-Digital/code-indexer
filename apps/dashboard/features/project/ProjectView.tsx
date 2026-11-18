@@ -41,7 +41,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi.js';
 import type { Project } from '@mcp/shared/types.js';
 import { useRunningTasks, tasksForProject, isDevServerTask } from '../../state/running-tasks.js';
@@ -50,6 +50,7 @@ import {
   useWorkspaceStore,
 } from '../../state/workspace.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
+import { useWorktreeSelection } from '../../state/worktree-selection.js';
 import { pushRecentProject } from '../../state/recent-projects.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import { useFsEvents, type FsEventDTO } from '../../hooks/useFsEvents.js';
@@ -71,7 +72,7 @@ import {
   pluginEditorContextFromEditor,
 } from '../workspace/editor/plugin-editor-gutter.js';
 import { runPluginEditorAction } from '../workspace/editor/plugin-editor-action-runner.js';
-import { getActiveEditor } from '../workspace/editor/editor-models.js';
+import { flushWorkspaceDrafts, getActiveEditor } from '../workspace/editor/editor-models.js';
 import { startRecentFilesTracking } from '../../state/recent-files.js';
 import { SearchEverywhere } from '../search-everywhere/SearchEverywhere.js';
 import { FileStructurePopup } from '../search-everywhere/FileStructurePopup.js';
@@ -80,6 +81,7 @@ import { LocalHistoryDialog } from '../workspace/local-history/LocalHistoryDialo
 import { BOTTOM_BUILTIN_TAB_IDS } from '../workspace/BottomPanel.js';
 import { projectSurface } from './tabs-config.js';
 import { ProjectWorkbench } from './ProjectWorkbench.js';
+import { useProjectCheckout } from './useProjectCheckout.js';
 
 interface ProjectViewProps {
   projectId: number;
@@ -91,12 +93,28 @@ interface ProjectViewProps {
 
 export function ProjectView({ projectId, projectName, initialSessionId }: ProjectViewProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { t } = useTranslation('workspace');
   const layout = useWorkspaceLayout();
+  const clearCheckoutLink = useCallback(() => {
+    const params = new URLSearchParams(location.search);
+    if (!params.has('session') && !params.has('worktree')) return;
+    params.delete('session');
+    params.delete('worktree');
+    navigate({ search: params.toString(), hash: location.hash }, { replace: true });
+  }, [location.hash, location.search, navigate]);
+  const worktreeSelection = useWorktreeSelection(projectId, clearCheckoutLink);
+  const linkedWorktree = new URLSearchParams(location.search).get('worktree');
+  const selectWorktree = worktreeSelection.select;
+  useLayoutEffect(() => {
+    if (linkedWorktree !== null) selectWorktree(linkedWorktree || null);
+  }, [linkedWorktree, selectWorktree]);
+  const { workspaceId, workspaceRoot, workspaceError } = useProjectCheckout(projectId, worktreeSelection.path);
   const contribWindows = useContributions((s) => s.toolWindows);
   const contribEditorActions = useContributions((s) => s.editorActions);
   const openFile = useWorkspaceStore((s) => s.openFile);
-  const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
+  const activeFilePath = useWorkspaceStore((s) =>
+    workspaceId != null && s.activeProjectId === workspaceId ? s.activeFilePath : null);
   const setProject = useWorkspaceStore((s) => s.setProject);
 
   // Live filesystem events — ONE stream per project feeds both consumers:
@@ -104,24 +122,25 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // (non-dirty → silent reload from disk; dirty → conflict badge).
   const applyFsEventsToTree = useFileTreeStore((s) => s.applyFsEvents);
   const gitFsDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useFsEvents(projectId, (events: FsEventDTO[]) => {
-    applyFsEventsToTree(events);
+  useFsEvents(workspaceId, (events: FsEventDTO[]) => {
+    const ws = useWorkspaceStore.getState();
+    if (workspaceId == null || ws.activeProjectId !== workspaceId) return;
+    if (useFileTreeStore.getState().projectId === workspaceId) applyFsEventsToTree(events);
     if (events.some((event) => !event.isDir)) {
       if (gitFsDebounce.current) clearTimeout(gitFsDebounce.current);
       gitFsDebounce.current = setTimeout(() => {
         const revision = useGitRevision.getState();
-        revision.bump(projectId, revision.branchByProject[projectId] ?? null);
+        revision.bump(workspaceId, revision.branchByProject[workspaceId] ?? null);
       }, 350);
     }
-    const ws = useWorkspaceStore.getState();
     for (const e of events) {
       if (e.isDir) continue;
       const tab = ws.openFiles.find(
-        (f) => (f.kind === undefined || f.kind === 'file') && f.path === e.path && f.projectId === projectId,
+        (f) => (f.kind === undefined || f.kind === 'file') && f.path === e.path && f.projectId === workspaceId,
       );
       if (!tab || (tab.kind !== undefined && tab.kind !== 'file')) continue;
       if (e.kind === 'delete' || tab.dirty) {
-        ws.markExternallyChanged(projectId, e.path);
+        ws.markExternallyChanged(workspaceId, e.path);
         continue;
       }
       // Never-loaded tab (content null) loads on activation anyway.
@@ -132,30 +151,32 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       // round trip with no payload.
       void apiCallFs<
         { content: string; last_modified: string } | { notModified: true; last_modified: string }
-      >('files.read', { projectId, path: e.path, ifModifiedSince: tab.lastModified ?? undefined })
+      >('files.read', { projectId: workspaceId, path: e.path, ifModifiedSince: tab.lastModified ?? undefined })
         .then(async (res) => {
           if ('notModified' in res) return;
           const { applyExternalContent } = await import('../workspace/editor/editor-models.js');
-          applyExternalContent(projectId, e.path, res.content, res.last_modified);
+          applyExternalContent(workspaceId, e.path, res.content, res.last_modified);
         })
         .catch(() => undefined);
     }
   });
   useEffect(() => () => {
     if (gitFsDebounce.current) clearTimeout(gitFsDebounce.current);
-  }, [projectId]);
+  }, [workspaceId]);
 
   // Live git-metadata — ONE stream per project. A branch switch (in-app OR an
   // external `git checkout`) bumps the git-revision store, which re-syncs the
   // branch chip / git window / file-tree colors; a genuine switch also toasts.
   // Editor contents already self-heal via the fs-events stream above (the
   // working-tree files change on disk), and the backend re-indexes on its own.
-  useGitMeta(projectId, (frame) => {
+  useGitMeta(workspaceId, (frame) => {
+    if (workspaceId == null) return;
     // changed:[] marks the server seed (initial/reconnect snapshot) — record the
     // branch without forcing a refetch unless it reveals a switch we missed.
     const isSeed = frame.changed.length === 0;
-    const { branchChanged } = useGitRevision.getState().bump(projectId, frame.branch, isSeed);
+    const { branchChanged } = useGitRevision.getState().bump(workspaceId, frame.branch, isSeed);
     if (branchChanged) {
+      window.dispatchEvent(new CustomEvent('coder:worktrees-changed', { detail: { projectId } }));
       toast.info(frame.branch ? t('git.branchSwitched', { branch: frame.branch }) : t('git.branchDetached'));
     }
   });
@@ -176,12 +197,13 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // Preview availability: builder projects always; any project once a
   // dev-server runner is active. Drives both the conditional "Preview" rail
   // tab and the chat-tab split.
-  const hasDevTask = useRunningTasks((s) => tasksForProject(s.tasks, projectId).some(isDevServerTask));
-  const previewEnabled = !!builderJson || hasDevTask;
+  const hasDevTask = useRunningTasks((s) => tasksForProject(s.tasks, projectId, worktreeSelection.path).some(isDevServerTask));
+  const previewEnabled = workspaceId != null && (!!builderJson || hasDevTask);
   // Keep project metadata reads side-effect free. The explicit lifecycle call
   // runs after the first paint and is cancelled if this view disappears before
   // the deferred large-project reconciliation begins.
   useEffect(() => {
+    if (workspaceId == null) return;
     const activationId = crypto.randomUUID();
     const clientId = (() => {
       const key = 'mcp-project-lifecycle-client-id';
@@ -199,7 +221,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     let secondFrame = 0;
     const firstFrame = requestAnimationFrame(() => {
       secondFrame = requestAnimationFrame(() => {
-        activation = apiCall('projects.activate', { id: projectId, activationId, clientId }).catch(() => undefined);
+        activation = apiCall('projects.activate', { id: workspaceId, activationId, clientId }).catch(() => undefined);
       });
     });
     return () => {
@@ -209,10 +231,10 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       // activation. If activation started, serialize deactivation after it so
       // HTTP and IPC cannot leave a late activation record behind.
       void (activation ?? Promise.resolve())
-        .then(() => apiCall('projects.deactivate', { id: projectId, activationId, clientId }))
+        .then(() => apiCall('projects.deactivate', { id: workspaceId, activationId, clientId }))
         .catch(() => undefined);
     };
-  }, [projectId]);
+  }, [workspaceId]);
 
   useEffect(() => {
     markRouteEvent('ProjectView:mounted', { projectId, tab: layout.primarySurface });
@@ -221,12 +243,19 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
 
   useEffect(() => {
     setRouteTab(layout.primarySurface, projectId);
-    useActiveSurface.getState().setProjectTab({ projectId, tab: layout.primarySurface });
   }, [projectId, layout.primarySurface]);
+  useLayoutEffect(() => {
+    useActiveSurface.getState().setProjectTab({
+      projectId,
+      tab: layout.primarySurface,
+      workspaceId,
+      worktreePath: worktreeSelection.path,
+    });
+  }, [projectId, layout.primarySurface, workspaceId, worktreeSelection.path]);
 
   // Clear the active-surface signal when leaving the project view so off-project
   // pages don't read a stale rail tab.
-  useEffect(() => () => useActiveSurface.getState().setProjectTab(null), []);
+  useLayoutEffect(() => () => useActiveSurface.getState().setProjectTab(null), []);
 
   // A session deep link intentionally takes over the primary area; ordinary
   // project opens retain the IDE-first Editor + left/right tool windows.
@@ -242,7 +271,10 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // surface. Bottom-panel tools (runners/terminal/...) open the drawer at
   // that tab; everything else selects a side-rail tab. Only honour ids we
   // actually know about. `getState()` avoids re-running on every layout change.
+  const appliedTabLink = useRef<string | null>(null);
   useEffect(() => {
+    const link = `${projectId}:${location.key}`;
+    if (appliedTabLink.current === link) return;
     const requested = new URLSearchParams(location.search).get('tab');
     if (!requested) return;
     // Legacy deep-links (?tab=runs|indexed|...) now resolve to the unified
@@ -276,20 +308,24 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       useWorkspaceLayout.getState().setActiveRight(requested);
     } else if (pluginWindow?.side === 'bottom') {
       useWorkspaceLayout.getState().setActiveBottom(requested);
+    } else {
+      return;
     }
-  }, [location.search, contribWindows]);
+    appliedTabLink.current = link;
+  }, [projectId, location.key, location.search, contribWindows]);
 
   // ─── Open file from the tree → uses the same workspace store as the
   //     legacy Workspace component so tabs persist + the editor sees
   //     them ───
   const handleOpen = useCallback(
     (path: string) => {
+      if (workspaceId == null || useWorkspaceStore.getState().activeProjectId !== workspaceId) return;
       // Instant open — content: null; MonacoMount fetches on activation
       // (SWR via ifModifiedSince once loaded). No await, no flicker.
-      openFile({ projectId, path, content: null, dirty: false, lastModified: null });
+      openFile({ projectId: workspaceId, path, content: null, dirty: false, lastModified: null });
       useWorkspaceLayout.getState().setPrimarySurface('editor');
     },
-    [projectId, openFile],
+    [workspaceId, openFile],
   );
 
   // Cross-pane "show me the editor" requests (selection chip's open-in-
@@ -298,30 +334,22 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   useEffect(() => {
     function onOpenFilesTab(e: Event) {
       const d = (e as CustomEvent).detail as { projectId?: number } | undefined;
-      if (d?.projectId === projectId) useWorkspaceLayout.getState().setPrimarySurface('editor');
+      if (workspaceId != null && d?.projectId === workspaceId) useWorkspaceLayout.getState().setPrimarySurface('editor');
     }
     window.addEventListener('mcp:open-files-tab', onOpenFilesTab as EventListener);
     return () => window.removeEventListener('mcp:open-files-tab', onOpenFilesTab as EventListener);
-  }, [projectId]);
+  }, [workspaceId]);
 
-  // ─── Tab restoration across reloads — INSTANT: tabs come back with
-  //     content: null (no serial fetch loop); the active one loads on
-  //     mount, the rest on first activation. A deleted-on-disk file shows
-  //     its loading state until the user activates it and the read 404s —
-  //     acceptable for a restored ghost. ───
-  // ─── Project scope: UM swap atômico. setProject persiste as abas do projeto
-  //     que sai, dropa-as (para o editor nunca mostrar arquivos de outro
-  //     projeto — P1) e hidrata as abas persistidas DESTE projeto (content:null
-  //     → fetch lazy na ativação). Substitui o antigo loop de restore que só
-  //     ADICIONAVA, nunca limpava. ───
-  // useLayoutEffect (não useEffect): o swap roda ANTES do paint, então a troca de
-  // projeto nunca pinta um frame com as abas/arquivo do projeto anterior (alinha
-  // activeProjectId no store antes do browser desenhar). Mata o flash de 1 frame.
   useLayoutEffect(() => {
     useWorkspaceLayout.getState().activateProject(projectId);
-    setProject(projectId);
     return () => useWorkspaceLayout.getState().deactivateProject(projectId);
-  }, [projectId, setProject]);
+  }, [projectId]);
+
+  useLayoutEffect(() => {
+    if (workspaceId == null || useWorkspaceStore.getState().activeProjectId === workspaceId) return;
+    flushWorkspaceDrafts();
+    setProject(workspaceId, true);
+  }, [workspaceId, setProject]);
 
   // Title-bar switcher feeds: report this window's active project to the main
   // process (so every window's switcher lists it under "Open Projects") and
@@ -336,9 +364,10 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // savePersistedTabs se auto-filtra por projectId, então uma aba estranha
   // jamais é escrita sob esta chave.
   useEffect(() => {
+    if (workspaceId == null) return;
     const tabIdentity = (state: ReturnType<typeof useWorkspaceStore.getState>): string =>
       state.openFiles
-        .filter((file) => file.projectId === projectId && (!file.kind || file.kind === 'file'))
+        .filter((file) => file.projectId === workspaceId && (!file.kind || file.kind === 'file'))
         .map((file) => file.path)
         .join('\u0000');
     const initial = useWorkspaceStore.getState();
@@ -348,7 +377,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     let previousSplit = initial.splitDir;
     let previousActivePane = initial.activePaneId;
     const unsubscribe = useWorkspaceStore.subscribe((state) => {
-      if (state.activeProjectId !== projectId) return;
+      if (state.activeProjectId !== workspaceId) return;
       const nextTabs = tabIdentity(state);
       // Buffer content/dirty metadata changes on every key, but persisted tabs
       // contain only identity/layout. Avoid a synchronous localStorage write in
@@ -364,7 +393,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       previousSplit = state.splitDir;
       previousActivePane = state.activePaneId;
       savePersistedTabs(
-        projectId,
+        workspaceId,
         state.openFiles,
         state.activeFilePath,
         state.panes,
@@ -373,16 +402,17 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       );
     });
     return () => unsubscribe();
-  }, [projectId]);
+  }, [workspaceId]);
 
   // ─── Keymap: command registry + ONE capture-phase dispatcher ───
   // Replaces the old hardcoded Ctrl+J/W/B listener. Bindings come from the
   // active preset (IntelliJ by default) + user overrides; the Keymap dialog
   // (Ctrl+Alt+S) edits them live.
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (workspaceId == null) return;
     startRecentFilesTracking();
     const unregister = registerProjectCommands({
-      projectId,
+      projectId: workspaceId,
       // Ctrl+J = toggle the bottom drawer; opens at Terminal when closed,
       // closes regardless of which bottom tab is active. getState() reads
       // live (this closure is registered once per project).
@@ -418,7 +448,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
     // useState setter. Registering once per project keeps closures fresh
     // enough (they read live state via getState()).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [workspaceId]);
 
   // Plugin UI contributions — hydrate scoped to THIS project so activation
   // rules (auto-detection) are evaluated against its root: a plugin's panel
@@ -426,10 +456,11 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
   // repo). Re-runs when the project changes. Each contributed tool window
   // becomes an extra rail tab / bottom-panel tab rendering its sandboxed webview.
   useEffect(() => {
-    void hydrateContributions(projectId);
-  }, [projectId]);
+    if (workspaceId != null) void hydrateContributions(workspaceId);
+  }, [workspaceId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (workspaceId == null) return;
     const activeLanguageId = activeFilePath ? languageIdForPath(activeFilePath) : undefined;
     const activeActions = contribEditorActions.filter((action) => (
       !action.documentSelector
@@ -447,12 +478,12 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         allowInInputs: true,
         run: async () => { await runPluginEditorAction(
           action,
-          projectId,
-          pluginEditorContextFromEditor(getActiveEditor(), projectId, activeFilePath ?? undefined, activeLanguageId),
+          workspaceId,
+          pluginEditorContextFromEditor(getActiveEditor(), workspaceId, activeFilePath ?? undefined, activeLanguageId),
         ); },
       })),
     );
-  }, [activeFilePath, contribEditorActions, projectId]);
+  }, [activeFilePath, contribEditorActions, workspaceId]);
   return (
     // `h-full` (not `flex-1`) because the parent <main> in AppShell is
     // a plain block element — `flex-1` would no-op and the bottom of
@@ -463,7 +494,11 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       <ProjectWorkbench
         projectId={projectId}
         projectName={projectName}
-        projectRoot={project?.root_path ?? null}
+        mainRoot={project?.root_path ?? null}
+        projectRoot={worktreeSelection.path ? workspaceRoot : project?.root_path ?? null}
+        workspaceId={workspaceId}
+        workspaceError={workspaceError}
+        worktreeSelection={worktreeSelection}
         initialSessionId={initialSessionId}
         activeFilePath={activeFilePath}
         onOpenFile={handleOpen}
@@ -473,10 +508,14 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         framework={project?.framework}
       />
       {/* Keymap-driven overlays — open via Shift Shift / Ctrl+F12 / Ctrl+Alt+S. */}
-      <SearchEverywhere projectId={projectId} onOpenFile={handleOpen} />
-      <FileStructurePopup projectId={projectId} />
+      {workspaceId != null && (
+        <div key={workspaceId} className="contents">
+          <SearchEverywhere projectId={workspaceId} onOpenFile={handleOpen} />
+          <FileStructurePopup projectId={workspaceId} />
+          <LocalHistoryDialog />
+        </div>
+      )}
       <KeymapDialog />
-      <LocalHistoryDialog />
     </div>
   );
 }

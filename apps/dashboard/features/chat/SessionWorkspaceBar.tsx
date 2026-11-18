@@ -1,14 +1,16 @@
-import { useRef, useState, type Ref } from 'react';
+import { useLayoutEffect, useRef, useState, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
-import { GitBranch, GitFork, Home, Loader2, Plus, RefreshCw } from 'lucide-react';
-import type { CoderWorktrees } from '@mcp/api-bus';
+import { GitFork, Loader2, Plus, RefreshCw } from 'lucide-react';
+import type { CoderWorktree, CoderWorktrees } from '@mcp/api-bus';
 import { Button } from '../../components/ui/button.js';
 import { Input } from '../../components/ui/input.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
-import { Tabs, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
+import { toast } from '../../components/ui/prompt-dialog.js';
+import { WorktreePicker, worktreeLabel } from './WorktreePicker.js';
+import { RemoveWorktreeDialog } from './RemoveWorktreeDialog.js';
 import { apiPost } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
-import { worktreeKey } from './worktree-scope.js';
+import { worktreeKey } from '../../state/worktree-selection.js';
 
 interface Props {
   projectId?: number;
@@ -32,9 +34,13 @@ export function SessionWorkspaceBar(props: Props) {
   const [creating, setCreating] = useState(false);
   const creatingRef = useRef(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const worktrees = props.data?.worktrees.filter((item) => !item.primary) ?? [];
-  const selectedMissing = props.path && !worktrees.some((item) => worktreeKey(item.path) === worktreeKey(props.path));
-  const primary = props.data?.worktrees.find((item) => item.primary);
+  const [removing, setRemoving] = useState<CoderWorktree | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const latest = useRef<Props | null>(props);
+  useLayoutEffect(() => {
+    latest.current = props;
+    return () => { latest.current = null; };
+  }, [props]);
 
   const create = async () => {
     if (creatingRef.current || props.projectId == null) return;
@@ -65,27 +71,9 @@ export function SessionWorkspaceBar(props: Props) {
     <div data-testid="session-workspace-bar" className="shrink-0 rounded-md border border-[var(--workbench-border)] bg-[var(--workbench-raised)]">
       <div className="flex min-h-10 flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1">
         {!props.isGlobal && <>
-          <Tabs value={worktreeKey(props.path) || 'primary'} onValueChange={(value) => {
-            const next = worktrees.find((item) => worktreeKey(item.path) === value)?.path;
-            if (value === 'primary' || next) props.onSelect(next ?? null);
-          }} className="min-w-0 flex-1 basis-52 overflow-x-auto">
-            <TabsList aria-label={t('chat:worktrees.navigation')} className="h-8 w-max justify-start gap-1 bg-transparent p-0">
-              <TabsTrigger value="primary" title={primary?.path} className="h-7 max-w-60 gap-1.5 px-2 text-xs">
-                <Home className="h-3.5 w-3.5 shrink-0" />
-                {t('chat:worktrees.primary')}
-                {primary?.branch && <span className="truncate font-mono text-[10px] text-muted-foreground">{primary.branch}</span>}
-              </TabsTrigger>
-              {worktrees.map((item) => <TabsTrigger key={item.path} value={worktreeKey(item.path)}
-                title={`${item.path}${item.locked ? ` · ${t('chat:worktrees.locked')}` : ''}`}
-                className={cn('h-7 max-w-60 gap-1.5 px-2 text-xs', item.prunable && 'text-destructive')}>
-                <GitBranch className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{item.branch || item.head.slice(0, 8)}</span>
-              </TabsTrigger>)}
-              {selectedMissing && <TabsTrigger value={worktreeKey(props.path)} title={props.path!} className="h-7 max-w-60 gap-1.5 px-2 text-xs text-destructive">
-                <GitBranch className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{props.path!.split(/[\\/]/).pop()}</span>
-              </TabsTrigger>}
-            </TabsList>
-          </Tabs>
+          <div className="min-w-0 flex-1 basis-40">
+            <WorktreePicker data={props.data} path={props.path} triggerRef={trigger} onSelect={props.onSelect} onRemove={setRemoving} />
+          </div>
           <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs" disabled={props.loading || !props.data?.isGit}
             title={!props.loading && props.data && !props.data.isGit ? t('chat:worktrees.notGit') : undefined}
             onClick={() => { setCreateError(null); setOpen(true); }}>
@@ -96,11 +84,23 @@ export function SessionWorkspaceBar(props: Props) {
             <RefreshCw className={cn('h-3.5 w-3.5', props.loading && 'animate-spin')} />
           </Button>
         </>}
-        <div ref={props.actionsRef} className="ml-auto max-w-full overflow-x-auto" />
+        {props.actionsRef && <div ref={props.actionsRef} className="ml-auto max-w-full overflow-x-auto" />}
       </div>
       {(props.error || props.sessionError || props.unavailable) && <p role="alert" className="border-t px-3 py-1.5 text-xs text-destructive">
         {props.sessionError || (props.error ? t('chat:worktrees.loadError') : t('chat:worktrees.unavailable'))}
       </p>}
+      {removing && props.projectId != null && <RemoveWorktreeDialog key={removing.path} item={removing} projectId={props.projectId}
+        onClose={() => setRemoving(null)} restoreFocus={() => trigger.current?.focus()} onRefresh={props.onRefresh}
+        onRemoved={result => {
+          const current = latest.current;
+          if (current && current.projectId === props.projectId) {
+            if (worktreeKey(current.path) === worktreeKey(removing.path)) current.onSelect(null);
+            setRemoving(null);
+          }
+          props.onRefresh();
+          if (result.branchWarning) toast.warning(t('chat:worktrees.branchWarning', { branch: removing.branch }), { description: result.branchWarning });
+          else toast.success(t('chat:worktrees.removed', { name: worktreeLabel(removing) }));
+        }} />}
       <Dialog open={open} onOpenChange={(value) => { if (!creating) setOpen(value); }}>
         <DialogContent>
           <form onSubmit={(event) => { event.preventDefault(); void create(); }} className="space-y-4">

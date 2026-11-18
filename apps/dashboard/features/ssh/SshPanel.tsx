@@ -15,9 +15,10 @@
  * renders it. The TOFU host-key flow lives here, in one place.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
-import { Plus, X, AlertCircle, Server, Pencil, Trash2, Loader2, ChevronRight, TerminalSquare, ArrowRightLeft, Play, FolderOpen, ShieldCheck, RotateCw, Repeat, Search, Import, Share2 } from 'lucide-react';
+import { Plus, X, AlertCircle, Server, Pencil, Trash2, Loader2, ChevronRight, TerminalSquare, ArrowRightLeft, Play, FolderOpen, ShieldCheck, RotateCw, Repeat, Search, Import, Share2, Columns2 } from 'lucide-react';
 import type { SshConnectSpec, SshHostKeyInfo } from '@mcp/api-bus';
 import { ExponentialBackoff, sleep } from '@mcp/shared/sse/BackoffStrategy.js';
 import { isUnencryptedSecret } from '@mcp/secret-box';
@@ -39,6 +40,7 @@ import {
   patchHost,
   importSshConfig,
   sshHostKey,
+  savedConnectionId,
   type HostKeyDecision,
 } from './api.js';
 import { groupHosts, SHARED, UNGROUPED } from './host-grouping.js';
@@ -55,6 +57,7 @@ const VIEWS: SshView[] = ['terminals', 'files', 'tunnels', 'snippets'];
 
 interface SshPanelProps {
   projectId: number;
+  workspaceId?: number | null;
 }
 
 const EMPTY_SHELLS: readonly SshShell[] = Object.freeze([]);
@@ -66,7 +69,11 @@ interface TrustRequest {
   resolve: (accepted: boolean) => void;
 }
 
-export function SshPanel({ projectId }: SshPanelProps) {
+export function SshPanel(props: SshPanelProps) {
+  return <ProjectSshPanel key={props.projectId} {...props} />;
+}
+
+function ProjectSshPanel({ projectId, workspaceId = projectId }: SshPanelProps) {
   const { t } = useTranslation('ssh');
   const dark = useIsDark();
   const hasElectron = !!electronApi();
@@ -85,19 +92,34 @@ export function SshPanel({ projectId }: SshPanelProps) {
   const [dialog, setDialog] = useState<{ open: boolean; editing: SshHost | null }>({ open: false, editing: null });
   const [vaultOpen, setVaultOpen] = useState(false);
   const [trust, setTrust] = useState<TrustRequest | null>(null);
-  const [connecting, setConnecting] = useState<string | null>(null);
+  const trustQueue = useRef<TrustRequest[]>([]);
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      for (const request of trustQueue.current.splice(0)) request.resolve(false);
+    };
+  }, []);
+  const [connecting, setConnecting] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<SshView>('terminals');
   const [hostQuery, setHostQuery] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadSequence = useRef(0);
+  const { groups, groupKeys } = useMemo(() => groupHosts(hosts, hostQuery), [hosts, hostQuery]);
 
   const reload = useCallback(() => {
+    const sequence = ++loadSequence.current;
     void Promise.all([listHosts(projectId), listIdentities(projectId)])
       .then(([h, i]) => {
+        if (!mounted.current || loadSequence.current !== sequence) return;
+        setLoadError(null);
         setHosts(h);
         setIdentities(i);
       })
-      .catch(() => {
-        /* offline / no backend — rail just stays empty */
+      .catch((error: unknown) => {
+        if (mounted.current && loadSequence.current === sequence) setLoadError(error instanceof Error ? error.message : String(error));
       });
   }, [projectId]);
 
@@ -148,7 +170,12 @@ export function SshPanel({ projectId }: SshPanelProps) {
 
   const requestTrust = useCallback(
     (info: SshHostKeyInfo, mode: HostKeyDecision) =>
-      new Promise<boolean>((resolve) => setTrust({ info, mode, resolve })),
+      new Promise<boolean>((resolve) => {
+        if (!mounted.current) { resolve(false); return; }
+        const request = { info, mode, resolve };
+        trustQueue.current.push(request);
+        if (trustQueue.current.length === 1) setTrust(request);
+      }),
     [],
   );
 
@@ -156,6 +183,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
     async (spec: SshConnectSpec, label: string) => {
       const res = await connectWithTrust(spec, 80, 24, requestTrust);
       add(projectId, { terminalId: res.terminalId, hostId: spec.hostId, label });
+      setView('terminals');
     },
     [projectId, add, requestTrust],
   );
@@ -163,14 +191,15 @@ export function SshPanel({ projectId }: SshPanelProps) {
   const connectHost = useCallback(
     async (h: SshHost) => {
       setError(null);
-      setConnecting(sshHostKey(h));
+      const hostKey = sshHostKey(h);
+      setConnecting(keys => new Set(keys).add(hostKey));
       try {
         const spec = await resolveSpecFromHost(h, hosts, identities);
         await openSpec(spec, h.label);
       } catch (e) {
         setError(t('error.connectFailed', { reason: e instanceof Error ? e.message : String(e) }));
       } finally {
-        setConnecting(null);
+        setConnecting(keys => { const next = new Set(keys); next.delete(hostKey); return next; });
       }
     },
     [hosts, identities, openSpec, t],
@@ -201,8 +230,8 @@ export function SshPanel({ projectId }: SshPanelProps) {
         confirmLabel: t('panel.delete'),
         tone: 'destructive',
       }))) return;
-      await deleteHost(projectId, h).catch(() => {});
-      reload();
+      try { await deleteHost(projectId, h); reload(); }
+      catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     },
     [projectId, reload, t],
   );
@@ -226,20 +255,26 @@ export function SshPanel({ projectId }: SshPanelProps) {
   // Drafts (unsaved quick-connects) can't redial — there's no persisted spec.
   const reconnectShell = useCallback(
     async (shell: SshShell): Promise<boolean> => {
-      const h = hosts.find((x) => `saved:${sshHostKey(x)}` === shell.hostId);
-      if (!h) return false;
+      const h = hosts.find(x => savedConnectionId(x) === shell.hostId);
+      const lookup = () => useSshSessions.getState().byProject[projectId]?.find(item => item.terminalId === shell.terminalId);
+      if (!h || lookup()?.state !== 'dropped') return false;
       setShellState(projectId, shell.terminalId, 'reconnecting');
       try {
         const spec = await resolveSpecFromHost(h, hosts, identities);
         const res = await connectWithTrust(spec, 80, 24, requestTrust);
+        if (!lookup()) {
+          await apiCall('terminal.kill', { terminalId: res.terminalId });
+          return false;
+        }
         swapTerminal(projectId, shell.terminalId, res.terminalId);
         return true;
-      } catch {
+      } catch (e) {
+        if (lookup()) setError(t('error.connectFailed', { reason: e instanceof Error ? e.message : String(e) }));
         setShellState(projectId, shell.terminalId, 'dropped');
         return false;
       }
     },
-    [hosts, identities, projectId, requestTrust, setShellState, swapTerminal],
+    [hosts, identities, projectId, requestTrust, setShellState, swapTerminal, t],
   );
 
   // Bounded backoff+jitter redial loop (opt-in). Bails the moment the user closes
@@ -254,6 +289,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
           const base = backoff.nextDelay(attempt);
           if (base == null) break; // exhausted → stays 'dropped' for a manual retry
           await sleep(Math.round(Math.random() * base)); // full jitter (avoid reconnect storms)
+          if (!mounted.current || !autoEnabled.current) break;
           const shell = useSshSessions.getState().byProject[projectId]?.find((x) => x.terminalId === terminalId);
           if (!shell || shell.state !== 'dropped') break; // closed or recovered elsewhere
           if (await reconnectShell(shell)) break; // success — swapTerminal already ran
@@ -271,17 +307,22 @@ export function SshPanel({ projectId }: SshPanelProps) {
   // blip or `exit`) keeps the tab as 'dropped' with a Reconnect affordance, and
   // auto-redials when the user opted in (and the host is saved).
   const onTerminalExited = useCallback(
-    (shell: SshShell) => {
-      if (shell.kind === 'snippet') {
+    (shell: SshShell, code: number | null) => {
+      const current = useSshSessions.getState().byProject[projectId]?.find(item => item.terminalId === shell.terminalId);
+      if (!current || current.exited || current.state === 'reconnecting') return;
+      if (shell.kind === 'snippet' || code != null) {
         markExited(projectId, shell.terminalId);
+        if (shell.kind !== 'snippet') setShellState(projectId, shell.terminalId, 'dropped');
         return;
       }
       setShellState(projectId, shell.terminalId, 'dropped');
-      if (autoReconnect && hosts.some((x) => `saved:${sshHostKey(x)}` === shell.hostId)) void autoReconnectLoop(shell.terminalId);
+      if (autoReconnect && hosts.some(x => savedConnectionId(x) === shell.hostId)) void autoReconnectLoop(shell.terminalId);
     },
     [projectId, markExited, setShellState, autoReconnect, hosts, autoReconnectLoop],
   );
 
+  const autoEnabled = useRef(autoReconnect);
+  autoEnabled.current = autoReconnect;
   const toggleAutoReconnect = useCallback(() => {
     setAutoReconnect((v) => {
       const next = !v;
@@ -307,11 +348,6 @@ export function SshPanel({ projectId }: SshPanelProps) {
   const insecureHosts = hosts.filter((h) =>
     [h.enc_password, h.enc_private_key, h.enc_passphrase].some(isUnencryptedSecret),
   ).length;
-
-  // Filter + group. Memoized because it ran in the render body on EVERY render
-  // — including once per keystroke in the search box, and once per progress
-  // frame while a transfer was streaming.
-  const { groups, groupKeys } = useMemo(() => groupHosts(hosts, hostQuery), [hosts, hostQuery]);
 
   return (
     <div className="h-full flex min-h-0">
@@ -358,7 +394,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
             <p className="mt-0.5 text-muted-foreground">{t('panel.insecureBody', { count: insecureHosts })}</p>
           </div>
         )}
-        {hosts.length > 4 && (
+        {hosts.length > 0 && (
           <div className="shrink-0 border-b px-2 py-1.5">
             <div className="relative">
               <Search className="h-3 w-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -366,15 +402,18 @@ export function SshPanel({ projectId }: SshPanelProps) {
                 value={hostQuery}
                 onChange={(e) => setHostQuery(e.target.value)}
                 placeholder={t('panel.searchHosts')}
+                aria-label={t('panel.searchHosts')}
                 className="w-full h-6 text-[11px] bg-background border rounded pl-6 pr-2"
               />
             </div>
           </div>
         )}
         <div className="flex-1 min-h-0 overflow-y-auto py-1">
-          {hosts.length === 0 && (
+          {loadError && <div role="alert" className="p-2 text-xs">{loadError} <button type="button" className="underline" onClick={reload}>{t('panel.retry')}</button></div>}
+          {!loadError && hosts.length === 0 && (
             <div className="px-3 py-4 text-[11px] text-muted-foreground text-center">{t('panel.noHosts')}</div>
           )}
+          {hosts.length > 0 && groupKeys.length === 0 && <p className="p-2 text-center text-xs text-muted-foreground">{t('panel.noMatches')}</p>}
           {groupKeys.map((gk) => (
             <div key={gk} className="mb-1">
               {(groupKeys.length > 1 || gk !== UNGROUPED) && (
@@ -387,15 +426,16 @@ export function SshPanel({ projectId }: SshPanelProps) {
                 <div
                   key={sshHostKey(h)}
                   className="group flex items-center gap-1.5 px-2 py-1 mx-1 rounded text-xs cursor-pointer hover:bg-muted"
-                  onClick={() => void connectHost(h)}
-                  title={`${h.username}@${h.hostname}:${h.port}`}
                 >
-                  {connecting === sshHostKey(h) ? (
+                  <button type="button" disabled={connecting.has(sshHostKey(h))} onClick={() => void connectHost(h)}
+                    title={`${h.username}@${h.hostname}:${h.port}`} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                  {connecting.has(sshHostKey(h)) ? (
                     <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
                   ) : (
                     <Server className="h-3 w-3 shrink-0 text-muted-foreground" />
                   )}
                   <span className="truncate flex-1">{h.label}</span>
+                  </button>
                   <button
                     type="button"
                     aria-label={t('panel.edit')}
@@ -420,7 +460,7 @@ export function SshPanel({ projectId }: SshPanelProps) {
       </div>
 
       {/* Right pane: view switcher + shells/tunnels */}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0">
         <div className="h-8 shrink-0 border-b flex items-center px-1 gap-1">
           {VIEWS.map((v) => {
             const Icon =
@@ -442,8 +482,13 @@ export function SshPanel({ projectId }: SshPanelProps) {
           })}
         </div>
 
+        {error && <div role="alert" className="flex shrink-0 items-center gap-2 border-b bg-red-500/10 px-2 py-1 text-xs text-red-400">
+          <span className="flex-1">{error}</span><button type="button" aria-label={t('panel.dismiss')} onClick={() => setError(null)}><X className="h-3.5 w-3.5" /></button>
+        </div>}
         {view === 'files' ? (
-          <DualPaneFiles projectId={projectId} hosts={hosts} identities={identities} onNeedTrust={requestTrust} />
+          workspaceId != null && (
+            <DualPaneFiles key={workspaceId} projectId={workspaceId} hosts={hosts} identities={identities} onNeedTrust={requestTrust} />
+          )
         ) : view === 'tunnels' ? (
           <TunnelsPanel hosts={hosts} identities={identities} />
         ) : view === 'snippets' ? (
@@ -454,7 +499,8 @@ export function SshPanel({ projectId }: SshPanelProps) {
             shells={shells}
             activeId={activeId}
             dark={dark}
-            error={error}
+            onImport={importConfig}
+            importing={importing}
             autoReconnect={autoReconnect}
             onToggleAutoReconnect={toggleAutoReconnect}
             onReconnect={(s) => void reconnectShell(s)}
@@ -489,8 +535,10 @@ export function SshPanel({ projectId }: SshPanelProps) {
           info={trust.info}
           mode={trust.mode}
           onDecision={(accepted) => {
+            if (trustQueue.current[0] !== trust) return;
+            trustQueue.current.shift();
             trust.resolve(accepted);
-            setTrust(null);
+            setTrust(trustQueue.current[0] ?? null);
           }}
         />
       )}
@@ -500,10 +548,12 @@ export function SshPanel({ projectId }: SshPanelProps) {
 
 /** The terminals view: shell tab bar + the active SingleTerminal. */
 function SshTerminals({
+  projectId,
   shells,
   activeId,
   dark,
-  error,
+  onImport,
+  importing,
   autoReconnect,
   onToggleAutoReconnect,
   onReconnect,
@@ -516,17 +566,21 @@ function SshTerminals({
   shells: SshShell[];
   activeId: string | undefined;
   dark: boolean;
-  error: string | null;
+  onImport: () => void;
+  importing: boolean;
   autoReconnect: boolean;
   onToggleAutoReconnect: () => void;
   onReconnect: (shell: SshShell) => void;
   onSelect: (id: string) => void;
   onClose: (shell: SshShell) => void;
-  onExited: (shell: SshShell) => void;
+  onExited: (shell: SshShell, code: number | null) => void;
   onNew: () => void;
 }) {
   const { t } = useTranslation('ssh');
-  const activeShell = shells.find((x) => x.terminalId === activeId);
+  const panes = useSshSessions(s => s.panesByProject[projectId]);
+  const toggleSplit = useSshSessions(s => s.toggleSplit);
+  const visible = (panes ?? (activeId ? [activeId] : []))
+    .map(id => shells.find(shell => shell.terminalId === id)).filter((shell): shell is SshShell => !!shell);
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="h-8 shrink-0 border-b flex items-center px-1 gap-0.5 overflow-x-auto">
@@ -545,7 +599,7 @@ function SshTerminals({
               >
                 {shell.state === 'reconnecting' ? (
                   <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-                ) : shell.state === 'dropped' ? (
+                ) : shell.state === 'dropped' && !shell.exited ? (
                   <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />
                 ) : shell.exited ? (
                   <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
@@ -565,9 +619,14 @@ function SshTerminals({
             );
           })}
         </div>
+        {shells.length > 1 && <button type="button" aria-pressed={!!panes} title={t('panel.split')} aria-label={t('panel.split')}
+          onClick={() => toggleSplit(projectId)} className={cn('shrink-0 rounded p-1 hover:bg-muted', panes && 'text-primary')}>
+          <Columns2 className="h-3.5 w-3.5" />
+        </button>}
         <button
           type="button"
           aria-label={t('panel.autoReconnect')}
+          aria-pressed={autoReconnect}
           title={t(autoReconnect ? 'panel.autoReconnectOn' : 'panel.autoReconnectOff')}
           onClick={onToggleAutoReconnect}
           className={cn('shrink-0 rounded p-1 hover:bg-muted', autoReconnect ? 'text-emerald-500' : 'text-muted-foreground')}
@@ -576,33 +635,12 @@ function SshTerminals({
         </button>
       </div>
 
-      {error && <div className="px-2 py-1 text-[10px] text-red-400 border-b bg-red-500/10 shrink-0">{error}</div>}
-
       <div
         className="flex-1 min-h-0 relative"
         style={{ background: dark ? TERMINAL_SURFACE_BG.dark : TERMINAL_SURFACE_BG.light }}
       >
-        {activeShell?.state === 'dropped' && (
-          <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border-b border-red-500/30 text-[11px]">
-            <AlertCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />
-            <span className="flex-1 text-red-300">{t('panel.disconnected')}</span>
-            <button
-              type="button"
-              onClick={() => onReconnect(activeShell)}
-              className="inline-flex items-center gap-1 rounded px-2 py-0.5 border border-input bg-background/60 hover:bg-muted transition-colors"
-            >
-              <RotateCw className="h-3 w-3" /> {t('panel.reconnect')}
-            </button>
-          </div>
-        )}
-        {activeShell?.state === 'reconnecting' && (
-          <div className="absolute inset-x-0 top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/30 text-[11px] text-amber-300">
-            <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-            <span>{t('panel.reconnecting')}</span>
-          </div>
-        )}
         {shells.length === 0 && (
-          <div className="absolute inset-0 grid place-items-center text-center text-xs text-muted-foreground gap-2 p-4">
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-xs text-muted-foreground gap-2 p-4">
             <Server className="h-5 w-5 opacity-60" />
             <div>{t('panel.empty')}</div>
             <button
@@ -613,18 +651,28 @@ function SshTerminals({
               <Plus className="h-3.5 w-3.5" />
               <span>{t('panel.newHost')}</span>
             </button>
+            <button type="button" disabled={importing} className="mt-1 hover:text-foreground" onClick={onImport}>{t('panel.importConfig')}</button>
           </div>
         )}
-        {activeId && (
-          <SingleTerminal
-            key={activeId}
-            terminalId={activeId}
-            onProcessExited={() => {
-              const shell = shells.find((x) => x.terminalId === activeId);
-              if (shell) onExited(shell);
-            }}
-          />
-        )}
+        {!!visible.length && <PanelGroup direction="horizontal" autoSaveId={panes ? 'ssh-two-terminals' : undefined}>
+          {visible.map((shell, index) => <Fragment key={index}>
+            {index > 0 && <PanelResizeHandle className="w-1 bg-border hover:bg-primary/50" />}
+            <Panel id={String(index)} order={index} minSize={20}>
+              <section aria-label={shell.label} className="flex h-full min-w-0 flex-col"
+                onPointerDown={() => onSelect(shell.terminalId)} onFocusCapture={() => onSelect(shell.terminalId)}>
+                {panes && <div className={cn('truncate border-b px-2 py-1 text-xs', shell.terminalId === activeId ? 'bg-accent text-accent-foreground' : 'text-muted-foreground')}>{shell.label}</div>}
+                {shell.state === 'dropped' && <div className="flex items-center gap-2 border-b px-2 py-1 text-xs">
+                  <AlertCircle className="h-3.5 w-3.5" /><span>{t(shell.exited ? 'panel.finished' : 'panel.disconnected')}</span>
+                  <button type="button" className="ml-auto inline-flex items-center gap-1 underline" onClick={() => onReconnect(shell)}><RotateCw className="h-3 w-3" />{t('panel.reconnect')}</button>
+                </div>}
+                {shell.state === 'reconnecting' && <div role="status" className="px-2 py-1 text-xs">{t('panel.reconnecting')}</div>}
+                <div className="relative min-h-0 flex-1">
+                  <SingleTerminal key={shell.terminalId} terminalId={shell.terminalId} onProcessExited={code => onExited(shell, code)} />
+                </div>
+              </section>
+            </Panel>
+          </Fragment>)}
+        </PanelGroup>}
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { capabilityDiscoveryEntries } from '@mcp/code-agent/core/capability-discovery.js';
 import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
+import { canInvokeInsideCodeExec } from './code-exec-eligibility.js';
 import {
   getToolText,
   rankDiscoveryCandidates,
@@ -64,17 +65,17 @@ export function buildFindToolsTool(
     executionClass: 'control',
     effectBoundary: 'control',
     description:
-      'Find tools by capability — searches tool NAMES, DESCRIPTIONS, and ARGUMENT names ' +
+      'Find tools and input schemas; invoke discovered non-interactive tools through code_exec without changing the public catalog. Searches tool NAMES, DESCRIPTIONS, and ARGUMENT names ' +
       '(lazy discovery for tools NOT in your visible list).\n\n' +
       'Use when you suspect a tool exists for a task but cannot see it in your current tools array. ' +
       'Returns up to 5 candidates with their `name`, `tier`, `source`, argument summary, and a ' +
-      'short description. A strong unambiguous match requests activation; the next outgoing projection confirms visibility. ' +
-      '`expand_toolset(<tier>)` requests a whole tier when you need several of its tools.\n\n' +
+      'short description and full input schema. Use tools.<name>(args) inside code_exec for hidden non-interactive tools. ' +
+      'Search by server and capability to find a related operation without replacing the current tools.\n\n' +
       'QUERY TIPS: concept nouns ("worktree", "spec revision"), verbs ("edit", "spawn"), and exact ' +
       'argument names seen in other tool results ("evolution_id") all match; filler words are ' +
       'ignored. When nothing matches strongly, the closest weak candidates are returned, labeled ' +
       'with why each one matched.\n\n' +
-      'WHEN TO USE: before guessing tool names, before calling expand_toolset speculatively, when ' +
+      'WHEN TO USE: before guessing tool names, when ' +
       'a generic search/edit/git/web/lsp/mcp capability is needed but no matching tool is visible.\n\n' +
       "DON'T: use this when you already see the tool you need in your tools array — call it directly. " +
       'Avoid for things that are obviously code-search; use mcp__search/grep_code instead.',
@@ -112,6 +113,7 @@ export function buildFindToolsTool(
       const runner = ctx.runner as
         | {
           activeTiers?: ReadonlySet<ToolTier> | null;
+          stableToolCatalog?: boolean;
           pinnedTools?: ReadonlySet<string>;
           visibleToolNames?: ReadonlySet<string> | null;
           promoteTool?: (name: string) => string[];
@@ -156,6 +158,8 @@ export function buildFindToolsTool(
         visible: boolean;
         blocked: boolean;
         schemaRejected: boolean;
+        schema: JsonSchema;
+        callableInsideCodeExec: boolean;
       };
       const all: Scored[] = [];
       for (const { tool: t } of capabilityDiscoveryEntries(registry)) {
@@ -169,6 +173,8 @@ export function buildFindToolsTool(
           source: t.source,
           description: t.description ?? '',
           params: paramSummary(t.parameters),
+          schema: t.parameters,
+          callableInsideCodeExec: canInvokeInsideCodeExec(t),
           score,
           blocked: runner?.discoveryState?.(t.name).authorization === 'blocked',
           schemaRejected: runner?.projectionReceipt?.deferred.some(entry => entry.name === t.name && entry.reason === 'provider_schema_rejected') ?? false,
@@ -207,7 +213,7 @@ export function buildFindToolsTool(
       const unambiguous = !!top[0] && (pool.length === 1
         || top[0].name.toLowerCase() === query.toLowerCase().trim()
         || top[0].score.total >= pool[1].score.total + Math.max(2, pool[1].score.total * 0.25));
-      const autoPromoted = !weak && unambiguous && !top[0]?.blocked && !top[0]?.schemaRejected && top[0]?.score.nameHit
+      const autoPromoted = !runner?.stableToolCatalog && !weak && unambiguous && !top[0]?.blocked && !top[0]?.schemaRejected && top[0]?.score.nameHit
         && top[0].score.hitCount === tokens.length && !top[0].visible && runner?.promoteTool
         ? top[0]
         : null;
@@ -224,6 +230,8 @@ export function buildFindToolsTool(
           : r.schemaRejected ? ' [schema rejected by current provider; use another tool or the code_exec bridge]'
           : r.visible
           ? ''
+          : runner?.stableToolCatalog
+            ? r.callableInsideCodeExec ? ' [invoke inside code_exec]' : ' [not exposed in this session; cannot invoke through code_exec]'
           : autoPromoted?.name === r.name
             ? ' [activation requested; pending projection]'
             : ` [hidden — refine search to activate or expand_toolset('${r.tier}')]`;
@@ -246,7 +254,12 @@ export function buildFindToolsTool(
       ];
       for (const r of top) lines.push(renderCandidate(r));
       // Steer the follow-up when the top candidate is hidden.
-      if (autoPromoted) {
+      if (runner?.stableToolCatalog) {
+        for (const candidate of top.filter(r => !r.blocked)) {
+          lines.push(`\n${candidate.name} input schema: ${JSON.stringify(candidate.schema)}`);
+        }
+        lines.push('\nThe public tool catalog stays fixed. Call hidden non-interactive tools with code_exec: return await tools.<name>(args). Dispatch still validates permissions, scope and arguments.');
+      } else if (autoPromoted) {
         lines.push('');
         lines.push(
           `Requested activation of ${autoPromoted.name}` +
@@ -275,7 +288,8 @@ export function buildFindToolsTool(
         discovery: { schemaVersion: 1, revision: JSON.stringify(runner?.projectionReceipt ?? null),
           tools: top.map(r => ({ name: r.name, state: r.blocked ? 'denied' : r.visible ? 'callable' : autoPromoted?.name === r.name ? 'activated' : 'deferred',
             ...(r.schemaRejected && !r.blocked ? { reason: 'provider_schema_rejected' } : {}) })) },
-        candidates: top.map((r) => ({ name: r.name, score: r.score.total, visible: !r.blocked && r.visible, authorization: r.blocked ? 'blocked' : 'requires_dispatch_validation', availability: 'attempt_snapshot' })),
+        candidates: top.map((r) => ({ name: r.name, score: r.score.total, visible: !r.blocked && r.visible, authorization: r.blocked ? 'blocked' : 'requires_dispatch_validation', availability: 'attempt_snapshot',
+          ...(runner?.stableToolCatalog && !r.blocked ? { inputSchema: r.schema, invokeAs: r.callableInsideCodeExec && !r.visible ? 'code_exec' : 'top_level' } : {}) })),
         activation: autoPromoted ? { requested: [autoPromoted.name], state: 'pending_projection', evicted } : null,
         ambiguous: !unambiguous,
         projection: runner?.projectionReceipt ?? null,

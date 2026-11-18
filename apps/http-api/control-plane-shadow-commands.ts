@@ -22,6 +22,7 @@ interface AcceptLocalCoderCommandInput {
   requestedCapabilityProfile: string;
   requestedAt?: string;
   actor?: SessionCommand['actor'];
+  onUnavailable?: (error: unknown) => void;
 }
 
 export interface LocalCoderShadowAcceptance {
@@ -174,6 +175,7 @@ export async function acceptLocalCoderCommand(
       runContext,
     };
   } catch (error) {
+    input.onUnavailable?.(error);
     metrics.writeErrors += 1;
     console.warn(
       `[control-plane] command accept failed session=${input.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -189,6 +191,7 @@ export async function acceptLocalCompanyCommand(input: {
   idempotencyKey?: string | null;
   fingerprint: Record<string, unknown>;
   requestedAt?: string;
+  onUnavailable?: (error: unknown) => void;
 }): Promise<LocalCoderShadowAcceptance | null> {
   if (!input.store) return null;
   const requestedAt = input.requestedAt ?? new Date().toISOString();
@@ -247,6 +250,7 @@ export async function acceptLocalCompanyCommand(input: {
       commandContext,
     };
   } catch (error) {
+    input.onUnavailable?.(error);
     metrics.writeErrors += 1;
     console.warn(
       `[control-plane] company command accept failed session=${input.companySessionId}: ${error instanceof Error ? error.message : String(error)}`,

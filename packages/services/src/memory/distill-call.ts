@@ -48,6 +48,7 @@ export class DistillLlmError extends Error {
 }
 
 export interface DistillCallDeps {
+  signal?: AbortSignal;
   resolver: PipelineProviderResolver;
   resolveContext?: ResolveContext;
   getFallbackDefault?: () => FallbackDefault | null;
@@ -94,18 +95,20 @@ export async function callDistillLlm(
 
   const chatFn = deps.chatFn ?? callConfiguredChat;
   const runOne = (binding: ResolvedBinding): Promise<ChatCallResult> => {
+    deps.signal?.throwIfAborted();
     const configured = Number((binding.config as Record<string, unknown>)?.max_tokens);
     const maxTokens = Math.max(Number.isFinite(configured) ? configured : 0, MIN_DISTILL_MAX_TOKENS);
     return chatFn(binding, messages, {
       disableThinking: suppressThinkingFor(binding),
       maxTokens,
       timeoutMs: DISTILL_TIMEOUT_MS,
-      signal: AbortSignal.timeout(DISTILL_TIMEOUT_MS),
+      signal: deps.signal ? AbortSignal.any([deps.signal, AbortSignal.timeout(DISTILL_TIMEOUT_MS)]) : AbortSignal.timeout(DISTILL_TIMEOUT_MS),
     });
   };
   // The distiller has always gone straight to the next binding on failure
   // (no same-binding retry) — keep that by disabling per-binding retry.
   const { result, binding, failedOver } = await callChatWithFailover(chain, runOne, {
+    signal: deps.signal,
     retry: { maxRetries: 0 },
     label: 'memory distiller',
     codePrefix: 'memory_distill',

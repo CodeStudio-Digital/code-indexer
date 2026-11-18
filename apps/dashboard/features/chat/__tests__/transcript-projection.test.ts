@@ -84,6 +84,52 @@ describe('buildTranscriptProjection', () => {
     expect(history.map((group) => group.kind)).toEqual(['user']);
   });
 
+  it('places live usage after its tools and switches exactly once from checkpoint to committed usage', () => {
+    const id = 'assistant:abc:message:1';
+    const tokens = { input_tokens: 0, output_tokens: 0, cache_creation_tokens: 75 };
+    const call = { type: 'tool_use' as const, id: 'tool-1', name: 'read_file', input: {} };
+    const data = session([user('question'), assistant(call)]);
+    data.message_rows[1].operation_id = id + ':checkpoint';
+    const live: AssistantTurn = { blocks: [
+      { type: 'usage', id, tokens, toolIds: [call.id] },
+      { type: 'tool', call: { id: call.id, name: call.name, status: 'done' } },
+    ] };
+    const checkpoint = buildTranscriptProjection(data, live);
+    expect(checkpoint.live.blocks.map(block => block.type)).toEqual(['tool', 'usage']);
+    expect(projectTranscriptHistory(checkpoint.historyGroups, checkpoint)).toHaveLength(1);
+    Object.assign(data.message_rows[1], tokens);
+    const committed = buildTranscriptProjection(data, live);
+    expect(committed.live.duplicated).toBe(true);
+    expect(committed.live.blocks).toEqual([]);
+    expect(projectTranscriptHistory(committed.historyGroups, committed)).toHaveLength(2);
+  });
+
+  it('finishes an unmetered call from history and retains a stored count during an unmetered replay', () => {
+    const data = session([user('Question'), assistant({ type: 'text', text: 'First answer' })]);
+    data.message_rows[1].operation_id = 'first:commit';
+    const live: AssistantTurn = { blocks: [{ type: 'text', text: 'First answer' },
+      { type: 'usage', id: 'first', toolIds: [], tokens: { input_tokens: 0, output_tokens: 0 } }] };
+    expect(buildTranscriptProjection(data, live).live.duplicated).toBe(true);
+    data.message_rows[1].input_tokens = 17;
+    live.blocks.push({ type: 'text', text: 'Next answer' });
+    const projection = buildTranscriptProjection(data, live);
+    expect(projection.live.replacesPersistedTail).toBe(false);
+    expect(projection.live.blocks.map(block => block.type)).toEqual(['text']);
+  });
+
+  it('preserves earlier counters on partial replay and keeps fresh counters with the same values', () => {
+    const tokens = { input_tokens: 321, output_tokens: 45 };
+    const data = session([user('question'), assistant({ type: 'text', text: 'first' })]);
+    Object.assign(data.message_rows[1], tokens, { operation_id: 'first:commit' });
+    const live: AssistantTurn = { startsMidTurn: true, blocks: [
+      { type: 'text', text: 'first' }, { type: 'text', text: 'next' },
+      { type: 'usage', id: 'next', toolIds: [], tokens },
+    ] };
+    const projected = buildTranscriptProjection(data, live);
+    expect(projected.live.replacesPersistedTail).toBe(false);
+    expect(projected.live.blocks).toEqual(live.blocks.slice(1));
+  });
+
   it('indexes durable tool results once for all persisted renderers', () => {
     const data = session([
       user('question'),

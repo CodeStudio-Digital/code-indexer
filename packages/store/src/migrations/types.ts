@@ -5,6 +5,8 @@ type DB = InstanceType<typeof DatabaseConstructor>;
 export interface Migration {
   version: number;
   name: string;
+  /** Central-only changes are recorded, but never executed, in project databases. */
+  scope?: 'central' | 'all';
   up: (db: DB) => void;
   /**
    * Opt-out do auto-wrap em `db.transaction()`. Necessário para

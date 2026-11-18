@@ -25,6 +25,18 @@ afterEach(() => {
 });
 
 describe('detectPhp', () => {
+  it('keeps live scripts in a Unity backend and skips generated and dependency manifests', async () => {
+    mkdirSync(join(root, 'Assets'));
+    mkdirSync(join(root, 'ProjectSettings'));
+    writeFileSync(join(root, 'ProjectSettings/ProjectVersion.txt'), 'm_EditorVersion: 6000');
+    writeComposer('backend', { first: 'echo ok' });
+    writeComposer('Library/PackageCache/pkg', { generated: 'echo skip' });
+    writeComposer('backend/vendor/vendor/package', { dependency: 'echo skip' });
+    const scripts = async () => (await detectRunnersAsync(root)).groups.flatMap(group => group.runners.map(runner => runner.label));
+    expect(await scripts()).toEqual(['first']);
+    writeComposer('backend', { second: 'echo changed' });
+    expect(await scripts()).toEqual(['second']);
+  });
   it('keeps root composer runner compatibility', () => {
     writeComposer('', { setup: 'php index.php' });
     const group = detectRunners(root, { shellFamily: 'powershell' }).groups.find((item) => item.manager === 'composer');

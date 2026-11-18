@@ -45,4 +45,33 @@ describe('provider model reasoning hydration', () => {
   it('does not infer reasoning for a model with no native metadata', () => {
     expect(hydrateModel(rawModel({})).can_reason).toBe(false);
   });
+
+  it.each(['', 'coding', 'normal'])('fills the effort levels for a saved GLM-5.3 row in mode %j', (mode) => {
+    const model = hydrateModel(rawModel({
+      provider_kind: 'zai',
+      provider_id: 'my-coding-plan',
+      model_id: 'glm-5.3',
+      mode,
+      default_max_tokens: 24_000,
+    }));
+
+    expect(model).toMatchObject({
+      can_reason: true,
+      supported_reasoning_levels: ['low', 'high', 'max'],
+      default_reasoning_level: null,
+      default_max_tokens: 24_000,
+    });
+  });
+
+  it('keeps a saved valid default and filters stale catalog levels for GLM-5.3-Flash', () => {
+    const model = hydrateModel(rawModel({
+      provider_kind: 'zai',
+      model_id: 'glm-5.3-flash',
+      default_reasoning_level: 'high',
+      supported_reasoning_levels: JSON.stringify(['medium', 'high', 'ultra']),
+    }));
+
+    expect(model.default_reasoning_level).toBe('high');
+    expect(model.supported_reasoning_levels).toEqual(['low', 'high', 'max']);
+  });
 });

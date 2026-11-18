@@ -14,12 +14,14 @@
 import type { SessionId } from '@mcp/session-storage';
 import type { FsReviewEvidenceSource } from '../sessions/fs-store/review-evidence-repository.js';
 import { extractValidationSignal } from './tool-call-ledger.js';
+import { isPlainDocumentationPath, validationTargetsDocumentation } from './documentation-write.js';
 
 export interface VerifyCommandRecord {
   command: string;
   at: string;
   isError: boolean;
   exitCode: number | null;
+  includesDocumentation?: boolean;
 }
 
 export interface VerifyEvidence {
@@ -77,6 +79,7 @@ export async function buildVerifyEvidence(
         at: row.created_at,
         isError: row.is_error === 1,
         exitCode: exitCodeOf(row.result_text),
+        includesDocumentation: validationTargetsDocumentation(command),
       });
     }
     const lastVerify = verifies[0] ?? null;
@@ -86,7 +89,9 @@ export async function buildVerifyEvidence(
     if (lastVerify) {
       const edits = (await source.listReviewEvidenceEdits(sessionId))
         .filter((row) => row.applied_at >= lastVerify.at)
-        .sort((left, right) => left.file_path.localeCompare(right.file_path))
+        // Keep code-affecting edits visible even when there are many reports.
+        .sort((left, right) => Number(isPlainDocumentationPath(left.file_path))
+          - Number(isPlainDocumentationPath(right.file_path)) || left.file_path.localeCompare(right.file_path))
         .slice(0, MAX_EDITED_FILES + 1);
       filesEditedAfter = edits
         .filter((row) => row.applied_at > lastVerify.at)
@@ -112,6 +117,11 @@ export function formatVerifyEvidence(e: VerifyEvidence): string {
     return 'No test/typecheck/lint/build command was recorded this session — the changes below are UNVERIFIED.';
   }
   const { lastVerify } = e;
+  const affectsCheck = (file: string) => lastVerify.includesDocumentation
+    || validationTargetsDocumentation(lastVerify.command) || !isPlainDocumentationPath(file);
+  const editedAfter = e.filesEditedAfter.filter(affectsCheck);
+  const editedAtSameTime = e.filesEditedAtSameTime?.filter(affectsCheck) ?? [];
+  const proseEdits = [...e.filesEditedAfter, ...(e.filesEditedAtSameTime ?? [])].filter(file => !affectsCheck(file));
   const outcome =
     lastVerify.exitCode != null
       ? `exit=${lastVerify.exitCode}`
@@ -126,20 +136,22 @@ export function formatVerifyEvidence(e: VerifyEvidence): string {
   } else if (lastVerify.exitCode == null) {
     lines.push('AMBIGUOUS: no successful terminal exit was recorded; wait for completion or rerun verification.');
   }
-  if (e.filesEditedAfter.length > 0) {
-    const shown = e.filesEditedAfter.slice(0, MAX_EDITED_FILES);
-    const more = e.filesEditedAfter.length > MAX_EDITED_FILES ? ' (+more)' : '';
+  if (editedAfter.length > 0) {
+    const shown = editedAfter.slice(0, MAX_EDITED_FILES);
+    const more = editedAfter.length > MAX_EDITED_FILES ? ' (+more)' : '';
     lines.push(
       `STALE: edited AFTER that run — ${shown.join(', ')}${more}. The recorded result does not cover these edits.`,
     );
-  } else if ((e.filesEditedAtSameTime?.length ?? 0) > 0) {
-    const shown = e.filesEditedAtSameTime!.slice(0, MAX_EDITED_FILES);
-    const more = e.filesEditedAtSameTime!.length > MAX_EDITED_FILES ? ' (+more)' : '';
+  } else if (editedAtSameTime.length > 0) {
+    const shown = editedAtSameTime.slice(0, MAX_EDITED_FILES);
+    const more = editedAtSameTime.length > MAX_EDITED_FILES ? ' (+more)' : '';
     lines.push(
       `AMBIGUOUS: edited in the SAME persisted second — ${shown.join(', ')}${more}. Ordering cannot be proven; rerun verification.`,
     );
   } else if (!lastVerify.isError && lastVerify.exitCode === 0) {
-    lines.push('No edits recorded after that run — the result covers the current state.');
+    lines.push(proseEdits.length ? 'No code-affecting edits after that run; code validation remains fresh.'
+      : 'No edits recorded after that run — the result covers the current state.');
   }
+  if (proseEdits.length) lines.push(`Review prose separately: ${proseEdits.slice(0, MAX_EDITED_FILES).join(', ')}.`);
   return lines.join('\n');
 }

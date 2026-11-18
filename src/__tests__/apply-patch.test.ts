@@ -458,8 +458,53 @@ describe('apply_patch normalization & atomicity', () => {
 // unchanged context lines used to fail because the parser concatenated all
 // removed lines into a contiguous block, producing a search string that
 // doesn't exist in the source. The parser now auto-splits such hunks into
-// independent PatchHunks, each anchored by the surrounding context.
+// linked PatchHunks; application keeps the full @@ block anchored together.
 describe('apply_patch multi-block hunks', () => {
+  it.each(['\n', '\r\n'])('keeps separated changes inside the anchored function (%j)', async (eol: string) => {
+    // A real benchmark patch changed cloneDeep, but its final `return value`
+    // was applied to cloneShallow because each split group searched from 0.
+    const ctx = makeCtx(dir);
+    const source = [
+      'function shallow(value) {',
+      '  return value;',
+      '}',
+      '',
+      'function deep(value) {',
+      '  const copied = value;',
+      '',
+      '  return value;',
+      '}',
+      '',
+    ].join(eol);
+    writeFileSync(join(dir, 'clone.ts'), source);
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Update File: clone.ts
+@@
+ function deep(value) {
+-  const copied = value;
++  const copied = structuredClone(value);
+
+-  return value;
++  return copied;
+ }
+*** End Patch`);
+    await applyParsedPatch(patch, ctx);
+    expect(readFileSync(join(dir, 'clone.ts'), 'utf8')).toBe(
+      [
+        'function shallow(value) {',
+        '  return value;',
+        '}',
+        '',
+        'function deep(value) {',
+        '  const copied = structuredClone(value);',
+        '',
+        '  return copied;',
+        '}',
+        '',
+      ].join(eol),
+    );
+  });
+
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'apply-patch-multiblock-'));
@@ -488,6 +533,27 @@ describe('apply_patch multi-block hunks', () => {
     expect(update.hunks).toHaveLength(2);
     await applyParsedPatch(patch, ctx);
     expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe('a\nB\nc\nD\ne\n');
+  });
+
+  it('rejects separated fragments that do not form one contiguous context block', async () => {
+    const original = 'top\nold-one\nbridge\nunlisted\nold-two\nbottom\n';
+    writeFileSync(join(dir, 'foo.ts'), original);
+    const patch = parseApplyPatch(`*** Begin Patch
+*** Add File: pending.ts
++not committed
+*** Update File: foo.ts
+@@
+ top
+-old-one
++new-one
+ bridge
+-old-two
++new-two
+ bottom
+*** End Patch`);
+    await expect(applyParsedPatch(patch, makeCtx(dir))).rejects.toThrow(/did not match/);
+    expect(readFileSync(join(dir, 'foo.ts'), 'utf8')).toBe(original);
+    expect(existsSync(join(dir, 'pending.ts'))).toBe(false);
   });
 
   it('carries multiple context lines between change groups as anchor', async () => {

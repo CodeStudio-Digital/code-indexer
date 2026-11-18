@@ -24,6 +24,7 @@
  * the tool's text content, or thrown Error when the tool reports isError.
  */
 import { Buffer } from 'node:buffer';
+import { canInvokeInsideCodeExec as isSafeTool } from './code-exec-eligibility.js';
 import type { Context } from 'node:vm';
 import { superviseCodeExec } from './code-exec-supervisor.js';
 import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } from '@mcp/code-agent/core/tool.js';
@@ -46,6 +47,7 @@ import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
 import { buildChangeSandboxApi } from '@mcp/code-agent/tools/code-exec-change.js';
+import { completedReadResults } from './code-exec-partial-results.js';
 import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
@@ -53,6 +55,7 @@ import { stableArgsKey } from '@mcp/code-agent/core/runner/dup-utils.js';
 import { normalizeGuardInput } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
 import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import { renderBatchReturn } from '@mcp/code-agent/core/batch-return-format.js';
 import { nestedToolConcurrencyGate } from './code-exec-concurrency.js';
 import { preserveCodeExecEffectOutcome } from './code-exec-effect-outcome.js';
 
@@ -157,21 +160,6 @@ const CODE_EXEC_DESC =
  *    result and durable session transition must stay attributable to a direct
  *    top-level tool_use id.
  */
-function isSafeTool(tool: CoderTool): boolean {
-  if (resolveToolMetadata(tool).interactive) return false;
-  if (
-    tool.name === 'spawn_agent' ||
-    tool.name === 'resume_agent' ||
-    tool.name === 'code_exec' ||
-    tool.name.startsWith('spawn_') ||
-    tool.name === 'execute_task' ||
-    tool.name === 'task_complete' ||
-    tool.name === 'expand_toolset' ||
-    tool.name === 'view_image' || tool.name === 'view_video'
-  ) return false;
-  return true;
-}
-
 type NestedRefusalError = Error & {
   code: string;
   refusalKind: string;
@@ -191,6 +179,7 @@ interface NestedOutcome {
   content: string;
   isError: boolean;
   delivered: boolean;
+  readOnly: boolean;
   durationMs: number;
   status: 'succeeded' | 'failed' | 'refused' | 'cancelled';
   refusalKind?: string;
@@ -644,6 +633,7 @@ export function buildCodeExecTool(
               content: input.content,
               isError: input.isError,
               delivered,
+              readOnly: metadata.executionClass === 'read' && !metadata.mutates,
               durationMs: input.durationMs,
               status: !input.isError
                 ? 'succeeded'
@@ -1426,17 +1416,18 @@ export function buildCodeExecTool(
         const counts =
           `total=${summary.total}, succeeded=${summary.succeeded}, failed=${summary.failed}, ` +
           `refused=${summary.refused}, cancelled=${summary.cancelled}, unsettled=${summary.unsettled}`;
+        const reads = completedReadResults(nestedOutcomes);
         if (outputId) {
           return {
             note: `\n\n[nested call summary: ${counts}; ` +
-              `full outcomes preserved in get_tool_output({output_id:"${outputId}"}).]`,
+              `full outcomes preserved in get_tool_output({output_id:"${outputId}"}).]${reads}`,
             summary,
             outputId,
           };
         }
         const names = nestedOutcomes.map((entry) => `${entry.name}:${entry.status}`).slice(0, 8).join(', ');
         return {
-          note: `\n\n[nested call summary: ${counts}${names ? `; ${names}` : ''}.]`,
+          note: `\n\n[nested call summary: ${counts}${names ? `; ${names}` : ''}.]${reads}`,
           summary,
           outputId: null,
         };
@@ -1622,11 +1613,9 @@ export function buildCodeExecTool(
       if (returnValue !== undefined) {
         lines.push('');
         lines.push('[return]');
-        if (typeof returnValue === 'string') {
-          lines.push(returnValue);
-        } else {
-          try { lines.push(JSON.stringify(returnValue, null, 2)); } catch { lines.push(String(returnValue)); }
-        }
+        // Text values (tool outputs) stay raw in labeled sections instead of
+        // one JSON-escaped string; small structured values remain JSON.
+        lines.push(renderBatchReturn(returnValue));
       }
       const out = lines.join('\n');
       // Console capture is already memory-bounded above. A large structured

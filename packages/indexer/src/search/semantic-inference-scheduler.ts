@@ -25,8 +25,14 @@ export class SemanticInferenceScheduler {
   private active = false;
   private sequence = 0;
   private stopped: Error | null = null;
+  private nextBackgroundAt = 0;
+  private wake: (() => void) | null = null;
 
-  constructor(private readonly maxPending = 128) {}
+  constructor(private readonly maxPending = 128,
+    private readonly backgroundDutyCycle = 1,
+    private readonly pressureBudget?: () => number) {
+    if (!(backgroundDutyCycle > 0 && backgroundDutyCycle <= 1)) throw new RangeError('Invalid background duty cycle');
+  }
 
   enqueue<T>(
     priority: number,
@@ -74,12 +80,14 @@ export class SemanticInferenceScheduler {
       this.pending.push(entry);
       this.pending.sort((left, right) =>
         right.priority - left.priority || left.sequence - right.sequence);
+      this.wake?.();
       void this.drain();
     });
   }
 
   close(reason = new Error('semantic inference scheduler stopped')): void {
     this.stopped = reason;
+    this.wake?.();
     for (const entry of this.pending.splice(0)) { entry.cleanup?.(); entry.reject(reason); }
   }
 
@@ -92,10 +100,32 @@ export class SemanticInferenceScheduler {
     this.active = true;
     try {
       while (!this.stopped && this.pending.length > 0) {
+        if (this.pending[0].priority <= 0 && this.nextBackgroundAt > performance.now()) {
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(done, this.nextBackgroundAt - performance.now());
+            const scheduler = this;
+            function done() { clearTimeout(timer); scheduler.wake = null; resolve(); }
+            this.wake = done;
+          });
+          continue; // A query or cancellation may have changed the queue.
+        }
         const entry = this.pending.shift()!;
         entry.cleanup?.();
+        const started = performance.now();
         try { entry.resolve(await entry.run()); }
         catch (error) { entry.reject(error); }
+        finally {
+          if (entry.priority <= 0) {
+            const elapsed = performance.now() - started;
+            const sampledDuty = this.pressureBudget?.() ?? this.backgroundDutyCycle;
+            const duty = Number.isFinite(sampledDuty)
+              ? Math.max(0.1, Math.min(this.backgroundDutyCycle, sampledDuty))
+              : this.backgroundDutyCycle;
+            this.nextBackgroundAt = performance.now() + Math.min(1_000, elapsed * (1 / duty - 1));
+          }
+        }
+        // Deliver incoming query/cancellation messages between native batches.
+        if (this.backgroundDutyCycle < 1) await new Promise<void>(resolve => setImmediate(resolve));
       }
     } finally {
       this.active = false;

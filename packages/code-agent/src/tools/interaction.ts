@@ -60,33 +60,26 @@ export const askUser: CoderTool = {
       question: { type: 'string', description: 'Single-sentence prompt. Keep it short and decision-shaped.' },
       header: {
         type: 'string',
-        description: 'Optional short UI label (≤40 chars). Shown above the question in the dashboard.',
+        description: 'Optional UI header, at most 40 characters.',
       },
       options: {
         type: 'array',
-        description:
-          'Pre-defined answer options. STRONGLY PREFERRED — when provided, must be 2–8 mutually exclusive choices. ' +
-          'UI renders them as buttons in a 2-column grid. Keep the list short and decision-shaped — if you find yourself ' +
-          'reaching 8, consider whether two of them collapse into one or whether the question itself is too broad. ' +
-          'If you only need free-form (no buttons), omit this field.',
+        description: 'Prefer 2–8 concise, mutually exclusive choices; omit for a free-text-only question.',
         items: {
           type: 'object',
           properties: {
-            label: { type: 'string', description: 'Button label shown in the UI. Keep ≤24 chars.' },
-            value: { type: 'string', description: 'Value returned to the agent when the user picks this option. snake_case preferred.' },
+            label: { type: 'string', description: 'Button label, at most 24 characters.' },
+            value: { type: 'string', description: 'Returned choice value; prefer snake_case.' },
           },
           required: ['label', 'value'],
         },
         minItems: 2,
         maxItems: 8,
       },
-      allow_freeform: { type: 'boolean', description: 'When true and options are given, also allow a free-form answer alongside the buttons.' },
+      allow_freeform: { type: 'boolean', description: 'Allow a free-text answer alongside the options.' },
       multi_select: {
         type: 'boolean',
-        description:
-          'When true and options are given, the user can select MULTIPLE options (checkbox-style) and then confirm — ' +
-          'the answer returns the chosen values joined by ", ". Use for "select all that apply" questions ' +
-          '(e.g. which screens the app needs, what data it stores, which login methods). Default false = pick one.',
+        description: 'Allow multiple choices, returned as values joined by ", ". Default false selects one.',
       },
       filesystem_access: {
         type: 'object',

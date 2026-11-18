@@ -30,6 +30,9 @@ import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/session-storage/run-lim
 
 interface Props {
   projectId: number;
+  workspaceId?: number;
+  worktreePath?: string | null;
+  mainRoot?: string | null;
   projectName: string;
   onClose: () => void;
   initialSessionId?: string | null;
@@ -42,6 +45,9 @@ interface Props {
 
 export function EditorChatRail({
   projectId,
+  workspaceId = projectId,
+  worktreePath,
+  mainRoot,
   projectName,
   onClose,
   initialSessionId,
@@ -54,13 +60,16 @@ export function EditorChatRail({
   const { t } = useTranslation(['workspace', 'chat', 'common', 'dbClient']);
   const s = useEditorChatSession(projectId, {
     initialSessionId: initialSessionId ?? undefined,
+    workspaceId,
+    worktreePath,
+    mainRoot,
     selectionPrefixSessionId,
     includeEditorContext,
     initialAgent,
     newSessionTitle,
   });
-  const { fileRefs } = useEditorChatContext(projectId);
-  const removeFileRef = (p: string) => editorChatContextActions().removeFileRef(projectId, p);
+  const { fileRefs } = useEditorChatContext(workspaceId);
+  const removeFileRef = (p: string) => editorChatContextActions().removeFileRef(workspaceId, p);
   const pendingExternalPrompt = useRef<{ prompt: string; title?: string } | null>(null);
   const [launchRequest, setLaunchRequest] = useState<{
     config: SessionLaunchConfig;
@@ -159,9 +168,9 @@ export function EditorChatRail({
   // Select the stable path instead of the entire openFiles array. The Monaco
   // buffer mirrors content into that array on every key; the rail does not need
   // the text and must not rerender its conversation tree while typing.
-  const addablePath = useWorkspaceStore((st) => includeEditorContext && st.activeProjectId === projectId
+  const addablePath = useWorkspaceStore((st) => includeEditorContext && st.activeProjectId === workspaceId
     ? st.openFiles.find(
-    (file) => file.projectId === projectId
+    (file) => file.projectId === workspaceId
       && file.path === st.activeFilePath
       && file.kind !== 'git-log'
       && file.kind !== 'git-stash'
@@ -285,7 +294,7 @@ export function EditorChatRail({
               </span>
               <button
                 type="button"
-                onClick={() => addablePath && editorChatContextActions().addFileRef(projectId, addablePath)}
+                onClick={() => addablePath && editorChatContextActions().addFileRef(workspaceId, addablePath)}
                 disabled={alreadyAdded}
                 className="shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded border border-info/30 bg-info/10 text-info hover:bg-info/20 disabled:opacity-50 disabled:cursor-default"
               >
@@ -312,13 +321,13 @@ export function EditorChatRail({
             snapshotFiles={s.snapshotFiles}
           />
         </div>
-        {includeEditorContext && <SelectionChips projectId={projectId} />}
+        {includeEditorContext && <SelectionChips projectId={workspaceId} />}
         <ProviderSelectionNotice state={s.providerChange} onRetry={s.retryProviderChange} />
         <Composer
           compact
           filePicks={fileRefs}
           onRemovePick={removeFileRef}
-          onClearPicks={() => editorChatContextActions().clearFileRefs(projectId)}
+          onClearPicks={() => editorChatContextActions().clearFileRefs(workspaceId)}
           agent={s.agent}
           setAgent={s.setAgent}
           provider={s.provider}
@@ -359,13 +368,13 @@ export function EditorChatRail({
           setExecutionMode={s.setExecutionMode}
           executionModePending={s.executionModePending}
           executionModeLocked={s.executionModeLocked}
-          sendBlocked={s.executionModePending || s.providerChange?.pending || Boolean(s.providerChange?.error)}
+          sendBlocked={s.queue.restoring || s.executionModePending || s.providerChange?.pending || Boolean(s.providerChange?.error)}
           planDepth={s.planDepth}
           setPlanDepth={s.setPlanDepth}
           getModelsForProvider={s.getModelsForProvider}
           queueable={s.selectedId != null}
           onQueue={s.handleQueue}
-          queuedStrip={<QueuedMessages items={s.queue.items} onPromote={s.queue.promote} onRemove={s.queue.remove} />}
+          queuedStrip={<QueuedMessages items={s.queue.items} paused={s.queue.paused} storageError={s.queue.storageError} onResume={s.queue.resume} onPromote={s.queue.promote} onRemove={s.queue.remove} />}
         />
         </div>
       </>

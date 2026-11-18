@@ -63,7 +63,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
     ) => agentStreamOwnership.run(
       sid,
       consumerIdRef.current,
-      opts.method === 'GET' ? 'attach' : 'command',
+      opts.method === 'GET' && !opts.freshAttach ? 'attach' : 'command',
       onMessageComplete,
       (notifyMessageComplete) => openStream(
         sid,
@@ -197,9 +197,9 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
    * or starts from the buffer head when lastSeenSeq is -1.
    */
   const reattach = useCallback(
-    async (sid: SessionId, onMessageComplete?: () => void) => {
+    async (sid: SessionId, onMessageComplete?: () => void, freshAttach = false) => {
       const { busId: lastBusId, seq: lastSeq } = readAgentStreamCursor(sid);
-      const initialBlocks = lastBusId && lastSeq >= 0
+      const initialBlocks = !freshAttach && lastBusId && lastSeq >= 0
         ? getAgentSessionSnapshot(sid).currentTurn?.blocks
         : undefined;
       await runStream(
@@ -207,8 +207,9 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
         {
           url: `/api/coder/sessions/${sid}/attach`,
           method: 'GET',
-          lastEventId: lastSeq,
-          lastEventBusId: lastBusId,
+          lastEventId: freshAttach ? undefined : lastSeq,
+          lastEventBusId: freshAttach ? undefined : lastBusId,
+          freshAttach,
           reattach: true,
           initialBlocks,
         },

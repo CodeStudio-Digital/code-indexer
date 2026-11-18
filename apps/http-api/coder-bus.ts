@@ -357,7 +357,7 @@ const REPLAY_STATE_KINDS = new Set<string>([
   'agents_group_start', 'agent_progress', 'agents_group_end',
   // Latest-wins session state the client has no other live source for.
   'todos_updated', 'session_agent_changed', 'session_drive_changed',
-  'session_snapshot_changed', 'diagram_changed', 'context_status',
+  'session_snapshot_changed', 'chat_session_created', 'diagram_changed', 'context_status',
   'index_status', 'auto_continue',
   // A queued user message starts a new visible assistant run without replacing
   // the underlying worker/bus. Replays must retain that transcript boundary.

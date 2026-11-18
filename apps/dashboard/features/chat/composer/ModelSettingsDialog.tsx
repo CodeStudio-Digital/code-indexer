@@ -338,7 +338,7 @@ function ModelSettingsDialogBody({
               </div>
             </div>
           </div>
-          {showAgent && setReasoningEffort && reasoningLevels && reasoningLevels.length > 0 && (
+          {setReasoningEffort && reasoningLevels && reasoningLevels.length > 0 && (
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">{t('chat:toolbar.effort', { defaultValue: 'Reasoning effort' })}</label>
               <div className="flex items-center gap-1.5">

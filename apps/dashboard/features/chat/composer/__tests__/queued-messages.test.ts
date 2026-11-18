@@ -15,7 +15,7 @@ describe('QueuedMessages attachments', () => {
   it('keeps queued attachments visible with their names and count', () => {
     const html = renderToStaticMarkup(createElement(QueuedMessages, {
       items: [{
-        id: 1,
+        id: 'queue-1',
         text: 'review this',
         attachments: [
           { name: 'one.txt', mediaType: 'text/plain', text: 'one' },
@@ -29,7 +29,7 @@ describe('QueuedMessages attachments', () => {
     }));
 
     expect(html).toContain('one.txt, two.txt');
-    expect(html).toMatch(/>2<\/span>/);
+    expect(html).toContain('2</span>');
   });
 
   it('keeps the file picker enabled during a queue-capable live run', () => {

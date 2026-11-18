@@ -3,17 +3,8 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 
 /**
- * expand_toolset — runtime escape hatch for the tiered tool system.
- *
- * The agent starts at the 'bootstrap' tier with ~13 essential tools. If it
- * decides it needs deeper navigation (find_references, edit_file, etc.) or
- * admin tools (git_commit, add_snapshot, index_project), it calls this tool
- * to unlock the corresponding tier. The runner then rebuilds its tools array
- * on the NEXT turn with the expanded set.
- *
- * Custom tiers (from external MCP servers and installed plugins) can also be
- * unlocked on-demand. The tool's `tier` enum is dynamically generated to
- * include both core tiers and every runtime tool group.
+ * Discover tool families without changing the stable public catalog.
+ * Legacy runners can still request tier projection through this alias.
  */
 
 export interface CustomTierInfo {
@@ -50,46 +41,38 @@ export function buildExpandTools(
 
   // Build description with custom tier docs
   let description =
-    'Unlock a higher tier of tools for this session.\n\n' +
+    'Discover a family of tools; use find_tools for input schemas and code_exec for hidden non-interactive calls.\n\n' +
     'Tiers:\n' +
     '- "navigate": write_file, edit_file, create_file, manage_path, run_command, git_status/diff/log, ' +
     'task_complete (inline-mode closer), and deeper MCP navigation (find_references, trace_usage, ' +
-    'get_dependencies, prepare_edit, get_symbol_body, etc.). Unlock this BEFORE editing code ' +
-    'or running shell commands. (spawn_agent + execute_tasks + update_task are bootstrap-tier — ' +
-    'available without unlocking.)\n' +
+    'get_dependencies, prepare_edit, get_symbol_body, etc.).\n' +
     '- "admin": git_add/commit/branch, mcp__index_project, mcp__get_costs, ' +
-    'and other rarely-needed admin tools. Unlock ONLY when the user explicitly asks for them.\n' +
+    'and other rarely-needed admin tools. Discovery does not authorize mutations.\n' +
     '- "master": company orchestration surface — spawn_subordinate_agent, ' +
     'wait_for_subordinates, list_subordinates, forward_to_agent, kanban_list_cards, ' +
     'kanban_get_card, kanban_create_card, kanban_move_card, kanban_assign_agent, and ' +
-    'related delegation tools. Auto-activated for company-master sessions; call this ' +
-    'explicitly if the master surface looks missing (e.g. after recovery agent boot).\n' +
+    'related delegation tools, available in company-master sessions.\n' +
     '- "preview": live-app DevTools over a dedicated window — preview_open/navigate, ' +
     'preview_snapshot/console/network/eval/screenshot/inspect_css/performance/memory/storage, and ' +
-    'preview_click/fill/type/press/wait_for/scroll/hover/double_click/right_click. Unlock to SEE, inspect, or drive ' +
-    'the running app (open the dev-server URL first). Auto-active for builder/dev-server projects.\n' +
+    'preview_click/fill/type/press/wait_for/scroll/hover/double_click/right_click. Open the dev-server URL first.\n' +
     '- "diagram": author draw.io diagrams — diagram_create/update/read/list/export. Saves real ' +
-    '.drawio files rendered in a live embedded editor. Unlock to draw architecture, flowcharts, ' +
-    'network/ER/sequence/C4. Auto-active for the `diagram` agent.\n' +
+    '.drawio files rendered in a live embedded editor.\n' +
     '- "db": operate the databases registered in the Databases tab — db_list, progressive db_schema ' +
     '(paged catalog or one table), db_query (single SQL statement, writes require approval) and db_command ' +
-    '(MongoDB/Redis). Unlock when the task needs to inspect or change data in a registered database.\n' +
-    '- Contextual capabilities (`company`, `sandbox`, `qa`, `app`) are auto-activated by their owning runtime. ' +
-    'Expand them manually only during recovery or an explicitly configured custom-agent flow.';
+    '(MongoDB/Redis).\n' +
+    '- Contextual capabilities (`company`, `sandbox`, `qa`, `app`) are registered by their owning runtime.';
 
   if (customTiers && customTiers.size > 0) {
     description += '\n\nExternal tool groups (on-demand):';
     for (const [name, info] of customTiers) {
-      description += `\n- "${name}": ${info.toolCount} tools from ${info.displayName}. Unlock when the task involves ${info.displayName}.`;
+      description += `\n- "${name}": ${info.toolCount} tools from ${info.displayName}.`;
     }
   }
 
   description +=
-    '\n\nWHEN TO USE: call this the turn BEFORE you need tools from a higher tier. Once unlocked, ' +
-    'the tier stays active for the rest of the session — you never need to call it twice for ' +
-    'the same tier.\n\n' +
-    "DON'T: call this speculatively. Call it only after the bootstrap tools have told you the " +
-    'task actually requires writes, shell commands, git mutations, or external tools.';
+    '\n\nUse this only to browse a family. For a known operation, find_tools returns its input schema directly. ' +
+    'Hidden non-interactive tools run inside code_exec; interactive controls use their exposed top-level call. ' +
+    'Discovery keeps the public catalog unchanged and does not grant permission.';
 
   const expandToolset: CoderTool = {
     name: 'expand_toolset',
@@ -107,7 +90,7 @@ export function buildExpandTools(
           type: 'string',
           enum: allTiers,
           description:
-            'Which tier to unlock.' +
+            'Which tool family to inspect.' +
             (customNames.length > 0
               ? ` Core: "navigate" (reads+writes+nav), "admin" (git mutations). Custom: ${customNames.map((n) => `"${n}"`).join(', ')}.`
               : ' "navigate" covers reads+writes+local nav; "admin" covers git mutations and snapshot admin.'),
@@ -142,6 +125,12 @@ export function buildExpandTools(
       ctx.signal?.throwIfAborted();
 
       const runner = ctx.runner;
+      if (runner?.stableToolCatalog) {
+        const names = (options?.toolNamesForTier?.(tier) ?? [])
+          .filter(name => runner.discoveryState(name).authorization !== 'blocked');
+        return { ...ok(`Tools in '${tier}': ${names.join(', ') || 'no registered tools'}. The public catalog remains fixed. Use find_tools({query: "exact tool name", limit: 1}) for the schema, then code_exec for non-interactive calls.`),
+          structuredData: { tier, state: 'discovered', tools: names, projection: runner.projectionReceipt ?? null } };
+      }
       if (!runner || typeof (runner as unknown as { promoteTier?: unknown }).promoteTier !== 'function') {
         return err('expand_toolset requires a runner that supports tier promotion.');
       }

@@ -27,7 +27,7 @@ function simpleStream(): AsyncIterable<unknown> {
 }
 
 async function run(
-  vendor: 'deepseek' | 'mistral' | 'copilot' | 'openrouter',
+  vendor: 'deepseek' | 'mistral' | 'copilot' | 'openrouter' | 'zai',
   model: string,
   overrides: Partial<ChatRequest>,
   stream: AsyncIterable<unknown> = simpleStream(),
@@ -44,6 +44,34 @@ async function run(
 
 describe('current OpenAI-compatible reasoning controls', () => {
   beforeEach(() => mockCreate.mockReset());
+
+  it.each(['low', 'high', 'max'])('sends GLM-5.3 effort %s even with a saved thinking-off toggle', async (effort) => {
+    const { body } = await run('zai', 'glm-5.3', { thinking: false, reasoningEffort: effort });
+
+    expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: effort });
+  });
+
+  it('uses Low when migrating a disabled thinking request and Max for an unsupported effort', async () => {
+    expect((await run('zai', 'glm-5.3', { thinking: false })).body)
+      .toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low' });
+    expect((await run('zai', 'glm-5.3-flash', { reasoningEffort: 'medium' })).body)
+      .toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' });
+  });
+
+  it('uses the documented Max default when the host resolves effort to Auto', async () => {
+    const { body } = await run('zai', 'glm-5.3', { thinking: false, reasoningEffort: null });
+
+    expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' });
+  });
+
+  it('keeps the older GLM-5.1 thinking switch and OpenRouter effort format', async () => {
+    const { body: legacy } = await run('zai', 'glm-5.1', { thinking: false });
+    expect(legacy.thinking).toEqual({ type: 'disabled' });
+    expect(legacy).not.toHaveProperty('reasoning_effort');
+    const { body: routed } = await run('openrouter', 'z-ai/glm-5.3', { reasoningEffort: 'high' });
+    expect(routed.reasoning).toEqual({ effort: 'high', exclude: false });
+    expect(routed).not.toHaveProperty('thinking');
+  });
 
   it('maps DeepSeek xhigh to max and enables thinking explicitly', async () => {
     const { body } = await run('deepseek', 'deepseek-v4-pro', {

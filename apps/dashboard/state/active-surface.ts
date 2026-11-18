@@ -12,6 +12,8 @@ import { create } from 'zustand';
 export interface ActiveProjectTab {
   projectId: number;
   tab: string;
+  workspaceId?: number | null;
+  worktreePath?: string | null;
 }
 
 interface ActiveSession {
@@ -34,6 +36,7 @@ export const useActiveSurface = create<ActiveSurfaceState>((set) => ({
   setProjectTab: (v) => set({ projectTab: v }),
 }));
 
-function activeSurfaceSnapshot(): ActiveProjectTab | null {
-  return useActiveSurface.getState().projectTab;
+export function acceptsWorkspaceTab(projectId: number): boolean {
+  const workspaceId = useActiveSurface.getState().projectTab?.workspaceId;
+  return workspaceId === undefined || workspaceId === projectId;
 }

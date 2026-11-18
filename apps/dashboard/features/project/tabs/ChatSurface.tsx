@@ -11,6 +11,8 @@ import { markRouteEvent } from '../../../lib/perf/route-startup-metrics.js';
 
 interface ChatSurfaceProps {
   projectId: number;
+  workspaceId: number | null;
+  worktreePath: string | null;
   projectName: string;
   initialSessionId?: string;
   builderJson: { stack: string; port: number } | null;
@@ -19,7 +21,7 @@ interface ChatSurfaceProps {
   workbenchSlots?: AgentChatWorkbenchSlots;
 }
 
-export function ChatSurface({ projectId, projectName, initialSessionId, builderJson, previewEnabled, framework, workbenchSlots }: ChatSurfaceProps) {
+export function ChatSurface({ projectId, workspaceId, worktreePath, projectName, initialSessionId, builderJson, previewEnabled, framework, workbenchSlots }: ChatSurfaceProps) {
   useEffect(() => {
     markRouteEvent('ChatSurface:mounted', { projectId, tab: 'chat' });
   }, [projectId]);
@@ -29,9 +31,11 @@ export function ChatSurface({ projectId, projectName, initialSessionId, builderJ
       projectId={projectId}
       projectName={projectName}
       initialSessionId={initialSessionId}
-      selectionPrefixSessionId={previewEnabled ? projectId : undefined}
-      preview={previewEnabled ? {
-        pinnedPort: builderJson?.port,
+      selectionPrefixSessionId={previewEnabled ? workspaceId ?? undefined : undefined}
+      preview={previewEnabled && workspaceId != null ? {
+        workspaceId,
+        worktreePath,
+        pinnedPort: worktreePath ? undefined : builderJson?.port,
         selectionEnabled: !!builderJson,
         framework,
       } : undefined}

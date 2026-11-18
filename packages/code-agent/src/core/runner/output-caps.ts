@@ -10,6 +10,11 @@
  *              still runs, and a hard ceiling prevents a single tool dump from
  *              overflowing the model context window mid-turn)
  *
+ * The level sizes ONE tool result. A batched `code_exec` block carrying N
+ * nested results may use min(N, 4) of those budgets (core/batch-return-format)
+ * — the total the same calls would get as separate results — still bounded by
+ * the context-relative ceiling.
+ *
  * Finite non-max levels are clamped to the ceiling so the curve is monotonic
  * and can never exceed `max`; `ultra` then sits a fixed 4× above it. Pure
  * module — no imports. Each call-site passes its own (base, ceiling) so the

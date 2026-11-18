@@ -43,13 +43,9 @@ export const MANAGE_PATH_DESC =
   "DON'T: target an authorized root itself, .git, .mcp-indexer, node_modules, unapproved absolute paths, or traversal paths.";
 
 export const EDIT_FILE_DESC =
-  'Find-and-replace edit on a file. Progressive matching: exact → normalized whitespace → indentation-flexible → block-anchor. Returns a fuzzy hint if no match.\n' +
-  "USE: targeted change within a larger file — fixing a function, tweaking a config value, renaming a symbol in one place.\n" +
-  "USE: replace_all=true when you genuinely want every occurrence replaced.\n" +
-  "DON'T: retry the exact same old_string after a failure — READ the fuzzy hint, correct the snippet, then retry. Blind retries are the #1 cause of doom-loop aborts.\n" +
-  "DON'T: supply an old_string that appears many times in the file unless replace_all=true — you'll get an ambiguity error.\n" +
-  "DON'T: edit a file you haven't read this session — use mcp__get_symbol_body or read_file first.\n" +
-  "DON'T: chain 3+ edit_file calls on the same file — use multi_edit instead (1 call, atomic rollback on failure).";
+  'Replace a small, unique span copied from a current read. Preserve exact identifiers, types, punctuation and literals in old_string.\n' +
+  'Use replace_all=true only when every occurrence should change. Use multi_edit for several changes in the same file.\n' +
+  'A mismatch shows the closest current text and the first difference. Correct the snippet from that output and retry directly when it contains enough context. Read only the affected lines if more context is needed.';
 
 export const MULTI_EDIT_DESC =
   'Apply MULTIPLE sequential find/replace operations to ONE file atomically.\n' +
@@ -64,11 +60,11 @@ export const MULTI_EDIT_DESC =
 export const READ_FILE_NATIVE_DESC =
   'Read a file from disk directly (bypasses the indexer). Auto-returns the whole file when it has ≤800 lines.\n' +
   '\n' +
-  'Decision tree (follow this BEFORE calling read_file):\n' +
-  '1. Don\'t know total_lines? → call mcp__get_file_skeleton FIRST. It returns file size + outline in <100 tokens.\n' +
+  'Choose the smallest read that answers the question:\n' +
+  '1. Confirm unknown paths with glob/search before reading. Do not request a skeleton merely to learn a line count.\n' +
   '2. File ≤800 lines → read_file returns the whole file in one call (auto-full).\n' +
   '3. File >800 + you know the symbol name → pass `symbol: "<name>"` (or call mcp__get_symbol_body).\n' +
-  '4. File >800 + you need everything → pass `force: true` (returns the full file in one call).\n' +
+  '4. For a large file, read a relevant start_line/end_line range or use a skeleton to locate a declaration. Use force:true only when the entire file is necessary.\n' +
   '5. Hunting a string, not a line? → use mcp__grep_code to locate it, then read the range or symbol.\n' +
   '\n' +
   'NEVER: paginate more than twice on the same file. After 2 calls without finding what you need, switch tactics (skeleton, symbol, grep, force). The doom-loop guard aborts repetitive turns.\n' +
@@ -78,10 +74,9 @@ export const READ_FILE_NATIVE_DESC =
   "USE: in a non-indexed project, `symbol` is the cheapest way to read one function.";
 
 export const LIST_DIRECTORY_NATIVE_DESC =
-  'List files and subdirectories at a path (non-recursive). Fallback path when the indexer listing is stale.\n' +
-  "USE: a directory you just created files in and mcp__list_directory still shows the stale version.\n" +
-  "DON'T: use as your default lister. mcp__list_directory is overlay-aware and cheaper.\n" +
-  "DON'T: walk the tree by recursive listing. Use mcp__grep_code with a glob filter for fan-out searches.";
+  'List files and subdirectories directly from disk at a confirmed path (non-recursive).\n' +
+  'Use glob for filename discovery across the tree and mcp__grep_code for content search.\n' +
+  'Inspect returned paths before opening files; do not guess directory names or walk the tree with repeated listings.';
 
 // ---------- git (src/core/coder/tools/git.ts) ----------
 
@@ -108,7 +103,7 @@ export const GIT_ADD_DESC =
 
 export const GIT_COMMIT_DESC =
   "Create a commit from staged changes. Always include a clear 'why' in the message.\n" +
-  "USE: only when the user explicitly asked to commit. This is admin-tier and requires expand_toolset first.\n" +
+  "USE: only when the user explicitly asked to commit. Discover the schema with find_tools if it is not visible; dispatch still enforces permissions.\n" +
   "DON'T: commit speculatively after an edit. The user reviews diffs themselves.\n" +
   "DON'T: use --no-verify or amend unless the user explicitly asked.";
 

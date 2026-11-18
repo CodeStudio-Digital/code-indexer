@@ -103,21 +103,26 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   /** Reconcile one integration without interrupting unrelated tool calls. */
-  async refreshServer(serverId: string): Promise<McpExternalSnapshot> {
+  async refreshServer(serverId: string, { reuseConnection = false } = {}): Promise<McpExternalSnapshot> {
     return this.runLifecycle(async () => {
       if (this.shuttingDown) throw new Error('MCP pool is shutting down');
       const configs = this.loadEnabledServers();
       this.toolRevisions.reconcileConfigurations(configs);
       const config = configs.find(c => c.id === serverId);
-      const prefix = `ext_${serverId}__`;
-      for (const name of this.liveTools.keys()) {
-        if (name.startsWith(prefix)) this.liveTools.delete(name);
-      }
-      await this.manager.closeServer(serverId);
+      let snapshot = config && reuseConnection && this.manager.isConnectedWith(config)
+        ? await this.buildSnapshot(configs, serverId) : undefined;
       let failure: unknown;
-      try { if (config) await this.manager.connectServer(config); }
-      catch (e) { failure = e; }
-      this.snapshot = await this.buildSnapshot(configs, serverId);
+      if (!snapshot || this.manager.getConnectionStates().get(serverId)?.state !== 'connected') {
+        const prefix = `ext_${serverId}__`;
+        for (const name of this.liveTools.keys()) {
+          if (name.startsWith(prefix)) this.liveTools.delete(name);
+        }
+        await this.manager.closeServer(serverId);
+        try { if (config) await this.manager.connectServer(config); }
+        catch (e) { failure = e; }
+        snapshot = await this.buildSnapshot(configs, serverId);
+      }
+      this.snapshot = snapshot;
       this.configFingerprint = this.fingerprint(configs);
       this.scheduleHealthCheck();
       if (failure) throw failure;

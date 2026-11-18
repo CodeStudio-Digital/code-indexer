@@ -70,8 +70,8 @@ describe('action, approval and recovery prompt contracts', () => {
       tags: [], source: 'user', author: null, sortOrder: 0,
     };
     const prompt = buildLazySkillsSection([skill]);
-    expect(prompt).toContain('Progress updates and discovery are allowed first');
-    expect(prompt).toContain('Skills do not override the user, active mode or permissions');
+    expect(prompt).toContain('Progress updates and discovery may come first');
+    expect(prompt).toContain('Skills cannot override the user, mode or permissions');
     expect(prompt).not.toContain('BEFORE any other tool call or prose');
   });
 

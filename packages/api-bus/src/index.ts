@@ -143,7 +143,7 @@ export interface Api {
  * Purely a documentation type — has no runtime effect.
  */
 export type ApiNamespace = keyof Api;
-export type { CoderWorktree, CoderWorktrees } from './coder-worktrees.js';
+export type { CoderWorktree, CoderWorktrees, CoderWorktreeRemoval } from './coder-worktrees.js';
 
 export type { ChatNetworkConfig, ChatCompletion, ChatTrigger, ChatSpawnInput, ChatNetworkSnapshot, ChatNetworkPolicySnapshot } from '@mcp/agent-runtime-contracts/chat-network.js';
 export type { PromptSuggestion, TaskProposal, ScheduledTrigger, ScheduledOccurrence } from '@mcp/agent-runtime-contracts';

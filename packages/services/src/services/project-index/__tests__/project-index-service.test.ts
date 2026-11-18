@@ -26,15 +26,13 @@ function fakeDb(
   synthetic = false,
   fileCount = 2,
 ): CodeIndexDB {
-  return {
-    getProject: () => ({
-      id: 1, root_path: 'D:/fake', file_count: fileCount, symbol_count: 5,
-      is_synthetic: synthetic,
-      structural_indexed_at: project.structural_indexed_at,
-      last_indexed: project.last_indexed,
-    }),
-    countSemanticStale: () => 1,
-  } as unknown as CodeIndexDB;
+  const getProject = () => ({
+    id: 1, root_path: 'D:/fake', file_count: fileCount, symbol_count: 5,
+    is_synthetic: synthetic,
+    structural_indexed_at: project.structural_indexed_at,
+    last_indexed: project.last_indexed,
+  });
+  return { getProject, getProjectCatalogEntry: getProject, countSemanticStale: () => 1 } as unknown as CodeIndexDB;
 }
 
 const SETTINGS: ProjectIndexSettings = {
@@ -193,7 +191,7 @@ class FakeGitMetaWatcher {
     return this.active.has(projectId);
   }
 
-  readCurrent() {
+  async readCurrent() {
     return { branch: 'main', detached: false, changed: [] };
   }
 }
@@ -499,7 +497,7 @@ describe('ProjectIndexService', () => {
     const svc = new ProjectIndexService(
       // Stamp present but zero rows — the screenshot bug scenario.
       {
-        getProject: () => ({
+        getProjectCatalogEntry: () => ({
           id: 1, root_path: 'D:/fake', file_count: 0, symbol_count: 0,
           structural_indexed_at: '2026-06-12T00:00:00Z', last_indexed: null,
         }),
@@ -822,6 +820,7 @@ describe('ProjectIndexService', () => {
       fileWatcher.isSkipped = () => true; // budget guard skipped this project
       const gitWatcher = new FakeGitMetaWatcher();
       const db = {
+        getProjectCatalogEntry: () => ({ id: 1, root_path: root, file_count: 50_000 }),
         getProject: () => ({
           id: 1, root_path: root, file_count: 50_000, symbol_count: 0,
           structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null,
@@ -863,6 +862,7 @@ describe('ProjectIndexService', () => {
       fileWatcher.isSkipped = () => false; // chokidar owns freshness here
       const gitWatcher = new FakeGitMetaWatcher();
       const db = {
+        getProjectCatalogEntry: () => ({ id: 1, root_path: root, file_count: 10 }),
         getProject: () => ({
           id: 1, root_path: root, file_count: 10, symbol_count: 0,
           structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null,

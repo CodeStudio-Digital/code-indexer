@@ -15,7 +15,7 @@ import * as path from 'node:path';
 const PREFERRED = ['test', 'typecheck', 'check', 'lint', 'build', 'verify'];
 const MAX_SCRIPTS = 10;
 
-export function detectVerifyCommands(projectRoot: string): string {
+export function detectVerifyCommands(projectRoot: string, platform = process.platform): string {
   try {
     const pkgPath = path.join(projectRoot, 'package.json');
     const hasMakefile = fs.existsSync(path.join(projectRoot, 'Makefile'));
@@ -53,6 +53,10 @@ export function detectVerifyCommands(projectRoot: string): string {
     }
     if (hasMakefile) lines.push('A Makefile exists — `make <target>` may cover build/test too.');
     if (hasJustfile) lines.push('A justfile exists — `just <recipe>` may cover build/test too.');
+    const extension = platform === 'win32' ? '.cmd' : '';
+    const localBins = ['tsc', 'ava', 'vitest', 'jest', 'eslint', 'xo', 'biome', 'ruff'].map(name => `node_modules/.bin/${name}${extension}`)
+      .filter(file => fs.existsSync(path.join(projectRoot, file)));
+    if (localBins.length) lines.push(`Installed verification entrypoints (observed): ${localBins.map(file => `\`${file}\``).join(', ')}. Use the declared script or these entrypoints with scoped arguments; do not guess a package's internal cli.js path.`);
     lines.push('Prefer these over guessed commands.');
     return lines.join('\n');
   } catch {

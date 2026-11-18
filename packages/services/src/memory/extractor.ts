@@ -1,5 +1,4 @@
 import type { ContextSnapshot, SnapshotCategory } from '@mcp/shared/types.js';
-import { titleSimilarity } from './text-sim.js';
 
 /**
  * Distills durable project memory from a coding session and persists it,
@@ -33,19 +32,18 @@ export interface SessionMemoryInput {
   /**
    * Current "Project style profile" content (MCP_MEMORY_STYLE_PROFILE fold).
    * `null` = feature ON but no profile yet; `undefined` = feature off. When
-   * present, the positive distiller is also asked to emit ONE complete
-   * updated profile candidate (replace-not-append handled by the extractor).
+   * present, the distiller avoids echoing its known facts and captures only
+   * new evidence. Maintenance reconciles compatible facts separately.
    */
   styleProfile?: string | null;
   /**
    * Errors hit and how they were resolved (from the compaction summarizer's
-   * `errors_and_fixes`). Consumed by the failure distiller to mint `gotcha`
-   * lessons; the positive distiller ignores it.
+   * `errors_and_fixes`). Included in the unified learning pass as gotchas.
    */
   errorsAndFixes?: string[];
   /**
    * Ordered shell commands that ran successfully this run. Consumed by the
-   * procedure distiller to mint `procedure` recipes; other distillers ignore it.
+   * unified distiller to mint verified, reusable procedure recipes.
    */
   toolTrail?: string[];
 }
@@ -89,15 +87,6 @@ export interface ExtractResult {
   skipped: number;
 }
 
-/** The maintained-fold singleton (MCP_MEMORY_STYLE_PROFILE): ONE memory whose
- *  content is always the COMPLETE current profile — merges REPLACE the body
- *  instead of appending (append would grow a frankenprofile forever), and its
- *  importance pins at ≥0.9 so it tops the index and survives GC. */
-const STYLE_PROFILE_TITLE = 'project style profile';
-const STYLE_PROFILE_IMPORTANCE = 0.9;
-const isStyleProfile = (title: string): boolean =>
-  title.trim().toLowerCase() === STYLE_PROFILE_TITLE;
-
 const IMPORTANCE_FLOOR: Partial<Record<SnapshotCategory, number>> = {
   feedback: 0.75,
   user: 0.7,
@@ -110,7 +99,6 @@ const IMPORTANCE_FLOOR: Partial<Record<SnapshotCategory, number>> = {
   todo: 0.4,
   note: 0.3,
 };
-const DUP_TITLE_THRESHOLD = 0.6;
 
 export class MemoryExtractor {
   constructor(
@@ -127,20 +115,14 @@ export class MemoryExtractor {
   ): Promise<ExtractResult> {
     const out: ExtractResult = { created: 0, merged: 0, skipped: 0 };
 
-    let candidates: MemoryCandidate[];
-    try {
-      candidates = await this.distiller.distill(input);
-    } catch (e) {
-      // Typed LLM/transport failures must reach the orchestrator so the
-      // distill log records `error` (retryable) instead of a silent zero.
-      // Name check (not instanceof) to keep this module import-cycle-free.
-      if (e instanceof Error && e.name === 'DistillLlmError') throw e;
-      return out; // anything else is best-effort — never break the session over it
-    }
+    // The orchestrator isolates failures from the chat, but must keep the input
+    // retryable. Returning an empty success here would consume an unsaved lesson.
+    const candidates = await this.distiller.distill(input);
 
     const persist = async (): Promise<ExtractResult> => {
       for (const c of candidates) {
-        const importance = Math.max(c.importance ?? 0.5, IMPORTANCE_FLOOR[c.category] ?? 0);
+        // Automatic salience is not a user pin; repetition is not new evidence.
+        const importance = Math.min(0.85, Math.max(c.importance ?? 0.5, IMPORTANCE_FLOOR[c.category] ?? 0));
         if (!c.title.trim() || !c.content.trim()) {
           out.skipped++;
           continue;
@@ -149,41 +131,22 @@ export class MemoryExtractor {
         const existing = await this.search
           .searchSnapshotsHybrid(projectId, projectName, `${c.title}\n${c.content}`.slice(0, 500), 3)
           .catch(() => [] as ContextSnapshot[]);
-        const dup = existing.find(
-          (s) => (s.category === c.category || (['user', 'feedback'].includes(s.category) && ['user', 'feedback'].includes(c.category)))
-            && titleSimilarity(s.title, c.title) >= DUP_TITLE_THRESHOLD,
-        );
+        const normalized = (value: string) => value.replace(/\s+/g, ' ').trim();
+        const dup = existing.find((s) =>
+          (s.category === c.category || (['user', 'feedback'].includes(s.category) && ['user', 'feedback'].includes(c.category)))
+          && normalized(s.content) === normalized(c.content));
 
         if (dup) {
-          // Merge: enrich the existing memory rather than spawning a near-dup.
-          // Corroboration bumps importance slightly (capped at 1) so a fact the
-          // session keeps re-deriving rises above the injection bar. When the
-          // body doesn't actually grow, the importance-only update stays on the
-          // cheap metadata path (no version row, no embedding invalidation).
-          // The style-profile singleton REPLACES its body (the candidate is the
-          // complete updated profile) instead of appending.
-          const merged = isStyleProfile(c.title)
-            ? c.content.trim()
-            : dup.content.includes(c.content.trim())
-              ? dup.content
-              : `${dup.content}\n\n${c.content.trim()}`;
-          const importanceBump = isStyleProfile(c.title)
-            ? Math.max(dup.importance ?? 0.5, STYLE_PROFILE_IMPORTANCE)
-            : Math.min(1, (dup.importance ?? 0.5) + 0.02);
-          await this.writer.update(dup.id, {
-            ...(merged !== dup.content ? { content: merged } : {}),
-            projectId,
-            importance: importanceBump,
-            ...(c.referencedFiles ? { referencedFiles: c.referencedFiles } : {}),
-          });
-          out.merged++;
+          // Preserve provenance and historical file baselines on repeated text.
+          // Related but different facts stay separate for evidence-based review.
+          out.skipped++;
         } else {
           await this.writer.create(projectId, {
             title: c.title.trim(),
             category: c.category,
             content: c.content.trim(),
             source,
-            importance: isStyleProfile(c.title) ? Math.max(importance, STYLE_PROFILE_IMPORTANCE) : importance,
+            importance,
             referencedFiles: c.referencedFiles,
           });
           out.created++;

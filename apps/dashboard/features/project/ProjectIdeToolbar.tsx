@@ -72,7 +72,9 @@ export function ProjectBranchControl({ projectId }: { projectId: number }) {
           projectId={projectId}
           onMutated={() => setRefresh((value) => value + 1)}
           onRequestCommit={() => {
-            useWorkspaceLayout.getState().setActiveLeft('git');
+            const layout = useWorkspaceLayout.getState();
+            layout.setPrimarySurface('editor');
+            layout.setActiveLeft('git');
             setOpen(false);
           }}
           onClose={() => setOpen(false)}
@@ -98,7 +100,11 @@ function quoteArg(value: string): string {
   return `"${value.replace(/(["\\$`])/g, '\\$1')}"`;
 }
 
-export function ProjectRunControl({ projectId }: { projectId: number }) {
+export function ProjectRunControl({ projectId, runnerProjectId = projectId, worktreePath }: {
+  projectId: number;
+  runnerProjectId?: number;
+  worktreePath?: string | null;
+}) {
   const { t } = useTranslation('projects');
   const allConfigurations = useContributions((state) => state.runConfigurations);
   // RunnerStartInput currently has no env field. Hide incompatible declarations
@@ -162,7 +168,7 @@ export function ProjectRunControl({ projectId }: { projectId: number }) {
   const debugSessions = useDebugSessions((state) => state.sessions);
   const [debugStarting, setDebugStarting] = useState(false);
   const [debugError, setDebugError] = useState<string | null>(null);
-  const tasks = useMemo(() => tasksForProject(allTasks, projectId), [allTasks, projectId]);
+  const tasks = useMemo(() => tasksForProject(allTasks, runnerProjectId, worktreePath), [allTasks, runnerProjectId, worktreePath]);
   const running = tasks.filter((task) => task.status === 'running').sort((a, b) => b.startedAt - a.startedAt)[0];
   const activeDebug = activeDebugSessionForProject(debugSessions, projectId);
   const selected = configurations.find((config) => config.key === selectedId) ?? configurations[0];

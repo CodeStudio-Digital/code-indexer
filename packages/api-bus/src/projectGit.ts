@@ -375,6 +375,8 @@ export interface GitScope {
  * aggregate status can skip its noise.
  */
 export interface GitRepoRef {
+  /** UI snapshot only: discovery continues; never use this as a routing allowlist. */
+  discoveryPending?: boolean;
   /** Absolute path of the repo root. Legacy alias retained during migration. */
   absPath: string;
   /** Absolute root of the selected Git working tree. */

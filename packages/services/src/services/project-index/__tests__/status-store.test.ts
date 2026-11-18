@@ -15,7 +15,7 @@ import { ProjectIndexStatusStore } from '../status-store.js';
 
 function fakeDb(): CodeIndexDB {
   return {
-    getProject: () => ({
+    getProjectCatalogEntry: () => ({
       id: 1, root_path: 'D:/fake', file_count: 3, symbol_count: 7,
       structural_indexed_at: '2026-06-17T00:00:00Z', last_indexed: null,
     }),

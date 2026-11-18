@@ -1,5 +1,10 @@
 {
   "panel": {
+    "finished": "Session ended.",
+    "split": "Split terminals side by side",
+    "noMatches": "No hosts match your search.",
+    "retry": "Retry",
+    "dismiss": "Dismiss",
     "empty": "No open SSH connections",
     "emptyHint": "Create a connection to open a remote terminal.",
     "newConnection": "New connection",

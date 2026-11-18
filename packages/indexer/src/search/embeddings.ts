@@ -1,4 +1,5 @@
 import type { VectorWriteTarget } from '@mcp/store/vectors.js';
+import { noteFreeModelRateLimit, waitForFreeModelSlot } from './free-model-rate-limit.js';
 
 export interface QueryEmbeddingOptions {
   signal?: AbortSignal;
@@ -496,6 +497,7 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
     const timer = setTimeout(() => ctl.abort(), this.requestTimeoutMs);
     let response: Response;
     try {
+      await waitForFreeModelSlot(this.baseURL, this.model, this.apiKey, ctl.signal);
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       // Local OpenAI-compatible runtimes (Ollama, LM Studio, llama.cpp) do not
       // require a token. Cloud providers still receive the exact Bearer header
@@ -516,7 +518,8 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
     }
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(`Embedding API error: ${response.status} ${body}`.trim());
+      const retry = noteFreeModelRateLimit(this.baseURL, this.model, this.apiKey, response, body);
+      throw new Error(`Embedding API error: ${response.status}${retry} ${body}`.trim());
     }
     const data = (await response.json()) as { data?: Array<{ index?: number; embedding?: number[] }> };
     if (!Array.isArray(data.data) || data.data.length !== batch.length) {

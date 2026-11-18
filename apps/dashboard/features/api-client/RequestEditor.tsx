@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Loader2, Code2, Save, Check, X, Pencil } from 'lucide-react';
+import { Send, Square, Code2, Save, Check, X, Pencil } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
 import { HTTP_METHODS, type ApiRequest, type KvRow } from './types.js';
@@ -16,7 +16,7 @@ import { parseRows, stringifyRows } from './kv-grid/kv-utils.js';
 import { BodyPanel } from './body/BodyPanel.js';
 import { AuthEditor } from './AuthEditor.js';
 import { ScriptEditor } from './ScriptEditor.js';
-import { useQuerySync, serializeQuery, stripQuery } from './useQuerySync.js';
+import { useQuerySync, withQuery } from './useQuerySync.js';
 import { SubTabs, type SubTabDef } from './SubTabs.js';
 import { ApiClientSelect } from './ApiClientSelect.js';
 import type { ScriptAssistPayload } from './api.js';
@@ -35,17 +35,17 @@ interface Props {
   /** Privacy-safe shape (keys+types) of the last response, for the AI script bar. */
   responseShape?: string;
   onSave: (rid: number, patch: Partial<ApiRequest>) => void;
-  onSend: (rid: number) => void;
+  onSend: (request: ApiRequest) => void;
+  onCancel: (rid: number) => void;
   onOpenCode?: (rid: number) => void;
   onSaveDraft?: (draft: ApiRequest) => void;
-  onSendDraft?: (draft: ApiRequest) => void;
   onDiscardDraft?: () => void;
   onAssist?: (payload: ScriptAssistPayload) => Promise<{ script: string; explanation: string }>;
 }
 
 type SubTab = 'params' | 'headers' | 'body' | 'auth' | 'scripts';
 
-export function RequestEditor({ request, baseUrl, sending, isDraft, responseShape, onSave, onSend, onOpenCode, onSaveDraft, onSendDraft, onDiscardDraft, onAssist }: Props) {
+export function RequestEditor({ request, baseUrl, sending, isDraft, responseShape, onSave, onSend, onCancel, onOpenCode, onSaveDraft, onDiscardDraft, onAssist }: Props) {
   const { t } = useTranslation('apiClient');
   const [draft, setDraft] = useState<ApiRequest | null>(request);
   const [tab, setTab] = useState<SubTab>('params');
@@ -77,12 +77,8 @@ export function RequestEditor({ request, baseUrl, sending, isDraft, responseShap
     onQuery: (rows: KvRow[]) => upd({ query_json: stringifyRows(rows) }),
   });
 
-  // Persist the GIVEN query rows + a URL rebuilt from them (stripQuery normalizes
-  // away the old `?…` so a stale path_template can't double the query).
   const commitQuery = (rows: KvRow[]) => {
-    const qs = serializeQuery(rows);
-    const base = stripQuery(d.path_template);
-    persist({ query_json: stringifyRows(rows), path_template: qs ? `${base}?${qs}` : base });
+    persist({ query_json: stringifyRows(rows), path_template: withQuery(d.path_template, rows) });
   };
 
   const tabDefs: SubTabDef<SubTab>[] = [
@@ -94,7 +90,12 @@ export function RequestEditor({ request, baseUrl, sending, isDraft, responseShap
   ];
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full" onKeyDown={event => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        if (!sending && !event.repeat) onSend(d);
+      }
+    }}>
       <div className="flex items-center gap-2 px-2 pt-2">
         <div className="group/name flex items-center gap-1.5 flex-1 min-w-0 px-1.5 py-0.5 rounded-md hover:bg-muted/50 focus-within:bg-muted/60 transition-colors" title={t('request.clickToRename')}>
           <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/40 group-hover/name:text-muted-foreground transition-colors" />
@@ -108,7 +109,7 @@ export function RequestEditor({ request, baseUrl, sending, isDraft, responseShap
         </div>
         {isDraft ? (
           <>
-            <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => onSaveDraft?.(d)}>
+            <Button size="sm" variant="outline" className="h-7 gap-1" disabled={sending} onClick={() => onSaveDraft?.(d)}>
               <Save className="h-3.5 w-3.5" /> {t('request.save')}
             </Button>
             <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground" title={t('request.discardDraft')} onClick={() => onDiscardDraft?.()}>
@@ -145,9 +146,9 @@ export function RequestEditor({ request, baseUrl, sending, isDraft, responseShap
             <Code2 className="h-4 w-4" />
           </Button>
         )}
-        <Button size="sm" className="h-9 gap-1.5 px-4" disabled={sending} onClick={async () => { if (isDraft) { onSendDraft?.(d); } else { await persist({ ...d }); onSend(d.id); } }}>
-          {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-          {t('request.send')}
+        <Button size="sm" className="h-9 gap-1.5 px-4" onClick={() => sending ? onCancel(d.id) : onSend(d)}>
+          {sending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
+          {t(sending ? 'request.stop' : 'request.send')}
         </Button>
       </div>
 

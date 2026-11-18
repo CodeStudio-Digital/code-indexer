@@ -16,3 +16,8 @@ describe('background semantic retry policy', () => {
       .toEqual({ attempt: 21, not_before_ms: 6000, blocked: false });
   });
 });
+it('keeps transient quota failures retryable even after the old eight-attempt cap', () => {
+  const retry = nextSemanticRetry(new Error('429 Rate limit exceeded Retry-After: 120'), 25, 1000);
+  expect(retry).toMatchObject({ attempt: 26, blocked: false });
+  expect(retry.not_before_ms).toBe(901000);
+});

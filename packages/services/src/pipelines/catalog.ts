@@ -239,7 +239,7 @@ const CATALOG_SEED: CatalogSeed[] = [
     pipelineName: 'memory_extraction',
     bindingRole: 'distiller',
     description:
-      'Distills durable project memory (decisions, conventions, gotchas, recipes) from session summaries at compaction / idle. Optional — when unset, falls back to the general default AI model (zero-config).',
+      'Learns durable facts from sessions and reviews existing agent memories in the background: grounded consolidation, refinement and reversible retirement. Retrieval uses the Memory semantic profile (embeddings + reranker), without an extra LLM query/filter. Unset falls back to the general default AI model.',
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.1-8b-instruct',
@@ -248,35 +248,6 @@ const CATALOG_SEED: CatalogSeed[] = [
       config: { temperature: 0, max_tokens: 4000 },
     },
     introducedInPhase: 'memory',
-  },
-  {
-    pipelineName: 'memory_recall',
-    bindingRole: 'reranker',
-    description:
-      'Independent LLM selective-recall filter (not the semantic-profile cross-encoder): keeps only the retrieved project ' +
-      'memories CLEARLY about the current task (aboutness, not keyword overlap; ≤5; conservative with user-profile). ' +
-      'Gated by CODER_MEMORY_LLM_FILTER. Unset → no LLM filtering (the structural relevance floor still applies).',
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.1-8b-instruct',
-      config: { temperature: 0, max_tokens: 200 },
-    },
-    introducedInPhase: 'cc-gap-D1',
-  },
-  {
-    pipelineName: 'memory_query',
-    bindingRole: 'query_writer',
-    description:
-      'Memory-recall query writer: a cheap LLM pass that turns a meta/continuation message ' +
-      '("continue", "reanalise tudo que fez") plus the recent conversation into ONE short search ' +
-      'query describing the task in progress, so proactive memory recall stops missing on task-less ' +
-      'turns. Optional — unset falls back to a pure walk-back heuristic (last substantive message).',
-    recommendedDefault: {
-      providerKind: 'cloudflare',
-      modelHint: '@cf/meta/llama-3.1-8b-instruct',
-      config: { temperature: 0, max_tokens: 100 },
-    },
-    introducedInPhase: 'memory-query',
   },
 
   // ─── Vision fallback (image → text) ──────────────────────────────────────

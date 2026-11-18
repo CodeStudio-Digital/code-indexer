@@ -1,6 +1,7 @@
 import { persistBoardAttachments } from '@mcp/company/services/board-attachments.js';
 import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
+import { sessionRecoveryFailure } from '../../../control-plane-recovery-error.js';
 import { bodyLimit } from 'hono/body-limit';
 import type { ServerDeps } from '../../deps.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
@@ -243,12 +244,14 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         guard,
       );
     };
+    let storageFailure: ReturnType<typeof sessionRecoveryFailure>;
     const acceptance = await acceptLocalCompanyCommand({
       store: controlPlaneStore,
       companySessionId: input.sessionId,
       kind: input.kind,
       idempotencyKey: input.dedupeKey,
       fingerprint: input.fingerprint,
+      onUnavailable: (error) => { storageFailure = sessionRecoveryFailure(error); },
     });
 
     if (
@@ -273,16 +276,16 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       };
     }
     if (!acceptance) {
-      if (input.dedupeKey) {
-        recentMessageKeys.recordTerminal(input.sessionId, input.dedupeKey, {
+      if (input.dedupeKey && guard) {
+        recentMessageKeys.rejectClaim(input.sessionId, input.dedupeKey, guard.token, guard.fingerprintHash, {
           event: 'error',
-          data: { reason: 'idempotency-authority-unavailable', duplicate: false },
-        }, -1, guard);
+          data: { reason: storageFailure?.code ?? 'idempotency-authority-unavailable', duplicate: false, retryable: true },
+        });
       }
       return {
         kind: 'reject',
         status: 503,
-        body: {
+        body: storageFailure ?? {
           error: 'idempotency authority unavailable; request was not executed',
           code: 'IDEMPOTENCY_AUTHORITY_UNAVAILABLE',
         },

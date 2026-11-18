@@ -121,6 +121,7 @@ export async function createCoderProvider(
       def.createCoder(creds, model, { ...opts, providerId, providerModels }),
       providerModels,
       model,
+      { useModelDefault: def.kind === 'zai' },
     ),
   );
 }

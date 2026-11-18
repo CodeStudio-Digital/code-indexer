@@ -6,12 +6,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiRequest } from './types.js';
 import * as api from './api.js';
+import { useRequestRuns } from './use-request-runs.js';
 import { loadApiClientUi, saveApiClientUi } from './api-client-ui-state.js';
 import { parseRequestAssertion, requestRestoreCreateInput, requestRestorePatch } from './request-delete-undo.js';
 import { type ApiClientState, INITIAL_STATE, closeTabState, removeTabsState, makeDraft } from './api-client-tab-state.js';
 
 export function useApiClient(projectId: number) {
   const [s, set] = useState<ApiClientState>(INITIAL_STATE);
+  const { runs, run, cancel, saveAs } = useRequestRuns(s.openTabIds);
+  const activeRun = s.activeRequestId == null ? undefined : runs[s.activeRequestId];
   const [lastDeletedRequest, setLastDeletedRequest] = useState<{
     request: ApiRequest;
     wasOpen: boolean;
@@ -43,7 +46,7 @@ export function useApiClient(projectId: number) {
     set((prev) => ({
       ...prev,
       collections,
-      activeCollectionId: prev.activeCollectionId ?? collections[0]?.id ?? null,
+      activeCollectionId: prev.activeCollectionId ?? (prev.draftRequest ? null : collections[0]?.id ?? null),
     }));
   }, [projectId]);
 
@@ -135,7 +138,7 @@ export function useApiClient(projectId: number) {
   const selectCollection = useCallback((id: number) =>
     // Clear the visible tab set immediately so the bar never flashes the previous
     // collection's tabs; the tabs-load effect repopulates this collection's tabs.
-    patch({ activeCollectionId: id, activeRequestId: null, openTabIds: [], response: null, draftRequest: null, draftDirty: false }), [patch]);
+    set(prev => prev.activeCollectionId === id ? prev : { ...prev, activeCollectionId: id, activeRequestId: null, openTabIds: [], draftRequest: null, draftDirty: false }), []);
   // Re-fetch the active collection's requests WITHOUT touching the current
   // selection/response — used after a regression run (which updates nothing on
   // the request rows, so resetting selection would just blank the editor).
@@ -150,7 +153,6 @@ export function useApiClient(projectId: number) {
     ...prev,
     openTabIds: prev.openTabIds.includes(id) ? prev.openTabIds : [...prev.openTabIds, id],
     activeRequestId: id,
-    response: null,
   })), []);
   const selectEnv = useCallback((id: number) => patch({ selectedEnvId: id }), [patch]);
   /** Close a request/draft tab (X / middle-click), activating the neighbor. */
@@ -175,13 +177,13 @@ export function useApiClient(projectId: number) {
   const newDraft = useCallback(() => set((prev) => {
     // One draft at a time: focus the existing draft tab if there is one.
     const existing = prev.openTabIds.find((id) => id < 0);
-    if (existing != null && prev.draftRequest) return { ...prev, activeRequestId: existing, response: null };
+    if (existing != null && prev.draftRequest) return { ...prev, activeRequestId: existing };
     const draft = makeDraft();
     return {
       ...prev,
       draftRequest: draft, draftDirty: false,
       openTabIds: [...prev.openTabIds.filter((id) => id >= 0), draft.id],
-      activeRequestId: draft.id, response: null,
+      activeRequestId: draft.id,
     };
   }), []);
   const updateDraft = useCallback((p: Partial<ApiRequest>) =>
@@ -209,7 +211,7 @@ export function useApiClient(projectId: number) {
       // If the active collection was deleted, clear its tabs — the tabs-load effect
       // repopulates for the new active collection.
       return switched
-        ? { ...prev, collections, activeCollectionId, activeRequestId: null, openTabIds: [], response: null, draftRequest: null, draftDirty: false }
+        ? { ...prev, collections, activeCollectionId, activeRequestId: null, openTabIds: [], draftRequest: null, draftDirty: false }
         : { ...prev, collections };
     });
   }, [projectId]);
@@ -273,7 +275,7 @@ export function useApiClient(projectId: number) {
       const openTabIds = prev.openTabIds.filter((id) => !gone.has(id));
       let activeRequestId = prev.activeRequestId;
       if (activeRequestId != null && gone.has(activeRequestId)) activeRequestId = openTabIds[0] ?? null;
-      return { ...prev, openTabIds, activeRequestId, ...(activeRequestId !== prev.activeRequestId ? { response: null } : {}) };
+      return { ...prev, openTabIds, activeRequestId };
     });
     if (s.activeCollectionId != null) await refreshRequests(s.activeCollectionId);
   }, [projectId, s.activeCollectionId, refreshRequests]);
@@ -351,77 +353,54 @@ export function useApiClient(projectId: number) {
           requests,
           openTabIds,
           activeRequestId: deleted.wasActive ? restored.id : prev.activeRequestId,
-          ...(deleted.wasActive ? { response: null } : {}),
         };
       });
     }
     return restored;
   }, [lastDeletedRequest, projectId, s.activeCollectionId, refreshRequests]);
 
-  const send = useCallback(async (rid: number) => {
-    patch({ sending: true, error: null, response: null });
-    try {
-      const response = await api.sendRequest(projectId, rid, s.selectedEnvId ?? undefined);
-      // Patch just the sent row's status in place — no full-collection refetch.
-      set((prev) => ({
-        ...prev,
-        response,
-        requests: prev.requests.map((r) => (r.id === rid ? { ...r, last_status: response.status, last_run_at: new Date().toISOString() } : r)),
-      }));
-      // A test/pre script wrote env vars (e.g. saved a token) → reflect them in the UI.
-      // Non-fatal: the send already succeeded and its response is stored — a
-      // failed env refresh must NOT overwrite that with a send-failed error.
-      if (response.envUpdated) { try { await refreshEnvironments(); } catch { /* env list just won't refresh */ } }
-    } catch (e) {
-      patch({ error: e instanceof Error ? e.message : String(e) });
-    } finally {
-      patch({ sending: false });
-    }
-  }, [projectId, s.selectedEnvId, patch, refreshEnvironments]);
+  const send = useCallback(async (draft: ApiRequest) => {
+    const rid = draft.id;
+    const envId = s.selectedEnvId ?? undefined;
+    const response = await run(rid, async signal => {
+      if (rid < 0) return api.sendAdhoc(projectId, draft, envId, signal);
+      await saveRequest(rid, draft);
+      signal.throwIfAborted();
+      return api.sendRequest(projectId, rid, envId, signal);
+    });
+    if (!response) return;
+    if (rid > 0) set(prev => ({
+      ...prev,
+      requests: prev.requests.map(r => r.id === rid
+        ? { ...r, last_status: response.status, last_run_at: new Date().toISOString() } : r),
+    }));
+    if (response.envUpdated) await refreshEnvironments().catch(() => {});
+  }, [projectId, s.selectedEnvId, run, saveRequest, refreshEnvironments]);
 
-  // Send the unsaved draft ad-hoc (no DB row); same response handling as send.
-  const sendDraft = useCallback(async (draft: ApiRequest) => {
-    patch({ sending: true, error: null, response: null });
-    try {
-      const response = await api.sendAdhoc(projectId, draft, s.selectedEnvId ?? undefined);
-      patch({ response });
-      // Non-fatal: the send already succeeded and its response is stored — a
-      // failed env refresh must NOT overwrite that with a send-failed error.
-      if (response.envUpdated) { try { await refreshEnvironments(); } catch { /* env list just won't refresh */ } }
-    } catch (e) {
-      patch({ error: e instanceof Error ? e.message : String(e) });
-    } finally {
-      patch({ sending: false });
-    }
-  }, [projectId, s.selectedEnvId, patch, refreshEnvironments]);
+  const openRequestInCollection = useCallback(async (cid: number, rid: number, draftId?: number) => {
+    const [collections, requests] = await Promise.all([api.listCollections(projectId), api.listRequests(projectId, cid)]);
+    const restored = loadApiClientUi(projectId, cid)?.openTabIds ?? [];
+    loadedTabsRef.current = cid;
+    if (draftId != null) saveAs(draftId, rid);
+    set(prev => {
+      const same = prev.activeCollectionId === cid;
+      const tabs = same ? prev.openTabIds : restored;
+      const openTabIds = [...new Set([...tabs.map(id => id === draftId ? rid : id), rid])];
+      return { ...prev, collections, requests, activeCollectionId: cid, activeRequestId: rid, openTabIds,
+        ...(same && draftId == null ? {} : { draftRequest: null, draftDirty: false }) };
+    });
+  }, [projectId, saveAs]);
 
-  // Persist the draft into the chosen collection/folder, then select it.
-  const saveDraft = useCallback(async (draft: ApiRequest, collectionId: number, folder: string | null, name: string) => {
-    const created = await api.createRequest(projectId, collectionId, { ...draft, id: undefined, name, folder, source: 'manual' });
-    if (collectionId === s.activeCollectionId) {
-      await refreshRequests(collectionId);
-      set((prev) => {
-        const draftId = prev.draftRequest?.id;
-        // Replace the draft tab in place with the saved id; drop any other negatives.
-        const mapped = prev.openTabIds.map((x) => (x === draftId ? created.id : x)).filter((x) => x > 0);
-        const openTabIds = mapped.includes(created.id) ? mapped : [...mapped, created.id];
-        return { ...prev, draftRequest: null, draftDirty: false, openTabIds, activeRequestId: created.id, response: null };
-      });
-    } else {
-      // Cross-collection: pre-persist the saved id into the target collection's tab
-      // set, then switch — the tabs-load effect reads the storage we just updated.
-      const persisted = loadApiClientUi(projectId, collectionId);
-      saveApiClientUi(projectId, collectionId, {
-        openTabIds: [...(persisted?.openTabIds ?? []).filter((x) => x !== created.id), created.id],
-        activeRequestId: created.id,
-      });
-      await refreshCollections();
-      patch({ draftRequest: null, draftDirty: false, activeCollectionId: collectionId, activeRequestId: null, openTabIds: [], response: null });
-    }
-  }, [projectId, s.activeCollectionId, refreshRequests, refreshCollections, patch]);
+  const saveDraft = useCallback(async (draft: ApiRequest, cid: number, folder: string | null, name: string) => {
+    const created = await api.createRequest(projectId, cid, { ...draft, id: undefined, name, folder, source: 'manual' });
+    await openRequestInCollection(cid, created.id, draft.id);
+  }, [projectId, openRequestInCollection]);
 
   return {
-    state: s,
+    state: {
+      ...s, response: activeRun?.response ?? null, previousResponse: activeRun?.previous ?? null,
+      sending: activeRun?.sending ?? false, error: activeRun ? activeRun.error ?? null : s.error, cancelled: activeRun?.cancelled ?? false,
+    },
     refreshEnvironments, refreshCollections, reloadRequests, removeEnvironment,
     selectCollection, selectRequest, selectEnv, closeTab,
     closeOtherTabs, closeTabsToRight, closeTabsToLeft, closeAllTabs,
@@ -431,7 +410,6 @@ export function useApiClient(projectId: number) {
     undoLastRequestDelete,
     addFolder, renameFolder, removeFolder, moveRequest,
     duplicateRequest, reorderRequests, bulkMove, bulkDelete,
-    newDraft, updateDraft, discardDraft, sendDraft, saveDraft,
-    send,
+    newDraft, updateDraft, discardDraft, saveDraft, send, cancel, openRequestInCollection,
   };
 }

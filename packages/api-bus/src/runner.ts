@@ -81,9 +81,9 @@ export interface DetectedRunner {
 /** Runners grouped by manager, plus an install hint per group. */
 export interface DetectedGroup {
   manager: RunnerManager;
-  /** Project-relative source file that produced this group (package.json, app/composer.json, …). */
+  /** Checkout-relative source file (package.json, app/composer.json, …). */
   source: string;
-  /** Project-relative working directory for every command in this group. */
+  /** Checkout-relative working directory for every command in this group. */
   cwd?: string;
   runners: DetectedRunner[];
   /** True when dependencies appear to be missing (no node_modules/vendor). */
@@ -110,7 +110,9 @@ export interface RunnerTask {
   label: string;
   command: string;
   manager: RunnerManager;
-  /** Project-relative working dir the run was launched in (for restart). */
+  /** Canonical path of a linked checkout. Unset for the project's main workspace. */
+  worktreePath?: string;
+  /** Checkout-relative working dir the run was launched in (for restart). */
   cwd?: string;
   /** Explicit execution environment used by settings actions (host/WSL). */
   target?: RuntimeTarget;
@@ -125,11 +127,13 @@ export interface RunnerStartInput {
   command: string;
   label: string;
   manager: RunnerManager;
+  /** A linked checkout registered to the project. Defaults to the project root. */
+  worktreePath?: string | null;
   /**
-   * Project-relative working directory to run in (defaults to the project root).
+   * Checkout-relative working directory (defaults to the checkout root).
    * Used by the run gutter for a NESTED package.json/composer.json so
    * `npm run`/`composer run` resolve the right manifest. Resolved + confined to
-   * the project root server-side.
+   * the checkout server-side.
    */
   cwd?: string;
   /** Override the project's runner shell target (used by host/WSL settings panes). */
@@ -165,12 +169,12 @@ export interface FileRunTarget {
 
 export interface RunnerApi {
   /**
-   * Scan the project's root for runnable commands across ecosystems. The
+   * Scan the selected checkout for runnable commands across ecosystems. The
    * package-manager override is resolved for `target` (default: the env of the
    * project's `runner_shell` — host or a WSL distro), so the WSL list/commands
    * honour the distro's chosen manager.
    */
-  detect(input: { projectId: number; target?: RuntimeTarget }, ctx: ApiContext): Promise<DetectedRunners>;
+  detect(input: { projectId: number; worktreePath?: string | null; target?: RuntimeTarget }, ctx: ApiContext): Promise<DetectedRunners>;
 
   /**
    * Probe whether a package manager (npm/yarn/pnpm/bun/composer/pip/poetry) is

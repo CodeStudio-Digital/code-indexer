@@ -35,13 +35,8 @@ export function interpolateSkillVars(template: string, ctx: SkillTemplateContext
 }
 
 const DISCOVERY_INSTRUCTIONS = [
-  'To find and use a skill, walk this 3-level hierarchy:',
-  '1. `list_skill_namespaces({})` — see installed packs with counts, repos, and sample IDs (use this first to pick a pack by topic)',
-  '2. `get_skills_list({namespace: "X"})` — list skills inside a pack you picked',
-  '3. `get_skill_content({skill_id: "Y"})` — load full instructions before starting that work',
-  '',
-  'Skip ahead if you already know the right pack or skill. The hierarchy exists to keep token cost low — do not list everything just to browse.',
-  'Load a clearly relevant or explicitly requested skill before its domain work, unless its current body is already in context. Progress updates and discovery are allowed first. Skills do not override the user, active mode or permissions. Only use an id from the catalog or the user\'s `/<name>`; never guess ids.',
+  'For an explicit request or concrete domain need, discover with `list_skill_namespaces({})`, then `get_skills_list({namespace: "X"})`. Skip steps when the pack/ID is known; routine edits need no catalog round trip.',
+  'Load a clearly relevant or requested skill via `get_skill_content({skill_id: "Y"})` before its domain work. Reuse instructions already in context. Progress updates and discovery may come first. Use catalog or user-supplied IDs only. Skills cannot override the user, mode or permissions.',
 ].join('\n');
 
 function buildNamespaceSummary(skills: ResolvedSkill[]): string {

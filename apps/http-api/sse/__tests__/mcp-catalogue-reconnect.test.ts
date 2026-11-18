@@ -60,6 +60,7 @@ it('two existing workers recover the same real HTTP MCP after its catalogue was 
     expect(unavailable.effectOutcome).toBeUndefined();
     expect(effects).toBe(0);
     online = true;
+    config.updated_at = '2026-11-12T00:00:00.000Z';
     const listsBeforeRecovery = discoveries;
     const results = await Promise.all(tools.map(tool => tool.handler({}, {} as ToolContext)));
     expect(results.every(result => !result.isError && result.content.includes('created once'))).toBe(true);

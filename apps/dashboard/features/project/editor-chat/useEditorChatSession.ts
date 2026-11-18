@@ -37,6 +37,7 @@ import {
 } from '../../builder/studio/studio-context-store.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
 import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
+import { deliverQueuedMessage } from '../../chat/composer/deliver-queued-message.js';
 import {
   executionModeChangeLocked,
   modelCanReason,
@@ -52,7 +53,7 @@ import type { CoderSession, CoderSessionGroup, PromptHandlers, SessionData } fro
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
 import { useSessionAgent } from '../../chat/useSessionAgent.js';
 import { useSessionProvider } from '../../chat/useSessionProvider.js';
-import { sessionProviderSwitches } from '../../../hooks/agent-stream/provider-switch.js';
+import { sessionsInWorktree } from '../../chat/worktree-scope.js';
 import type { NotificationSourceContext } from '../../notifications/index.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
 
@@ -61,6 +62,9 @@ type PendingAutoTitleSessions = Set<string> & {
 };
 
 interface EditorChatSessionOptions {
+  workspaceId?: number;
+  worktreePath?: string | null;
+  mainRoot?: string | null;
   initialSessionId?: string;
   initialAgent?: AgentId;
   agentLock?: AgentId;
@@ -77,6 +81,9 @@ type AgentId = AgentPreset;
 
 export function useEditorChatSession(projectId: number, options: EditorChatSessionOptions = {}) {
   const {
+    workspaceId = projectId,
+    worktreePath,
+    mainRoot,
     initialSessionId,
     initialAgent,
     agentLock,
@@ -88,11 +95,14 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     initialThinking,
     initialReasoningEffort,
   } = options;
-  const { selections } = useEditorChatContext(projectId);
+  const { selections } = useEditorChatContext(workspaceId);
 
   const { data: sessions, refetch: refetchSessions, update: updateSessions } = useApi<CoderSession[]>(
     `/coder/sessions?project_id=${projectId}&archived=0`,
   );
+  const visibleSessions = useMemo(() => sessions && worktreePath !== undefined
+    ? sessionsInWorktree(sessions, worktreePath, mainRoot ?? undefined)
+    : sessions, [sessions, worktreePath, mainRoot]);
   const { data: groups, refetch: refetchGroups } = useApi<CoderSessionGroup[]>(
     `/coder/groups?project_id=${projectId}`,
   );
@@ -298,6 +308,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
       const created = await apiPost<CoderSession>('/coder/sessions', {
         project_id: projectId,
+        worktree_path: worktreePath,
         title: (explicitTitle || newSessionTitle).slice(0, 80),
         provider: selectedProvider,
         model: selectedModel,
@@ -331,7 +342,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       pendingAutoTitle.current.creationInFlight = false;
       setCreating(false);
     }
-  }, [projectId, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, settings.executionMode, settings.adoptExecutionMode, adoptAgent, thinking, temperature, updateSessions, refetchSessions]);
+  }, [projectId, worktreePath, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, settings.executionMode, settings.adoptExecutionMode, adoptAgent, thinking, temperature, updateSessions, refetchSessions]);
 
   const { archiveSession, deleteSession, favoriteSession, renameSession, duplicateSession, moveSessionToGroup, createGroup } =
     useEditorSessionCatalogActions({ projectId, selectedId, setSelectedId, refetchSessions, refetchGroups });
@@ -344,7 +355,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     // (Ctrl/Cmd+I) plus the current live editor selection (deduped) — then
     // clear ALL staged context (file refs are already inlined by the
     // Composer as <file_refs>; clear() also drops the live selection).
-    const editorPrefix = includeEditorContext ? consumeEditorContext(projectId, selections) : '';
+    const editorPrefix = includeEditorContext ? consumeEditorContext(workspaceId, selections) : '';
     const studioPrefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
     const shots = selectionPrefixSessionId ? consumePendingAttachments(selectionPrefixSessionId) : [];
     const prefix = [editorPrefix, studioPrefix].filter(Boolean).join('\n');
@@ -370,71 +381,41 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
           .catch((err) => console.warn('[editor-chat] generate-title failed:', err));
       }
     }, { attachments: allAtts, agent: getAgent(), maxTurns, maxAutoContinues, thinking, describeImages: settings.describeImages, blockCodeComments: settings.blockCodeComments, selectedSkillIds });
-  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, updateSessionData, sendMessage, refetchSession, refetchSessions, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages, settings.blockCodeComments]);
+  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, workspaceId, updateSessionData, sendMessage, refetchSession, refetchSessions, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages, settings.blockCodeComments]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
-  // Live run → POST /inject (no new stream; the open SSE renders the injected
-  // turn). No run → fall back to sendMessage (fresh streamed run). See the
-  // AgentChat copy for the full rationale (avoids the mid-run stream-abort freeze).
-  const deliverQueued = useCallback<QueueDeliver>(async (
-    text,
-    { interject, attachments, skillIds },
-  ) => {
-    if (!selectedId) return;
-    await sessionProviderSwitches.wait(selectedId);
-    try {
-      const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean }>(
-        `/coder/sessions/${selectedId}/inject`,
-        {
-          content: text,
-          interject,
-          attachments,
-          describe_images: settings.describeImages,
-          selected_skill_ids: skillIds,
-        },
-      );
-      // Defer the persisted-history refresh to user_message_boundary so the
-      // new user row cannot render beside the preceding live-turn buffer.
-      if (r?.injected) return;
-    } catch { /* fall through to a fresh streamed send */ }
+  const deliverQueued = useCallback<QueueDeliver>(async (text, delivery) => {
+    if (!selectedId) throw new Error('No conversation selected');
     await settings.awaitPendingExecutionMode();
     await ensureAgentLock();
     await awaitPendingAgentChange();
-    await sendMessage(text, async () => { refetchSession(); }, {
-      attachments,
-      agent: getAgent(),
-      maxTurns,
-      maxAutoContinues,
-      thinking,
-      describeImages: settings.describeImages,
-      blockCodeComments: settings.blockCodeComments,
-      selectedSkillIds: skillIds,
-      interject,
-    });
-  }, [selectedId, settings.awaitPendingExecutionMode, sendMessage, refetchSession, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages, settings.blockCodeComments]);
-  const queue = useMessageQueue({ streaming, deliver: deliverQueued });
+    return deliverQueuedMessage({ sessionId: selectedId, text, delivery, reattach, refresh: refetchSession,
+      settings: { agent, max_turns: maxTurns ?? undefined, max_auto_continues: maxAutoContinues,
+        thinking, describe_images: settings.describeImages, block_code_comments: settings.blockCodeComments } });
+  }, [selectedId, settings.awaitPendingExecutionMode, ensureAgentLock, awaitPendingAgentChange, reattach, refetchSession, agent, maxTurns, maxAutoContinues, thinking, settings.describeImages, settings.blockCodeComments]);
+  const queue = useMessageQueue({ sessionId: selectedId, deliver: deliverQueued });
+  const abortWithQueue = useCallback(() => { queue.pause(); void abort(); }, [queue.pause, abort]);
   const handleQueue = useCallback((
     text: string,
     mode: QueueMode,
     attachments: AgentAttachment[],
     skillIds?: string[],
   ) => {
-    if (!selectedId) return;
+    if (!selectedId || queue.restoring) return false;
     // Mirror handleSend's staged-context prefixing (selected-code), then clear.
-    const editorPrefix = includeEditorContext ? consumeEditorContext(projectId, selections) : '';
+    const editorPrefix = includeEditorContext ? consumeEditorContext(workspaceId, selections) : '';
     const studioPrefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
     const shots = selectionPrefixSessionId
       ? consumePendingAttachments(selectionPrefixSessionId)
       : [];
     const prefix = [editorPrefix, studioPrefix].filter(Boolean).join('\n');
-    queue.enqueue(
+    return queue.enqueue(
       prefix ? `${prefix}\n\n${text}` : text,
       mode,
       shots.length > 0 ? [...attachments, ...shots] : attachments,
       skillIds,
     );
-  }, [selectedId, includeEditorContext, selectionPrefixSessionId, selections, projectId, queue]);
-  useEffect(() => { queue.clear(); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, includeEditorContext, selectionPrefixSessionId, selections, workspaceId, queue.enqueue, queue.restoring]);
 
   useEffect(() => {
     if (selectionPrefixSessionId == null) return undefined;
@@ -452,11 +433,11 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   }), [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval]);
 
   return {
-    sessions: sessions ?? null, groups: groups ?? null, refetchSessions, selectedId, setSelectedId,
+    sessions: visibleSessions ?? null, groups: groups ?? null, refetchSessions, selectedId, setSelectedId,
     createSession, creating, archiveSession, deleteSession, favoriteSession, renameSession, duplicateSession,
     moveSessionToGroup, createGroup,
     sessionData: selectedSessionData, streaming, currentTurn, doneReason, error, pendingApprovals, respondToToolApproval,
-    transcriptProjection, tasksState, handlers, loadEarlierMessages, abort, handleSend,
+    transcriptProjection, tasksState, handlers, loadEarlierMessages, abort: abortWithQueue, handleSend,
     snapshotActions, snapshotFiles,
     queue, handleQueue,
     provider, model, setModel, providerChange, retryProviderChange, agent, setAgent: handleAgentChange,

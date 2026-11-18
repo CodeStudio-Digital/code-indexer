@@ -13,13 +13,14 @@ import { startTask } from '../../../../state/running-tasks.js';
 
 interface DetectedListProps {
   projectId: number;
+  worktreePath?: string | null;
   detected: DetectedRunners | null;
   loading: boolean;
   error: string | null;
   onStarted: (taskId: string) => void;
 }
 
-export function DetectedList({ projectId, detected, loading, error, onStarted }: DetectedListProps) {
+export function DetectedList({ projectId, worktreePath, detected, loading, error, onStarted }: DetectedListProps) {
   const { t } = useTranslation(['projects', 'common']);
   const [busy, setBusy] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -28,7 +29,7 @@ export function DetectedList({ projectId, detected, loading, error, onStarted }:
     setBusy(key);
     setRunError(null);
     try {
-      const task = await startTask({ projectId, command, label, manager, cwd });
+      const task = await startTask({ projectId, worktreePath, command, label, manager, cwd });
       onStarted(task.taskId);
     } catch (err) {
       setRunError(`${command}\n${err instanceof Error ? err.message : String(err)}`);

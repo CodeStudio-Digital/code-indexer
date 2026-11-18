@@ -9,6 +9,7 @@ import type {
 import type { StopReason, TransitionKind } from './types.js';
 import type { RecoveryKind } from './recovery-config.js';
 import type { AsyncOperationSnapshot } from './operation-types.js';
+import type { PromptContextMeasurement } from '@mcp/provider-sdk/prompt-cache-metrics.js';
 
 /**
  * Events emitted by the runner. CLI and SSE handler both consume these.
@@ -110,7 +111,7 @@ export interface RunnerEvents {
   operation_started: (payload: AsyncOperationSnapshot) => void;
   operation_progress: (payload: AsyncOperationSnapshot) => void;
   operation_finished: (payload: AsyncOperationSnapshot) => void;
-  message_complete: (message: AgentMessage, usage: ChatUsage | null) => void;
+  message_complete: (message: AgentMessage, usage: ChatUsage | null, operationId: string, context?: PromptContextMeasurement) => void;
   turn_start: (turn: number) => void;
   /**
    * A dashboard-injected user message was drained into the runner history at
@@ -455,14 +456,8 @@ export interface RunnerEvents {
    * persisted cache-blind `last_turn_input_tokens` (the "70k jumps to 100k
    * on send" bug).
    */
-  context_status: (payload: {
+  context_status: (payload: PromptContextMeasurement & {
     turn: number;
-    /** True prompt size (tokens) of the last provider call. */
-    prompt_tokens: number;
-    /** Where the number came from: provider usage or tokenizer estimate. */
-    source: 'usage' | 'estimate';
-    /** Effective context window of the active model (window − reserved output). */
-    context_window: number;
     /** prompt_tokens / context_window (0 when window unknown). */
     ratio: number;
   }) => void;
@@ -522,6 +517,8 @@ export interface RunnerEvents {
     model: string;
     toolCount: number;
     historyChars: number;
+    /** Host preparation before network dispatch; persistence is a subset. */
+    timing?: { preparation_ms: number; persistence_wait_ms: number };
   }) => void;
   /**
    * Emitted alongside `provider_call` with the temperature the runner picked

@@ -141,6 +141,9 @@ export function wrapProviderForSubagentFence(
   assertFence: () => void | Promise<void>,
 ): ChatProvider {
   return {
+    get inferenceOnly() { return provider.inferenceOnly; },
+    get reasoningCapabilities() { return provider.reasoningCapabilities; },
+    get toolLimits() { return provider.toolLimits; },
     get name() { return provider.name; },
     get model() { return provider.model; },
     set model(model: string) { provider.model = model; },

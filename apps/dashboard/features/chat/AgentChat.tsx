@@ -36,6 +36,7 @@ import type { RightPanelId } from './right-panel/types.js';
 import { Composer, type ComposerHandle } from './composer/Composer.js';
 import { levelFromSession, type OutputCapLevel } from './composer/output-cap-levels.js';
 import { useMessageQueue, type QueueDeliver, type QueueMode } from './composer/useMessageQueue.js';
+import { deliverQueuedMessage } from './composer/deliver-queued-message.js';
 import { QueuedMessages } from './composer/QueuedMessages.js';
 import { providerSupportsThinking, resolveReasoningLevels } from './composer/provider-caps.js';
 import {
@@ -50,7 +51,6 @@ import { isAgentPreset } from './agent-state.js';
 import { useSessionAgent } from './useSessionAgent.js';
 import { useSessionProvider } from './useSessionProvider.js';
 import { ProviderSelectionNotice } from './ProviderSelectionNotice.js';
-import { sessionProviderSwitches } from '../../hooks/agent-stream/provider-switch.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { LiveMessageList } from './messages/LiveMessageList.js';
@@ -361,6 +361,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     projectId, isGlobal, sessions, selectedId,
     selectedSession: selectedSessionData?.session ?? null,
     onSelect: setSelectedId,
+    selection: workbenchSlots?.worktreeSelection,
   });
   sessionDataRef.current = selectedSessionData;
   const messagePageAbortControllersRef = useRef<Set<AbortController>>(new Set());
@@ -481,7 +482,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
-  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats: persistedStats } =
     useAgentChatState({
       selectedId,
       doneReason,
@@ -489,6 +490,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       sessionData: selectedSessionData,
       provider,
     });
+  const stats = useMemo(() => persistedStats && contextStatus
+    ? { ...persistedStats, last_turn_context: contextStatus, last_turn_prompt_tokens: contextStatus.prompt_tokens }
+    : persistedStats, [persistedStats, contextStatus]);
 
   // Snapshot counts/diffs are refreshed on selection, explicit review actions,
   // and once per completed edit tool. The lower-frequency tool boundary keeps
@@ -802,77 +806,40 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   }, [selectedId, updateSessionData, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, refetchSessions, getAgent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments, selectionPrefixSessionId, persistedMessageCount]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
-  // Delivery is run-state-aware and serves BOTH queue modes:
-  //   • live run  → POST /inject (JSON, NO new stream): enqueues into the live
-  //     runner; the already-open SSE renders the agent's next turn. Calling
-  //     sendMessage here would open a 2nd stream that aborts the live one and
-  //     wipes the in-flight turn (the freeze bug) — so we never do that mid-run.
-  //   • no run    → /inject returns { noActiveRun }; fall back to sendMessage,
-  //     which opens a fresh streamed run (the end-of-session path).
-  const deliverQueued = useCallback<QueueDeliver>(async (
-    text,
-    { interject, attachments, skillIds },
-  ) => {
-    if (!selectedId) return;
-    await sessionProviderSwitches.wait(selectedId);
-    try {
-      const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean; waiting?: boolean }>(
-        `/coder/sessions/${selectedId}/inject`,
-        {
-          content: text,
-          interject,
-          attachments,
-          describe_images: describeImages,
-          selected_skill_ids: skillIds,
-        },
-      );
-      // The persisted user row must become visible only after the live runner
-      // emits user_message_boundary and clears the preceding turn buffer. The
-      // stream handler performs that ordered refetch; doing it here creates a
-      // brief duplicated transcript between POST /inject and the next turn.
-      if (r?.injected) return;
-    } catch { /* fall through to a fresh streamed send */ }
-    await Promise.all([
-      awaitPendingExecutionMode(),
-      awaitPendingAgentChange(),
-    ]);
-    await sendMessage(text, async () => { refetchSession(); }, {
-      attachments,
-      agent: getAgent(),
-      maxTurns,
-      maxAutoContinues,
-      thinking,
-      describeImages,
-      blockCodeComments,
-      selectedSkillIds: skillIds,
-      interject,
-    });
-  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, getAgent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments]);
-  const queue = useMessageQueue({ streaming, deliver: deliverQueued });
+  // Admission and observation are separate: a stable command ID obtains a
+  // receipt without replacing the live stream or resending on an HTTP error.
+  const deliverQueued = useCallback<QueueDeliver>(async (text, delivery) => {
+    if (!selectedId) throw new Error('No conversation selected');
+    await Promise.all([awaitPendingExecutionMode(), awaitPendingAgentChange()]);
+    return deliverQueuedMessage({ sessionId: selectedId, text, delivery, reattach, refresh: refetchSession,
+      settings: { agent, max_turns: maxTurns ?? undefined, max_auto_continues: maxAutoContinues,
+        thinking, describe_images: describeImages, block_code_comments: blockCodeComments } });
+  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, reattach, refetchSession, agent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments]);
+  const queue = useMessageQueue({ sessionId: selectedId, deliver: deliverQueued });
+  const handleAbort = useCallback(() => { queue.pause(); void abort(); }, [queue.pause, abort]);
   const handleQueue = useCallback((
     text: string,
     mode: QueueMode,
     attachments: AgentAttachment[],
     skillIds?: string[],
   ) => {
-    if (!selectedId) return;
+    if (!selectedId || queue.restoring) return false;
     const prefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
     const shots = selectionPrefixSessionId
       ? consumePendingAttachments(selectionPrefixSessionId)
       : [];
-    queue.enqueue(
+    return queue.enqueue(
       prefix ? `${prefix}\n${text}` : text,
       mode,
       shots.length > 0 ? [...attachments, ...shots] : attachments,
       skillIds,
     );
-  }, [selectedId, selectionPrefixSessionId, queue]);
-  // Discard the queue AND any staged region screenshot when switching sessions.
-  // Both are ephemeral; the screenshot is keyed by the builder project (not the
+  }, [selectedId, selectionPrefixSessionId, queue.enqueue, queue.restoring]);
+  // The queue belongs to its conversation. Only discard the staged region
+  // screenshot when switching: it is keyed by the builder project (not the
   // chat session), so without this it would bleed into the next session's first
   // send (the Composer doesn't surface it, so it'd be an invisible mis-attach).
   useEffect(() => {
-    queue.clear();
     if (selectionPrefixSessionId) consumePendingAttachments(selectionPrefixSessionId);
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1559,8 +1526,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     [executionMode, provider, providerOptions, model],
   );
   const queuedStrip = useMemo(
-    () => <QueuedMessages items={queue.items} onPromote={queue.promote} onRemove={queue.remove} />,
-    [queue.items, queue.promote, queue.remove],
+    () => <QueuedMessages items={queue.items} paused={queue.paused} storageError={queue.storageError} onResume={queue.resume} onPromote={queue.promote} onRemove={queue.remove} />,
+    [queue.items, queue.paused, queue.storageError, queue.resume, queue.promote, queue.remove],
   );
 
   const workspaceBar = (
@@ -1569,7 +1536,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       path={worktrees.path} data={worktrees.data} loading={worktrees.loading}
       error={worktrees.error} unavailable={worktrees.unavailable} sessionError={sessionCreateError}
       actionsRef={sessionActionsRef} onRefresh={worktrees.refetch}
-      onSelect={(path) => { setSessionCreateError(null); worktrees.switchTo(path); }}
+      onSelect={(path) => { setSessionCreateError(null); (workbenchSlots?.worktreeSelection?.select ?? worktrees.switchTo)(path); }}
     />
   );
 
@@ -1786,9 +1753,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             </main>
           ) : (
             <main className="flex h-full w-full min-w-0 bg-[var(--workbench-surface)] overflow-hidden min-h-0 flex-col">
-              {sessionData?.session && (
+              {selectedSessionData?.session && (
                 <ChatHeader
-                  session={sessionData.session}
+                  session={selectedSessionData.session}
                   streaming={streaming}
                   runDelta={runDelta}
                   lastUsage={lastUsage}
@@ -1868,7 +1835,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 setModel={setModel}
                 onSwitchProvider={handleSwitchProvider}
                 onSend={handleSend}
-                onAbort={abort}
+                onAbort={handleAbort}
                 streaming={streaming}
                 providerOptions={providerOptions}
                 currentProviderModels={currentProviderModels}
@@ -1897,7 +1864,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 setExecutionMode={handleExecutionModeChange}
                 executionModePending={executionModePending}
                 executionModeLocked={executionModeLocked}
-                sendBlocked={executionModePending || providerChange?.pending || Boolean(providerChange?.error)}
+                sendBlocked={queue.restoring || executionModePending || providerChange?.pending || Boolean(providerChange?.error)}
                 planDepth={planDepth}
                 setPlanDepth={handlePlanDepthChange}
                 responseLanguage={responseLanguage}

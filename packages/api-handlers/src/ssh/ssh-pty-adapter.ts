@@ -10,6 +10,7 @@
  */
 
 import type { ClientChannel } from 'ssh2';
+import { StringDecoder } from 'node:string_decoder';
 import type { IPty } from '../terminal/pty-manager.js';
 
 export interface SshPtyAdapterOpts {
@@ -20,7 +21,7 @@ export interface SshPtyAdapterOpts {
 }
 
 export function adaptChannelToIPty(channel: ClientChannel, opts: SshPtyAdapterOpts): IPty {
-  let lastExitCode = 0;
+  let lastExitCode: number | null = null;
   // ssh2 emits `exit` (with the remote exit code, or a signal name) before
   // `close`. Capture the code so the `close` that ends iteration carries it.
   channel.once('exit', (code: number | null) => {
@@ -33,18 +34,28 @@ export function adaptChannelToIPty(channel: ClientChannel, opts: SshPtyAdapterOp
     rows: opts.rows,
 
     onData(listener: (data: string) => void) {
-      const onData = (d: Buffer | string): void => listener(typeof d === 'string' ? d : d.toString('utf8'));
-      channel.on('data', onData);
-      channel.stderr?.on('data', onData);
+      // SSH packets can split a UTF-8 character. stdout and stderr are distinct streams.
+      const subscribe = (stream: NodeJS.ReadableStream) => {
+        const decoder = new StringDecoder('utf8');
+        const onData = (d: Buffer | string) => {
+          const text = typeof d === 'string' ? d : decoder.write(d);
+          if (text) listener(text);
+        };
+        const onEnd = () => { const tail = decoder.end(); if (tail) listener(tail); };
+        stream.on('data', onData).once('end', onEnd);
+        return () => { stream.removeListener('data', onData); stream.removeListener('end', onEnd); };
+      };
+      const offStdout = subscribe(channel);
+      const offStderr = channel.stderr && subscribe(channel.stderr);
       return {
         dispose(): void {
-          channel.removeListener('data', onData);
-          channel.stderr?.removeListener('data', onData);
+          offStdout();
+          offStderr?.();
         },
       };
     },
 
-    onExit(listener: (e: { exitCode: number; signal?: number }) => void) {
+    onExit(listener) {
       const onClose = (): void => listener({ exitCode: lastExitCode });
       channel.once('close', onClose);
       return {

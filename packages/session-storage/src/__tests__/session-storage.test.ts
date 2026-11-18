@@ -82,6 +82,38 @@ afterEach(async () => {
 });
 
 describe('filesystem session bundle', () => {
+  it('persists diagnostic rows without flushing unchanged accounting totals, and still counts replacements', async () => {
+    let summaryFlushes = 0;
+    const { repository } = await fixture({ faultInjector: ({ point, path }) => {
+      if (point === 'atomic:after-temp-fsync-before-rename' && path?.endsWith('summary.json')) summaryFlushes++;
+    } });
+    const { location } = await repository.createSession({ kind: 'coder', scope: { kind: 'project', project_id: 1 } });
+    const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
+    const metric = { schema_version: 1, turns: 1, tool_calls: 1,
+      usage: { ...zeroUsage, input_tokens: 10 }, subagent_usage: zeroUsage };
+    await repository.writeEntity(location, 'metrics/turns', 'canonical', metric);
+    const summaryPath = join(location.bundle_path, 'metrics', 'summary.json');
+    const before = await readFile(summaryPath, 'utf8');
+    summaryFlushes = 0;
+    const diagnostic = { ...metric, metric_kind: 'turn_telemetry', turns: 0, tool_calls: 0, usage: zeroUsage };
+    for (const id of ['diagnostic-1', 'diagnostic-2']) {
+      const persisted = await repository.writeEntity(location, 'metrics/turns', id, diagnostic);
+      expect(JSON.parse(await readFile(persisted, 'utf8'))).toEqual(diagnostic);
+    }
+    expect(summaryFlushes).toBe(0);
+    expect(await readFile(summaryPath, 'utf8')).toBe(before);
+    await repository.writeEntity(location, 'metrics/turns', 'diagnostic-2', {
+      ...diagnostic, usage: { ...zeroUsage, input_tokens: 3 },
+    });
+    expect(repository.readMetricsSummarySync(location)).toMatchObject({ turns: 1, tool_calls: 1, tokens: { input: 13 } });
+    expect(summaryFlushes).toBe(1);
+    await repository.writeEntity(location, 'metrics/provider_attempts', 'attempt-1', { schema_version: 1 });
+    expect(repository.readMetricsSummarySync(location).provider_attempts).toBe(1);
+    expect(summaryFlushes).toBe(2);
+    await repository.rebuildMetricsSummary(location);
+    expect(repository.readMetricsSummarySync(location)).toMatchObject({ turns: 1, provider_attempts: 1, tokens: { input: 13 } });
+  });
+
   it('rebuilds hot metric totals after a lost acknowledgement of the metric rename', async () => {
     let failRename = false;
     const { repository } = await fixture({ faultInjector: async (context) => {

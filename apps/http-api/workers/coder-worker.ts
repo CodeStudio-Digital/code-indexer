@@ -35,6 +35,7 @@ import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.j
 // worker_thread. Relative paths resolve identically under tsx, tsc and
 // raw node.
 import { parentPort, workerData } from 'node:worker_threads';
+import { FsPipelineTelemetrySink, type SessionScopedDiagnostic } from '@mcp/session-storage/fs-store/pipeline-telemetry.js';
 import { dirname, join } from 'node:path';
 import { installLlmDispatcher } from '../install-llm-dispatcher.js';
 import {
@@ -354,6 +355,7 @@ const operationalSessionStore = getSharedSessionStore(
   sessionContext.writerOwnerId,
 );
 await operationalSessionStore.ensureCatalog();
+const pipelineDiagnostics = new FsPipelineTelemetrySink(operationalSessionStore);
 // API client store for the `api_*` agent tools (auto-test/auto-fix). Single
 // `api`-agent sessions run in this worker, so the main-thread binding is null
 // here — re-wire a fresh dual-mode instance. R1: when project-DB routing is on
@@ -464,6 +466,7 @@ function prepareWorkerStop(): Promise<void> {
     // Close this session explicitly first. FsSessionStore.close() is designed
     // as broad best-effort shutdown; the handoff needs a strict per-session
     // acknowledgement so main never spawns a replacement over a live lease.
+    await pipelineDiagnostics.flush();
     const sessionStore = getSharedSessionStore(dbPath);
     const location = await sessionStore.getSessionLocation(sessionId);
     if (location) {
@@ -890,6 +893,9 @@ bridge.handle('runFresh', async (payload) => {
       runEndMemory: memoryShims.runEndMemory,
       projectMemory: memoryShims.projectMemory,
       onSnapshotRecorded: (info) => publish(run.bus, 'session_snapshot_changed', info),
+      onChatCreated: async childId => {
+        await bridge.request('chat.created', { childId, runId: run.runId }, { timeoutMs: 3_000 });
+      },
       // Mirror the in-process wiring in routes/coder/stream.ts so the
       // docs_deep_research tool appears on turn 1 of every worker-thread
       // run too. Pulls the singleton we installed above; if neither
@@ -1032,6 +1038,16 @@ bridge.handle('appendSessionEvent', async (payload) => {
     eventPayload,
     operationId,
   );
+  return { ok: true };
+});
+
+bridge.handle('appendPipelineDiagnostic', payload => {
+  if (stopping) return { ok: false };
+  const { event } = payload as { event: SessionScopedDiagnostic };
+  if ((event?.sessionId ?? event?.companySessionId) !== sessionId) {
+    throw new Error('coder-worker: diagnostic belongs to another session');
+  }
+  pipelineDiagnostics.emit(event);
   return { ok: true };
 });
 

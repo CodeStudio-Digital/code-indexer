@@ -4,7 +4,7 @@ import type { FsSessionStore } from './fs-session-store.js';
 
 /** Storage needs only the owner identity. Producers retain their own event
  * schema; the full event is serialized without importing a pipeline engine. */
-interface SessionScopedDiagnostic {
+export interface SessionScopedDiagnostic {
   readonly sessionId?: string;
   readonly companySessionId?: string;
 }
@@ -17,11 +17,13 @@ interface SessionScopedDiagnostic {
 export class FsPipelineTelemetrySink {
   readonly #pending = new Set<Promise<void>>();
 
-  constructor(private readonly sessions: FsSessionStore) {}
+  constructor(private readonly sessions: FsSessionStore,
+    private readonly forwardToOwner?: (sessionId: string, event: SessionScopedDiagnostic) => Promise<boolean>) {}
 
   emit<Event extends SessionScopedDiagnostic>(event: Event): void {
     const targetSessionId = event.sessionId ?? event.companySessionId;
     if (!targetSessionId) return;
+    if (this.#pending.size >= 128) return;
 
     let task: Promise<void>;
     task = this.#persist(targetSessionId, event)
@@ -44,18 +46,22 @@ export class FsPipelineTelemetrySink {
     while (this.#pending.size > 0) {
       await Promise.allSettled([...this.#pending]);
     }
+    await this.sessions.repository.flushDiagnostics();
   }
 
   async #persist(
     targetSessionId: string,
     event: SessionScopedDiagnostic,
   ): Promise<void> {
+    // An active worker owns the lease. Diagnostics follow that owner rather
+    // than racing it with a second writer in the HTTP host.
+    if (await this.forwardToOwner?.(targetSessionId, event)) return;
     const location = await this.sessions.getSessionLocation(targetSessionId);
     if (!location) {
       throw new Error(`unknown filesystem session ${targetSessionId}`);
     }
     const id = randomUUID();
-    await this.sessions.repository.writeEntity(
+    this.sessions.repository.enqueueDiagnostic(
       location,
       'metrics/pipeline_stages',
       id,

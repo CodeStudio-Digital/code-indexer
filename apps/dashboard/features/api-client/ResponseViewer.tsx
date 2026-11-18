@@ -49,17 +49,19 @@ interface Props {
   response: SendResponse | null;
   error: string | null;
   sending: boolean;
+  cancelled?: boolean;
   verifiedStatus?: number | null;
   onMarkVerified?: (status: number) => void;
   /** Save the current response as a documentation example (saved-request only). */
   onSaveExample?: () => void;
 }
 
-export function ResponseViewer({ response, error, sending, verifiedStatus, onMarkVerified, onSaveExample }: Props) {
+export function ResponseViewer({ response, error, sending, cancelled, verifiedStatus, onMarkVerified, onSaveExample }: Props) {
   const { t } = useTranslation('apiClient');
   const [tab, setTab] = useState<Tab>('body');
 
   if (sending) return <div className="h-full flex items-center justify-center text-xs text-muted-foreground">{t('response.sending')}</div>;
+  if (cancelled) return <div role="status" className="grid h-full place-items-center p-3 text-center text-xs text-muted-foreground">{t('response.cancelled')}</div>;
   if (error) return <div className="h-full flex items-start p-3 text-xs text-red-500 font-mono whitespace-pre-wrap">{error}</div>;
   if (!response) return <div className="h-full flex items-center justify-center text-xs text-muted-foreground">{t('response.emptyState')}</div>;
 

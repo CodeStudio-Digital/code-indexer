@@ -8,9 +8,10 @@
  * ABI: needs `pnpm node:rebuild`.
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Database } from '../db/types.js';
 // Trigger config.ts's `import 'dotenv/config'` ONCE at file load, so the repo's
 // .env (which may set MCP_PROJECT_DB=1) is applied before any test. After this,
 // our hooks fully control the flags — dotenv won't re-run (module cached).
@@ -55,6 +56,88 @@ function seedProjectWithFiles(db: any, name: string, root: string): number {
 }
 
 describe('CodeIndexDB tiered-hybrid integration', () => {
+  it('waits for exclusive settings locks between ticks and cancels a superseded checkout read', async () => {
+    process.env.MCP_PROJECT_DB = process.env.MCP_PROJECT_DB_NEW = process.env.MCP_PROJECT_DB_ROUTE = '1';
+    const dir = freshDir();
+    const db = await freshDb(join(dir, 'index.db'));
+    try {
+      const { id } = db.createProject('locked settings', join(dir, 'project'));
+      const linked = db.getOrCreateWorktreeProject(id, join(dir, 'feature'));
+      db.updateProject(id, { runner_shell: 'cmd', package_managers: '{"node":"yarn"}' });
+      db.evictProject(id);
+      const writer = new Database(db.resolveProjectDbPath(id));
+      let ticks = 0;
+      const heartbeat = setInterval(() => ticks++, 15);
+      try {
+        writer.pragma('journal_mode = DELETE');
+        expect(db.getProject(linked.id)?.runner_shell).toBe('cmd');
+        writer.exec('BEGIN EXCLUSIVE');
+        writer.prepare('UPDATE project_runtime_config SET runner_shell = ? WHERE project_id = ?').run('git-bash', id);
+        // Synchronous observers can use their last committed settings while the lock holds.
+        expect(db.getProject(linked.id)?.runner_shell).toBe('cmd');
+        db.evictProject(id);
+        const controller = new AbortController();
+        const cancelled = db.getProjectAsync(linked.id, controller.signal);
+        controller.abort();
+        await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+        const commit = setTimeout(() => writer.exec('COMMIT'), 150);
+        try {
+          const [owner, checkout] = await Promise.all([db.getProjectAsync(id), db.getProjectAsync(linked.id)]);
+          expect(ticks).toBeGreaterThanOrEqual(4);
+          expect(owner?.runner_shell).toBe('git-bash');
+          expect(checkout).toMatchObject({root_path: linked.root_path, runner_shell: 'git-bash', package_managers: '{"node":"yarn"}'});
+          expect(db.projectPoolStats.open).toBe(0);
+        } finally { clearTimeout(commit); }
+      } finally { clearInterval(heartbeat); writer.close(); }
+    } finally { db.close(); }
+  });
+
+  it('reads cold settings under a writer transaction without opening a writable project handle', async () => {
+    process.env.MCP_PROJECT_DB = process.env.MCP_PROJECT_DB_NEW = process.env.MCP_PROJECT_DB_ROUTE = '1';
+    const dir = freshDir();
+    const db = await freshDb(join(dir, 'index.db'));
+    try {
+      const { id } = db.createProject('cold settings', join(dir, 'project'));
+      const dbPath = db.resolveProjectDbPath(id);
+      const worktree = db.getOrCreateWorktreeProject(id, join(dir, 'checkout'));
+      db.raw().prepare('INSERT INTO project_runtime_config (project_id, runner_shell) VALUES (?, ?)').run(id, 'cmd');
+      expect(db.getProject(worktree.id)?.runner_shell).toBe('cmd');
+      expect(existsSync(dbPath)).toBe(false);
+      writeFileSync(dbPath, 'unreadable legacy partition');
+      expect(db.getProject(worktree.id)?.runner_shell).toBe('cmd');
+      rmSync(dbPath);
+      db.updateProject(id, { runner_shell: 'git-bash', package_managers: '{"node":"yarn"}', editor_settings: { tabSize: 6 } });
+      db.evictProject(id);
+      const writer = new Database(dbPath);
+      try {
+        writer.exec('BEGIN IMMEDIATE');
+        writer.prepare('UPDATE project_runtime_config SET runner_shell = ? WHERE project_id = ?').run('powershell', id);
+        const fromCheckout = db.getProject(worktree.id);
+        expect(fromCheckout).toMatchObject({ root_path: worktree.root_path, runner_shell: 'git-bash', package_managers: '{"node":"yarn"}', editor_settings: { tabSize: 6 } });
+        writer.exec('COMMIT');
+        expect(db.getProject(id)?.runner_shell).toBe('powershell');
+        expect(db.projectPoolStats.open).toBe(0);
+      } finally { writer.close(); }
+    } finally { db.close(); }
+  });
+
+  it('reads pre-migration shell settings without changing the project schema or journal', async () => {
+    process.env.MCP_PROJECT_DB = process.env.MCP_PROJECT_DB_NEW = process.env.MCP_PROJECT_DB_ROUTE = '1';
+    const dir = freshDir();
+    const db = await freshDb(join(dir, 'index.db'));
+    try {
+      const { id } = db.createProject('legacy settings', join(dir, 'legacy'));
+      const legacy = new Database(db.resolveProjectDbPath(id));
+      try {
+        legacy.exec('CREATE TABLE projects (id INTEGER PRIMARY KEY, node_version TEXT, runtime_versions TEXT, runner_shell TEXT)');
+        legacy.prepare('INSERT INTO projects (id, runner_shell) VALUES (?, ?)').run(id, 'git-bash');
+        expect(db.getProject(id)?.runner_shell).toBe('git-bash');
+        expect(legacy.pragma('journal_mode', { simple: true })).toBe('delete');
+        expect(legacy.prepare('SELECT name FROM sqlite_schema WHERE type = ?').all('table')).toEqual([{name:'projects'}]);
+        expect(db.projectPoolStats.open).toBe(0);
+      } finally { legacy.close(); }
+    } finally { db.close(); }
+  });
   it('observes a split committed by another handle after the reader cached central routing', async () => {
     process.env.MCP_PROJECT_DB = '1';
     process.env.MCP_PROJECT_DB_SPLIT = '1';

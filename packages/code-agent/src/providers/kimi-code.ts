@@ -15,6 +15,7 @@ type KimiThinkingConfig = {
 };
 
 export class KimiCodeChatProvider implements ChatProvider {
+  readonly inferenceOnly = true;
   readonly name = 'kimi-code';
   model: string;
   private client: OpenAI;

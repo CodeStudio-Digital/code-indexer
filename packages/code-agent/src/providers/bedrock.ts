@@ -64,6 +64,7 @@ interface BedrockSdkModule {
 }
 
 export class BedrockChatProvider implements ChatProvider {
+  readonly inferenceOnly = true; // Converse toolSpec calls are dispatched by our runner.
   readonly name = 'bedrock';
   model: string;
   private region: string;

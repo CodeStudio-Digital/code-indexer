@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
+import { measureStorage, measureStorageSync, recordStorageElapsed } from './storage-timing.js';
 import { dirname, join } from 'node:path';
 import {
   atomicWriteFile,
@@ -537,6 +538,10 @@ export class SessionWriter {
   }
 
   #refreshLease(): Promise<void> {
+    return measureStorage('lease.refresh', () => this.#refreshLeaseCore());
+  }
+
+  #refreshLeaseCore(): Promise<void> {
     this.#leaseRefreshQueue = this.#leaseRefreshQueue.then(async () => {
       const leaseStat = await lstat(this.#leasePath);
       if (leaseStat.isSymbolicLink()) {
@@ -549,6 +554,29 @@ export class SessionWriter {
         );
       }
       const now = Date.now();
+      const expiresAt = Date.parse(current.expires_at);
+      if (!Number.isFinite(expiresAt)) {
+        throw new SessionFenceLostError(`Writer ${this.#token} lease ${this.#fence} expired for session ${this.#sessionId}`);
+      }
+      if (expiresAt <= now) {
+        // A suspended event loop or slow disk can delay the heartbeat. TTL is
+        // a liveness hint, not a transfer of authority: acquisition refuses to
+        // steal from a live process and isolate recovery requires observed exit.
+        // Renew only our exact last lease with its durable fence still intact.
+        // A replacement, external edit, or revoked fence remains terminal.
+        const known = this.#lease;
+        if (!known || current.expires_at !== known.expires_at
+          || current.acquired_at !== known.acquired_at
+          || current.pid !== process.pid || current.owner_host !== hostname()
+          || current.owner_id !== this.#ownerId
+          || await this.#readFence() !== this.#fence) {
+          throw new SessionFenceLostError(`Writer ${this.#token} lease ${this.#fence} expired for session ${this.#sessionId}`);
+        }
+      }
+      // Keep validating ownership on every mutation, but renew a healthy lease
+      // only once per heartbeat interval. Rewriting/fsyncing the same lease for
+      // every output and metric serialized redundant disk flushes into turns.
+      if (expiresAt - now > this.#leaseTtlMs * 2 / 3) return;
       const lease: WriterLeaseFile = {
         ...this.#lease!,
         expires_at: new Date(now + this.#leaseTtlMs).toISOString(),
@@ -567,6 +595,10 @@ export class SessionWriter {
   }
 
   async #assertLease(): Promise<void> {
+    return measureStorage('lease.assert', () => this.#assertLeaseCore());
+  }
+
+  async #assertLeaseCore(): Promise<void> {
     if (this.#closed || !this.#lease) throw new SessionFenceLostError(`Writer for ${this.#sessionId} is closed`);
     if (this.#heartbeatFailure) throw this.#heartbeatFailure;
 
@@ -580,11 +612,12 @@ export class SessionWriter {
       throw new SessionFenceLostError(`Writer ${this.#token} lost fence ${this.#fence} for session ${this.#sessionId}`);
     }
     const expiresAt = Date.parse(current.expires_at);
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    if (!Number.isFinite(expiresAt)) {
       throw new SessionFenceLostError(
         `Writer ${this.#token} lease ${this.#fence} expired for session ${this.#sessionId}`,
       );
     }
+    if (expiresAt <= Date.now()) await this.#refreshLease();
   }
 
   async #reloadConversation(): Promise<void> {
@@ -599,7 +632,12 @@ export class SessionWriter {
     if (this.#closing || this.#closed) {
       return Promise.reject(new SessionFenceLostError(`Writer for ${this.#sessionId} is closed`));
     }
-    const result = this.#queue.then(task, task);
+    const queuedAt = performance.now();
+    const run = () => {
+      recordStorageElapsed('writer.queue', queuedAt);
+      return task();
+    };
+    const result = this.#queue.then(run, run);
     this.#queue = result.then(
       () => undefined,
       () => undefined,
@@ -669,8 +707,8 @@ export class SessionWriter {
         payload: input.payload,
         artifacts,
       };
-      const record: ConversationCommit = { ...unsigned, hash: commitHash(unsigned) };
-      const line = `${JSON.stringify(record)}\n`;
+      const record: ConversationCommit = { ...unsigned, hash: measureStorageSync('journal.hash', () => commitHash(unsigned)) };
+      const line = measureStorageSync('journal.serialize', () => `${JSON.stringify(record)}\n`);
 
       await this.#faultInjector?.({
         point: 'conversation:before-append',
@@ -683,16 +721,18 @@ export class SessionWriter {
       // immediately before opening the append handle; stale writers never
       // reach the journal even if they passed the earlier artifact boundary.
       await this.#assertLease();
-      const handle = await open(this.#conversationPath, 'a', 0o600);
+      const handle = await measureStorage('journal.open', () => open(this.#conversationPath, 'a', 0o600));
       try {
-        await handle.writeFile(line);
-        await this.#faultInjector?.({
+        await measureStorage('journal.write', () => handle.writeFile(line));
+        await measureStorage('journal.fsync', async () => {
+          await this.#faultInjector?.({
           point: 'conversation:after-write-before-fsync',
           session_id: this.#sessionId,
           path: this.#conversationPath,
           operation_id: input.operation_id,
+          });
+          await handle.sync();
         });
-        await handle.sync();
         await this.#assertLease();
       } catch (error) {
         await handle.close().catch(() => undefined);

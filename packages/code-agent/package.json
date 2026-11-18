@@ -26,6 +26,7 @@
     "chroma-js": "3.2.0",
     "ffmpeg-static": "5.2.0",
     "openai": "^4.85.4",
+    "ws": "^8.18.0",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",
     "@mcp/api-bus": "workspace:*"

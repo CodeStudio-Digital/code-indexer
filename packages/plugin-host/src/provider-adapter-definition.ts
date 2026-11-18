@@ -73,6 +73,7 @@ async function loadAdapter(ref: ProviderAdapterRuntimeRef, kind: string): Promis
 class PluginChatProvider implements ChatProvider {
   readonly name: string;
   model: string;
+  private clientSlot?: { model: string; client?: ChatProvider; pending: Promise<ChatProvider> };
 
   constructor(
     private readonly ref: ProviderAdapterRuntimeRef,
@@ -90,18 +91,52 @@ class PluginChatProvider implements ChatProvider {
     this.model = model;
   }
 
-  async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
+  private get activeClient(): ChatProvider | undefined {
+    return this.clientSlot?.model === this.model ? this.clientSlot.client : undefined;
+  }
+
+  get inferenceOnly() { return this.activeClient?.inferenceOnly; }
+  get reasoningCapabilities() { return this.activeClient?.reasoningCapabilities; }
+  get toolLimits() { return this.activeClient?.toolLimits; }
+
+  private async createClient(model: string): Promise<ChatProvider> {
     const adapter = await loadAdapter(this.ref, this.kind);
     const client = adapter.createCoder
       ? await adapter.createCoder({
           kind: this.kind,
           creds: this.creds,
-          model: this.model,
+          model,
           opts: this.opts,
         })
-      : this.hostDefinition?.createCoder?.(this.creds, this.model, this.opts);
+      : this.hostDefinition?.createCoder?.(this.creds, model, this.opts);
     if (!client) throw new Error(`Provider '${this.kind}' does not support the coder`);
-    client.setModel(this.model);
+    client.setModel(model);
+    return client;
+  }
+
+  private getClient(): Promise<ChatProvider> {
+    if (this.clientSlot?.model === this.model) return this.clientSlot.pending;
+    // Keep transport pools and continuation state for this provider instance.
+    // Model changes rebuild model-dependent options; credentials belong to this
+    // instance, never to the module cache shared by other sessions/accounts.
+    const slot = {
+      model: this.model,
+      pending: this.createClient(this.model),
+      client: undefined as ChatProvider | undefined,
+    };
+    slot.pending = slot.pending.then((client) => {
+      slot.client = client;
+      return client;
+    }, (error: unknown) => {
+      if (this.clientSlot === slot) this.clientSlot = undefined;
+      throw error;
+    });
+    this.clientSlot = slot;
+    return slot.pending;
+  }
+
+  async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
+    const client = await this.getClient();
     yield* client.chat(req);
   }
 }

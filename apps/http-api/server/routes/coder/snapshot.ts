@@ -11,7 +11,7 @@
  * truth.
  */
 import type { Hono } from 'hono';
-import { resolveSessionWorkspaceRoot } from '@mcp/code-agent/tools/project-worktrees.js';
+import { resolveSessionWorkspaceRoot } from '../../worktree-reads.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../deps.js';
 import {

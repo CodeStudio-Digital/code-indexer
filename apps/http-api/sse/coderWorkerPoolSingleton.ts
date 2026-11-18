@@ -49,6 +49,7 @@ const sessionRuntimeBox: {
 const sessionWriterHandoffBox: {
   release: ((context: SessionRuntimeContext) => Promise<void>) | null;
 } = { release: null };
+let importPublishedChat: ((parentId: SessionId, childId: SessionId) => Promise<SessionId>) | null = null;
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'coder-worker');
@@ -115,6 +116,7 @@ export function getCoderWorkerPool(): CoderWorkerPool {
       }
       await release(context);
     },
+    importPublishedChat: (parentId, childId) => importPublishedChat?.(parentId, childId),
     workerMaxOldGenerationSizeMb: initialRuntimePolicy.host.workerHeapMb,
     ttlMs: initialRuntimePolicy.host.workerIdleTtlMs,
     postRunLingerMs: initialRuntimePolicy.host.workerPostRunLingerMs,
@@ -225,6 +227,10 @@ export function setCoderWorkerSessionWriterHandoff(
   release: ((context: SessionRuntimeContext) => Promise<void>) | null,
 ): void {
   sessionWriterHandoffBox.release = release;
+}
+
+export function setCoderWorkerPublishedChatImporter(importer: typeof importPublishedChat): void {
+  importPublishedChat = importer;
 }
 
 function getCoderWorkerControlPlaneStore(): ControlPlaneAuthority | null {

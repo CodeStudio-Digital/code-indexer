@@ -56,6 +56,7 @@ import { rollbackStreamedChars } from './stream-rollback.js';
 import { finalizeLiveVisualizations, outcomeForDoneReason } from './live-block-finalize.js';
 import { isPromptResolved } from './prompt-resolution-store.js';
 import { parseToolApprovalRecovery } from './tool-approval-response.js';
+import { hasTurnTokens } from '../../lib/turn-tokens.js';
 
 interface HandlerContext {
   sid: SessionId;
@@ -86,6 +87,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
   // one-turn-behind snapshot while the live transcript is advancing.
   let messageCompleteNotified = false;
   let contentBlockSequence = 0;
+  const completions = new Map(blocks.flatMap(block => block.type === 'usage' ? [[block.id, block] as const] : []));
   // SnapshotRecorder emits once per successful filesystem mutation. Hold that
   // dirty signal until the enclosing tool completes so multi-file edits cause
   // one inventory refresh instead of one full-list request per file.
@@ -941,7 +943,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // the conversation transcript.
     },
 
-    user_message_boundary: () => {
+    user_message_boundary: (data) => {
       // POST /inject keeps the same runner and SSE transport alive, but the
       // drained user message is a new visible conversation turn. Carrying the
       // run-level buffer across this boundary makes history render the prior
@@ -958,6 +960,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         || block.type === 'workflow'
       ));
       blocks.splice(0, blocks.length, ...crossTurnBlocks);
+      completions.clear();
       rebuildToolIndex(blocks, toolIndex);
       // Whatever suffix a cursorless reattach rebuilt belongs to the turn that
       // just ended; from here the buffer tracks a run from its start again.
@@ -967,6 +970,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // that would expose the new row beside the preceding turn's live buffer
       // during the short queue-to-runner handoff window.
       flushNow();
+      const ids = (data as { round_message_ids?: unknown }).round_message_ids;
+      if (Array.isArray(ids)) updateSession(sid, current => ({
+        consumedMessageIds: [...new Set([...(current.consumedMessageIds ?? []), ...ids.filter((id): id is number => Number.isSafeInteger(id))])].slice(-128),
+      }));
       onMessageComplete?.();
       // The boundary refresh already publishes the new user row. A provider
       // completion immediately after it is still one persistence cycle behind,
@@ -998,6 +1005,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     session_snapshot_changed: () => {
       snapshotInventoryDirty = true;
       updateSession(sid, (cur) => ({ snapshotTick: cur.snapshotTick + 1 }));
+    },
+
+    chat_session_created: () => {
+      window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
     },
 
     todos_updated: (data) => {
@@ -1072,14 +1083,33 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     diagram_export_request: () => {},
 
     message_complete: (data) => {
-      const u = (data as { usage?: Usage }).usage;
+      const u = (data as { usage?: Usage | null }).usage;
+      const operationId = typeof data.operation_id === 'string' ? data.operation_id : undefined;
+      const last: Usage = {
+        input_tokens: u?.input_tokens ?? 0,
+        output_tokens: u?.output_tokens ?? 0,
+        cache_read_input_tokens: u?.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: u?.cache_creation_input_tokens ?? 0,
+      };
+      if (operationId) {
+        const tokens = { input_tokens: last.input_tokens, output_tokens: last.output_tokens,
+          cache_read_tokens: last.cache_read_input_tokens, cache_creation_tokens: last.cache_creation_input_tokens };
+        const previous = completions.get(operationId);
+        const measured = hasTurnTokens(tokens);
+        if (previous && (hasTurnTokens(previous.tokens) || !measured)) return;
+        const message = data.message as { content?: { type: string; id?: string }[] } | undefined;
+        const toolIds = message?.content?.flatMap(block => block.type === 'tool_use' && block.id ? [block.id] : []) ?? previous?.toolIds ?? [];
+        // An unmetered call still ends its own content. Its tools can arrive
+        // after this event, and late counters must update this same boundary.
+        if (measured || toolIds.length || (blocks.length && blocks.at(-1)?.type !== 'usage')) {
+          const boundary = { type: 'usage' as const, id: operationId, toolIds, tokens };
+          const index = previous ? blocks.indexOf(previous) : -1;
+          if (index >= 0) blocks[index] = boundary;
+          else blocks.push(boundary);
+          completions.set(operationId, boundary);
+        }
+      }
       if (u) {
-        const last: Usage = {
-          input_tokens: u.input_tokens ?? 0,
-          output_tokens: u.output_tokens ?? 0,
-          cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
-          cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
-        };
         updateSession(sid, (cur) => ({
           lastUsage: last,
           runDelta: {

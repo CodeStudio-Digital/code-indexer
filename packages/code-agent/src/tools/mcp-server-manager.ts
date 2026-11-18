@@ -208,11 +208,13 @@ export class McpServerManager {
     if (next.size !== configs.length) throw new Error('Duplicate MCP server ids in configuration');
     const removed = [...new Set([...this.connections.keys(), ...this.connecting.keys()])].filter(id => !next.has(id));
     await Promise.all(removed.map(id => this.closeServer(id)));
-    const changed = configs.filter(config => {
-      const current = this.connections.get(config.id);
-      return current?.state !== 'connected' || mcpServerConfigurationKey(current.config) !== mcpServerConfigurationKey(config);
-    });
-    await this.connectAll(changed);
+    await this.connectAll(configs.filter(config => !this.isConnectedWith(config)));
+  }
+
+  isConnectedWith(config: McpServerConfig): boolean {
+    const current = this.connections.get(config.id);
+    return current?.state === 'connected'
+      && mcpServerConfigurationKey(current.config) === mcpServerConfigurationKey(config);
   }
 
   /** Reconnect only before dispatch. A lost response never authorizes a replay. */

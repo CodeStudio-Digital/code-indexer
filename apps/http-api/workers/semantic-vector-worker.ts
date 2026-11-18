@@ -6,7 +6,7 @@ import {
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
 import { SemanticStore } from '../../../packages/store/src/semantic-store.js';
 import { LocalVectorRouter } from '../../../packages/store/src/local-vector-router.js';
-import type { VectorRecord } from '../../../packages/shared/src/types.js';
+import type { AgentMemoryScope, VectorRecord } from '../../../packages/shared/src/types.js';
 import type {
   VectorSearchOptions,
   VectorWriteTarget,
@@ -23,6 +23,7 @@ import {
   type ResolvedLocalReranker,
 } from '../../../packages/indexer/src/search/local-reranker-policy.js';
 import { SemanticInferenceScheduler } from '../../../packages/indexer/src/search/semantic-inference-scheduler.js';
+import { BackgroundInferenceBudget } from '../../../packages/indexer/src/search/background-inference-budget.js';
 import type { RerankCandidate } from '../../../packages/indexer/src/search/reranker-types.js';
 import type {
   EmbeddingTarget,
@@ -42,7 +43,8 @@ const router = new LocalVectorRouter({
 });
 router.pool.startSweeper();
 const vectors = router.asVectorStore();
-const inference = new SemanticInferenceScheduler();
+const backgroundBudget = new BackgroundInferenceBudget();
+const inference = new SemanticInferenceScheduler(128, 0.5, () => backgroundBudget.current());
 const INFERENCE_SESSION_IDLE_MS = resolveOnnxIdleTtlMs();
 const INFERENCE_SESSION_SWEEP_MS = 60_000;
 let activeOperations = 0;
@@ -244,17 +246,17 @@ bridge.handle('inference.embed', async (payload) => {
     const vectors: number[][] = [];
     let tokens = 0;
     // Interactive work gets a scheduling point between small backfill batches.
-    for (let offset = 0; offset < texts.length; offset += 16) {
+    for (let offset = 0; offset < texts.length; offset += 8) {
       signal.throwIfAborted();
       const result = await inference.enqueue(0, async () => {
         const managed = embeddingFor(target);
         managed.inflight++;
-        try { return await managed.service.embed(texts.slice(offset, offset + 16)); }
+        try { return await managed.service.embed(texts.slice(offset, offset + 8)); }
         finally { managed.inflight--; managed.lastUsedAt = Date.now(); }
       }, { signal });
       vectors.push(...result.vectors);
       tokens += result.tokens;
-      if (offset + 16 < texts.length) await new Promise<void>((resolve) => setImmediate(resolve));
+      if (offset + 8 < texts.length) await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return { vectors, tokens };
   });
@@ -323,6 +325,12 @@ bridge.handle('semantic.jobsPage', async (payload) => {
 });
 bridge.handle('semantic.projectJobsPage', payload => trackOperation(() => projectJobsPage(semanticStore, payload as ProjectJobsPageInput)));
 bridge.handle('semantic.currentProjectJobs', payload => trackOperation(() => currentProjectJobs(semanticStore, payload as ProjectJobScope[])));
+bridge.handle('memory.searchFts', payload => trackOperation(() => {
+  const { scope, projectId, query, limit } = payload as {
+    scope: AgentMemoryScope; projectId: number; query: string; limit: number;
+  };
+  return db.searchAgentMemoryFts(scope, projectId, query, limit);
+}));
 
 bridge.handle('vectors.upsert', async (payload) => {
   const input = payload as {

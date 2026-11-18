@@ -44,6 +44,43 @@ function memoryRow(id: number): AgentMemoryRow {
 }
 
 describe('AgentMemoryService active-generation queries', () => {
+  it('sends a bounded memory query to the FTS worker and the embedding backend', async () => {
+    const searchAgentMemoryFts = vi.fn();
+    const searchFts = vi.fn(async () => [memoryRow(1)]);
+    const vectorSearch = vi.fn(async () => []);
+    const embed = embedding();
+    const db = { searchAgentMemoryFts } as unknown as CodeIndexDB;
+    const service = new AgentMemoryService(db, embed, { search: vectorSearch } as unknown as VectorStore,
+      embed, null, null, undefined, searchFts);
+    const signal = new AbortController().signal;
+    const result = await service.search('project', 7, 'project head ' + 'body '.repeat(38_000) + 'important conclusion', 5, undefined, signal);
+    expect(result.map(row => row.id)).toEqual([1]);
+    expect(searchAgentMemoryFts).not.toHaveBeenCalled();
+    const bounded = vi.mocked(embed.embedQuery).mock.calls[0]![0];
+    expect(bounded.length).toBeLessThanOrEqual(4096);
+    expect(bounded).toMatch(/^project head /);
+    expect(bounded).toMatch(/important conclusion$/);
+    expect(searchFts).toHaveBeenCalledExactlyOnceWith('project', 7, bounded, 15, signal);
+    expect(vectorSearch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps vector recall available when the FTS worker fails without retrying SQLite on the host', async () => {
+    const searchAgentMemoryFts = vi.fn();
+    const searchFts = vi.fn(async () => { throw new Error('worker unavailable'); });
+    const db = { searchAgentMemoryFts, getAgentMemoriesByIds: () => [memoryRow(1)] } as unknown as CodeIndexDB;
+    const embed = embedding();
+    const vectorStore = { search: async () => [{ metadata: { ref_id: '1' } }] } as unknown as VectorStore;
+    const service = new AgentMemoryService(db, embed, vectorStore, embed, null, null, undefined, searchFts);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = await service.search('project', 7, 'registry token', 5);
+      expect(result.map(row => row.id)).toEqual([1]);
+      expect(searchAgentMemoryFts).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('aborts an explicit query during embedding without starting vector lookup or returning FTS fallback', async () => {
     const ctrl = new AbortController();
     const vectorSearch = vi.fn();
@@ -65,7 +102,7 @@ describe('AgentMemoryService active-generation queries', () => {
     expect(vectorSearch).not.toHaveBeenCalled();
   });
 
-  it('collapses automatic paraphrases in favor of an explicit canonical memory', () => {
+  it('collapses identical automatic facts in favor of an explicit canonical memory', () => {
     const content =
       'On disconnect, roll back pending optimistic mutations in reverse insertion order and preserve authoritative events.';
     const automatic = {
@@ -79,8 +116,7 @@ describe('AgentMemoryService active-generation queries', () => {
       ...memoryRow(2),
       name: 'canonical disconnect decision',
       source: 'agent',
-      content:
-        'Pending optimistic mutations roll back in reverse insertion order on disconnect, preserving authoritative events.',
+      content,
       score: 0.8,
     } as AgentMemoryHit;
     const distinct = {
@@ -115,7 +151,7 @@ describe('AgentMemoryService active-generation queries', () => {
     expect(dedupeAgentMemoryHits([user, agent]).map((row) => row.id)).toEqual([1, 2]);
   });
 
-  it('collapses automatic symptom paraphrases by normalized title concepts', () => {
+  it('preserves separate facts whose titles are similar', () => {
     const first = {
       ...memoryRow(1),
       name: 'optimistic-mutation-persistence-on-disconnect',
@@ -134,7 +170,7 @@ describe('AgentMemoryService active-generation queries', () => {
 
     const results = dedupeAgentMemoryHits([first, richer]);
 
-    expect(results.map((row) => row.id)).toEqual([2]);
+    expect(results.map((row) => row.id)).toEqual([1, 2]);
     expect(results[0]!.score).toBe(0.9);
   });
 
@@ -147,7 +183,7 @@ describe('AgentMemoryService active-generation queries', () => {
     const canonical = {
       ...memoryRow(2),
       source: 'agent',
-      content: 'On disconnect, pending optimistic mutations roll back in reverse insertion order.',
+      content: 'Disconnect rolls back every pending optimistic mutation in reverse insertion order.',
     } as AgentMemoryRow;
     const distinct = {
       ...memoryRow(3),

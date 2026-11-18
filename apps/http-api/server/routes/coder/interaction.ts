@@ -237,7 +237,6 @@ export function mountCoderInteractionRoutes(
     const waiting = await workerPool.isWaitingForInput(id).catch(() => false);
     if (waiting) {
       if (!interject) return c.json({ waiting: true });
-      await workerPool.interruptWait(id).catch(() => undefined);
     }
     const operationId = `interaction:inject:${randomUUID()}`;
     if (attachments?.length) {
@@ -245,6 +244,7 @@ export function mountCoderInteractionRoutes(
     } else {
       await workerPool.pushUserMessage(id, content, skillIds, operationId);
     }
+    if (waiting && interject) await workerPool.interruptWait(id);
     return c.json({ injected: true });
   });
 

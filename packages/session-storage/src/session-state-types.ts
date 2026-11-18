@@ -1,3 +1,5 @@
+import type { PromptContextMeasurement } from '@mcp/provider-sdk/prompt-cache-metrics.js';
+
 export type {
   ExternalSessionSource,
   ExternalSessionCandidate,
@@ -23,6 +25,7 @@ export interface CoderSessionStats {
   total_cache_creation_tokens: number;
   last_turn_input_tokens: number;
   last_turn_prompt_tokens?: number | null;
+  last_turn_context?: PromptContextMeasurement | null;
   message_count: number;
   assistant_turns: number;
   tool_call_count: number;

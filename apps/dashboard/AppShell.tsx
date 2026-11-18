@@ -156,6 +156,8 @@ export function AppShell() {
   // is null on pages with no pinnable target (button hidden). Rail capture
   // reads the live active tab from active-surface (not the URL — see that store).
   const activeProjectTab = useActiveSurface((s) => s.projectTab);
+  const activeCheckout = isProjectView && activeProjectTab?.projectId === view.projectId ? activeProjectTab : null;
+  const workspaceId = activeCheckout?.workspaceId ?? null;
   const sessionTitle = useActiveSurface((s) =>
     s.session?.id === view.sessionId ? s.session.title : null,
   );
@@ -254,7 +256,7 @@ export function AppShell() {
             </button>
           </div>
         )}
-        {isProjectView && view.projectId && <ProjectBranchControl projectId={view.projectId} />}
+        {workspaceId != null && <ProjectBranchControl key={workspaceId} projectId={workspaceId} />}
         {!isWorkbenchView && <span className="mx-0.5 h-4 w-px bg-border" />}
         {/* Center: only the actual controls are carved out of the drag region. */}
         {isWorkbenchView ? (
@@ -298,7 +300,14 @@ export function AppShell() {
               {shortcut}
             </kbd>
           </button>}
-          {isProjectView && view.projectId && <ProjectRunControl projectId={view.projectId} />}
+          {isProjectView && view.projectId && workspaceId != null && (
+            <ProjectRunControl
+              key={workspaceId}
+              projectId={workspaceId}
+              runnerProjectId={view.projectId}
+              worktreePath={activeCheckout?.worktreePath ?? null}
+            />
+          )}
           {currentPin && (
             <Tooltip>
               <TooltipTrigger asChild>

@@ -20,10 +20,13 @@ describe('buildSystemPrompt per-provider preambles', () => {
     expect(prefixes.size).toBe(distinctFamilies.length);
   });
 
-  it('uses the OpenAI-compatible preamble for OpenRouter', () => {
-    const openai = buildSystemPrompt({ ...base, providerFamily: 'openai' });
+  it('uses the family-neutral preamble for OpenRouter', () => {
+    // An OpenRouter route may serve any model family (Claude, GPT, Gemini…),
+    // so it must not claim the OpenAI GPT identity (bafca3dc, 2026-11-08).
+    const generic = buildSystemPrompt({ ...base, providerFamily: 'generic' });
     const openrouter = buildSystemPrompt({ ...base, providerFamily: 'openrouter' });
-    expect(openrouter.slice(0, 120)).toBe(openai.slice(0, 120));
+    expect(openrouter.slice(0, 120)).toBe(generic.slice(0, 120));
+    expect(openrouter).not.toContain('OpenAI GPT family');
   });
 
   it('is bit-stable across calls (critical for prefix cache)', () => {

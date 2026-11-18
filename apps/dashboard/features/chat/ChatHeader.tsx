@@ -1,11 +1,11 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Bell, Bot, Boxes, Info, Loader2, PanelLeft, Scissors, Star, Workflow } from 'lucide-react';
 import type { ContextStatus, IndexStatus, RunDelta, Usage } from '../../hooks/useAgentStream.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn } from '../../lib/utils.js';
-import { promptCacheHitRatio, promptInputTokens } from './prompt-cache-metrics.js';
+import { promptCacheHitRatio, promptInputTokens, sessionContextUsage } from './prompt-cache-metrics.js';
 import { providerAccent, providerLabel, projectColor, workspaceColor } from './constants.js';
 import type { CoderSession, CoderSessionStats, LinkedProject } from './types.js';
 import { formatDuration } from './utils.js';
@@ -74,7 +74,8 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelta, lastUsage, stats, contextStatus, indexStatus, onOpenDetails, onOpenNotifications, unreadNotifications = 0, notificationsOpen = false, onSummarizeClear, summarizing, onOpenSidebar, onOpenToolConfig, onOpenSkillConfig, onOpenMetrics, onOpenSnapshots, onOpenToolStats, pendingSnapshots, metaSidebarOpen, onToggleMetaSidebar, workerLogOpen, onToggleWorkerLog, showCanvasToggle, canvasActive, onToggleCanvas, linkedCount, onManageProjects, linkedProjects, workspaceProjectId, activeProjectId, onFocusProject }: ChatHeaderProps) {
-  const { t } = useTranslation(['chat', 'common']);
+  const { t, i18n } = useTranslation(['chat', 'common']);
+  const numbers = useMemo(() => new Intl.NumberFormat(i18n.resolvedLanguage), [i18n.resolvedLanguage]);
   // Global session: the workspace accent ties this conversation to its sidebar
   // group. `isGlobal` is implied by having a manage handler + linked count.
   const isGlobal = linkedCount != null && !!onManageProjects;
@@ -86,21 +87,8 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
 
-  // Context window usage — SINGLE source of truth. Live: the `context_status`
-  // event (the same cache-inclusive number the runner's compaction gates act
-  // on). At rest: the persisted cache-inclusive prompt of the last turn from
-  // stats, falling back to the legacy cache-blind column for old sessions.
-  // `lastUsage.input_tokens` no longer feeds this bar — mixing it with the
-  // persisted value is what made the gauge jump on send (70k → 100k).
-  const lastTurnInput =
-    contextStatus?.prompt_tokens ??
-    stats?.last_turn_prompt_tokens ??
-    session.last_turn_input_tokens ??
-    0;
-  const contextWindow = contextStatus?.context_window ?? stats?.context_window ?? null;
-  const ctxPct = contextWindow && lastTurnInput > 0
-    ? Math.min(Math.round((lastTurnInput / contextWindow) * 100), 100)
-    : null;
+  const { tokens: lastTurnInput, window: contextWindow, percent: ctxPct, estimated } =
+    sessionContextUsage(session, stats, contextStatus);
 
   return (
     // `min-w-0` lets the flex children shrink past their intrinsic width
@@ -226,11 +214,15 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
       <div className="flex items-center gap-3 text-[11px] text-muted-foreground shrink-0">
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="hidden xl:flex flex-col items-end gap-0.5 tabular-nums cursor-help">
+            <div tabIndex={0} className="hidden xl:flex flex-col items-end gap-0.5 tabular-nums whitespace-nowrap cursor-help">
               {ctxPct !== null && contextWindow ? (
                 <>
                   <div className="flex items-center gap-1.5">
-                    <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div role="meter" aria-label={t('chat:header.currentContext')}
+                      aria-valuemin={0} aria-valuemax={contextWindow} aria-valuenow={Math.min(lastTurnInput, contextWindow)}
+                      aria-valuetext={t(estimated ? 'chat:header.estimatedContextTokens' : 'chat:header.contextTokens', {
+                        used: numbers.format(lastTurnInput), available: numbers.format(contextWindow),
+                      })} className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
                       <div
                         className={cn(
                           'h-full rounded-full transition-all',
@@ -239,10 +231,10 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
                         style={{ width: `${ctxPct}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-foreground font-medium">{ctxPct}%</span>
+                    <span className="text-[10px] text-foreground font-medium">{numbers.format(ctxPct)}%</span>
                   </div>
                   <div className="text-[10px]">
-                    {formatK(lastTurnInput)} / {formatK(contextWindow)}
+                    {estimated && '≈'}{numbers.format(lastTurnInput)} / {numbers.format(contextWindow)}
                   </div>
                 </>
               ) : (
@@ -258,7 +250,7 @@ export const ChatHeader = memo(function ChatHeader({ session, streaming, runDelt
             </div>
           </TooltipTrigger>
           <TooltipContent className="max-w-sm">
-            <StatsTooltip session={session} lastUsage={lastUsage} stats={stats} contextWindow={contextWindow} lastTurnInput={lastTurnInput} ctxPct={ctxPct} />
+            <StatsTooltip session={session} lastUsage={lastUsage} stats={stats} contextWindow={contextWindow} lastTurnInput={lastTurnInput} ctxPct={ctxPct} estimated={estimated} />
           </TooltipContent>
         </Tooltip>
         {/* Builder-style draw.io canvas toggle — only for diagram sessions.
@@ -331,6 +323,7 @@ function StatsTooltip({
   contextWindow,
   lastTurnInput,
   ctxPct,
+  estimated,
 }: {
   session: CoderSession;
   lastUsage: Usage | null;
@@ -338,6 +331,7 @@ function StatsTooltip({
   contextWindow: number | null;
   lastTurnInput: number;
   ctxPct: number | null;
+  estimated: boolean;
 }) {
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
@@ -352,7 +346,7 @@ function StatsTooltip({
   const promptInput = promptInputTokens(usage);
   const hitRate = Math.round((promptCacheHitRatio(usage) ?? 0) * 100);
   const savedTokens = Math.round(totalCR * 0.5);
-  const { t } = useTranslation('chat');
+  const { t, i18n } = useTranslation('chat');
   return (
     <div className="space-y-1.5 text-xs">
       {/* Context Window section */}
@@ -361,12 +355,12 @@ function StatsTooltip({
           <div className="font-semibold">{t('header.contextWindow')}</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 tabular-nums">
             <span>{t('header.currentContext')}</span>
-            <span className="text-right">{lastTurnInput.toLocaleString()}</span>
+            <span className="text-right">{estimated && '≈'}{lastTurnInput.toLocaleString(i18n.resolvedLanguage)}</span>
             <span>{t('header.windowSize')}</span>
-            <span className="text-right">{contextWindow.toLocaleString()}</span>
+            <span className="text-right">{contextWindow.toLocaleString(i18n.resolvedLanguage)}</span>
             <span>{t('header.contextUsage')}</span>
             <span className={cn('text-right font-medium', ctxPct > 90 ? 'text-red-400' : ctxPct > 70 ? 'text-amber-400' : 'text-emerald-400')}>
-              {ctxPct}%
+              {ctxPct.toLocaleString(i18n.resolvedLanguage)}%
             </span>
           </div>
           <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
@@ -404,7 +398,7 @@ function StatsTooltip({
       {lastUsage && (
         <div className="mt-1 pt-1 border-t border-border/40 text-emerald-300">
           {t('header.lastTurn', {
-            context: lastUsage.input_tokens.toLocaleString(),
+            context: lastTurnInput.toLocaleString(i18n.resolvedLanguage),
             output: lastUsage.output_tokens.toLocaleString(),
             cache: (lastUsage.cache_read_input_tokens ?? 0).toLocaleString(),
           })}

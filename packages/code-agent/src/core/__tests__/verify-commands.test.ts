@@ -2,7 +2,7 @@
  * Unit tests for `detectVerifyCommands` — the dynamic-suffix block that
  * hands the agent the project's REAL verify commands (B2-dyn).
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -65,5 +65,15 @@ describe('detectVerifyCommands', () => {
     const dir = tempProject();
     writeFileSync(join(dir, 'package.json'), '{not json');
     expect(detectVerifyCommands(dir)).toBe('');
+  });
+
+  it('reports installed Windows launchers without assuming an internal cli.js', () => {
+    const dir = tempProject();
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'xo && ava' } }));
+    mkdirSync(join(dir, 'node_modules/.bin'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules/.bin/xo.cmd'), '@echo off');
+    const block = detectVerifyCommands(dir, 'win32');
+    expect(block).toContain('`node_modules/.bin/xo.cmd`');
+    expect(block).not.toContain('`node_modules/.bin/ava.cmd`');
   });
 });

@@ -377,11 +377,17 @@ function nativeToolsSection(available?: ReadonlySet<string>): string {
   ])
     ? ' Read the target before editing.'
     : '';
-  const discovery = toolAvailable(available, 'find_tools')
-    ? ' Use `find_tools` for a missing capability; do not guess tool names.'
+  // `find_tools` guidance lives in "# Tool discovery" (rendered under the same
+  // availability condition) and in the find_tools contract, which also covers
+  // not rediscovering visible schemas; repeating it here only grew the prefix.
+  const batching = toolAvailable(available, 'code_exec')
+    ? '\nBatch independent reads/searches in one code_exec Promise.all and inspect every result; keep dependent calls and mutations sequential. Reuse gathered content instead of re-reading.'
+    : '';
+  const checks = toolAvailable(available, 'exec_command')
+    ? ' Run long checks with exec_command; claim success only after the exit code.'
     : '';
   return `# Tool contract
-Use each visible tool according to its schema.${readBeforeWrite}${discovery}
+Use each visible tool according to its schema.${readBeforeWrite}${batching}${checks}
 `;
 }
 
@@ -516,7 +522,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     // model the real shell (cmd.exe vs bash) + what NOT to reach for. Cuts the
     // ~69% run_command failure rate from Unix idioms on Windows.
     os: describeShell(ctx.os),
-    tierHint: toolAvailable(ctx.availableTools, 'expand_toolset') ? tierHint(ctx.profile) : '',
+    tierHint: toolAvailable(ctx.availableTools, 'find_tools') ? tierHint(ctx.profile) : '',
     mcpSection: hasCodeNavigation ? mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive, ctx.availableTools) : '',
     nativeToolsSection: nativeToolsSection(ctx.availableTools),
     overlaySection: overlaySection(ctx.availableTools),
@@ -783,9 +789,7 @@ Complete authorized work within mode and permission gates. No human is watching:
 }
 
 /**
- * Emit a short hint about the tiered tool system when the runner started
- * with a profile smaller than 'full'. The agent needs to know that certain
- * tools are hidden and how to unlock them via `expand_toolset`. Profile is
+ * Explain the stable direct surface and schema discovery. Profile is
  * fixed at session start, so this text is byte-stable for the session and
  * lives in the cached prefix above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
  *
@@ -794,21 +798,9 @@ Complete authorized work within mode and permission gates. No human is watching:
  * the same project. They now render in `customTiersBlock` below the
  * boundary instead.
  */
-function tierHint(profile?: 'bootstrap' | 'navigate' | 'full'): string {
-  if (!profile || profile === 'full') {
-    return '';
-  }
-
-  if (profile === 'bootstrap') {
-    // No enumeration of VISIBLE tools — the model already sees them (with
-    // descriptions) in the tools array; the hint's job is what's hidden.
-    return `# Tool tiers (IMPORTANT)
-Bootstrap exposes focused read/search tools. Unlock \`navigate\` only for editing, shell or deeper impact analysis; unlock \`admin\` only for an explicitly requested privileged operation.
-`;
-  }
-  // navigate
-  return `# Tool tiers
-Navigate includes editing, shell and deep code navigation. Unlock \`admin\` only for an explicitly requested privileged operation.
+function tierHint(_profile?: 'bootstrap' | 'navigate' | 'full'): string {
+  return `# Tool discovery
+The public tool catalog stays stable during a run. Use \`find_tools\` for exact names and input schemas, then \`code_exec\` to invoke hidden non-interactive tools with \`tools.<name>(args)\`. Discovery does not grant permission: the same mode, scope and approval rules apply. Interactive and lifecycle tools require a top-level call. Do not guess names or expand tiers just to execute a known tool.
 `;
 }
 
@@ -826,7 +818,7 @@ function toolCapBlock(toolCap?: { maxTools: number; approxCatalog: number }): st
   return (
     '\n\n# Tool visibility\n' +
     `The visible list is capped at ${toolCap.maxTools} of ~${toolCap.approxCatalog} tools. ` +
-    'Use `find_tools("<capability>")` for one hidden tool or `expand_toolset` for a needed tier; discovered tools are pinned. Do not guess names.\n'
+    'Use `find_tools({query: "<capability>"})` for schemas and `code_exec` for hidden non-interactive tools. Discovery does not replace visible tools.\n'
   );
 }
 
@@ -846,9 +838,9 @@ function customTiersBlock(
   return (
     '\n\n# External tool groups (hidden, on-demand)\n' +
     'The following external MCP server tool groups are available but HIDDEN. ' +
-    'Call `expand_toolset({tier: "<name>"})` to unlock:\n' +
+    'Use `find_tools` with the server name and capability to obtain exact names and schemas:\n' +
     sorted.map((t) => `- "${t.tier}" (${t.toolCount} tools) — ${t.displayName}`).join('\n') +
-    '\nUnlock ONLY when your task requires them. They stay active for the rest of the session.\n'
+    '\nCall discovered non-interactive tools through `code_exec`; use their returned input schemas.\n'
   );
 }
 

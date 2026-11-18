@@ -80,6 +80,56 @@ describe('trimProjectSchema (C2)', () => {
     }
   });
 
+  it('opens and reopens a pre-274 project without bootstrapping central tables or sweeping indexed rows', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db);
+      db.prepare("INSERT INTO projects (id, name, root_path) VALUES (1, 'preserved', '/p')").run();
+      db.prepare("INSERT INTO files (project_id, path, language, content_hash) VALUES (1, 'keep.ts', 'ts', 'h')").run();
+      db.prepare('DELETE FROM schema_version WHERE version >= 274').run();
+      const before = db.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").all();
+      const guarded = new Proxy(db, {
+        get(target, property) {
+          if (property === 'pragma') return (source: string, ...args: unknown[]) => {
+            if (source === 'foreign_key_check') throw new Error('full FK sweep must not run on an unchanged project schema');
+            return Reflect.apply(target.pragma, target, [source, ...args]);
+          };
+          if (property === 'exec') return (source: string) => {
+            if (/provider_configs|agent_memory|mcp_oauth/i.test(source)) throw new Error('central bootstrap must not run');
+            return target.exec(source);
+          };
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as DB;
+      initProjectSchema(guarded);
+      initProjectSchema(guarded);
+      expect(db.prepare('SELECT version FROM schema_version WHERE version >= 274 ORDER BY version').all())
+        .toEqual([{ version: 274 }, { version: 275 }]);
+      expect(db.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").all()).toEqual(before);
+      expect(db.prepare('SELECT path FROM files').all()).toEqual([{ path: 'keep.ts' }]);
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+    } finally { db.close(); }
+  });
+
+  it('still applies pending project migrations to an already-trimmed schema', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db);
+      for (const row of db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='symbol_references'").all() as { name: string }[]) {
+        db.exec('DROP TRIGGER "' + row.name.replaceAll('"', '""') + '"');
+      }
+      db.exec('DROP INDEX idx_symbol_refs_project_name_kind; ALTER TABLE symbol_references DROP COLUMN reference_kind');
+      db.prepare('DELETE FROM schema_version WHERE version >= 269').run();
+      initProjectSchema(db);
+      expect(db.prepare('PRAGMA table_info(symbol_references)').all()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: 'reference_kind' })]),
+      );
+      expect(userTables(db)).not.toContain('agent_memory');
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+    } finally { db.close(); }
+  });
+
   it('drops every central table and leaves a project-only DB that still writes', () => {
     const { db } = buildFullSchema();
     try {

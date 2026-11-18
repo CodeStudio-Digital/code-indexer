@@ -1,4 +1,5 @@
 import type { AgentMessage } from '@mcp/provider-sdk';
+import type { PromptContextMeasurement } from '@mcp/provider-sdk/prompt-cache-metrics.js';
 import type {
   ArtifactInput,
   ArtifactRef,
@@ -41,6 +42,7 @@ export interface FsLinkProjectInput {
  */
 export interface FsCoderSession {
   id: SessionId;
+  parent_session_id: SessionId | null;
   kind: string;
   storage_scope: SessionStorageScope;
   project_id: ProjectId | null;
@@ -222,6 +224,7 @@ export interface FsPersistAssistantTurnInput {
   session_id: SessionId;
   message: AgentMessage;
   usage: FsAppendMessageUsage | null;
+  context?: PromptContextMeasurement;
   tool_calls: readonly FsToolCallInput[];
   nested_tool_calls?: readonly FsToolCallInput[];
   subagent_usage?: FsAppendMessageUsage;
@@ -311,8 +314,10 @@ export interface FsStoredMessage {
   seq: number;
   role: AgentMessage['role'];
   phase?: AgentMessage['phase'];
+  provider_replay?: AgentMessage['providerReplay'];
   content: JsonValue;
   usage: {
+    context?: PromptContextMeasurement;
     input_tokens: number;
     output_tokens: number;
     cache_read_tokens: number;

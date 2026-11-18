@@ -426,7 +426,7 @@ function openBrowserLink(url: string): void {
 /** Documents use a separate, unprivileged viewer; they never replace the IDE. */
 function openDocumentWindow(url: string): void {
   if (!isDocumentLink(url)) return;
-  const viewer = new BrowserWindow({ width: 1000, height: 760, autoHideMenuBar: true,
+  const viewer = new BrowserWindow({ width: 1000, height: 760, show: false, autoHideMenuBar: true,
     webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true, javascript: false } });
   viewer.webContents.setWindowOpenHandler(({ url: target }) => { openBrowserLink(target); return { action: 'deny' }; });
   viewer.webContents.on('will-navigate', (event, target) => { event.preventDefault(); openBrowserLink(target); });
@@ -435,7 +435,17 @@ function openDocumentWindow(url: string): void {
   });
   installEditContextMenu(viewer);
   applyProductionHardening(viewer);
-  void viewer.loadURL(url).catch(error => console.error('[documents] Open failed:', error));
+  const failed = () => {
+    if (viewer.isDestroyed()) return;
+    viewer.destroy();
+    const pt = app.getLocale().startsWith('pt');
+    void dialog.showMessageBox({ type: 'warning', title: 'CodeStudio',
+      message: pt ? 'Não foi possível abrir o documento.' : 'The document could not be opened.',
+      detail: pt ? 'Verifique se o arquivo ainda existe e se você tem acesso a ele.'
+        : 'Check that the file still exists and you have access to it.' });
+  };
+  viewer.webContents.once('did-navigate', (_event, _url, status) => { if (status >= 400) failed(); });
+  void viewer.loadURL(url).then(() => { if (!viewer.isDestroyed()) viewer.show(); }, failed);
 }
 
 function attachWindowHandlers(win: BrowserWindow) {

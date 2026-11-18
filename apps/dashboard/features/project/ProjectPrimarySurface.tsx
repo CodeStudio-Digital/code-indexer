@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { cn } from '../../lib/utils.js';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
 import { EditorPaneHost } from '../workspace/EditorPane.js';
@@ -17,6 +17,8 @@ const ProjectLspInstallPrompts = lazy(() =>
 interface ProjectPrimarySurfaceProps {
   surface: string;
   projectId: number;
+  workspaceId: number | null;
+  worktreePath: string | null;
   projectName: string;
   onOpenFile: (path: string) => void;
   initialSessionId?: string;
@@ -127,16 +129,22 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
     <div className="relative h-full min-h-0 bg-[var(--workbench-surface)]">
       {mountedSurfaces.includes('editor') && (
         <RetainedPane active={props.surface === 'editor'} surface="editor">
-          <EditorPaneHost />
-          <Suspense fallback={null}>
-            <ProjectLspInstallPrompts projectId={props.projectId} />
-          </Suspense>
+          {props.workspaceId != null && (
+            <Fragment key={props.workspaceId}>
+              <EditorPaneHost />
+              <Suspense fallback={null}>
+                <ProjectLspInstallPrompts projectId={props.workspaceId} />
+              </Suspense>
+            </Fragment>
+          )}
         </RetainedPane>
       )}
       {mountedSurfaces.includes('sessions') && (
         <RetainedPane active={props.surface === 'sessions'} surface="sessions">
           <ChatSurface
             projectId={props.projectId}
+            workspaceId={props.workspaceId}
+            worktreePath={props.worktreePath}
             projectName={props.projectName}
             initialSessionId={props.initialSessionId}
             builderJson={props.builderJson}
@@ -151,6 +159,7 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
           <TransientSurface
             tab="ssh"
             projectId={props.projectId}
+            workspaceId={props.workspaceId}
             projectName={props.projectName}
             onOpenFile={props.onOpenFile}
             contribWindows={props.contribWindows}
@@ -173,11 +182,13 @@ export function ProjectPrimarySurface(props: ProjectPrimarySurfaceProps) {
           />
         </RetainedPane>
       )}
-      {transient && (
+      {transient && props.workspaceId != null && (
         <div className="absolute inset-0">
           <TransientSurface
             tab={props.surface}
             projectId={props.projectId}
+            workspaceId={props.workspaceId}
+            worktreePath={props.worktreePath}
             projectName={props.projectName}
             onOpenFile={props.onOpenFile}
             contribWindows={props.contribWindows}

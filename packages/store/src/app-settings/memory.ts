@@ -9,15 +9,22 @@ import type { SettingDef } from './types.js';
  */
 export const MEMORY_SETTINGS: readonly SettingDef[] = [
   {
+    key: 'MCP_MEMORY_EVOLVE',
+    label: 'Evolução automática das memórias',
+    description: 'Revisa novos aprendizados na base dos agentes, consolida duplicatas e refina conteúdo com histórico reversível. Usa o destilador configurado, em lotes limitados e com intervalo por projeto. Memórias manuais, preferências e fixadas são protegidas.',
+    type: 'bool', category: 'memory', default: '1',
+  },
+  {
     key: 'MCP_MEMORY_CONSOLIDATE',
-    label: 'Memory consolidator (merge dups + archive stale)',
+    label: 'Legacy snapshot consolidator',
     description:
-      'Periodically merges near-duplicate memory snapshots and archives fully-stale, cold, ' +
+      'Legacy snapshots only; agent memories use Automatic memory evolution instead. Periodically merges near-duplicate memory snapshots and archives fully-stale, cold, ' +
       'low-importance ones. Archiving is reversible (restore from the project Memory tab). Runs only ' +
       'on idle projects whose memory changed since the last pass. Off by default (opt-in): set to 1 to arm.',
     type: 'bool',
     category: 'memory',
     default: '0',
+    advanced: true,
   },
   {
     key: 'MCP_MEMORY_CONSOLIDATE_INTERVAL_MS',

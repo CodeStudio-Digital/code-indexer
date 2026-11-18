@@ -70,10 +70,10 @@ describe('SYSTEM_PROMPT_DYNAMIC_BOUNDARY — static prefix byte-stability', () =
     expect(splitOnBoundary(a).staticPrefix).not.toBe(splitOnBoundary(b).staticPrefix);
   });
 
-  it('static prefix changes when profile changes (cache key change is intentional)', () => {
+  it('uses the same discovery instructions across tool profiles', () => {
     const a = buildSystemPrompt({ ...baseCtx, profile: 'bootstrap' });
     const b = buildSystemPrompt({ ...baseCtx, profile: 'navigate' });
-    expect(splitOnBoundary(a).staticPrefix).not.toBe(splitOnBoundary(b).staticPrefix);
+    expect(splitOnBoundary(a).staticPrefix).toBe(splitOnBoundary(b).staticPrefix);
   });
 
   it('static prefix is byte-identical when only customTiers ORDER changes', () => {
@@ -137,9 +137,9 @@ describe('SYSTEM_PROMPT_DYNAMIC_BOUNDARY — static prefix byte-stability', () =
 
   it('persistence framing (R6) is present in the agent-loop block', () => {
     const prompt = buildSystemPrompt(baseCtx);
-    expect(prompt).toContain('carry explicit change requests through implementation and verification');
-    expect(prompt).toContain('Proceed on reversible in-scope work');
-    expect(prompt).toContain('Respect Plan/Spec approval gates');
+    expect(prompt).toContain('Carry authorized action requests through implementation and verification');
+    expect(prompt).toContain('continue independent safe work when blocked');
+    expect(prompt).toContain('Respect Plan/Spec gates');
   });
 
   it('preamble guidance (R6) is present', () => {

@@ -65,6 +65,9 @@ import {
   type ToolOutputRecord,
 } from './types.js';
 
+import { DiagnosticQueue } from './diagnostic-queue.js';
+import { traceStorageOperation } from './storage-timing.js';
+
 export const SESSION_LAYOUT_VERSION = 1 as const;
 
 export const SESSION_BUNDLE_DIRECTORIES = [
@@ -225,6 +228,9 @@ export class FileSessionRepository {
   readonly #listeners = new Set<(event: SessionRepositoryEvent) => void>();
   readonly #moving = new Set<string>();
   readonly #artifactRecoveryRegistry: Set<string>;
+  readonly #diagnostics = new DiagnosticQueue(error => {
+    console.warn('[session-storage] diagnostic write failed:', error instanceof Error ? error.message : String(error));
+  });
 
   constructor(options: FileSessionRepositoryOptions) {
     this.#locator = options.locator;
@@ -891,7 +897,19 @@ export class FileSessionRepository {
           const previous = this.#metricProjections.get(writer);
           const projection = (newMetric && previous ? appendSessionMetric(previous, directory, value) : null)
             ?? calculateSessionMetricsProjection(location.bundle_path);
-          await atomicWriteJson(join(location.bundle_path, 'metrics', 'summary.json'), projection.summary, {
+          const before = previous?.summary;
+          const after = projection.summary;
+          const totalsUnchanged = before !== undefined
+            && before.turns === after.turns && before.tool_calls === after.tool_calls
+            && before.provider_attempts === after.provider_attempts
+            && before.tokens.input === after.tokens.input && before.tokens.output === after.tokens.output
+            && before.tokens.cache_read === after.tokens.cache_read
+            && before.tokens.cache_creation === after.tokens.cache_creation;
+          // Diagnostic turn rows have zero accounting contribution. Their own
+          // file is durable above; rewriting and fsyncing identical summary
+          // totals would hold the same writer queue used by the conversation.
+          if (totalsUnchanged) projection.summary = before;
+          else await atomicWriteJson(join(location.bundle_path, 'metrics', 'summary.json'), after, {
             faultInjector: this.#faultInjector,
             context: { session_id: location.session_id },
           });
@@ -928,6 +946,7 @@ export class FileSessionRepository {
   }
 
   async closeSession(location: SessionLocation): Promise<void> {
+    await this.#diagnostics.flush();
     const key = cacheKey(location);
     const writer = this.#writers.get(key);
     if (!writer) return;
@@ -936,6 +955,7 @@ export class FileSessionRepository {
   }
 
   async trashSession(location: SessionLocation): Promise<TrashResult> {
+    await this.#diagnostics.flush();
     const key = cacheKey(location);
     if (this.#moving.has(key)) throw new Error(`Session ${location.session_id} is already being moved`);
     this.#moving.add(key);
@@ -1123,9 +1143,21 @@ export class FileSessionRepository {
   }
 
   async close(): Promise<void> {
+    await this.#diagnostics.close();
     await Promise.all(this.#projectionMutations.values());
     const writers = [...this.#writers.values()];
     this.#writers.clear();
     await Promise.allSettled(writers.map(async (writer) => (await writer).close()));
   }
+
+  /** Never use for conversation, tool outcomes, usage accounting or authority. */
+  enqueueDiagnostic(location: SessionLocation, directory: 'metrics/turns' | 'metrics/pipeline_stages', id: string, value: JsonValue): boolean {
+    const snapshot = JSON.stringify(value);
+    if (snapshot.length > 128 * 1024) return false;
+    return this.#diagnostics.enqueue(`${cacheKey(location)}:${directory}:${id}`,
+      () => traceStorageOperation({ sessionId: location.session_id, operationId: `diagnostic:${id}` },
+        () => this.writeEntity(location, directory, id, JSON.parse(snapshot) as JsonValue)));
+  }
+
+  flushDiagnostics(): Promise<void> { return this.#diagnostics.flush(); }
 }

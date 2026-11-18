@@ -18,8 +18,10 @@ export const operations = {
 async acceptCommand<T>(this: ControlPlaneFileContext,
     input: AcceptCommandInput<T>,
   ): Promise<AcceptCommandResult> {
-    if (this.internalRecoveryPromise) await this.internalRecoveryPromise;
+    // Retry a failed catalog initialization, but never race a restart scan.
+    if (this.internalRecoveryRequest) await this.recoverInterruptedRuns();
     return this.internalEnqueue(input.command.sessionId, async () => {
+      await this.internalEnsureSessionRecovered(input.command.sessionId);
       const repository = await this.internalRepository(input.command.sessionId);
       const aliases = new Set([
         input.command.kind,

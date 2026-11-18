@@ -19,10 +19,11 @@ import { createHash } from 'node:crypto';
 import type { EmbeddingService } from './embeddings.js';
 import { resolveModelCacheDir } from './model-cache.js';
 import { resolveOnnxIdleTtlMs } from './onnx-idle.js';
+import { onnxSessionOptions } from './onnx-resource-policy.js';
 import type { SemanticOnnxDtype } from '@mcp/store/semantic-store.js';
 
 const DEFAULT_MODEL = 'Xenova/multilingual-e5-small';
-const BATCH = 32;
+const BATCH = 8;
 
 /** Minimal shape of the transformers.js feature-extraction pipeline. */
 type FeatureExtractor = ((
@@ -155,6 +156,7 @@ export class LocalEmbeddingService implements EmbeddingService {
       this.model,
       {
         dtype: this.dtype,
+        session_options: onnxSessionOptions(),
         ...(this.revision ? { revision: this.revision } : {}),
       },
     )) as unknown as FeatureExtractor;

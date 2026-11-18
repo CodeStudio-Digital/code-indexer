@@ -71,6 +71,29 @@ describe('project git premium safety and snapshots', () => {
     });
     expect(JSON.stringify(rows[0])).not.toContain(root);
   });
+
+  it('cancels diff during target resolution, and reports target and worker times on success', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-diff-phases-'));
+    dirs.push(root);
+    await init(root);
+    writeFileSync(join(root, 'base.txt'), 'changed\n');
+    let release!: (root: string) => void;
+    const pending = new Promise<string>(r => { release = r; });
+    const rows: Array<{ diag: Record<string, unknown> }> = [];
+    const h = createProjectGitHandlers({ db: { getProjectRootPath: () => pending },
+      pipelineTelemetryStore: { insert: (row: typeof rows[number]) => rows.push(row) } } as never);
+    const controller = new AbortController();
+    const first = h.diff({ projectId: 1, path: 'base.txt' }, { signal: controller.signal } as never);
+    await Promise.resolve();
+    controller.abort();
+    await expect(first).rejects.toMatchObject({ code: 'git_diff_cancelled' });
+    release(root);
+    expect(rows[0]?.diag.process_count).toBe(0);
+    const patch = await h.diff({ projectId: 1, path: 'base.txt' }, {} as never);
+    expect(patch.patch).toContain('+changed');
+    expect(rows[1]?.diag).toMatchObject({ process_count: 2, target_resolve_ms: expect.any(Number),
+      git_round_trip_ms: expect.any(Number), git_process_ms: expect.any(Number) });
+  });
   it('rejects raw AI argv and never executes an injected git alias', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mcp-git-ai-safe-'));
     dirs.push(root);

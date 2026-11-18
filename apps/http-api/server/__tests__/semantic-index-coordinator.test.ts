@@ -414,13 +414,15 @@ function makeHarness(options: {
       return row;
     }),
     getJob: vi.fn((id: number) => jobs.get(id) ?? null),
-    getOrCreateBuildJob: vi.fn((input: any) => {
+    claimBuildJob: vi.fn((input: any) => {
+      if (Array.from(jobs.values()).some(job => job.namespace === input.namespace && job.kind === input.kind
+        && job.generation_id === input.generation_id && job.status === 'running')) return null;
       const existing = Array.from(jobs.values()).reverse().find((job) =>
         job.namespace === input.namespace && job.generation_id === input.generation_id
         && job.kind === input.kind && ['pending', 'paused'].includes(job.status));
-      if (!existing) return store.createJob(input);
+      if (!existing) return store.updateJob(store.createJob(input).id, { status: 'running' });
       return store.updateJob(existing.id, {
-        status: 'pending', expected_items: input.expected_items, processed_items: 0, failed_items: 0,
+        status: 'running', expected_items: input.expected_items, processed_items: 0, failed_items: 0,
         error: null, cursor: { ...input.cursor, ...(existing.cursor?.retry ? { retry: existing.cursor.retry } : {}) },
       })!;
     }),
@@ -436,6 +438,7 @@ function makeHarness(options: {
     hasOpenNamespaceMutationJobs: vi.fn((namespace: string) => Array.from(jobs.values()).some((job) =>
       job.namespace === namespace && ['pending', 'paused', 'running'].includes(job.status)
       && (job.kind === 'delta' || (job.kind === 'backfill' && job.generation_id === null)))),
+    recoverInterruptedJobs: vi.fn(),
     listJobs: vi.fn((filter?: { namespace?: string; namespacePrefix?: string; generationId?: number | null; limit?: number; status?: string; namespaces?: string[]; statuses?: string[]; kinds?: string[] }) => Array.from(jobs.values())
       .filter((row) => (!filter?.namespace || row.namespace === filter.namespace)
           && (!filter?.namespacePrefix || row.namespace.startsWith(filter.namespacePrefix))
@@ -749,31 +752,21 @@ describe('SemanticIndexCoordinator code generations', () => {
 
   it('normalizes interrupted work on startup without enumerating or indexing projects', () => {
     const h = makeHarness({ projects: [1, 2], fileCounts: { 1: 1, 2: 1 } });
-    const interrupted = h.store.createJob({
-      generation_id: null,
-      namespace: 'code:p1',
-      kind: 'backfill',
-      cursor: { reason: 'code-delta', events: [{ kind: 'upsert', path: 'src/file-1.ts' }] },
-      expected_items: 1,
-    });
-    h.store.updateJob(interrupted.id, { status: 'running', processed_items: 1 });
+    h.store.listJobs.mockClear();
     h.db.listProjects.mockClear();
     h.embedding.embedQuery.mockClear();
     retryEmbeddingsMock.mockClear();
 
     h.coordinator.recoverInterruptedJobsPassively();
 
-    expect(h.jobs.get(interrupted.id)).toMatchObject({
-      status: 'paused',
-      processed_items: 0,
-      error: expect.stringContaining('waiting for an explicit resume'),
-    });
+    expect(h.store.recoverInterruptedJobs).toHaveBeenCalledOnce();
+    expect(h.store.listJobs).not.toHaveBeenCalled();
     expect(h.db.listProjects).not.toHaveBeenCalled();
     expect(h.embedding.embedQuery).not.toHaveBeenCalled();
     expect(retryEmbeddingsMock).not.toHaveBeenCalled();
   });
 
-  it('cancels paused work from a generation no longer referenced by its namespace', () => {
+  it('rejects resuming work from a generation no longer referenced by its namespace', () => {
     const generations: Generation[] = [{
       id: 2,
       purpose: 'code',
@@ -816,12 +809,6 @@ describe('SemanticIndexCoordinator code generations', () => {
       error: 'interrupted by application restart; waiting for an explicit resume',
     });
 
-    h.coordinator.recoverInterruptedJobsPassively();
-
-    expect(h.jobs.get(obsolete.id)).toMatchObject({
-      status: 'cancelled',
-      error: expect.stringContaining('superseded'),
-    });
     expect(() => h.coordinator.resumeJob(obsolete.id)).toThrow(/superseded/);
     expect(retryEmbeddingsMock).not.toHaveBeenCalled();
   });

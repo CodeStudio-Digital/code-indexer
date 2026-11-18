@@ -9,8 +9,9 @@ import { machineSetupStream } from './machine-setup.js';
  * it as a MessagePort stream automatically (no preload/route changes).
  */
 export function createSystemHandlers(deps: HandlerDeps): SystemApi {
+  let pendingPreflight: ReturnType<typeof getPreflight> | undefined;
   return {
-    preflight: () => getPreflight(deps),
+    preflight: () => pendingPreflight ??= getPreflight(deps).finally(() => { pendingPreflight = undefined; }),
     podmanMachineSetupStream: (_input, ctx) => machineSetupStream(ctx?.signal),
   };
 }

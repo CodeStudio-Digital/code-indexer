@@ -23,6 +23,7 @@ import {
   type FsProjectInfoResolver,
 } from './session-projection.js';
 import { toJsonValue } from './conversation-codec.js';
+import { hasStorageTrace, recordStorageElapsed, traceStorageOperation } from '../storage-timing.js';
 import {
   normalizeSessionMaxAutoContinues,
   normalizeSessionMaxTurns,
@@ -125,7 +126,21 @@ export class FsSessionDirectory {
   ): Promise<T> {
     const key = String(id).toLowerCase();
     const previous = this.mutationQueues.get(key) ?? Promise.resolve();
-    const result = previous.then(task, task);
+    const queuedAt = performance.now();
+    const run = () => {
+      recordStorageElapsed('mutation.queue', queuedAt);
+      return task();
+    };
+    // Capture other queue owners as well as transcript commits. Stack labels
+    // are collected only for an explicitly enabled diagnostic export; no
+    // paths, arguments or conversation contents are included.
+    const captureOwner = !!process.env.CODESTUDIO_STORAGE_TRACE_FILE && !hasStorageTrace();
+    const owner = captureOwner ? new Error().stack?.split('\n').slice(2, 4)
+      .map(line => line.match(/^\s*at (?:async )?([\w.$<>]+)\s+\(/)?.[1]?.slice(0, 100) ?? 'anonymous')
+      .join(' > ') : undefined;
+    const result = captureOwner
+      ? traceStorageOperation({ sessionId: key, operationId: `mutation:${owner ?? 'unknown'}` }, () => previous.then(run, run))
+      : previous.then(run, run);
     const settled = result.then(
       () => undefined,
       () => undefined,

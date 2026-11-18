@@ -275,6 +275,9 @@ import { structuralState271 } from './271-structural-state.js';
 import { pathCandidates272 } from './272-path-candidates.js';
 import { structuralBuild273 } from './273-structural-build.js';
 import { mcpOAuthResource274 } from './274_mcp_oauth_resource.js';
+import { agentMemoryEvolution275 } from './275_agent_memory_evolution.js';
+import { worktreeProjects276 } from './276_worktree_projects.js';
+import { semanticRecovery277 } from './277_semantic_recovery.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -549,13 +552,16 @@ export const MIGRATIONS: Migration[] = [
   pathCandidates272,
   structuralBuild273,
   mcpOAuthResource274,
+  agentMemoryEvolution275,
+  worktreeProjects276,
+  semanticRecovery277,
 ];
 
 /**
  * Ensure the `schema_version` table exists and apply any pending migrations.
  * Safe to call on both fresh and existing databases.
  */
-export function runMigrations(db: DB): { applied: number[]; current: number } {
+export function runMigrations(db: DB, options: { scope?: 'central' | 'project' } = {}): { applied: number[]; current: number } {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
       version INTEGER PRIMARY KEY,
@@ -576,7 +582,9 @@ export function runMigrations(db: DB): { applied: number[]; current: number } {
     if (appliedSet.has(migration.version)) continue;
 
     try {
-      if (migration.outsideTransaction) {
+      if (options.scope === 'project' && migration.scope === 'central') {
+        db.prepare('INSERT INTO schema_version (version, name) VALUES (?, ?)').run(migration.version, migration.name);
+      } else if (migration.outsideTransaction) {
         // Migration auto-gerencia sua própria transação + PRAGMAs.
         // Geralmente recreate-table com `foreign_keys=OFF` (ver
         // migration 103). O registro em schema_version vai num INSERT

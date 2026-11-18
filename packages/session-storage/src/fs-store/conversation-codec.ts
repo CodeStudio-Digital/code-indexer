@@ -186,6 +186,7 @@ export function prepareMessage(
       schema_version: 1,
       role: message.role,
       ...(message.phase ? { phase: message.phase } : {}),
+      ...(message.providerReplay ? { provider_replay: message.providerReplay } : {}),
       content,
       usage: usageRecord(usage),
       is_meta: message.isMeta === true,
@@ -303,6 +304,7 @@ export function hydrateMessage(
   return {
     role: stored.role,
     ...(stored.phase ? { phase: stored.phase } : {}),
+    ...(stored.provider_replay ? { providerReplay: stored.provider_replay } : {}),
     content: content.map((block) => hydrateContentBlock(artifactStore, block)),
     ...(stored.is_meta ? { isMeta: true } : {}),
     ...(stored.selected_skill_ids.length > 0

@@ -1009,5 +1009,6 @@
   "hygiene.purgeResult": "{{count}} projeto(s) apagado(s), {{vectors}} vetores locais removidos.",
   "hygiene.clearResult": "{{count}} projeto(s) limpo(s), {{vectors}} vetores locais removidos. Re-indexe quando quiser.",
   "hygiene.projectError": "{{project}}: {{error}}",
-  "hygiene.diskError": "Não foi possível verificar a pasta: {{error}}"
+  "hygiene.diskError": "Não foi possível verificar a pasta: {{error}}",
+  "pipelines.memoryRetrievalHint": "Busca de memórias usa embeddings e reranker do perfil Memória em Indexação semântica. Este modelo de texto cuida apenas do aprendizado e da revisão do conhecimento; não há uma chamada LLM adicional para escrever cada busca ou filtrar resultados."
 }

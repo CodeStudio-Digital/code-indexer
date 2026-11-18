@@ -163,6 +163,7 @@ export function withReasoningCapabilities(
   provider: ChatProvider,
   models: readonly ProviderRuntimeModelMetadata[] | undefined,
   selectedModel?: string,
+  options: { useModelDefault?: boolean } = {},
 ): ChatProvider {
   let activeModel = selectedModel ?? provider.model;
   // A plugin-backed provider may be lazy: its real client is created only on
@@ -171,6 +172,9 @@ export function withReasoningCapabilities(
   const initialWireModel = parseRuntimeModelRef(activeModel).id;
   if (provider.model !== initialWireModel) provider.setModel(initialWireModel);
   return {
+    get inferenceOnly() {
+      return provider.inferenceOnly;
+    },
     get reasoningCapabilities() {
       const metadata = selectRuntimeModelMetadata(models, activeModel);
       return metadata ? { canReason: metadata.can_reason, supportedLevels: metadata.supported_reasoning_levels,
@@ -197,7 +201,7 @@ export function withReasoningCapabilities(
       const metadata = selectRuntimeModelMetadata(models, activeModel);
       const virtualUltra = req.reasoningEffort?.trim().toLowerCase() === 'ultra';
       const resolution = resolveReasoningEffort({
-        requestedEffort: req.reasoningEffort,
+        requestedEffort: req.reasoningEffort ?? (options.useModelDefault ? metadata?.default_reasoning_level : undefined),
         capability: metadata
           ? {
               canReason: metadata.can_reason,

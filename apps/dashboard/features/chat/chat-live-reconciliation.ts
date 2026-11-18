@@ -1,4 +1,5 @@
-import type { PersistedMessage } from './types.js';
+import type { MessageRow, PersistedMessage } from './types.js';
+import { hasTurnTokens } from '../../lib/turn-tokens.js';
 import { normalizeRunText, normalizedCovers, persistedCoveragePrefixEnd } from './live-run-alignment.js';
 import type { AssistantTurn, StreamBlock } from '../../hooks/useAgentStream.js';
 import { latestVisibleUserIndex, getPersistedAssistantText, getPersistedAssistantThinkingText, getCurrentTurnText, getCurrentTurnThinkingText, liveBlockPersistedId } from './chat-message-text.js';
@@ -13,6 +14,7 @@ import { collectLatestPersistedInteractivePromptSignatures, liveBlockPersistedSi
  * remains O(1) to reuse.
  */
 export interface PersistedLiveReconciliation {
+  reportedTurnIds: Set<string>;
   assistantRun: PersistedMessage[];
   /** The loaded window begins after its owning user message. */
   startsMidTurn: boolean;
@@ -38,6 +40,7 @@ export function buildPersistedLiveReconciliation(
   messages: PersistedMessage[],
   precedingUserMessageId: number | null | undefined = null,
   fallbackResultIds: Iterable<string> = [],
+  rows: readonly MessageRow[] = [],
 ): PersistedLiveReconciliation {
   const latestUserIndex = latestVisibleUserIndex(messages);
   const startsMidTurn = latestUserIndex < 0 && precedingUserMessageId != null;
@@ -46,8 +49,13 @@ export function buildPersistedLiveReconciliation(
     .filter((message) => message.role === 'assistant');
   const persistedToolUseIds = new Set<string>();
   const persistedToolResultIds = new Set<string>();
-  for (const message of messages) {
+  const reportedTurnIds = new Set<string>();
+  for (const [index, message] of messages.entries()) {
     if (message.role === 'assistant') {
+      const row = rows[index];
+      if (index > latestUserIndex && row?.operation_id && hasTurnTokens(row)) {
+        reportedTurnIds.add(row.operation_id.replace(/:(commit|checkpoint)$/, ''));
+      }
       for (const block of message.content) {
         if (block.type === 'tool_use' && block.id) persistedToolUseIds.add(block.id);
       }
@@ -81,6 +89,7 @@ export function buildPersistedLiveReconciliation(
   const persistedThinking = thinkingParts.join('\n').trim();
 
   return {
+    reportedTurnIds,
     assistantRun,
     startsMidTurn,
     precedingUserMessageId: precedingUserMessageId ?? null,
@@ -253,6 +262,7 @@ export function visibleLiveBlocks(
     });
   }
   return effectiveBlocks.filter((b, index) => {
+    if (b.type === 'usage') return preferCompleteLiveRun || !reconciliation?.reportedTurnIds.has(b.id);
     // `agents`/`task_run`/`workflow` are rich live cards that stay canonical
     // while they run (see below), so a covered prefix must not sweep them out by
     // position just because their spawn tool_use already checkpointed.

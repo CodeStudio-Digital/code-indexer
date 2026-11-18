@@ -12,6 +12,7 @@ import { TableStructureEditor } from './structure/TableStructureEditor.js';
 export function DatabaseEditorView({ tab }: { tab: OpenDatabaseTab }) {
   const updateDatabaseTab = useWorkspaceStore((state) => state.updateDatabaseTab);
   const work = tab.workTab;
+  const connectionProjectId = tab.connectionProjectId ?? tab.projectId;
   // DatabaseEditorStack normally gives every tab its own retained component
   // instance. Keep the child keyed as a defensive boundary for standalone
   // consumers that replace a descriptor in place.
@@ -35,7 +36,7 @@ export function DatabaseEditorView({ tab }: { tab: OpenDatabaseTab }) {
     return <ErDiagramTab key={viewKey} connKey={work.connKey} schema={work.schema} />;
   }
   if (work.kind === 'schema-diff' && work.schema) {
-    return <SchemaDiffTab key={viewKey} projectId={tab.projectId} sourceConnKey={work.connKey} sourceSchema={work.schema} />;
+    return <SchemaDiffTab key={viewKey} projectId={connectionProjectId} sourceConnKey={work.connKey} sourceSchema={work.schema} />;
   }
   if (work.kind === 'structure') {
     return (
@@ -52,7 +53,7 @@ export function DatabaseEditorView({ tab }: { tab: OpenDatabaseTab }) {
   return (
     <QueryConsole
       key={viewKey}
-      projectId={tab.projectId}
+      projectId={connectionProjectId}
       connectionId={work.connectionId}
       connKey={work.connKey}
       suggestions={tab.suggestions}

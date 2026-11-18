@@ -116,6 +116,26 @@ describe('useWorkspaceStore — isolamento por projeto (P1)', () => {
     expect(useWorkspaceStore.getState().openFiles).toBe(ref);
   });
 
+  it('keeps a newer draft in its checkout when a pending save completes after a switch', () => {
+    const { setProject, openFile, setContent, markClean } = useWorkspaceStore.getState();
+    const path = 'src/index.ts';
+    setProject(101);
+    openFile(file(101, path));
+    setContent(101, path, 'newer main draft');
+    setProject(102, true);
+    openFile({ ...file(102, path), content: 'feature contents' });
+
+    markClean(101, path, 'updated mtime', 'previous save');
+    expect(useWorkspaceStore.getState().openFiles).toMatchObject([{ projectId: 102, content: 'feature contents', dirty: false }]);
+    setProject(101, true);
+    expect(useWorkspaceStore.getState().openFiles).toMatchObject([{
+      projectId: 101,
+      content: 'newer main draft',
+      dirty: true,
+      lastModified: 'updated mtime',
+    }]);
+  });
+
   it('regressão: closeFile(B, path) não fecha a aba homônima de A', () => {
     useWorkspaceStore.setState({
       activeProjectId: 1,

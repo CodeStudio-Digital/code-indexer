@@ -8,7 +8,7 @@
  * (the gear button in the header), not inline chips.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw, Settings2 } from 'lucide-react';
 import type { DetectedRunners } from '@mcp/api-bus';
@@ -24,9 +24,10 @@ import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 
 interface RunnersTabProps {
   projectId: number;
+  worktreePath?: string | null;
 }
 
-export function RunnersTab({ projectId }: RunnersTabProps) {
+export function RunnersTab({ projectId, worktreePath }: RunnersTabProps) {
   const { t } = useTranslation(['projects', 'common']);
   const dark = useIsDark();
   const [detected, setDetected] = useState<DetectedRunners | null>(null);
@@ -37,7 +38,7 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const allTasks = useRunningTasks((s) => s.tasks);
-  const tasks = tasksForProject(allTasks, projectId);
+  const tasks = useMemo(() => tasksForProject(allTasks, projectId, worktreePath), [allTasks, projectId, worktreePath]);
 
   useEffect(() => {
     let alive = true;
@@ -47,20 +48,27 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
     return () => { alive = false; };
   }, [projectId]);
 
+  const detection = useRef<AbortController | null>(null);
   const detect = useCallback(async () => {
+    detection.current?.abort();
+    const controller = new AbortController();
+    detection.current = controller;
     setLoading(true);
     setError(null);
     try {
-      setDetected(await apiCall<DetectedRunners>('runner.detect', { projectId }));
+      const result = await apiCall<DetectedRunners>('runner.detect', { projectId, worktreePath }, { signal: controller.signal });
+      if (!controller.signal.aborted) setDetected(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, worktreePath]);
 
   useEffect(() => {
+    setDetected(null);
     void detect();
+    return () => detection.current?.abort();
   }, [detect]);
 
   // Keep a sensible selection: if nothing selected, follow the newest run.
@@ -75,9 +83,14 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
   return (
     <div className="h-full flex min-h-0">
       <div className="w-80 shrink-0 border-r flex flex-col min-h-0 overflow-auto">
-        <div className="px-3 py-2 border-b flex items-center justify-between">
-          <span className="text-xs font-semibold">{t('runners.title')}</span>
-          <div className="flex items-center gap-2">
+        <div className="px-3 py-2 border-b flex items-center gap-2">
+          <span className="text-xs font-semibold shrink-0">{t('runners.title')}</span>
+          {worktreePath && (
+            <span className="min-w-0 truncate text-[11px] text-muted-foreground" title={worktreePath}>
+              {worktreePath.split(/[\\/]/).filter(Boolean).at(-1)}
+            </span>
+          )}
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={() => void detect()}
@@ -102,6 +115,7 @@ export function RunnersTab({ projectId }: RunnersTabProps) {
         <ActiveList tasks={tasks} selectedId={selectedId} onSelect={setSelectedId} />
         <DetectedList
           projectId={projectId}
+          worktreePath={worktreePath}
           detected={detected}
           loading={loading}
           error={error}

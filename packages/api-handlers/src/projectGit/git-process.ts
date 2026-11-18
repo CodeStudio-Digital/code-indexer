@@ -3,7 +3,7 @@ import type { GitRunResult } from '@mcp/api-bus';
 import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 
 export interface GitResult {
-  code: number; stdout: string; stderr: string; durationMs?: number;
+  code: number; stdout: string; stderr: string; durationMs?: number; processMs?: number;
   timedOut?: boolean; truncated?: boolean; errorCode?: GitRunResult['errorCode'];
 }
 

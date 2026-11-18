@@ -31,6 +31,7 @@ import {
  *   ToolSpec                         ↔ FunctionDeclaration
  */
 export class GeminiChatProvider implements ChatProvider {
+  readonly inferenceOnly = true; // Function declarations only; no hosted code/search tools.
   readonly name = 'gemini';
   model: string;
   private client: GoogleGenAI | null = null;

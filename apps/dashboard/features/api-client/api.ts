@@ -68,11 +68,27 @@ export const duplicateRequest = (p: number, rid: number) =>
   req<ApiRequest>(`${root(p)}/requests/${rid}/duplicate`, { method: 'POST' });
 export const reorderRequests = (p: number, cid: number, orderedIds: number[], folder: string | null) =>
   req<{ ok: true }>(`${root(p)}/collections/${cid}/reorder`, j({ orderedIds, folder }));
-export const sendRequest = (p: number, rid: number, envId?: number) =>
-  req<SendResponse>(`${root(p)}/requests/${rid}/send`, j({ envId }));
+async function manualSend(p: number, path: string, body: unknown, signal?: AbortSignal): Promise<SendResponse> {
+  if (!signal) return req<SendResponse>(root(p) + path, j(body));
+  signal.throwIfAborted();
+  const reservations = root(p) + '/sends';
+  const { id } = await req<{ id: string }>(reservations, { method: 'POST' });
+  const cancel = () => { void req(reservations + '/' + id, { method: 'DELETE', keepalive: true }).catch(() => {}); };
+  if (signal.aborted) { cancel(); signal.throwIfAborted(); }
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    return await req<SendResponse>(root(p) + path, {
+      ...j(body), signal, headers: { 'Content-Type': 'application/json', 'X-CodeStudio-Send-Id': id },
+    });
+  } finally {
+    signal.removeEventListener('abort', cancel);
+  }
+}
+export const sendRequest = (p: number, rid: number, envId?: number, signal?: AbortSignal) =>
+  manualSend(p, `/requests/${rid}/send`, { envId }, signal);
 /** Send an unsaved draft request (no DB row) — posts the full request fields. */
-export const sendAdhoc = (p: number, request: Partial<ApiRequest>, envId?: number) =>
-  req<SendResponse>(`${root(p)}/send-adhoc`, j({ request, envId }));
+export const sendAdhoc = (p: number, request: Partial<ApiRequest>, envId?: number, signal?: AbortSignal) =>
+  manualSend(p, '/send-adhoc', { request, envId }, signal);
 export const verifyRequest = (p: number, rid: number, expectedStatus: number, assert?: unknown) =>
   req<ApiRequest>(`${root(p)}/requests/${rid}/verify`, j({ expectedStatus, assert }));
 export const listRequestHistory = (p: number, rid: number, limit = 50) =>
@@ -101,6 +117,12 @@ export const importOpenApi = (p: number, specPath?: string) =>
   req<ImportResult>(`${root(p)}/collections/import-openapi`, j({ specPath: specPath || undefined }));
 export const importOpenApiContent = (p: number, content: string, filename?: string) =>
   req<ImportResult>(`${root(p)}/collections/import-openapi-content`, j({ content, filename }));
+export interface PostmanPreview {
+  name: string; requests: number; folders: number; variables: number; scripts: number; skipped: number; examples: number;
+  collectionId?: number;
+}
+export const importPostman = (p: number, content: string, importId: string, commit: boolean, createEnvironment = false) =>
+  req<PostmanPreview>(`${root(p)}/collections/import-postman`, j({ content, importId, commit, createEnvironment }));
 export const runCollection = (p: number, cid: number, opts: { envId?: number; includeMutating?: boolean }) =>
   req<RunReport>(`${root(p)}/collections/${cid}/run`, j(opts));
 export const listRuns = (p: number, cid: number) =>

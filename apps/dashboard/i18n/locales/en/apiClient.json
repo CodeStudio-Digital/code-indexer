@@ -1,4 +1,34 @@
 {
+  "postman": {
+    "title": "Import Postman collection",
+    "file": "Postman v2.1 collection file",
+    "requests_one": "{{count}} HTTP request",
+    "requests_other": "{{count}} HTTP requests",
+    "folders_one": "{{count}} folder",
+    "folders_other": "{{count}} folders",
+    "omitted": "Omitted items ·",
+    "scripts_one": "{{count}} script",
+    "scripts_other": "{{count}} scripts",
+    "examples_one": "{{count}} example",
+    "examples_other": "{{count}} examples",
+    "skipped_one": "{{count}} unsupported request",
+    "skipped_other": "{{count}} unsupported requests",
+    "env_one": "Create an environment with the collection variable",
+    "env_other": "Create an environment with the {{count}} collection variables",
+    "create": "Create collection",
+    "limit": "Choose a file up to 2 MiB.",
+    "failed": "The collection could not be created."
+  },
+  "compare": {
+    "before": "Previous",
+    "after": "Current",
+    "field": "Field",
+    "duration": "Duration",
+    "size": "Size",
+    "limited": "Partial comparison. A body was truncated or reached the comparison limit.",
+    "empty": "Send this request twice to compare responses in this tab.",
+    "same": "The response bodies match."
+  },
   "ai": {
     "askAi": "Ask AI",
     "close": "Close",
@@ -284,6 +314,7 @@
     "writeWarning": "⚠ will hit write endpoints"
   },
   "request": {
+    "stop": "Stop",
     "clickToRename": "Click to rename",
     "discardDraft": "Discard draft",
     "emptyState": "Select or create a request.",
@@ -302,6 +333,7 @@
     "tabScripts": "Scripts"
   },
   "response": {
+    "cancelled": "Request stopped. The server may already have processed it.",
     "emptyState": "Send a request to see the response.",
     "markVerifiedTitle": "Pin this status as the regression baseline",
     "saveExample": "Save example",
@@ -410,6 +442,8 @@
     "url": "URL"
   },
   "toolbar": {
+    "compare": "Compare",
+    "importCurl": "Import cURL",
     "collectionNamePlaceholder": "Collection name",
     "collections": "Collections",
     "discardConfirmBody": "Your edits to the Untitled request will be lost.",

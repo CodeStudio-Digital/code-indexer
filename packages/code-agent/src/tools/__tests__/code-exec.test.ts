@@ -1068,6 +1068,8 @@ describe('code_exec metadata safety and scheduling', () => {
       expect(editInvocations).toBe(2);
       expect(siblingSettled).toBe(true);
       expect(result.content).toContain('output_id:"abc123def456"');
+      expect(result.content).toContain('sibling-read-result');
+      expect(result.content).not.toContain('edit:1');
       expect(put).toHaveBeenCalledWith(expect.stringContaining('sibling-read-result'));
       expect(result.content).toContain('nested call summary');
       expect(result.content).toContain('succeeded=3');

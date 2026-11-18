@@ -156,6 +156,7 @@ import {
   capFor,
   type ToolOutputCapLevel,
 } from './runner/output-caps.js';
+import { batchBudgetUnits } from './batch-return-format.js';
 import { isEssentialCompanyTool } from './runner/company-essentials.js';
 
 // Assembly modules — extracted in Commit 2 of the BT refactor. The legacy
@@ -295,7 +296,7 @@ function normalizeMessageForCacheWithPreservedIds(
   cap: number = PUSH_TIME_CAP,
   preservedToolUseIds?: ReadonlySet<string>,
   toolNamesByUseId?: ReadonlyMap<string, string>,
-  resolveOutput?: (toolName: string) => { policy: ResolvedToolOutputPolicy; cap: number },
+  resolveOutput?: (toolName: string, content?: string) => { policy: ResolvedToolOutputPolicy; cap: number },
   store?: { put(content: string): string | null },
 ): AgentMessage {
   if (m.role !== 'tool' && m.role !== 'user') return m;
@@ -303,7 +304,9 @@ function normalizeMessageForCacheWithPreservedIds(
   const content = m.content.map((b): ContentBlock => {
     if (b.type !== 'tool_result') return b;
     const toolName = toolNamesByUseId?.get(b.tool_use_id);
-    const resolved = toolName && resolveOutput ? resolveOutput(toolName) : undefined;
+    // Content-derived budgets (batched code_exec blocks) must resolve the same
+    // cap on resume as they did live, or the cached prefix would change.
+    const resolved = toolName && resolveOutput ? resolveOutput(toolName, b.content) : undefined;
     const effectiveCap = resolved?.cap ?? cap;
     if (b.content.length <= effectiveCap) return b;
     const policy = resolved?.policy ?? resolveRegisteredToolOutputPolicy(
@@ -350,7 +353,7 @@ export function normalizeMessagesForCache(
   messages: AgentMessage[],
   cap: number = PUSH_TIME_CAP,
   preserveToolOutputNames?: ReadonlySet<string>,
-  resolveOutput?: (toolName: string) => { policy: ResolvedToolOutputPolicy; cap: number },
+  resolveOutput?: (toolName: string, content?: string) => { policy: ResolvedToolOutputPolicy; cap: number },
   store?: { put(content: string): string | null },
 ): AgentMessage[] {
   if ((!preserveToolOutputNames || preserveToolOutputNames.size === 0) && !resolveOutput) {
@@ -626,8 +629,10 @@ export class CoderRunner extends EventEmitter {
 
   /** Exact catalog sent on the latest provider turn (after cap + relevance). */
   public visibleToolNames: ReadonlySet<string> | null = null;
+  public authorizedToolNames: ReadonlySet<string> | null = null;
   public projectionReceipt: import('./tool-projection.js').ToolProjectionReceipt | null = null;
   public requestedToolNames = new Set<string>();
+  public readonly stableToolCatalog = true;
 
   /**
    * Last `response.id` returned by the Responses API (ChatGPT/Codex with
@@ -752,7 +757,7 @@ export class CoderRunner extends EventEmitter {
       opts.initialMessages ?? [],
       this.effectivePushTimeCap,
       this.authoritativeToolOutputNames,
-      (toolName) => this.resolveToolOutputCap(toolName),
+      (toolName, content) => this.resolveToolOutputCap(toolName, batchBudgetUnits(toolName, content)),
       this.opts.toolContext.toolOutputStore,
     );
     // back-reference so native interaction tools can pause the loop
@@ -825,6 +830,9 @@ export class CoderRunner extends EventEmitter {
    * rebuilt at the start of each turn from the registry + activeTiers.
    */
   promoteTier(tier: ToolTier): void {
+    // Discovery is not an authorization or schema mutation. The registered
+    // non-interactive catalog is already reachable through code_exec.
+    if (this.stableToolCatalog) return;
     if (!this.activeTiers) return; // no filtering → nothing to promote
     if (this.activeTiers.has(tier)) return;
     this.activeTiers.add(tier);
@@ -1267,7 +1275,8 @@ export class CoderRunner extends EventEmitter {
    */
   /** Discovery reports static exclusions; argument-dependent authority remains at dispatch. */
   discoveryState(name: string): { authorization: 'blocked' | 'requires_dispatch_validation'; visible: boolean; reason?: string } {
-    const blocked = this.opts.globalDisabledTools?.has(name) || this.opts.sessionDisabledTools?.has(name)
+    const blocked = (this.authorizedToolNames !== null && !this.authorizedToolNames.has(name))
+      || this.opts.globalDisabledTools?.has(name) || this.opts.sessionDisabledTools?.has(name)
       || (name === 'submit_plan' && (!this.opts.planMode || this.opts.specMode));
     return { authorization: blocked ? 'blocked' : 'requires_dispatch_validation',
       visible: this.visibleToolNames?.has(name) ?? false,
@@ -1277,6 +1286,7 @@ export class CoderRunner extends EventEmitter {
   promoteTool(name: string): string[] {
     if (this.discoveryState(name).authorization === 'blocked') return [];
     this.requestedToolNames.add(name);
+    if (this.stableToolCatalog) return [];
     const requiredPinnedTools = new Set(this.opts.requiredPinnedTools ?? []);
     const alreadyPinned = this.pinnedTools.has(name);
     const evicted = promoteDynamicToolPin(
@@ -1649,7 +1659,7 @@ export class CoderRunner extends EventEmitter {
           });
         },
         reduceToolResult: (toolName, content, meta) => {
-          const { policy, cap } = this.resolveToolOutputCap(toolName);
+          const { policy, cap } = this.resolveToolOutputCap(toolName, batchBudgetUnits(toolName, content));
           if (policy.reducer === 'none') {
             return {
               content,
@@ -2040,7 +2050,10 @@ export class CoderRunner extends EventEmitter {
     reductionReport?: ReductionReport;
     sourceTruncations?: import('@mcp/code-agent/core/tool.js').ToolSourceTruncation[];
   }): { content: string; truncated?: boolean; originalSize?: number; outputId?: string; inlineCap: number; reductionReport: ReductionReport } {
-    const { policy, cap } = this.resolveToolOutputCap(args.toolName);
+    const { policy, cap } = this.resolveToolOutputCap(
+      args.toolName,
+      batchBudgetUnits(args.toolName, args.shapedContent),
+    );
     return finalizeToolOutput({
       toolName: args.toolName,
       rawContent: args.rawContent,
@@ -2054,7 +2067,13 @@ export class CoderRunner extends EventEmitter {
     });
   }
 
-  private resolveToolOutputCap(toolName: string): {
+  /**
+   * `budgetUnits` > 1 marks a block that carries several tool results (a
+   * batched code_exec return): it gets that many single-result budgets, the
+   * same total the calls would receive as separate top-level results, still
+   * bounded by `maxInlineChars` and the context-relative ceiling.
+   */
+  private resolveToolOutputCap(toolName: string, budgetUnits = 1): {
     policy: ResolvedToolOutputPolicy;
     cap: number;
   } {
@@ -2070,7 +2089,7 @@ export class CoderRunner extends EventEmitter {
     );
     let targetCap = policy.mode === 'authoritative'
       ? Math.max(this.effectivePushTimeCap, this.opts.preservedToolOutputCap ?? PRESERVED_TOOL_OUTPUT_CAP)
-      : this.effectivePushTimeCap;
+      : this.effectivePushTimeCap * Math.max(1, Math.floor(budgetUnits));
     if (policy.maxInlineChars !== undefined) {
       // `maxInlineChars` is a ceiling, including for authoritative tools. The
       // latter start from an expanded default budget, but an explicit smaller

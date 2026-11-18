@@ -4,12 +4,13 @@
  * telemetry surfaced (empty path, ENOENT), the slice/footer behavior and the
  * force escape hatch.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { fsTools } from '../fs.js';
+import { LocalFilesystemAdapter } from '../../ports/filesystem-port.js';
 
 const readFile = fsTools.find((t) => t.name === 'read_file')!;
 
@@ -57,6 +58,26 @@ describe('read_file — error strings (telemetry cases)', () => {
     const res = await run(readFile, { path: 'nope/missing.md' });
     expect(res.isError).toBe(true);
     expect(res.content).toContain('File nope/missing.md not found');
+  });
+
+  it('returns real sibling names on a missing path without reading their contents', async () => {
+    mkdirSync(join(root, 'source'));
+    writeFileSync(join(root, 'source/body.ts'), 'content must not be read for a hint');
+    writeFileSync(join(root, 'source/timeout.ts'), 'other content');
+    const res = await run(readFile, { path: 'source/response-size.ts' });
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('"body.ts", "timeout.ts"');
+    expect(res.content).not.toContain('content must not be read');
+  });
+
+  it('preserves permission errors and does not enumerate a denied directory', async () => {
+    const fs = new LocalFilesystemAdapter();
+    vi.spyOn(fs, 'readFile').mockRejectedValue(Object.assign(new Error('access denied'), { code: 'EACCES' }));
+    const enumerate = vi.spyOn(fs, 'iterateDirectory');
+    const res = await readFile.handler({ path: 'private.ts' }, { ...ctx, ports: { fs } } as ToolContext);
+    expect(res.content).toContain('Could not read private.ts: access denied');
+    expect(res.content).not.toContain('not found');
+    expect(enumerate).not.toHaveBeenCalled();
   });
 
   it('path traversal outside the root is refused', async () => {

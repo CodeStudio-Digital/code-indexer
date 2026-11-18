@@ -52,6 +52,7 @@ test('confirmed deletion clears the selected chat, attachments and draft; errors
     return route.fulfill({ json: { active: [] } });
   });
   await page.goto('/e2e/fixtures/session-lifecycle.html');
+  await expect(page.getByRole('button', { name: 'Iniciar execução' })).toBeVisible();
   await page.evaluate(() => (window as any).lifecycle.stage());
   await page.getByRole('button', { name: 'Iniciar execução' }).click();
   await expect(page.locator('main')).toContainText('transmitindo');

@@ -3,12 +3,13 @@
  * progressive matcher's CRLF tolerance, the empty/not-found/non-unique error
  * contracts (telemetry: "old_string cannot be empty"), and replace_all.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import { fsTools } from '../fs.js';
+import { LocalFilesystemAdapter } from '@mcp/code-agent/ports/filesystem-port.js';
+import { fsTools, multiEdit } from '../fs.js';
 
 const editFile = fsTools.find((t) => t.name === 'edit_file')!;
 
@@ -55,6 +56,111 @@ describe('edit_file — replacements', () => {
     expect(res.isError).toBeFalsy();
     expect(res.content).toContain('(3 replacements)');
     expect(readBack('c.ts')).not.toContain('foo();');
+  });
+});
+
+describe('edit_file — current TypeScript context', () => {
+  const oldBlock = [
+    'async function receive(id: string) {',
+    '  const row = await query<{status:string;connection_id}>(id);',
+  ].join('\n');
+  const newBlock = [
+    'async function receive(id: string) {',
+    '  const started = Date.now();',
+    '  const row = await query<{status:string;connection_id;created_at:number}>(id);',
+    '  return started - row.created_at;',
+  ].join('\n');
+  const actualBlock = oldBlock.replace('connection_id}', 'connection_id:string}');
+  const expectedBlock = newBlock.replace('connection_id;', 'connection_id:string;');
+
+  it.each(['\n', '\r\n'])('restores the type omitted from both snippets with line ending %j', async (eol) => {
+    const prefix = 'const untouched = "two  spaces";  \n';
+    const suffix = '\n}\n// trailing  spaces  \n';
+    const lineEndings = (value: string) => value.replaceAll('\n', eol);
+    write('worker.ts', lineEndings(prefix + actualBlock + suffix));
+    const res = await editFile.handler(
+      { path: 'worker.ts', old_string: oldBlock, new_string: newBlock },
+      ctx,
+    );
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('preserved TypeScript property type');
+    expect(readBack('worker.ts')).toBe(lineEndings(prefix + expectedBlock + suffix));
+  });
+
+  it('leaves the file alone when two typed blocks match the omission', async () => {
+    const original = `${actualBlock}\n}\n${actualBlock}\n}\n`;
+    write('worker.ts', original);
+    const res = await editFile.handler(
+      { path: 'worker.ts', old_string: oldBlock, new_string: newBlock },
+      ctx,
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('not unique');
+    expect(readBack('worker.ts')).toBe(original);
+  });
+
+  it('does not use matching outer lines to overwrite changed code in the middle', async () => {
+    const original = `${actualBlock.replace('(id);', '(currentId);')}\n  return row;\n}\n`;
+    write('worker.ts', original);
+    const res = await editFile.handler(
+      { path: 'worker.ts', old_string: `${oldBlock}\n  return row;\n}`, new_string: `${newBlock}\n}` },
+      ctx,
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('connection_id:string');
+    expect(res.content).toContain('currentId');
+    expect(readBack('worker.ts')).toBe(original);
+  });
+
+  it('does not infer an old type when the replacement explicitly changes it', async () => {
+    const original = `${actualBlock}\n}\n`;
+    write('worker.ts', original);
+    const res = await editFile.handler(
+      { path: 'worker.ts', old_string: oldBlock, new_string: newBlock.replace('connection_id;', 'connection_id:number;') },
+      ctx,
+    );
+    expect(res.isError).toBe(true);
+    expect(readBack('worker.ts')).toBe(original);
+  });
+
+  it('rechecks the source before writing a recovered edit', async () => {
+    const original = `${actualBlock}\n}\n`;
+    const concurrent = `${original}// added in editor\n`;
+    write('worker.ts', original);
+    const fs = new LocalFilesystemAdapter();
+    const writeFile = vi.spyOn(fs, 'writeFile');
+    vi.spyOn(fs, 'readFile').mockResolvedValueOnce(original).mockImplementationOnce(async () => {
+      write('worker.ts', concurrent);
+      return concurrent;
+    });
+    const res = await editFile.handler(
+      { path: 'worker.ts', old_string: oldBlock, new_string: newBlock },
+      { ...ctx, ports: { fs } },
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('changed while the edit was being prepared');
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(readBack('worker.ts')).toBe(concurrent);
+  });
+
+  it('shares recovery with multi_edit and commits only when the whole batch matches', async () => {
+    const original = `${actualBlock}\n}\n`;
+    write('worker.ts', original);
+    const recovered = { old_string: oldBlock, new_string: newBlock };
+    const failed = await multiEdit.handler({
+      path: 'worker.ts',
+      edits: [recovered, { old_string: 'not present', new_string: 'unused' }],
+    }, ctx);
+    expect(failed.isError).toBe(true);
+    expect(failed.content).toContain('#1: would succeed [preserved TypeScript property type');
+    expect(readBack('worker.ts')).toBe(original);
+
+    const result = await multiEdit.handler({
+      path: 'worker.ts',
+      edits: [recovered, { old_string: 'return started - row.created_at;', new_string: 'return row.created_at;' }],
+    }, ctx);
+    expect(result.isError).toBeFalsy();
+    expect(readBack('worker.ts')).toBe(`${expectedBlock.replace('started - row.created_at', 'row.created_at')}\n}\n`);
   });
 });
 

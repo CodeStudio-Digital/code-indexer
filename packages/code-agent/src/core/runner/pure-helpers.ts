@@ -3,6 +3,7 @@ import type { ReductionReport, ReductionStage } from '@mcp/code-agent/core/smart
 import type { ResolvedToolOutputPolicy } from '@mcp/code-agent/core/tool-output-policy.js';
 import type { ToolSourceTruncation } from '@mcp/code-agent/core/tool.js';
 import { stripUnpairedSurrogates } from '@mcp/code-agent/core/text-boundaries.js';
+import { fitBatchReturn } from '@mcp/code-agent/core/batch-return-format.js';
 
 /**
  * Coarse character count over a transcript. Adds a fixed per-block
@@ -130,16 +131,22 @@ export function capToolContent(
       const room = Math.max(0, safeCap - fixed.length);
       const returnPayload = content.slice(returnAt + returnMarker.length);
       const payloadMarker = '\n[…return middle elided…]\n';
+      // Sectioned batch returns keep every value visible (fair share per
+      // value) instead of dropping whole middle values.
+      const fairShare = returnPayload.length > room ? fitBatchReturn(returnPayload, room) : null;
       const payload = returnPayload.length <= room
         ? returnPayload
-        : room <= payloadMarker.length
-          ? returnPayload.slice(0, room)
-          : returnPayload.slice(0, Math.ceil((room - payloadMarker.length) * 0.55))
-            + payloadMarker
-            + returnPayload.slice(-Math.floor((room - payloadMarker.length) * 0.45));
+        : fairShare !== null
+          ? fairShare
+          : room <= payloadMarker.length
+            ? returnPayload.slice(0, room)
+            : returnPayload.slice(0, Math.ceil((room - payloadMarker.length) * 0.55))
+              + payloadMarker
+              + returnPayload.slice(-Math.floor((room - payloadMarker.length) * 0.45));
+      const returnParts = fairShare !== null ? ['return', 'every_return_value'] : ['return', 'return_head', 'return_tail'];
       shaped = {
         value: (fixed + payload).slice(0, safeCap),
-        preserved: errorBlock ? ['header', 'errors', 'return', 'return_head', 'return_tail'] : ['header', 'return', 'return_head', 'return_tail'],
+        preserved: errorBlock ? ['header', 'errors', ...returnParts] : ['header', ...returnParts],
       };
     } else {
       shaped = fitHeadTail(content, safeCap);

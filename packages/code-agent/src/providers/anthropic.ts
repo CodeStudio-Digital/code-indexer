@@ -296,6 +296,7 @@ export function buildAnthropicSystemBlocks(
  * messages.create() schema and re-emits stream events as ChatDelta.
  */
 export class AnthropicChatProvider implements ChatProvider {
+  readonly inferenceOnly = true; // This wire registers only client-executed ToolSpec functions.
   readonly name: string;
   model: string;
   private client: Anthropic;

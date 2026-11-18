@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'chokidar';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 /**
@@ -29,23 +29,19 @@ export interface GitMetaWatcherEvents {
 
 /** `<root>/.git` is usually a dir; for worktrees/submodules it's a file
  *  pointing at the real gitdir (`gitdir: …`). Returns null when there's no repo.
- *  Worktree limitation: we watch the per-worktree gitdir (which holds HEAD, so
- *  branch switches — the primary signal — still fire), but its refs/ + packed-refs
- *  live in the shared common dir, so ref-only updates (a commit/fetch without a
- *  HEAD change) aren't detected for worktrees; those self-heal on the next
- *  HEAD-touching event or the file-tree's periodic git-status poll. */
-function resolveDotGit(rootPath: string): string | null {
+ *  Linked worktrees have their own HEAD and share the refs in commondir. */
+async function resolveDotGit(rootPath: string): Promise<string | null> {
   const dotGit = join(rootPath, '.git');
   let st;
   try {
-    st = statSync(dotGit);
+    st = await fs.stat(dotGit);
   } catch {
     return null;
   }
   if (st.isDirectory()) return dotGit;
   if (st.isFile()) {
     try {
-      const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, 'utf8'));
+      const m = /^gitdir:\s*(.+)$/m.exec(await fs.readFile(dotGit, 'utf8'));
       return m ? resolve(rootPath, m[1].trim()) : null;
     } catch {
       return null;
@@ -54,10 +50,10 @@ function resolveDotGit(rootPath: string): string | null {
   return null;
 }
 
-function resolveGitContext(rootPath: string): { repoRoot: string; gitDir: string } | null {
+async function resolveGitContext(rootPath: string): Promise<{ repoRoot: string; gitDir: string } | null> {
   let current = resolve(rootPath);
   while (true) {
-    const gitDir = resolveDotGit(current);
+    const gitDir = await resolveDotGit(current);
     if (gitDir) return { repoRoot: current, gitDir };
     const parent = dirname(current);
     if (parent === current) return null;
@@ -65,34 +61,37 @@ function resolveGitContext(rootPath: string): { repoRoot: string; gitDir: string
   }
 }
 
-function resolveCommonGitDir(gitDir: string): string | null {
+async function resolveCommonGitDir(gitDir: string): Promise<string | null> {
   try {
-    const rel = readFileSync(join(gitDir, 'commondir'), 'utf8').trim();
+    const rel = (await fs.readFile(join(gitDir, 'commondir'), 'utf8')).trim();
     return rel ? resolve(gitDir, rel) : null;
   } catch {
     return null;
   }
 }
 
-const NESTED_DENY = new Set(['.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.cache', 'vendor', 'target']);
+const NESTED_DENY = new Set(['.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.cache', 'vendor', 'target', '.mcp-indexer', '.tmp', 'Library', 'Temp', 'obj']);
 
-function resolveNestedGitDirs(projectRoot: string): string[] {
+async function resolveNestedGitDirs(projectRoot: string, active: () => boolean): Promise<string[]> {
   const out: string[] = [];
   const queue: Array<{ dir: string; depth: number }> = [{ dir: projectRoot, depth: 0 }];
-  let visited = 0;
-  while (queue.length > 0 && visited < 1_000) {
-    const item = queue.shift()!;
-    visited += 1;
-    let entries: import('node:fs').Dirent[];
-    try { entries = readdirSync(item.dir, { withFileTypes: true }); } catch { continue; }
-    if (item.dir !== projectRoot && entries.some((entry) => entry.name === '.git')) {
-      const gitDir = resolveDotGit(item.dir);
-      if (gitDir) out.push(gitDir);
-      continue;
-    }
-    if (item.depth >= 3) continue;
-    for (const entry of entries) {
-      if (entry.isDirectory() && !NESTED_DENY.has(entry.name)) queue.push({ dir: join(item.dir, entry.name), depth: item.depth + 1 });
+  for (let cursor = 0; cursor < queue.length && active();) {
+    const batch = queue.slice(cursor, cursor + 8);
+    cursor += batch.length;
+    const listings = await Promise.all(batch.map(({ dir }) => fs.readdir(dir, { withFileTypes: true }).catch(() => [])));
+    for (const [i, { dir, depth }] of batch.entries()) {
+      if (!active()) return [];
+      const entries = listings[i]!;
+      if (dir !== projectRoot && entries.some(entry => entry.name === '.git')) {
+        const gitDir = await resolveDotGit(dir);
+        if (gitDir) out.push(gitDir);
+        continue;
+      }
+      if (depth >= 3) continue;
+      for (const entry of entries) {
+        if (queue.length >= 1_000) break;
+        if (entry.isDirectory() && !NESTED_DENY.has(entry.name)) queue.push({ dir: join(dir, entry.name), depth: depth + 1 });
+      }
     }
   }
   return out;
@@ -103,20 +102,20 @@ function resolveNestedGitDirs(projectRoot: string): string[] {
  *  points into `<main>/.git/modules/<name>`). Pure fs — no git spawn. Lets the
  *  watcher catch a branch switch / commit INSIDE a submodule, which the parent's
  *  gitdir never reflects (its `.git/modules/**` is high-churn noise we prune). */
-function resolveSubmoduleGitDirs(rootPath: string): string[] {
+async function resolveSubmoduleGitDirs(rootPath: string, active: () => boolean): Promise<string[]> {
   let text: string;
   try {
-    text = readFileSync(join(rootPath, '.gitmodules'), 'utf8');
+    text = await fs.readFile(join(rootPath, '.gitmodules'), 'utf8');
   } catch {
     return [];
   }
   const out: string[] = [];
   const re = /^\s*path\s*=\s*(.+?)\s*$/gm;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while (active() && (m = re.exec(text)) !== null) {
     const sub = m[1].trim();
     if (!sub) continue;
-    const gd = resolveDotGit(join(rootPath, sub));
+    const gd = await resolveDotGit(join(rootPath, sub));
     if (gd) out.push(gd);
   }
   return out;
@@ -136,9 +135,9 @@ function isUnderOrEq(parent: string, child: string): boolean {
  *  ambiguous {branch:null, detached:false} return means "couldn't determine"
  *  (unreadable mid-write / empty) — startWatching falls back to the last known
  *  state for that case so a transient read never emits a false "detached". */
-function readHead(gitDir: string): { branch: string | null; detached: boolean } {
+async function readHead(gitDir: string): Promise<{ branch: string | null; detached: boolean }> {
   try {
-    const head = readFileSync(join(gitDir, 'HEAD'), 'utf8').trim();
+    const head = (await fs.readFile(join(gitDir, 'HEAD'), 'utf8')).trim();
     const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
     if (ref) return { branch: ref[1].trim(), detached: false };
     if (/^[0-9a-f]{7,40}$/i.test(head)) return { branch: null, detached: true };
@@ -164,7 +163,7 @@ function isNoise(absPath: string, gitDir: string): boolean {
   // cookie files, which it rewrites constantly — prune so we never open handles on it.
   return (
     top === 'objects' || top === 'logs' || top === 'lfs' || top === 'hooks' ||
-    top === 'info' || top === 'modules' || top === 'fsmonitor--daemon'
+    top === 'info' || top === 'modules' || top === 'worktrees' || top === 'fsmonitor--daemon'
   );
 }
 
@@ -201,12 +200,13 @@ export function isWatchIgnored(gitDirs: string[], p: string): boolean {
 
 const DEBOUNCE_MS = 250;
 
+interface Subscription {
+  watcher?: FSWatcher;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 export class GitMetaWatcher {
-  private watchers = new Map<number, FSWatcher>();
-  private pending = new Map<number, Set<GitMetaChange>>();
-  private timers = new Map<number, ReturnType<typeof setTimeout>>();
-  /** Last successfully-determined HEAD per project — used to mask transient reads. */
-  private lastHead = new Map<number, { branch: string | null; detached: boolean }>();
+  private watchers = new Map<number, Subscription>();
 
   /** Arm the watcher for one project. No-op when the project isn't a git repo.
    *  Watches the main gitdir PLUS each initialized submodule's gitdir, so a
@@ -214,22 +214,27 @@ export class GitMetaWatcher {
    *  git revision → editor change markers re-fetch their submodule baseline). */
   startWatching(projectId: number, rootPath: string, events: GitMetaWatcherEvents): void {
     if (this.watchers.has(projectId)) return;
-    const context = resolveGitContext(rootPath);
-    if (!context) return;
-    const { repoRoot, gitDir: mainGitDir } = context;
-    // [main, ...submodule gitdirs]. Each path's owning gitdir is the DEEPEST
-    // match (a submodule gitdir lives under the main one), so its HEAD/refs are
-    // classified against the right root while its object DB is still pruned.
-    const gitDirs = Array.from(new Set([
-      mainGitDir,
-      ...(resolveCommonGitDir(mainGitDir) ? [resolveCommonGitDir(mainGitDir)!] : []),
-      ...resolveSubmoduleGitDirs(repoRoot),
-      ...resolveNestedGitDirs(rootPath),
-    ]));
-    this.pending.set(projectId, new Set());
-    // Baseline for the transient-read fallback above (main repo's HEAD).
-    this.lastHead.set(projectId, readHead(mainGitDir));
+    const subscription: Subscription = {};
+    this.watchers.set(projectId, subscription);
+    const active = () => this.watchers.get(projectId) === subscription;
+    void this.arm(rootPath, events, subscription, active).finally(() => {
+      if (active() && !subscription.watcher) this.watchers.delete(projectId);
+    }).catch(error => {
+      if (active()) void this.stopWatching(projectId);
+      console.warn('[git-meta] Could not watch repository metadata:', error);
+    });
+  }
 
+  private async arm(rootPath: string, events: GitMetaWatcherEvents, subscription: Subscription, active: () => boolean): Promise<void> {
+    const context = await resolveGitContext(rootPath);
+    if (!context || !active()) return;
+    const { repoRoot, gitDir: mainGitDir } = context;
+    const [common, initialHead] = await Promise.all([resolveCommonGitDir(mainGitDir), readHead(mainGitDir)]);
+    if (!active()) return;
+    const gitDirs = [...new Set(common ? [mainGitDir, common] : [mainGitDir])];
+    let lastHead = initialHead;
+    let publishing = Promise.resolve();
+    const pending = new Set<GitMetaChange>();
     const watcher = watch(gitDirs, {
       persistent: true,
       ignoreInitial: true,
@@ -240,53 +245,52 @@ export class GitMetaWatcher {
     });
 
     const onEvent = (filePath: string) => {
+      if (!active()) return;
       const gd = ownerGitDir(gitDirs, filePath);
       if (!gd) return;
       const kind = classify(filePath, gd);
       if (!kind) return;
-      this.pending.get(projectId)!.add(kind);
-      const existing = this.timers.get(projectId);
-      if (existing) clearTimeout(existing);
+      if (gd === common && gd !== mainGitDir && kind !== 'ref') return;
+      pending.add(kind);
+      clearTimeout(subscription.timer);
       // Coalesce: a checkout touches HEAD (+ refs) in a burst — fire once.
-      const timer = setTimeout(() => {
-        const set = this.pending.get(projectId);
-        if (!set || set.size === 0) return;
-        const changed = Array.from(set);
-        set.clear();
-        // Branch identity is always the MAIN repo's HEAD; a submodule-only change
-        // keeps it unchanged but still emits (non-seed → the UI bumps gitRev).
-        let { branch, detached } = readHead(mainGitDir);
-        // Ambiguous read (mid-write / unreadable) → keep the last known HEAD so
-        // we don't emit a false "detached" branch:null that the UI would toast.
-        if (branch === null && !detached) {
-          const last = this.lastHead.get(projectId);
-          if (last) ({ branch, detached } = last);
-        }
-        this.lastHead.set(projectId, { branch, detached });
-        void events.onChange({ branch, detached, changed });
+      subscription.timer = setTimeout(() => {
+        const changed = [...pending];
+        pending.clear();
+        publishing = publishing.then(async () => {
+          if (!active()) return;
+          const head = await readHead(mainGitDir);
+          if (!active()) return;
+          if (head.branch !== null || head.detached) lastHead = head;
+          await events.onChange({ ...lastHead, changed });
+        }).catch(error => console.warn('[git-meta] Could not publish a metadata change:', error));
       }, DEBOUNCE_MS);
-      this.timers.set(projectId, timer);
     };
 
     watcher.on('add', onEvent);
     watcher.on('change', onEvent);
     watcher.on('unlink', onEvent);
-    this.watchers.set(projectId, watcher);
+    subscription.watcher = watcher;
+    const add = (dirs: string[]) => {
+      if (!active()) return;
+      const additions = [...new Set(dirs)].filter(dir => !gitDirs.includes(dir));
+      if (!additions.length) return;
+      gitDirs.push(...additions);
+      watcher.add(additions);
+    };
+    // The selected checkout is already watched while slow sibling directories
+    // are inspected. A retired subscription cannot attach handles to its successor.
+    await Promise.all([
+      resolveSubmoduleGitDirs(repoRoot, active).then(add),
+      resolveNestedGitDirs(rootPath, active).then(add),
+    ]);
   }
 
   async stopWatching(projectId: number): Promise<void> {
-    const watcher = this.watchers.get(projectId);
-    if (watcher) {
-      await watcher.close();
-      this.watchers.delete(projectId);
-    }
-    const timer = this.timers.get(projectId);
-    if (timer) {
-      clearTimeout(timer);
-      this.timers.delete(projectId);
-    }
-    this.pending.delete(projectId);
-    this.lastHead.delete(projectId);
+    const subscription = this.watchers.get(projectId);
+    this.watchers.delete(projectId);
+    clearTimeout(subscription?.timer);
+    await subscription?.watcher?.close();
   }
 
   async stopAll(): Promise<void> {
@@ -299,10 +303,10 @@ export class GitMetaWatcher {
 
   /** Current branch snapshot (changed:[]) — used to seed a new subscriber so it
    *  can tell a real switch from its first frame. Null when not a git repo. */
-  readCurrent(rootPath: string): GitMetaEvent | null {
-    const context = resolveGitContext(rootPath);
+  async readCurrent(rootPath: string): Promise<GitMetaEvent | null> {
+    const context = await resolveGitContext(rootPath);
     if (!context) return null;
-    const { branch, detached } = readHead(context.gitDir);
+    const { branch, detached } = await readHead(context.gitDir);
     return { branch, detached, changed: [] };
   }
 }

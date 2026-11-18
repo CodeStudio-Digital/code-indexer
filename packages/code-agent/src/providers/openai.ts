@@ -10,6 +10,10 @@ import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapte
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 
 export class OpenAIChatProvider implements ChatProvider {
+  get inferenceOnly(): boolean {
+    // Declarative gateways may inject server-managed plugins/tools.
+    return !this.bodyInject && !this.bodyRemove;
+  }
   readonly toolLimits: ChatProvider['toolLimits'];
   readonly name: string;
   model: string;

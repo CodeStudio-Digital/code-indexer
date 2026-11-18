@@ -1,6 +1,7 @@
 import type { VerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
 import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import { isPlainDocumentationPath, validationTargetsDocumentation } from '@mcp/code-agent/core/documentation-write.js';
 import type { RunContext } from '../machine/types.js';
 
 export type VerificationReadinessStatus =
@@ -29,11 +30,14 @@ function currentRunEntries(ctx: RunContext): ToolCallLedgerEntry[] {
   return ctx.opts.toolContext.toolCallLedger?.snapshot(ctx.verification.ledgerStartSeq) ?? [];
 }
 
-function isWriteEntry(ctx: RunContext, entry: ToolCallLedgerEntry): boolean {
+function isWriteEntry(ctx: RunContext, entry: ToolCallLedgerEntry, checksDocumentation: boolean): boolean {
   if (entry.outcome !== 'success') return false;
   // Shell metadata is conservatively mutating even for test invocations and
   // empty polls. Their own verification receipts are not subsequent edits.
   if (entry.validationSignal) return false;
+  if (entry.verificationObservation) return false;
+  if (entry.documentationOnly && !checksDocumentation) return false;
+  if (entry.executionClass === 'read' && entry.mutates === false) return false;
   if (entry.executionClass === 'write') return true;
   const tool = ctx.opts.registry.get?.(entry.name);
   if (!tool) return false;
@@ -69,8 +73,10 @@ function persistedReadiness(
     return { ...base, status: 'stale' };
   }
   if (persisted.lastVerify.exitCode == null) return { ...base, status: 'ambiguous' };
-  if (persisted.filesEditedAfter.length > 0) return { ...base, status: 'stale' };
-  if ((persisted.filesEditedAtSameTime?.length ?? 0) > 0) return { ...base, status: 'ambiguous' };
+  const affectsCheck = (file: string) => persisted.lastVerify!.includesDocumentation
+    || validationTargetsDocumentation(persisted.lastVerify!.command) || !isPlainDocumentationPath(file);
+  if (persisted.filesEditedAfter.some(affectsCheck)) return { ...base, status: 'stale' };
+  if (persisted.filesEditedAtSameTime?.some(affectsCheck)) return { ...base, status: 'ambiguous' };
   return { ...base, status: 'fresh' };
 }
 
@@ -78,8 +84,9 @@ export async function evaluateVerificationReadinessAtFinish(
   ctx: RunContext,
 ): Promise<VerificationReadiness> {
   const entries = currentRunEntries(ctx);
-  const writes = entries.filter((entry) => isWriteEntry(ctx, entry));
   const validations = entries.filter((entry) => !!entry.validationSignal);
+  const checksDocumentation = validations.some(entry => validationTargetsDocumentation(entry.validationSignal!));
+  const writes = entries.filter((entry) => isWriteEntry(ctx, entry, checksDocumentation));
   const successfulValidations = validations.filter((entry) => entry.outcome === 'success' && entry.validationOutcome === 'passed');
   const changedFiles = (() => {
     try {
@@ -94,7 +101,7 @@ export async function evaluateVerificationReadinessAtFinish(
   const lastSuccessfulValidationStartSeq = successfulValidations.at(-1)?.validationStartedSeq ?? null;
   const validationSignals = uniqueSignals(validations);
 
-  if (changedFiles.length === 0 && lastWriteSeq == null) {
+  if (!changedFiles.some(file => !isPlainDocumentationPath(file)) && lastWriteSeq == null && lastValidationSeq == null) {
     return {
       status: 'not_applicable',
       changedFiles,
@@ -149,7 +156,7 @@ export function formatVerificationReadiness(readiness: VerificationReadiness): s
     : '';
   switch (readiness.status) {
     case 'fresh':
-      return `Verification is fresh and covers the latest recorded write.${signals}${fileText}`;
+      return `Code verification is fresh and covers the latest code-affecting write; review any documentation edits separately.${signals}${fileText}`;
     case 'stale':
       return `Verification is stale or failed; it does not cover the latest recorded write.${signals}${fileText}`;
     case 'ambiguous':
@@ -157,7 +164,7 @@ export function formatVerificationReadiness(readiness: VerificationReadiness): s
     case 'missing':
       return `No successful test/typecheck/lint/build was recorded after the latest change.${fileText}`;
     case 'not_applicable':
-      return 'No changed files or current-run writes were recorded; verification is not applicable.';
+      return 'No code-affecting changes were recorded; code verification is not applicable. Review any prose edits separately.';
   }
 }
 

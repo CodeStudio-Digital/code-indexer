@@ -29,7 +29,7 @@ describe('renderPreflightHint', () => {
         '4) confirm the reproduction now passes and the previously-passing tests still pass; ' +
         '5) check boundary and negative cases. ' +
         'When a unit test is not viable, a sanitized captured request, fixture, replay, script, browser scenario, integration test or benchmark is an acceptable oracle.',
-      'toolset seeded for this task: profile=navigate; prioritized: read_file, edit_file',
+      'profile=navigate; use the visible tool schemas as the invocation contract.',
       'likely linked projects — verify before editing:',
       '- poa-intranet-angular — task names intranet',
       'skills with objective applicability evidence — confirm the target project before loading:',
@@ -37,7 +37,7 @@ describe('renderPreflightHint', () => {
       'read these project memories BEFORE exploring (recall_memory({query:"<title>"})):',
       '- "Auth token refresh gotcha" — same login flow',
       '- "API error envelope"',
-      'note: these are suggestions from a cheap pre-analysis run before any code was read. Verify against the code; if a memory conflicts with what you observe, trust the code (memories age when files change); find_tools / expand_toolset remain available if something is missing.',
+      'note: these are suggestions from a cheap pre-analysis run before any code was read. Verify against the code; if a memory conflicts with what you observe, trust the code (memories age when files change); use visible tools first and find_tools for a missing capability.',
       '</preflight>',
     ].join('\n'));
   });
@@ -73,6 +73,8 @@ describe('renderPreflightHint', () => {
     expect(hint).toContain('profile=bootstrap');
     expect(hint).not.toContain('recall_memory');
     expect(hint).not.toContain('get_skill_content');
+    expect(hint).not.toContain('prioritized:');
+    expect(hint).not.toContain('expand_toolset');
   });
 
   it('renders optional Agent Decision guidance inside the preflight block', () => {

@@ -10,6 +10,8 @@ export interface ToolContextServices {
   /** Runner-local handle consumed by one registry invocation, never its children. */
   toolOutcomeControl?: { scope?: import('./tool-outcome-observer.js').ToolOutcomeScope };
   sessionNetwork?: import('../runtime/session-network.js').SessionNetwork;
+  /** Provider catalog preference at run startup. The network checks live authorization on create. */
+  agenticChat?: boolean;
   ultraBudget?: import('../runtime/ultra-budget.js').UltraAgentBudget;
   ultraPolicy?: import('@mcp/agent-runtime-contracts').PresetResolution;
   /** Session/peer mailbox independent of Company orchestration. */

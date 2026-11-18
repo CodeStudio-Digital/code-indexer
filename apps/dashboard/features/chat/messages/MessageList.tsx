@@ -28,8 +28,9 @@ import {
   type TranscriptProjection,
 } from '../transcript-projection.js';
 import { AssistantBubble } from './AssistantBubble.js';
+import { ChatFileLinks } from './ChatFileLinks.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
-import { MessageView } from './MessageView.js';
+import { UserMessage } from './MessageView.js';
 import { renderStreamBlock } from './renderStreamBlock.js';
 import { PreflightBlock } from './PreflightBlock.js';
 import { SnapshotFilesProvider, type SnapshotActions } from './snapshot-files-context.js';
@@ -48,7 +49,10 @@ import {
 } from './chapter-transcript.js';
 import { activeChapterIdAtScrollOffset } from './chapter-markers.js';
 import { useFollowOutput } from './useFollowOutput.js';
-import { splitTranscriptGroup, type AssistantTurnHeader } from './transcript-segments.js';
+import { assistantMarkdown, liveTranscriptSegments, splitTranscriptGroup, type TurnFramePart } from './transcript-segments.js';
+import { TurnFrame, TurnInfoScope } from './TurnFrame.js';
+import { TurnFooter } from './TurnFooter.js';
+import { prependRoundMarkdown, type ReadMarkdown } from './round-markdown.js';
 import { ChapterSourcePager, CHAPTER_SOURCE_PAGE_SIZE, MAX_OPEN_CHAPTER_SOURCES, type ChapterSourceState } from './chapter-source-pager.js';
 import { useTranscriptSelection } from './transcript-selection.js';
 
@@ -110,10 +114,11 @@ type TranscriptRow =
       group: VisualGroup;
       resultsById: ReadonlyMap<string, ToolResultView>;
       summary?: TurnSummary;
-      header?: AssistantTurnHeader | false;
+      frame?: TurnFramePart;
+      copyMarkdown?: ReadMarkdown;
       sourceChapterId?: string;
     }
-  | { kind: 'live-block'; key: string; index: number }
+  | { kind: 'live-block'; key: string; index: number; frame?: TurnFramePart }
   | { kind: 'tail'; key: string };
 
 function earliestPersistedSeq(sessionData: SessionData | null): number | null {
@@ -223,7 +228,8 @@ const TranscriptMessage = React.memo(function TranscriptMessage({
   tasksState,
   activeTasksToolUseId,
   summary,
-  header,
+  frame,
+  copyMarkdown,
 }: {
   group: VisualGroup;
   resultsById: ReadonlyMap<string, ToolResultView>;
@@ -232,111 +238,20 @@ const TranscriptMessage = React.memo(function TranscriptMessage({
   tasksState: PersistedTasksState | null;
   activeTasksToolUseId: string | null;
   summary?: TurnSummary;
-  header?: AssistantTurnHeader | false;
+  frame?: TurnFramePart;
+  copyMarkdown?: ReadMarkdown;
 }) {
-  let content: React.ReactNode;
-  if (group.kind === 'user') {
-    content = (
-      <MessageView
-        message={group.message}
-        messageId={group.messageId}
-        sessionId={sessionId}
-        toolResultsById={resultsById}
-        usage={group.usage}
-        onAnswer={handlers.onAnswer}
-        onPlanResponse={handlers.onPlanResponse}
-        onTasksResponse={handlers.onTasksResponse}
-        onDecide={handlers.onDecide}
-        onSpecResponse={handlers.onSpecResponse}
-        onFork={handlers.onFork}
-        onRollback={handlers.onRollback}
-        rollbackPendingSeq={handlers.rollbackPendingSeq}
-        tasksState={tasksState}
-      />
-    );
-  } else if (header === undefined && group.hasText && group.messages.length === 1) {
-    content = (
-      <MessageView
-        message={group.messages[0]}
-        messageId={group.messageIds[0]}
-        sessionId={sessionId}
-        toolResultsById={resultsById}
-        usage={group.usages[0]}
-        onAnswer={handlers.onAnswer}
-        onPlanResponse={handlers.onPlanResponse}
-        onTasksResponse={handlers.onTasksResponse}
-        onDecide={handlers.onDecide}
-        onSpecResponse={handlers.onSpecResponse}
-        onFork={handlers.onFork}
-        onRollback={handlers.onRollback}
-        rollbackPendingSeq={handlers.rollbackPendingSeq}
-        tasksState={tasksState}
-        activeTasksToolUseId={activeTasksToolUseId}
-      />
-    );
-  } else {
-    content = (
-      <GroupedToolBubble
-        header={header}
-        group={group}
-        toolResultsById={resultsById}
-        sessionId={sessionId}
-        handlers={handlers}
-        tasksState={tasksState}
-        activeTasksToolUseId={activeTasksToolUseId}
-      />
-    );
-  }
-
-  return (
-    <>
-      {content}
-      {summary && (
-        <TurnFilesSummary paths={summary.paths} roundMessageId={summary.roundMessageId} />
-      )}
-    </>
-  );
-});
-
-const LiveTurn = React.memo(function LiveTurn({
-  currentTurn,
-  blocks,
-  streaming,
-  preflight,
-  handlers,
-  continuation,
-}: {
-  currentTurn: AssistantTurn | null;
-  blocks: TranscriptProjection['live']['blocks'];
-  streaming: boolean;
-  preflight: { startedAt: number } | null;
-  handlers: PromptHandlers;
-  continuation: boolean;
-}) {
-  const allBlocks = currentTurn?.blocks ?? [];
-  if (blocks.length > 0) {
-    return (
-      <AssistantBubble streaming={streaming} continuation={continuation}>
-        {blocks.map((block, index) => renderStreamBlock(block, index, handlers))}
-      </AssistantBubble>
-    );
-  }
-  if (allBlocks.length > 0) return null;
-  if (preflight) {
-    return (
-      <AssistantBubble streaming continuation={continuation}>
-        <PreflightBlock startedAt={preflight.startedAt} />
-      </AssistantBubble>
-    );
-  }
-  if (streaming) {
-    return (
-      <AssistantBubble streaming continuation={continuation}>
-        <div className="dot-pulse text-muted-foreground"><span /><span /><span /></div>
-      </AssistantBubble>
-    );
-  }
-  return null;
+  return <>
+    {group.kind === 'user'
+      ? <UserMessage message={group.message} messageId={group.messageId} sessionId={sessionId}
+          onFork={handlers.onFork} onRollback={handlers.onRollback} rollbackPendingSeq={handlers.rollbackPendingSeq} />
+      : <TurnFrame part={frame}>
+          <GroupedToolBubble group={group} toolResultsById={resultsById} sessionId={sessionId}
+            handlers={handlers} tasksState={tasksState} activeTasksToolUseId={activeTasksToolUseId} />
+        </TurnFrame>}
+    {summary && <TurnFilesSummary paths={summary.paths} roundMessageId={summary.roundMessageId} />}
+    {copyMarkdown && <TurnFooter copyMarkdown={copyMarkdown} />}
+  </>;
 });
 
 export const MessageList = React.memo(function MessageList({
@@ -596,6 +511,26 @@ export const MessageList = React.memo(function MessageList({
     () => new Map(displayGroups.map((group, index) => [group, index])),
     [displayGroups],
   );
+  const previousUser = sessionData?.preceding_user_seq;
+  const startOfWindow = displayGroups[0];
+  const copyWithEarlier = useCallback((read: () => string, userSeq?: number | null, before?: number | null): ReadMarkdown => (
+    sessionId && userSeq && before && before > userSeq + 1
+      ? signal => prependRoundMarkdown(sessionId, userSeq, before, read(), signal)
+      : read
+  ), [sessionId]);
+  const liveBlocks = projection.live.blocks;
+  const pendingPreflight = currentTurn?.blocks.length ? null : preflight;
+  const continuedGroup = liveBlocks.length && projection.live.continuation ? displayGroups.at(-1) : undefined;
+  const prefix = continuedGroup?.kind === 'assistant' ? continuedGroup : undefined;
+  const liveCopy = useMemo<ReadMarkdown | undefined>(() => {
+    if (!liveBlocks.length || !(prefix?.hasText || liveBlocks.some(block => block.type === 'text' && block.text))) return undefined;
+    // Read at click time so copying a long response adds no work per delta.
+    const read = () => [
+      ...(prefix ? [assistantMarkdown(prefix)] : []),
+      ...liveBlocks.flatMap(block => block.type === 'text' && block.text ? [block.text] : []),
+    ].filter(Boolean).join('\n\n');
+    return prefix && prefix === startOfWindow ? copyWithEarlier(read, previousUser, initialCursor) : read;
+  }, [prefix, liveBlocks, startOfWindow, copyWithEarlier, previousUser, initialCursor]);
   const rows = useMemo<TranscriptRow[]>(() => {
     const result: TranscriptRow[] = [];
     const showHistoryControl = pagination.hasMore
@@ -611,7 +546,9 @@ export const MessageList = React.memo(function MessageList({
       if (item.kind === 'message') {
         const groupIndex = displayGroupIndexes.get(item.group) ?? -1;
         for (const segment of splitTranscriptGroup(item.group)) result.push({
-          kind: 'message', key: segment.key, group: segment.group, header: segment.header,
+          kind: 'message', key: segment.key, group: segment.group, frame: segment.frame,
+          copyMarkdown: item.group === prefix || !segment.copyMarkdown ? undefined
+            : item.group === startOfWindow ? copyWithEarlier(segment.copyMarkdown, previousUser, initialCursor) : segment.copyMarkdown,
           resultsById: projection.toolResultsById,
           summary: segment.last ? turnSummaries.get(groupIndex) : undefined,
         });
@@ -627,19 +564,22 @@ export const MessageList = React.memo(function MessageList({
       sourceProjection.groups.forEach((group, index) => {
         for (const segment of splitTranscriptGroup(group)) result.push({
           kind: 'message', key: `chapter-source:${chapter.id}:${segment.key}`,
-          group: segment.group, header: segment.header,
+          group: segment.group, frame: segment.frame,
+          copyMarkdown: index === 0 && segment.copyMarkdown
+            ? copyWithEarlier(segment.copyMarkdown, source.precedingUserSeq, source.items[0]?.seq) : segment.copyMarkdown,
           resultsById: sourceProjection.resultsById,
           summary: segment.last ? sourceProjection.summaries.get(index) : undefined,
           sourceChapterId: chapter.id,
         });
       });
     }
-    projection.live.blocks.forEach((block, index) => {
+    for (const { index, frame } of liveTranscriptSegments(liveBlocks)) {
+      const block = liveBlocks[index];
       const id = liveBlockPersistedId(block)
         ?? ('id' in block ? block.id : undefined)
         ?? `${block.type}:${index}`;
-      result.push({ kind: 'live-block', key: `live:${sessionId}:${block.type}:${id}`, index });
-    });
+      result.push({ kind: 'live-block', key: `live:${sessionId}:${block.type}:${id}`, index, frame });
+    }
     result.push({ kind: 'tail', key: `tail:${sessionId ?? 'empty'}` });
     return result;
   }, [
@@ -656,7 +596,12 @@ export const MessageList = React.memo(function MessageList({
     pagination.includeArchived,
     pagination.status,
     projection.toolResultsById,
-    projection.live.blocks,
+    liveBlocks,
+    prefix,
+    startOfWindow,
+    copyWithEarlier,
+    previousUser,
+    initialCursor,
     sessionId,
     sourceProjections,
     totalMessages,
@@ -827,6 +772,7 @@ export const MessageList = React.memo(function MessageList({
   };
 
   return (
+    <ChatFileLinks endpoint={sessionId ? '/api/coder/sessions/' + encodeURIComponent(sessionId) + '/linked-file' : null}>
     <div className="relative min-h-0 flex-1">
       {chapters.length > 1 && (
         <nav
@@ -870,7 +816,7 @@ export const MessageList = React.memo(function MessageList({
             {chapters.length > 0 && (
               <span className="pointer-events-none absolute bottom-0 left-[22px] top-0 w-px bg-gradient-to-b from-primary/35 via-border/70 to-border/15 sm:left-[34px] lg:left-[42px]" />
             )}
-            {virtualizer.getVirtualItems().map((virtualRow) => {
+            <TurnInfoScope>{virtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index];
               if (!row) return null;
               // Virtual row boundaries can split consecutive calls. Assistant
@@ -928,32 +874,34 @@ export const MessageList = React.memo(function MessageList({
                         tasksState={row.sourceChapterId ? null : tasksState}
                         activeTasksToolUseId={row.sourceChapterId ? null : projection.activeTasksToolUseId}
                         summary={row.summary}
-                        header={row.header}
+                        frame={row.frame}
+                        copyMarkdown={row.copyMarkdown}
                       />
                     </div>
                   )}
                   {row.kind === 'live-block' && (
                     <div className={chapters.length > 0 ? 'pl-8' : undefined}>
-                      <AssistantBubble
-                        streaming={streaming}
-                        continuation={row.index > 0 || projection.live.continuation}
-                      >
-                        {renderStreamBlock(projection.live.blocks[row.index], row.index, handlers)}
-                      </AssistantBubble>
+                      <TurnFrame part={row.frame} live>
+                        <AssistantBubble>
+                          {renderStreamBlock(projection.live.blocks[row.index], row.index, handlers)}
+                        </AssistantBubble>
+                      </TurnFrame>
                     </div>
                   )}
                   {row.kind === 'tail' && (
                     <div className={chapters.length > 0 ? 'space-y-3 pl-8 pt-1' : 'space-y-3 pt-1'}>
-                      {projection.live.blocks.length === 0 && <LiveTurn
-                        currentTurn={currentTurn}
-                        blocks={projection.live.blocks}
-                        streaming={streaming}
-                        preflight={preflight}
-                        handlers={handlers}
-                        continuation={projection.live.continuation}
-                      />}
                       {showLiveSummary && (
                         <TurnFilesSummary paths={liveEditRefs} roundMessageId={liveRoundMessageId} />
+                      )}
+                      {(streaming || pendingPreflight || liveCopy) && (
+                        <TurnFooter copyMarkdown={liveCopy}>
+                          {pendingPreflight ? <PreflightBlock startedAt={pendingPreflight.startedAt} /> : streaming && (
+                            <div role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-success motion-safe:animate-pulse" />
+                              {t('messages.processing')}
+                            </div>
+                          )}
+                        </TurnFooter>
                       )}
                       {error && (
                         <Alert variant="destructive">
@@ -968,10 +916,11 @@ export const MessageList = React.memo(function MessageList({
                   )}
                 </div>
               );
-            })}
+            })}</TurnInfoScope>
           </div>
         </SnapshotFilesProvider>
       </div>
     </div>
+    </ChatFileLinks>
   );
 });

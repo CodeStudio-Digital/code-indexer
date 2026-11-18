@@ -29,9 +29,14 @@ export function mountAgentMemorySemanticRoutes(app: Hono, deps: ServerDeps): voi
     const retry = deps.semanticStore.getNamespaceBuildRetry(coverage.namespace);
     const lastRepair = deps.semanticStore.listJobs({ namespace: coverage.namespace, generationId: coverage.generationId, kinds: ['delta','backfill'],
       statuses: ['paused'], order: 'newest', limit: 1 })[0];
-    return { ...coverage, repairing: repairs.has(coverage.namespace),
-      blocked: retry?.blocked ?? false, retryAt: retry?.not_before_ms ?? null,
-      errorCode: repairErrors.get(coverage.namespace) ?? memorySemanticFailureCode(lastRepair?.error ?? state?.last_error) };
+    const candidates = [repairErrors.get(coverage.namespace), lastRepair?.error, state?.last_error].map(memorySemanticFailureCode);
+    const complete = coverage.live === coverage.indexed && !coverage.failed && !coverage.missing && !coverage.pending;
+    const errorCode = complete ? null : candidates.find(code => code && code !== 'embedding_failed') ?? candidates.find(Boolean) ?? null;
+    const running = deps.semanticStore.listJobs({ namespace: coverage.namespace, kinds: ['build','backfill','delta'], statuses: ['running'], limit: 1 })
+      .some(job => job.status === 'running');
+    return { ...coverage, repairing: repairs.has(coverage.namespace) || running,
+      blocked: complete ? false : retry?.blocked ?? false, retryAt: complete ? null : retry?.not_before_ms ?? null,
+      errorCode };
   };
   app.get('/api/projects/:id/agent-memory/semantic', (c) => {
     const id = parseIdParam(c);
@@ -39,6 +44,9 @@ export function mountAgentMemorySemanticRoutes(app: Hono, deps: ServerDeps): voi
     const target = deps.semanticStore.getProfile('memory')?.embedding_target;
     const enabled = !!target && target.kind !== 'disabled';
     return c.json({ enabled, remote: enabled && target.kind !== 'onnx' && target.kind !== 'local_http',
+      embeddingModel: target && target.kind !== 'disabled' ? target.model : null,
+      rerankerModel: (() => { const reranker = deps.semanticStore.getProfile('memory')?.reranker_target;
+        return reranker && reranker.kind !== 'disabled' ? reranker.model : null; })(),
       project: stateFor(id, 'project'), user: stateFor(0, 'user') });
   });
   app.post('/api/projects/:id/agent-memory/semantic/repair', async (c) => {
