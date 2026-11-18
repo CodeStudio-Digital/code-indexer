@@ -256,9 +256,21 @@ async function exerciseCopilotLogin() {
     let allowAccountChoice;
     const deviceInspected = new Promise(resolve => { allowAccountChoice = resolve; });
     const methods = {
-      async start() { state.mode = this.options.mode; },
+      async start() {
+        state.mode = this.options.mode;
+        Object.defineProperty(this, 'rpc', { value: { account: {
+          async getQuota() { return { quotaSnapshots: {} }; },
+          async getCurrentAuth() {
+            return { authInfo: { type: 'user', copilotUser: {
+              login: 'chosen-fixture', token_based_billing: true,
+              quota_snapshots: { premium_interactions: { entitlement: 1000, quota_remaining: 549.75 } },
+            } } };
+          },
+        } } });
+      },
       async stop() {},
       async deleteSession() {},
+      async getAuthStatus() { return { isAuthenticated: true, login: 'chosen-fixture', host: 'https://github.com' }; },
       async listModels() {
         return [{ id: 'fixture-copilot-model', name: 'Fixture Copilot Model', capabilities: { supports: {} } }];
       },
@@ -318,6 +330,10 @@ async function exerciseCopilotLogin() {
     assert.equal(providers.find(provider => provider.id === 'copilot').extra.githubLogin, 'chosen-fixture');
     const { models } = await api('admin/providers/copilot/models');
     assert.ok(models.some(model => model.model_id === 'fixture-copilot-model'));
+    const quota = page.getByRole('region', { name: /^(Cota do Copilot|Copilot quota)$/ });
+    await quota.getByRole('button', { name: /^(Consultar cota|Check quota)$/ }).click();
+    await expect(quota.getByText(/^(Créditos de IA|AI credits)$/)).toBeVisible();
+    await expect(quota.getByText(/^549[.,]75$/)).toBeVisible();
     await page.evaluate(hash => { location.hash = hash; }, projectHash);
     await expect.poll(() => page.url()).toMatch(/#\/projects\/\d+/);
   } finally {
@@ -433,7 +449,7 @@ try {
   assert.deepEqual(errors, []);
   passed = true;
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
-    electronChromium: true, copilotRuntime: true, copilotLogin: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
+    electronChromium: true, copilotRuntime: true, copilotLogin: true, copilotQuota: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
     figmaPanel: true, figmaProviderCalls, figmaSecretSeen, figmaVerificationNudges, coldFigmaReads, warmFigmaReads,
     persistedReply: true, cloudCalls, rendererErrors: errors }));
 } catch (error) {

@@ -20,6 +20,7 @@ import {
 } from '../../../components/ui/dialog.js';
 import { cn } from '../../../lib/utils.js';
 import { ProviderCard } from '../ProviderCard.js';
+import { CopilotQuotaPanel } from './CopilotQuotaPanel.js';
 import type { AddModelInput } from './AddModelForm.js';
 import type { AdminModel, AdminProvider, TestResult } from '../types.js';
 import { providerVisual } from './provider-icons.js';
@@ -108,6 +109,13 @@ export function ProviderModal({ provider, onClose, ...rest }: ProviderModalProps
             ProviderCard's outer chrome (no double-border with the
             DialogContent) via a single global rule kept here. */}
         <div className="flex-1 min-h-0 overflow-y-auto p-3 [&_.provider-card-shell]:border-0 [&_.provider-card-shell]:shadow-none">
+          {provider.kind === 'copilot' && (
+            <CopilotQuotaPanel
+              key={JSON.stringify([provider.id, provider.extra.githubLogin, provider.extra.githubHost])}
+              providerId={provider.id}
+              linked={provider.enabled || typeof provider.extra.githubLogin === 'string'}
+            />
+          )}
           <ProviderCard
             {...rest}
             provider={provider}

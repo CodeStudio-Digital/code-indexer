@@ -1,6 +1,23 @@
 import type { ApiContext } from './common.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 
+export type CopilotQuotaCategory = 'premium_interactions' | 'chat' | 'completions';
+
+export interface CopilotQuotaSnapshot {
+  category: CopilotQuotaCategory;
+  unit: 'credits' | 'requests';
+  used: number | null;
+  limit: number | null;
+  remaining: number | null;
+  remainingPercent: number | null;
+  resetAt: string | null;
+}
+
+export interface CopilotQuotaReport {
+  checkedAt: string;
+  quotas: CopilotQuotaSnapshot[];
+}
+
 /**
  * Admin operations — provider management, quality/drift dashboards, worker
  * diagnostics, pipeline bindings.

@@ -16,6 +16,7 @@ import { modelsRouter } from './models.routes.js';
 import { semanticRouter, type SemanticAdminRuntime } from './semantic.routes.js';
 import { oauthRouter } from './oauth.routes.js';
 import { copilotOAuthRouter } from './oauth-copilot.routes.js';
+import { copilotQuotaRouter } from './copilot-quota.routes.js';
 import { bedrockOAuthRouter } from './oauth-bedrock.routes.js';
 import { toolsRouter } from './tools.routes.js';
 import { mcpServersRouter, type McpAdminRuntime } from './mcp-servers.routes.js';
@@ -39,6 +40,7 @@ export function createAdminRouter(
   app.route('/', semanticRouter(store, semantic));
   app.route('/', oauthRouter(store));
   app.route('/', copilotOAuthRouter(store));
+  app.route('/', copilotQuotaRouter(store));
   app.route('/', bedrockOAuthRouter(store));
   app.route('/', bedrockModelAccessRouter(store));
   app.route('/', toolsRouter(store));
