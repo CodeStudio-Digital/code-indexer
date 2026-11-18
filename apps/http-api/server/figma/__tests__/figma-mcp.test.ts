@@ -94,6 +94,7 @@ describe('bundled Figma MCP', () => {
     expect(storage.get('figma', 'mcp.connection')).not.toContain('figma-fixture-account-token');
     const snapshot = await pool.getReadySnapshot();
     expect(snapshot.tools).toHaveLength(6);
+    for (const tool of snapshot.tools) expect(tool).toMatchObject({ transport: 'embedded', readOnly: true });
     expect(JSON.stringify(snapshot)).not.toContain('figma-fixture-account-token');
     expect(await pool.callTool(FIGMA_SERVER_ID, 'get_metadata', { file: key })).toMatchObject({
       ok: true, result: { structuredData: { name: 'Fixture file', pages: [{ id: '1:2', name: 'Page 1' }] } },

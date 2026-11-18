@@ -21,6 +21,8 @@ export interface McpExternalSnapshot {
     /** Opaque binding to this exact configuration and tool definition. */
     catalogueRevision?: string;
     transport?: 'stdio' | 'sse' | 'streamable_http' | 'embedded';
+    /** Set only for host-owned tools whose operations are reads. */
+    readOnly?: true;
   }>;
   /** Tier assignment per prefixed tool name. */
   tierMap: Array<[string, ToolTier]>;

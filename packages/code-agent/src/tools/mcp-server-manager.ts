@@ -175,6 +175,9 @@ export class McpServerManager {
           // Server authors can opt non-conventional names in through future
           // MCP metadata without changing guard code.
           const repeatable = /^(?:wait_for|await|poll|tail|monitor)_/.test(t.name);
+          // Embedded tools are defined by the host. Remote MCP annotations
+          // alone cannot grant a read classification.
+          const readOnly = conn.config.transport === 'embedded' && t.annotations?.readOnlyHint === true;
           allTools.push({
             name: prefixedName,
             description: sanitized.description,
@@ -188,9 +191,10 @@ export class McpServerManager {
             },
             handler: this.createHandler(serverId, t.name, mcpServerConfigurationKey(conn.config)),
             repeatPolicy: repeatable ? 'pollable' : 'stable',
-            mutates: true,
+            mutates: !readOnly,
             parallelSafe: false,
-            riskLevel: 'write',
+            riskLevel: readOnly ? 'read' : 'write',
+            ...(readOnly ? { executionClass: 'read' as const } : {}),
           });
         }
       } catch (e) {

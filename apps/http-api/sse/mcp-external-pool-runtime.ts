@@ -424,13 +424,15 @@ export class McpExternalPool implements IMcpServerManager {
         const m = t.name.match(/^ext_(.+?)__(.+)$/);
         const serverId = t.capabilityProvenance?.serverId ?? m?.[1] ?? '';
         const toolName = t.name.slice(('ext_' + serverId + '__').length);
+        const transport = configs.find(config => config.id === serverId)?.transport;
         return {
           name: t.name,
           description: t.description,
           parameters: t.parameters,
           repeatable: t.repeatPolicy === 'pollable' || !!t.repeatable,
           catalogueRevision: this.toolRevisions.get(t.name)!.revision,
-          transport: configs.find(config => config.id === serverId)?.transport,
+          transport,
+          ...(transport === 'embedded' && t.mutates === false && t.executionClass === 'read' ? { readOnly: true as const } : {}),
           serverId,
           toolName,
         };

@@ -4,6 +4,7 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { capabilityDiscoveryEntries } from '@mcp/code-agent/core/capability-discovery.js';
 import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { canInvokeInsideCodeExec } from './code-exec-eligibility.js';
+import { codeExecToolAccessor } from './code-exec-hints.js';
 import {
   getToolText,
   rankDiscoveryCandidates,
@@ -69,7 +70,7 @@ export function buildFindToolsTool(
       '(lazy discovery for tools NOT in your visible list).\n\n' +
       'Use when you suspect a tool exists for a task but cannot see it in your current tools array. ' +
       'Returns up to 5 candidates with their `name`, `tier`, `source`, argument summary, and a ' +
-      'short description and full input schema. Use tools.<name>(args) inside code_exec for hidden non-interactive tools. ' +
+      'short description and full input schema. Use tools["exact-name"](args) inside code_exec for hidden non-interactive tools. ' +
       'Search by server and capability to find a related operation without replacing the current tools.\n\n' +
       'QUERY TIPS: concept nouns ("worktree", "spec revision"), verbs ("edit", "spawn"), and exact ' +
       'argument names seen in other tool results ("evolution_id") all match; filler words are ' +
@@ -244,7 +245,10 @@ export function buildFindToolsTool(
         } else if (weak) {
           matchTag = r.score.nameHit ? ' [matched: name]' : ' [matched: description only]';
         }
-        return `- ${r.name} (tier=${r.tier}, source=${r.source})${argsTag}${matchTag}${visTag}: ${shortDesc}`;
+        const accessor = codeExecToolAccessor(r.name);
+        const callTag = !r.blocked && r.callableInsideCodeExec && accessor.startsWith('tools[')
+          ? ` [code_exec: ${accessor}(args)]` : '';
+        return `- ${r.name} (tier=${r.tier}, source=${r.source})${argsTag}${matchTag}${visTag}${callTag}: ${shortDesc}`;
       };
 
       const lines: string[] = [
@@ -258,7 +262,7 @@ export function buildFindToolsTool(
         for (const candidate of top.filter(r => !r.blocked)) {
           lines.push(`\n${candidate.name} input schema: ${JSON.stringify(candidate.schema)}`);
         }
-        lines.push('\nThe public tool catalog stays fixed. Call hidden non-interactive tools with code_exec: return await tools.<name>(args). Dispatch still validates permissions, scope and arguments.');
+        lines.push('\nThe public tool catalog stays fixed. Inside code_exec, call hidden non-interactive tools with return await tools["exact-name"](args). Preserve punctuation in the name. Dispatch still validates permissions, scope and arguments.');
       } else if (autoPromoted) {
         lines.push('');
         lines.push(

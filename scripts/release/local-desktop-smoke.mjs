@@ -21,6 +21,7 @@ let modelCalls = 0;
 let anthropicCalls = 0;
 let figmaProviderCalls = 0;
 let figmaSecretSeen = false;
+let figmaVerificationNudges = 0;
 const reply = 'Resposta do endpoint local.';
 const anthropicReply = 'Resposta do endpoint Anthropic local.';
 const figmaToken = 'figma-fixture-local-pat';
@@ -48,10 +49,15 @@ const server = createServer(async (req, res) => {
     if (request.stream && request.messages?.some(message =>
       message.role === 'user' && JSON.stringify(message.content).includes(figmaFile))) {
       figmaProviderCalls++;
+      if (request.messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('[verification-required]'))) {
+        figmaVerificationNudges++;
+      }
       const seen = request.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes(figmaFileName));
       const hasSchema = request.tools?.some(tool => tool.function?.name === figmaTool);
       const searched = request.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes(figmaTool));
-      const call = hasSchema || searched ? { name: figmaTool, input: { file: figmaFile } }
+      const call = hasSchema || searched ? { name: 'code_exec', input: {
+        code: 'return await tools.ext_codestudio_figma__get_metadata({file:' + JSON.stringify(figmaFile) + '});',
+      } }
         : { name: 'find_tools', input: { query: 'codestudio figma get_metadata' } };
       const delta = seen ? { role: 'assistant', content: figmaReply } : {
         role: 'assistant',
@@ -417,6 +423,7 @@ try {
   assert.equal(warmFigmaReads, 0);
   assert.ok(figmaProviderCalls >= 4);
   assert.equal(figmaSecretSeen, false);
+  assert.equal(figmaVerificationNudges, 0);
   assert.ok((await api(area + '/api-client/collections')).collections.some(item => item.id === collection.id));
   assert.ok((await api(area + '/ssh/hosts')).hosts.some(item => item.id === host.id));
   assert.ok(JSON.stringify(await api(sessionPath + '/messages')).includes(reply));
@@ -427,7 +434,7 @@ try {
   passed = true;
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
     electronChromium: true, copilotRuntime: true, copilotLogin: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
-    figmaPanel: true, figmaProviderCalls, figmaSecretSeen, coldFigmaReads, warmFigmaReads,
+    figmaPanel: true, figmaProviderCalls, figmaSecretSeen, figmaVerificationNudges, coldFigmaReads, warmFigmaReads,
     persistedReply: true, cloudCalls, rendererErrors: errors }));
 } catch (error) {
   console.error('Isolated profile:', root);

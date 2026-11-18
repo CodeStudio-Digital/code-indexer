@@ -12,6 +12,10 @@
  */
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
 
+export function codeExecToolAccessor(name: string): string {
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? 'tools.' + name : 'tools[' + JSON.stringify(name) + ']';
+}
+
 /**
  * Node globals the sandbox intentionally omits. A script reaching for one of
  * these gets a bare `ReferenceError: <name> is not defined`; we recognize the
@@ -118,6 +122,10 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
   }
   const close = suggestToolName(name, ctx.exposedNames as string[]);
   if (close) {
+    const accessor = codeExecToolAccessor(close);
+    if (accessor.startsWith('tools[')) {
+      return `\n\nHint: call \`await ${accessor}(args)\`. A hyphen in dot notation is parsed as subtraction.`;
+    }
     return `\n\nHint: did you mean \`${close}\`? (case-sensitive)`;
   }
   return '';
@@ -138,15 +146,23 @@ export function wrapToolsBinding<T extends object>(
   exposedNames: ReadonlyArray<string>,
 ): T {
   const PASSTHROUGH = new Set(['then', 'catch', 'finally', 'toJSON']);
+  const aliases = new Map<string, string | null>();
+  for (const name of exposedNames) {
+    const alias = name.replaceAll('-', '_');
+    if (alias === name || alias in target) continue;
+    aliases.set(alias, aliases.has(alias) ? null : name);
+  }
   return new Proxy(target, {
     get(t, prop, receiver) {
       if (typeof prop !== 'string' || prop in t || PASSTHROUGH.has(prop)) {
         return Reflect.get(t, prop, receiver);
       }
+      const canonical = aliases.get(prop);
+      if (canonical) return Reflect.get(t, canonical, receiver);
       const close = suggestToolName(prop, exposedNames as string[]);
       throw new Error(
         `tools.${prop} is not an available tool in this code_exec` +
-          (close ? ` — did you mean \`tools.${close}\`?` : '') +
+          (close ? ` — did you mean \`${codeExecToolAccessor(close)}\`?` : '') +
           `. ${exposedNames.length} tools are exposed; ` +
           `log(Object.keys(tools).sort().join(', ')) to list them.`,
       );
