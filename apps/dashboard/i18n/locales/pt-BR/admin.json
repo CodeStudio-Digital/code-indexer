@@ -1,6 +1,9 @@
 {
   "copilot.connectFailed": "O login no GitHub Copilot não foi concluído.",
   "copilot.openGitHub": "Abrir o GitHub para digitar o código",
+  "copilot.chooseAccount": "Escolha a conta que o CodeStudio deve usar.",
+  "copilot.codeExpired": "O código do GitHub expirou. Inicie uma nova conexão.",
+  "copilot.credentialVaultUnavailable": "O Copilot não conseguiu usar o cofre de credenciais do sistema. Habilite o cofre e tente conectar novamente.",
   "bedrock.defaultHelp": "Usa o perfil AWS, a sessão SSO ou as variáveis de ambiente configuradas nesta máquina.",
   "bedrock.authApiKey": "Chave de API do Bedrock",
   "bedrock.authIam": "Chaves de acesso IAM",

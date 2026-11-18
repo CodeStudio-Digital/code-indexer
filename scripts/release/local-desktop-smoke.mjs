@@ -117,6 +117,7 @@ Object.assign(env, {
   LOCALAPPDATA: join(root, 'local-app-data'),
   MCP_DATA_DIR: data, MCP_MODEL_CACHE_DIR: join(root, 'models'),
   MCP_RUNTIME_COORDINATION_DIR: join(root, 'coordination'), PROVIDER_REFRESH_INTERVAL_MS: '0',
+  COPILOT_DISABLE_KEYTAR: '1', // The isolated smoke never reads or writes credentials in the user's vault.
   CODESTUDIO_CLOUD_URL: local + '/unavailable', CODESTUDIO_PORTAL_URL: local + '/unavailable',
   MEGABRAIN_GITHUB_BROKER_URL: local + '/unavailable',
 });
@@ -202,10 +203,10 @@ async function exerciseCopilotRuntime() {
     const entry = join(app.getAppPath(), 'dist/packages/code-agent/src/providers/copilot-sdk-client.js');
     const script = 'const run = ' + String(async function run({ entry, baseUrl }) {
       const { pathToFileURL } = process.getBuiltinModule('node:url');
-      const { startCopilotClient, stopCopilotClient } = await import(pathToFileURL(entry).href);
+      const { createCopilotSession, startCopilotClient, stopCopilotClient } = await import(pathToFileURL(entry).href);
       const client = await startCopilotClient('release-smoke');
       try {
-        const session = await client.createSession({
+        const session = await createCopilotSession(client, {
           model: 'fixture/local-test',
           inference: {
             providers: [{ name: 'fixture', type: 'openai', baseUrl, apiKey: 'local-fixture', wireApi: 'completions' }],
@@ -235,6 +236,81 @@ async function exerciseCopilotRuntime() {
     });
   }, local + '/v1');
   assert.equal(result, 'function');
+}
+
+async function exerciseCopilotLogin() {
+  const fixtureFile = join(root, 'copilot-login-fixture.cjs');
+  await writeFile(fixtureFile, 'module.exports = ' + String(async function installFixture(appPath) {
+    const { join } = require('node:path');
+    const { pathToFileURL } = require('node:url');
+    const entry = join(appPath, 'node_modules', '@microsoft', 'copilot-sdk', 'dist', 'index.js');
+    const { CopilotClient } = await import(pathToFileURL(entry).href);
+    const prototype = CopilotClient.prototype;
+    const state = { steps: 0 };
+    const methods = {
+      async start() { state.mode = this.options.mode; },
+      async stop() {},
+      async deleteSession() {},
+      async listModels() {
+        return [{ id: 'fixture-copilot-model', name: 'Fixture Copilot Model', capabilities: { supports: {} } }];
+      },
+      async createSession(options) {
+        state.usesHostTools = options.enableConfigDiscovery === false && options.tools.availableTools.length === 0
+          && options.tools.excludedTools.includes('builtin:*') && options.tools.excludedTools.includes('mcp:*');
+        return { sessionId: 'fixture-copilot-session', rpc: {
+          options: { async update(patch) { state.clearedPlugins = patch.plugins.installed.length === 0; } },
+          accounts: { login: {
+            async begin() {
+              return { flowId: 'fixture-copilot-flow', step: {
+                kind: 'device-code', userCode: 'ABCD-EFGH', verificationUri: 'https://github.com/login/device',
+                expiresIn: 900, interval: 1,
+              } };
+            },
+            async advance({ input }) {
+              state.steps++;
+              if (state.steps === 1) return { kind: 'awaiting' };
+              if (!input) return { kind: 'completed', result: { status: 'needs-account-selection', accounts: [
+                { selectionId: 'first', login: 'first-fixture', host: 'github.com' },
+                { selectionId: 'chosen', login: 'chosen-fixture', host: 'github.com' },
+              ] } };
+              state.choice = input;
+              return { kind: 'completed', result: { status: 'completed', login: 'chosen-fixture', host: 'github.com' } };
+            },
+            async cancel() {},
+          } },
+        } };
+      },
+    };
+    const originals = Object.fromEntries(Object.keys(methods).map(key => [key, prototype[key]]));
+    Object.assign(prototype, methods);
+    globalThis.copilotLoginFixture = { state, restore: () => Object.assign(prototype, originals) };
+  }));
+
+  await app.evaluate(async ({ app }, fixtureFile) => {
+    const require = process.getBuiltinModule('node:module').createRequire(fixtureFile);
+    await require(fixtureFile)(app.getAppPath());
+  }, fixtureFile);
+  try {
+    const projectHash = await page.evaluate(() => location.hash);
+    await page.evaluate(() => { location.hash = '#/admin'; });
+    await page.getByRole('button', { name: /^(Conectar|Connect)$/ }).first().click({ timeout: 30000 });
+    await page.getByRole('menuitem', { name: /^(Conectar|Connect) Copilot$/ }).click();
+    const dialog = page.getByRole('dialog', { name: /^(Conectar|Connect) GitHub Copilot$/ });
+    await dialog.getByRole('button', { name: 'Individual / Business' }).click();
+    await expect(dialog.getByText('ABCD-EFGH')).toBeVisible();
+    await dialog.getByRole('button', { name: 'chosen-fixture · github.com' }).click();
+    await expect(dialog).toBeHidden();
+    assert.deepEqual(await app.evaluate(() => globalThis.copilotLoginFixture.state),
+      { mode: 'coding-agent', steps: 3, usesHostTools: true, clearedPlugins: true, choice: 'chosen' });
+    const { providers } = await api('admin/providers');
+    assert.equal(providers.find(provider => provider.id === 'copilot').extra.githubLogin, 'chosen-fixture');
+    const { models } = await api('admin/providers/copilot/models');
+    assert.ok(models.some(model => model.model_id === 'fixture-copilot-model'));
+    await page.evaluate(hash => { location.hash = hash; }, projectHash);
+    await expect.poll(() => page.url()).toMatch(/#\/projects\/\d+/);
+  } finally {
+    await app.evaluate(() => { globalThis.copilotLoginFixture.restore(); });
+  }
 }
 
 async function stubFigma(rateLimited = false) {
@@ -292,6 +368,7 @@ try {
   await assertProviderSurface();
   await exerciseElectronChromium();
   await exerciseCopilotRuntime();
+  await exerciseCopilotLogin();
   await stubFigma();
   await exerciseFigmaPanel();
   const projectId = Number(page.url().match(/#\/projects\/(\d+)/)[1]);
@@ -340,7 +417,7 @@ try {
   assert.deepEqual(errors, []);
   passed = true;
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
-    electronChromium: true, copilotRuntime: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
+    electronChromium: true, copilotRuntime: true, copilotLogin: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
     figmaPanel: true, figmaProviderCalls, figmaSecretSeen, coldFigmaReads, warmFigmaReads,
     persistedReply: true, cloudCalls, rendererErrors: errors }));
 } catch (error) {

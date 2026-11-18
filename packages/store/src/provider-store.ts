@@ -121,6 +121,13 @@ export class ProviderStore {
   getOAuth(providerId: string): OAuthTokenRow | null { return oauth.get(this.db, providerId); }
   setOAuth(input: oauth.SetOAuthInput): void { oauth.set(this.db, input); }
   deleteOAuth(providerId: string): void { oauth.del(this.db, providerId); }
+  saveCopilotConnection(input: UpsertProviderInput, modelInputs: UpsertModelInput[]): void {
+    this.db.transaction(() => {
+      providers.upsert(this.db, input);
+      models.replaceFromSource(this.db, input.id, 'live', modelInputs);
+      oauth.del(this.db, input.id);
+    })();
+  }
 
   // ─── Global Disabled Tools ─────────────────────────────────────
   listGlobalDisabledTools(): string[] { return globalTools.listDisabled(this.db); }

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { CopilotClient } from '@microsoft/copilot-sdk';
+import type { CopilotClient, CreateSessionOptions } from '@microsoft/copilot-sdk';
 export type { Model as CopilotModel } from '@microsoft/copilot-sdk';
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
 
@@ -24,7 +24,9 @@ export async function startCopilotClient(providerId = 'copilot'): Promise<Copilo
   await mkdir(baseDirectory, { recursive: true });
   const { CopilotClient, RuntimeConnection } = await import('@microsoft/copilot-sdk');
   const client = new CopilotClient({
-    mode: 'empty',
+    // The SDK disables the OS credential vault in empty mode. The Local edition
+    // signs in as the desktop user, and later runtimes must read that same vault.
+    mode: 'coding-agent',
     runtime: RuntimeConnection.forSpawnedStdio({
       path: packagedRuntimePath(), baseDirectory, workingDirectory: baseDirectory,
     }),
@@ -34,6 +36,38 @@ export async function startCopilotClient(providerId = 'copilot'): Promise<Copilo
     return client;
   } catch (error) {
     await client.forceStop().catch(() => {});
+    throw error;
+  }
+}
+
+/** Keep tool execution and project discovery under CodeStudio's ownership. */
+export async function createCopilotSession(client: CopilotClient, options: CreateSessionOptions = {}) {
+  const session = await client.createSession({
+    ...options,
+    enableConfigDiscovery: false,
+    github: { ...options.github, telemetryEnabled: false },
+    tools: {
+      ...options.tools, availableTools: options.tools?.availableTools ?? [],
+      excludedTools: ['builtin:*', 'mcp:*'], manageScheduleEnabled: false,
+    },
+    mcp: { oauthTokenStorage: 'in-memory' },
+    state: {
+      infiniteSessions: { enabled: false }, enableCrossSessionStore: false, skipEmbeddingRetrieval: true,
+      embeddingCacheStorage: 'in-memory', memory: { enabled: false },
+    },
+    instructions: { onDemandDiscovery: false, skipCustomInstructions: true },
+    hooks: { enableRepositoryHooks: false },
+    git: { enableHostGitOperations: false, coauthorEnabled: false },
+    skills: { enabled: false, includedBuiltinSkills: [] },
+    agents: { localDiscoveryOnly: true },
+    experiments: { enableExperimentalMode: false },
+    systemMessage: options.systemMessage ?? { mode: 'customize', sections: { environment_context: { action: 'remove' } } },
+  });
+  try {
+    await session.rpc.options.update({ plugins: { installed: [] } });
+    return session;
+  } catch (error) {
+    await client.deleteSession(session.sessionId).catch(() => {});
     throw error;
   }
 }

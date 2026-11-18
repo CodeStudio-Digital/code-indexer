@@ -1,6 +1,6 @@
 import type { MessageOptions, SessionEvent } from '@microsoft/copilot-sdk';
 import type { ChatDelta, ChatProvider, ChatRequest } from '@mcp/provider-sdk';
-import { startCopilotClient, stopCopilotClient } from './copilot-sdk-client.js';
+import { createCopilotSession, startCopilotClient, stopCopilotClient } from './copilot-sdk-client.js';
 
 function toMessage(request: ChatRequest): MessageOptions {
   const attachments: NonNullable<MessageOptions['attachments']> = [];
@@ -51,7 +51,7 @@ export class CopilotSdkProvider implements ChatProvider {
     const client = await startCopilotClient(this.modelProviderId);
     try {
       const allowed = new Set(request.tools.map(tool => tool.name));
-      const session = await client.createSession({
+      const session = await createCopilotSession(client, {
         model: this.model || undefined,
         systemMessage: { mode: 'replace', content: request.system },
         events: { streaming: true },
@@ -63,10 +63,7 @@ export class CopilotSdkProvider implements ChatProvider {
             ...tool, parameters: { ...tool.parameters }, overridesBuiltInTool: true, skipPermission: true,
           })),
           availableTools: request.tools.map(tool => 'custom:' + tool.name),
-          excludedTools: ['builtin:*', 'mcp:*'],
         },
-        state: { infiniteSessions: { enabled: false }, enableCrossSessionStore: false },
-        github: { telemetryEnabled: false },
         permissions: { onRequest: () => ({ kind: 'denied-no-approval-rule-and-could-not-request-from-user' }) },
       });
       const queue: SessionEvent[] = [];
