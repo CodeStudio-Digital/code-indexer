@@ -23,7 +23,7 @@ export function detectVerifyCommands(projectRoot: string, platform = process.pla
     if (!fs.existsSync(pkgPath)) {
       if (!hasMakefile && !hasJustfile) return '';
       const runner = hasMakefile ? 'Makefile (`make <target>`)' : 'justfile (`just <recipe>`)';
-      return `# Known verify commands (detected)\nNo package.json; this project uses a ${runner}. Read it once to learn the real targets before running builds/tests.`;
+      return `# Known verify commands (detected)\nNo package.json; this project uses a ${runner}. Inspect targets if the request calls for verification.`;
     }
 
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
@@ -31,13 +31,11 @@ export function detectVerifyCommands(projectRoot: string, platform = process.pla
       packageManager?: string;
     };
     const names = Object.keys(pkg.scripts ?? {});
-    if (names.length === 0 && !hasMakefile && !hasJustfile) return '';
 
     // Preferred verify-ish scripts first (including namespaced variants like
-    // `test:unit` / `check:types`), then the rest, capped.
+    // `test:unit` / `check:types`). Never suggest unrelated scripts as verification.
     const preferred = names.filter((n) => PREFERRED.some((p) => n === p || n.startsWith(`${p}:`)));
-    const rest = names.filter((n) => !preferred.includes(n));
-    const shown = [...preferred, ...rest].slice(0, MAX_SCRIPTS);
+    const shown = preferred.slice(0, MAX_SCRIPTS);
 
     const manager = pkg.packageManager?.split('@')[0]
       ?? (fs.existsSync(path.join(projectRoot, 'pnpm-lock.yaml')) ? 'pnpm'
@@ -57,7 +55,8 @@ export function detectVerifyCommands(projectRoot: string, platform = process.pla
     const localBins = ['tsc', 'ava', 'vitest', 'jest', 'eslint', 'xo', 'biome', 'ruff'].map(name => `node_modules/.bin/${name}${extension}`)
       .filter(file => fs.existsSync(path.join(projectRoot, file)));
     if (localBins.length) lines.push(`Installed verification entrypoints (observed): ${localBins.map(file => `\`${file}\``).join(', ')}. Use the declared script or these entrypoints with scoped arguments; do not guess a package's internal cli.js path.`);
-    lines.push('Prefer these over guessed commands.');
+    if (lines.length === 1) return '';
+    lines.push('Use a relevant check only for a code change or an explicit verification request.');
     return lines.join('\n');
   } catch {
     return '';

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildLazySkillsSection,
+  buildMatchedSkillsPromptSection,
   buildCompactSkillsSection,
   buildSkillsPromptSection,
 } from '@mcp/code-agent/skills/prompt-injector.js';
@@ -45,6 +46,18 @@ function fakeSkill(
 }
 
 describe('skills prompt modes — sizing + determinism', () => {
+  it('sends identical matched skill instructions once and preserves different tool scopes', () => {
+    const match = (id: string, allowedTools: string[]) => ({
+      ...fakeSkill(id), matchConfidence: 1, matchReason: 'role:qa', promptBody: 'Inspect the selected screen.', allowedTools,
+    });
+    const skills = [match('qa-preview', ['preview_open']), match('qa-playwright', ['preview_open']), match('qa-local', ['read_file'])];
+    const context = { PROJECT_NAME: 'test', PROJECT_ROOT: './', SESSION_ID: '1', OS: 'win32', TIMESTAMP: '' };
+    const prompt = buildMatchedSkillsPromptSection(skills, context);
+    expect(prompt.match(/Inspect the selected screen\./g)).toHaveLength(2);
+    for (const skill of skills) expect(prompt).toContain(skill.name);
+    expect(buildMatchedSkillsPromptSection(skills.reverse(), context)).toBe(prompt);
+  });
+
   describe('buildLazySkillsSection (default)', () => {
     it('returns a bounded summary with namespace counts and 3-level discovery instructions', () => {
       const for10 = buildLazySkillsSection(

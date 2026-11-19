@@ -92,17 +92,13 @@ function render(collections: DocsHintCollection[]): string | null {
       : '';
   return [
     '<indexed-docs>',
-    'This project has indexed documentation collections (fresher than your training data):',
+    'Indexed documentation for this project:',
     ...lines,
     // Compact usage protocol — distilled from the DocsAgent's contract so the
     // coder handles the corpus the same way: search-first, trust calibrated
     // relevance, read full before answering, cite the source, be honest about gaps.
-    'How to use them: search with rag_search_docs BEFORE answering from memory about these ' +
-      'libraries; trust the calibrated Relevance (0-1) over snippet order; read any promising hit ' +
-      'in FULL with rag_read_doc({chunk_id}) before you rely on it, and cite the Source it prints. ' +
-      'For a simple question, use one search and at most three full reads. ' +
-      "If the search reports no good match, tell the user it isn't covered — don't guess. For broad " +
-      "multi-section questions, docs_deep_research (unlock via expand_toolset('navigate')) runs a cited pass." +
+    'For a question about these libraries, use rag_search_docs, read the relevant passage with rag_read_doc and cite its source. ' +
+      'Reuse existing evidence. Report scoped gaps. For multi-part research use docs_deep_research when available.' +
       overflow,
     '</indexed-docs>',
   ].join('\n');

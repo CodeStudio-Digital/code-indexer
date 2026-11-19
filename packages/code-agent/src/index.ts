@@ -70,6 +70,7 @@ import {
   buildSystemPrompt,
   normalizeProviderFamily,
   promoteIndexReadySystemPrompt,
+  type PromptContext,
 } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
@@ -93,7 +94,7 @@ import { SessionSnapshotService } from '@mcp/services/services/session-snapshots
 import { filterReviewableDiffs } from '@mcp/services/services/snapshot-review-ignore.js';
 import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox-filesystem-adapter.js';
 import { SandboxShellAdapter } from '@mcp/services/sandbox/adapters/sandbox-shell-adapter.js';
-import { planTools } from '@mcp/code-agent/tools/plan.js';
+import { approvedPlanForRevision, planTools } from '@mcp/code-agent/tools/plan.js';
 import { specTools } from '@mcp/code-agent/tools/spec/index.js';
 import {
   tasksTools,
@@ -1531,6 +1532,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     signal: opts.signal,
     // Persistence hooks for submit_plan — let the dashboard list plans
     // long after the live tool_use scrolled out of view.
+    getActivePlan: () => activePlanCache,
     recordPlan: async (toolUseId, planText) => {
       try {
         await store.recordPlan({
@@ -1566,6 +1568,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try {
         await store.setSessionAgent(session.id, agent);
       } catch (e) {
+        if (agent === 'plan') throw e;
         console.warn(`[coder] setSessionAgent failed: ${e instanceof Error ? e.message : String(e)}`);
       }
       // Apply the NEW agent's defaults to the LIVE runner so the next
@@ -1993,7 +1996,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Detected verify commands (B2-dyn) — package.json scripts + package
   // manager, rendered below the dynamic boundary next to the repo map so the
   // agent runs the project's REAL test/typecheck instead of guessing.
-  const verifyCommands = detectVerifyCommands(project.root_path);
+  const verifyCommands = sandboxBinding ? undefined : detectVerifyCommands(effectiveCwd);
 
   // The current agent loop is the only supported product behavior.
   const agentLoopV2EnvFlag = true;
@@ -2069,12 +2072,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ),
   );
   const effectiveMcpAvailable = [...availableTools].some((name) => name.startsWith('mcp__'));
-  let systemPrompt = buildSystemPrompt({
+  const promptContext: PromptContext = {
     projectName: project.name,
     projectRoot: project.root_path,
     globalWorkspace: toolContext.globalWorkspace,
     os: process.platform,
     planMode: opts.planMode,
+    specMode: opts.specMode ?? effectiveAgentId === 'spec',
     providerFamily: normalizeProviderFamily(session.provider),
     profile: preResolvedProfile,
     sessionId: String(session.id),
@@ -2128,10 +2132,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Registry is fully populated by now (native + company + MCP); the
     // count is a session-start approximation, which is all the hint needs.
     toolCap: {
-      maxTools: sessionToolCap != null
-        ? Math.min(getModelMaxTools(session.model), sessionToolCap)
-        : getModelMaxTools(session.model),
-      approxCatalog: registry.list().length,
+      maxTools: Math.min(getModelMaxTools(session.model), provider.toolLimits?.maxCount ?? Infinity,
+        sessionToolCap && sessionToolCap > 0 ? sessionToolCap : 28),
+      approxCatalog: availableTools.size,
     },
     // Effective permission/sandbox policy surfaced to the model: the real
     // writable root (sandbox workdir or project root) + the approval mode.
@@ -2154,30 +2157,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         : undefined,
     ultraPolicy: ultraPreset,
     availableTools,
-  });
+  };
 
-  if (sessionNetwork) systemPrompt += '\n\n' + await sessionNetwork.context(session.id);
-  if (opts.customAgentPrompt?.trim()) {
-    systemPrompt = appendStaticPromptSection(
-      systemPrompt,
-      `# Custom agent instructions\n${opts.customAgentPrompt.trim()}`,
-    );
-  }
-
-  // Append company prompt block (master orchestration or subordinate instructions)
-  if (opts.companyPromptBlock) {
-    systemPrompt = appendStaticPromptSection(systemPrompt, opts.companyPromptBlock);
-  }
-
-  // Draw.io diagram guidance — appended only when the `diagram` tier will be
-  // active (the `diagram` agent, or a session that persisted
-  // expand_toolset('diagram')). Static + byte-stable → prompt-cache safe.
-  const diagramTierActive =
-    effectiveAgentId === 'diagram' ||
-    (persistedToolset?.extraTiers?.includes('diagram') ?? false);
-  if (diagramTierActive) {
-    systemPrompt = appendStaticPromptSection(systemPrompt, buildDiagramGuidance());
-  }
+  const fixedSections = [
+    opts.customAgentPrompt?.trim() ? `# Custom agent instructions\n${opts.customAgentPrompt.trim()}` : '',
+    opts.companyPromptBlock ?? '',
+  ];
+  let sessionSuffix = sessionNetwork ? '\n\n' + await sessionNetwork.context(session.id) : '';
 
   // Append skill awareness block. Mode resolution priority:
   //   1. Explicit env CODER_SKILLS_PROMPT_MODE = lazy | compact | matched | full
@@ -2193,8 +2179,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (resolvedSkills.length > 0) {
     const inCompany = !!opts.companyContext;
     if (!inCompany) {
-      systemPrompt += buildLazySkillsSection(resolvedSkills);
-      skillsModeUsed = 'lazy';
+      sessionSuffix += buildLazySkillsSection(resolvedSkills, availableTools);
+      if (availableTools.has('get_skill_content')) skillsModeUsed = 'lazy';
     } else {
       // Path triggers fire from `recentFiles`. Outside company context we
       // approximate that with file-shaped tokens in the user message
@@ -2211,16 +2197,29 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       };
       const matched = matchSkills(resolvedSkills, matchCtx);
       if (matched.length > 0) {
-        systemPrompt += buildMatchedSkillsPromptSection(matched, skillTemplateCtx);
-        skillsModeUsed = 'matched';
+        const instructions = buildMatchedSkillsPromptSection(matched, skillTemplateCtx, availableTools);
+        sessionSuffix += instructions;
+        if (instructions) skillsModeUsed = 'matched';
       } else {
         // No matches: degrade to lazy rather than dumping the full list.
-        systemPrompt += buildLazySkillsSection(resolvedSkills);
-        skillsModeUsed = 'lazy';
+        sessionSuffix += buildLazySkillsSection(resolvedSkills, availableTools);
+        if (availableTools.has('get_skill_content')) skillsModeUsed = 'lazy';
       }
     }
   }
 
+  function composeSessionPrompt(): string {
+    const { agentId, planMode = false, specMode = false } = promptContext;
+    const canRevisePlan = !!approvedPlanForRevision(toolContext, { agentId, planMode, specMode, isSubagent: false });
+    let prompt = buildSystemPrompt({ ...promptContext, canRevisePlan });
+    for (const section of fixedSections) prompt = appendStaticPromptSection(prompt, section);
+    if (availableTools.has('diagram_create') && (agentId === 'diagram' || persistedToolset?.extraTiers?.includes('diagram'))) {
+      prompt = appendStaticPromptSection(prompt, buildDiagramGuidance());
+    }
+    return prompt + sessionSuffix;
+  }
+
+  let systemPrompt = composeSessionPrompt();
   // Persist the fully assembled system prompt for the Input tab in the
   // session details modal. Dedup by hash inside SessionStore — typical
   // restarts are byte-identical (cache prefix is intentionally stable).
@@ -2608,6 +2607,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     systemPrompt,
+    systemPromptForAgent: (agent) => {
+      promptContext.agentId = agent.id;
+      promptContext.planMode = agent.planMode;
+      promptContext.specMode = !!agent.specMode;
+      systemPrompt = composeSessionPrompt();
+      return systemPrompt;
+    },
     toolContext,
     initialMessages,
     sessionId: session.id,
@@ -2895,9 +2901,12 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         const liveRepoMap = liveRepoMapBudget > 0
           ? buildRepoMap(db, project.id, liveRepoMapBudget)
           : '';
+        promptContext.isIndexed = true;
+        promptContext.repoMap = liveRepoMap;
         systemPrompt = promoteIndexReadySystemPrompt(systemPrompt, {
-          mcpAvailable: effectiveMcpAvailable,
-          sessionDrive: availableTools.has('save_note') || availableTools.has('read_plan'),
+          mcpAvailable: promptContext.mcpAvailable,
+          sessionDrive: promptContext.sessionDrive,
+          availableTools,
           repoMap: liveRepoMap,
         });
         runner.setSystemPromptForNextTurn(systemPrompt);

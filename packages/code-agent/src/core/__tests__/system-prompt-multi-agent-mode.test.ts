@@ -13,7 +13,7 @@ function baseCtx(overrides?: Partial<PromptContext>): PromptContext {
     os: 'win32',
     providerFamily: 'openai',
     profile: 'full',
-    availableTools: new Set(['spawn_agent', 'task_list', 'execute_tasks']),
+    availableTools: new Set(['spawn_agent', 'task_list', 'execute_tasks', 'reply_chat_message']),
     ...overrides,
   };
 }
@@ -28,6 +28,12 @@ describe('system prompt — multi-agent execution mode', () => {
     expect(prefix).toContain('Preserve Explore/Plan');
     expect(prefix).toContain('reply_chat_message');
     expect(suffix).not.toContain('Multi-agent mode');
+  });
+
+  it('names only the peer tools present in the session', () => {
+    const prompt = buildSystemPrompt(baseCtx({ multiAgentMode: 'proactive', availableTools: new Set(['spawn_agent', 'send_chat_message']) }));
+    expect(prompt).toContain('send_chat_message');
+    expect(prompt).not.toMatch(/list_chats|reply_chat_message|resume_chat/);
   });
 
   it('revokes proactive delegation when the session selects the explicit policy', () => {

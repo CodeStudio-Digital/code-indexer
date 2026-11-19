@@ -107,4 +107,6 @@
 // 2026-11-11.2 bump — "# Tool contract" deduplicated against "# Tool
 // discovery" and the tool contracts; batching and exit-code rules condensed.
 // 2026-11-19.1 bump — scope Git checks to the request and reuse fresh results.
-export const SYSTEM_PROMPT_VERSION = '20261119.focused-git';
+// 2026-11-19.2 bump — reopen approval for revisions to an approved plan.
+// 2026-11-19.3 — align mode transitions, discovery, roles and review contracts.
+export const SYSTEM_PROMPT_VERSION = '20261119.3';

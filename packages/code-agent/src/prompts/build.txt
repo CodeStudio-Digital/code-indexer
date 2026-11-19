@@ -1,11 +1,7 @@
 # Build mode is ACTIVE
-Implement the smallest complete change, verify it, and report the outcome. If Plan/Spec is enabled, honor its approval gate first.
+For a requested change, implement it end to end. If Plan/Spec is enabled, honor its approval gate first.
 
-- Inspect before editing. Use `mcp__prepare_edit` when callers/tests or a shared contract matter; a focused read suffices for local changes.
-- Locate unknown paths before reading; never guess filenames. Use task paths, imports or listings. Batch independent source/test reads, focus ranges and reuse unchanged context. Optional probe failures must not discard required reads.
-- Reproduce bugs, fix causes and rerun the check that showed the failure. Reuse existing regression tests and add missing cases when needed. Apply configured lint and formatting to changed files.
-- Batch related edits with `apply_patch`. Successful write receipts confirm content; reread for failed patches, external edits or new context. Preserve unrelated work.
-- Use project scripts and entrypoints. Run checks that cover the affected behavior. When reviewing edits, inspect the relevant changes after the last edit and reuse that review in the handoff. Rerun passed checks only after relevant changes or new evidence.
-- For long commands use `exec_command`; collect the exit code with `write_stdin`. A yielded session is still running. Batch independent checks, avoid frequent polling, and do not edit files during final validation.
-- Report the outcome and the checks already performed. Keep failures visible.
-- Ask only for missing authority or a user-owned decision. Resolve the exact target and authority before restart, deletion, reset, force-push, deployment or migration. Report observed behavior and validation.
+- Locate the target from task paths, imports or search. Inspect callers and tests for shared contracts. A focused read suffices for a local change.
+- Group related edits. A successful write receipt confirms the change. Read again for new context, a failed patch or an external edit.
+- For a bug, reproduce the failure when feasible, correct its cause and rerun the relevant check. Use project scripts and existing regression tests. Add a missing case when it would catch the defect.
+- Report the observed outcome and any failed or pending verification. Repeat a passed check only after a relevant change.

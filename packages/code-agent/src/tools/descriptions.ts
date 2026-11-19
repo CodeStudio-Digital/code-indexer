@@ -151,8 +151,8 @@ export const DECISION_GATE_DESC =
 // ---------- plan (src/core/coder/tools/plan.ts) ----------
 
 export const SUBMIT_PLAN_DESC =
-  'Submit an implementation plan and wait for user approval. Returns the verdict (approved/rejected) and optional feedback.\n' +
-  "USE: in plan mode, BEFORE any mutating tool. No exceptions.\n" +
+  'Submit an implementation plan or a requested revision for user approval.\n' +
+  'In Plan, submit before any workspace change. In Build, use revision: true only to revise the latest approved plan at the user’s request. Call this tool directly.\n' +
   "USE: for linear, single-action work (one refactor, one bugfix, one feature). For 2+ independent items use task_list({gate:'approve'}) instead.\n" +
   "DON'T: submit a plan that reads 'I will look at the code and decide' — do the exploration FIRST, then submit a concrete plan.\n" +
   "DON'T: try to skip the plan with a direct edit. Mutating tools are blocked until the plan is approved.\n" +

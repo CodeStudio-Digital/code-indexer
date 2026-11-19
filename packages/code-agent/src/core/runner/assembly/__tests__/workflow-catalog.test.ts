@@ -89,6 +89,19 @@ describe('workflow catalog', () => {
     expect(names(spec)).not.toContain('submit_plan');
   });
 
+  it('keeps the review tool visible in Build when there is an approved plan to revise', () => {
+    const toolContext: ToolContext = {
+      cwd: tmpdir(), projectName: 'catalog',
+      runner: { agentId: 'build', planMode: false } as ToolContext['runner'],
+      getActivePlan: () => ({ text: 'Approved plan', status: 'approved' }),
+      setSessionAgent: () => undefined,
+    };
+    const build = buildTools(args({ toolContext }));
+    expect(build.protectedToolNames.has('submit_plan')).toBe(true);
+    expect(names(build)).not.toContain('decision_gate');
+    expect(names(buildTools(args({ toolContext, sessionDisabledTools: new Set(['submit_plan']) })))).not.toContain('submit_plan');
+  });
+
   it('applies revocation before selecting canonical alternatives and ignores pins for disabled tools', () => {
     const result = buildTools(args({ sessionDisabledTools: new Set(['read_file', 'exec_command', 'apply_patch']),
       requiredPinnedTools: new Set(['read_file', 'exec_command', 'apply_patch']) }));

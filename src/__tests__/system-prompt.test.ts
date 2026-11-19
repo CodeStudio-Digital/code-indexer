@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSystemPrompt, type ProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
+import { buildSystemPrompt, normalizeProviderFamily, type ProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
 
 const base = {
   projectName: 'acme/app',
@@ -18,6 +18,11 @@ describe('buildSystemPrompt per-provider preambles', () => {
       prefixes.add(p.slice(0, 120));
     }
     expect(prefixes.size).toBe(distinctFamilies.length);
+  });
+
+  it.each(['copilot', 'bedrock', 'openai', 'anthropic'])('does not infer a model identity from the local %s connection', (kind) => {
+    const prompt = buildSystemPrompt({ ...base, providerFamily: normalizeProviderFamily(kind) });
+    expect(prompt).not.toMatch(/Claude family|OpenAI GPT family|Codex family/i);
   });
 
   it('uses the family-neutral preamble for OpenRouter', () => {

@@ -325,7 +325,7 @@ export function buildInvokeSkillTool(
             `For this task, restrict yourself to ONLY the following tools:`,
             ...skill.allowedTools.map((t) => `- \`${t}\``),
             '',
-            'Calling tools outside this list is a contract violation: the user explicitly tagged this skill with `allowed-tools` because the workflow only needs that subset. Stay in scope. If you genuinely need a tool outside the list (e.g. a search you didn\'t plan for), STOP and ask the master via `ask_master` before reaching for it.',
+            'Use the listed tools within session permissions. If this scope prevents the requested work, report the missing capability to the caller.',
           ].join('\n')
         : '';
 

@@ -154,7 +154,8 @@ describe('update_task — error paths', () => {
     } as unknown as ToolContext;
     const r = await updateTask.handler({ task_id: 'task_1', status: 'skipped' }, ctx);
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('Call submit_tasks first');
+    expect(r.content).toContain('no task list exists in this session');
+    expect(r.content).not.toContain('submit_tasks');
   });
 
   it('requires at least one mutating field', async () => {

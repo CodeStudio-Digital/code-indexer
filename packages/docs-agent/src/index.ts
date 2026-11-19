@@ -37,6 +37,7 @@ import { buildDocsToolset, type DocsToolsetCounters, type PlanSlot } from './too
 import type { DocsFinishSlot, DocsFinishPayload } from './tools/docs-finish.js';
 import { reviewAnswer, applyReview } from './review/review-gate.js';
 import { buildDocsSystemPrompt } from './prompts/system-prompt.js';
+import { DOCS_BUDGET } from './tools/evidence-ledger.js';
 import {
   DocsResearchSessionsStore,
   type DocsResearchStatus,
@@ -47,12 +48,6 @@ import type {
   DocsResearchResult,
   ResearchConfidence,
 } from './types.js';
-
-// Hard behavioral budget: evidence tools enforce four searches/eight reads;
-// six runner rounds are enough to plan, retrieve, synthesize and finish.
-const DEFAULT_MAX_TURNS = 6;
-/** Hard cap so a misconfigured caller can't trigger arbitrarily long runs. */
-const MAX_MAX_TURNS = 6;
 
 export interface RunDocsAgentDeps {
   /** Filesystem session authority for docs bundles. */
@@ -156,7 +151,9 @@ export async function runDocsAgent(
 
       // 5. Build the system prompt — interpolates the live collection list.
       const collections = deps.docStore.listCollections();
+      const maxTurns = clamp(opts.maxTurns ?? DOCS_BUDGET.rounds, 1, DOCS_BUDGET.rounds);
       const systemPrompt = buildDocsSystemPrompt({
+        maxTurns,
         collections,
         scopedCollections: opts.collections,
       });
@@ -178,7 +175,6 @@ export async function runDocsAgent(
       //    markdown is durable). `maxTurns` enforces the docs_finish
       //    contract: a runaway agent gets force-stopped, the slot stays
       //    empty, the session row records 'failed' with a clear reason.
-      const maxTurns = clamp(opts.maxTurns ?? DEFAULT_MAX_TURNS, 1, MAX_MAX_TURNS);
       const runner = new CoderRunner({
         provider,
         registry,

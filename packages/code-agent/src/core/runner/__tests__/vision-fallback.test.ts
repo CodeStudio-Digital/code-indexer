@@ -76,7 +76,8 @@ describe('applyVisionFallback', () => {
     ];
     await applyVisionFallback({ messages: msgs, gate: true, describer: d });
     expect(d.prompts).toHaveLength(1);
-    expect(d.prompts[0]).toMatch(/describe this image in detail/i);
+    expect(d.prompts[0]).toContain('visible subject');
+    expect(d.prompts[0]).toMatch(/layout.*labels.*visible defects/i);
   });
 
   it('emits an "omitted" note when no describer is wired', async () => {

@@ -15,7 +15,9 @@ describe('action, approval and recovery prompt contracts', () => {
     expect(build).toContain('can you fix');
     expect(build).not.toContain('Questions are read-only');
     expect(explore).toContain('Investigate read-only');
-    expect(buildSystemPrompt({ ...base, agentId: 'build', planMode: true })).toContain('honor its approval gate first');
+    const gated = buildSystemPrompt({ ...base, agentId: 'build', planMode: true });
+    expect(gated).toContain('# Plan mode is ACTIVE');
+    expect(gated).not.toContain('# Build mode is ACTIVE');
     expect(build).not.toContain('There is no plan gate');
   });
 

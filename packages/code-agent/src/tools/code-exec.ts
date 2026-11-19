@@ -110,7 +110,7 @@ const CODE_EXEC_DESC =
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
   'Mutations must satisfy active mode, permission and task-scope gates. When Plan/Spec is active, obtain its required approval first; ordinary action mode does not create a new plan requirement. ' +
-  'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and lifecycle tools (task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
+  'Interactive approvals, spawn/resume controls, task_complete and image/video tools are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
   'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, at most ' + MAX_PARALLEL_TOOL_CALLS + ' independent read calls at once; writes, commands and unknown classifications form sequential barriers, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
   '\n' +

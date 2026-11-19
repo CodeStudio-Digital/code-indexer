@@ -42,6 +42,7 @@ import { assembleMessagesForChat } from '../assembly/messages.js';
 import { buildTools, buildToolsCacheKey, fingerprintToolsJson, type BuildToolsResult } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import { approvedPlanForRevision } from '@mcp/code-agent/tools/plan.js';
 import { resolveProviderCapabilityProjection } from '@mcp/code-agent/core/capability-catalog.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
 import { maybeKickSummaryPrecompute, shouldKickPrecompute } from '../compaction/precompute.js';
@@ -564,6 +565,7 @@ export class ExecutingNode implements BehaviorNode {
       `|cap=${ctx.opts.sessionToolCap ?? ''}` +
       `|terse=${String(ctx.terseDescriptionsLock)}` +
       `|mode=${Boolean(ctx.opts.toolContext.runner?.planMode)}:${Boolean(ctx.opts.toolContext.runner?.specMode)}` +
+      `|planRevision=${!!approvedPlanForRevision(ctx.opts.toolContext)}` +
       `|hardLimit=${ctx.opts.provider.toolLimits?.maxCount ?? ''}` +
       `|model=${ctx.opts.provider.model ?? ''}` +
       `|disabled=${JSON.stringify([[...(ctx.opts.globalDisabledTools ?? [])].sort(), [...(ctx.opts.sessionDisabledTools ?? [])].sort()])}`;

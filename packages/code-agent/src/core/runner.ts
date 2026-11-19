@@ -58,6 +58,7 @@ import { filterByTiers, profileToTiers, PREVIEW_TOOLS, type ToolTier, type Coder
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { parkForBackgroundWork } from '@mcp/code-agent/tools/subagent-jobs-lifecycle.js';
 import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
+import { approvedPlanForRevision } from '@mcp/code-agent/tools/plan.js';
 import { applySmartReducerDetailed, type ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
 import {
   resolveRegisteredToolOutputPolicy,
@@ -1002,10 +1003,7 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
-   * Active agent identity at run start, if any. Read-only — the in-memory
-   * agent never changes mid-run; mode transitions persist to the DB and
-   * take effect on the NEXT runner creation. Tools use this to decide
-   * whether a transition (e.g. plan→build after approval) should fire.
+   * Active agent identity, including live mode transitions after plan review.
    */
   get agentId(): import('@mcp/code-agent/agents/index.js').AgentId | null | undefined {
     return this.opts.agentId;
@@ -1029,6 +1027,7 @@ export class CoderRunner extends EventEmitter {
     this.opts.toolContext.planMode = this.opts.planMode;
     if (this.opts.planMode) this.resetPlanApproval();
     if (this.opts.specMode) this.resetSpecApproval();
+    if (this.opts.systemPromptForAgent) this.setSystemPromptForNextTurn(this.opts.systemPromptForAgent(def));
   }
 
   /**
@@ -1277,7 +1276,8 @@ export class CoderRunner extends EventEmitter {
   discoveryState(name: string): { authorization: 'blocked' | 'requires_dispatch_validation'; visible: boolean; reason?: string } {
     const blocked = (this.authorizedToolNames !== null && !this.authorizedToolNames.has(name))
       || this.opts.globalDisabledTools?.has(name) || this.opts.sessionDisabledTools?.has(name)
-      || (name === 'submit_plan' && (!this.opts.planMode || this.opts.specMode));
+      || (name === 'submit_plan' && (this.opts.specMode
+        || (!this.opts.planMode && !approvedPlanForRevision(this.opts.toolContext))));
     return { authorization: blocked ? 'blocked' : 'requires_dispatch_validation',
       visible: this.visibleToolNames?.has(name) ?? false,
       ...(blocked ? { reason: 'disabled_or_mode_excluded' } : {}) };

@@ -115,6 +115,20 @@ it('reports an exact blocked match without requesting activation', async () => {
   expect(promoteTool).not.toHaveBeenCalled();
 });
 
+it.each([true, false])('ends discovery of a known plan tool with actionable guidance (blocked: %s)', async blocked => {
+  const registry = buildRegistry();
+  registry.register(tool('submit_plan', 'Submit a plan or revision for approval.', { interactive: true }));
+  const result = await buildFindToolsTool(registry).handler({ query: 'submit_plan' }, {
+    cwd: '/tmp', projectName: 'test', runner: {
+      stableToolCatalog: true,
+      visibleToolNames: new Set(blocked ? [] : ['submit_plan']),
+      discoveryState: () => ({ authorization: blocked ? 'blocked' : 'requires_dispatch_validation' }),
+    },
+  } as never);
+  expect(result.content).toContain(blocked ? 'Repeating discovery cannot enable it' : 'Call submit_plan directly');
+  expect(result.content).not.toContain('Inside code_exec, call hidden');
+});
+
 function namesIn(output: string): string[] {
   const out: string[] = [];
   for (const line of output.split('\n')) {

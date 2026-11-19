@@ -42,10 +42,7 @@ function guardTrackWriteOverApprove(ctx: ToolContext): string | null {
   if (!hasActive) return null;
   return (
     'Refused: an approved task list is still active, so a lightweight checklist would overwrite it. ' +
-    'Drive it with execute_tasks (if approved), or adjust/clear it with update_task / cancel_tasks / ' +
-    'delete_tasks — call expand_toolset("navigate") first if those are not yet available — before ' +
-    'starting a checklist. ' +
-    '(todos and tasks share one list per session — task_list gate:"track" vs gate:"approve".)'
+    'Continue the approved list with execute_tasks, or update the existing task if its scope changed.'
   );
 }
 

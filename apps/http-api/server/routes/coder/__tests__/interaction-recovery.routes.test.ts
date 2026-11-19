@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SPEC_APPROVAL_REMINDER } from '@mcp/code-agent/tools/spec/index.js';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 
 const { poolMock } = vi.hoisted(() => ({
@@ -190,6 +191,35 @@ describe('coder interaction route filesystem recovery', () => {
         tool_use_id: 'question-1',
       }],
     });
+  });
+
+  it.each([undefined, '.mcp/specs/tiered-cache.md'])('resumes approved Spec in Build with the same guidance as the live runner (path %s)', async (path) => {
+    const session = await store.createSession({ project_id: 7, title: 'Pending spec', provider: 'test', model: 'test' });
+    await store.setSessionAgent(session.id, 'spec');
+    await store.appendMessage({
+      session_id: session.id, operation_id: 'pending-spec',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'spec-1', name: 'submit_spec', input: { name: 'Tiered cache' } }] },
+    });
+    await store.close();
+    store = openStore();
+    const app = new Hono();
+    mountCoderSpecResponseRoute(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
+
+    const response = await app.request(`/api/coder/sessions/${session.id}/spec-response`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true, spec_path: path }),
+    });
+    expect(response.status).toBe(200);
+    expect((await store.getSession(session.id))?.agent).toBe('build');
+    const recovered = await store.loadSessionWithMessages(session.id);
+    expect(recovered?.messages[1]).toMatchObject({ role: 'tool', content: [{
+      type: 'tool_result', tool_use_id: 'spec-1',
+      content: expect.stringContaining(path ? 'approved by user at ' + path : 'approved by user.'),
+    }] });
+    expect(recovered?.messages[2]).toMatchObject({
+      role: 'user', content: [{ type: 'text', text: SPEC_APPROVAL_REMINDER }],
+    });
+    expect(SPEC_APPROVAL_REMINDER).not.toContain('submit_tasks');
   });
 
   it('answers a pending decision_gate from a reopened bundle', async () => {

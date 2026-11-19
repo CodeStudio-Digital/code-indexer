@@ -26,16 +26,8 @@ export function shellLabel(platform: string = process.platform): string {
 export function describeShell(platform: string = process.platform): string {
   if (platform === 'win32') {
     return (
-      'win32 (Windows). The shell for run_command / exec_command is **cmd.exe**, ' +
-      'NOT bash. Use Windows commands: `dir` (not ls), `type` (not cat), ' +
-      '`findstr` (not grep), `where` (not which). Unix pipes like `| head` / ' +
-      '`| tail` DO NOT EXIST in cmd — the tool already truncates output, so omit ' +
-      'them. `&&` chaining and `cmd1 & cmd2` work. Env vars expand as `%VAR%` in ' +
-      'cmd — `$env:VAR` only works inside PowerShell, `$VAR` never. Discard ' +
-      'streams with `2>nul` in cmd (`2>$null` is PowerShell-only). For anything ' +
-      'beyond a simple command (loops, redirects, env logic), call PowerShell ' +
-      'explicitly: `powershell -NoProfile -Command "..."`. Feed multi-line ' +
-      'scripts via the `stdin` param instead of inline quoting.'
+      'win32 (Windows). Default shell: cmd.exe. Use cmd syntax (%VAR%, findstr, no `| head`) or select powershell/pwsh explicitly for PowerShell syntax. ' +
+      'For exec_command, launch executables with argv. Windows .cmd and .bat launchers require command:{kind:"shell",shell:"cmd",script:"..."}.'
     );
   }
   const name = platform === 'darwin' ? 'macOS' : platform === 'linux' ? 'Linux' : platform;

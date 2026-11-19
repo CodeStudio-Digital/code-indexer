@@ -26,6 +26,7 @@ import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { isEssentialCompanyTool } from '../company-essentials.js';
 import { selectWorkflowCatalog } from '../../../tools/workflow-catalog.js';
 import { WORKFLOW_CATALOG_CONTRACTS } from '../../../tools/catalog-contracts.js';
+import { approvedPlanForRevision } from '../../../tools/plan.js';
 
 export interface SerializedTool {
   name: string;
@@ -117,14 +118,13 @@ const BUILD_TASK_LIST_SCHEMA: JsonSchema = {
 
 export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   let filtered = args.registry.list();
-  // submit_plan is an execution gate, not a generic planning aid. Advertising
-  // it to Build agents lets weak models turn a pre-approved implementation
-  // request into an indefinite human wait. Keep the handler in the registry
-  // for persisted calls, but expose it only when Plan mode owns that gate.
+  // Keep the approval gate off the ordinary Build surface. A session with an
+  // approved plan can reopen that review using the same interactive tool.
   const specModeBlocksPlan = args.toolContext.runner?.specMode === true;
   const planModeAllowsPlan = args.toolContext.runner?.planMode === true
     && !specModeBlocksPlan;
-  if (!planModeAllowsPlan) {
+  const canSubmitPlan = planModeAllowsPlan || !!approvedPlanForRevision(args.toolContext);
+  if (!canSubmitPlan) {
     filtered = filtered.filter((tool) => tool.name !== 'submit_plan');
   }
 
@@ -150,7 +150,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     for (const t of args.registry.list()) {
       const required = args.requiredPinnedTools?.has(t.name);
       if ((!required && !args.pinnedTools?.has(t.name)) || present.has(t.name)) continue;
-      if (!planModeAllowsPlan && t.name === 'submit_plan') continue;
+      if (!canSubmitPlan && t.name === 'submit_plan') continue;
       if (args.globalDisabledTools?.has(t.name)) continue;
       if (args.sessionDisabledTools?.has(t.name)) continue;
       filtered.push(t);

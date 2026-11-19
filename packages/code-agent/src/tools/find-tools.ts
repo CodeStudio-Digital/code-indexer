@@ -262,7 +262,16 @@ export function buildFindToolsTool(
         for (const candidate of top.filter(r => !r.blocked)) {
           lines.push(`\n${candidate.name} input schema: ${JSON.stringify(candidate.schema)}`);
         }
-        lines.push('\nThe public tool catalog stays fixed. Inside code_exec, call hidden non-interactive tools with return await tools["exact-name"](args). Preserve punctuation in the name. Dispatch still validates permissions, scope and arguments.');
+        const primary = !weak && unambiguous ? top[0] : undefined;
+        if (primary?.blocked) {
+          lines.push(`\n${primary.name} is unavailable in the current mode or configuration. Repeating discovery cannot enable it. Use a listed available alternative or report the limitation.`);
+        } else if (primary?.visible && !primary.schemaRejected) {
+          lines.push(`\nCall ${primary.name} directly with its visible schema. The tool is ready to use.`);
+        } else if (primary && !primary.callableInsideCodeExec) {
+          lines.push(`\n${primary.name} requires a visible top-level schema. Use a listed available alternative or report the limitation.`);
+        } else {
+          lines.push('\nThe public tool catalog stays fixed. Inside code_exec, call hidden non-interactive tools with return await tools["exact-name"](args). Preserve punctuation in the name. Dispatch still validates permissions, scope and arguments.');
+        }
       } else if (autoPromoted) {
         lines.push('');
         lines.push(
