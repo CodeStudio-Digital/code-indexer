@@ -1046,6 +1046,7 @@
   "rightRail.state": "State",
   "rightRail.context": "Context",
   "rightRail.changes": "Changes",
+  "rightRail.usageQuota": "Usage quotas",
   "rightRail.more": "More",
   "rightRail.sessionTools": "Session tools",
   "rightRail.advanced": "Tools and diagnostics",

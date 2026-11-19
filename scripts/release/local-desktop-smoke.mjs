@@ -253,6 +253,7 @@ async function exerciseCopilotLogin() {
     const { CopilotClient } = await import(pathToFileURL(entry).href);
     const prototype = CopilotClient.prototype;
     const state = { steps: 0 };
+    let quotaRemaining = 549.75;
     let allowAccountChoice;
     const deviceInspected = new Promise(resolve => { allowAccountChoice = resolve; });
     const methods = {
@@ -263,7 +264,7 @@ async function exerciseCopilotLogin() {
           async getCurrentAuth() {
             return { authInfo: { type: 'user', copilotUser: {
               login: 'chosen-fixture', token_based_billing: true,
-              quota_snapshots: { premium_interactions: { entitlement: 1000, quota_remaining: 549.75 } },
+              quota_snapshots: { premium_interactions: { entitlement: 1000, quota_remaining: quotaRemaining } },
             } } };
           },
         } } });
@@ -306,7 +307,11 @@ async function exerciseCopilotLogin() {
     };
     const originals = Object.fromEntries(Object.keys(methods).map(key => [key, prototype[key]]));
     Object.assign(prototype, methods);
-    globalThis.copilotLoginFixture = { state, allowAccountChoice, restore: () => Object.assign(prototype, originals) };
+    globalThis.copilotLoginFixture = {
+      state, allowAccountChoice,
+      setQuotaRemaining: value => { quotaRemaining = value; },
+      restore: () => Object.assign(prototype, originals),
+    };
   }));
 
   await app.evaluate(async ({ app }, fixtureFile) => {
@@ -334,6 +339,23 @@ async function exerciseCopilotLogin() {
     await quota.getByRole('button', { name: /^(Consultar cota|Check quota)$/ }).click();
     await expect(quota.getByText(/^(Créditos de IA|AI credits)$/)).toBeVisible();
     await expect(quota.getByText(/^549[.,]75$/)).toBeVisible();
+
+    const projectId = Number(projectHash.match(/^#\/projects\/(\d+)/)[1]);
+    const chat = await api('coder/sessions', {
+      project_id: projectId, title: 'Quota shortcut fixture', provider: 'copilot', model: 'fixture-copilot-model',
+    });
+    const chatHash = `#/projects/${projectId}?session=${encodeURIComponent(chat.id)}`;
+    await page.evaluate(hash => { location.hash = hash; }, chatHash);
+    const shortcut = page.getByRole('button', { name: /^(Cotas de uso|Usage quotas)$/ });
+    await shortcut.click({ timeout: 30000 });
+    const quickQuota = page.getByRole('region', { name: 'GitHub Copilot', exact: true });
+    await expect(shortcut).toHaveAttribute('aria-pressed', 'true');
+    await expect(quickQuota.getByText(/^549[.,]75$/)).toBeVisible({ timeout: 15000 });
+    await app.evaluate(() => { globalThis.copilotLoginFixture.setQuotaRemaining(537.25); });
+    await quickQuota.getByRole('button', { name: /^(Atualizar cota|Refresh quota)$/ }).click();
+    await expect(quickQuota.getByText(/^537[.,]25$/)).toBeVisible();
+    await shortcut.click();
+    await expect(quickQuota).toBeHidden();
     await page.evaluate(hash => { location.hash = hash; }, projectHash);
     await expect.poll(() => page.url()).toMatch(/#\/projects\/\d+/);
   } finally {
@@ -449,7 +471,7 @@ try {
   assert.deepEqual(errors, []);
   passed = true;
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
-    electronChromium: true, copilotRuntime: true, copilotLogin: true, copilotQuota: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
+    electronChromium: true, copilotRuntime: true, copilotLogin: true, copilotQuota: true, quickQuota: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
     figmaPanel: true, figmaProviderCalls, figmaSecretSeen, figmaVerificationNudges, coldFigmaReads, warmFigmaReads,
     persistedReply: true, cloudCalls, rendererErrors: errors }));
 } catch (error) {

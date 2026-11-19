@@ -1,7 +1,7 @@
 import type { AdminModel, AdminProvider, TestResult, ProviderConfigDescriptor } from './types.js';
 
-export async function fetchProviders(): Promise<AdminProvider[]> {
-  const r = await fetch('/api/admin/providers');
+export async function fetchProviders(signal?: AbortSignal): Promise<AdminProvider[]> {
+  const r = await fetch('/api/admin/providers', { signal });
   const j = (await r.json()) as { providers: AdminProvider[] };
   return j.providers;
 }

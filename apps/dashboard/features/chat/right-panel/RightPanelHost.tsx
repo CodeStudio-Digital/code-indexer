@@ -11,7 +11,7 @@
  * position or partial state per panel, this is the place to add
  * mounting that respects an `mounted: Set<RightPanelId>` cache.
  */
-import { Bell, Bot, ChartNoAxesCombined, Compass, Library, ScrollText, Settings, Workflow } from 'lucide-react';
+import { Bell, Bot, ChartNoAxesCombined, Compass, Gauge, Library, ScrollText, Settings, Workflow } from 'lucide-react';
 import { lazy, memo, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
@@ -39,6 +39,9 @@ const SessionConfigView = lazy(() =>
 );
 const SessionInsightsPanel = lazy(() =>
   import('./SessionInsightsPanel.js').then((m) => ({ default: m.SessionInsightsPanel })),
+);
+const CopilotQuotaPanel = lazy(() =>
+  import('../../admin/providers/CopilotQuotaPanel.js').then((m) => ({ default: m.CopilotQuotaPanel })),
 );
 const DiagramPanel = lazy(() =>
   import('./diagram/DiagramPanel.js').then((m) => ({ default: m.DiagramPanel })),
@@ -198,6 +201,14 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
               session={props.session}
               stats={props.stats}
             />
+          </PanelBody>
+        </PanelChrome>
+      );
+    case 'usage-quota':
+      return (
+        <PanelChrome title={t('chat:rightRail.usageQuota')} icon={Gauge} onClose={onClose}>
+          <PanelBody>
+            <CopilotQuotaPanel key={props.session?.provider} variant="quick" providerId={props.session?.provider} />
           </PanelBody>
         </PanelChrome>
       );
