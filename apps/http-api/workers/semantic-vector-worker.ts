@@ -140,6 +140,7 @@ function resolvedRerankerFor(target: Extract<RerankerTarget, { kind: 'onnx' }>):
   }
   const sessionKey = stable({
     model: resolved.model,
+    localFilesOnly: target.model === 'auto',
     dtype: resolved.dtype,
     revision: target.revision,
     cacheDir: target.cacheDir,
@@ -150,6 +151,7 @@ function resolvedRerankerFor(target: Extract<RerankerTarget, { kind: 'onnx' }>):
   if (!managed) {
     const service = new LocalReranker({
       model: resolved.model,
+      localFilesOnly: target.model === 'auto',
       revision: target.revision,
       cacheDir: target.cacheDir,
       dtype: resolved.dtype,

@@ -21,8 +21,9 @@
  * artifact lands in `dist/apps/electron/preload.cjs`.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { buildSync } from 'esbuild';
@@ -35,6 +36,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '../..');
 const nodeRequire = createRequire(import.meta.url);
+const bundledPluginsDir = process.env.MCP_BUNDLED_PLUGINS_DIR || path.join(repoRoot, 'dist', 'bundled-plugins');
+const devDataDir = process.env.MCP_DATA_DIR?.trim() || (process.platform === 'win32' && process.env.LOCALAPPDATA
+  ? path.join(process.env.LOCALAPPDATA, 'CodeStudioLocal-dev', 'data')
+  : path.join(homedir(), '.codestudio-local-dev'));
+
+if (!process.env.MCP_BUNDLED_PLUGINS_DIR) {
+  const build = spawnSync(process.execPath, ['scripts/build-bundled-plugins.mjs', '--if-changed'], {
+    cwd: repoRoot, stdio: 'inherit', windowsHide: true,
+  });
+  if (build.status !== 0) throw build.error ?? new Error('Could not prepare the bundled plugins for Electron dev.');
+}
 
 // 1) Bundle preload.ts → preload.cjs. Synchronous so the spawn below
 //    sees the file ready on disk.
@@ -142,6 +154,10 @@ const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
   detached: process.platform !== 'win32',
   env: {
     ...process.env,
+    MCP_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+    MCP_BUNDLED_SEMANTIC_MODELS_DIR: process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR || path.join(repoRoot, 'assets', 'semantic-models'),
+    MCP_DATA_DIR: devDataDir,
+    MCP_MODEL_CACHE_DIR: process.env.MCP_MODEL_CACHE_DIR || path.join(devDataDir, 'models'),
     MCP_ELECTRON_DEV_URL: dashboardUrl,
     // IPC-first: Hono HTTP listener stays OFF unless the operator
     // explicitly opts in (MCP_DEV_HTTP=1) to debug with curl. The

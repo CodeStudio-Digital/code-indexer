@@ -220,6 +220,7 @@ export function createRerankerForTarget(
     } else {
       service = new LocalReranker({
         model: resolved.model,
+        localFilesOnly: target.model === 'auto',
         revision: target.revision,
         cacheDir: target.cacheDir,
         dtype: resolved.dtype,

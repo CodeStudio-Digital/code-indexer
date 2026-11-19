@@ -121,7 +121,7 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
 await mkdir(join(root, 'local-app-data'));
 Object.assign(env, {
   LOCALAPPDATA: join(root, 'local-app-data'),
-  MCP_DATA_DIR: data, MCP_MODEL_CACHE_DIR: join(root, 'models'),
+  MCP_DATA_DIR: data, MCP_MODEL_CACHE_DIR: join(root, 'models'), MODEL_PRICING_REMOTE_ENABLED: '0',
   MCP_RUNTIME_COORDINATION_DIR: join(root, 'coordination'), PROVIDER_REFRESH_INTERVAL_MS: '0',
   COPILOT_DISABLE_KEYTAR: '1', // The isolated smoke never reads or writes credentials in the user's vault.
   CODESTUDIO_CLOUD_URL: local + '/unavailable', CODESTUDIO_PORTAL_URL: local + '/unavailable',
@@ -177,7 +177,8 @@ async function assertProviderSurface() {
   });
   assert.deepEqual(retired, [404, 400, 400]);
   assert.deepEqual((await ipc('system.preflight')).checks.map(check => check.id).sort(), ['disk', 'git']);
-  assert.deepEqual((await readdir(join(dirname(binary), 'resources', 'bundled-plugins'))).sort(),
+  const bundled = await readdir(join(dirname(binary), 'resources', 'bundled-plugins'), { withFileTypes: true });
+  assert.deepEqual(bundled.filter(entry => entry.isDirectory()).map(entry => entry.name).sort(),
     ['angular', 'figma', 'javascript-debugger']);
 }
 
@@ -419,6 +420,14 @@ try {
   await page.getByRole('button', { name: /^(Open project|Abrir projeto)$/ }).click();
   await expect.poll(() => page.url(), { timeout: 60000 }).toMatch(/#\/projects\/\d+/);
   await assertProviderSurface();
+  const { profile: semanticProfile } = await api('admin/semantic/profiles/code');
+  assert.match(semanticProfile.embedding_target.model, /granite-embedding-97m-multilingual-r2/);
+  const embeddingProbe = await api('admin/semantic/probe', { capability: 'embedding', target: semanticProfile.embedding_target });
+  assert.equal(embeddingProbe.dimension, 384);
+  assert.equal((await api('admin/model-prices')).remoteSyncEnabled, false);
+  const priceSync = await api('admin/model-prices/sync', {});
+  assert.equal(priceSync.remoteSyncDisabled, true);
+  assert.deepEqual(priceSync.sources, []);
   await exerciseElectronChromium();
   await exerciseCopilotRuntime();
   await exerciseCopilotLogin();
@@ -471,6 +480,7 @@ try {
   assert.deepEqual(errors, []);
   passed = true;
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
+    bundledEmbedding: true, localModelPrices: true,
     electronChromium: true, copilotRuntime: true, copilotLogin: true, copilotQuota: true, quickQuota: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
     figmaPanel: true, figmaProviderCalls, figmaSecretSeen, figmaVerificationNudges, coldFigmaReads, warmFigmaReads,
     persistedReply: true, cloudCalls, rendererErrors: errors }));

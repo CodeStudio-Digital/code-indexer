@@ -278,6 +278,7 @@ import { mcpOAuthResource274 } from './274_mcp_oauth_resource.js';
 import { agentMemoryEvolution275 } from './275_agent_memory_evolution.js';
 import { worktreeProjects276 } from './276_worktree_projects.js';
 import { semanticRecovery277 } from './277_semantic_recovery.js';
+import { bundledGraniteEmbedding278 } from './278_bundled_granite_embedding.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -555,6 +556,7 @@ export const MIGRATIONS: Migration[] = [
   agentMemoryEvolution275,
   worktreeProjects276,
   semanticRecovery277,
+  bundledGraniteEmbedding278,
 ];
 
 /**

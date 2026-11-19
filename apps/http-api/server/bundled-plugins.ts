@@ -102,6 +102,13 @@ function bundledPluginsRoot(): string | null {
   return null;
 }
 
+async function hasNewDevBundle(staged: string, installed: string): Promise<boolean> {
+  if (!process.env.MCP_ELECTRON_DEV_URL) return false;
+  const readStamp = (directory: string) => readFile(join(directory, '.source-sha256'), 'utf8').catch(() => null);
+  const [next, previous] = await Promise.all([readStamp(staged), readStamp(installed)]);
+  return next !== null && next !== previous;
+}
+
 export async function seedBundledPlugins(): Promise<void> {
   const { initializeDatabaseForStartup } = await import('./database-startup.js');
   await initializeDatabaseForStartup(loadConfig().dbPath);
@@ -159,11 +166,13 @@ export async function seedBundledPlugins(): Promise<void> {
       // plugin is left untouched. Runtime compatibility is the sole exception,
       // and its disabled state is restored immediately after installation.
       if (existing && !existing.enabled && !runtimeUpgrade) continue;
+      const devUpdate = existing?.source === 'bundled' && await hasNewDevBundle(dir, pluginDir(ns));
       const needsInstall =
         !existing ||
         existing.source !== 'bundled' ||
         existing.version !== version ||
-        runtimeUpgrade;
+        runtimeUpgrade ||
+        devUpdate;
       if (!needsInstall) continue;
 
       try {

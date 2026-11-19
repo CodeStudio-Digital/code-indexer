@@ -12,7 +12,7 @@ import {
   inspectFilesystemCostCoverage,
 } from '@mcp/session-storage/fs-store/telemetry-global-dashboard.js';
 import { refreshAllModelPrices } from '@mcp/indexer/indexer/providers/scheduled-pricing-refresh.js';
-import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js';
+import { getEnabledPriceSources, isRemotePriceSyncEnabled } from '@mcp/services/services/pricing/index.js';
 
 /**
  * Telemetry routes over immutable per-session metric files. No handler in
@@ -57,6 +57,7 @@ export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
     return c.json({
       prices: providerStore.listAllModelPrices(),
       missing: getRecentMissingPrices(),
+      remoteSyncEnabled: isRemotePriceSyncEnabled(),
     });
   });
 

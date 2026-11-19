@@ -44,6 +44,26 @@ The Electron window opens at the project list. Pick a project to enter the Works
 
 **Don't have a project yet?** Click `+ New project` on the home screen, point at any folder on your disk, and hit `Index`. The agent + Monaco LSP both work against that path.
 
+### Plugins in development
+
+`pnpm electron:dev` builds and installs Figma, Angular, and JavaScript Debugger automatically. Restart it after editing a bundled plugin to load the changed files. Check the installed copies under **Settings → Plugins → Installed**.
+
+The default dev data directory is `%LOCALAPPDATA%\CodeStudioLocal-dev\data` on Windows and `~/.codestudio-local-dev` elsewhere. Set `MCP_DATA_DIR` to choose a different directory.
+
+To build a plugin from a local folder, run the SDK CLI from the repository root.
+
+```powershell
+pnpm exec tsx packages/plugin-sdk/src/cli/index.ts build 'C:\path\to\my-plugin'
+```
+
+In **Settings → Plugins → Installed**, paste the absolute folder path into the install field and click **Install**. See [plugin authoring](docs/PLUGINS.md#authoring-sdk--cli) for the manifest and SDK commands.
+
+### Offline embeddings and model prices
+
+The default semantic index uses the [bundled Granite Multilingual R2 model](assets/semantic-models/README.md). A normal Git checkout includes its tokenizer and q8 weights, and the desktop installer includes the same files. Reindex existing E5-backed indexes to switch them to Granite. The automatic reranker uses models already available locally and otherwise keeps the hybrid search ranking.
+
+Turn off **Sync model prices online** under **Settings → App settings → Models and prices** to stop OpenRouter and LiteLLM price sync. The app uses stored prices for cost estimates. Set `MODEL_PRICING_REMOTE_ENABLED=0` to disable price requests from the first launch of a new profile.
+
 ### Other entry points
 
 | Command | What it runs |

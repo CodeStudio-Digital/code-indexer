@@ -55,6 +55,11 @@
       "to": "bundled-plugins"
     },
     {
+      "from": "assets/semantic-models",
+      "to": "semantic-models",
+      "filter": ["**/*", "!.gitattributes"]
+    },
+    {
       "from": "node_modules/typescript/lib",
       "to": "ts-lib",
       "filter": [

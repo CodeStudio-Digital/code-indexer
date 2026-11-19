@@ -20,6 +20,7 @@ interface SyncResult {
   sources: Array<{ tag: string; ok: boolean; fetched: number; inserted: number; error?: string }>;
   totalRows: number;
   hydrated: boolean;
+  remoteSyncDisabled?: true;
 }
 interface BackfillResult { scanned: number; updated: number; nowPriced: number; stillUnpriced: number }
 
@@ -43,7 +44,11 @@ const SOURCE_PRIORITY: Record<string, number> = { manual: 0, litellm: 1, openrou
 
 export function ModelPricesPanel() {
   const { t } = useTranslation(['telemetry']);
-  const { data, loading, error, refetch } = useApi<{ prices: ModelPriceRow[]; missing: MissingPrice[] }>('/admin/model-prices');
+  const { data, loading, error, refetch } = useApi<{
+    prices: ModelPriceRow[];
+    missing: MissingPrice[];
+    remoteSyncEnabled: boolean;
+  }>('/admin/model-prices');
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState<null | 'sync' | 'backfill'>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
@@ -81,11 +86,12 @@ export function ModelPricesPanel() {
   const filtered = f ? prices.filter((p) => p.model_id.toLowerCase().includes(f) || p.source.toLowerCase().includes(f)) : prices;
   const shown = [...filtered].sort((a, b) => a.model_id.localeCompare(b.model_id)).slice(0, 200);
   const btn = 'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted/50 disabled:opacity-50';
+  const remoteSyncDisabled = data?.remoteSyncEnabled === false || syncResult?.remoteSyncDisabled;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <button className={btn} onClick={onSync} disabled={busy !== null}>
+        <button className={btn} onClick={onSync} disabled={busy !== null || remoteSyncDisabled}>
           {busy === 'sync' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
           {t('telemetry:prices.sync', { defaultValue: 'Sincronizar preços' })}
         </button>
@@ -106,7 +112,8 @@ export function ModelPricesPanel() {
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {actionError}
         </div>
       )}
-      {syncResult && (
+      {remoteSyncDisabled && <p className="text-xs text-muted-foreground">{t('telemetry:prices.syncDisabled')}</p>}
+      {syncResult && syncResult.sources.length > 0 && (
         <div className="rounded-md border bg-card/50 px-3 py-2 text-xs">
           <span className="font-medium">{t('telemetry:prices.syncDone', { defaultValue: 'Sync' })}:</span>{' '}
           {syncResult.sources.map((s) => (

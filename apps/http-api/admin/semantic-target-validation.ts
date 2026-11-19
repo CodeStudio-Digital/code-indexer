@@ -1,5 +1,6 @@
 import { SemanticStore, type EmbeddingTarget, type RerankerTarget, type SemanticCapability, type SemanticPurpose } from '@mcp/store/semantic-store.js';
 import { createHash } from 'node:crypto';
+import { BUNDLED_EMBEDDING_TARGET } from '@mcp/shared/providers/bundled-semantic-model.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import { semanticTargetContextFingerprint } from '@mcp/indexer/search/semantic-fingerprint.js';
 import { resolveProviderSpec } from './model-discovery/index.js';
@@ -77,13 +78,19 @@ export function normalizeEmbeddingTarget(value: unknown): EmbeddingTarget {
   if (!model) throw new Error('embedding target model is required');
   if (target.kind === 'onnx') {
     const e5 = /(?:^|[/_-])e5(?:$|[/_.-])/i.test(model);
+    const bundled = model === BUNDLED_EMBEDDING_TARGET.model;
+    const dtype = normalizeOnnxDtype(target.dtype);
+    const revision = typeof target.revision === 'string' && target.revision ? target.revision : undefined;
+    if (bundled && (dtype !== 'q8' || (revision && revision !== BUNDLED_EMBEDDING_TARGET.revision))) {
+      throw new Error('The bundled Granite embedding model supports the shipped revision in q8.');
+    }
     return {
       kind: 'onnx',
       model,
-      revision: typeof target.revision === 'string' && target.revision ? target.revision : undefined,
+      revision: bundled ? BUNDLED_EMBEDDING_TARGET.revision : revision,
       cacheDir: typeof target.cacheDir === 'string' && target.cacheDir ? target.cacheDir : undefined,
-      dtype: normalizeOnnxDtype(target.dtype),
-      pooling: target.pooling === 'cls' ? 'cls' : 'mean',
+      dtype,
+      pooling: target.pooling === 'cls' || (bundled && target.pooling !== 'mean') ? 'cls' : 'mean',
       normalize: target.normalize !== false,
       queryTemplate: normalizeTemplate(
         target.queryTemplate,
@@ -95,7 +102,7 @@ export function normalizeEmbeddingTarget(value: unknown): EmbeddingTarget {
         e5 ? 'passage: {text}' : '{text}',
         'documentTemplate',
       ),
-      maxTokens: normalizeMaxTokens(target.maxTokens),
+      maxTokens: normalizeMaxTokens(target.maxTokens) ?? (bundled ? BUNDLED_EMBEDDING_TARGET.maxTokens : undefined),
     };
   }
   if (target.kind === 'local_http') {

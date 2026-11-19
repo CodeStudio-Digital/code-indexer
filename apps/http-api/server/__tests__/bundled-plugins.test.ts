@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   existsSync,
   mkdtempSync,
@@ -67,6 +67,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -100,6 +101,23 @@ describe('retired plugins', () => {
 });
 
 describe('seedBundledPlugins runtime format migration', () => {
+  it('refreshes edited same-version bundles only in dev, and only once', async () => {
+    vi.stubEnv('MCP_ELECTRON_DEV_URL', undefined);
+    writeFileSync(join(fixtureDir, '.source-sha256'), 'new-source');
+    const sentry = join(installedDir, 'sentry.txt');
+    writeFileSync(sentry, 'old install');
+    await seedBundledPlugins();
+    expect(existsSync(sentry)).toBe(true);
+
+    vi.stubEnv('MCP_ELECTRON_DEV_URL', 'http://localhost:7317');
+    await seedBundledPlugins();
+    expect(existsSync(sentry)).toBe(false);
+    expect(readFileSync(join(installedDir, '.source-sha256'), 'utf8')).toBe('new-source');
+    writeFileSync(sentry, 'current install');
+    await seedBundledPlugins();
+    expect(readFileSync(sentry, 'utf8')).toBe('current install');
+  });
+
   it('refreshes a cachebusted manifest and preserves user grants', async () => {
     const nextVersion = `${VERSION}+codex.local-20260722004907`;
     const nextContributions = {

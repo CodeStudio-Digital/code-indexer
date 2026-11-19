@@ -212,6 +212,9 @@ async function bootstrap() {
   if (!process.env.MCP_MODEL_CACHE_DIR) {
     process.env.MCP_MODEL_CACHE_DIR = path.join(app.getPath('userData'), 'models');
   }
+  if (app.isPackaged && !process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR) {
+    process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR = path.join(process.resourcesPath, 'semantic-models');
+  }
 
   // Point outbound-MCP OAuth redirects at the ephemeral 127.0.0.1 loopback
   // the desktop app spins up during consent (see oauth-loopback.ts). The

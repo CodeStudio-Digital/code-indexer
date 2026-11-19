@@ -14,7 +14,7 @@
  * MODEL_PRICING_REFRESH_INTERVAL_MS. Default 24h. Set to 0 to disable.
  */
 import type { ProviderStore } from '@mcp/store/provider-store.js';
-import type { PriceSource } from '@mcp/services/services/pricing/index.js';
+import { isRemotePriceSyncEnabled, type PriceSource } from '@mcp/services/services/pricing/index.js';
 import { mergeDBPricing } from '@mcp/code-agent/providers/pricing-cache.js';
 
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -25,6 +25,7 @@ export interface PriceRefreshResult {
   totalRows: number;
   /** True when at least one source succeeded and the cache was re-hydrated. */
   hydrated: boolean;
+  remoteSyncDisabled?: true;
 }
 
 export async function refreshAllModelPrices(
@@ -33,6 +34,11 @@ export async function refreshAllModelPrices(
 ): Promise<PriceRefreshResult> {
   const result: PriceRefreshResult = { sources: [], totalRows: 0, hydrated: false };
   for (const src of sources) {
+    // Read the setting before each fetch, including the manual refresh path.
+    if (!isRemotePriceSyncEnabled()) {
+      result.remoteSyncDisabled = true;
+      break;
+    }
     try {
       const prices = await src.fetch();
       const fetchedAt = new Date().toISOString();

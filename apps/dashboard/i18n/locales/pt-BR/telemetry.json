@@ -122,6 +122,7 @@
   "coverage.allPriced": "Todos os turnos com uso têm preço — o custo estimado está completo.",
   "coverage.title": "{{turns}} turno(s) sem preço ({{tokens}} tokens) — fora do custo estimado",
   "prices.sync": "Sincronizar preços",
+  "prices.syncDisabled": "Consulta online de preços desativada nas configurações.",
   "prices.backfill": "Recalcular custos do histórico",
   "prices.filter": "Filtrar por modelo ou fonte…",
   "prices.syncDone": "Sincronização",
