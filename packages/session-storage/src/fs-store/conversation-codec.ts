@@ -46,6 +46,7 @@ interface StoredArtifactBlock {
   name?: string;
   path?: string;
   describe_hint?: string;
+  source_image_id?: string;
 }
 
 interface StoredToolResultBlock {
@@ -147,6 +148,7 @@ export function prepareMessage(
         media_type: block.mediaType,
         ...(block.name ? { name: block.name } : {}),
         ...(block.describeHint ? { describe_hint: block.describeHint } : {}),
+        ...(block.sourceImageId ? { source_image_id: block.sourceImageId } : {}),
       });
       artifacts.push(prepared.input);
       refs.push(prepared.stored.artifact);
@@ -245,6 +247,7 @@ function hydrateContentBlock(
         ...(block.describe_hint
           ? { describeHint: block.describe_hint }
           : {}),
+        ...(block.source_image_id ? { sourceImageId: block.source_image_id } : {}),
       };
     }
     if (block.source_type === 'document') {

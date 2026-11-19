@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
+import sharp from 'sharp';
 
 const binary = resolve(process.argv[2] ?? 'dist/electron-builder/win-unpacked/CodeStudio Local.exe');
 const root = await mkdtemp(join(tmpdir(), 'codestudio-local-smoke-'));
@@ -29,6 +31,35 @@ const figmaFile = 'https://www.figma.com/design/FixtureDesign1/Smoke';
 const figmaFileName = 'Figma MCP fixture file';
 const figmaReply = 'Figma MCP fixture validated.';
 const figmaTool = 'ext_codestudio-figma__get_metadata';
+const figmaShotTool = 'ext_codestudio-figma__get_screenshot';
+const figmaShotFile = figmaFile + '?node-id=0-1';
+const captureFigmaImage = 'Capture the Figma image fixture';
+const reopenFigmaImage = 'Reopen the previous Figma image fixture';
+const reopenedImageReply = 'Previous Figma attachment reopened.';
+const figmaPng = await sharp({ create: { width: 96, height: 64, channels: 3, background: '#6366f1' } }).png().toBuffer();
+const figmaPngBase64 = figmaPng.toString('base64');
+const figmaImageId = createHash('sha256').update(JSON.stringify({ mediaType: 'image/png', base64: figmaPngBase64 })).digest('hex').slice(0, 24);
+
+function figmaFixtureReply(request, currentPrompt) {
+  const sawToolResult = predicate => request.messages.some(message => message.role === 'tool' && predicate(JSON.stringify(message.content)));
+  if (currentPrompt.includes(reopenFigmaImage)) {
+    if (sawToolResult(text => text.includes('original 96×64') && text.includes(figmaImageId))) return { text: reopenedImageReply };
+    return { call: { name: 'view_image', input: { attachment_id: figmaImageId } } };
+  }
+  const screenshot = currentPrompt.includes(captureFigmaImage);
+  if (sawToolResult(text => screenshot ? text.includes('FixtureDesign1') && text.includes('0:1') && text.includes('png') : text.includes(figmaFileName))) {
+    return { text: figmaReply };
+  }
+  const toolName = screenshot ? figmaShotTool : figmaTool;
+  const hasSchema = request.tools?.some(tool => tool.function?.name === toolName);
+  if (!hasSchema && !sawToolResult(text => text.includes(toolName))) {
+    return { call: { name: 'find_tools', input: { query: `codestudio figma ${screenshot ? 'get_screenshot' : 'get_metadata'}` } } };
+  }
+  const alias = toolName.replaceAll('-', '_');
+  const file = JSON.stringify(screenshot ? figmaShotFile : figmaFile);
+  return { call: { name: 'code_exec', input: { code: `return await tools.${alias}({file:${file}});` } } };
+}
+
 const server = createServer(async (req, res) => {
   if (req.url === '/ping') return res.end('local API response');
   if (req.url === '/favicon.ico') { res.writeHead(204); return res.end(); }
@@ -46,20 +77,16 @@ const server = createServer(async (req, res) => {
     const request = JSON.parse(raw);
     if (request.model !== 'local-test') { res.writeHead(400); return res.end(); }
     if (raw.includes(figmaToken)) figmaSecretSeen = true;
-    if (request.stream && request.messages?.some(message =>
-      message.role === 'user' && JSON.stringify(message.content).includes(figmaFile))) {
+    const figmaPrompt = request.messages?.filter(message => message.role === 'user')
+      .map(message => JSON.stringify(message.content))
+      .findLast(text => text?.includes(figmaFile) || text?.includes(reopenFigmaImage));
+    if (request.stream && figmaPrompt) {
       figmaProviderCalls++;
       if (request.messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('[verification-required]'))) {
         figmaVerificationNudges++;
       }
-      const seen = request.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes(figmaFileName));
-      const hasSchema = request.tools?.some(tool => tool.function?.name === figmaTool);
-      const searched = request.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes(figmaTool));
-      const call = hasSchema || searched ? { name: 'code_exec', input: {
-        code: 'return await tools.ext_codestudio_figma__get_metadata({file:' + JSON.stringify(figmaFile) + '});',
-      } }
-        : { name: 'find_tools', input: { query: 'codestudio figma get_metadata' } };
-      const delta = seen ? { role: 'assistant', content: figmaReply } : {
+      const { text, call } = figmaFixtureReply(request, figmaPrompt);
+      const delta = text ? { role: 'assistant', content: text } : {
         role: 'assistant',
         tool_calls: [{ index: 0, id: 'figma-call-' + figmaProviderCalls, type: 'function',
           function: { name: call.name, arguments: JSON.stringify(call.input) } }],
@@ -68,7 +95,7 @@ const server = createServer(async (req, res) => {
       res.setHeader('content-type', 'text/event-stream');
       for (const payload of [
         { ...chunk, choices: [{ index: 0, delta, finish_reason: null }] },
-        { ...chunk, choices: [{ index: 0, delta: {}, finish_reason: seen ? 'stop' : 'tool_calls' }],
+        { ...chunk, choices: [{ index: 0, delta: {}, finish_reason: text ? 'stop' : 'tool_calls' }],
           usage: { prompt_tokens: 45, completion_tokens: 8, total_tokens: 53 } },
       ]) res.write('data: ' + JSON.stringify(payload) + '\n\n');
       return res.end('data: [DONE]\n\n');
@@ -368,14 +395,24 @@ async function exerciseCopilotLogin() {
 }
 
 async function stubFigma(rateLimited = false) {
-  await app.evaluate((_electron, { token, fileName, rateLimited }) => {
+  await app.evaluate((_electron, { token, fileName, rateLimited, png }) => {
     const fetch = globalThis.fetch;
     globalThis.figmaMetadataReads = 0;
+    globalThis.figmaImageReads = 0;
     globalThis.fetch = async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.href === 'https://assets.figma.com/codestudio-fixture.png') {
+        globalThis.figmaImageReads++;
+        if (rateLimited) return Response.json({}, { status: 403 });
+        return new Response(new Uint8Array(Buffer.from(png, 'base64')), { headers: { 'Content-Type': 'image/png' } });
+      }
       if (url.hostname !== 'api.figma.com') return fetch(input, init);
       if (new Headers(init?.headers).get('X-Figma-Token') !== token) return Response.json({}, { status: 403 });
       if (url.pathname === '/v1/me') return Response.json({ id: 'fixture-account', handle: 'Figma Fixture' });
+      if (url.pathname === '/v1/images/FixtureDesign1') {
+        if (rateLimited) return Response.json({}, { status: 429 });
+        return Response.json({ images: { '0:1': 'https://assets.figma.com/codestudio-fixture.png' } });
+      }
       if (url.pathname === '/v1/files/FixtureDesign1') {
         globalThis.figmaMetadataReads++;
         if (rateLimited) return Response.json({}, { status: 429, headers: { 'Retry-After': '45' } });
@@ -385,7 +422,7 @@ async function stubFigma(rateLimited = false) {
       }
       return Response.json({}, { status: 404 });
     };
-  }, { token: figmaToken, fileName: figmaFileName, rateLimited });
+  }, { token: figmaToken, fileName: figmaFileName, rateLimited, png: figmaPngBase64 });
 }
 
 async function exerciseFigmaPanel() {
@@ -452,6 +489,15 @@ try {
   assert.ok(modelCalls > 0);
   const coldFigmaReads = await exerciseFigmaChat(projectId, 'Figma agent test');
   assert.equal(coldFigmaReads, 1);
+  const figmaImageChat = await api('coder/sessions', {
+    project_id: projectId, title: 'Figma attachment fixture', provider: 'local-test', model: 'local-test',
+  });
+  const figmaImageSession = 'coder/sessions/' + figmaImageChat.id;
+  await api(figmaImageSession + '/messages', {
+    content: `${captureFigmaImage} from ${figmaShotFile}`, response_mode: 'json', max_turns: 2,
+  });
+  await expect.poll(() => app.evaluate(() => globalThis.figmaImageReads), { timeout: 45000 }).toBe(1);
+  await expect.poll(async () => (await api(figmaImageSession + '/status')).active, { timeout: 45000 }).toBe(false);
   await api('admin/providers', { id: 'local-anthropic', name: 'Local Anthropic endpoint', kind: 'anthropic',
     base_url: local + '/v1', api_key: 'local-fixture', enabled: true, use_for_coder: true });
   await api('admin/providers/local-anthropic/models', { model_id: 'local-test', name: 'Local Anthropic model', enabled: true, context_window: 128000 });
@@ -466,6 +512,11 @@ try {
   assert.deepEqual(await ipc('plugins.figmaConnection', { namespace: 'figma', action: 'status' }),
     { connected: true, account: 'Figma Fixture', toolCount: 6 });
   await stubFigma(true);
+  await api(figmaImageSession + '/messages', {
+    content: `${reopenFigmaImage} with attachment_id=${figmaImageId}`, response_mode: 'json', max_turns: 3,
+  });
+  await expect.poll(async () => JSON.stringify(await api(figmaImageSession + '/messages')), { timeout: 45000 }).toContain(reopenedImageReply);
+  assert.equal(await app.evaluate(() => globalThis.figmaImageReads), 0);
   const warmFigmaReads = await exerciseFigmaChat(projectId, 'Figma project cache after restart');
   assert.equal(warmFigmaReads, 0);
   assert.ok(figmaProviderCalls >= 4);
@@ -482,7 +533,7 @@ try {
   console.log(JSON.stringify({ cleanOnboarding: true, localFilesAndGit: true, apiRoundTrip: true, persistedSshHost: true,
     bundledEmbedding: true, localModelPrices: true,
     electronChromium: true, copilotRuntime: true, copilotLogin: true, copilotQuota: true, quickQuota: true, supportedProviderKinds: 4, modelCalls, anthropicCalls,
-    figmaPanel: true, figmaProviderCalls, figmaSecretSeen, figmaVerificationNudges, coldFigmaReads, warmFigmaReads,
+    figmaPanel: true, figmaAttachmentReopened: true, figmaProviderCalls, figmaSecretSeen, figmaVerificationNudges, coldFigmaReads, warmFigmaReads,
     persistedReply: true, cloudCalls, rendererErrors: errors }));
 } catch (error) {
   console.error('Isolated profile:', root);

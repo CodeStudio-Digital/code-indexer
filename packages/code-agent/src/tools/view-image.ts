@@ -40,14 +40,21 @@ export const viewImage: CoderTool = {
       let name: string;
       let attachmentId: string | null = null;
       if (args.attachment_id) {
-        attachmentId = String(args.attachment_id);
-        const reference = store?.listImages?.().find(image => image.id === attachmentId);
-        if (!reference) return err('Image reference not found in this session. Use action=list.');
-        const raw = await store!.get(attachmentId, ctx.signal);
-        if (!raw) return err('Image payload not found.');
-        const image = JSON.parse(raw) as { base64: string };
-        bytes = Buffer.from(image.base64, 'base64');
-        name = reference.name;
+        attachmentId = String(args.attachment_id).trim().toLowerCase();
+        if (store?.getImage) {
+          const image = store.getImage(attachmentId);
+          if (!image) return err('Image reference not found in this session. Use action=list.');
+          bytes = Buffer.from(image.base64, 'base64');
+          name = image.name;
+        } else {
+          const reference = store?.listImages?.().find(image => image.id === attachmentId);
+          if (!reference) return err('Image reference not found in this session. Use action=list.');
+          const raw = await store!.get(attachmentId, ctx.signal);
+          if (!raw) return err('Image payload not found.');
+          const image = JSON.parse(raw) as { base64: string };
+          bytes = Buffer.from(image.base64, 'base64');
+          name = reference.name;
+        }
       } else {
         const resolved = resolveWorkspacePath(String(args.path), ctx, 'read');
         if (!resolved.ok) return err(resolved.reason);

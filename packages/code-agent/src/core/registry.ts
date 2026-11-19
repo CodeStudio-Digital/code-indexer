@@ -15,6 +15,7 @@ import { asAbortSignal } from './abort-signal.js';
 import { runWithSnapshotInvocation } from '../ports/snapshot-invocation.js';
 import { beginInvocation, finishInvocation } from './invocation-evidence.js';
 import { createToolOutcomeScope } from './tool-outcome-observer.js';
+import { saveToolResultImages } from './vision-context.js';
 import {
   mutationFencedFilesystemPort,
   mutationFencedShellPort,
@@ -284,7 +285,7 @@ export class ToolRegistry {
       if (ctx.toolCallLedger?.outcomeUnknownTool && result.effectOutcome !== 'unknown') {
         return unknownToolOutcome(`A nested tool outcome is unresolved: ${ctx.toolCallLedger.outcomeUnknownTool}. Reconcile before retrying.`);
       }
-      return result;
+      return await saveToolResultImages(result, name, invocationContext.toolOutputStore);
     } catch (e) {
       notify?.({ isError: true });
       if (isUncertainToolOutcomeError(e)) {

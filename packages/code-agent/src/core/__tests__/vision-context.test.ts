@@ -8,9 +8,11 @@ import sharp from 'sharp';
 import { BundleToolOutputStore, FsSessionStore } from '../../sessions/fs-store/index.js';
 import { attachmentsToBlocks, type AgentMessage } from '../messages.js';
 import { projectVisionContext } from '../vision-context.js';
+import { ToolRegistry } from '../registry.js';
 import { toolExtraUserMessages } from '../tool-extra-user-messages.js';
 import { viewImage } from '../../tools/view-image.js';
 import { viewVideo } from '../../tools/view-video.js';
+import { mcpResultToToolResult } from '../../tools/mcp-result.js';
 import type { ToolContext } from '../tool.js';
 
 const roots: string[] = [];
@@ -72,6 +74,41 @@ it('opens an un-attached project image and rejects outside paths, invalid crops 
   expect((await viewImage.handler({ path: 'asset.png', crop: { left: 100, top: 0, width: 100, height: 10 } }, f.ctx)).isError).toBe(true);
   expect((await viewImage.handler({ attachment_id: 'abcdef123456' }, f.ctx)).isError).toBe(true);
   await f.media.drain(); await f.store.close();
+});
+
+it('saves an MCP screenshot before a subsequent inference and reopens its ID in the same session only', async () => {
+  const f = await fixture();
+  const registry = new ToolRegistry();
+  const toolName = 'ext_codestudio-figma__get_screenshot';
+  registry.register({
+    name: toolName, description: 'Render a Figma frame', parameters: { type: 'object', properties: {} },
+    source: 'mcp', mutates: false, parallelSafe: true, riskLevel: 'read',
+    handler: async () => mcpResultToToolResult({ content: [
+      { type: 'text', text: 'Rendered frame' },
+      { type: 'image', mimeType: 'image/png', data: f.png.toString('base64') },
+    ] }, 'get_screenshot'),
+  });
+  const result = await registry.invoke(toolName, {}, f.ctx);
+  const image = result.extraUserBlocks?.[0];
+  if (image?.type !== 'image' || !image.sourceImageId) throw new Error(result.content);
+  const id = image.sourceImageId;
+  await f.store.close();
+
+  const reopened = FsSessionStore.fromRoots(f.options);
+  try {
+    await reopened.refresh();
+    const ctx = { ...f.ctx, toolOutputStore: new BundleToolOutputStore(reopened, f.session.id) };
+    const viewed = await viewImage.handler({ attachment_id: ` ${id.toUpperCase()} ` }, ctx);
+    expect(viewed.isError).toBeFalsy();
+    expect(viewed.content).toContain('original 120×80');
+    const list = await viewImage.handler({ action: 'list' }, ctx);
+    expect(JSON.parse(list.content).images).toContainEqual({ id, name: `${toolName} 1`, mediaType: 'image/png' });
+    const other = await reopened.createSession({ project_id: 7, title: 'other', provider: 'test', model: 'test' });
+    const otherCtx = { ...f.ctx, toolOutputStore: new BundleToolOutputStore(reopened, other.id) };
+    expect((await viewImage.handler({ attachment_id: id }, otherCtx)).isError).toBe(true);
+  } finally {
+    await reopened.close();
+  }
 });
 
 it('extracts chosen video frames locally, with no external provider request', async () => {
