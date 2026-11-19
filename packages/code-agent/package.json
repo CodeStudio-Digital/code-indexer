@@ -12,6 +12,8 @@
     "./tools/preview/contracts.js": "./src/tools/preview/contracts.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "3.1172.0",
+    "@microsoft/copilot-sdk": "2.0.1",
     "@mcp/agent-runtime-contracts": "workspace:*",
     "@mcp/agent-runtime-host": "workspace:*",
     "@mcp/candidate-pipeline": "workspace:*",
@@ -26,6 +28,7 @@
     "chroma-js": "3.2.0",
     "ffmpeg-static": "5.2.0",
     "openai": "^4.85.4",
+    "ws": "^8.18.0",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2",
     "@mcp/api-bus": "workspace:*"

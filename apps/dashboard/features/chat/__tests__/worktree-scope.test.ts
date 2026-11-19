@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { sessionsInWorktree, worktreeKey } from '../worktree-scope.js';
+import { worktreeKey } from '../../../state/worktree-selection.js';
+import { sessionsInWorktree } from '../worktree-scope.js';
 import type { CoderSession } from '../types.js';
 
 describe('session checkout filtering', () => {

@@ -2,7 +2,7 @@
  * Unit tests for `detectVerifyCommands` — the dynamic-suffix block that
  * hands the agent the project's REAL verify commands (B2-dyn).
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -32,9 +32,8 @@ describe('detectVerifyCommands', () => {
     const block = detectVerifyCommands(dir);
     expect(block).toContain('# Known verify commands (detected)');
     expect(block).toContain('`pnpm run <script>`');
-    // Preferred scripts lead; `dev` trails.
-    expect(block.indexOf('test')).toBeLessThan(block.indexOf('dev'));
-    expect(block).toContain('Prefer these over guessed commands.');
+    expect(block).not.toContain('dev');
+    expect(block).toContain('only for a code change or an explicit verification request');
   });
 
   it('falls back to the lockfile for the package manager', () => {
@@ -47,10 +46,16 @@ describe('detectVerifyCommands', () => {
   it('caps the script list at 10 entries', () => {
     const dir = tempProject();
     const scripts: Record<string, string> = {};
-    for (let i = 0; i < 20; i++) scripts[`script${i}`] = 'echo';
+    for (let i = 0; i < 20; i++) scripts[`test:suite${i}`] = 'echo';
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts }));
     const line = detectVerifyCommands(dir).split('\n').find((l) => l.startsWith('package.json'))!;
     expect(line.split(',').length).toBe(10);
+  });
+
+  it('does not suggest unrelated project commands for verification', () => {
+    const dir = tempProject();
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { deploy: 'release', start: 'serve' } }));
+    expect(detectVerifyCommands(dir)).toBe('');
   });
 
   it('points at the Makefile when there is no package.json', () => {
@@ -65,5 +70,15 @@ describe('detectVerifyCommands', () => {
     const dir = tempProject();
     writeFileSync(join(dir, 'package.json'), '{not json');
     expect(detectVerifyCommands(dir)).toBe('');
+  });
+
+  it('reports installed Windows launchers without assuming an internal cli.js', () => {
+    const dir = tempProject();
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'xo && ava' } }));
+    mkdirSync(join(dir, 'node_modules/.bin'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules/.bin/xo.cmd'), '@echo off');
+    const block = detectVerifyCommands(dir, 'win32');
+    expect(block).toContain('`node_modules/.bin/xo.cmd`');
+    expect(block).not.toContain('`node_modules/.bin/ava.cmd`');
   });
 });

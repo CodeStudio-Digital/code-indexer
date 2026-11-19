@@ -7,16 +7,20 @@ different path documented in `RELEASE_PROCESS.md`.
 ## TL;DR
 
 ```bash
-pnpm install            # installs everything except native rebuilds
-pnpm electron:rebuild   # rebuild better-sqlite3 against Electron's Node ABI
+pnpm electron:setup     # install dependencies and prepare SQLite for Electron
 pnpm electron:dev       # launches Vite dev + Electron together
 ```
+
+Run setup on a fresh checkout or after changing dependencies. It tests SQLite in
+Electron and downloads the published binary for the installed release if needed.
+On Windows x64 the prebuilt binary runs on machines without Visual Studio Build
+Tools. The downloads use the dependency and registry configuration on the machine.
 
 If you flip between Node-only dev (`pnpm dev`) and Electron-only dev
 (`pnpm electron:dev`), you need to swap the native ABI:
 
 ```bash
-pnpm electron:rebuild   # before running pnpm electron:dev
+pnpm electron:setup     # before running pnpm electron:dev
 pnpm node:rebuild       # before running pnpm dev (Node ABI)
 ```
 
@@ -53,18 +57,17 @@ and `node-pty` back in. If you still hit this after `pnpm install`:
 node node_modules/.pnpm/electron@*/node_modules/electron/install.js
 ```
 
-### "NODE_MODULE_VERSION 127 vs 130" on better-sqlite3
+### `NODE_MODULE_VERSION` mismatch on better-sqlite3
 
-The native module was compiled for the system Node, but Electron 33
-embeds Node with a different ABI. Run:
+The native module installed for the system Node version may target a different
+ABI from Electron. Run:
 
 ```bash
-pnpm electron:rebuild
+pnpm electron:setup
 ```
 
-This wraps `electron-rebuild -f -o better-sqlite3`. After this, the
-in-process `apps/http-api/server.ts` will NOT work under plain `pnpm dev`
-until you run `pnpm node:rebuild`.
+Run `pnpm node:rebuild` before switching back to the browser development
+server with `pnpm dev`.
 
 ### "Cannot find module 'ws'" / "node-fetch"
 

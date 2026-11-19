@@ -58,7 +58,7 @@ export class SftpManager {
     try {
       sftp = await openSftp(client);
     } catch (err) {
-      this.manager.release(spec.hostId);
+      this.manager.release(spec.hostId, client);
       throw err;
     }
     // Return the acquired ref EXACTLY once — whether the whole connection dies,
@@ -78,7 +78,7 @@ export class SftpManager {
       if (endChannel) {
         try { sftp.end(); } catch { /* already closed */ }
       }
-      this.manager.release(spec.hostId);
+      this.manager.release(spec.hostId, client);
     };
     const session: SftpSession = { sftp, close };
     this.sessions.set(spec.hostId, session);
@@ -248,15 +248,15 @@ export class SftpManager {
     return transferStream((onProgress, done) => {
       let channel: SFTPWrapper | null = null;
       let settled = false;
-      let acquired = false;
+      let acquired: Client | undefined;
       let released = false;
       const onChannelClose = (): void =>
         settle(new ApiError('sftp_closed', 502, 'SFTP channel closed during transfer'));
       const onChannelError = (error: Error): void => settle(error);
       const release = (): void => {
-        if (released) return;
+        if (released || !acquired) return;
         released = true;
-        this.manager.release(spec.hostId);
+        this.manager.release(spec.hostId, acquired);
       };
       const settle = (err?: Error): void => {
         if (settled) return;
@@ -279,7 +279,7 @@ export class SftpManager {
       void this.manager
         .acquire(spec)
         .then((client) => {
-          acquired = true;
+          acquired = client;
           return openSftp(client);
         })
         .then((sftp) => {
@@ -298,7 +298,10 @@ export class SftpManager {
           sftp.once('error', onChannelError);
           run(sftp, onProgress, (err) => settle(err ?? undefined));
         })
-        .catch((err) => settle(err instanceof Error ? err : new Error(String(err))));
+        .catch((err) => {
+          if (settled) release();
+          else settle(err instanceof Error ? err : new Error(String(err)));
+        });
     });
   }
 

@@ -801,16 +801,8 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
                 description:
                   'Named micro-agent profile. Prefer investigator/verifier/reviewer/implementer/full for specialized toolsets.',
               },
-              tool_profile: {
-                type: 'string',
-                enum: MICRO_AGENT_PROFILE_NAMES,
-                description: 'Alias for profile, accepted for callers that describe tool capability explicitly.',
-              },
-              type: {
-                type: 'string',
-                enum: ['explore', 'implement', 'full', 'verify', 'review'],
-                description: 'Backward-compatible alias for profile. Prefer profile/tool_profile for named specializations.',
-              },
+              // normalizeAgents still accepts tool_profile/type in persisted
+              // calls; publish only the canonical profile field to new turns.
               label: { type: 'string', description: 'Short UI label shown in parallel mode (3-5 words).' },
               max_turns: {
                 type: 'number',

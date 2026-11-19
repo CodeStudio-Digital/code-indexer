@@ -3,12 +3,8 @@
  * network, no Cloudflare round-trip, no per-query cost. The point of this for
  * a desktop IDE: RAG that works fully offline.
  *
- * Default model is `Xenova/multilingual-e5-small` (384-d) — multilingual so
- * PT-BR comments / snapshots embed well alongside English code identifiers.
- *
- * The e5 family is trained with asymmetric prefixes: documents must be
- * prefixed `passage: ` and queries `query: `. Skipping these measurably hurts
- * retrieval, so they're applied here (not the caller's job).
+ * The bundled multilingual Granite model uses CLS pooling and raw text.
+ * Previously configured E5 indexes retain their document and query prefixes.
  *
  * `@huggingface/transformers` is imported lazily on first use. The desktop
  * HTTP host instantiates this engine only inside semantic-vector-worker; the
@@ -16,13 +12,16 @@
  */
 import { createIdleResource, type IdleResource } from '@mcp/shared/utils/idle-disposer.js';
 import { createHash } from 'node:crypto';
+import { BUNDLED_EMBEDDING_TARGET } from '@mcp/shared/providers/bundled-semantic-model.js';
 import type { EmbeddingService } from './embeddings.js';
 import { resolveModelCacheDir } from './model-cache.js';
+import { resolveBundledEmbeddingPath } from './bundled-model-path.js';
 import { resolveOnnxIdleTtlMs } from './onnx-idle.js';
+import { onnxSessionOptions } from './onnx-resource-policy.js';
 import type { SemanticOnnxDtype } from '@mcp/store/semantic-store.js';
 
-const DEFAULT_MODEL = 'Xenova/multilingual-e5-small';
-const BATCH = 32;
+const DEFAULT_MODEL = BUNDLED_EMBEDDING_TARGET.model;
+const BATCH = 8;
 
 /** Minimal shape of the transformers.js feature-extraction pipeline. */
 type FeatureExtractor = ((
@@ -54,22 +53,29 @@ export interface LocalEmbeddingFingerprintInput {
  * allowing Electron main to pin generations while all ONNX objects stay in
  * semantic-vector-worker. */
 export function localEmbeddingFingerprint(input: LocalEmbeddingFingerprintInput): string {
-  const protocol = {
-    documentTemplate: input.protocol?.documentTemplate ?? 'passage: {text}',
-    queryTemplate: input.protocol?.queryTemplate ?? 'query: {text}',
-    pooling: input.protocol?.pooling ?? 'mean',
-    normalize: input.protocol?.normalize ?? true,
-    maxTokens: Math.max(1, Math.floor(input.protocol?.maxTokens ?? 512)),
-  };
+  const model = input.model || DEFAULT_MODEL;
+  const protocol = resolveProtocol(model, input.protocol);
+  const bundled = model === BUNDLED_EMBEDDING_TARGET.model;
   const protocolHash = createHash('sha256')
     .update(JSON.stringify({
-      revision: input.revision ?? '',
+      revision: input.revision ?? (bundled ? BUNDLED_EMBEDDING_TARGET.revision : ''),
       dtype: input.dtype ?? 'q8',
       ...protocol,
     }))
     .digest('hex')
     .slice(0, 12);
-  return `local:${input.model || DEFAULT_MODEL}:${protocolHash}`;
+  return `local:${model}:${protocolHash}`;
+}
+
+function resolveProtocol(model: string, protocol?: LocalEmbeddingProtocol): Required<LocalEmbeddingProtocol> {
+  const bundled = model === BUNDLED_EMBEDDING_TARGET.model;
+  return {
+    documentTemplate: protocol?.documentTemplate ?? (bundled ? '{text}' : 'passage: {text}'),
+    queryTemplate: protocol?.queryTemplate ?? (bundled ? '{text}' : 'query: {text}'),
+    pooling: protocol?.pooling ?? (bundled ? 'cls' : 'mean'),
+    normalize: protocol?.normalize ?? true,
+    maxTokens: Math.max(1, Math.floor(protocol?.maxTokens ?? 512)),
+  };
 }
 
 function applyTemplate(template: string, text: string): string {
@@ -99,15 +105,7 @@ export class LocalEmbeddingService implements EmbeddingService {
     this.cacheDir = opts?.cacheDir;
     this.revision = opts?.revision;
     this.dtype = opts?.dtype ?? 'q8';
-    this.protocol = {
-      // Preserve the existing E5 behavior unless a semantic profile explicitly
-      // declares a different model protocol.
-      documentTemplate: opts?.protocol?.documentTemplate ?? 'passage: {text}',
-      queryTemplate: opts?.protocol?.queryTemplate ?? 'query: {text}',
-      pooling: opts?.protocol?.pooling ?? 'mean',
-      normalize: opts?.protocol?.normalize ?? true,
-      maxTokens: Math.max(1, Math.floor(opts?.protocol?.maxTokens ?? 512)),
-    };
+    this.protocol = resolveProtocol(this.model, opts?.protocol);
     // The session used to live forever after first use; the idle lease
     // evicts it after a quiet period and re-creates lazily. `acquire`
     // refcounts, so a dispose can never land mid-inference.
@@ -134,9 +132,13 @@ export class LocalEmbeddingService implements EmbeddingService {
   }
 
   private async loadExtractor(): Promise<FeatureExtractor> {
+    const bundled = this.model === BUNDLED_EMBEDDING_TARGET.model;
+    if (bundled && (this.dtype !== BUNDLED_EMBEDDING_TARGET.dtype
+      || (this.revision && this.revision !== BUNDLED_EMBEDDING_TARGET.revision))) {
+      throw new Error('The bundled Granite embedding model supports the shipped revision in q8.');
+    }
     let mod: {
       pipeline: (task: string, model: string, opts?: Record<string, unknown>) => Promise<unknown>;
-      env?: Record<string, unknown>;
     };
     try {
       const modName = '@huggingface/transformers';
@@ -147,15 +149,17 @@ export class LocalEmbeddingService implements EmbeddingService {
           `Install it with: pnpm add @huggingface/transformers (${(e as Error).message})`,
       );
     }
-    // Auto-resolve (and create) ~/.mcp/models unless overridden. No env
-    // var or manual folder setup required.
-    if (mod.env) (mod.env as { cacheDir?: string }).cacheDir = resolveModelCacheDir(this.cacheDir);
     return (await mod.pipeline(
       'feature-extraction',
-      this.model,
+      bundled ? resolveBundledEmbeddingPath() : this.model,
       {
         dtype: this.dtype,
-        ...(this.revision ? { revision: this.revision } : {}),
+        session_options: onnxSessionOptions(),
+        ...(bundled ? { local_files_only: true } : {
+          cache_dir: resolveModelCacheDir(this.cacheDir),
+          local_files_only: this.model === 'Xenova/multilingual-e5-small' && !!process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR,
+          ...(this.revision ? { revision: this.revision } : {}),
+        }),
       },
     )) as unknown as FeatureExtractor;
   }

@@ -39,6 +39,8 @@ export interface SshShell {
 interface SshSessionsState {
   byProject: Record<number, SshShell[]>;
   activeByProject: Record<number, string | undefined>;
+  panesByProject: Record<number, string[] | undefined>;
+  toggleSplit: (projectId: number) => void;
   /** Append a shell and focus it. */
   add: (projectId: number, shell: SshShell) => void;
   /** Drop a shell; focus falls back to the last remaining sibling. */
@@ -53,25 +55,51 @@ interface SshSessionsState {
   setActive: (projectId: number, terminalId: string) => void;
 }
 
+function focusShell(s: SshSessionsState, projectId: number, id: string) {
+  const active = s.activeByProject[projectId];
+  const panes = s.panesByProject[projectId];
+  return {
+    activeByProject: { ...s.activeByProject, [projectId]: id },
+    panesByProject: panes && !panes.includes(id)
+      ? { ...s.panesByProject, [projectId]: panes.map(pane => pane === active ? id : pane) }
+      : s.panesByProject,
+  };
+}
+
 export const useSshSessions = create<SshSessionsState>((set) => ({
   byProject: {},
   activeByProject: {},
+  panesByProject: {},
+  toggleSplit: projectId => set(s => {
+    const active = s.activeByProject[projectId];
+    const other = s.byProject[projectId]?.find(shell => shell.terminalId !== active);
+    if (!active || !other) return s;
+    const panes = s.panesByProject[projectId] ? undefined : [active, other.terminalId];
+    return { panesByProject: { ...s.panesByProject, [projectId]: panes } };
+  }),
 
   add: (projectId, shell) =>
     set((s) => ({
       byProject: { ...s.byProject, [projectId]: [...(s.byProject[projectId] ?? []), shell] },
-      activeByProject: { ...s.activeByProject, [projectId]: shell.terminalId },
+      ...focusShell(s, projectId, shell.terminalId),
     })),
 
   remove: (projectId, terminalId) =>
     set((s) => {
       const list = (s.byProject[projectId] ?? []).filter((x) => x.terminalId !== terminalId);
       const wasActive = s.activeByProject[projectId] === terminalId;
+      const panes = s.panesByProject[projectId];
+      const otherPane = panes?.find(id => id !== terminalId);
+      const replacement = list.find(shell => !panes?.includes(shell.terminalId));
+      const nextPanes = panes?.includes(terminalId)
+        ? (replacement ? panes.map(id => id === terminalId ? replacement.terminalId : id) : undefined)
+        : panes;
       return {
         byProject: { ...s.byProject, [projectId]: list },
+        panesByProject: { ...s.panesByProject, [projectId]: nextPanes },
         activeByProject: {
           ...s.activeByProject,
-          [projectId]: wasActive ? list[list.length - 1]?.terminalId : s.activeByProject[projectId],
+          [projectId]: wasActive ? otherPane ?? list[list.length - 1]?.terminalId : s.activeByProject[projectId],
         },
       };
     }),
@@ -115,9 +143,11 @@ export const useSshSessions = create<SshSessionsState>((set) => ({
           ),
         },
         activeByProject: wasActive ? { ...s.activeByProject, [projectId]: newTerminalId } : s.activeByProject,
+        panesByProject: { ...s.panesByProject, [projectId]: s.panesByProject[projectId]?.map(id => id === oldTerminalId ? newTerminalId : id) },
       };
     }),
 
   setActive: (projectId, terminalId) =>
-    set((s) => ({ activeByProject: { ...s.activeByProject, [projectId]: terminalId } })),
+    set(s => s.activeByProject[projectId] === terminalId || !s.byProject[projectId]?.some(shell => shell.terminalId === terminalId)
+      ? s : focusShell(s, projectId, terminalId)),
 }));

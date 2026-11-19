@@ -6,6 +6,7 @@ import { mountConversationFormatGuard } from './conversation-format-guard.js';
 import { mountCoderProvidersRoutes } from './providers.js';
 import { mountCoderSessionsRoutes } from './sessions.js';
 import { mountCoderSessionFilesRoutes } from './session-files.js';
+import { mountCoderLinkedFileRoute } from './linked-file.js';
 import { mountCoderWorktreeRoutes } from './worktrees.js';
 import { mountCoderGroupsRoutes } from './groups.js';
 import { mountCoderInteractionRoutes } from './interaction.js';
@@ -37,6 +38,7 @@ export function mountCoderRoutes(app: Hono, deps: ServerDeps): void {
   mountSessionWorkbenchRoutes(app, deps);
   mountCoderSessionsRoutes(app, deps, runtime);
   mountCoderSessionFilesRoutes(app, deps);
+  mountCoderLinkedFileRoute(app, deps);
   mountCoderWorktreeRoutes(app, deps);
   mountCoderGroupsRoutes(app, deps);
   mountCoderInteractionRoutes(app, deps, runtime);

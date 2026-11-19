@@ -104,4 +104,9 @@
 // tool work and distinguish it from reasoning summaries and the final answer.
 // Configuration investigations must prove consumers/overrides before concluding.
 // Session Meta removed from the tool catalog and prompt.
-export const SYSTEM_PROMPT_VERSION = '20261104.intent-safe-recovery';
+// 2026-11-11.2 bump — "# Tool contract" deduplicated against "# Tool
+// discovery" and the tool contracts; batching and exit-code rules condensed.
+// 2026-11-19.1 bump — scope Git checks to the request and reuse fresh results.
+// 2026-11-19.2 bump — reopen approval for revisions to an approved plan.
+// 2026-11-19.3 — align mode transitions, discovery, roles and review contracts.
+export const SYSTEM_PROMPT_VERSION = '20261119.3';

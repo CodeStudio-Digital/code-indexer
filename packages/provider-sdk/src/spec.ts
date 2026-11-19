@@ -20,7 +20,7 @@ import type { AuthDescriptor } from './auth.js';
 export const PROVIDER_SPEC_VERSION = 1 as const;
 
 /** The wire protocol — selects the host adapter + the discovery format. */
-export type WireKind = 'openai-compat' | 'anthropic' | 'gemini' | 'bedrock' | 'codex' | 'kimi';
+export type WireKind = 'openai-compat' | 'anthropic' | 'gemini' | 'bedrock' | 'copilot' | 'codex' | 'kimi';
 
 /** OpenAI-compatible vendor flag (enables vendor-specific request tweaks). */
 export type OpenAICompatVendor =

@@ -12,6 +12,8 @@ import { mountSessionNetworkRoutes } from './session-network-routes.js';
 import { ChatScheduler } from '@mcp/code-agent/runtime/chat-scheduler.js';
 import { mountUltraFollowupRoutes } from './ultra-followups.js';
 import type { ChatNetworkSnapshot } from '@mcp/agent-runtime-contracts/chat-network.js';
+import { asSessionId } from '@mcp/session-storage';
+import { setCoderWorkerPublishedChatImporter } from '../../../sse/coderWorkerPoolSingleton.js';
 
 export function mountChatCollaborationRoutes(app: Hono, deps: ServerDeps, runtime: CoderRuntime): void {
   const mailbox = new ChatCollaborationStore(deps.sessionStore.locator.dataDir);
@@ -22,6 +24,12 @@ export function mountChatCollaborationRoutes(app: Hono, deps: ServerDeps, runtim
         .some(row => `${row.model_id}${row.mode ? `::${row.mode}` : ''}` === model)) throw new Error('Unknown or disabled provider/model');
     } });
   mountSessionNetworkRoutes(app, deps, network, ready);
+  setCoderWorkerPublishedChatImporter(async (parentId, childId) => {
+    await ready;
+    const child = await network.session(childId);
+    if (child.parent_session_id !== parentId) throw new Error('Chat was not created by this session');
+    return asSessionId((await network.config(parentId)).rootId);
+  });
   const scheduler = new ChatScheduler(mailbox);
   mountUltraFollowupRoutes(app, network, scheduler, ready);
   const service = ready.then(() => startCollaborationWakeService(mailbox, message => wakeCollaboratingChat(deps, runtime, mailbox, message, network, scheduler), async () => {
@@ -30,7 +38,11 @@ export function mountChatCollaborationRoutes(app: Hono, deps: ServerDeps, runtim
     await scheduler.tick();
   }));
   void service.catch(error => console.error('[chat-collaboration] startup failed:', error));
-  registerShutdownTask('chat-collaboration', async () => { const stop = await service; await stop(); });
+  registerShutdownTask('chat-collaboration', async () => {
+    setCoderWorkerPublishedChatImporter(null);
+    const stop = await service;
+    await stop();
+  });
 
   app.get('/api/coder/sessions/:id/collaboration', async c => {
     await ready;

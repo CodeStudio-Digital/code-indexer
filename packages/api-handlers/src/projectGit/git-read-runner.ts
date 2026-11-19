@@ -6,13 +6,18 @@ import { isReadOnlyGit, type GitReadRequest, type GitReadResponse } from './git-
 
 const CONCURRENCY = 4;
 const MAX_PENDING = 64;
+const LOCATION_FLAGS = new Set(['--path-format=absolute', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']);
+function isLocationRead(args: string[]): boolean {
+  return (args[0] === 'worktree' && args[1] === 'list')
+    || (args[0] === 'rev-parse' && args.length > 1 && args.slice(1).every(arg => LOCATION_FLAGS.has(arg)));
+}
 const failed = (message: string): GitResult => ({ code: -1, stdout: '', stderr: message, errorCode: 'spawn_failed' });
 const timeout = (ms: number): GitResult => ({ code: -1, stdout: '', stderr: `Git read timed out after ${ms}ms`, timedOut: true, errorCode: 'timeout' });
 
 interface Pending {
   id: number; input: GitProcessInput; pid: Int32Array; resolve(result: GitResult): void;
-  deadline: number; started: boolean; expired: boolean; untrack?: () => void;
-  timer?: ReturnType<typeof setTimeout>;
+  deadline: number; started: boolean; expired: boolean; locationRead: boolean; reserved?: boolean; untrack?: () => void;
+  timer?: ReturnType<typeof setTimeout>; detachAbort?: () => void;
 }
 
 function createWorker(): Worker {
@@ -30,34 +35,43 @@ export class GitReadExecutor {
   private readonly pending = new Map<number, Pending>();
   private readonly queue: Pending[] = [];
   private active = 0;
+  private reservedActive = false;
   private shutdown: Promise<void> | null = null;
   private failing: Promise<void> | null = null;
   private closing = false;
   private exited: Promise<void> = Promise.resolve();
   constructor(private readonly factory: () => Worker = createWorker) {}
 
-  run(input: GitProcessInput): Promise<GitResult> {
+  run(input: GitProcessInput, signal?: AbortSignal): Promise<GitResult> {
+    if (signal?.aborted) return Promise.resolve(failed('Git read cancelled'));
     if (this.closing || this.failing) return Promise.resolve(failed('Git read worker is shutting down'));
     if (!isReadOnlyGit(input.args)) return Promise.resolve(failed('Git worker accepts only read commands'));
-    if (this.pending.size >= MAX_PENDING) return Promise.resolve(failed('Git read queue is full'));
+    const locationRead = isLocationRead(input.args);
+    if (this.pending.size >= MAX_PENDING + (locationRead ? CONCURRENCY : 0)) return Promise.resolve(failed('Git read queue is full'));
     try { this.ensureWorker(); } catch (error) { return Promise.resolve(failed(`Git read worker failed: ${String(error)}`)); }
     this.worker!.ref();
     return new Promise(resolve => {
       const job: Pending = { id: ++this.sequence, input, resolve, pid: new Int32Array(new SharedArrayBuffer(4)),
-        started: false, expired: false, deadline: input.timeoutMs > 0 ? Date.now() + input.timeoutMs : 0 };
+        started: false, expired: false, locationRead, deadline: input.timeoutMs > 0 ? Date.now() + input.timeoutMs : 0 };
       this.pending.set(job.id, job); this.queue.push(job);
-      if (input.timeoutMs > 0) job.timer = setTimeout(() => {
+      const cancel = (result: GitResult) => {
+        if (job.expired) return;
         job.expired = true;
-        job.resolve(timeout(input.timeoutMs));
+        job.resolve(result);
         if (job.started) this.post({ type: 'cancel', id: job.id });
         else {
-          this.pending.delete(job.id);
           const index = this.queue.indexOf(job);
           if (index >= 0) this.queue.splice(index, 1);
-          this.pump();
+          this.finish(job, result);
         }
         // A started job remains owned and keeps the worker alive until close.
-      }, input.timeoutMs);
+      };
+      if (signal) {
+        const abort = () => cancel(failed('Git read cancelled'));
+        signal.addEventListener('abort', abort, { once: true });
+        job.detachAbort = () => signal.removeEventListener('abort', abort);
+      }
+      if (input.timeoutMs > 0) job.timer = setTimeout(() => cancel(timeout(input.timeoutMs)), input.timeoutMs);
       this.pump();
     });
   }
@@ -88,12 +102,20 @@ export class GitReadExecutor {
   }
 
   private pump(): void {
-    while (this.worker && !this.closing && this.active < CONCURRENCY && this.queue.length) {
-      const job = this.queue.shift()!;
+    while (this.worker && !this.closing && this.queue.length) {
+      // A diff or status on a large checkout can occupy all ordinary slots.
+      // Reserve one additional process solely for locating/listing checkouts.
+      const reserve = this.active - Number(this.reservedActive) >= CONCURRENCY;
+      if (reserve && this.reservedActive) break;
+      const index = reserve ? this.queue.findIndex(item => item.locationRead) : 0;
+      if (index < 0) break;
+      const [job] = this.queue.splice(index, 1);
+      if (!job) break;
       if (!this.pending.has(job.id)) continue;
       const remaining = job.deadline ? job.deadline - Date.now() : 0;
       if (job.deadline && remaining <= 0) { this.finish(job, timeout(job.input.timeoutMs)); continue; }
       job.started = true; this.active++;
+      if (reserve) { job.reserved = true; this.reservedActive = true; }
       this.post({ type: 'run', id: job.id, input: { ...job.input, timeoutMs: remaining }, pid: job.pid.buffer as SharedArrayBuffer });
     }
     if (!this.pending.size && this.worker && !this.closing) {
@@ -106,8 +128,10 @@ export class GitReadExecutor {
   private finish(job: Pending, result: GitResult): void {
     if (!this.pending.delete(job.id)) return;
     if (job.timer) clearTimeout(job.timer);
+    job.detachAbort?.();
     job.untrack?.(); Atomics.store(job.pid, 0, 0);
     if (job.started) this.active--;
+    if (job.reserved) this.reservedActive = false;
     if (!job.expired) job.resolve(result);
     this.pump();
   }
@@ -161,5 +185,5 @@ export class GitReadExecutor {
 }
 
 const reader = new GitReadExecutor();
-export const runGitRead = (input: GitProcessInput): Promise<GitResult> => reader.run(input);
+export const runGitRead = (input: GitProcessInput, signal?: AbortSignal): Promise<GitResult> => reader.run(input, signal);
 export const disposeGitReadWorker = (): Promise<void> => reader.dispose();

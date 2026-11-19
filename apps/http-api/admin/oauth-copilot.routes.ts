@@ -1,206 +1,159 @@
-/**
- * GitHub Copilot device flow — /oauth/copilot/start + /poll.
- *
- * Start is stateless — we don't persist the device_code; it lives on
- * GitHub's side for ~15 min and the UI keeps it. Poll exchanges the GitHub
- * PAT for a Copilot token on success, upserts the provider row (creating it
- * on-the-fly for enterprise/individual editions), stores both tokens, and
- * kicks off a best-effort model refresh so the UI has models immediately.
- */
 import { Hono } from 'hono';
+import { createCopilotSession, startCopilotClient, stopCopilotClient } from '@mcp/code-agent/providers/copilot-sdk-client.js';
+import { mapCopilotModel } from '@mcp/provider-engine/discovery/copilot-models.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
-import {
-  startDeviceFlow,
-  pollDeviceFlow,
-  exchangeForCopilotToken,
-  type CopilotEdition,
-} from '@mcp/services/services/oauth/copilot.js';
-import { parseCopilotOpts } from './shared/copilot-opts.js';
-import { discoverModels } from './model-discovery/index.js';
-import {
-  providerAuthContext,
-  providerAuthHandlers,
-  syntheticProviderConfig,
-} from './provider-auth-runtime.js';
+
+type Client = Awaited<ReturnType<typeof startCopilotClient>>;
+type LoginSession = Awaited<ReturnType<typeof createCopilotSession>>;
+type AccountChoice = { selectionId: string; login: string; host: string };
+type Flow = {
+  client: Client;
+  session: LoginSession;
+  providerId: string;
+  timer: ReturnType<typeof setTimeout>;
+  interval: number;
+  advancing: boolean;
+  accounts?: AccountChoice[];
+};
 
 export function copilotOAuthRouter(store: ProviderStore): Hono {
   const app = new Hono();
+  const flows = new Map<string, Flow>();
+  const starting = new Set<string>();
 
-  /**
-   * Start the GitHub device flow. The UI shows user_code + verification_uri;
-   * the user opens the URL, types the code, and the UI polls /poll below.
-   */
-  app.post('/oauth/copilot/start', async (c) => {
+  async function close(flowId: string, cancel: boolean) {
+    const flow = flows.get(flowId);
+    if (!flow) return;
+    flows.delete(flowId);
+    clearTimeout(flow.timer);
+    if (cancel) await flow.session.rpc.accounts.login.cancel({ flowId }).catch(() => {});
+    await flow.client.deleteSession(flow.session.sessionId).catch(() => {});
+    await stopCopilotClient(flow.client);
+  }
+
+  app.post('/oauth/copilot/start', async c => {
+    const body = await c.req.json<{ edition?: string; ghes_host?: string; provider_id?: string }>().catch(() => ({}));
+    const enterprise = 'edition' in body && body.edition === 'enterprise';
+    const host = 'ghes_host' in body ? body.ghes_host?.trim().toLowerCase() : undefined;
+    if (enterprise && !/^[a-z0-9-]+\.ghe\.com$/.test(host ?? '')) {
+      return c.json({ error: 'Enter the GitHub Enterprise Cloud host (organization.ghe.com).' }, 400);
+    }
+    const providerId = ('provider_id' in body ? body.provider_id : undefined)
+      ?? (enterprise ? 'copilot-enterprise' : 'copilot');
+    const existing = store.getProvider(providerId);
+    if (existing && existing.kind !== 'copilot') {
+      return c.json({ error: 'Invalid Copilot provider' }, 409);
+    }
+    if (starting.has(providerId)) return c.json({ error: 'Copilot sign-in is already starting for this provider.' }, 409);
+    starting.add(providerId);
+    let client: Client | undefined;
+    let session: LoginSession | undefined;
+    let sdkFlowId: string | undefined;
     try {
-      const body = await c.req.json<unknown>().catch(() => ({}));
-      const opts = parseCopilotOpts(body);
-      const handlers = providerAuthHandlers('copilot');
-      const providerId = opts.edition === 'enterprise' ? 'copilot-enterprise' : 'copilot';
-      const cfg = syntheticProviderConfig({ id: providerId, kind: 'copilot', extra: { copilot_opts: opts } });
-      const flow = handlers?.start
-        ? await handlers.start(providerAuthContext(store, cfg), opts)
-        : await startDeviceFlow(opts);
-      // Echo the resolved opts back so the UI can attach them to the poll
-      // request verbatim without tracking state across the two calls.
-      return c.json({ ...flow, opts });
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 502);
+      for (const [flowId, flow] of flows) {
+        if (flow.providerId === providerId) await close(flowId, true);
+      }
+      client = await startCopilotClient(providerId);
+      c.req.raw.signal.throwIfAborted();
+      session = await createCopilotSession(client);
+      const { flowId, step: first } = await session.rpc.accounts.login.begin({
+        kind: enterprise ? 'proxima' : 'githubDotCom', method: 'device-code',
+      });
+      sdkFlowId = flowId;
+      const step = first.kind === 'input-required' && host
+        ? await session.rpc.accounts.login.advance({ flowId, input: host }) : first;
+      if (step.kind !== 'device-code') {
+        throw new Error(step.kind === 'error' ? step.message : 'GitHub did not return a device code.');
+      }
+      c.req.raw.signal.throwIfAborted();
+      const timer = setTimeout(() => void close(flowId, true), step.expiresIn * 1000);
+      timer.unref();
+      const interval = Number.isFinite(step.interval) && step.interval > 0 ? Math.ceil(step.interval) : 5;
+      flows.set(flowId, { client, session, providerId, timer, interval, advancing: false });
+      return c.json({ device_code: flowId, user_code: step.userCode, verification_uri: step.verificationUri,
+        expires_in: step.expiresIn, interval });
+    } catch (error) {
+      if (sdkFlowId && session) await session.rpc.accounts.login.cancel({ flowId: sdkFlowId }).catch(() => {});
+      if (session && client) await client.deleteSession(session.sessionId).catch(() => {});
+      if (client) await stopCopilotClient(client);
+      return c.json({ error: (error as Error).message }, 502);
+    } finally {
+      starting.delete(providerId);
     }
   });
 
-  /**
-   * Poll a device flow. Called by the dashboard on an interval until status
-   * flips to 'authorized', at which point we exchange the GitHub PAT for a
-   * Copilot token and persist both. The provider row (kind='copilot') is
-   * created on-the-fly if it doesn't exist yet — the UI doesn't have to
-   * create the provider before starting OAuth.
-   */
-  app.post('/oauth/copilot/poll', async (c) => {
-    const body = await c.req.json<{
-      device_code: string;
-      provider_id?: string;
-      opts?: unknown;
-      edition?: CopilotEdition;
-      ghes_host?: string;
-      integration_id?: string;
-      client_id?: string;
-    }>();
-    if (!body.device_code) return c.json({ error: 'device_code required' }, 400);
-    // Enterprise connections get their own provider row so individual +
-    // enterprise can coexist side-by-side.
-    const opts = parseCopilotOpts(body.opts ?? body);
-    const providerId =
-      body.provider_id ?? (opts.edition === 'enterprise' ? 'copilot-enterprise' : 'copilot');
-
-    try {
-      const handlers = providerAuthHandlers('copilot');
-      const cfg = store.getProvider(providerId) ?? syntheticProviderConfig({
-        id: providerId,
-        kind: 'copilot',
-        extra: { copilot_opts: opts },
-      });
-      const result = handlers?.poll
-        ? await handlers.poll(providerAuthContext(store, cfg), { ...body, opts })
-        : await pollDeviceFlow(body.device_code, opts);
-      if (result.status !== 'authorized') {
-        return c.json(normalizePollResult(result));
-      }
-
-      const pluginAccessToken = readString(result, 'access_token');
-      const pluginExpiresAt = readNumber(result, 'expires_at');
-      const pluginRefreshToken = readString(result, 'refresh_token');
-      const pluginExtra = readRecord(result, 'extra');
-      const pluginEndpoints = readRecord(result, 'endpoints') as Record<string, string> | undefined;
-      const copilot = pluginAccessToken && pluginExpiresAt
-        ? {
-            token: pluginAccessToken,
-            expires_at: pluginExpiresAt,
-            endpoints: pluginEndpoints,
-            extra: pluginExtra ?? {},
-          }
-        : await exchangeForCopilotToken(readString(result, 'access_token') ?? '', opts);
-      const githubPat = pluginRefreshToken ?? readString(result, 'access_token') ?? '';
-      if (!copilot.token || !githubPat) {
-        return c.json({ status: 'error', error: 'Copilot auth did not return usable credentials' }, 502);
-      }
-
-      // Prefer the API endpoint the token exchange published; fall back to
-      // the public default for individual or construct from ghes_host for
-      // enterprise (not always published by older GHES versions).
-      const apiBase =
-        copilot.endpoints?.api ??
-        (opts.edition === 'enterprise' && opts.ghes_host
-          ? `https://${opts.ghes_host.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`
-          : 'https://api.githubcopilot.com');
-
-      // Make sure the provider row exists — upsert with sensible defaults.
-      if (!store.getProvider(providerId)) {
-        store.upsertProvider({
-          id: providerId,
-          name:
-            opts.edition === 'enterprise'
-              ? `GitHub Copilot (Enterprise${opts.ghes_host ? ` · ${opts.ghes_host}` : ''})`
-              : 'GitHub Copilot',
-          kind: 'copilot',
-          base_url: apiBase,
-          api_key: copilot.token, // Mirrored so createChatProviderFromConfig works before refresh.
-          auth_mode: 'oauth',
-          enabled: true,
-          use_for_coder: true,
-          use_for_agent: false, // Copilot's pricing model isn't friendly for indexing loops.
-          extra: { copilot_opts: opts },
-        });
-      } else {
-        // Refresh the api_key mirror + opts so the coder adapter and
-        // model discovery see the new token/edition. use_for_agent is
-        // preserved — admin can enable indexing for Copilot.
-        const existing = store.getProvider(providerId)!;
-        store.upsertProvider({
-          ...existing,
-          api_key: copilot.token,
-          base_url: apiBase,
-          extra: { ...existing.extra, copilot_opts: opts },
-        });
-      }
-
-      store.setOAuth({
-        provider_id: providerId,
-        access_token: copilot.token,
-        refresh_token: githubPat, // GitHub PAT used for re-exchange.
-        expires_at: copilot.expires_at,
-        scope: readString(result, 'scope') ?? null,
-        extra: { ...copilot.extra, copilot_opts: opts },
-      });
-
-      // Kick off a best-effort model refresh so the UI has models to show
-      // the moment the dialog flips to 'success'. Non-fatal on failure.
-      let model_count = 0;
-      try {
-        const fresh = store.getProvider(providerId)!;
-        const result = await discoverModels(store, fresh);
-        if (!result.notModified) {
-          store.replaceModelsFromSource(providerId, 'live', result.models);
-          store.setProviderCatalogEtag(providerId, result.etag);
-        }
-        model_count = result.models.length;
-      } catch (e) {
-        console.warn(`[copilot] initial model discovery failed: ${(e as Error).message}`);
-      }
-
-      return c.json({
-        status: 'authorized',
-        provider_id: providerId,
-        expires_at: copilot.expires_at,
-        model_count,
-      });
-    } catch (e) {
-      return c.json({ status: 'error', error: (e as Error).message }, 502);
+  app.post('/oauth/copilot/poll', async c => {
+    const { device_code: flowId, selection_id: selection } = await c.req.json<{ device_code: string; selection_id?: string }>();
+    const flow = flows.get(flowId);
+    if (!flow) return c.json({ status: 'expired' }, 410);
+    if (flow.advancing) return c.json({ status: 'pending', interval: flow.interval });
+    if (flow.accounts && selection === undefined) return c.json({ status: 'choose_account', accounts: flow.accounts });
+    if (selection !== undefined && !flow.accounts?.some(account => account.selectionId === selection)) {
+      return c.json({ status: 'error', error: 'Choose an account from the active GitHub Copilot sign-in.' }, 400);
     }
+    flow.advancing = true;
+    let keepOpen = false;
+    let authorized = false;
+    const cancel = () => void close(flowId, true);
+    const signal = c.req.raw.signal;
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      signal.throwIfAborted();
+      const step = await flow.session.rpc.accounts.login.advance({ flowId, ...(selection !== undefined ? { input: selection } : {}) });
+      if (flows.get(flowId) !== flow) return c.json({ status: 'expired' }, 410);
+      flow.accounts = undefined;
+      if (step.kind === 'awaiting' || step.kind === 'needs-interaction') {
+        keepOpen = true;
+        return c.json({ status: 'pending', interval: flow.interval });
+      }
+      if (step.kind === 'error') return c.json({ status: 'error', error: step.message }, 401);
+      if (step.kind !== 'completed') {
+        return c.json({ status: 'error', error: 'Unexpected GitHub Copilot login step (' + step.kind + ').' }, 502);
+      }
+      if (step.result.status === 'needs-account-selection') {
+        const accounts = step.result.accounts?.map(({ selectionId, login, host }) => ({ selectionId, login, host }));
+        if (!accounts?.length) return c.json({ status: 'error', error: 'GitHub Copilot returned no accounts to select.' }, 502);
+        flow.accounts = accounts;
+        keepOpen = true;
+        return c.json({ status: 'choose_account', accounts });
+      }
+      if (step.result.status === 'needs-plaintext-consent') {
+        return c.json({
+          status: 'error', code: 'credential_store_unavailable',
+          error: 'Copilot could not use the system credential vault. Enable the vault, then sign in again.',
+        }, 409);
+      }
+      if (step.result.status === 'declined') {
+        return c.json({ status: 'error', code: 'declined', error: 'Copilot credential storage was declined.' }, 401);
+      }
+      const identity = step.result.login ? step.result : await flow.client.getAuthStatus();
+      if (!identity.login) return c.json({ status: 'error', error: 'GitHub did not report which account signed in. Reconnect GitHub Copilot.' }, 409);
+      const models = (await flow.client.listModels()).filter(model => model.policy?.state !== 'disabled').map(mapCopilotModel);
+      if (flows.get(flowId) !== flow) return c.json({ status: 'expired' }, 410);
+      const current = store.getProvider(flow.providerId);
+      if (current && current.kind !== 'copilot') return c.json({ status: 'error', error: 'Invalid Copilot provider' }, 409);
+      store.saveCopilotConnection({
+        ...current, id: flow.providerId, name: current?.name ?? 'GitHub Copilot', kind: 'copilot',
+        api_key: null, base_url: null, auth_mode: 'oauth', enabled: true, use_for_coder: true,
+        use_for_agent: current?.use_for_agent ?? false,
+        extra: { ...current?.extra, githubLogin: identity.login, githubHost: step.result.host ?? identity.host },
+      }, models);
+      authorized = true;
+      return c.json({ status: 'authorized', provider_id: flow.providerId, model_count: models.length });
+    } catch (error) {
+      return c.json({ status: 'error', error: (error as Error).message }, 502);
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      flow.advancing = false;
+      if (!keepOpen) await close(flowId, !authorized);
+    }
+  });
+
+  app.post('/oauth/copilot/cancel', async c => {
+    const { device_code } = await c.req.json<{ device_code: string }>();
+    await close(device_code, true);
+    return c.json({ ok: true });
   });
 
   return app;
-}
-
-function normalizePollResult(result: { status: string; message?: string; error?: string }) {
-  return result.message && !result.error ? { ...result, error: result.message } : result;
-}
-
-function readString(source: unknown, key: string): string | undefined {
-  if (!source || typeof source !== 'object') return undefined;
-  const value = (source as Record<string, unknown>)[key];
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function readNumber(source: unknown, key: string): number | undefined {
-  if (!source || typeof source !== 'object') return undefined;
-  const value = (source as Record<string, unknown>)[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function readRecord(source: unknown, key: string): Record<string, unknown> | undefined {
-  if (!source || typeof source !== 'object') return undefined;
-  const value = (source as Record<string, unknown>)[key];
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }

@@ -1,12 +1,5 @@
+import { bedrockClientConfig, resolveAwsConfigCredentials } from '@mcp/provider-sdk';
 import type { ProviderConfig, ProviderStore } from '@mcp/store/provider-store.js';
-
-type BedrockExtra = {
-  region?: string;
-  aws_region?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
-  sessionToken?: string;
-};
 
 type FoundationModelAvailabilityResponse = {
   modelId?: string;
@@ -61,29 +54,9 @@ async function loadSdk(): Promise<BedrockSdk> {
   }
 }
 
-function makeClient(sdk: BedrockSdk, region: string, tok: BedrockExtra): BedrockControlClient {
-  return new sdk.BedrockClient({
-    region,
-    credentials:
-      tok.accessKeyId && tok.secretAccessKey
-        ? {
-            accessKeyId: tok.accessKeyId,
-            secretAccessKey: tok.secretAccessKey,
-            sessionToken: tok.sessionToken,
-          }
-        : undefined,
-  });
-}
-
-function resolveRegionAndCreds(
-  store: ProviderStore,
-  cfg: ProviderConfig,
-): { region: string; tok: BedrockExtra } {
-  const oauth = store.getOAuth(cfg.id);
-  const tok = (oauth?.extra || {}) as BedrockExtra;
-  const cfgExtra = (cfg.extra || {}) as BedrockExtra;
-  const region = tok.region ?? tok.aws_region ?? cfgExtra.aws_region ?? process.env.AWS_REGION ?? 'us-east-1';
-  return { region, tok };
+async function getClientConfig(store: ProviderStore, cfg: ProviderConfig) {
+  const creds = await resolveAwsConfigCredentials(cfg, { get: async () => store.getOAuth(cfg.id) });
+  return bedrockClientConfig(creds.aws);
 }
 
 export async function checkModelAccess(
@@ -91,9 +64,12 @@ export async function checkModelAccess(
   cfg: ProviderConfig,
   modelId: string,
 ): Promise<ModelAccessStatus> {
-  const { region, tok } = resolveRegionAndCreds(store, cfg);
   const sdk = await loadSdk();
-  const client = makeClient(sdk, region, tok);
+  const client = new sdk.BedrockClient(await getClientConfig(store, cfg));
+  return readStatus(client, sdk, modelId);
+}
+
+async function readStatus(client: BedrockControlClient, sdk: BedrockSdk, modelId: string): Promise<ModelAccessStatus> {
   const cmd = new sdk.GetFoundationModelAvailabilityCommand({ modelId });
   const resp: FoundationModelAvailabilityResponse = await client.send(cmd);
   return {
@@ -112,11 +88,11 @@ export async function requestModelAccess(
   modelId: string,
   useCaseData?: UseCaseFormData,
 ): Promise<{ alreadyAuthorized: boolean; modelId: string }> {
-  const { region, tok } = resolveRegionAndCreds(store, cfg);
   const sdk = await loadSdk();
-  const client = makeClient(sdk, region, tok);
+  const config = await getClientConfig(store, cfg);
+  const client = new sdk.BedrockClient(config);
 
-  const status = await checkModelAccess(store, cfg, modelId);
+  const status = await readStatus(client, sdk, modelId);
   if (status.authorizationStatus === 'AUTHORIZED') {
     return { alreadyAuthorized: true, modelId };
   }
@@ -130,7 +106,7 @@ export async function requestModelAccess(
   if (offers.length === 0) {
     throw new Error(
       `No agreement offers found for model "${modelId}". ` +
-        `The model may not support on-demand access in region ${region}.`,
+        `The model may not support on-demand access in region ${config.region}.`,
     );
   }
   const offerToken = offers[0].offerToken ?? offers[0].offerId;

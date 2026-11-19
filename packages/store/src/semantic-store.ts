@@ -45,10 +45,12 @@ export class SemanticStore extends SemanticConnection {
   private readonly jobs = new SemanticJobs(this.db);
   createJob = this.jobs.createJob.bind(this.jobs);
   getOrCreateBuildJob = this.jobs.getOrCreateBuildJob.bind(this.jobs);
+  claimBuildJob = this.jobs.claimBuildJob.bind(this.jobs);
   hasLiveMutationFence = this.jobs.hasLiveMutationFence.bind(this.jobs);
   getNamespaceBuildRetry = this.jobs.getNamespaceBuildRetry.bind(this.jobs);
   getJob = this.jobs.getJob.bind(this.jobs);
   listJobs = this.jobs.listJobs.bind(this.jobs);
+  recoverInterruptedJobs = this.jobs.recoverInterruptedJobs.bind(this.jobs);
   getJobHighWaterId = this.jobs.getJobHighWaterId.bind(this.jobs);
   currentProjectJob = this.jobs.currentProjectJob.bind(this.jobs);
   listProjectRemovalIds = this.jobs.listProjectRemovalIds.bind(this.jobs);

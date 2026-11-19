@@ -1,7 +1,9 @@
 import type { IMcpServerManager } from '@mcp/code-agent/tools/mcp-server-manager-interface.js';
 import { McpServerManager, mcpServerConfigurationKey } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
-import { McpServerStore, type McpServerConfig } from '@mcp/store/mcp-server-store.js';
+import { McpServerStore } from '@mcp/store/mcp-server-store.js';
+import type { EmbeddedMcpConfig, McpRuntimeConfig } from '@mcp/code-agent/tools/mcp-connection-types.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
 import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 import { err } from "@mcp/agent-runtime-host/tool-result.js";
@@ -48,7 +50,7 @@ export class McpExternalPool implements IMcpServerManager {
   private readonly manager: McpServerManager;
   private readonly dbPath: string;
   private readonly bearerResolver: ResolveMcpBearer | null;
-  private readonly loadEnabledServers: () => McpServerConfig[];
+  private readonly loadEnabledServers: () => McpRuntimeConfig[];
   private snapshot: McpExternalSnapshot | null = null;
   private liveTools = new Map<string, CoderTool>();
   private readonly toolRevisions = new McpCatalogueRevisions();
@@ -64,15 +66,19 @@ export class McpExternalPool implements IMcpServerManager {
     /** Test seam; production always uses the real manager. */
     manager?: McpServerManager;
     /** Test seam; production reads enabled configs from McpServerStore. */
-    loadEnabledServers?: () => McpServerConfig[];
+    loadEnabledServers?: () => McpRuntimeConfig[];
+    embedded?: { readConfig(): EmbeddedMcpConfig | null; connect(config: EmbeddedMcpConfig): Promise<Transport> };
   }) {
     this.dbPath = opts.dbPath;
     this.bearerResolver = opts.bearerResolver ?? null;
-    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver);
+    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver, opts.embedded?.connect.bind(opts.embedded));
     this.loadEnabledServers = opts.loadEnabledServers ?? (() => {
       const store = new McpServerStore(this.dbPath);
       try {
-        return store.listServers({ enabled: true });
+        const persisted: McpRuntimeConfig[] = store.listServers({ enabled: true });
+        const embedded = opts.embedded?.readConfig();
+        if (embedded && !persisted.some(server => server.id === embedded.id)) persisted.push(embedded);
+        return persisted;
       } finally {
         store.close();
       }
@@ -103,21 +109,26 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   /** Reconcile one integration without interrupting unrelated tool calls. */
-  async refreshServer(serverId: string): Promise<McpExternalSnapshot> {
+  async refreshServer(serverId: string, { reuseConnection = false } = {}): Promise<McpExternalSnapshot> {
     return this.runLifecycle(async () => {
       if (this.shuttingDown) throw new Error('MCP pool is shutting down');
       const configs = this.loadEnabledServers();
       this.toolRevisions.reconcileConfigurations(configs);
       const config = configs.find(c => c.id === serverId);
-      const prefix = `ext_${serverId}__`;
-      for (const name of this.liveTools.keys()) {
-        if (name.startsWith(prefix)) this.liveTools.delete(name);
-      }
-      await this.manager.closeServer(serverId);
+      let snapshot = config && reuseConnection && this.manager.isConnectedWith(config)
+        ? await this.buildSnapshot(configs, serverId) : undefined;
       let failure: unknown;
-      try { if (config) await this.manager.connectServer(config); }
-      catch (e) { failure = e; }
-      this.snapshot = await this.buildSnapshot(configs, serverId);
+      if (!snapshot || this.manager.getConnectionStates().get(serverId)?.state !== 'connected') {
+        const prefix = `ext_${serverId}__`;
+        for (const name of this.liveTools.keys()) {
+          if (name.startsWith(prefix)) this.liveTools.delete(name);
+        }
+        await this.manager.closeServer(serverId);
+        try { if (config) await this.manager.connectServer(config); }
+        catch (e) { failure = e; }
+        snapshot = await this.buildSnapshot(configs, serverId);
+      }
+      this.snapshot = snapshot;
       this.configFingerprint = this.fingerprint(configs);
       this.scheduleHealthCheck();
       if (failure) throw failure;
@@ -158,7 +169,7 @@ export class McpExternalPool implements IMcpServerManager {
 
   /** Dispatch through the cached catalogue; discovery never runs per invocation. */
   async callTool(serverId: string, toolName: string, args: Record<string, unknown>,
-    signal?: AbortSignal, catalogueRevision?: string, assertDispatch?: () => void): Promise<{ ok: boolean; text: string; result: ToolResult }> {
+    signal?: AbortSignal, catalogueRevision?: string, assertDispatch?: () => void, projectId?: number): Promise<{ ok: boolean; text: string; result: ToolResult }> {
     if (signal?.aborted) {
       const result = err('External MCP call cancelled before dispatch.');
       return { ok: false, text: result.content, result };
@@ -198,7 +209,7 @@ export class McpExternalPool implements IMcpServerManager {
         { code: 'MCP_UNAVAILABLE', kind: 'network', retryable: !this.shuttingDown,
           suggestedAction: 'Wait for the server to become ready and retry; a new chat is not required.' })
       : signal?.aborted ? err('External MCP call cancelled before dispatch.')
-      : await tool.handler(args, { signal, assertExternalMcpDispatch: assertWireDispatch } as ToolContext);
+      : await tool.handler(args, { signal, projectId, assertExternalMcpDispatch: assertWireDispatch } as ToolContext);
     // Keep the legacy envelope while carrying the full result through new workers.
     return { ok: !result.isError, text: result.content, result };
   }
@@ -219,7 +230,7 @@ export class McpExternalPool implements IMcpServerManager {
    * the snapshot; the runner uses external tools when present and
    * proceeds without them otherwise.
    */
-  async connectAll(_configs: McpServerConfig[]): Promise<void> {
+  async connectAll(_configs: McpRuntimeConfig[]): Promise<void> {
     await this.getReadySnapshot();
     if (this.booted) {
       console.log(
@@ -230,7 +241,7 @@ export class McpExternalPool implements IMcpServerManager {
   }
 
   /** Reconcile pool state without blindly reopening healthy transports. */
-  async refreshAll(_configs: McpServerConfig[]): Promise<void> {
+  async refreshAll(_configs: McpRuntimeConfig[]): Promise<void> {
     await this.getReadySnapshot();
   }
 
@@ -243,7 +254,8 @@ export class McpExternalPool implements IMcpServerManager {
     return { tools: snapshot.tools.flatMap(entry => {
       const live = this.liveTools.get(entry.name);
       return live ? [{ ...live, handler: async (args, ctx) =>
-        (await this.callTool(entry.serverId, entry.toolName, args, ctx.signal, entry.catalogueRevision)).result }] : [];
+        (await this.callTool(entry.serverId, entry.toolName, args, ctx.signal, entry.catalogueRevision,
+          ctx.assertExternalMcpDispatch, ctx.projectId)).result }] : [];
     }), tierMap: new Map(snapshot.tierMap) };
   }
 
@@ -303,19 +315,19 @@ export class McpExternalPool implements IMcpServerManager {
     return run;
   }
 
-  private fingerprint(configs: McpServerConfig[]): string {
+  private fingerprint(configs: McpRuntimeConfig[]): string {
     return configs
       .map((config) => `${config.id}:${mcpServerConfigurationKey(config)}`)
       .sort()
       .join('|');
   }
 
-  private connectionsHealthy(configs: McpServerConfig[]): boolean {
+  private connectionsHealthy(configs: McpRuntimeConfig[]): boolean {
     const states = this.manager.getConnectionStates();
     return configs.every((config) => states.get(config.id)?.state === 'connected');
   }
 
-  private needsFullRebuild(configs: McpServerConfig[]): boolean {
+  private needsFullRebuild(configs: McpRuntimeConfig[]): boolean {
     return !this.booted
       || this.snapshot === null
       || this.configFingerprint !== this.fingerprint(configs);
@@ -323,7 +335,7 @@ export class McpExternalPool implements IMcpServerManager {
 
   /** Retry only failed/missing servers so one offline integration does not
    * tear down every healthy MCP transport on each new agent run. */
-  private async reconnectUnhealthy(configs: McpServerConfig[]): Promise<void> {
+  private async reconnectUnhealthy(configs: McpRuntimeConfig[]): Promise<void> {
     const states = this.manager.getConnectionStates();
     const unhealthy = configs.filter(
       (config) => states.get(config.id)?.state !== 'connected',
@@ -344,7 +356,7 @@ export class McpExternalPool implements IMcpServerManager {
     this.snapshot = await this.buildSnapshot(configs);
   }
 
-  private async rebuild(configs: McpServerConfig[], closeExisting: boolean): Promise<void> {
+  private async rebuild(configs: McpRuntimeConfig[], closeExisting: boolean): Promise<void> {
     this.toolRevisions.reconcileConfigurations(configs);
     if (closeExisting) {
       // Retire changed/disabled admissions synchronously, but do not close
@@ -388,7 +400,7 @@ export class McpExternalPool implements IMcpServerManager {
     );
   }
 
-  private async buildSnapshot(configs: McpServerConfig[], serverId?: string): Promise<McpExternalSnapshot> {
+  private async buildSnapshot(configs: McpRuntimeConfig[], serverId?: string): Promise<McpExternalSnapshot> {
     const { tools, tierMap } = await this.manager.listAllTools(serverId ? { serverId } : undefined);
     if (serverId) {
       const prefix = `ext_${serverId}__`;
@@ -412,13 +424,15 @@ export class McpExternalPool implements IMcpServerManager {
         const m = t.name.match(/^ext_(.+?)__(.+)$/);
         const serverId = t.capabilityProvenance?.serverId ?? m?.[1] ?? '';
         const toolName = t.name.slice(('ext_' + serverId + '__').length);
+        const transport = configs.find(config => config.id === serverId)?.transport;
         return {
           name: t.name,
           description: t.description,
           parameters: t.parameters,
           repeatable: t.repeatPolicy === 'pollable' || !!t.repeatable,
           catalogueRevision: this.toolRevisions.get(t.name)!.revision,
-          transport: configs.find(config => config.id === serverId)?.transport,
+          transport,
+          ...(transport === 'embedded' && t.mutates === false && t.executionClass === 'read' ? { readOnly: true as const } : {}),
           serverId,
           toolName,
         };

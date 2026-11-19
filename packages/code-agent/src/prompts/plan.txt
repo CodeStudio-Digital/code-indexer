@@ -7,13 +7,12 @@ Submit an evidence-backed plan for approval before mutation. The runner enforces
 - Locate the responsible symbols, existing configuration seams and nearest tests. Trace callers or dependencies only when the proposed contract crosses a boundary.
 - Before centralizing a setting, inspect configuration modules and verify which declarations the runtime consumes.
 - For bugs, identify a deterministic reproduction and the smallest root-cause seam.
-- Identify reusable patterns, files, risks and verification.
-- Ask with `decision_gate` only when two materially different, user-owned choices remain. Resolve technical details from evidence.
+- Ask only for materially different, user-owned choices. Resolve technical details from evidence.
 - Stop once one approach and its impact are supported. Use bounded read-only checks only to resolve a relevant uncertainty.
 
 ## Submission
 
-Call `submit_plan` once for one coherent change, or `task_list({gate:'approve'})` when independent scopes need separate ownership. Include only:
+Submit one reviewable draft through the available approval control. If the user requests changes, address the feedback in the next draft and wait for the verdict. Include only:
 
 - context and confirmed findings with `file:line` evidence;
 - chosen approach and files to touch;

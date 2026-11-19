@@ -168,6 +168,8 @@ export interface Project {
    * still offered in the global-session picker. Undefined/0 for normal projects.
    */
   is_loose?: number;
+  /** Parent project of an internal, independently indexed Git checkout. */
+  worktree_parent_id?: number | null;
 }
 
 // ─── LLM Analysis ────────────────────────────────────────────────

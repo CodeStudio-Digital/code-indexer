@@ -95,21 +95,25 @@ export class RemoteMcpServerManager implements IMcpServerManager {
   async listAllTools(): Promise<{ tools: CoderTool[]; tierMap: Map<string, ToolTier> }> {
     if (!this.snapshot) return { tools: [], tierMap: new Map() };
 
-    const tools: CoderTool[] = this.snapshot.tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters as CoderTool['parameters'],
-      source: 'mcp_external',
-      effectBoundary: 'external_mcp',
-      capabilityProvenance: { kind: 'mcp_external', providerId: 'mcp-external', serverId: t.serverId,
-        provenanceRef: `mcp-server:${t.serverId}${t.catalogueRevision ? `:${t.catalogueRevision}` : ''}` },
-      mutates: true,
-      parallelSafe: false,
-      riskLevel: 'write',
-      repeatPolicy: t.repeatable ? 'pollable' : 'stable',
-      handler: this.createHandler(t.serverId, t.toolName, t.name, t.catalogueRevision),
-      repeatable: t.repeatable,
-    }));
+    const tools: CoderTool[] = this.snapshot.tools.map((t) => {
+      const readOnly = t.transport === 'embedded' && t.readOnly === true;
+      return {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters as CoderTool['parameters'],
+        source: 'mcp_external',
+        effectBoundary: 'external_mcp',
+        capabilityProvenance: { kind: 'mcp_external', providerId: 'mcp-external', serverId: t.serverId,
+          provenanceRef: `mcp-server:${t.serverId}${t.catalogueRevision ? `:${t.catalogueRevision}` : ''}` },
+        mutates: !readOnly,
+        parallelSafe: false,
+        riskLevel: readOnly ? 'read' : 'write',
+        ...(readOnly ? { executionClass: 'read' } : {}),
+        repeatPolicy: t.repeatable ? 'pollable' : 'stable',
+        handler: this.createHandler(t.serverId, t.toolName, t.name, t.catalogueRevision),
+        repeatable: t.repeatable,
+      };
+    });
 
     const tierMap = new Map<string, ToolTier>(
       this.snapshot.tierMap as Array<[string, ToolTier]>,

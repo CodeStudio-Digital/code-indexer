@@ -9,6 +9,7 @@ import {
   buildPersistedLiveReconciliation,
   groupMessages,
   isLiveTurnDuplicatedInHistory,
+  liveBlockPersistedId,
   liveTurnContinuesPersistedAssistant,
   liveTurnCoversPersistedAssistantRun,
   mergeConsecutiveAssistantGroups,
@@ -44,6 +45,7 @@ export function buildTranscriptProjection(
     messages,
     sessionData?.preceding_user_seq,
     fallbackResults.map((result) => result.tool_use_id),
+    sessionData?.message_rows,
   );
   const duplicated = isLiveTurnDuplicatedInHistory(
     currentTurn,
@@ -70,7 +72,7 @@ export function buildTranscriptProjection(
     toolResultsById: buildToolResultIndex(sessionData),
     activeTasksToolUseId: findActiveTasksToolUseId(messages, tasksState),
     live: {
-      blocks,
+      blocks: positionLiveUsage(blocks),
       duplicated,
       replacesPersistedTail,
       continuation: replacesPersistedTail
@@ -82,6 +84,35 @@ export function buildTranscriptProjection(
       ),
     },
   };
+}
+
+/** A provider completes before its tools are dispatched. As each tool appears,
+ * keep the counters below the calls it belongs to, just as in stored history. */
+function positionLiveUsage(blocks: StreamBlock[]): StreamBlock[] {
+  if (!blocks.some(block => block.type === 'usage' && block.toolIds.length > 0)) return blocks;
+  const toolPositions = new Map<string, number>();
+  blocks.forEach((block, index) => {
+    const id = liveBlockPersistedId(block);
+    if (id) toolPositions.set(id, index);
+  });
+  const moveAfter = new Map<number, StreamBlock>();
+  const moved = new Set<StreamBlock>();
+  blocks.forEach((block, index) => {
+    if (block.type !== 'usage') return;
+    let last = index;
+    for (const id of block.toolIds) last = Math.max(last, toolPositions.get(id) ?? -1);
+    if (last === index) return;
+    moveAfter.set(last, block);
+    moved.add(block);
+  });
+  if (!moved.size) return blocks;
+  const ordered: StreamBlock[] = [];
+  blocks.forEach((block, index) => {
+    if (!moved.has(block)) ordered.push(block);
+    const footer = moveAfter.get(index);
+    if (footer) ordered.push(footer);
+  });
+  return ordered;
 }
 
 export function projectTranscriptHistory(

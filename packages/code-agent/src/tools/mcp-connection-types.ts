@@ -5,11 +5,14 @@ import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 /** Per-server connection state. */
 export type McpConnectionState = 'connected' | 'disconnected' | 'error';
 
+/** Host-owned transports are supplied in memory and have no persisted server row. */
+export type EmbeddedMcpConfig = Omit<McpServerConfig, 'transport'> & { transport: 'embedded' };
+export type McpRuntimeConfig = McpServerConfig | EmbeddedMcpConfig;
 
 export interface ServerConnection {
   client: Client;
   transport: Transport;
-  config: McpServerConfig;
+  config: McpRuntimeConfig;
   state: McpConnectionState;
   error?: string;
   /** Kept only for stdio servers, so their child pid stays discoverable. */

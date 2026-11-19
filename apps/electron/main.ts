@@ -213,6 +213,9 @@ async function bootstrap() {
   if (!process.env.MCP_MODEL_CACHE_DIR) {
     process.env.MCP_MODEL_CACHE_DIR = path.join(app.getPath('userData'), 'models');
   }
+  if (app.isPackaged && !process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR) {
+    process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR = path.join(process.resourcesPath, 'semantic-models');
+  }
 
   // Point outbound-MCP OAuth redirects at the ephemeral 127.0.0.1 loopback
   // the desktop app spins up during consent (see oauth-loopback.ts). The
@@ -426,7 +429,7 @@ function openBrowserLink(url: string): void {
 /** Documents use a separate, unprivileged viewer; they never replace the IDE. */
 function openDocumentWindow(url: string): void {
   if (!isDocumentLink(url)) return;
-  const viewer = new BrowserWindow({ width: 1000, height: 760, autoHideMenuBar: true,
+  const viewer = new BrowserWindow({ width: 1000, height: 760, show: false, autoHideMenuBar: true,
     webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true, javascript: false } });
   viewer.webContents.setWindowOpenHandler(({ url: target }) => { openBrowserLink(target); return { action: 'deny' }; });
   viewer.webContents.on('will-navigate', (event, target) => { event.preventDefault(); openBrowserLink(target); });
@@ -435,7 +438,17 @@ function openDocumentWindow(url: string): void {
   });
   installEditContextMenu(viewer);
   applyProductionHardening(viewer);
-  void viewer.loadURL(url).catch(error => console.error('[documents] Open failed:', error));
+  const failed = () => {
+    if (viewer.isDestroyed()) return;
+    viewer.destroy();
+    const pt = app.getLocale().startsWith('pt');
+    void dialog.showMessageBox({ type: 'warning', title: 'CodeStudio',
+      message: pt ? 'Não foi possível abrir o documento.' : 'The document could not be opened.',
+      detail: pt ? 'Verifique se o arquivo ainda existe e se você tem acesso a ele.'
+        : 'Check that the file still exists and you have access to it.' });
+  };
+  viewer.webContents.once('did-navigate', (_event, _url, status) => { if (status >= 400) failed(); });
+  void viewer.loadURL(url).then(() => { if (!viewer.isDestroyed()) viewer.show(); }, failed);
 }
 
 function attachWindowHandlers(win: BrowserWindow) {
@@ -769,7 +782,10 @@ function registerMcpProtocol(dispatch: BackendDispatch) {
   });
 }
 
-void bootstrap().catch((err) => {
+const start = app.commandLine.hasSwitch('codestudio-browser-worker')
+  ? import('./src/browser-worker.js').then(({ runBrowserWorker }) => runBrowserWorker())
+  : bootstrap();
+void start.catch((err) => {
   console.error('[electron] bootstrap failed:', err);
   process.exitCode = 1;
 });

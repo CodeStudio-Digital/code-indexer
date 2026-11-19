@@ -8,7 +8,7 @@ import type { CreateAgentMemoryData, AgentMemoryIndexEntry, AgentMemoryEvent, Ag
 export type { CreateAgentMemoryData, AgentMemoryIndexEntry, AgentMemoryEvent, AgentMemoryStats } from './agent-memory-types.js';
 import type { AgentMemoryRow, AgentMemoryScope } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
-import { buildFtsMatch } from './fts-query.js';
+import { boundAgentMemoryQuery, buildAgentMemoryFtsMatch } from './fts-query.js';
 
 /** Resolve a non-colliding live slug: name, name-2, name-3, … */
 function resolveLiveSlug(
@@ -269,7 +269,9 @@ export function searchFts(
   limit = 15,
 ): AgentMemoryRow[] {
   const pid = normalizeScopeProject(scope, projectId);
-  const ftsQuery = buildFtsMatch(query, 'OR');
+  const bounded = boundAgentMemoryQuery(query);
+  if (!bounded) return [];
+  const ftsQuery = buildAgentMemoryFtsMatch(bounded);
   if (ftsQuery) {
     try {
       return db
@@ -284,7 +286,7 @@ export function searchFts(
       /* fall through to LIKE */
     }
   }
-  const pattern = `%${query}%`;
+  const pattern = `%${bounded}%`;
   return db
     .prepare(
       `SELECT * FROM agent_memory

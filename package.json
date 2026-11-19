@@ -1,6 +1,6 @@
 {
   "name": "mcp-code-indexer",
-  "version": "3.16.16",
+  "version": "3.16.55",
   "packageManager": "pnpm@10.22.0",
   "description": "Codebase indexing platform powered by LLMs with hybrid search, MCP Server, and web dashboard",
   "repository": {
@@ -26,6 +26,7 @@
     "dev:dashboard": "vite dev apps/dashboard",
     "better-sqlite3": "npm rebuild better-sqlite3",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
+    "electron:setup": "pnpm install --frozen-lockfile --ignore-scripts && pnpm rebuild esbuild ffmpeg-static && node scripts/prepare-electron-dev.mjs",
     "electron:dev": "tsx apps/electron/dev.ts",
     "profile": "electron --js-flags=\"--prof\" .",
     "electron:build": "node scripts/build-electron.mjs",
@@ -66,10 +67,11 @@
     "typecheck:dashboard": "tsc --noEmit -p apps/dashboard/tsconfig.json"
   },
   "dependencies": {
+    "@microsoft/copilot-sdk": "2.0.1",
     "@anthropic-ai/sdk": "^0.39.0",
-    "@aws-sdk/client-bedrock": "^3.1029.0",
-    "@aws-sdk/client-bedrock-agent-runtime": "^3.1087.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1029.0",
+    "@aws-sdk/client-bedrock": "3.1172.0",
+    "@aws-sdk/client-bedrock-agent-runtime": "3.1172.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1172.0",
     "@babel/parser": "^7.29.7",
     "@google/genai": "^1.48.0",
     "@hono/node-server": "^1.19.12",

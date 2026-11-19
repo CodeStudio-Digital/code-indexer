@@ -83,6 +83,16 @@ export interface MarketPluginInfo {
   brandColor?: string;
 }
 
+export type FigmaConnectionCommand =
+  | { action: 'status' | 'test' | 'disconnect' }
+  | { action: 'connect'; token: string };
+
+export interface FigmaConnectionStatus {
+  connected: boolean;
+  account: string | null;
+  toolCount: number;
+}
+
 export interface PluginsApi {
   list(input: void, ctx: ApiContext): Promise<InstalledPluginInfo[]>;
   /**
@@ -123,6 +133,11 @@ export interface PluginsApi {
     input: { namespace: string; tool: string; args?: Record<string, unknown>; projectId?: number },
     ctx: ApiContext,
   ): Promise<{ content: string; isError?: boolean; data?: unknown }>;
+
+  figmaConnection(
+    input: { namespace: string } & FigmaConnectionCommand,
+    ctx: ApiContext,
+  ): Promise<FigmaConnectionStatus>;
 
   /**
    * Stream a long-running allowlisted command for a plugin (live `wrangler

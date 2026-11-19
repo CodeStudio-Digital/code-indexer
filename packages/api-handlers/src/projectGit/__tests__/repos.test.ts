@@ -8,7 +8,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fs, mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRepoResolver } from '../repos.js';
@@ -93,6 +93,54 @@ describe('repos: discovery (listRepos)', () => {
     expect(git).toHaveBeenCalledTimes(1);
   });
 
+  it('publishes the main repo while discovery is blocked but waits for authoritative routing', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'mcp-repos-progress-')));
+    dirs.push(root);
+    mkdirSync(join(root, 'child', '.git'), { recursive: true });
+    const resolver = createRepoResolver({
+      requireRoot: () => root,
+      detectRepo: async () => ({ repoRoot: root, gitDir: join(root, '.git'), notARepo: false }),
+      runGit: async () => ({ code: 1, stdout: '', stderr: '' }),
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const original = fs.readdir.bind(fs);
+    const spy = vi.spyOn(fs, 'readdir').mockImplementation((async (...args: Parameters<typeof fs.readdir>) => {
+      if (String(args[0]) === root) await blocked;
+      return original(...args);
+    }) as typeof fs.readdir);
+    try {
+      const partial = await resolver.listRepos(1, { interactive: true });
+      expect(partial).toEqual([expect.objectContaining({ kind: 'main', discoveryPending: true })]);
+      expect(await resolver.resolveCwd(1, root)).toBe(root);
+      let routed = false;
+      const routing = resolver.resolveRepoForPath(1, 'child/a.ts').then(value => { routed = true; return value; });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(routed).toBe(false);
+      release();
+      expect((await routing).repo.projectRelPrefix).toBe('child');
+      const complete = await resolver.listRepos(1, { interactive: true });
+      expect(complete).toHaveLength(2);
+      expect(complete.every(repo => !repo.discoveryPending)).toBe(true);
+    } finally { release(); spy.mockRestore(); }
+  });
+
+  it('does not scan generated directories and preserves explicit submodules in them', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'mcp-repos-generated-')));
+    dirs.push(root);
+    for (const dir of ['.tmp', '.mcp-indexer', 'Library', 'Temp', 'obj', 'source']) {
+      mkdirSync(join(root, dir, 'child', '.git'), { recursive: true });
+    }
+    const resolver = createRepoResolver({
+      requireRoot: () => root,
+      detectRepo: async () => ({ repoRoot: root, gitDir: join(root, '.git'), notARepo: false }),
+      runGit: async () => ({ code: 0, stdout: 'submodule.explicit.path Library/child\n', stderr: '' }),
+    });
+    writeFileSync(join(root, '.gitmodules'), '[submodule "explicit"]\npath = Library/child\n');
+    const repos = await resolver.listRepos(1);
+    expect(repos.map(repo => repo.projectRelPrefix)).toEqual(['', 'Library/child', 'source/child']);
+  });
+
   it('finds main + submodules (init state) + nested repos (ignore state)', async () => {
     const root = await setupFixture();
     const repos = await makeResolver(root).listRepos(1);
@@ -159,6 +207,24 @@ describe('repos: resolveCwd', () => {
 });
 
 describe('repos: resolveRepoForPath (auto-routing)', () => {
+  it('can preview a file or a deleted path with sibling enumeration unavailable', async () => {
+    const root = await setupFixture();
+    const resolver = makeResolver(root);
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'file.ts'), 'changed\n');
+    const spy = vi.spyOn(fs, 'readdir').mockRejectedValue(new Error('unexpected directory enumeration'));
+    try {
+      for (const file of ['src/file.ts', 'src/removed/file.ts']) {
+        expect(await resolver.resolveDiffPath(1, file)).toEqual({ cwd: root, gitPath: file });
+      }
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+    for (const file of ['packages/sub/a.ts', 'tools/local/a.ts']) {
+      const { cwd, repoRelPath } = await makeResolver(root).resolveRepoForPath(1, file);
+      expect(await makeResolver(root).resolveDiffPath(1, file)).toEqual({ cwd, gitPath: repoRelPath });
+    }
+  });
+
   it('routes a file inside a submodule to that submodule, rebased repo-relative', async () => {
     const root = await setupFixture();
     const { repo, repoRelPath } = await makeResolver(root).resolveRepoForPath(1, 'packages/sub/src/a.ts');

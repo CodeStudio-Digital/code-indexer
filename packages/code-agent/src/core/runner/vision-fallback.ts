@@ -18,9 +18,7 @@ import type { AgentMessage, ContentBlock, ImageBlock, TextBlock } from '@mcp/cod
 import type { IVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 
 const DEFAULT_UI_PROMPT =
-  'Describe this image in detail for a developer who cannot see it: the overall layout and ' +
-  'structure, every UI component and its position, text labels, colors, typography, spacing ' +
-  'and alignment, and any visible visual defects (misalignment, overflow, clipping, low contrast).';
+  'Describe the visible subject and relevant details. For a UI, include layout, key labels, styling and visible defects.';
 
 const OMITTED_NOTE =
   '[Image omitted: this model cannot view images and no vision model is configured. ' +

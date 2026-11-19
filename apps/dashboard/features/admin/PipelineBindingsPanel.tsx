@@ -145,9 +145,7 @@ const PIPELINE_LABELS: Record<string, string> = {
   doc_ingest: 'Ingestão de documentação',
   doc_search: 'Busca em documentação',
   docs_research: 'Pesquisa em documentação',
-  memory_extraction: 'Extração de memória',
-  memory_recall: 'Filtro de memórias',
-  memory_query: 'Query de recall de memórias',
+  memory_extraction: 'Aprendizado e evolução de memórias',
   'code-agent': 'Chat e multimodal',
   editor: 'Editor',
 };
@@ -260,6 +258,7 @@ export function PipelineBindingsPanel() {
       map.set(key, { catalog: entry, rows: [] });
     }
     for (const b of bindings) {
+      if (b.pipeline_name === 'memory_query' || b.pipeline_name === 'memory_recall') continue;
       const key = `${b.pipeline_name}::${b.binding_role}`;
       const bucket = map.get(key);
       if (bucket) bucket.rows.push(b);
@@ -670,6 +669,7 @@ export function PipelineBindingsPanel() {
                 <p className="text-xs text-muted-foreground line-clamp-2">
                   {group.catalog.description}
                 </p>
+                {group.catalog.pipelineName === 'memory_extraction' && <p className="rounded-md bg-primary/10 p-3 text-xs leading-relaxed text-muted-foreground">{t('admin:pipelines.memoryRetrievalHint')}</p>}
                 {group.catalog.recommendedDefault && (
                   <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                     <span>{t('admin:pipelines.suggested')}</span>

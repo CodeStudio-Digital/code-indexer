@@ -1,7 +1,7 @@
 import { mcpResultToToolResult } from './mcp-result.js';
 import type { ExternalMcpContent } from './mcp-content-types.js';
 import { mcpServerConfigurationKey } from './mcp-transport.js';
-import type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
+import type { EmbeddedMcpConfig, McpConnectionState, McpRuntimeConfig, ServerConnection } from './mcp-connection-types.js';
 export type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
 import { terminateSession, createTransport } from './mcp-transport.js';
 import { listToolsFromConnection } from './mcp-catalog-listing.js';
@@ -20,8 +20,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
-import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolResult, ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
@@ -47,13 +46,16 @@ export class McpServerManager {
    *                        servers attempt to connect unauthenticated and
    *                        the dashboard guides re-auth on failure.
    */
-  constructor(private readonly bearerResolver: ResolveMcpBearer | null = null) {}
+  constructor(
+    private readonly bearerResolver: ResolveMcpBearer | null = null,
+    private readonly connectEmbedded?: (config: EmbeddedMcpConfig) => Promise<Transport>,
+  ) {}
 
   /**
    * Connect to all provided server configs in parallel, with per-server timeout.
    * Failures are isolated — a failing server logs a warning but doesn't block others.
    */
-  async connectAll(configs: McpServerConfig[]): Promise<void> {
+  async connectAll(configs: McpRuntimeConfig[]): Promise<void> {
     if (new Set(configs.map(config => config.id)).size !== configs.length) throw new Error('Duplicate MCP server ids');
     const results = await mapMcpSources(configs, cfg => this.connectServer(cfg));
     for (let i = 0; i < results.length; i++) {
@@ -70,7 +72,7 @@ export class McpServerManager {
   /**
    * Connect to a single external MCP server.
    */
-  connectServer(config: McpServerConfig): Promise<void> {
+  connectServer(config: McpRuntimeConfig): Promise<void> {
     const cleanupFailure = this.cleanupFailures.get(config.id);
     if (cleanupFailure) return Promise.reject(cleanupFailure);
     const frozen = structuredClone(config);
@@ -87,7 +89,7 @@ export class McpServerManager {
     return attempt.promise;
   }
 
-  private async openConnection(config: McpServerConfig,
+  private async openConnection(config: McpRuntimeConfig,
     attempt: { key: string; controller: AbortController; promise: Promise<void> },
     retired: Promise<void>): Promise<void> {
     const { signal } = attempt.controller;
@@ -100,7 +102,11 @@ export class McpServerManager {
       signal.throwIfAborted();
       const cleanupFailure = this.cleanupFailures.get(config.id);
       if (cleanupFailure) throw cleanupFailure;
-      transport = await awaitMcpConnection<Transport>(createTransport(config, this.bearerResolver).then(async transport => {
+      const opened = config.transport === 'embedded'
+        ? this.connectEmbedded?.(config)
+        : createTransport(config, this.bearerResolver);
+      if (!opened) throw new Error(`Embedded MCP server "${config.id}" is unavailable`);
+      transport = await awaitMcpConnection<Transport>(opened.then(async transport => {
         if (signal.aborted) { await this.closeTransport(config.id, transport); signal.throwIfAborted(); }
         return transport;
       }), signal);
@@ -169,6 +175,9 @@ export class McpServerManager {
           // Server authors can opt non-conventional names in through future
           // MCP metadata without changing guard code.
           const repeatable = /^(?:wait_for|await|poll|tail|monitor)_/.test(t.name);
+          // Embedded tools are defined by the host. Remote MCP annotations
+          // alone cannot grant a read classification.
+          const readOnly = conn.config.transport === 'embedded' && t.annotations?.readOnlyHint === true;
           allTools.push({
             name: prefixedName,
             description: sanitized.description,
@@ -182,9 +191,10 @@ export class McpServerManager {
             },
             handler: this.createHandler(serverId, t.name, mcpServerConfigurationKey(conn.config)),
             repeatPolicy: repeatable ? 'pollable' : 'stable',
-            mutates: true,
+            mutates: !readOnly,
             parallelSafe: false,
-            riskLevel: 'write',
+            riskLevel: readOnly ? 'read' : 'write',
+            ...(readOnly ? { executionClass: 'read' as const } : {}),
           });
         }
       } catch (e) {
@@ -203,16 +213,18 @@ export class McpServerManager {
   }
 
   /** Reconcile by source. Unchanged transports (and their in-flight calls) survive. */
-  async refreshAll(configs: McpServerConfig[]): Promise<void> {
+  async refreshAll(configs: McpRuntimeConfig[]): Promise<void> {
     const next = new Map(configs.map(config => [config.id, config]));
     if (next.size !== configs.length) throw new Error('Duplicate MCP server ids in configuration');
     const removed = [...new Set([...this.connections.keys(), ...this.connecting.keys()])].filter(id => !next.has(id));
     await Promise.all(removed.map(id => this.closeServer(id)));
-    const changed = configs.filter(config => {
-      const current = this.connections.get(config.id);
-      return current?.state !== 'connected' || mcpServerConfigurationKey(current.config) !== mcpServerConfigurationKey(config);
-    });
-    await this.connectAll(changed);
+    await this.connectAll(configs.filter(config => !this.isConnectedWith(config)));
+  }
+
+  isConnectedWith(config: McpRuntimeConfig): boolean {
+    const current = this.connections.get(config.id);
+    return current?.state === 'connected'
+      && mcpServerConfigurationKey(current.config) === mcpServerConfigurationKey(config);
   }
 
   /** Reconnect only before dispatch. A lost response never authorizes a replay. */
@@ -238,7 +250,7 @@ export class McpServerManager {
           if (ctx.signal?.aborted || this.connections.get(serverId) !== admitted || admitted.state !== 'connected'
             || mcpServerConfigurationKey(admitted.config) !== configKey) throw new Error('MCP connection retired.');
           ctx.assertExternalMcpDispatch?.();
-        }, () => this.callToolOnce(admitted, toolName, args, ctx.signal, ctx.deadlineAtEpochMs));
+        }, () => this.callToolOnce(admitted, toolName, args, ctx));
       } catch (e) {
         if (e instanceof McpDispatchRejected) return err(e.message);
         conn.state = 'disconnected';
@@ -275,12 +287,14 @@ export class McpServerManager {
     conn: ServerConnection,
     toolName: string,
     args: Record<string, unknown>,
-    signal?: AbortSignal,
-    deadlineAtEpochMs?: number,
+    ctx: ToolContext,
   ): Promise<ToolResult> {
+    const { signal, deadlineAtEpochMs, projectId } = ctx;
     const remaining = Math.min(60_000, (deadlineAtEpochMs ?? Date.now() + 60_000) - Date.now());
     if (remaining <= 0) throw new Error("MCP deadline expired before dispatch");
-    const result = await conn.client.callTool({ name: toolName, arguments: args }, undefined, { signal, timeout: remaining });
+    const meta = conn.config.transport === 'embedded' && projectId != null
+      ? { _meta: { 'codestudio/projectId': projectId } } : {};
+    const result = await conn.client.callTool({ name: toolName, arguments: args, ...meta }, undefined, { signal, timeout: remaining });
     return mcpResultToToolResult(result, toolName);
   }
 

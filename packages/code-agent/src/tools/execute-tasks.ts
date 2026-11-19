@@ -215,8 +215,8 @@ const EXECUTE_TASKS_DESC =
   "  - 'implement'   → read+write+shell, scoped to the task's `files`.\n" +
   "  - 'verify'      → tests/linters/lsp, no write.\n" +
   '\n' +
-  'Returns a consolidated summary of every task that ran. Call this ONCE after submit_tasks is approved — ' +
-  'do NOT loop execute_task by hand. Token cost of every subagent IS billed to this session.';
+  'Returns a consolidated summary. Start this workflow only with an approved task list. ' +
+  'Close an inline scope with task_complete before advancing. Subagent tokens count toward this session.';
 
 const executeTasksSchema: JsonSchema = {
   type: 'object',
@@ -335,12 +335,11 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         if (gated) return gated;
       }
 
-      if (!state) return err('execute_tasks: no tasks state found. Call submit_tasks first.');
+      if (!state) return err('execute_tasks: no approved task list exists in this session. Use this workflow only for an approved list.');
       if (effectiveGate(state) !== 'approve') {
         return err(
           'execute_tasks: the active list is a lightweight checklist (gate:"track"), which is not executable. ' +
-          'It is your own progress tracker — just do the work and flip items with task_list updates. ' +
-          'To run parallel subagent waves, re-issue the list with task_list({gate:"approve", ...}) and get it approved first.',
+          'Use task_list updates to track progress. Continue the requested work within the active mode.',
         );
       }
       if (!state.approved) return err('execute_tasks: task list not approved yet.');

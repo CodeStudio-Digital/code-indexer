@@ -32,7 +32,7 @@ export interface TuningPragmaOptions {
   mmapBytes?: number;
 }
 
-const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
+export const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const DEFAULT_MMAP_BYTES = 256 * 1024 * 1024;
 
 const envInt = (name: string): number | null => {

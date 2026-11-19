@@ -68,7 +68,7 @@ export interface CoverageContext {
  * confirm nor break the alignment — the walk passes straight through them
  * instead of treating them as a mismatch.
  */
-const TRANSPARENT_BLOCKS = new Set(['activity', 'agents', 'task_run', 'workflow', 'notice']);
+const TRANSPARENT_BLOCKS = new Set(['activity', 'agents', 'task_run', 'workflow', 'notice', 'usage']);
 
 /**
  * Index of the last live block already rendered by the persisted run, or -1.

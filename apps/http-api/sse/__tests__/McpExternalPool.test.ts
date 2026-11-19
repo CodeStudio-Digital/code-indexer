@@ -340,7 +340,7 @@ describe('McpExternalPool readiness reconciliation', () => {
       snapshot.tools.some((tool) => tool.name === 'ext_unity__get_server_health'))).toBe(true);
   });
 
-  it('keeps healthy connections warm but rebuilds when persisted config changes', async () => {
+  it('keeps healthy connections warm across timestamp updates and rebuilds after an endpoint change', async () => {
     let config = server();
     const fake = fakeManager(() => true);
     const pool = new McpExternalPool({
@@ -359,6 +359,10 @@ describe('McpExternalPool readiness reconciliation', () => {
     config = { ...config, updated_at: '2026-08-02T00:01:00.000Z' };
     await pool.getReadySnapshot();
     expect(fake.closeAll).not.toHaveBeenCalled();
+    expect(fake.connectAll).toHaveBeenCalledTimes(1);
+
+    config = { ...config, url: 'http://127.0.0.1:8766/mcp' };
+    await pool.getReadySnapshot();
     expect(fake.connectAll).toHaveBeenCalledTimes(2);
   });
 });

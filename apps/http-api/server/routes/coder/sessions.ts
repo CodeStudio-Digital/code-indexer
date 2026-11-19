@@ -1,6 +1,6 @@
 import { trimMessageBlocks, reconstructMissingToolResults } from './session-message-preview.js';
 import { registerSessionImageRoutes } from './session-images.js';
-import { resolveProjectWorktree } from '@mcp/code-agent/tools/project-worktrees.js';
+import { resolveProjectWorktree } from '../../worktree-reads.js';
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
@@ -12,6 +12,7 @@ import { AGENTS } from '@mcp/code-agent/agents/index.js';
 import { decide } from '@mcp/code-agent/agents/decision-engine.js';
 import { getAllKnownToolsMeta, getToolTier, TIER_COUNTS } from '@mcp/code-agent/tools/tiers.js';
 import { getModelContextWindow } from '@mcp/code-agent/providers/capabilities.js';
+import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import {
   cleanSessionTitleSeed,
   isAutomaticSessionTitle,
@@ -1225,6 +1226,14 @@ export function mountCoderSessionsRoutes(
       limit,
       includeArchived,
     );
+    if (c.req.query('detail') === 'assistant-text') {
+      // Copying a round can span older pages. Send only Markdown, never
+      // attachment bodies, tool payloads or the duplicated content_json.
+      const items = data.messages.flatMap((message, i) => message.role === 'assistant'
+        ? [{ seq: data.message_rows[i].seq, text: message.content.flatMap(block =>
+          block.type === 'text' && block.text ? [block.text] : []).join('\n\n') }] : []);
+      return c.json({ items, next_before_seq: data.next_cursor });
+    }
     const preceding_user_seq = data.message_rows[0]
       ? await sessionStore.previousUserMessageSeq(sessionId, data.message_rows[0].seq)
       : null;
@@ -1262,11 +1271,14 @@ export function mountCoderSessionsRoutes(
     // Resolve context window DB-first, then fall back to static registry.
     const session = await sessionStore.getSession(id);
     let context_window: number | null = null;
+    let effective_context_window = stats.last_turn_context?.context_window ?? null;
     if (session) {
-      const dbModel = deps.providerStore.listModels(session.provider).find((m) => m.model_id === session.model);
-      context_window = dbModel?.context_window ?? getModelContextWindow(session.model);
+      const [modelId, mode] = session.model.split('::');
+      const dbModel = deps.providerStore.listModels(session.provider).find((m) => m.model_id === modelId && (!mode || m.mode === mode));
+      context_window = dbModel?.context_window ?? getModelContextWindow(modelId);
+      effective_context_window ??= deriveTokenLimits(modelId, context_window).effective;
     }
-    return c.json({ ...stats, context_window });
+    return c.json({ ...stats, context_window, effective_context_window });
   });
 
   registerSessionImageRoutes(app, sessionStore);

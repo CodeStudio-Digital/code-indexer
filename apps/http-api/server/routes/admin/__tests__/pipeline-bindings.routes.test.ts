@@ -176,14 +176,14 @@ describe('POST /bulk/apply-profile', () => {
       { capability_kind: 'embeddings', provider_id: 'cf-1', model_id: 'bge-m3' },
       { capability_kind: 'reranking',  provider_id: 'cf-1', model_id: 'llama-8b' },
     ] });
-    const rows = captured.rows!;
-    // Embeddings are owned by the Code/Knowledge semantic profiles.
+    const rows = captured.rows ?? [];
+    // Embeddings and all cross-encoders are owned by semantic profiles.
     expect(rows.some((row) => row.binding_role === 'embedder')).toBe(false);
     // Both semantic cross-encoders are profile-owned.
     expect(rows.some((row) => row.pipeline_name === 'indexer_search' && row.binding_role === 'reranker')).toBe(false);
     expect(rows.some((row) => row.pipeline_name === 'doc_search' && row.binding_role === 'reranker')).toBe(false);
-    // memory_recall is a distinct LLM filter and remains pipeline-configurable.
-    expect(rows.some((row) => row.pipeline_name === 'memory_recall' && row.binding_role === 'reranker')).toBe(true);
+    expect(rows.some((row) => row.pipeline_name === 'memory_recall')).toBe(false);
+    expect(rows.some((row) => row.pipeline_name === 'memory_query')).toBe(false);
   });
 
   it('400 on unknown capability', async () => {

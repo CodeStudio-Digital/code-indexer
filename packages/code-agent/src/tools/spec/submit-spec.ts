@@ -4,7 +4,7 @@ import { formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
 import { getRejectedSet, hashSpec } from './hash-ledger.js';
 import { writeSpecToRepo } from './write-spec.js';
 import { mirrorSpecToCompanyDrive } from './mirror-to-drive.js';
-import { formatSpecResult } from './format-result.js';
+import { formatSpecResult, SPEC_APPROVAL_REMINDER } from './format-result.js';
 import { toolInteractions } from '../../core/tool-interactions.js';
 
 const SUBMIT_SPEC_DESC =
@@ -122,17 +122,7 @@ export const submitSpec: CoderTool = {
       rejected.clear();
       const result: ToolResult = { content: formatSpecResult(true, written.relPath, feedback) };
       if (transitioning) {
-        result.extraUserBlocks = [
-          {
-            type: 'text',
-            text:
-              `<system-reminder>Mode transition: Spec → Build. The spec at ${written.relPath} was approved. ` +
-              `Derive tasks from its "## Implementation Plan" section, call submit_tasks with files+complexity per step, ` +
-              (ctx.ports?.interactions ? 'then implement the approved steps with the tools available in this attempt. '
-                : 'then call execute_tasks once to run them. ') +
-              `The spec-mode gate is now released; mutating tools are unlocked.</system-reminder>`,
-          },
-        ];
+        result.extraUserBlocks = [{ type: 'text', text: SPEC_APPROVAL_REMINDER }];
       }
       return result;
     }

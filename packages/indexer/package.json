@@ -8,7 +8,7 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-agent-runtime": "^3.1087.0",
+    "@aws-sdk/client-bedrock-agent-runtime": "3.1172.0",
     "@huggingface/transformers": "^4.2.0",
     "@mcp/candidate-pipeline": "workspace:*",
     "@mcp/provider-sdk": "workspace:*",

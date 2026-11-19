@@ -8,7 +8,7 @@
  * inactive remote tab still saves via Save-All.
  */
 import type * as MonacoNs from 'monaco-editor';
-import { useWorkspaceStore } from '../../../state/workspace.js';
+import { isParkedSftpTab, useWorkspaceStore } from '../../../state/workspace.js';
 
 interface SftpEditHandle {
   /** The Monaco model — disposed by the janitor when the tab closes. */
@@ -24,17 +24,12 @@ let subscribed = false;
 function ensureJanitor(): void {
   if (subscribed) return;
   subscribed = true;
-  const openKeys = (state: ReturnType<typeof useWorkspaceStore.getState>): string[] =>
-    state.openFiles
-      .filter((f) => f.kind === 'sftp')
-      .map((f) => keyOf(f.projectId, f.path));
-  let prev = openKeys(useWorkspaceStore.getState());
-  useWorkspaceStore.subscribe((state) => {
-    const next = openKeys(state);
-    if (next.length === prev.length && next.every((key, index) => key === prev[index])) return;
-    const now = new Set(next);
-    for (const k of prev) {
-      if (now.has(k)) continue;
+  useWorkspaceStore.subscribe((state, previous) => {
+    if (state.openFiles === previous.openFiles || handles.size === 0) return;
+    for (const file of previous.openFiles) {
+      if (file.kind !== 'sftp' || isParkedSftpTab(file.projectId, file.path)) continue;
+      if (state.openFiles.some((tab) => tab.kind === 'sftp' && tab.projectId === file.projectId && tab.path === file.path)) continue;
+      const k = keyOf(file.projectId, file.path);
       const h = handles.get(k);
       if (h) {
         try {
@@ -45,7 +40,6 @@ function ensureJanitor(): void {
         handles.delete(k);
       }
     }
-    prev = next;
   });
 }
 

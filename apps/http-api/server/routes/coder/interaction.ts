@@ -6,7 +6,7 @@ import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from "@mcp/provider-sdk";
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
-import { formatPlanResult } from '@mcp/code-agent/tools/plan.js';
+import { formatPlanResult, PLAN_APPROVAL_REMINDER } from '@mcp/code-agent/tools/plan.js';
 import {
   formatTasksApprovedResult,
   formatTasksRejectedResult,
@@ -237,7 +237,6 @@ export function mountCoderInteractionRoutes(
     const waiting = await workerPool.isWaitingForInput(id).catch(() => false);
     if (waiting) {
       if (!interject) return c.json({ waiting: true });
-      await workerPool.interruptWait(id).catch(() => undefined);
     }
     const operationId = `interaction:inject:${randomUUID()}`;
     if (attachments?.length) {
@@ -245,6 +244,7 @@ export function mountCoderInteractionRoutes(
     } else {
       await workerPool.pushUserMessage(id, content, skillIds, operationId);
     }
+    if (waiting && interject) await workerPool.interruptWait(id);
     return c.json({ injected: true });
   });
 
@@ -451,7 +451,7 @@ export function mountCoderInteractionRoutes(
             role: 'user',
             content: [{
               type: 'text',
-              text: '<system-reminder>Mode transition: Plan → Build. The plan was approved. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run verify after each batch. No further plan submission needed.</system-reminder>',
+              text: PLAN_APPROVAL_REMINDER,
             }],
           };
           await sessionStore.appendMessage({

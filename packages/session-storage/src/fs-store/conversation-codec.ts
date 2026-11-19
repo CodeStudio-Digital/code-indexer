@@ -46,6 +46,7 @@ interface StoredArtifactBlock {
   name?: string;
   path?: string;
   describe_hint?: string;
+  source_image_id?: string;
 }
 
 interface StoredToolResultBlock {
@@ -147,6 +148,7 @@ export function prepareMessage(
         media_type: block.mediaType,
         ...(block.name ? { name: block.name } : {}),
         ...(block.describeHint ? { describe_hint: block.describeHint } : {}),
+        ...(block.sourceImageId ? { source_image_id: block.sourceImageId } : {}),
       });
       artifacts.push(prepared.input);
       refs.push(prepared.stored.artifact);
@@ -186,6 +188,7 @@ export function prepareMessage(
       schema_version: 1,
       role: message.role,
       ...(message.phase ? { phase: message.phase } : {}),
+      ...(message.providerReplay ? { provider_replay: message.providerReplay } : {}),
       content,
       usage: usageRecord(usage),
       is_meta: message.isMeta === true,
@@ -244,6 +247,7 @@ function hydrateContentBlock(
         ...(block.describe_hint
           ? { describeHint: block.describe_hint }
           : {}),
+        ...(block.source_image_id ? { sourceImageId: block.source_image_id } : {}),
       };
     }
     if (block.source_type === 'document') {
@@ -303,6 +307,7 @@ export function hydrateMessage(
   return {
     role: stored.role,
     ...(stored.phase ? { phase: stored.phase } : {}),
+    ...(stored.provider_replay ? { providerReplay: stored.provider_replay } : {}),
     content: content.map((block) => hydrateContentBlock(artifactStore, block)),
     ...(stored.is_meta ? { isMeta: true } : {}),
     ...(stored.selected_skill_ids.length > 0

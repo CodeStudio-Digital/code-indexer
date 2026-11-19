@@ -19,16 +19,19 @@ function render(activePanelId: RightPanelId | null = null, extras = {}) {
 describe('ChatRightRail navigation', () => {
   it('keeps primary entries, network and configuration, with specialist tools in More', () => {
     const html = render(null, { previewAvailable: true });
-    for (const name of ['state', 'context', 'changes', 'more', 'config']) {
+    for (const name of ['state', 'context', 'changes', 'usageQuota', 'more', 'config']) {
       expect(html).toContain(`aria-label="rightRail.${name}"`);
     }
-    expect(html.match(/<button /g)).toHaveLength(6);
+    expect(html.match(/<button /g)).toHaveLength(7);
     expect(html).toContain('aria-label="collaboration.title"');
     expect(html).not.toContain('aria-label="rightRail.preview"');
   });
   it.each(['plans', 'chapters'] as const)('recognizes legacy grouped panel %s', (id) => {
     const html = render(id);
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
+  });
+  it('marks the usage quota shortcut as active', () => {
+    expect(render('usage-quota')).toMatch(/<button(?=[^>]*aria-label="rightRail.usageQuota")(?=[^>]*aria-pressed="true")/);
   });
   it('offers a subagents shortcut only when there is activity or history', () => {
     expect(render()).not.toContain('aria-label="rightRail.subagents"');

@@ -8,6 +8,7 @@
     "./*": "./src/*"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock": "3.1172.0",
     "@mcp/provider-sdk": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",

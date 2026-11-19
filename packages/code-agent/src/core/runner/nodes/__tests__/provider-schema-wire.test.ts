@@ -23,7 +23,7 @@ it.each(['valid', 'sse-rejection', 'http-rejection'])('runs discovery through re
   const tiers = new Map([[name, 'rea']]);
   registry.register(buildFindToolsTool(registry, tiers));
   registry.register(buildCodeExecTool(registry));
-  const runner = { visibleToolNames: new Set<string>(), requestedToolNames: pins, pinnedTools: pins,
+  const runner = { stableToolCatalog: true, visibleToolNames: new Set<string>(), requestedToolNames: pins, pinnedTools: pins,
     promoteTool(tool: string) { pins.add(tool); return []; } };
   const bodies: Array<{ tools: Array<{ name: string; parameters: unknown }>; instructions?: string; input: unknown[] }> = [];
   const server = createServer(async (request, response) => {
@@ -44,7 +44,7 @@ it.each(['valid', 'sse-rejection', 'http-rejection'])('runs discovery through re
     }
     let tool: string | undefined, args: Record<string, unknown> = {};
     if (attempt === 1) { tool = 'find_tools'; args = { query: 'capture_browser_scenario', limit: 1 }; }
-    else if (mode === 'valid' && attempt === 2) { tool = name; args = { actions: [] }; }
+    else if (mode === 'valid' && attempt === 2) { tool = 'code_exec'; args = { code: `return await tools.${name}({actions:[]})` }; }
     else if (mode !== 'valid' && attempt === 3) { tool = 'find_tools'; args = { query: 'capture_browser_scenario', limit: 1 }; }
     else if (mode !== 'valid' && attempt === 4) {
       tool = 'code_exec'; args = { code: `return await tools.${name}({actions:[]})` };
@@ -66,11 +66,22 @@ it.each(['valid', 'sse-rejection', 'http-rejection'])('runs discovery through re
       provider: new ChatGPTCodexProvider({ apiKey: 'local-only', baseURL: `http://127.0.0.1:${address.port}`, model: 'local-fixture' }),
     });
     ctx.opts.externalToolTiers = tiers;
+    // A real provider rejection can concern only a published schema. Hidden
+    // discovery stays stable; explicitly configured top-level tools still
+    // exercise both rejection transports and the authorized generic fallback.
+    if (mode !== 'valid') ctx.opts.requiredPinnedTools = [name];
     const result = await runBehaviorTree({ opts: ctx.opts, emit: ctx.emit, initialTiers: new Set(['bootstrap']), initialPins: pins });
     expect(result.reason).toBe('completed');
     expect(bodies).toHaveLength(mode === 'valid' ? 3 : 5);
-    expect(bodies[0].tools.some(t => t.name === name)).toBe(false);
-    expect(bodies[1].tools.find(t => t.name === name)?.parameters).toEqual(rea);
+    expect(bodies[0].tools.some(t => t.name === name)).toBe(mode !== 'valid');
+    if (mode === 'valid') {
+      expect(bodies[1].tools).toEqual(bodies[0].tools);
+      expect(bodies.every(body => !body.tools.some(tool => tool.name === name))).toBe(true);
+      const discoveryOutput = (bodies[1].input as Array<{ type: string; output?: string }>).find(item => item.type === 'function_call_output')?.output;
+      const schemaLine = discoveryOutput?.split(`${name} input schema: `)[1]?.split('\n')[0];
+      expect(schemaLine).toBeDefined();
+      expect(JSON.parse(schemaLine!)).toEqual(registry.get(name)!.parameters);
+    } else expect(bodies[1].tools.find(t => t.name === name)?.parameters).toEqual(rea);
     expect(rejectedHandler).toHaveBeenCalledTimes(1);
     if (mode !== 'valid') {
       for (const body of bodies.slice(2)) {

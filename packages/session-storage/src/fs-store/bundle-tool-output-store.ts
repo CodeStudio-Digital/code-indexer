@@ -66,6 +66,8 @@ export class BundleToolOutputStore {
         })
         .then(() => undefined)
         .catch((error: unknown) => {
+          this.#memory.delete(id);
+          this.#images.delete(id);
           this.#failure =
             error instanceof Error ? error : new Error(String(error));
           throw this.#failure;
@@ -84,6 +86,12 @@ export class BundleToolOutputStore {
     return this.put(JSON.stringify({ mediaType, base64 }), {
       name: image.name || 'image', mediaType,
     });
+  }
+
+  async saveImage(image: StoredImage): Promise<string | null> {
+    const id = this.putImage(image);
+    if (id) await this.#pending.get(id);
+    return id;
   }
 
   /** Catalog metadata survives compaction/restart without loading any pixels. */
@@ -113,7 +121,30 @@ export class BundleToolOutputStore {
     if (!/^[a-f0-9]{6,64}$/.test(normalized)) return null;
     const cached = this.#memory.get(normalized);
     if (cached !== undefined) return cached;
+    const record = this.#readRecord(normalized);
+    return record ? this.#readPayload(normalized, record) : null;
+  }
 
+  getImage(id: string): (ImageReference & { base64: string }) | null {
+    const normalized = id.trim().toLowerCase();
+    if (!/^[a-f0-9]{6,64}$/.test(normalized)) return null;
+    let reference = this.#images.get(normalized);
+    let content = this.#memory.get(normalized) ?? null;
+    if (!reference || content === null) {
+      const record = this.#readRecord(normalized);
+      if (!record || record.metadata.purpose !== 'session_image') return null;
+      const image = record.metadata.image as Omit<ImageReference, 'id'> | undefined;
+      if (!image || typeof image.name !== 'string' || typeof image.mediaType !== 'string') return null;
+      reference = { id: normalized, ...image };
+      this.#images.set(normalized, reference);
+      content ??= this.#readPayload(normalized, record);
+    }
+    if (content === null) return null;
+    const payload = JSON.parse(content) as StoredImage;
+    return typeof payload.base64 === 'string' ? { ...reference, base64: payload.base64 } : null;
+  }
+
+  #readRecord(normalized: string): ToolOutputRecord | null {
     const recordPath = join(
       this.#bundlePath,
       'tools_outputs',
@@ -133,12 +164,18 @@ export class BundleToolOutputStore {
       ) {
         throw new Error(`Invalid bundled tool output record ${recordPath}`);
       }
-      const artifacts = new ArtifactStore({
-        bundlePath: this.#bundlePath,
-        sessionId: this.#sessionId,
-      });
-      const content = Buffer.from(artifacts.read(record.raw)).toString('utf8');
-      this.#memory.set(normalized, content);
+      return record;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  #readPayload(id: string, record: ToolOutputRecord): string | null {
+    const artifacts = new ArtifactStore({ bundlePath: this.#bundlePath, sessionId: this.#sessionId });
+    try {
+      const content = Buffer.from(artifacts.read(record.raw!)).toString('utf8');
+      this.#memory.set(id, content);
       return content;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;

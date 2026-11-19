@@ -2,8 +2,62 @@ import { describe, expect, it } from 'vitest';
 import { ToolCallLedger, logicalOperationId, extractValidationSignal } from '../tool-call-ledger.js';
 
 describe('validation command recognition', () => {
+  it('recognizes structured shell checks and rejects ambiguous or token-spoofed argv', () => {
+    expect(extractValidationSignal('exec_command', { command: {
+      kind: 'shell', shell: 'cmd', script: 'npm run build && node node_modules/typescript/bin/tsc --noEmit',
+    } })).toBe('npm run build && tsc --noEmit');
+    for (const args of [
+      { command: { kind: 'argv', executable: 'npm test', args: [] } },
+      { command: { kind: 'argv', executable: 'npm', args: ['run test'] } },
+      { command: { kind: 'argv', executable: 'npm', args: ['test', '&&', 'echo'] } },
+      { command: { kind: 'argv', executable: 'npm', args: ['test'] }, cmd: 'echo done' },
+      { command: { kind: 'shell', shell: 'unknown', script: 'npm test' } },
+    ]) expect(extractValidationSignal('exec_command', args)).toBeUndefined();
+  });
+
+  it.each([
+    'git diff --output=source.ts',
+    'git diff > source.ts',
+    'git diff --check && node rewrite.js',
+    'git -c alias.inspect=reset inspect',
+    'git diff --ext-diff',
+    'git diff --textconv',
+    'git status; git reset --hard',
+    'git status | tee source.ts',
+    'node --version && node -e "process.exit(0)"',
+    'node --version > source.ts',
+  ])('keeps potentially mutating commands outside inspection evidence: %s', cmd => {
+    const ledger = new ToolCallLedger();
+    expect(ledger.record({ name: 'exec_command', args: { cmd }, content: 'ok', isError: false }).verificationObservation).toBeUndefined();
+  });
+
+  it.each([
+    'Get-Content result.log; Set-Content source.ts changed',
+    'Get-Content result.log > source.ts',
+    'Get-Content $(Write-Output result.log)',
+    'Get-Content result.log | Invoke-Expression',
+  ])('does not treat an arbitrary PowerShell script as inspection: %s', script => {
+    const ledger = new ToolCallLedger();
+    expect(ledger.record({ name: 'exec_command', args: { command: {
+      kind: 'argv', executable: 'powershell', args: ['-NoProfile', '-Command', script],
+    } }, content: 'ok', isError: false }).verificationObservation).toBeUndefined();
+  });
+
+  it('does not certify inspection as a test or retain raw command input', () => {
+    const ledger = new ToolCallLedger();
+    const entry = ledger.record({ name: 'exec_command', args: { command: {
+      kind: 'argv', executable: 'git', args: ['diff', '--', 'private-file.ts'],
+    } }, content: 'ok', isError: false });
+    expect(entry.verificationObservation).toBe(true);
+    expect(entry.validationSignal).toBeUndefined();
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('private-file.ts');
+    expect(ledger.record({ name: 'plugin_shell', args: { cmd: 'git status' }, content: 'ok', isError: false }).verificationObservation).toBeUndefined();
+  });
+
   it.each([
     'echo "npm test"',
+    '"pnpm test"',
+    'pnpm "run test"',
     'printf "pytest passed"',
     'cat build.log',
     'npm test -- --help',
@@ -13,7 +67,11 @@ describe('validation command recognition', () => {
     'npx tsc -v',
     'pnpm test || echo success',
     'echo before; pnpm test',
-    'pnpm test > result.txt',
+    'pnpm test >',
+    'pnpm test | tee result.txt',
+    'npm run build && echo success',
+    'node -e "console.log(0)"',
+    'node node_modules/ava/entrypoints/cli.mjs --help > result.txt',
     'pnpm --dir ../other test',
   ])('does not mistake %s for completed validation', (command) => {
     expect(extractValidationSignal('run_command', { command })).toBeUndefined();
@@ -23,6 +81,25 @@ describe('validation command recognition', () => {
     expect(extractValidationSignal('exec_command', { cmd: 'pytest -v', workdir: '/repo' })).toBe('pytest');
     expect(extractValidationSignal('run_command', { command: 'pytest -c pytest.ini' })).toBe('pytest');
     expect(extractValidationSignal('run_command', { command: 'npx tsc --noEmit' })).toBe('tsc --noEmit');
+  });
+
+  it.each([
+    ['pnpm test > result.txt', 'pnpm test'],
+    ['node node_modules/ava/entrypoints/cli.mjs "test/*.ts" "!test/browser.ts" > .checks.log 2>&1', 'ava'],
+    ['npm run build && node node_modules/typescript/bin/tsc --project tsconfig.test.json', 'npm run build && tsc --noEmit'],
+    ['node_modules\\.bin\\xo.cmd src/a.ts > "lint results.log" 2>&1', 'static validation'],
+    ['pytest -v 1> test.log 2>&1', 'pytest'],
+  ])('recognizes completed validation with its real launcher and log: %s', (command: string, expected: string) => {
+    expect(extractValidationSignal('run_command', { command })).toBe(expected);
+    const ledger = new ToolCallLedger();
+    expect(ledger.record({ name: 'run_command', args: { command }, content: 'exit code: 1', isError: true }).validationOutcome).toBe('failed');
+  });
+
+  it('retains only a documentation classification, not report contents', () => {
+    const ledger = new ToolCallLedger();
+    const entry = ledger.record({ name: 'write_file', args: { path: 'REPORT.md', content: 'private-prose' }, content: 'ok', isError: false, mutates: true });
+    expect(entry.documentationOnly).toBe(true);
+    expect(JSON.stringify(ledger.snapshot())).not.toContain('private-prose');
   });
 
   it('does not trust arbitrary tool names or command-looking read arguments', () => {

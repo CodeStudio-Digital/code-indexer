@@ -243,12 +243,12 @@ export default function Admin() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-56">
-                            <DropdownMenuItem onSelect={() => setCopilotOpen(true)}>{t('admin:connectCopilot')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => { setExpanded(null); setCopilotOpen(true); }}>{t('admin:connectCopilot')}</DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => { setClaudeCodeProviderId(null); setClaudeCodeOpen(true); }}>{t('admin:connectClaudeCode')}</DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => setGoogleOpen(true)}>{t('admin:connectGoogle')}</DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => setChatgptOpen(true)}>{t('admin:connectChatgpt')}</DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => setKimiCodeOpen(true)}>{t('admin:connectKimiCode')}</DropdownMenuItem>
-                            <DropdownMenuItem onSelect={() => setBedrockOpen(true)}>{t('admin:awsBedrock')}</DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => { setExpanded(null); setBedrockOpen(true); }}>{t('admin:awsBedrock')}</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                         <Button
@@ -327,6 +327,8 @@ export default function Admin() {
                 onConnect={(() => {
                   const p = providers.find((x) => x.id === expanded);
                   if (!p) return undefined;
+                  if (p.kind === 'copilot') return () => setCopilotOpen(true);
+                  if (p.kind === 'bedrock') return () => setBedrockOpen(true);
                   if (p.kind === 'kimi-code') return () => setKimiCodeOpen(true);
                   if (p.kind === 'claude-code') {
                     return () => {
@@ -399,6 +401,8 @@ export default function Admin() {
       )}
       {copilotOpen && (
         <CopilotConnectionDialog
+          providerId={providers.find(p => p.id === expanded && p.kind === 'copilot')?.id}
+          initialHost={providers.find(p => p.id === expanded)?.extra.githubHost as string | undefined}
           onClose={() => setCopilotOpen(false)}
           onConnected={handleConnected}
         />
@@ -434,10 +438,12 @@ export default function Admin() {
       )}
       {bedrockOpen && (
         <BedrockCredentialsDialog
+          providerId={providers.find(p => p.id === expanded && p.kind === 'bedrock')?.id}
+          initialRegion={providers.find(p => p.id === expanded)?.extra.aws_region as string | undefined}
           onClose={() => setBedrockOpen(false)}
-          onSaved={() => {
+          onSaved={(id) => {
             setBedrockOpen(false);
-            void load();
+            void handleConnected(id);
           }}
         />
       )}

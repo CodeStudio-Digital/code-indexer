@@ -23,9 +23,17 @@ interface GitOperationMetrics {
   cacheMisses: number;
   timedOut: boolean;
   truncated: boolean;
+  targetMs?: number;
+  gitRoundTripMs?: number;
+  gitProcessMs?: number;
 }
 
 const operationMetrics = new AsyncLocalStorage<GitOperationMetrics>();
+
+export function recordDiffTiming(timing: Partial<Pick<GitOperationMetrics, 'targetMs' | 'gitRoundTripMs' | 'gitProcessMs' | 'timedOut'>>): void {
+  const current = operationMetrics.getStore();
+  if (current) Object.assign(current, timing);
+}
 
 /** Runner/cache instrumentation without refs, paths, commands or content. */
 export function recordGitProcess(metric: { outputBytes: number; timedOut?: boolean; truncated?: boolean }): void {
@@ -171,18 +179,12 @@ export function validateProjectGitInput(method: ProjectGitRpcMethod, input: unkn
 export function guardProjectGitApi(
   api: ProjectGitApi,
   onMutation?: (method: ProjectGitRpcMethod, input: { projectId: number; repoPath?: string }) => void,
-  onMetric?: (metric: {
+  onMetric?: (metric: GitOperationMetrics & {
     method: ProjectGitRpcMethod;
     durationMs: number;
     queueWaitMs: number;
     mutation: boolean;
     ok: boolean;
-    processCount: number;
-    outputBytes: number;
-    cacheHits: number;
-    cacheMisses: number;
-    timedOut: boolean;
-    truncated: boolean;
   }) => void,
 ): ProjectGitApi {
   const tails = new Map<string, Promise<unknown>>();

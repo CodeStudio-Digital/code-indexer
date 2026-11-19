@@ -1,3 +1,5 @@
+export const DOCS_BUDGET = { searches: 4, reads: 8, citations: 12, rounds: 6 } as const;
+
 export class DocsEvidenceLedger {
   readonly readChunkIds = new Set<number>();
   readonly hitsBySubQuestion = new Map<number, Set<number>>();
@@ -5,9 +7,9 @@ export class DocsEvidenceLedger {
   reads = 0;
 
   constructor(
-    readonly maxSearches = 4,
-    readonly maxReads = 8,
-    readonly maxCitations = 12,
+    readonly maxSearches: number = DOCS_BUDGET.searches,
+    readonly maxReads: number = DOCS_BUDGET.reads,
+    readonly maxCitations: number = DOCS_BUDGET.citations,
   ) {}
 
   canSearch(): boolean { return this.searches < this.maxSearches; }

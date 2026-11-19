@@ -21,6 +21,45 @@ function setup() {
 }
 
 describe('live transcript continuity across provider turns', () => {
+  it('publishes each reported usage once, including cache-only turns and identical successive counts', () => {
+    const { handlers, blocks } = setup();
+    const event = {
+      operation_id: 'assistant:run:message:2',
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 16 },
+      message: { content: [{ type: 'tool_use', id: 'edit-a' }] },
+    };
+    handlers.message_complete(event, 'message_complete');
+    handlers.message_complete(event, 'message_complete');
+    handlers.message_complete({ ...event, operation_id: 'assistant:run:message:3' }, 'message_complete');
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ type: 'usage', id: event.operation_id, toolIds: ['edit-a'],
+      tokens: { input_tokens: 0, output_tokens: 0, cache_creation_tokens: 16 } });
+    handlers.user_message_boundary({}, 'user_message_boundary');
+    expect(blocks).toHaveLength(0);
+    handlers.message_complete({ ...event, usage: {} }, 'message_complete');
+    expect(blocks).toMatchObject([{ type: 'usage', id: event.operation_id, toolIds: ['edit-a'],
+      tokens: { input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0 } }]);
+  });
+  it('preserves an unmetered call boundary and applies late counters to its original position exactly once', () => {
+    const { blocks, handlers } = setup();
+    handlers.thinking({ text: 'Reading paths' }, 'thinking');
+    const first = { operation_id: 'first', message: { content: [{ type: 'tool_use', id: 'a' }] }, usage: null };
+    handlers.message_complete(first, 'message_complete');
+    handlers.message_complete(first, 'message_complete');
+    handlers.tool_call_start({ id: 'a', name: 'read_file' }, 'tool_call_start');
+    handlers.text({ text: 'Next call' }, 'text');
+    handlers.message_complete({ operation_id: 'next', usage: { input_tokens: 10, output_tokens: 1 } }, 'message_complete');
+    expect(blocks.map(block => block.type)).toEqual(['thinking', 'usage', 'tool', 'text', 'usage']);
+    expect(blocks[1]).toMatchObject({ id: 'first', toolIds: ['a'], tokens: { input_tokens: 0, output_tokens: 0 } });
+    const late = { operation_id: 'first', usage: { input_tokens: 4, output_tokens: 2 } };
+    handlers.message_complete(late, 'message_complete');
+    handlers.message_complete(late, 'message_complete');
+    expect(blocks.filter(block => block.type === 'usage')).toMatchObject([
+      { id: 'first', toolIds: ['a'], tokens: { input_tokens: 4, output_tokens: 2 } },
+      { id: 'next', tokens: { input_tokens: 10, output_tokens: 1 } },
+    ]);
+  });
+
   it('keeps auto-continue telemetry out of the conversation transcript', () => {
     const { blocks, flush, handlers } = setup();
 

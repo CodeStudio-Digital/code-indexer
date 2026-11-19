@@ -31,6 +31,13 @@ import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
 } from '@mcp/code-agent/ports/filesystem-port.js';
+import {
+  buildReplacement,
+  describeClosestRegion,
+  locateHunk,
+  type HunkLine,
+  type MatchLevel,
+} from './apply-patch-match.js';
 
 function fsPort(ctx: ToolContext): IFilesystemPort {
   return ctx.ports?.fs ?? defaultLocalFilesystemPort();
@@ -39,6 +46,10 @@ function fsPort(ctx: ToolContext): IFilesystemPort {
 // ─── Patch model ──────────────────────────────────────────────────
 
 export interface PatchHunk {
+  /** Another change group from the same @@ block, after shared context. */
+  continuesPrevious?: true;
+  /** Text after `@@` (e.g. a function signature): preferred search start. */
+  anchor?: string;
   /** Unchanged context lines preceding the change. */
   contextBefore: string[];
   /** Lines removed from the file. */
@@ -62,6 +73,14 @@ export interface ParsedPatch {
 
 const BEGIN = '*** Begin Patch';
 const END = '*** End Patch';
+
+/** `@@ def foo` (Codex) or `@@ -12,7 +12,8 @@ def foo` (unified diff). */
+function hunkAnchor(line: string): string | undefined {
+  let rest = line.trim().slice(2).trim();
+  const unified = /^-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s*@@\s*(.*)$/.exec(rest);
+  if (unified) rest = unified[1].trim();
+  return rest || undefined;
+}
 
 export function parseApplyPatch(input: string): ParsedPatch {
   const trimmed = input.replace(/^\s*<<['"]?EOF['"]?\s*\n/, '').replace(/\nEOF\s*$/, '\n');
@@ -134,7 +153,8 @@ export function parseApplyPatch(input: string): ParsedPatch {
       // Phase machine for multi-block hunks. A single `@@` block can contain
       // multiple non-adjacent change groups separated by unchanged context
       // (standard unified-diff format). We auto-split into separate PatchHunks
-      // so the applier's exact-substring search finds each contiguous segment.
+      // while retaining their common block, so application matches the entire
+      // original context once instead of independently locating each segment.
       //   before → leading context (no +/- seen yet)
       //   change → inside a +/- group
       //   after  → trailing context (after at least one +/-, before any next +/-)
@@ -163,7 +183,8 @@ export function parseApplyPatch(input: string): ParsedPatch {
         }
         if (ntrim.startsWith('@@')) {
           flushHunk();
-          cur = { contextBefore: [], removed: [], added: [], contextAfter: [] };
+          const anchor = hunkAnchor(ntrim);
+          cur = { ...(anchor ? { anchor } : {}), contextBefore: [], removed: [], added: [], contextAfter: [] };
           phase = 'before';
           i++;
           continue;
@@ -184,7 +205,7 @@ export function parseApplyPatch(input: string): ParsedPatch {
             // that ended the previous one.
             const carry = c.contextAfter;
             hunks.push(c);
-            cur = { contextBefore: [...carry], removed: [], added: [], contextAfter: [] };
+            cur = { continuesPrevious: true, contextBefore: [...carry], removed: [], added: [], contextAfter: [] };
             if (nxt.startsWith('+')) {
               cur.added.push(nxt.slice(1));
             } else {
@@ -266,6 +287,8 @@ function formatHunkError(
   search: string,
   norm: NormalizedContent,
   fileLineCount: number,
+  lines: readonly string[],
+  pattern: readonly string[],
 ): string {
   // Render \n as ⏎ so the diagnostic survives the JSON encoding chain to
   // the model — escaped \n in error messages reads as a literal `\n`,
@@ -283,8 +306,42 @@ function formatHunkError(
     `  Searched for ${search.length} chars (before=${hunk.contextBefore.length} ` +
     `removed=${hunk.removed.length} after=${hunk.contextAfter.length}).\n` +
     `  File: ${fileLineCount} lines (${eolLabel}, ${bomFlag}).\n` +
-    `  Search starts with: "${previewRaw}${suffix}"`
+    `  Search starts with: "${previewRaw}${suffix}"\n` +
+    '  Tried exact, trailing-whitespace, indentation-insensitive and Unicode-punctuation matching.\n' +
+    describeClosestRegion(lines, pattern) +
+    '  No file was changed: the patch is atomic. Fix this hunk against the current text above ' +
+    'and resend the whole patch; no extra read or diff is needed.'
   );
+}
+
+const LEVEL_NOTE: Record<Exclude<MatchLevel, 'exact'>, string> = {
+  rstrip: 'ignoring trailing whitespace',
+  trim: 'ignoring indentation; added lines were re-indented to the file',
+  unicode: 'normalizing indentation and Unicode punctuation; added lines were re-indented',
+};
+
+/** Line-based ops for one hunk plus its linked continuation groups. */
+function hunkOps(hunks: readonly PatchHunk[], index: number): { ops: HunkLine[]; next: number } {
+  const context = (text: string): HunkLine => ({ kind: 'context', text });
+  const remove = (text: string): HunkLine => ({ kind: 'remove', text });
+  const add = (text: string): HunkLine => ({ kind: 'add', text });
+  const first = hunks[index];
+  const ops = [
+    ...first.contextBefore.map(context),
+    ...first.removed.map(remove),
+    ...first.added.map(add),
+    ...first.contextAfter.map(context),
+  ];
+  // Groups split from one @@ block are contiguous in the source. Searching
+  // each group alone could put a common `return value` in an earlier function
+  // while still reporting success, so the whole block is matched at once.
+  // next.contextBefore is already present as the previous contextAfter.
+  let next = index;
+  while (hunks[next + 1]?.continuesPrevious) {
+    const group = hunks[++next];
+    ops.push(...group.removed.map(remove), ...group.added.map(add), ...group.contextAfter.map(context));
+  }
+  return { ops, next };
 }
 
 // ─── Applier ──────────────────────────────────────────────────────
@@ -294,6 +351,8 @@ export interface ApplyResult {
   updated: string[];
   deleted: string[];
   moved: Array<{ from: string; to: string }>;
+  /** Hunks located only through a tolerant match level (reported to the model). */
+  fuzzy?: Array<{ path: string; level: Exclude<MatchLevel, 'exact'> }>;
 }
 
 type PlannedOp =
@@ -333,6 +392,7 @@ export async function applyParsedPatch(
 ): Promise<ApplyResult> {
   const fs = fsPort(ctx);
   const planned: PlannedOp[] = [];
+  const fuzzy: NonNullable<ApplyResult['fuzzy']> = [];
   // Maps the *post-action* path (movePath when present, else path) to the
   // already-computed final content. Covers the rare case of a patch that
   // updates the same file twice, or updates then moves it: phase 1 must
@@ -393,26 +453,34 @@ export async function applyParsedPatch(
     const buffered = inMemoryUpdates.get(abs);
     const raw = buffered ?? (await fs.readFile(abs)).toString();
     const norm = normalize(raw);
-    let text = norm.text;
-    const fileLineCount = text.split('\n').length;
+    const lines = norm.text.split('\n');
+    const fileLineCount = lines.length;
+    // Hunks apply in order against the evolving buffer (git-apply cascade);
+    // each search starts where the previous hunk landed, then wraps.
+    let cursor = 0;
 
-    for (const hunk of action.hunks) {
-      const before = hunk.contextBefore.join('\n');
-      const removed = hunk.removed.join('\n');
-      const after = hunk.contextAfter.join('\n');
-      const added = hunk.added.join('\n');
-
-      const search = [before, removed, after].filter((s) => s.length > 0).join('\n');
-      const replace = [before, added, after].filter((s) => s.length > 0).join('\n');
-
-      const idx = text.indexOf(search);
-      if (idx === -1) {
-        throw new Error(formatHunkError(action.path, hunk, search, norm, fileLineCount));
+    for (let hunkIndex = 0; hunkIndex < action.hunks.length; hunkIndex++) {
+      const hunk = action.hunks[hunkIndex];
+      const { ops, next } = hunkOps(action.hunks, hunkIndex);
+      hunkIndex = next;
+      const pattern = ops.filter((op) => op.kind !== 'add').map((op) => op.text);
+      if (pattern.length === 0) {
+        // Context-free addition: Codex appends before the final newline.
+        const at = lines.length > 0 && lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+        lines.splice(at, 0, ...ops.map((op) => op.text));
+        cursor = at;
+        continue;
       }
-      text = text.slice(0, idx) + replace + text.slice(idx + search.length);
+      const located = locateHunk(lines, pattern, cursor, hunk.anchor);
+      if (!located) {
+        throw new Error(formatHunkError(action.path, hunk, pattern.join('\n'), norm, fileLineCount, lines, pattern));
+      }
+      lines.splice(located.start, pattern.length, ...buildReplacement(lines, located.start, ops, located.level));
+      cursor = located.start;
+      if (located.level !== 'exact') fuzzy.push({ path: action.path, level: located.level });
     }
 
-    const finalContent = denormalize(text, norm.eol, norm.bom);
+    const finalContent = denormalize(lines.join('\n'), norm.eol, norm.bom);
     // Key on the post-action absolute path so subsequent updates target
     // the correct buffer even after a Move.
     inMemoryUpdates.set(newAbs ?? abs, finalContent);
@@ -451,7 +519,7 @@ export async function applyParsedPatch(
   // mutation). Best-effort — on failure we surface what got committed so a
   // human can decide whether to retry. Not crash-safe (no temp+rename);
   // tracked as a follow-up.
-  const result: ApplyResult = { added: [], updated: [], deleted: [], moved: [] };
+  const result: ApplyResult = { added: [], updated: [], deleted: [], moved: [], ...(fuzzy.length ? { fuzzy } : {}) };
   for (let i = 0; i < planned.length; i++) {
     const op = planned[i];
     const path = pathFor(op.rootPath);
@@ -517,7 +585,9 @@ The patch is a single block delimited by \`*** Begin Patch\` and \`*** End Patch
   +added line
   *** Delete File: path/to/dead.ts
 
-Update hunks must include enough surrounding context (\` \`-prefixed lines) to make the search unambiguous — the implementation locates each hunk by exact-substring match. Use multiple hunks per file when needed; separate them with a blank line or a fresh \`@@\` line.
+Update hunks must include enough surrounding context (\` \`-prefixed lines) to make the search unambiguous. Hunks are located line by line: exact first, then ignoring trailing whitespace, then indentation (added lines are re-indented to the file), then Unicode punctuation. \`@@ <line text>\` names a line the hunk follows. Use multiple hunks per file when needed; separate them with a fresh \`@@\` line.
+
+A mismatch changes no file (the patch is atomic) and reports the closest current text, so the hunk can be fixed and the whole patch resent without another read.
 
 Prefer this tool over per-file edit tools when changing several files at once; the model that supports it (\`apply_patch_tool_type: 'freeform'\`) emits the patch text directly without JSON escaping.`;
 
@@ -570,6 +640,10 @@ export const applyPatchTool: CoderTool = {
     if (result.moved.length)
       lines.push(`Moved: ${result.moved.map((m) => `${m.from} -> ${m.to}`).join(', ')}`);
     if (lines.length === 0) lines.push('No changes applied.');
+    for (const level of ['rstrip', 'trim', 'unicode'] as const) {
+      const paths = [...new Set((result.fuzzy ?? []).filter((f) => f.level === level).map((f) => f.path))];
+      if (paths.length) lines.push(`Note: hunks in ${paths.join(', ')} matched ${LEVEL_NOTE[level]}.`);
+    }
     return ok(lines.join('\n'));
   },
 };

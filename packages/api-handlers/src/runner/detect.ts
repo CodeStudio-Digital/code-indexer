@@ -9,8 +9,13 @@
  * a cheap machine-readable task list without invoking the build.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync, type Dirent } from 'node:fs';
+import { access, readFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { mapLimit } from '@mcp/shared/utils/map-limit.js';
+import { getProjectDiscoveryCacheVersion } from '@mcp/shared/utils/project-ignore.js';
+import { readProjectDirectory } from '@mcp/shared/utils/project-directory-reads.js';
+import { scanRunnerManifests } from './runner-manifests.js';
 import type {
   DetectedGroup,
   DetectedRunner,
@@ -19,15 +24,19 @@ import type {
 } from '@mcp/api-bus';
 import {
   scanDotnetProjects,
-  scanDotnetProjectsAsync,
   type DotnetProjectScan,
 } from './dotnet-project-files.js';
 import { quoteShellArgument, type ShellFamily } from '../terminal/shell-quote.js';
-import { scanComposerProjects, scanComposerProjectsAsync } from './composer-project-files.js';
+import { scanComposerProjects } from './composer-project-files.js';
 
-function readJson(path: string): Record<string, unknown> | null {
+interface DetectionFiles {
+  exists(path: string): boolean;
+  text(path: string): string | null;
+}
+
+function readJson(files: DetectionFiles, path: string): Record<string, unknown> | null {
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    return JSON.parse(files.text(path) ?? 'null') as Record<string, unknown>;
   } catch {
     return null;
   }
@@ -67,17 +76,17 @@ function safeShellArgument(value: string, shellFamily: ShellFamily): string | nu
 }
 
 /** Pick the JS package manager from the lockfile present at the root. */
-function detectJsManager(root: string): RunnerManager {
-  if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
-  if (existsSync(join(root, 'yarn.lock'))) return 'yarn';
-  if (existsSync(join(root, 'bun.lockb'))) return 'bun';
+function detectJsManager(root: string, files: DetectionFiles): RunnerManager {
+  if (files.exists(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (files.exists(join(root, 'yarn.lock'))) return 'yarn';
+  if (files.exists(join(root, 'bun.lockb'))) return 'bun';
   return 'npm';
 }
 
-function detectJs(root: string, override: RunnerManager | undefined, shellFamily: ShellFamily): DetectedGroup | null {
-  const pkg = readJson(join(root, 'package.json'));
+function detectJs(root: string, override: RunnerManager | undefined, shellFamily: ShellFamily, files: DetectionFiles): DetectedGroup | null {
+  const pkg = readJson(files, join(root, 'package.json'));
   if (!pkg) return null;
-  const manager = override ?? detectJsManager(root);
+  const manager = override ?? detectJsManager(root, files);
   const scripts = (pkg.scripts ?? {}) as Record<string, string>;
   const runners: DetectedRunner[] = Object.keys(scripts).flatMap((name) => {
     const argument = safeShellArgument(name, shellFamily);
@@ -87,13 +96,13 @@ function detectJs(root: string, override: RunnerManager | undefined, shellFamily
     manager,
     source: 'package.json',
     runners,
-    installNeeded: !existsSync(join(root, 'node_modules')),
+    installNeeded: !files.exists(join(root, 'node_modules')),
     installCommand: `${manager} install`,
   };
 }
 
-function detectPhp(root: string, source: string, shellFamily: ShellFamily): DetectedGroup | null {
-  const composer = readJson(join(root, source));
+function detectPhp(root: string, source: string, shellFamily: ShellFamily, files: DetectionFiles): DetectedGroup | null {
+  const composer = readJson(files, join(root, source));
   if (!composer) return null;
   const manifestDir = dirname(source).replace(/\\/g, '/');
   const cwd = manifestDir === '.' ? undefined : manifestDir;
@@ -108,7 +117,7 @@ function detectPhp(root: string, source: string, shellFamily: ShellFamily): Dete
     source,
     cwd,
     runners,
-    installNeeded: !existsSync(join(root, cwd ?? '', 'vendor')),
+    installNeeded: !files.exists(join(root, cwd ?? '', 'vendor')),
     installCommand: 'composer install',
   };
 }
@@ -120,15 +129,15 @@ function detectPhp(root: string, source: string, shellFamily: ShellFamily): Dete
  * a missing local virtualenv (.venv/venv/env) — since Poetry's env can live
  * elsewhere; the install button is idempotent. No script scan in v1.
  */
-function detectPython(root: string, override?: RunnerManager): DetectedGroup | null {
-  const hasRequirements = existsSync(join(root, 'requirements.txt'));
-  const hasPyproject = existsSync(join(root, 'pyproject.toml'));
-  const hasPoetryLock = existsSync(join(root, 'poetry.lock'));
+function detectPython(root: string, files: DetectionFiles, override?: RunnerManager): DetectedGroup | null {
+  const hasRequirements = files.exists(join(root, 'requirements.txt'));
+  const hasPyproject = files.exists(join(root, 'pyproject.toml'));
+  const hasPoetryLock = files.exists(join(root, 'poetry.lock'));
   if (!hasRequirements && !hasPyproject && !hasPoetryLock) return null;
 
   let auto: RunnerManager = 'pip';
   if (hasPoetryLock) auto = 'poetry';
-  else if (hasPyproject && /\[tool\.poetry\]/.test(readText(join(root, 'pyproject.toml')) ?? '')) auto = 'poetry';
+  else if (hasPyproject && /\[tool\.poetry\]/.test(files.text(join(root, 'pyproject.toml')) ?? '')) auto = 'poetry';
   const manager = override ?? auto;
 
   const source = hasPyproject ? 'pyproject.toml' : 'requirements.txt';
@@ -141,28 +150,28 @@ function detectPython(root: string, override?: RunnerManager): DetectedGroup | n
       : hasRequirements
         ? 'pip install -r requirements.txt'
         : 'pip install .';
-  const venvPresent = ['.venv', 'venv', 'env'].some((d) => existsSync(join(root, d)));
+  const venvPresent = ['.venv', 'venv', 'env'].some((d) => files.exists(join(root, d)));
   return { manager, source, runners: [], installNeeded: !venvPresent, installCommand };
 }
 
 const MAVEN_GOALS = ['compile', 'test', 'package', 'spring-boot:run'];
 const GRADLE_TASKS = ['build', 'test', 'bootRun', 'run'];
 
-function wrapperBin(root: string, manager: 'maven' | 'gradle', shellFamily: ShellFamily): string {
+function wrapperBin(root: string, manager: 'maven' | 'gradle', shellFamily: ShellFamily, files: DetectionFiles): string {
   if (manager === 'maven') {
-    if (shellFamily !== 'posix' && existsSync(join(root, 'mvnw.cmd'))) return '.\\mvnw.cmd';
-    if (shellFamily === 'posix' && existsSync(join(root, 'mvnw'))) return './mvnw';
+    if (shellFamily !== 'posix' && files.exists(join(root, 'mvnw.cmd'))) return '.\\mvnw.cmd';
+    if (shellFamily === 'posix' && files.exists(join(root, 'mvnw'))) return './mvnw';
     return 'mvn';
   }
-  if (shellFamily !== 'posix' && existsSync(join(root, 'gradlew.bat'))) return '.\\gradlew.bat';
-  if (shellFamily === 'posix' && existsSync(join(root, 'gradlew'))) return './gradlew';
+  if (shellFamily !== 'posix' && files.exists(join(root, 'gradlew.bat'))) return '.\\gradlew.bat';
+  if (shellFamily === 'posix' && files.exists(join(root, 'gradlew'))) return './gradlew';
   return 'gradle';
 }
 
-function detectJava(root: string, override: RunnerManager | undefined, shellFamily: ShellFamily): DetectedGroup[] {
+function detectJava(root: string, override: RunnerManager | undefined, shellFamily: ShellFamily, files: DetectionFiles): DetectedGroup[] {
   const groups: DetectedGroup[] = [];
-  if (existsSync(join(root, 'pom.xml'))) {
-    const bin = wrapperBin(root, 'maven', shellFamily);
+  if (files.exists(join(root, 'pom.xml'))) {
+    const bin = wrapperBin(root, 'maven', shellFamily, files);
     groups.push({
       manager: 'maven',
       source: 'pom.xml',
@@ -177,9 +186,9 @@ function detectJava(root: string, override: RunnerManager | undefined, shellFami
       })),
     });
   }
-  const gradleBuild = ['build.gradle', 'build.gradle.kts'].find((f) => existsSync(join(root, f)));
+  const gradleBuild = ['build.gradle', 'build.gradle.kts'].find((f) => files.exists(join(root, f)));
   if (gradleBuild) {
-    const bin = wrapperBin(root, 'gradle', shellFamily);
+    const bin = wrapperBin(root, 'gradle', shellFamily, files);
     groups.push({
       manager: 'gradle',
       source: gradleBuild,
@@ -237,48 +246,73 @@ function dotnetGroup(found: DotnetProjectScan, shellFamily: ShellFamily): Detect
   };
 }
 
-function detectDotnet(root: string, shellFamily: ShellFamily): DetectedGroup | null {
-  return dotnetGroup(scanDotnetProjects(root), shellFamily);
+function buildRunners(root: string, opts: DetectOptions | undefined, files: DetectionFiles,
+  composer: readonly string[], dotnet: DotnetProjectScan): DetectedRunners {
+  const groups: DetectedGroup[] = [];
+  const shellFamily = opts?.shellFamily ?? defaultShellFamily();
+  const js = detectJs(root, opts?.nodeManager, shellFamily, files);
+  if (js) groups.push(js);
+  for (const source of composer) {
+    const php = detectPhp(root, source, shellFamily, files);
+    if (php) groups.push(php);
+  }
+  const py = detectPython(root, files, opts?.pythonManager);
+  if (py) groups.push(py);
+  groups.push(...detectJava(root, opts?.javaManager, shellFamily, files));
+  const group = dotnetGroup(dotnet, shellFamily);
+  if (group) groups.push(group);
+  return { groups };
 }
 
-async function detectDotnetAsync(root: string, shellFamily: ShellFamily): Promise<DetectedGroup | null> {
-  return dotnetGroup(await scanDotnetProjectsAsync(root), shellFamily);
-}
-
-/** Detect all runnable commands for a project root. */
+/** Synchronous entrypoint for callers outside the IDE hot path. */
 export function detectRunners(root: string, opts?: DetectOptions): DetectedRunners {
-  const groups: DetectedGroup[] = [];
-  const shellFamily = opts?.shellFamily ?? defaultShellFamily();
-  const js = detectJs(root, opts?.nodeManager, shellFamily);
-  if (js) groups.push(js);
-  for (const source of scanComposerProjects(root)) {
-    const php = detectPhp(root, source, shellFamily);
-    if (php) groups.push(php);
-  }
-  const py = detectPython(root, opts?.pythonManager);
-  if (py) groups.push(py);
-  groups.push(...detectJava(root, opts?.javaManager, shellFamily));
-  const dotnet = detectDotnet(root, shellFamily);
-  if (dotnet) groups.push(dotnet);
-  return { groups };
+  return buildRunners(root, opts, { exists: existsSync, text: readText }, scanComposerProjects(root), scanDotnetProjects(root));
 }
 
-/** Async main-process entrypoint; only the bounded recursive detector yields. */
-export async function detectRunnersAsync(root: string, opts?: DetectOptions): Promise<DetectedRunners> {
-  const groups: DetectedGroup[] = [];
-  const shellFamily = opts?.shellFamily ?? defaultShellFamily();
-  const composerProjects = scanComposerProjectsAsync(root);
-  const dotnetProject = detectDotnetAsync(root, shellFamily);
-  const js = detectJs(root, opts?.nodeManager, shellFamily);
-  if (js) groups.push(js);
-  for (const source of await composerProjects) {
-    const php = detectPhp(root, source, shellFamily);
-    if (php) groups.push(php);
+const rootProbes = [
+  'node_modules', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'requirements.txt', 'poetry.lock',
+  '.venv', 'venv', 'env', 'pom.xml', 'mvnw', 'mvnw.cmd', 'build.gradle', 'build.gradle.kts', 'gradlew', 'gradlew.bat',
+];
+
+async function loadDetectionFiles(root: string, composer: readonly string[], entries: Dirent[] | null): Promise<DetectionFiles> {
+  const present = new Set<string>();
+  const contents = new Map<string, string>();
+  const listing = new Map(entries?.map(entry => [entry.name, entry]));
+  const namesLower = new Set(entries?.map(entry => entry.name.toLowerCase()));
+  const texts = new Set(composer.map(rel => join(root, rel)));
+  for (const name of ['package.json', 'pyproject.toml']) {
+    if (!entries || namesLower.has(name)) texts.add(join(root, name));
   }
-  const py = detectPython(root, opts?.pythonManager);
-  if (py) groups.push(py);
-  groups.push(...detectJava(root, opts?.javaManager, shellFamily));
-  const dotnet = await dotnetProject;
-  if (dotnet) groups.push(dotnet);
-  return { groups };
+  const probes = new Set([...texts, ...composer.map(source => join(root, dirname(source), 'vendor'))]);
+  for (const name of rootProbes) {
+    const entry = listing.get(name);
+    const path = join(root, name);
+    if (entry && !entry.isSymbolicLink()) present.add(path);
+    else if (!entries || namesLower.has(name)) probes.add(path);
+  }
+  await mapLimit([...probes], 8, async path => {
+    try {
+      if (texts.has(path)) contents.set(path, await readFile(path, 'utf8'));
+      else await access(path);
+      present.add(path);
+    } catch { /* an absent manifest, wrapper or install directory is normal */ }
+  });
+  return { exists: path => present.has(path), text: path => contents.get(path) ?? null };
+}
+
+const detections = new Map<string, Promise<DetectedRunners>>();
+export function detectRunnersAsync(root: string, opts?: DetectOptions): Promise<DetectedRunners> {
+  const version = getProjectDiscoveryCacheVersion(root);
+  const key = JSON.stringify([resolve(root), version,
+    opts?.nodeManager, opts?.pythonManager, opts?.javaManager, opts?.shellFamily]);
+  const existing = detections.get(key);
+  if (existing) return existing;
+  const work = Promise.all([
+    readProjectDirectory(resolve(root), resolve(root), version, true).catch(() => null),
+    scanRunnerManifests(root),
+  ]).then(async ([entries, { dotnet, composer }]) =>
+    buildRunners(root, opts, await loadDetectionFiles(root, composer, entries), composer, dotnet)
+  ).finally(() => detections.delete(key));
+  detections.set(key, work);
+  return work;
 }

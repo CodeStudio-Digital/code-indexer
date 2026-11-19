@@ -17,6 +17,11 @@ export interface PriceSourceConfig {
   openrouterBaseUrl?: string;
 }
 
+export function isRemotePriceSyncEnabled(): boolean {
+  const value = process.env.MODEL_PRICING_REMOTE_ENABLED?.trim().toLowerCase();
+  return value !== 'false' && value !== '0';
+}
+
 /**
  * The enabled price sources. Order is documentation only (the cache merge
  * applies its own source priority); LiteLLM first as the higher-trust source.

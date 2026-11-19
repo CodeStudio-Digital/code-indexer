@@ -1,17 +1,12 @@
 import { semanticJobIsExecuting, type SemanticGenerationView, type SemanticJobView, type SemanticModelView, type SemanticNamespaceStatusView, type SemanticProfilePurpose, type SemanticProfileView, type SemanticTarget, type SemanticTargetKind } from './semantic-api.js';
 import type { AdminProvider } from './types.js';
+import { BUNDLED_EMBEDDING_TARGET } from '@mcp/shared/providers/bundled-semantic-model.js';
 
 export const PURPOSES: SemanticProfilePurpose[] = ['code', 'docs', 'memory'];
 
 function defaultTarget(capability: 'embedding' | 'rerank'): SemanticTarget {
   if (capability === 'embedding') {
-    return {
-      kind: 'onnx',
-      model: 'Xenova/multilingual-e5-small',
-      dtype: 'q8',
-      pooling: 'mean',
-      normalize: true,
-    };
+    return { ...BUNDLED_EMBEDDING_TARGET };
   }
   return { kind: 'onnx', model: 'auto', dtype: 'q8' };
 }

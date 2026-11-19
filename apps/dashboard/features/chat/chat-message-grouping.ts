@@ -104,7 +104,7 @@ export function groupMessages(
 /**
  * A model can make many provider/tool cycles before the user speaks again.
  * Persist those cycles independently, but present them as one assistant turn
- * with one header. Rendering splits the logical turn into bounded virtual
+ * with one copy action. Rendering splits the logical turn into bounded virtual
  * segments; grouping must not repeatedly copy the growing turn arrays.
  */
 export function mergeConsecutiveAssistantGroups(groups: VisualGroup[]): VisualGroup[] {

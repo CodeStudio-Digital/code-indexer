@@ -1,7 +1,7 @@
-import { isValidElement, memo, useEffect, useRef, useState, type ReactNode, type ComponentProps } from 'react';
+import { isValidElement, memo, useContext, useEffect, useRef, useState, type ReactNode, type ComponentProps } from 'react';
 import { Check, Copy, Maximize2, Minimize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { RootContent } from 'hast';
 import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
@@ -13,10 +13,14 @@ import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 import { codePreview } from './code-preview.js';
 import { highlightMarkdownCode, MAX_HIGHLIGHT_CHARS } from './markdown-highlight.js';
 import { LargeMarkdown } from './LargeMarkdown.js';
+import { ChatFileLinkContext } from './chat-file-link-context.js';
+import { markdownUrlTransform, parseFileLink, scrollToMarkdownAnchor } from './markdown-links.js';
 
 interface MarkdownProps {
   text: string;
   className?: string;
+  showDocumentCopy?: boolean;
+  initialAnchor?: string;
 }
 
 const baseClasses =
@@ -32,32 +36,56 @@ const REMARK_PLUGINS = [remarkGfm];
 const MARKDOWN_COMPONENTS = { pre: CodeBlock, a: MarkdownLink };
 export const LARGE_MARKDOWN_CHARS = 12_000;
 const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
-  return <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{text}</ReactMarkdown>;
+  return <ReactMarkdown remarkPlugins={REMARK_PLUGINS} urlTransform={markdownUrlTransform} components={MARKDOWN_COMPONENTS}>{text}</ReactMarkdown>;
 });
 function renderMarkdownNode(node: RootContent) {
   return toJsxRuntime(node, { Fragment, jsx, jsxs, components: MARKDOWN_COMPONENTS,
     ignoreInvalidStyle: true, passKeys: true, passNode: true });
 }
 
-function MarkdownLink({ href, children, title }: ComponentProps<'a'>) {
-  const external = /^(?:https?:|mailto:)/i.test(href ?? '');
-  return <a href={href} title={title} target={external ? '_blank' : undefined}
-    rel={external ? 'noopener noreferrer' : undefined}
-    onClick={event => {
-      if (external && href && window.electronAPI?.openExternal) {
+export function MarkdownLink({ href, children, node: _node, ...props }: ComponentProps<'a'> & ExtraProps) {
+  const scope = useContext(ChatFileLinkContext);
+  if (!href) return <span>{children}</span>;
+  if (href.startsWith('#')) {
+    return <a {...props} href={href} onClick={event => {
+      event.preventDefault();
+      const anchor = event.currentTarget;
+      if (anchor.closest('[data-markdown-viewport]')) return; // the virtualizer handles this click
+      const root = anchor.closest<HTMLElement>('[data-markdown-document]');
+      try { if (root) scrollToMarkdownAnchor(root, decodeURIComponent(href.slice(1))); } catch { /* malformed fragment */ }
+    }}>{children}</a>;
+  }
+  const url = href.startsWith('//') ? 'https:' + href : href;
+  if (/^(?:https?:\/\/|mailto:)/i.test(url)) {
+    return <a {...props} href={url} target="_blank" rel="noopener noreferrer" onClick={event => {
+      if (window.electronAPI?.openExternal) {
         event.preventDefault();
-        window.electronAPI.openExternal(href);
+        window.electronAPI.openExternal(url);
       }
     }}>{children}</a>;
+  }
+  if (!scope) {
+    const safe = defaultUrlTransform(href);
+    return safe ? <a {...props} href={safe}>{children}</a> : <span>{children}</span>;
+  }
+  const file = parseFileLink(href, scope.sourceFile);
+  if (!file) return <span>{children}</span>;
+  return <button type="button" role="link" title={props.title ?? file.path}
+    className="inline cursor-pointer break-words text-left font-medium text-primary underline underline-offset-2 hover:text-primary/80 focus-visible:outline-ring"
+    onClick={event => scope.open(file, event.currentTarget)}>{children}</button>;
 }
 
-export const Markdown = memo(function Markdown({ text, className }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ text, className, showDocumentCopy = true, initialAnchor }: MarkdownProps) {
   const fence = text.length > LARGE_MARKDOWN_CHARS ? singleFence(text) : null;
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (initialAnchor && root.current && text.length <= LARGE_MARKDOWN_CHARS) scrollToMarkdownAnchor(root.current, initialAnchor);
+  }, [initialAnchor, text]);
   return (
-    <div data-text-selectable className={cn(baseClasses, !className && defaultClasses, className)}>
+    <div ref={root} data-text-selectable data-markdown-document className={cn(baseClasses, !className && defaultClasses, className)}>
       {fence ? <CodeBlock><code className={`language-${fence.lang}`}>{fence.code}</code></CodeBlock>
         : text.length > LARGE_MARKDOWN_CHARS
-        ? <LargeMarkdown text={text} renderNode={renderMarkdownNode}
+        ? <LargeMarkdown text={text} showCopy={showDocumentCopy} renderNode={renderMarkdownNode} initialAnchor={initialAnchor}
           preview={<pre className="whitespace-pre-wrap break-words">{text.slice(0, 4_000)}</pre>} />
         : <MarkdownContent text={text} />}
     </div>

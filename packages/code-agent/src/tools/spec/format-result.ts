@@ -8,19 +8,23 @@
  */
 export function formatSpecResult(
   approved: boolean,
-  specPath: string,
+  specPath?: string,
   feedback?: string,
 ): string {
   if (approved) {
     return (
-      `Spec approved by user at ${specPath}.` +
+      `Spec approved by user${specPath ? ` at ${specPath}` : ''}.` +
       `${feedback ? ` Feedback: ${feedback}` : ''}` +
-      ` You may now proceed with mutating tools — derive tasks from the spec's Implementation Plan via submit_tasks before editing.`
+      ' The approved Implementation Plan is the basis for any requested implementation.'
     );
   }
   return (
     `Spec rejected by user.` +
     `${feedback ? ` Requested changes: ${feedback}` : ''}` +
-    ` Revise the spec body to address the feedback and call submit_spec again. Cosmetic resubmits with identical hash are refused.`
+    ' Address the feedback and resubmit through the same review control with a materially revised body.'
   );
 }
+
+export const SPEC_APPROVAL_REMINDER =
+  '<system-reminder>Mode transition: Spec → Build. For a spec-only request, report the approved document. ' +
+  'If implementation was requested, implement and verify the approved steps within the active permissions.</system-reminder>';

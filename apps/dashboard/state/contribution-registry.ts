@@ -183,13 +183,15 @@ export const useContributions = create<ContributionState>((set) => ({
  * projects. Without it, `plugins.list` returns everything (used outside a
  * project context). Safe to call on mount.
  */
+let latestHydration = 0;
 export async function hydrateContributions(projectId?: number): Promise<void> {
+  const request = ++latestHydration;
   try {
     const plugins =
       projectId != null
         ? await apiCall<RawPlugin[]>('plugins.activeContributions', { projectId })
         : await apiCall<RawPlugin[]>('plugins.list', undefined);
-    useContributions.getState().setContributions(collectContributions(plugins));
+    if (request === latestHydration) useContributions.getState().setContributions(collectContributions(plugins));
   } catch {
     /* backend not ready / no plugins installed — leave the registry empty */
   }

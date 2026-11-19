@@ -1,14 +1,12 @@
 /**
- * Per-turn tool list assembly. Extracted from the legacy `buildTools` /
- * `buildToolsCacheKey` closures in runner.ts so the BT's `Executing` node
- * can call this directly. Behavior is byte-identical to the legacy
- * closures — see `runner.ts` for the original implementation.
+ * Provider-facing catalog assembly. Production uses a stable workflow surface;
+ * the legacy tier/ranking projection remains for explicit compatibility callers.
  *
  * Invariants:
  *   - Always returns alphabetically sorted by name (stable for prompt cache).
  *   - "Essential" company tools survive `maxTools` truncation; the truncation
  *     only eats the tail of the non-essential bucket.
- *   - Bootstrap-only profile shortens descriptions to their first sentence.
+ *   - Stable contracts are authored, never shortened at a sentence boundary.
  */
 import { createHash } from 'node:crypto';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -26,6 +24,9 @@ import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
 import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { isEssentialCompanyTool } from '../company-essentials.js';
+import { selectWorkflowCatalog } from '../../../tools/workflow-catalog.js';
+import { WORKFLOW_CATALOG_CONTRACTS } from '../../../tools/catalog-contracts.js';
+import { approvedPlanForRevision } from '../../../tools/plan.js';
 
 export interface SerializedTool {
   name: string;
@@ -34,6 +35,8 @@ export interface SerializedTool {
 }
 
 export interface BuildToolsArgs {
+  /** Stable public core; discovered operations use the existing code_exec dispatcher. */
+  stableCatalog?: boolean;
   registry: ToolRegistry;
   globalDisabledTools?: ReadonlySet<string>;
   sessionDisabledTools?: ReadonlySet<string>;
@@ -115,14 +118,13 @@ const BUILD_TASK_LIST_SCHEMA: JsonSchema = {
 
 export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   let filtered = args.registry.list();
-  // submit_plan is an execution gate, not a generic planning aid. Advertising
-  // it to Build agents lets weak models turn a pre-approved implementation
-  // request into an indefinite human wait. Keep the handler in the registry
-  // for persisted calls, but expose it only when Plan mode owns that gate.
+  // Keep the approval gate off the ordinary Build surface. A session with an
+  // approved plan can reopen that review using the same interactive tool.
   const specModeBlocksPlan = args.toolContext.runner?.specMode === true;
   const planModeAllowsPlan = args.toolContext.runner?.planMode === true
     && !specModeBlocksPlan;
-  if (!planModeAllowsPlan) {
+  const canSubmitPlan = planModeAllowsPlan || !!approvedPlanForRevision(args.toolContext);
+  if (!canSubmitPlan) {
     filtered = filtered.filter((tool) => tool.name !== 'submit_plan');
   }
 
@@ -133,6 +135,8 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     filtered = filtered.filter((t) => !args.sessionDisabledTools!.has(t.name));
   }
 
+  if (args.stableCatalog) return buildWorkflowTools(args, filtered, planModeAllowsPlan, specModeBlocksPlan);
+
   filtered = args.activeTiers
     ? filterByTiers(filtered, args.activeTiers, args.externalToolTiers)
     : filtered;
@@ -141,11 +145,12 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // tier filter dropped them from `filtered`) with the disabled filters
   // re-applied — a disabled tool can never re-enter via a pin. The hook
   // and filtering below still see (and may re-drop) pins.
-  if (args.pinnedTools?.size) {
+  if (args.pinnedTools?.size || args.requiredPinnedTools?.size) {
     const present = new Set(filtered.map((t) => t.name));
     for (const t of args.registry.list()) {
-      if (!args.pinnedTools.has(t.name) || present.has(t.name)) continue;
-      if (!planModeAllowsPlan && t.name === 'submit_plan') continue;
+      const required = args.requiredPinnedTools?.has(t.name);
+      if ((!required && !args.pinnedTools?.has(t.name)) || present.has(t.name)) continue;
+      if (!canSubmitPlan && t.name === 'submit_plan') continue;
       if (args.globalDisabledTools?.has(t.name)) continue;
       if (args.sessionDisabledTools?.has(t.name)) continue;
       filtered.push(t);
@@ -162,7 +167,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
       profile: args.activeTiers ? Array.from(args.activeTiers).sort().join(',') : undefined,
     },
   );
-  if (hookAllow && hookAllow.size > 0) {
+  if (hookAllow) {
     const before = filtered.length;
     filtered = filtered.filter((t) => hookAllow.has(t.name));
     if (filtered.length < before) {
@@ -171,6 +176,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   }
 
   const eligibleBeforeCap = [...filtered];
+  const authorizedTools = eligibleBeforeCap;
 
   // Protection partition BEFORE truncation. Required/configured pins are a
   // permanent floor. Runtime-discovered pins form a bounded LRU working set:
@@ -315,9 +321,62 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     eligibleToolsDefChars,
     protectedToolNames: new Set(protectedBucket.map((tool) => tool.name)),
     authorizedTools: [
-      ...eligibleBeforeCap,
+      ...authorizedTools,
       ...(args.catalogOnlyCapabilities ?? []),
     ],
+  };
+}
+
+/** Separate authorization, workflow membership and provider representation. */
+function buildWorkflowTools(
+  args: BuildToolsArgs, permitted: CoderTool[], planMode: boolean, specMode: boolean,
+): BuildToolsResult {
+  // Keep historical handlers registered for replay, but stop advertising obsolete
+  // aliases or gates for a different mode. Discovery reports these as unavailable.
+  const hasTaskList = permitted.some(tool => tool.name === 'task_list');
+  let authorized = permitted.filter(tool => {
+    if (tool.name === 'submit_spec') return specMode;
+    if (tool.name === 'submit_tasks') return planMode && (!hasTaskList || !!args.requiredPinnedTools?.has(tool.name));
+    if (tool.name === 'decision_gate') return planMode || !!args.requiredPinnedTools?.has(tool.name);
+    if (tool.name === 'expand_toolset') return !!args.requiredPinnedTools?.has(tool.name);
+    return true;
+  });
+  const hookAllow = runToolFilterHook(args.toolContext.cwd,
+    authorized.map(tool => ({ name: tool.name, source: tool.source })), {
+      projectName: args.toolContext.projectName, providerName: args.provider.name,
+      model: args.provider.model,
+      profile: args.activeTiers ? [...args.activeTiers].sort().join(',') : undefined,
+    });
+  if (hookAllow) authorized = authorized.filter(tool => hookAllow.has(tool.name));
+  const hardLimit = args.provider.toolLimits?.maxCount;
+  if (hardLimit !== undefined && (!Number.isSafeInteger(hardLimit) || hardLimit < 1)) {
+    throw new Error('Invalid verified provider tool limit');
+  }
+  const cap = Math.min(getModelMaxTools(args.provider.model ?? ''), hardLimit ?? Infinity,
+    args.sessionToolCap && args.sessionToolCap > 0 ? args.sessionToolCap : 28);
+  const selection = selectWorkflowCatalog(authorized, {
+    activeTiers: args.activeTiers, externalToolTiers: args.externalToolTiers,
+    requiredPinnedTools: args.requiredPinnedTools,
+    company: args.toolContext.companyContext, cap, hardLimit,
+    agenticChat: args.toolContext.agenticChat,
+  });
+  const serialize = (tool: CoderTool): SerializedTool => ({
+    name: tool.name,
+    description: !planMode && tool.name === 'task_list'
+      ? 'Maintain the live progress checklist without pausing execution.'
+      : tool.catalogDescription
+        ?? (tool.source !== 'mcp_external' ? WORKFLOW_CATALOG_CONTRACTS[tool.name] : undefined)
+        ?? tool.description,
+    parameters: !planMode && tool.name === 'task_list' ? BUILD_TASK_LIST_SCHEMA : tool.parameters,
+  });
+  const tools = selection.tools.sort((a, b) => a.name.localeCompare(b.name)).map(serialize);
+  const dropped = authorized.length - tools.length;
+  if (dropped > 0) console.log(`[coder] workflow catalog: ${authorized.length} authorized → ${tools.length} direct; ${selection.protectedNames.size} workflow/control tools, ${dropped} deferred (budget ${cap})`);
+  return {
+    tools, protectedToolNames: selection.protectedNames,
+    capInfo: dropped > 0 ? { total: authorized.length, cap: Math.max(cap, tools.length), dropped } : null,
+    eligibleToolsDefChars: JSON.stringify([...authorized].sort((a, b) => a.name.localeCompare(b.name)).map(serialize)).length,
+    authorizedTools: [...authorized, ...(args.catalogOnlyCapabilities ?? [])],
   };
 }
 

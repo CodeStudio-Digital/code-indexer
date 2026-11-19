@@ -1,0 +1,56 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Message queue regression fixture</title></head>
+<body><div id="root"></div><script type="module">
+import React, { useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Composer } from '/features/chat/composer/Composer.tsx';
+import { QueuedMessages } from '/features/chat/composer/QueuedMessages.tsx';
+import { useMessageQueue } from '/features/chat/composer/useMessageQueue.ts';
+import { getAgentSessionSnapshot, subscribeAgentSession, updateAgentSession } from '/hooks/agent-stream/session-stream-store.ts';
+import { DialogProvider } from '/components/ui/dialog-provider.tsx';
+import { TooltipProvider } from '/components/ui/tooltip.tsx';
+import { i18nReady } from '/i18n/index.ts';
+import '/index.css';
+const active = { streaming: true, doneReason: null, error: null };
+for (const id of ['queue-a', 'queue-b']) updateAgentSession(id, active);
+const control = window.queueFixture = {
+  deliveries: [], hold: false, fail: false, acceptedId: null, acknowledgements: [],
+  ack() { this.acknowledgements.shift()?.(); },
+  finish(id = 'queue-a', reason = 'completed') { updateAgentSession(id, { streaming: false, doneReason: reason, error: reason === 'error' ? 'failed' : null }); },
+  consume(messageId) { updateAgentSession('queue-a', { consumedMessageIds: [messageId] }); },
+};
+const noop = () => {};
+function Fixture() {
+  const [id, setId] = useState('queue-a');
+  const ref = useRef(null);
+  const subscribe = useCallback(listener => subscribeAgentSession(id, listener), [id]);
+  const snapshot = useSyncExternalStore(subscribe, () => getAgentSessionSnapshot(id));
+  const deliver = useCallback(async (text, options) => {
+    control.deliveries.push({ sessionId: id, text, ...options });
+    if (control.hold) await new Promise(resolve => control.acknowledgements.push(resolve));
+    if (control.fail) { control.fail = false; throw new Error('Connection lost — retained for retry'); }
+    updateAgentSession(id, active);
+    return control.acceptedId ? { acceptedMessageId: control.acceptedId } : 'accepted';
+  }, [id]);
+  const queue = useMessageQueue({ sessionId: id, deliver });
+  control.switch = setId;
+  control.attach = attachments => ref.current?.setAttachments(attachments);
+  control.snapshot = () => queue;
+  document.body.dataset.session = id;
+  document.body.dataset.ready = String(!queue.restoring);
+  const queuedStrip = React.createElement(QueuedMessages, { ...queue, onResume: queue.resume, onPromote: queue.promote, onRemove: queue.remove });
+  return React.createElement('main', { className: 'mx-auto max-w-3xl p-3', style: { paddingTop: 32 } },
+    React.createElement('h1', { className: 'mb-4 text-lg font-semibold' }, `Conversa ${id} · ${snapshot.streaming ? 'Em execução' : 'Parada'}`),
+    React.createElement(Composer, {
+      ref, sessionId: id, streaming: snapshot.streaming, queueable: true, sendBlocked: queue.restoring,
+      onQueue: queue.enqueue, queuedStrip, onSend: noop,
+      onAbort: () => { queue.pause(); control.finish(id, 'aborted'); },
+      agent: 'build', setAgent: noop, provider: 'fixture', model: 'test', setModel: noop,
+      onSwitchProvider: noop, providerOptions: [], currentProviderModels: [],
+      maxTurns: null, setMaxTurns: noop, maxAutoContinues: 0, setMaxAutoContinues: noop,
+      temperature: null, setTemperature: noop,
+    }));
+}
+await i18nReady;
+createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode, null,
+  React.createElement(DialogProvider, null, React.createElement(TooltipProvider, null, React.createElement(Fixture)))));
+</script></body></html>

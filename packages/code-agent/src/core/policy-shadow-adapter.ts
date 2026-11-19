@@ -7,7 +7,8 @@
  * host persistence port) are wired together for production runs.
  *
  * Contract:
- *   - Production defaults always observe and snapshot the catalog.
+ *   - Comparison diagnostics are opt-in. The production dispatcher still
+ *     applies its real permission, scope and recovery gates independently.
  *   - The mode is captured once at attempt composition; process env can never
  *     change authority halfway through an invocation sequence.
  *   - Evaluation + persistence are best-effort: any internal error is counted
@@ -88,7 +89,11 @@ export interface PolicyShadowComposition {
 }
 
 const DEFAULT_MODE: Readonly<PolicyShadowMode> = Object.freeze({
-  shadow: true,
+  // This observer cannot authorize or refuse a call. Persisting a decision
+  // and comparison before EVERY tool adds synchronous durability barriers to
+  // ordinary reads and edits. Keep the diagnostic available for explicit
+  // burn-in; do not put it on the production execution path by default.
+  shadow: false,
   catalog: true,
   enforce: false,
   resourceGrants: false,

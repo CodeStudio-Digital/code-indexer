@@ -2,6 +2,7 @@ import { apiPost } from '../../hooks/useApi.js';
 import { forgetAgentSession } from '../../hooks/agent-stream/session-stream-store.js';
 import { clearSessionWorkerLog } from '../../hooks/agent-stream/worker-log-store.js';
 import { sessionProviderSwitches } from '../../hooks/agent-stream/provider-switch.js';
+import { forgetMessageQueue } from './composer/useMessageQueue.js';
 import { forgetDraft } from './composer/composer-draft-store.js';
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
 
@@ -20,6 +21,7 @@ export function deleteChats(ids: string[]): Promise<void> {
     }>('/coder/sessions/batch-delete', { ids: unique, permanent: true });
     const deleted = result.items.map(item => item.session_id);
     for (const id of deleted) {
+      forgetMessageQueue(id);
       forgetAgentSession(id);
       clearSessionWorkerLog(id);
       sessionProviderSwitches.forget(id);

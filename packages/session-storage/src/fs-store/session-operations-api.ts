@@ -1,4 +1,5 @@
 import type { AgentMessage } from '@mcp/provider-sdk';
+import { promptInputTokens } from '@mcp/provider-sdk/prompt-cache-metrics.js';
 import type { CoderSessionStats } from '@mcp/session-storage/session-state-types.js';
 import {
   SessionOperationConflictError,
@@ -94,9 +95,15 @@ export class FsSessionOperations {
       this.directory.repository.readConversationSync(entry.location),
     );
     const session = this.directory.map(entry);
-    const lastAssistant = projection.storedMessages
-      .filter((message) => message.role === 'assistant')
-      .at(-1);
+    let latest: FsStoredMessage['usage'] | undefined;
+    let assistantTurns = 0;
+    for (const { role, usage } of projection.storedMessages) {
+      if (role !== 'assistant') continue;
+      assistantTurns++;
+      if (usage.context || usage.input_tokens > 0 || usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0) {
+        latest = usage;
+      }
+    }
     const tools = projection.toolCalls;
     return {
       total_input_tokens: session.total_input_tokens,
@@ -104,15 +111,13 @@ export class FsSessionOperations {
       total_cache_read_tokens: session.total_cache_read_tokens,
       total_cache_creation_tokens: session.total_cache_creation_tokens,
       last_turn_input_tokens: session.last_turn_input_tokens,
-      last_turn_prompt_tokens: lastAssistant
-        ? lastAssistant.usage.input_tokens +
-          lastAssistant.usage.cache_read_tokens +
-          lastAssistant.usage.cache_creation_tokens
-        : null,
+      last_turn_context: latest?.context ?? null,
+      last_turn_prompt_tokens: latest?.context?.prompt_tokens ?? (latest ? promptInputTokens({
+        provider: session.provider, inputTokens: latest.input_tokens,
+        cacheReadTokens: latest.cache_read_tokens, cacheCreationTokens: latest.cache_creation_tokens,
+      }) : null),
       message_count: projection.storedMessages.length,
-      assistant_turns: projection.storedMessages.filter(
-        (message) => message.role === 'assistant',
-      ).length,
+      assistant_turns: assistantTurns,
       tool_call_count: tools.length,
       tool_error_count: tools.filter((tool) => tool.is_error).length,
       distinct_tools: new Set(tools.map((tool) => tool.tool_name)).size,
@@ -343,6 +348,7 @@ export class FsSessionOperations {
         session_id: targetId,
         message: hydrated,
         usage: usage(stored),
+        context: stored.usage.context,
         tool_calls: converted.filter((_, index) => !attached[index].nested),
         nested_tool_calls: converted.filter((_, index) => attached[index].nested),
         operation_id: `copy:${targetId}:assistant:${stored.seq}`,

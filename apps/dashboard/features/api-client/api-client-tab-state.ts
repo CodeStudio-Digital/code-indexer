@@ -1,4 +1,4 @@
-import type { ApiCollection, ApiEnvironment, ApiRequest, SendResponse } from './types.js';
+import type { ApiCollection, ApiEnvironment, ApiRequest } from './types.js';
 
 export interface ApiClientState {
   collections: ApiCollection[];
@@ -14,8 +14,6 @@ export interface ApiClientState {
   draftRequest: ApiRequest | null;
   /** True once the draft has been edited — gates the "discard?" confirm. */
   draftDirty: boolean;
-  response: SendResponse | null;
-  sending: boolean;
   error: string | null;
   loading: boolean;
 }
@@ -23,7 +21,7 @@ export interface ApiClientState {
 export const INITIAL_STATE: ApiClientState = {
   collections: [], requests: [], environments: [],
   activeCollectionId: null, activeRequestId: null, openTabIds: [], selectedEnvId: null,
-  draftRequest: null, draftDirty: false, response: null, sending: false, error: null, loading: true,
+  draftRequest: null, draftDirty: false, error: null, loading: true,
 };
 
 /** Close a tab with VS-Code-style neighbor activation; closing the draft tab clears the draft. */
@@ -38,17 +36,13 @@ export function closeTabState(prev: ApiClientState, id: number): ApiClientState 
     openTabIds,
     activeRequestId,
     ...(id < 0 ? { draftRequest: null, draftDirty: false } : {}),
-    // Active request changed (or went away) → its old response is no longer
-    // relevant; blank it so it can't bleed into the new tab (mirrors selectRequest).
-    ...(activeRequestId !== prev.activeRequestId ? { response: null } : {}),
   };
 }
 
 /**
  * Close a SET of tabs at once (the context-menu bulk actions). Keeps `keepActive`
  * focused if it survives, else falls back to the last remaining tab; clears the
- * draft if a negative (draft) id is among those removed; blanks the response when
- * nothing is left open.
+ * draft if a negative (draft) id is among those removed.
  */
 export function removeTabsState(prev: ApiClientState, toRemove: Set<number>, keepActive: number | null): ApiClientState {
   if (toRemove.size === 0) return prev;
@@ -63,7 +57,6 @@ export function removeTabsState(prev: ApiClientState, toRemove: Set<number>, kee
     openTabIds,
     activeRequestId,
     ...(closingDraft ? { draftRequest: null, draftDirty: false } : {}),
-    ...(activeRequestId !== prev.activeRequestId ? { response: null } : {}),
   };
 }
 

@@ -3,6 +3,7 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody } from '../_helpers.js';
 import { requestInProject, resolveScopedEnv } from './_ownership.js';
 import { blockPrivateHosts, projectRoot } from './_net-policy.js';
+import { mountManualSends } from './manual-sends.js';
 import { type CookieJar, createJar, jarSnapshot } from '@mcp/shared/utils/http-engine.js';
 import { parseEnvVariables } from '@mcp/services/api-client/request-builder.js';
 import { executeRequest, type ExecRequest, type ExecuteResult } from '@mcp/services/api-client/execute-request.js';
@@ -100,7 +101,9 @@ function recordHistory(
 export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
   // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
 
-  app.post('/api/projects/:projectId/api-client/requests/:rid/send', async (c) => {
+  const manualSend = mountManualSends(app);
+  app.post('/api/projects/:projectId/api-client/requests/:rid/send', manualSend, async (c) => {
+    const signal = c.get('manualSendSignal');
     const projectId = parseIdParam(c, 'projectId');
     const store = deps.apiClientFor(projectId);
     const rid = parseIdParam(c, 'rid');
@@ -125,10 +128,12 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
     let res;
     try {
       res = await executeRequest({
-        request: req, baseUrl, variables: vars, jar, maxBytes: READ_CAP,
+        request: req, baseUrl, variables: vars, jar, maxBytes: READ_CAP, signal,
         blockPrivateHosts: block, fileRoot: projectRoot(deps, projectId), allowAbsoluteFiles: !block,
       });
+      signal.throwIfAborted();
     } catch (e) {
+      if (signal.aborted) return Response.json({ error: 'Request cancelled' }, { status: 499 });
       const msg = e instanceof Error ? e.message : String(e);
       // An unresolvable URL (no base URL set) is a config error, not a 502.
       if (/Invalid URL|could not|resolve/i.test(msg) && !/ECONN|timed out|socket/i.test(msg)) {
@@ -154,7 +159,8 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
   // Ad-hoc send for an UNSAVED draft request — runs the request from the posted
   // body (no DB row). Mirrors /send but reads the request fields from the client
   // and uses a scratch jar. Script var-sets still persist to the selected env.
-  app.post('/api/projects/:projectId/api-client/send-adhoc', async (c) => {
+  app.post('/api/projects/:projectId/api-client/send-adhoc', manualSend, async (c) => {
+    const signal = c.get('manualSendSignal');
     const projectId = parseIdParam(c, 'projectId');
     const store = deps.apiClientFor(projectId);
     const body = await parseJsonBody<{ request?: ExecRequest; envId?: number; persistVars?: boolean }>(c);
@@ -169,11 +175,13 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
     let res;
     try {
       res = await executeRequest({
-        request: body.request, baseUrl, variables: vars, jar, maxBytes: READ_CAP,
+        request: body.request, baseUrl, variables: vars, jar, maxBytes: READ_CAP, signal,
         blockPrivateHosts: block, fileRoot: projectRoot(deps, projectId), allowAbsoluteFiles: !block,
       });
+      signal.throwIfAborted();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (signal.aborted) return Response.json({ error: 'Request cancelled' }, { status: 499 });
       if (/Invalid URL|could not|resolve/i.test(msg) && !/ECONN|timed out|socket/i.test(msg)) {
         return c.json({ error: `Could not resolve URL from base '${baseUrl}' + path '${body.request.path_template}'. Set a base URL in the environment.` }, 422);
       }

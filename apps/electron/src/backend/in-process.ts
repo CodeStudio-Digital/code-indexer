@@ -15,6 +15,7 @@ import { IN_PROCESS_ENV } from '@apps/http-api/server/middleware/local-origin.js
 import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
 import { shutdownAppRuntime } from '@apps/http-api/server/runtime-shutdown.js';
 import { startOptionalDevHttp, stopDevHttp } from '../dev-http.js';
+import { createElectronBrowserHost } from '../browser-context-host.js';
 import { mountIpcHandlers } from '../handlers-mount.js';
 import type {
   BackendHandle,
@@ -26,7 +27,8 @@ import type {
 export function createInProcessBackend(): BackendHandle {
   // The Hono app is built but not served unless MCP_DEV_HTTP=1 — that flag
   // exists so an operator can curl the same backend from outside the window.
-  const { app: honoApp, deps, mcpPool, chromeService } = createApp();
+  const browser = createElectronBrowserHost();
+  const { app: honoApp, deps, mcpPool, chromeService } = createApp(browser);
   let handlers: LocalBackendAccess['handlers'] | null = null;
   let readyPromise: Promise<void> | null = null;
 
@@ -78,7 +80,8 @@ export function createInProcessBackend(): BackendHandle {
 
     async dispose(reason: string) {
       await stopDevHttp();
-      await shutdownAppRuntime({ deps, mcpPool, chromeService, reason });
+      try { await shutdownAppRuntime({ deps, mcpPool, chromeService, reason }); }
+      finally { await browser.dispose(); }
     },
 
     local,

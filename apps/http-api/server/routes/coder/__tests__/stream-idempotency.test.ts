@@ -32,6 +32,7 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
 import { mountCoderStreamRoutes } from '../stream.js';
 import { createBus, markEnded, publish, type CoderRunBus } from '../../../../coder-bus.js';
 import { RecentMessageKeys } from '../../recent-message-keys.js';
+import { SessionRecoveryError } from '../../../../control-plane-recovery-error.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
@@ -315,6 +316,85 @@ afterEach(() => {
 });
 
 describe('POST /messages idempotency', () => {
+  it('acknowledges live messages as JSON without opening another stream or restarting the worker', async () => {
+    const h = setup();
+    const { bus, pushCalls } = seedLiveRun(h.activeRuns, SESSION_ID);
+    const body = { content: 'guidance', client_msg_id: 'receipt-live', interject: true, response_mode: 'json' };
+    const [first, retry] = await Promise.all([h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body), h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body)]);
+    expect(await first.json()).toMatchObject({ accepted: true, active: true, bus_id: bus.busId });
+    expect(await retry.json()).toMatchObject({ accepted: true, active: true, bus_id: bus.busId });
+    expect(pushCalls).toEqual(['guidance']);
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+    expect(bus.subscribers.size).toBe(0);
+  });
+
+  it('returns a fresh-run receipt and recovers its terminal outcome without resending', async () => {
+    const h = setup();
+    const body = { content: 'next task', client_msg_id: 'receipt-fresh', response_mode: 'json', only_when_idle: true };
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body);
+    expect(await response.json()).toMatchObject({ accepted: true, active: true, started: true });
+    const liveRetry = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body);
+    expect(await liveRetry.json()).toMatchObject({ accepted: true, active: true });
+    expect(poolMock.runFresh).toHaveBeenCalledOnce();
+    const bus = h.activeRuns.get(SESSION_ID)!;
+    markEnded(bus, 'done', { reason: 'completed' });
+    const retry = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body);
+    expect(await retry.json()).toMatchObject({ accepted: true, active: false });
+    expect(poolMock.runFresh).toHaveBeenCalledOnce();
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a parked task into steering when the server is still busy', async () => {
+    const h = setup();
+    const { bus } = seedLiveRun(h.activeRuns, SESSION_ID);
+    const body = { content: 'later', client_msg_id: 'receipt-busy', response_mode: 'json', only_when_idle: true };
+    const busy = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body);
+    expect(await busy.json()).toEqual({ accepted: false, busy: true, bus_id: bus.busId });
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
+    expect(h.acceptCalls).toHaveLength(1);
+    markEnded(bus, 'done', { reason: 'completed' });
+    const next = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { ...body, client_msg_id: 'receipt-busy-retry' });
+    expect(await next.json()).toMatchObject({ accepted: true, started: true });
+    expect(poolMock.runFresh).toHaveBeenCalledOnce();
+  });
+
+  it('passes attachments and skills into a live message with a stable operation identity', async () => {
+    const h = setup(); seedLiveRun(h.activeRuns, SESSION_ID);
+    const attachments = [{ name: 'notes.txt', mediaType: 'text/plain', text: 'details' }];
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
+      content: 'inspect this', client_msg_id: 'receipt-attachment', response_mode: 'json', interject: true,
+      attachments, selected_skill_ids: ['skill-1'],
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ accepted: true });
+    expect(poolMock.pushUserMessage).toHaveBeenCalledWith(SESSION_ID, 'inspect this', ['skill-1'], expect.any(String), attachments);
+  });
+
+  it('persists steering before waking an interactive wait', async () => {
+    const h = setup(); const live = seedLiveRun(h.activeRuns, SESSION_ID); live.state.waiting = true;
+    let release!: () => void;
+    const persisted = new Promise<void>(resolve => { release = resolve; });
+    poolMock.pushUserMessage.mockImplementationOnce(async () => { await persisted; return 42; });
+    const request = h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
+      content: 'new instructions', client_msg_id: 'receipt-waiting', response_mode: 'json', interject: true,
+    });
+    await vi.waitFor(() => expect(poolMock.pushUserMessage).toHaveBeenCalledOnce());
+    expect(poolMock.interruptWait).not.toHaveBeenCalled();
+    release();
+    expect(await (await request).json()).toMatchObject({ accepted: true });
+    expect(poolMock.interruptWait).toHaveBeenCalledOnce();
+  });
+
+  it('keeps rejected live delivery visible instead of claiming successful admission', async () => {
+    const h = setup(); seedLiveRun(h.activeRuns, SESSION_ID);
+    poolMock.pushUserMessage.mockRejectedValueOnce(new Error('write failed'));
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
+      content: 'guidance', client_msg_id: 'receipt-failure', response_mode: 'json', interject: true,
+    });
+    expect(response.status).toBe(500);
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+  });
+
   it('creates authority for a fresh worker with shadow flags off and retains it for live follow-ups', async () => {
     vi.stubEnv('CODER_CONTROL_PLANE_SHADOW', '0');
     vi.stubEnv('CODER_AGENT_RUN_STORE_SHADOW', '0');
@@ -467,6 +547,29 @@ describe('POST /messages idempotency', () => {
     expect(h.appendCalls).toHaveLength(0);
     expect(poolMock.runFresh).not.toHaveBeenCalled();
     expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('retries the same message after session storage recovers without caching the admission failure', async () => {
+    const h = setup();
+    vi.spyOn(h.deps.controlPlaneStore!, 'acceptCommand').mockRejectedValueOnce(
+      new SessionRecoveryError(SESSION_ID, new Error('unreadable session directory')),
+    );
+    const body = { content: 'retry after storage recovery', client_msg_id: 'storage-retry', response_mode: 'json' };
+    const first = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body);
+    expect(first.status).toBe(503);
+    expect(await first.json()).toMatchObject({ code: 'SESSION_RECOVERY_UNAVAILABLE', session_id: SESSION_ID });
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+
+    const retry = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body);
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ accepted: true, started: true });
+    const replay = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, body);
+    expect(replay.status).toBe(200);
+    // Fresh input is persisted by the worker; the router must not append it.
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.runFresh).toHaveBeenCalledOnce();
+    expect(h.controlPlaneCommands.size).toBe(1);
   });
 
   it('keeps a fresh command non-terminal until its exact bus outcome', async () => {

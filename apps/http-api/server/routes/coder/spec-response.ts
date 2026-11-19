@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import type { AgentMessage } from "@mcp/provider-sdk";
-import { formatSpecResult } from '@mcp/code-agent/tools/spec/index.js';
+import { formatSpecResult, SPEC_APPROVAL_REMINDER } from '@mcp/code-agent/tools/spec/index.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseSessionIdParam } from '../_helpers.js';
@@ -63,7 +63,7 @@ export function mountCoderSpecResponseRoute(
       return c.json({ error: 'no pending spec' }, 404);
     }
 
-    const specPath = body.spec_path ?? '.mcp/specs/<unknown>.md';
+    const specPath = typeof body.spec_path === 'string' ? body.spec_path.trim() : undefined;
     const toolMsg: AgentMessage = {
       role: 'tool',
       content: [{
@@ -85,11 +85,10 @@ export function mountCoderSpecResponseRoute(
           await sessionStore.setSessionAgent(id, 'build');
           const reminder: AgentMessage = {
             role: 'user',
+            isMeta: true,
             content: [{
               type: 'text',
-              text:
-                `<system-reminder>Mode transition: Spec → Build. The spec at ${specPath} was approved. ` +
-                `Derive tasks from its "## Implementation Plan" via submit_tasks, then execute each per task scope.</system-reminder>`,
+              text: SPEC_APPROVAL_REMINDER,
             }],
           };
           await sessionStore.appendMessage({

@@ -1,4 +1,5 @@
 import type { Hono } from 'hono';
+import { sessionRecoveryFailure } from '../../../control-plane-recovery-error.js';
 import { bodyLimit } from 'hono/body-limit';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
@@ -82,6 +83,10 @@ function hashPreflightContent(s: string): string {
 }
 
 interface SendMessageBody {
+  /** JSON admission receipt; the client keeps its existing SSE subscription. */
+  response_mode?: 'json';
+  /** A parked task must not silently turn into steering if another run starts. */
+  only_when_idle?: boolean;
   content: string;
   max_turns?: number;
   max_auto_continues?: number;
@@ -278,6 +283,7 @@ export function mountCoderStreamRoutes(
       return { kind: 'pending', settled: memoryClaim.settled };
     }
 
+    let storageFailure: ReturnType<typeof sessionRecoveryFailure>;
     const acceptance = await acceptLocalCoderCommand({
       store: controlPlaneStore,
       sessionId: input.sessionId,
@@ -293,6 +299,7 @@ export function mountCoderStreamRoutes(
       requestedReasoningEffort: input.requestedReasoningEffort,
       requestedPreset: input.requestedPreset,
       requestedCapabilityProfile: input.requestedCapabilityProfile,
+      onUnavailable: (error) => { storageFailure = sessionRecoveryFailure(error); },
     });
 
     if (
@@ -319,16 +326,18 @@ export function mountCoderStreamRoutes(
     // server-generated durable key, so there is no non-authoritative execution
     // path hiding behind the legacy request shape.
     if (!acceptance) {
-      if (input.dedupeKey) {
-        recentMessageKeys.recordTerminal(input.sessionId, input.dedupeKey, {
+      if (input.dedupeKey && claimGuard) {
+        // No worker/input effect has started. Release the transient owner so
+        // the same message can retry admission after storage recovers.
+        recentMessageKeys.rejectClaim(input.sessionId, input.dedupeKey, claimGuard.token, claimGuard.fingerprintHash, {
           event: 'error',
-          data: { reason: 'idempotency-authority-unavailable', duplicate: false },
-        }, -1, claimGuard);
+          data: { reason: storageFailure?.code ?? 'idempotency-authority-unavailable', duplicate: false, retryable: true },
+        });
       }
       return {
         kind: 'reject',
         status: 503,
-        body: {
+        body: storageFailure ?? {
           error: 'idempotency authority unavailable; request was not executed',
           code: 'IDEMPOTENCY_AUTHORITY_UNAVAILABLE',
         },
@@ -924,6 +933,15 @@ export function mountCoderStreamRoutes(
   app.post('/api/coder/sessions/:id/messages', attachmentBodyLimit, async (c) => {
     const id = parseSessionIdParam(c);
     const body = await c.req.json<SendMessageBody>();
+    const replyBus = (bus: CoderRunBus, options?: Parameters<typeof pumpBusToSSE>[2], started = false, messageId?: number) =>
+      body.response_mode === 'json'
+        ? c.json({ accepted: true, bus_id: bus.busId, active: !bus.ended, started, message_id: messageId,
+          ...(bus.ended && bus.endReason ? { terminal: bus.endReason } : {}) })
+        : pumpBusToSSE(c, bus, options);
+    const replyTerminal = (event: 'done' | 'error', data: Record<string, unknown>) =>
+      body.response_mode === 'json'
+        ? c.json({ accepted: true, active: false, terminal: { event, data } })
+        : syntheticTerminalSSE(c, event, data);
     const attachmentsCheck = validateAttachments(body.attachments, { allowFileReferences: true });
     if (!attachmentsCheck.ok) {
       return c.json(
@@ -1049,10 +1067,10 @@ export function mountCoderStreamRoutes(
         }, 503);
       }
       if (settled.terminal) {
-        return syntheticTerminalSSE(c, settled.terminal.event, settled.terminal.data);
+        return replyTerminal(settled.terminal.event, settled.terminal.data);
       }
       if (settled.bus && (settled.bus.ended || settled.bus === workerPool.getBus(id))) {
-        return pumpBusToSSE(c, settled.bus, {
+        return replyBus(settled.bus, {
           // The reconnecting client owns the replay cursor. `sinceHint` only
           // describes where the original request attached and must not advance
           // a retry past buffered events it has not acknowledged.
@@ -1060,13 +1078,13 @@ export function mountCoderStreamRoutes(
           trimReplay: true,
         });
       }
-      return syntheticDoneSSE(c, { reason: 'completed', duplicate: true });
+      return replyTerminal('done', { reason: 'completed', duplicate: true });
     }
     if (earlyClaim.kind === 'replay') {
-      return pumpBusToSSE(c, earlyClaim.bus, { since: earlyClaim.since, trimReplay: true });
+      return replyBus(earlyClaim.bus, { since: earlyClaim.since, trimReplay: true });
     }
     if (earlyClaim.kind === 'terminal') {
-      return syntheticTerminalSSE(c, earlyClaim.event, earlyClaim.data);
+      return replyTerminal(earlyClaim.event, earlyClaim.data);
     }
     if (earlyClaim.kind === 'reject') {
       if (earlyClaim.retryAfterMs !== undefined) {
@@ -1103,6 +1121,13 @@ export function mountCoderStreamRoutes(
     };
 
     try {
+    // Always resolve command identity first: an acknowledgement lost after a
+    // fresh run started must replay that receipt, not queue the same task again.
+    const busyAtAdmission = workerPool.getBus(id);
+    if (body.only_when_idle && busyAtAdmission && !busyAtAdmission.ended) {
+      await settleClaimFailure('run-became-active');
+      return c.json({ accepted: false, busy: true, bus_id: busyAtAdmission.busId });
+    }
     // Office/OpenDocument files stay native on general file-input transports
     // (OpenAI/Codex/OpenRouter) and use a portable local text extraction path
     // elsewhere. PDFs similarly follow the declarative transport/model
@@ -1170,8 +1195,9 @@ export function mountCoderStreamRoutes(
     // The lock is released as soon as the synchronous setup completes — the
     // SSE stream itself is not held under the lock.
     const decide = async (): Promise<
-      | { kind: 'attach'; bus: CoderRunBus; tailFrom: number }
+      | { kind: 'attach'; bus: CoderRunBus; tailFrom: number; messageId: number }
       | { kind: 'fresh'; bus: CoderRunBus }
+      | { kind: 'busy'; bus: CoderRunBus }
       | { kind: 'reject'; status: 409; body: { error: string; code: string } }
     > => {
       // Coder sessions are workers-only. Synchronous runner pokes
@@ -1180,6 +1206,7 @@ export function mountCoderStreamRoutes(
       const pool = workerPool;
       const existingBus = pool.getBus(id);
       if (existingBus && !existingBus.ended) {
+        if (body.only_when_idle) return { kind: 'busy', bus: existingBus };
         if (
           claimAcceptance?.commandContext
           && !(await bindLocalCommandBus(controlPlaneStore, claimAcceptance, existingBus.busId))
@@ -1187,14 +1214,12 @@ export function mountCoderStreamRoutes(
           await settleClaimFailure('command-bus-binding-failed');
           throw new Error('failed to bind command to the live coder bus');
         }
-        if (body.attachments && body.attachments.length > 0) {
+        const referenceError = await authorizeAttachmentReferences(id, attachmentReferencePaths, false);
+        if (referenceError) {
           return {
             kind: 'reject',
             status: 409,
-            body: {
-              error: 'attachments are only supported on the first message of a session — drop them or wait for the current run to finish',
-              code: 'ATTACHMENTS_MIDRUN_UNSUPPORTED',
-            },
+            body: { error: referenceError, code: 'ATTACHMENT_REFERENCE_NOT_AUTHORIZED' },
           };
         }
         const waiting = await pool.isWaitingForInput(id).catch(() => false);
@@ -1209,7 +1234,6 @@ export function mountCoderStreamRoutes(
               },
             };
           }
-          await pool.interruptWait(id).catch(() => undefined);
         }
         try {
           const messageOperationId = claimAcceptance?.commandContext
@@ -1217,18 +1241,22 @@ export function mountCoderStreamRoutes(
             : dedupeKey
               ? `message-client:${dedupeKey}`
               : undefined;
-          await pool.pushUserMessage(
+          const messageId = await pool.pushUserMessage(
             id,
             body.content,
             selectedSkillIds,
             messageOperationId,
+            ...(body.attachments?.length ? [body.attachments] as const : []),
           );
+          // The message must be persisted and queued before waking ask_user /
+          // submit_plan; otherwise a quick final turn can finish without it.
+          if (waiting && body.interject) await pool.interruptWait(id);
           await terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
             status: 'succeeded',
             reason: 'message-enqueued',
           });
           commandSettled = true;
-          return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
+          return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1, messageId };
         } catch (error) {
           await settleClaimFailure('message-enqueue-failed', error);
           throw error;
@@ -1313,19 +1341,23 @@ export function mountCoderStreamRoutes(
       await settleClaimFailure(decision.body.code.toLowerCase());
       return c.json(decision.body, decision.status);
     }
+    if (decision.kind === 'busy') {
+      await settleClaimFailure('run-became-active');
+      return c.json({ accepted: false, busy: true, bus_id: decision.bus.busId });
+    }
     if (decision.kind === 'attach') {
       keepSemanticProjectAlive(id, decision.bus);
-      return pumpBusToSSE(c, decision.bus, {
+      return replyBus(decision.bus, {
         since: decision.tailFrom,
         trimReplay: true,
-      });
+      }, false, decision.messageId);
     }
 
     await keepSemanticProjectAlive(id, decision.bus);
 
     // `runFresh()` already started `runCoder()` inside the worker. The route
     // only mirrors its bus to SSE; there is deliberately no in-process path.
-    return pumpBusToSSE(c, decision.bus);
+    return replyBus(decision.bus, undefined, true);
     } catch (error) {
       if (isCoderStartupUncertainError(error)) {
         const pendingBus = workerPool.getBus(id);

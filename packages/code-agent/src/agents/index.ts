@@ -149,7 +149,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     id: 'api',
     label: 'API Test',
     description:
-      'API verification. Imports an OpenAPI/Swagger spec, runs each endpoint against the LIVE dev server, fixes the request/spec to match real responses, and marks each request verified — building a non-LLM regression battery. Navigate tier + the `api` tool tier; edit_file patches the spec.',
+      'API verification. Imports an OpenAPI/Swagger spec, runs each endpoint against the LIVE dev server, compares responses against the intended contract, corrects confirmed defects and marks checked requests verified — building a non-LLM regression battery. Navigate tier + the `api` tool tier; edit_file patches the spec.',
     profile: 'navigate',
     planMode: false,
     // Verification, not creativity — keep it deterministic.

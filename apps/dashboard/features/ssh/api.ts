@@ -163,6 +163,11 @@ export function sshHostKey(host: Pick<SshHost, 'id' | 'is_shared' | 'storage_sco
   return `${sshHostScope(host)}:${host.id}`;
 }
 
+/** Local row ids can repeat in independent project databases. */
+export function savedConnectionId(host: SshHost): string {
+  return sshHostScope(host) === 'shared' ? `saved:shared:${host.id}` : `saved:project:${host.project_id}:${host.id}`;
+}
+
 export function findHostByKey(hosts: SshHost[], key: string): SshHost | undefined {
   return hosts.find((h) => sshHostKey(h) === key);
 }
@@ -299,7 +304,7 @@ async function resolveAuth(
 async function jumpSpec(host: SshHost, identities: SshIdentity[]): Promise<SshConnectSpec> {
   const identity = host.identity_id != null ? identities.find((i) => i.id === host.identity_id) ?? null : null;
   return {
-    hostId: `saved:${sshHostKey(host)}:jump`,
+    hostId: `${savedConnectionId(host)}:jump`,
     host: host.hostname,
     port: host.port,
     username: host.username,
@@ -334,7 +339,7 @@ export async function resolveSpecFromHost(
   const jump = await Promise.all(farthestFirst.reverse().map((jh) => jumpSpec(jh, identities)));
 
   return {
-    hostId: `saved:${sshHostKey(host)}`,
+    hostId: savedConnectionId(host),
     host: host.hostname,
     port: host.port,
     username: host.username,

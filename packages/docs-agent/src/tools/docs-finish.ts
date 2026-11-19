@@ -17,7 +17,7 @@ import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { ResearchConfidence } from '../types.js';
-import type { DocsEvidenceLedger } from './evidence-ledger.js';
+import { DOCS_BUDGET, type DocsEvidenceLedger } from './evidence-ledger.js';
 import type { PlanSlot } from './docs-plan.js';
 
 export interface DocsFinishPayload {
@@ -93,8 +93,9 @@ export function makeDocsFinishTool(deps: DocsFinishToolDeps): CoderTool {
         return err(`confidence must be one of: high, medium, low. Got: "${rawConfidence}"`);
       }
       const confidence = rawConfidence as ResearchConfidence;
-      if (chunks_cited.length > (deps.ledger?.maxCitations ?? 12)) {
-        return err(`chunks_cited exceeds the evidence cap (${deps.ledger?.maxCitations ?? 12}).`);
+      const citationLimit = deps.ledger?.maxCitations ?? DOCS_BUDGET.citations;
+      if (chunks_cited.length > citationLimit) {
+        return err(`chunks_cited exceeds the evidence cap (${citationLimit}).`);
       }
       if (confidence === 'high' && deps.ledger) {
         const problem = deps.ledger.validateHighConfidence(deps.planSlot?.subQuestions?.length ?? 1, chunks_cited);

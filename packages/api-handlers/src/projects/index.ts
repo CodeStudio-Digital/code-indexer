@@ -111,8 +111,8 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       return db.listProjectsForGlobalPicker();
     },
 
-    async get({ id }) {
-      const project = db.getProject(id);
+    async get({ id }, { signal }) {
+      const project = await db.getProjectAsync(id, signal);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
       // Cheap package.json read — classifies the framework so the preview pane
       // can auto-pick the React-native element picker over the universal one.
@@ -120,7 +120,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     },
 
     async activate({ id, activationId, clientId }) {
-      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      if (!db.getProjectCatalogEntry(id)) throw new ApiError('not_found', 404, 'project not found');
       if (!activationId || activationId.length > 128) {
         throw new ApiError('invalid_activation_id', 400, 'activationId is required');
       }
@@ -157,6 +157,9 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     },
 
     async update({ id, ...patch }) {
+      if (db.getProjectCatalogEntry(id)?.worktree_parent_id) {
+        throw new ApiError('invalid_input', 400, 'Edit project settings from the owning project');
+      }
       const result = wrap(() => updateService.execute(id, patch as UpdateProjectInput));
       if (!result) throw new ApiError('not_found', 404, 'project not found');
       if (Object.prototype.hasOwnProperty.call(patch, 'index_ignore_patterns')) {
@@ -257,12 +260,12 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     },
 
     async indexStatus({ id }) {
-      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      if (!db.getProjectCatalogEntry(id)) throw new ApiError('not_found', 404, 'project not found');
       return deps.projectIndexService.getStatus(id);
     },
 
     fsEventsStream({ id }): AsyncStream<FsEventsFrame> {
-      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      if (!db.getProjectCatalogEntry(id)) throw new ApiError('not_found', 404, 'project not found');
       const svc = deps.projectIndexService;
       // Same hand-rolled iterator rationale as indexStatusStream: an
       // indefinite stream must unsubscribe on return(). Frames coalesce
@@ -314,7 +317,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     },
 
     gitMetaStream({ id }): AsyncStream<GitMetaFrame> {
-      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      if (!db.getProjectCatalogEntry(id)) throw new ApiError('not_found', 404, 'project not found');
       const svc = deps.projectIndexService;
       // Indefinite stream → must unsubscribe on return(). The watcher already
       // coalesces a checkout burst (~250ms) into one event, so we forward each
@@ -358,7 +361,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
     },
 
     indexStatusStream({ id }): AsyncStream<ProjectIndexStatus> {
-      if (!db.getProject(id)) throw new ApiError('not_found', 404, 'project not found');
+      if (!db.getProjectCatalogEntry(id)) throw new ApiError('not_found', 404, 'project not found');
       const svc = deps.projectIndexService;
       // Hand-rolled iterator (not streamFromCallbacks): a status stream is
       // INDEFINITE, so cancellation must unsubscribe — for-await calls

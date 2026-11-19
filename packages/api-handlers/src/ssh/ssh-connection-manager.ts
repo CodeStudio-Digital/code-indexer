@@ -51,6 +51,7 @@ const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 export class SshConnectionManager {
   private readonly conns = new Map<string, ManagedConnection>();
+  private readonly dialing = new Map<string, { sig: string; ready: Promise<ManagedConnection> }>();
   /**
    * Host keys actually OBSERVED during a recent failed handshake, keyed by
    * `host:port`. `trust()` only accepts a fingerprint that matches a live
@@ -76,20 +77,35 @@ export class SshConnectionManager {
       this.conns.delete(spec.hostId);
       existing.client.end();
     }
-    const client = await this.dialChain(spec);
-    const managed: ManagedConnection = { client, refCount: 1, sig };
-    this.conns.set(spec.hostId, managed);
-    client.on('close', () => {
-      // Peer/keepalive death — drop the pool entry so the next acquire redials.
-      if (this.conns.get(spec.hostId) === managed) this.conns.delete(spec.hostId);
-    });
-    return client;
+    let flight = this.dialing.get(spec.hostId);
+    if (!flight || flight.sig !== sig) {
+      const ready: Promise<ManagedConnection> = this.dialChain(spec).then(client => {
+        if (this.dialing.get(spec.hostId)?.ready !== ready) {
+          client.end();
+          throw new ApiError('ssh_connect_failed', 409, 'SSH connection superseded');
+        }
+        const managed: ManagedConnection = { client, refCount: 0, sig };
+        this.conns.set(spec.hostId, managed);
+        client.once('close', () => {
+          if (this.conns.get(spec.hostId) === managed) this.conns.delete(spec.hostId);
+        });
+        return managed;
+      }).finally(() => {
+        if (this.dialing.get(spec.hostId)?.ready === ready) this.dialing.delete(spec.hostId);
+      });
+      flight = { sig, ready };
+      this.dialing.set(spec.hostId, flight);
+    }
+    const managed = await flight.ready;
+    if (this.conns.get(spec.hostId) !== managed) throw new ApiError('ssh_connect_failed', 409, 'SSH connection closed');
+    managed.refCount += 1;
+    return managed.client;
   }
 
   /** Drop one channel's hold; ends the connection when the last is released. */
-  release(hostId: string): void {
+  release(hostId: string, client?: Client): void {
     const managed = this.conns.get(hostId);
-    if (!managed) return;
+    if (!managed || (client && managed.client !== client)) return;
     managed.refCount -= 1;
     if (managed.refCount <= 0) {
       this.conns.delete(hostId);
@@ -99,6 +115,7 @@ export class SshConnectionManager {
 
   /** Force-close a connection and every channel on it, regardless of ref-count. */
   disconnect(hostId: string): void {
+    this.dialing.delete(hostId);
     const managed = this.conns.get(hostId);
     if (!managed) return;
     this.conns.delete(hostId);
@@ -107,6 +124,7 @@ export class SshConnectionManager {
 
   /** Force-close every pooled connection (application shutdown). */
   disconnectAll(): void {
+    this.dialing.clear();
     const live = [...this.conns.values()];
     this.conns.clear();
     this.pendingChallenges.clear();
@@ -123,6 +141,7 @@ export class SshConnectionManager {
   trust(info: SshHostKeyInfo): void {
     const key = `${info.host}:${info.port}`;
     const challenge = this.pendingChallenges.get(key);
+    if (!challenge && this.knownHosts.get(info.host, info.port)?.fingerprint === info.fingerprint) return;
     if (!challenge || challenge.expiresAt < Date.now() || challenge.fingerprint !== info.fingerprint) {
       throw new ApiError('ssh_host_key_not_offered', 409, 'refusing to trust a host key that was not just presented');
     }

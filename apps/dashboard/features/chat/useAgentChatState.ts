@@ -37,7 +37,8 @@ export function useAgentChatState({
 }: UseAgentChatStateArgs) {
   const [enrichedProviders, setEnrichedProviders] = useState<EnrichedProvider[]>([]);
   const [tasksState, setTasksState] = useState<PersistedTasksState | null>(null);
-  const [stats, setStats] = useState<CoderSessionStats | null>(null);
+  const [statsResult, setStatsResult] = useState<{ sessionId: SessionId; stats: CoderSessionStats } | null>(null);
+  const stats = statsResult?.sessionId === selectedId ? statsResult.stats : null;
 
   // Pull the DB-backed provider/model list from /api/coder/providers (enriched
   // shape served by src/api/server.ts). Falls back to the static PROVIDERS
@@ -84,17 +85,17 @@ export function useAgentChatState({
   // Aggregate session stats — fetched on session select and on every run completion.
   useEffect(() => {
     if (!selectedId) {
-      setStats(null);
+      setStatsResult(null);
       return;
     }
     let cancelled = false;
     fetch(`/api/coder/sessions/${selectedId}/stats`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!cancelled) setStats(d);
+        if (!cancelled) setStatsResult(d ? { sessionId: selectedId, stats: d } : null);
       })
       .catch(() => {
-        if (!cancelled) setStats(null);
+        if (!cancelled) setStatsResult(null);
       });
     return () => {
       cancelled = true;

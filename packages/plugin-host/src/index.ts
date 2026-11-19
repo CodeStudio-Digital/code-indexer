@@ -46,7 +46,7 @@ export type {
   LoadDebugAdapterOptions,
 } from './debugger-loader.js';
 export { readPluginAsset } from './assets.js';
-export { isActivated } from './activation.js';
+export { createAsyncActivationCheck, isActivated } from './activation.js';
 export type { ActivationRule } from './activation.js';
 export { buildHostInvoke } from './host-invoke.js';
 export type { HostInvoke, HostInvokeDeps } from './host-invoke.js';

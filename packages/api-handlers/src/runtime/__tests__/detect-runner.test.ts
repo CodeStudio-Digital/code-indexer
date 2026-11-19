@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { detectRuntimes } from '../detect-runner.js';
 import { listFor } from '../detect-all.js';
+import { LocalShellAdapter } from '@mcp/code-agent/ports/shell-port.js';
+import { createSystemHandlers } from '../../system/index.js';
+import type { HandlerDeps } from '../../types.js';
 
 /**
  * These spawn a real worker thread. That is the point: typechecking proves
@@ -56,4 +59,22 @@ describe('detectRuntimes', () => {
     expect(await detectRuntimes('node', dir)).toEqual(expected());
     expect(listFor('node', dir)).toEqual(expected());
   }, 30_000);
+
+  it('shares in-flight host checks off the caller thread and runs a fresh check on demand', async () => {
+    const shell = vi.spyOn(LocalShellAdapter.prototype, 'run').mockRejectedValue(new Error('host probe on caller thread'));
+    try {
+      const api = createSystemHandlers({ config: { dbPath: join(dir, 'index.db') } } as HandlerDeps);
+      const ctx = { requestId: 'preflight-regression', signal: new AbortController().signal };
+      const first = api.preflight(undefined, ctx);
+      expect(api.preflight(undefined, ctx)).toBe(first);
+      const report = await first;
+      expect(report.checks.map(check => check.id)).toEqual(['podman', 'podman-machine', 'wsl2', 'git', 'disk', 'sandbox-image']);
+      const next = api.preflight(undefined, ctx);
+      expect(next).not.toBe(first);
+      expect((await next).platform).toBe(process.platform);
+      expect(shell).not.toHaveBeenCalled();
+    } finally {
+      shell.mockRestore();
+    }
+  }, 60_000);
 });

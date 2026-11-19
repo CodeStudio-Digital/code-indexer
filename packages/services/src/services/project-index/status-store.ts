@@ -137,7 +137,7 @@ export class ProjectIndexStatusStore {
   }
 
   private derive(projectId: number): Omit<ProjectIndexStatus, 'watcherActive' | 'dirtyPending'> {
-    const project = this.db.getProject(projectId);
+    const project = this.db.getProjectCatalogEntry(projectId);
     // A ready phase additionally requires actual rows — a stale/buggy stamp
     // over an empty index must never render "Symbols ready · 0 files".
     const hasRows = (project?.file_count ?? 0) > 0;

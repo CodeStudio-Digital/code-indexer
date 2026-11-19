@@ -65,8 +65,8 @@ import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js
 import { InvestigationSemanticIndex } from '@mcp/services/memory/investigation-semantic-index.js';
 import { AgentMemoryRetriever } from '@mcp/services/memory/agent-memory-retriever.js';
 import { AgentMemoryWriter, AgentMemoryDedupeSearch } from '@mcp/services/memory/agent-memory-writer.js';
-import { LlmRecallFilter } from '@mcp/services/memory/recall-filter.js';
-import { LlmMemoryQuerySynthesizer, type ConversationTail } from '@mcp/services/memory/query-synthesizer.js';
+import type { ConversationTail } from '@mcp/services/memory/query-synthesizer.js';
+import { AgentMemoryEvolution } from '@mcp/services/memory/agent-memory-evolution.js';
 import { createRunEndMemory, type RunEndMemory } from '@mcp/services/memory/run-end.js';
 import { recordMemoryAccess } from '@mcp/services/memory/access-telemetry.js';
 import { MemoryExtractor } from '@mcp/services/memory/extractor.js';
@@ -85,6 +85,8 @@ import {
 } from '@mcp/store/semantic-store.js';
 import { LocalVectorRouter } from '@mcp/store/local-vector-router.js';
 import { SessionStore } from '@mcp/code-agent/index.js';
+import { resolveProjectWorktree } from './worktree-reads.js';
+import { asSessionId } from '@mcp/session-storage';
 import {
   FsPipelineTelemetrySink,
   requireSessionProjectAuthority,
@@ -180,6 +182,8 @@ import { resolve as pathResolveNode, sep as pathSep } from 'node:path';
 import type { ChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { invokePluginTool, type PluginToolInvokeFn } from '../sse/PluginHostSingleton.js';
 import { syncPluginProviders } from './plugin-providers.js';
+import { BundledFigmaMcp } from './figma/integration.js';
+import type { ResearchBrowserHost } from '@mcp/services/research-browser/types.js';
 import { SemanticIndexCoordinator } from './semantic-index-coordinator.js';
 import {
   createDurableSemanticMutationSink,
@@ -217,6 +221,7 @@ export function setChromeServiceForDocs(svc: ChromeService | null): void {
 export interface CoreDeps {
   config: IndexerConfig;
   db: CodeIndexDB;
+  resolveProjectWorktree: typeof resolveProjectWorktree;
   /**
    * Electron-only: returns `app.getAppMetrics()` — the full process tree
    * (GPU, renderer, utility) with working-set + CPU. Injected by the
@@ -272,6 +277,7 @@ export interface SearchDeps {
    *  user-scope recall, embedding backfill and the consolidation sweeper. */
   agentMemoryService: AgentMemoryService;
   agentMemoryRetriever: AgentMemoryRetriever;
+  memoryEvolution?: AgentMemoryEvolution;
   /** Host-owned investigation semantic selector; worker coders reach it by RPC. */
   investigationSemantic: InvestigationSemanticIndexPort;
   /** Mem C write-back — end-of-run durable-memory distillation (facts + gotchas). */
@@ -559,6 +565,7 @@ export interface CompanyDeps {
 export interface PluginRuntimeDeps {
   /** Invoke an installed plugin's tool from the UI (outside a coder run). */
   invokePluginTool: PluginToolInvokeFn;
+  figmaMcp: BundledFigmaMcp;
   /**
    * Reconcile the provider registry with the currently-enabled declarative
    * provider plugins. Called at boot AND after any install/enable/disable/
@@ -589,7 +596,7 @@ export type ServerDeps = CoreDeps
   & PluginRuntimeDeps
   & ManagedGitDeps;
 
-export function createDeps(): ServerDeps {
+export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
   const config = loadConfig();
   const managedGit = createGitHubAppManagedGitClient();
   // This is the ONE main-process handle: make it the WAL checkpoint owner so the
@@ -911,6 +918,10 @@ export function createDeps(): ServerDeps {
     },
   });
   registerShutdownTask('agent-memory-write-queue', () => memoryRelationalWrites.drain());
+  // The semantic worker already owns a connection to the shared memory index.
+  // In-memory databases are private to their owning connection.
+  const memoryFtsWorker = config.dbPath === ':memory:' || config.dbPath.startsWith('file::memory:')
+    ? null : semanticVectorWorker;
   const agentMemoryService = new AgentMemoryService(
     db,
     memoryEmbeddingService,
@@ -922,6 +933,7 @@ export function createDeps(): ServerDeps {
       execute: <T>(operation: () => T): T => db.withBusyTimeout(0, operation),
       retry: <T>(operation: () => T): Promise<T> => memoryRelationalWrites.run(operation),
     },
+    memoryFtsWorker?.searchAgentMemoryFts.bind(memoryFtsWorker),
   );
   const agentMemoryRetriever = new AgentMemoryRetriever(agentMemoryService, db, {
     topK: 5,
@@ -987,7 +999,8 @@ export function createDeps(): ServerDeps {
     },
   });
   const coderPreferences = CoderPreferencesFile.fromDataDir(mcpDataDir());
-  filesystemPipelineTelemetrySink = new FsPipelineTelemetrySink(sessionStore);
+  filesystemPipelineTelemetrySink = new FsPipelineTelemetrySink(sessionStore, async (sessionId, event) =>
+    await peekCoderWorkerPool()?.appendPipelineDiagnostic(asSessionId(sessionId), event) ?? false);
   // Builder checkpoints — run-end hook deps (worker pool + in-process
   // stream both notify through the builder-checkpoint module global).
   setBuilderCheckpointDeps({ db, sessionStore });
@@ -1162,30 +1175,10 @@ export function createDeps(): ServerDeps {
       }
     },
   });
-  // D1 (2/2) — selective-recall LLM filter (CODER_MEMORY_LLM_FILTER). Keeps only
-  // retrieved memories CLEARLY about the task (CC's aboutness selector). Reuses
-  // the `memory_recall` binding; unset binding → fail-open (no filtering). The
-  // structural relevance floor (CODER_MEMORY_MIN_RELEVANCE) applies regardless.
-  // DEFAULT-ON now (set CODER_MEMORY_LLM_FILTER=0 to disable). Fail-open when no
-  // `memory_recall` binding resolves; the retriever only invokes it when there
-  // are more candidates than topK (something to actually discriminate).
-  if (process.env.CODER_MEMORY_LLM_FILTER !== '0') {
-    const recallFilter = new LlmRecallFilter({
-      resolver: pipelineProviderResolver,
-      getFallbackDefault: () => generalDefaultAsFallback(providerStore),
-    });
-    agentMemoryRetriever.setRecallFilter((task, items) => recallFilter.filter(task, items));
-  }
-  // Smart memory-recall query: when the latest user message is a meta /
-  // continuation ("continue", "reanalise tudo que fez") the runner asks this to
-  // write a real search query from the conversation tail. Optional — an unset
-  // `memory_query` binding returns null and the runner falls back to its pure
-  // walk-back heuristic (no general-default call on the turn's critical path).
-  const memoryQuerySynthesizerImpl = new LlmMemoryQuerySynthesizer({
-    resolver: pipelineProviderResolver,
-  });
-  const memoryQuerySynthesizer = (tail: ConversationTail): Promise<string | null> =>
-    memoryQuerySynthesizerImpl.synthesize(tail);
+  // Retrieval belongs to the memory semantic profile. Continuations use the
+  // runner's deterministic conversation walk-back, with no extra LLM calls.
+  // Preserve the worker port for older callers; retired bindings are inert.
+  const memoryQuerySynthesizer = (_tail: ConversationTail): Promise<string | null> => Promise.resolve(null);
   // Mem C write-back — distills durable memory (facts + `gotcha` lessons) at
   // run-end. Reuses the snapshot writer + hybrid dedup + the resolver's
   // `memory_extraction` binding; when no binding is set it falls back to the
@@ -1229,9 +1222,8 @@ export function createDeps(): ServerDeps {
           );
         });
     },
-    // Style-profile fold (opt-in): the positive distiller maintains ONE
-    // "Project style profile" memory per project — same LLM call, replace-
-    // not-append merge in the extractor. Off unless the flag is set.
+    // Legacy style context avoids echoing known conventions. Only new evidence
+    // is extracted; the maintenance job owns consolidation with provenance.
     getStyleProfile: process.env.MCP_MEMORY_STYLE_PROFILE === '1'
       ? (projectId) => {
           try {
@@ -1240,6 +1232,13 @@ export function createDeps(): ServerDeps {
         }
       : undefined,
   });
+  const memoryEvolution = new AgentMemoryEvolution({
+    db, service: agentMemoryService,
+    distill: { resolver: pipelineProviderResolver, getFallbackDefault: () => generalDefaultAsFallback(providerStore) },
+    isConfigured: () => runEndMemoryRaw.isConfigured(),
+  });
+  memoryEvolution.start();
+  registerShutdownTask('agent-memory-evolution', () => memoryEvolution.stop());
   // Global-session WRITE redirect: a SYNTHETIC union project (mig 155) has no
   // durable home — its directory is swept when orphaned — so map its id to the
   // PRIMARY real constituent before persisting. This single chokepoint covers
@@ -1377,6 +1376,7 @@ export function createDeps(): ServerDeps {
   // with the plain path. Without this the browser path would `page.goto`
   // unbounded and trip 429s much faster than the polite plain fetcher.
   const browserRender = new BrowserBackend(async () => {
+    if (desktopBrowser) return desktopBrowser;
     // Late-bound: chromeService isn't constructed yet at this point in
     // createDeps (it's owned by server.ts and only assigned after the
     // sandbox manager wires). The closure captures `chromeServiceRef`
@@ -1630,6 +1630,7 @@ export function createDeps(): ServerDeps {
   return {
     config,
     db,
+    resolveProjectWorktree,
     providerStore,
     costTracker,
     snapshotService,
@@ -1658,6 +1659,7 @@ export function createDeps(): ServerDeps {
     memoryQuerySynthesizer,
     agentMemoryService,
     agentMemoryRetriever,
+    memoryEvolution,
     investigationSemantic,
     runEndMemory,
     projectMemory,
@@ -1704,6 +1706,7 @@ export function createDeps(): ServerDeps {
     indexDocsUseCase,
     docProgressTracker,
     invokePluginTool,
+    figmaMcp: new BundledFigmaMcp(db.raw()),
     syncPluginProviders,
     managedGit,
     mcpBearerResolver: null,

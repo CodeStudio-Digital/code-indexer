@@ -14,6 +14,9 @@ import {
 import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 import { managePathTool } from '@mcp/code-agent/tools/manage-path.js';
+import { describeClosestRegion } from './apply-patch-match.js';
+import { recoverOmittedTypeProperty } from './edit-typescript-property.js';
+import { missingFileHint } from './missing-file-hint.js';
 
 /**
  * Resolve the filesystem port for a tool invocation. Falls back to the
@@ -230,7 +233,6 @@ interface EditResult {
   content?: string;
   occurrences: number;
   strategy: string;
-  hint?: string;
 }
 
 function normalizeLineEndings(s: string): string {
@@ -264,8 +266,7 @@ function normalizeUnicode(s: string): string {
 /**
  * Try to apply an edit using `oldStr`, `newStr`. If `norm` is provided,
  * both the haystack and the needle are passed through it before matching,
- * but the returned content rebuilds from the ORIGINAL haystack by locating
- * the matching span in the normalized version and mapping it back.
+ * and then the replacement is applied to the matching representation.
  */
 function applyEditWithTransform(
   content: string,
@@ -282,12 +283,7 @@ function applyEditWithTransform(
   const occurrences = tContent.split(tOld).length - 1;
   if (occurrences === 0) return { applied: false, occurrences: 0, strategy: strategyLabel };
   if (occurrences > 1 && !replaceAll) {
-    return {
-      applied: false,
-      occurrences,
-      strategy: strategyLabel,
-      hint: `Not unique (${occurrences} matches). Add more context or use replace_all=true.`,
-    };
+    return { applied: false, occurrences, strategy: strategyLabel };
   }
 
   // When the transform is identity (exact match), we can do the replacement
@@ -297,95 +293,19 @@ function applyEditWithTransform(
   if (strategyLabel === 'exact') {
     const updated = replaceAll
       ? content.split(oldStr).join(newStr)
-      : content.replace(oldStr, newStr);
+      : content.replace(oldStr, () => newStr);
     return { applied: true, content: updated, occurrences, strategy: strategyLabel };
   }
 
   const updated = replaceAll
     ? tContent.split(tOld).join(newStr)
-    : tContent.replace(tOld, newStr);
+    : tContent.replace(tOld, () => newStr);
   return { applied: true, content: updated, occurrences, strategy: strategyLabel };
 }
 
-/**
- * Best-effort fuzzy hint: find lines from `oldStr` that appear (exactly or
- * partially) in the file and return contextual snippets so the model can
- * self-correct. Tries multiple matching strategies: exact substring,
- * whitespace-collapsed substring, and trimmed substring inclusion.
- * Returns up to 3 candidate matches with actionable suggestions.
- */
-function findFuzzyHint(content: string, oldStr: string): string | null {
-  const haystackLines = content.split('\n');
-  const haystackTrimmed = haystackLines.map((l) => l.trim());
-  const haystackCollapsed = haystackLines.map((l) => {
-    const leading = l.match(/^[ \t]*/)?.[0] ?? '';
-    return leading + l.slice(leading.length).replace(/[ \t]+/g, ' ');
-  });
-
-  const needleLines = oldStr.split('\n').map((l) => l.trim()).filter((l) => l.length > 4);
-  if (needleLines.length === 0) return null;
-
-  interface Candidate { line: number; reason: string }
-  const candidates: Candidate[] = [];
-  const seen = new Set<number>();
-
-  for (const needle of needleLines.slice(0, 8)) {
-    for (let i = 0; i < haystackLines.length; i++) {
-      if (seen.has(i)) continue;
-      // 1. Exact substring
-      if (haystackLines[i].includes(needle)) {
-        candidates.push({ line: i, reason: 'exact substring' });
-        seen.add(i);
-        break;
-      }
-      // 2. Trimmed match
-      if (haystackTrimmed[i].includes(needle)) {
-        candidates.push({ line: i, reason: 'trimmed' });
-        seen.add(i);
-        break;
-      }
-      // 3. Collapsed whitespace match
-      const collapsedNeedle = needle.replace(/[ \t]+/g, ' ');
-      if (haystackCollapsed[i].includes(collapsedNeedle)) {
-        candidates.push({ line: i, reason: 'whitespace collapsed' });
-        seen.add(i);
-        break;
-      }
-      // 4. Needle is a significant part of the line (>60% overlap by words)
-      if (needle.length > 10) {
-        const needleWords = needle.toLowerCase().split(/\s+/);
-        const lineWords = haystackTrimmed[i].toLowerCase().split(/\s+/);
-        const overlap = needleWords.filter((w) => lineWords.includes(w)).length;
-        if (needleWords.length > 0 && overlap / needleWords.length >= 0.6) {
-          candidates.push({ line: i, reason: 'word overlap' });
-          seen.add(i);
-          break;
-        }
-      }
-    }
-    if (candidates.length >= 3) break;
-  }
-
-  if (candidates.length === 0) return null;
-
-  const parts: string[] = [];
-  for (const c of candidates) {
-    const start = Math.max(0, c.line - 2);
-    const end = Math.min(haystackLines.length, c.line + 4);
-    const slice = haystackLines
-      .slice(start, end)
-      .map((l, j) => `${(start + j + 1).toString().padStart(5)}  ${l}`)
-      .join('\n');
-    parts.push(`Match (${c.reason}) near line ${c.line + 1}:\n${slice}`);
-  }
-
-  // If single-line old_string, suggest the actual line content
-  if (needleLines.length === 1 && candidates.length === 1) {
-    const actual = haystackLines[candidates[0].line];
-    parts.push(`\nSuggested old_string:\n${actual}`);
-  }
-
-  return parts.join('\n\n');
+async function editSourceStillCurrent(fs: IFilesystemPort, path: string, expected: string): Promise<boolean> {
+  const current = await fs.readFile(path).catch(() => null);
+  return current === expected;
 }
 
 const editFile: CoderTool = {
@@ -425,70 +345,16 @@ const editFile: CoderTool = {
       return err(`File ${path} not found`);
     }
 
-    // Try strategies in order of strictness
-    const strategies: Array<{ label: string; transform: (s: string) => string }> = [
-      { label: 'exact', transform: (s) => s },
-      { label: 'line-endings normalized', transform: normalizeLineEndings },
-      { label: 'trailing whitespace trimmed', transform: (s) => trimLines(normalizeLineEndings(s)) },
-      { label: 'whitespace collapsed', transform: (s) => collapseWhitespace(trimLines(normalizeLineEndings(s))) },
-      { label: 'quotes normalized', transform: (s) => normalizeQuotes(collapseWhitespace(trimLines(normalizeLineEndings(s)))) },
-      { label: 'unicode normalized', transform: (s) => normalizeUnicode(collapseWhitespace(trimLines(normalizeLineEndings(s)))) },
-    ];
-
-    let nonUniqueInfo: EditResult | null = null;
-    for (const { label, transform } of strategies) {
-      const r = applyEditWithTransform(content, oldStr, newStr, replaceAll, transform, label);
-      if (r.applied && r.content !== undefined) {
-        await fs.writeFile(abs, r.content);
-        markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
-        emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
-        const suffix = r.strategy === 'exact' ? '' : ` [matched via: ${r.strategy}]`;
-        return ok(`Edited ${path} (${r.occurrences} replacement${r.occurrences === 1 ? '' : 's'})${suffix}`);
-      }
-      if (r.occurrences > 1 && !replaceAll) {
-        nonUniqueInfo = r;
-        break; // non-unique on any strategy means ambiguity — don't try looser strategies
-      }
+    const result = await performSingleEdit(path, content, oldStr, newStr, replaceAll);
+    if (!result.ok) return err(result.error);
+    if (result.recovered && !(await editSourceStillCurrent(fs, abs, content))) {
+      return err(`${path} changed while the edit was being prepared. Inspect the affected lines and retry.`);
     }
-
-    if (nonUniqueInfo) {
-      return err(`old_string is not unique in ${path} (${nonUniqueInfo.occurrences} occurrences via ${nonUniqueInfo.strategy}). ${nonUniqueInfo.hint ?? ''} Add more surrounding lines to disambiguate or use replace_all=true.`);
-    }
-
-    // Looser cascade (character-range replacers): escape-normalized →
-    // indentation-flexible → block-anchor → context-aware. Each returns
-    // candidate ranges on the original content; we apply the first strategy
-    // that yields a unique (or replace_all-compatible) hit.
-    for (const { label, run } of CASCADING_REPLACERS) {
-      const hits: ReplacerHit[] = run(content, oldStr);
-      if (hits.length === 0) continue;
-      if (hits.length > 1 && !replaceAll) {
-        nonUniqueInfo = {
-          applied: false,
-          occurrences: hits.length,
-          strategy: label,
-          hint: `Not unique (${hits.length} matches). Add more context or use replace_all=true.`,
-        };
-        break;
-      }
-      const updated = applyHits(content, hits, newStr, replaceAll);
-      await fs.writeFile(abs, updated);
-      markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
-      emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
-      return ok(`Edited ${path} (${hits.length} replacement${hits.length === 1 ? '' : 's'}) [matched via: ${label}]`);
-    }
-
-    if (nonUniqueInfo) {
-      return err(`old_string is not unique in ${path} (${nonUniqueInfo.occurrences} occurrences via ${nonUniqueInfo.strategy}). ${nonUniqueInfo.hint ?? ''} Add more surrounding lines to disambiguate or use replace_all=true.`);
-    }
-
-    const hint = findFuzzyHint(content, oldStr);
-    const msg = [
-      `old_string not found in ${path} (tried exact, CRLF/LF, trimmed, collapsed-ws, quotes-normalized, unicode-normalized, escape-normalized, indentation-flexible, block-anchor, context-aware).`,
-      hint ?? 'No nearby match located. Read the file again with mcp__read_file to see current content before retrying.',
-      'Do not retry with the same old_string — it will fail again. Either adjust old_string to match the actual file or use write_file to replace the full file.',
-    ].join('\n');
-    return err(msg);
+    await fs.writeFile(abs, result.content);
+    markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
+    emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
+    const suffix = result.strategy === 'exact' ? '' : ` [matched via: ${result.strategy}]`;
+    return ok(`Edited ${path} (${result.occurrences} replacement${result.occurrences === 1 ? '' : 's'})${suffix}`);
   },
 };
 
@@ -546,7 +412,12 @@ const readFile: CoderTool = {
     try {
       content = await fsPort(ctx).readFile(abs);
     } catch (e) {
-      return err(`File ${path} not found: ${e instanceof Error ? e.message : String(e)}`);
+      const message = e instanceof Error ? e.message : String(e);
+      const code = (e as NodeJS.ErrnoException | null)?.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return err(`Could not read ${path}: ${message}`);
+      const parent = resolveAuthorizedPath(pathFor(resolved.rootPath).dirname(abs), resolved.rootPath, undefined, 'read');
+      const hint = parent.ok ? await missingFileHint(fsPort(ctx), parent.abs, ctx.signal) : '';
+      return err(`File ${path} not found: ${message}${hint}`);
     }
     // I2 — feed the recently-touched files cache so subsequent hybrid
     // searches can favor what the agent just looked at. Sub-ms, never
@@ -708,22 +579,27 @@ async function walkDir(fs: IFilesystemPort, abs: string, projectRoot: string, de
   return out;
 }
 
-/**
- * Run a single edit operation against an in-memory string, using the same
- * cascading matcher strategies as `edit_file`. Returns either the updated
- * content + the strategy label, or a structured error describing why the
- * edit did not apply (not-found, ambiguous, empty-old, etc.).
- *
- * Used by `multi_edit` to apply N sequential edits on a rolling buffer and
- * only commit to disk when every step succeeded — any failure aborts and
- * leaves the file untouched.
- */
-function performSingleEdit(
+type SingleEditResult =
+  | { ok: true; content: string; strategy: string; occurrences: number; recovered?: true }
+  | { ok: false; error: string };
+
+function ambiguousEdit(path: string, occurrences: number, strategy: string): SingleEditResult {
+  return {
+    ok: false,
+    error: `old_string is not unique in ${path} (${occurrences} occurrences via ${strategy}). ` +
+      'PREFERRED: add surrounding context to old_string so it anchors ONE specific occurrence. ' +
+      `Use replace_all=true ONLY if you actually want to replace ALL ${occurrences} occurrences with verified old text.`,
+  };
+}
+
+/** Shared matcher for a single edit and each step of an atomic batch. */
+async function performSingleEdit(
+  path: string,
   content: string,
   oldStr: string,
   newStr: string,
   replaceAll: boolean,
-): { ok: true; content: string; strategy: string; occurrences: number } | { ok: false; error: string } {
+): Promise<SingleEditResult> {
   if (!oldStr) return { ok: false, error: 'old_string cannot be empty' };
 
   const strategies: Array<{ label: string; transform: (s: string) => string }> = [
@@ -735,51 +611,42 @@ function performSingleEdit(
     { label: 'unicode normalized', transform: (s) => normalizeUnicode(collapseWhitespace(trimLines(normalizeLineEndings(s)))) },
   ];
 
-  let nonUnique: EditResult | null = null;
   for (const { label, transform } of strategies) {
     const r = applyEditWithTransform(content, oldStr, newStr, replaceAll, transform, label);
     if (r.applied && r.content !== undefined) {
       return { ok: true, content: r.content, strategy: r.strategy, occurrences: r.occurrences };
     }
-    if (r.occurrences > 1 && !replaceAll) {
-      nonUnique = r;
-      break;
-    }
-  }
-  if (nonUnique) {
-    return {
-      ok: false,
-      error:
-        `old_string is not unique (${nonUnique.occurrences} occurrences via ${nonUnique.strategy}). ` +
-        `PREFERRED: add surrounding context to old_string so it anchors ONE specific occurrence. ` +
-        `Use replace_all=true ONLY if you actually want to replace ALL ${nonUnique.occurrences} occurrences ` +
-        `(silently affecting code you did not inspect is the most common cause of broken builds).`,
-    };
+    if (r.occurrences > 1 && !replaceAll) return ambiguousEdit(path, r.occurrences, label);
   }
 
   // Looser character-range replacers.
   for (const { label, run } of CASCADING_REPLACERS) {
     const hits: ReplacerHit[] = run(content, oldStr);
     if (hits.length === 0) continue;
-    if (hits.length > 1 && !replaceAll) {
-      return {
-        ok: false,
-        error:
-          `old_string is not unique (${hits.length} matches via ${label}). ` +
-          `PREFERRED: add surrounding context to old_string so it anchors ONE specific occurrence. ` +
-          `Use replace_all=true ONLY if you actually want to replace ALL ${hits.length} matches.`,
-      };
-    }
+    if (hits.length > 1 && !replaceAll) return ambiguousEdit(path, hits.length, label);
     const updated = applyHits(content, hits, newStr, replaceAll);
     return { ok: true, content: updated, strategy: label, occurrences: hits.length };
   }
 
-  const hint = findFuzzyHint(content, oldStr);
+  if (!replaceAll) {
+    const recovered = await recoverOmittedTypeProperty(path, content, oldStr, newStr);
+    if (recovered) {
+      const strategy = 'preserved TypeScript property type';
+      if (recovered.content === undefined) return ambiguousEdit(path, recovered.occurrences, strategy);
+      return { ok: true, content: recovered.content, strategy, occurrences: 1, recovered: true };
+    }
+  }
+
+  const hint = describeClosestRegion(
+    normalizeLineEndings(content).split('\n'), normalizeLineEndings(oldStr).split('\n'), 'old_string',
+  ).trimEnd();
   return {
     ok: false,
-    error:
-      'old_string not found. ' +
-      (hint ?? 'No nearby match located — re-read the file and adjust old_string before retrying.'),
+    error: [
+      `old_string not found in ${path}. Nothing was written.`,
+      'Do not retry with the same old_string. Use the current text below to correct it. Read only the relevant lines if more context is needed.',
+      hint,
+    ].filter(Boolean).join('\n'),
   };
 }
 
@@ -850,19 +717,21 @@ export const multiEdit: CoderTool = {
 
     const outcomes: EditOutcome[] = [];
     let current = content;
+    let recovered = false;
     let firstFailIdx = -1;
     for (let i = 0; i < edits.length; i++) {
       const raw = edits[i] as Record<string, unknown>;
       const oldStr = String(raw.old_string ?? '');
       const newStr = String(raw.new_string ?? '');
       const replaceAll = Boolean(raw.replace_all);
-      const r = performSingleEdit(current, oldStr, newStr, replaceAll);
+      const r = await performSingleEdit(path, current, oldStr, newStr, replaceAll);
       if (r.ok) {
         outcomes.push({ index: i, ok: true, strategy: r.strategy, occurrences: r.occurrences });
         // Rolling buffer only advances on success. Failures leave it
         // alone so the next edit's verdict mirrors what would happen
         // after the agent fixed the prior issue (best-effort).
         current = r.content;
+        recovered ||= r.recovered === true;
         continue;
       }
       // Mark dependents: when an EARLIER edit failed, the rolling
@@ -876,6 +745,9 @@ export const multiEdit: CoderTool = {
 
     const failed = outcomes.filter((o): o is Extract<EditOutcome, { ok: false }> => !o.ok);
     if (failed.length === 0) {
+      if (recovered && !(await editSourceStillCurrent(fs, abs, content))) {
+        return err(`${path} changed while the edits were being prepared. Inspect the affected lines and retry the batch.`);
+      }
       await fs.writeFile(abs, current);
       markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
       emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
@@ -901,7 +773,8 @@ export const multiEdit: CoderTool = {
         const dep = o.dependsOnPrior
           ? ' (may also be a downstream effect of an earlier failed edit — re-validate after fixing the first one)'
           : '';
-        lines.push(`  #${o.index + 1}: FAILED — ${o.error}${dep}`);
+        const [summary, ...details] = o.error.split('\n');
+        lines.push(`  #${o.index + 1}: FAILED — ${summary}${dep}`, ...details);
       }
     }
     return err(lines.join('\n'));

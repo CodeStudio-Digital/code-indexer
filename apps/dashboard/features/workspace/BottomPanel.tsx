@@ -27,6 +27,7 @@ import { WorkspaceTerminal } from './WorkspaceTerminal.js';
 import { WebviewWindow } from './jetbrains/tool-windows/WebviewWindow.js';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
+import { worktreeKey } from '../../state/worktree-selection.js';
 import { ProblemsPanel } from '../project/bottom/ProblemsPanel.js';
 import { OutputPanel } from '../project/bottom/OutputPanel.js';
 import { FindPanel } from '../project/bottom/FindPanel.js';
@@ -55,6 +56,8 @@ export const BOTTOM_BUILTIN_TAB_IDS = new Set<string>(TABS.map((t) => t.id));
 
 interface BottomPanelProps {
   projectId: number;
+  workspaceId: number | null;
+  worktreePath: string | null;
   isOpen: boolean;
   onToggle: () => void;
   onClose: () => void;
@@ -66,6 +69,8 @@ interface BottomPanelProps {
 
 export function BottomPanel({
   projectId,
+  workspaceId,
+  worktreePath,
   isOpen,
   onToggle,
   onClose,
@@ -84,8 +89,8 @@ export function BottomPanel({
   // o despejo de frames não toca a UI.
   const [seenProblems, setSeenProblems] = useState(false);
   const activePlugin = pluginWindows.find((w) => w.id === tab);
-  const diagnostics = useProjectDiagnostics(projectId, tab === 'problems' || seenProblems);
-  const problemCount = diagnostics.errorCount + diagnostics.warningCount;
+  const diagnostics = useProjectDiagnostics(workspaceId, tab === 'problems' || seenProblems);
+  const problemCount = workspaceId == null ? 0 : diagnostics.errorCount + diagnostics.warningCount;
 
   return (
     <div className="h-full flex flex-col bg-[var(--workbench-surface)] min-h-0">
@@ -177,8 +182,7 @@ export function BottomPanel({
           {/* Contain a crash to the active tab — a broken panel shows an inline
               message instead of taking down the whole workspace. Keyed by tab so
               switching tabs clears a stuck error. */}
-          <ErrorBoundary label={tab} resetKey={tab}>
-            {tab === 'terminal' && <WorkspaceTerminal projectId={projectId} />}
+          <ErrorBoundary label={tab} resetKey={`${tab}:${workspaceId}`}>
             {tab === 'runners' && !activePlugin && (
               <Suspense
                 fallback={
@@ -187,23 +191,30 @@ export function BottomPanel({
                   </div>
                 }
               >
-                <RunnersTab projectId={projectId} />
+                <RunnersTab key={`${projectId}:${worktreeKey(worktreePath)}`} projectId={projectId} worktreePath={worktreePath} />
               </Suspense>
             )}
-            {tab === 'problems' && !activePlugin && (
-              <ProblemsPanel items={diagnostics.items} onOpenFile={onOpenFile} />
-            )}
-            {tab === 'output' && !activePlugin && <OutputPanel projectId={projectId} />}
-            {tab === 'find' && !activePlugin && (
-              <FindPanel projectId={projectId} onOpenFile={onOpenFile} />
-            )}
-            {activePlugin && (
-              <WebviewWindow
-                namespace={activePlugin.pluginNs}
-                title={activePlugin.title}
-                entry={activePlugin.entry}
-                projectId={projectId}
-              />
+            {workspaceId != null && (
+              <div key={workspaceId} className="contents">
+                {tab === 'terminal' && <WorkspaceTerminal projectId={workspaceId} />}
+                {tab === 'problems' && !activePlugin && (
+                  <ProblemsPanel items={diagnostics.items} onOpenFile={onOpenFile} />
+                )}
+                {tab === 'output' && !activePlugin && (
+                  <OutputPanel projectId={workspaceId} runnerProjectId={projectId} worktreePath={worktreePath} />
+                )}
+                {tab === 'find' && !activePlugin && (
+                  <FindPanel projectId={workspaceId} onOpenFile={onOpenFile} />
+                )}
+                {activePlugin && (
+                  <WebviewWindow
+                    namespace={activePlugin.pluginNs}
+                    title={activePlugin.title}
+                    entry={activePlugin.entry}
+                    projectId={workspaceId}
+                  />
+                )}
+              </div>
             )}
           </ErrorBoundary>
         </div>

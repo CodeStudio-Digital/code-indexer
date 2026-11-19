@@ -1,11 +1,10 @@
 /**
- * End-to-end Frente 2 smoke: real LocalEmbeddingService (Xenova e5-small)
+ * End-to-end smoke: real LocalEmbeddingService (bundled Granite Multilingual R2)
  * composed with the real SqliteVecVectorStore (vec0). Proves the offline RAG
  * path works as a whole — embed documents → store in sqlite-vec → embed a
  * query → KNN search → the semantically relevant doc ranks first.
  *
- * Gated behind RUN_LOCAL_RAG_SMOKE=1 because it downloads the e5-small model
- * (~100-470MB) on first run — CI shouldn't pay that. Run locally with:
+ * Gated behind RUN_LOCAL_RAG_SMOKE=1 to opt into native ONNX inference. Run with:
  *   RUN_LOCAL_RAG_SMOKE=1 npx vitest run .../local-rag-smoke.test.ts
  */
 import { describe, it, expect } from 'vitest';
@@ -16,10 +15,10 @@ import { SqliteVecVectorStore } from '@mcp/store/sqlite-vec-store.js';
 
 const RUN = process.env.RUN_LOCAL_RAG_SMOKE === '1';
 
-describe.skipIf(!RUN)('local RAG smoke (real e5-small + sqlite-vec)', () => {
+describe.skipIf(!RUN)('local RAG smoke (bundled Granite + sqlite-vec)', () => {
   it('ranks the semantically relevant document first', async () => {
     if (!process.env.MCP_MODEL_CACHE_DIR) {
-      process.env.MCP_MODEL_CACHE_DIR = path.join(os.tmpdir(), 'mcp-e5-probe');
+      process.env.MCP_MODEL_CACHE_DIR = path.join(os.tmpdir(), 'mcp-granite-probe');
     }
     const embed = new LocalEmbeddingService();
     const store = new SqliteVecVectorStore({ path: ':memory:' });
@@ -44,6 +43,7 @@ describe.skipIf(!RUN)('local RAG smoke (real e5-small + sqlite-vec)', () => {
     );
 
     const { vector } = await embed.embedQuery('how is caching implemented?');
+    expect(vector).toHaveLength(384);
     const res = await store.search(vector, { topK: 3, filter: { project_name: 'p' } });
 
     expect(res).toHaveLength(3);

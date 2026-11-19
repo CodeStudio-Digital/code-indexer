@@ -66,6 +66,18 @@ function setup() {
 }
 
 describe('capability_catalog', () => {
+  it('discovers stable schemas and keeps interactive controls at top level', async () => {
+    const { catalog, ctx, promoteTool, registry } = setup();
+    registry.register({ ...tool('ask_user'), interactive: true });
+    Object.assign(ctx.runner!, { stableToolCatalog: true });
+    for (const [name, effective] of [['read_file', 'code_exec'], ['ask_user', 'top_level']]) {
+      const found = JSON.parse((await catalog.handler({ op: 'search', query: name }, ctx)).content);
+      const result = JSON.parse((await catalog.handler({ op: 'activate', capability_ids: [found.items[0].capabilityId] }, ctx)).content);
+      expect(result).toMatchObject({ projectionState: 'unchanged', activated: [{ name, effective, inputSchema: { type: 'object' } }] });
+    }
+    expect(promoteTool).not.toHaveBeenCalled();
+  });
+
   it('reports a blocked capability without promoting it', async () => {
     const { catalog, ctx, promoteTool } = setup();
     Object.assign(ctx.runner!, { discoveryState: () => ({ authorization: 'blocked', visible: false }) });

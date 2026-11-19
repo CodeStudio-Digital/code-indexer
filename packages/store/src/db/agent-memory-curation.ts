@@ -1,7 +1,7 @@
 import type { AgentMemoryScope, AgentMemoryRow } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 
-export type MemoryListRow = Pick<AgentMemoryRow, 'id' | 'name' | 'description' | 'type' | 'scope' | 'source' | 'importance' | 'access_count' | 'archived_at' | 'archived_reason' | 'source_snapshot_id'> & { excerpt: string };
+export type MemoryListRow = Pick<AgentMemoryRow, 'id' | 'name' | 'description' | 'type' | 'scope' | 'source' | 'importance' | 'access_count' | 'archived_at' | 'archived_reason' | 'source_snapshot_id' | 'superseded_by_id'> & { excerpt: string };
 
 /** Counts only; never hydrate every memory body to render a diagnostics card. */
 export function memoryCurationTotals(db: DB, scope: AgentMemoryScope, projectId: number) {
@@ -29,7 +29,7 @@ export function listMemoryCurationPage(db: DB, scope: AgentMemoryScope, projectI
   const params = query ? [scope, scope, projectId, query, query, query] : [scope, scope, projectId];
   const total = (db.prepare(`SELECT COUNT(*) AS count FROM agent_memory WHERE ${where}`).get(...params) as { count: number }).count;
   const items = db.prepare(`SELECT id, name, description, type, scope, source, importance, access_count,
-      archived_at, archived_reason, source_snapshot_id, substr(content, 1, 360) AS excerpt
+      archived_at, archived_reason, source_snapshot_id, superseded_by_id, substr(content, 1, 360) AS excerpt
     FROM agent_memory WHERE ${where} ORDER BY importance DESC, id DESC LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as MemoryListRow[];
   return { items, total, offset, limit, nextOffset: offset + items.length < total ? offset + items.length : null,

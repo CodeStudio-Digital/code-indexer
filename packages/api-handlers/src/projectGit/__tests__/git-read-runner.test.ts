@@ -21,6 +21,7 @@ const jobs = new Map(); let closing = false;
 parentPort.on('message', m => {
   if (m.type === 'dispose') { closing = true; for (const child of jobs.values()) child.kill(); if (!jobs.size) parentPort.close(); return; }
   if (m.type === 'cancel') { jobs.get(m.id)?.kill(); return; }
+  if (m.input.args[0] === 'worktree') { parentPort.postMessage({type:'result',id:m.id,result:{code:0,stdout:'inventory',stderr:''}}); return; }
   if (m.input.args[0] === 'check-ref-format') { parentPort.postMessage({type:'result',id:m.id,result:{code:0,stdout:'warm',stderr:''}}); return; }
   if (workerData.busy) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.busy);
   if (!workerData.hold) { parentPort.postMessage({ type:'result', id:m.id, result:{code:0,stdout:'ok',stderr:''} }); return; }
@@ -60,10 +61,11 @@ function fake(options: { busy?: number; hold?: boolean; crash?: boolean } = {}) 
 describe('read-only Git transport', () => {
   it.each([
     ['status', '--porcelain=v2'], ['rev-parse', '--git-dir'], ['config', '--file', '.gitmodules', '--get-regexp', 'path'],
-    ['remote', 'get-url', 'origin'], ['stash', 'show'], ['symbolic-ref', '--short', 'HEAD'],
+    ['remote', 'get-url', 'origin'], ['stash', 'show'], ['symbolic-ref', '--short', 'HEAD'], ['worktree', 'list', '--porcelain', '-z'],
   ])('offloads known read argv %j', (...args) => { expect(isReadOnlyGit(args)).toBe(true); });
   it.each([
     ['commit', '-m', 'message'], ['reset', '--hard'], ['fetch'], ['config', '--local', 'user.name', 'x'],
+    ['worktree', 'add', 'new'], ['worktree', 'remove', 'old'], ['worktree', 'prune'],
     ['config', '--get', 'x', '--edit'], ['symbolic-ref', '-d', 'HEAD'], ['symbolic-ref', '--delete', 'HEAD'],
     ['symbolic-ref', 'HEAD', 'refs/heads/new'], ['remote', 'set-url', 'origin', 'x'],
     ['stash', 'pop'], ['stash', 'show', '--output=file'], ['diff', '--output=file'], ['custom-alias'],
@@ -90,6 +92,9 @@ describe('read-only Git transport', () => {
     const calls = Array.from({ length: 64 }, () => reader.run(input()));
     expect((await reader.run(input())).stderr).toContain('queue is full');
     await untilSpawned(4);
+    // Navigation must still complete with four running diffs/statuses and a full queue.
+    const location = await reader.run(input({ args: ['worktree', 'list', '--porcelain', '-z'] }));
+    expect(location.stdout).toBe('inventory');
     await reader.dispose();
     await Promise.all(calls);
     expect(spawned()).toBe(4);

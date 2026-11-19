@@ -19,6 +19,7 @@ import v8 from 'node:v8';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { getMemoryLedger } from './memory-ledger.js';
 import { recordPersistentPerfSample } from './persistent-diagnostics.js';
+import { noteSyncSection } from './stall-evidence.js';
 import type { WorkerMemStats } from '../../workers/perf-stats.js';
 
 
@@ -73,13 +74,14 @@ export class PerfSampler {
   }
 
   private async collect(): Promise<PerfSample> {
-    const mem = process.memoryUsage();
+    const mem = noteSyncSection('process.memoryUsage', () => process.memoryUsage());
     const heap = v8.getHeapStatistics();
 
     let processes: PerfSample['processes'] = null;
     let totalWorkingSetMB: number | null = null;
     try {
-      const metrics = this.sources.processMetricsProvider?.();
+      const metrics = this.sources.processMetricsProvider
+        ? noteSyncSection('electron.getAppMetrics', this.sources.processMetricsProvider) : undefined;
       if (metrics) {
         processes = metrics.map((m) => ({
           pid: m.pid,

@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { SemanticVectorWorkerClient } from '../SemanticVectorWorkerClient.js';
 
 describe('SemanticVectorWorkerClient generation cleanup RPC', () => {
+  it('sends agent-memory FTS to the worker with the recall deadline and caller signal', async () => {
+    const client = new SemanticVectorWorkerClient('D:/test/index.db', { file: 'worker.js', execArgv: [], built: true });
+    const request = vi.fn(async () => []);
+    Object.defineProperty(client, 'request', { value: request });
+    const signal = new AbortController().signal;
+    await client.searchAgentMemoryFts('project', 7, 'registry token', 45, signal);
+    expect(request).toHaveBeenCalledExactlyOnceWith('memory.searchFts', {
+      scope: 'project', projectId: 7, query: 'registry token', limit: 45,
+    }, signal, 10_000);
+  });
+
   it('uses one bounded RPC for current project jobs and forwards request cancellation', async () => {
     const client = new SemanticVectorWorkerClient('D:/test/index.db', { file: 'worker.js', execArgv: [], built: true });
     const request = vi.fn(async () => []); Object.defineProperty(client, 'request', { value: request });

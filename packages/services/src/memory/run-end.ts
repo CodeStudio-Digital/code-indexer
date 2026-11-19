@@ -15,8 +15,6 @@ import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '
 import type { SessionId } from '@mcp/session-storage';
 import type { DistillDiag } from './distill-call.js';
 import { LlmMemoryDistiller } from './distiller.js';
-import { FailureDistiller } from './failure-distiller.js';
-import { ProcedureDistiller } from './procedure-distiller.js';
 import {
   MemoryExtractor,
   type MemoryCandidate,
@@ -145,11 +143,9 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
       deps.distillers?.positive ??
       (resolver ? new LlmMemoryDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER),
     failure:
-      deps.distillers?.failure ??
-      (resolver ? new FailureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER),
+      deps.distillers?.failure ?? NOOP_DISTILLER,
     procedure:
-      deps.distillers?.procedure ??
-      (resolver ? new ProcedureDistiller({ resolver, resolveContext, getFallbackDefault, onDiag }) : NOOP_DISTILLER),
+      deps.distillers?.procedure ?? NOOP_DISTILLER,
   });
 
   // Persist already-distilled candidates to a project, reusing the generic
@@ -219,13 +215,15 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
       // (decisions/conventions/architecture) go to the project; user/feedback
       // facts ride the SAME call (zero extra LLM cost) and go to the global
       // user memory (project 0). Only worth a call with some signal.
-      if (input.primaryRequest || input.summary) {
+      if (input.primaryRequest || input.summary || (!deps.distillers && (input.errorsAndFixes?.length || (input.succeeded && input.toolTrail?.length)))) {
         let cands: MemoryCandidate[] = [];
         try {
           cands = await distillers.positive.distill({
             primaryRequest: input.primaryRequest,
             summary: input.summary,
             filesTouched: input.filesTouched,
+            errorsAndFixes: input.errorsAndFixes,
+            toolTrail: input.succeeded ? input.toolTrail : undefined,
             // undefined = fold off; null = fold on, no profile yet.
             styleProfile: deps.getStyleProfile ? deps.getStyleProfile(projectId) : undefined,
           });
@@ -243,7 +241,7 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
       }
       // Failure lessons → `gotcha`. The distiller short-circuits to [] when
       // there are no errors, so guard here to skip even the call.
-      if (input.errorsAndFixes?.length) {
+      if (deps.distillers && input.errorsAndFixes?.length) {
         add(await failure
           .extractAndPersist(projectId, projectName, SOURCE, {
             primaryRequest: input.primaryRequest,
@@ -254,7 +252,7 @@ export function createRunEndMemory(deps: RunEndMemoryDeps): RunEndMemory {
       }
       // Procedure recipes — ONLY from runs that succeeded, so the steps come
       // from commands that actually worked (the thesis: verified by tests).
-      if (input.succeeded && input.toolTrail?.length) {
+      if (deps.distillers && input.succeeded && input.toolTrail?.length) {
         add(await procedure
           .extractAndPersist(projectId, projectName, SOURCE, {
             primaryRequest: input.primaryRequest,

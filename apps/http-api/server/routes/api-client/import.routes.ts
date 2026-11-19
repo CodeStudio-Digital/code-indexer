@@ -1,4 +1,6 @@
 import type { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { parsePostmanCollection } from '@mcp/services/api-client/import-postman.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { collectionInProject } from './_ownership.js';
@@ -15,6 +17,32 @@ import type { ApiCollection, CreateRequestInput } from '@mcp/store/api-client-ty
 export function mountApiImportRoutes(app: Hono, deps: ServerDeps): void {
   // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
+
+  app.post(`${base}/collections/import-postman`, bodyLimit({ maxSize: 6 * 1024 * 1024 }), async c => {
+    const projectId = parseIdParam(c, 'projectId');
+    const body = await parseJsonBody<{ content: string; importId: string; commit: boolean; createEnvironment: boolean }>(c);
+    let parsed;
+    try { parsed = parsePostmanCollection(typeof body.content === 'string' ? body.content : ''); }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+    const summary = { name: parsed.name, requests: parsed.requests.length, folders: parsed.folders.length,
+      variables: Object.keys(parsed.variables).length, scripts: parsed.scripts, skipped: parsed.skipped, examples: parsed.examples };
+    if (body.commit !== true) return c.json(summary);
+    if (!body.importId || !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(body.importId)) return c.json({ error: 'Invalid import id' }, 400);
+    const store = deps.apiClientFor(projectId);
+    const importKey = 'postman-import:' + body.importId;
+    const collectionId = store.transaction(() => {
+      const existing = store.findCollectionBySpecHash(projectId, importKey);
+      if (existing) return existing.id;
+      const col = store.createCollection({ project_id: projectId, name: parsed.name, description: parsed.description, spec_hash: importKey });
+      for (const folder of parsed.folders) store.addFolder(col.id, folder);
+      for (const request of parsed.requests) store.createRequest({ ...request, collection_id: col.id });
+      if (body.createEnvironment === true && summary.variables) store.upsertEnvironment({
+        project_id: projectId, name: parsed.name, variables_json: JSON.stringify(parsed.variables),
+      });
+      return col.id;
+    });
+    return c.json({ ...summary, collectionId });
+  });
 
   app.post(`${base}/collections/:cid/import-curl`, async (c) => {
     const projectId = parseIdParam(c, 'projectId');

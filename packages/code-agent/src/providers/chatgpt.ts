@@ -34,12 +34,9 @@ import type {
   ContentBlock,
 } from '@mcp/code-agent/core/messages.js';
 import { renderTextDocument, safeDocumentFilename } from './document-utils.js';
-
-const GPT_56_PROMPT_CACHE_MODELS = new Set([
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-]);
+import { supportsCodexSessionCapabilities } from './codex-capabilities.js';
+import { providerReplayItems, responsesReplayState } from '../core/provider-replay.js';
+import { CodexResponsesWebSocket } from './codex-websocket.js';
 
 // RFC 9562 UUID v5 uses SHA-1(namespace UUID + name). The fixed URL namespace
 // keeps the transport header opaque while making it stable across provider
@@ -126,6 +123,9 @@ export class ChatGPTCodexProvider implements ChatProvider {
   private parallelToolCalls = false;
   /** Count Sakana-style orchestration token details in billable usage. */
   private includeOrchestrationUsage = false;
+  private textVerbosity: 'low' | 'medium' | 'high' | null = null;
+  private replayScope: string;
+  private responseSocket?: CodexResponsesWebSocket;
   /**
    * One-shot guard so the "temperature ignored by Codex Responses API" warning
    * fires once per provider instance, not on every turn.
@@ -166,6 +166,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
     parallelToolCalls?: boolean;
     /** Add provider-specific orchestration tokens to usage totals. */
     includeOrchestrationUsage?: boolean;
+    /** Public answer length; independent of the selected reasoning effort. */
+    textVerbosity?: 'low' | 'medium' | 'high' | null;
+    /** Verified Responses WS support; custom gateways remain HTTP by default. */
+    websocketMode?: boolean;
   }) {
     this.name = opts.name ?? 'chatgpt';
     this.model = opts.model;
@@ -185,6 +189,11 @@ export class ChatGPTCodexProvider implements ChatProvider {
     this.reasoningSummaryFromThinking = opts.reasoningSummaryFromThinking ?? false;
     this.parallelToolCalls = opts.parallelToolCalls ?? false;
     this.includeOrchestrationUsage = opts.includeOrchestrationUsage ?? false;
+    this.textVerbosity = opts.textVerbosity ?? null;
+    this.replayScope = createHash('sha256').update(JSON.stringify([
+      this.name, opts.baseURL.replace(/\/+$/, ''),
+      opts.accountId ?? createHash('sha256').update(opts.apiKey).digest('hex'),
+    ])).digest('hex');
 
     const headers: Record<string, string> = {};
     if (this.codexHeadersEnabled) {
@@ -203,11 +212,24 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // applies during the reasoning phase. See native-fetch.ts.
       fetch: nativeFetch(),
     });
+    if (opts.websocketMode && this.codexHeadersEnabled && !this.imageGenerationEnabled) {
+      const url = new URL(`${opts.baseURL.replace(/\/+$/, '')}/responses`);
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      this.responseSocket = new CodexResponsesWebSocket(url.toString(), {
+        ...headers, Authorization: `Bearer ${opts.apiKey}`,
+      });
+    }
   }
 
   setModel(model: string): void {
     this.model = model;
   }
+
+  get inferenceOnly(): boolean {
+    return this.codexHeadersEnabled && !this.imageGenerationEnabled;
+  }
+
+  close(): void { this.responseSocket?.close(); }
 
   /**
    * Update reasoning capability post-construction. Useful when the factory
@@ -297,7 +319,8 @@ export class ChatGPTCodexProvider implements ChatProvider {
     const messagesToSend = useResume
       ? req.messages.slice(req.previousResponseMessageCount ?? 0)
       : req.messages;
-    const input = toResponsesInput(messagesToSend);
+    const replayScope = this.codexHeadersEnabled ? `${this.replayScope}:${this.model}` : undefined;
+    const input = toResponsesInput(messagesToSend, replayScope);
     const totalMessageCount = req.messages.length;
 
     const wantFreeformPatch = this.applyPatchToolType === 'freeform';
@@ -347,21 +370,14 @@ export class ChatGPTCodexProvider implements ChatProvider {
         }
       : null;
     const promptCacheKey =
-      req.sessionId != null && GPT_56_PROMPT_CACHE_MODELS.has(this.model.toLowerCase())
+      this.codexHeadersEnabled && req.sessionId != null && supportsCodexSessionCapabilities(this.model)
         ? `coder-session-${req.sessionId}`
         : null;
     const stableTransportSessionId =
       req.sessionId != null ? transportSessionId(req.sessionId) : null;
 
-    const stream = (await (this.client as unknown as {
-      responses: {
-        create: (
-          args: Record<string, unknown>,
-          opts?: { signal?: AbortSignal; headers?: Record<string, string> },
-        ) => Promise<AsyncIterable<Record<string, unknown>>>;
-      };
-    }).responses.create(
-      {
+    const requestStartedAt = performance.now();
+    const requestBody = {
         model: this.model,
         instructions: req.system,
         input,
@@ -371,17 +387,30 @@ export class ChatGPTCodexProvider implements ChatProvider {
           : {}),
         stream: true,
         // store: opt-in. When CODEX_STORE_RESPONSES=1 we persist server-side
-        // and replay `previous_response_id` next turn for ~40-80% better
-        // cache utilization. Default off — the OAuth backend isn't documented
+        // and replay `previous_response_id` next turn. Default off — the OAuth backend isn't documented
         // to support this and we observed silent failures with store=true.
         ...(this.statefulResponses ? { store: wantStore } : {}),
         ...(useResume ? { previous_response_id: req.previousResponseId } : {}),
-        // Reasoning effort is only sent when the runner explicitly opted in
-        // via `req.thinking`. When undefined we omit the field so the backend
-        // applies the model's default level (e.g. 'medium' for gpt-5.5).
+        // Explicit effort wins; otherwise resolve the supported thinking default.
+        // Omit unresolved effort so the backend applies its model default.
         // `summary: 'auto'` requests reasoning summary deltas the user can read.
         ...(reasoning ? { reasoning } : {}),
-      },
+        ...(this.textVerbosity ? { text: { verbosity: this.textVerbosity } } : {}),
+        // Stateless continuation still needs the model's opaque reasoning items.
+        ...(replayScope ? { include: ['reasoning.encrypted_content'] } : {}),
+      };
+    const socketRequest = this.responseSocket && !wantStore
+      ? await this.responseSocket.open(stableTransportSessionId ?? this.sessionId, requestBody, req.signal, req.onTransportActivity)
+      : null;
+    const stream = socketRequest?.stream ?? (await (this.client as unknown as {
+      responses: {
+        create: (
+          args: Record<string, unknown>,
+          opts?: { signal?: AbortSignal; headers?: Record<string, string> },
+        ) => Promise<AsyncIterable<Record<string, unknown>>>;
+      };
+    }).responses.create(
+      requestBody,
       // Forward the AbortSignal so the SDK can tear down the underlying
       // fetch when the runner aborts (e.g. user-initiated cancellation
       // or an internal timeout). Without this, an idle stream can wedge
@@ -395,6 +424,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
           }
         : undefined,
     )) as AsyncIterable<Record<string, unknown>>;
+    const headersMs = performance.now() - requestStartedAt;
+    let firstEventMs: number | null = null;
+    let firstContentMs: number | null = null;
+    const outputItems = new Map<number, Record<string, unknown>>();
 
     // Track tool calls across streaming events. Keyed by item_id because
     // the Responses API reports args deltas with the item_id, not an index.
@@ -414,8 +447,16 @@ export class ChatGPTCodexProvider implements ChatProvider {
     let reasoningEndsWithNewline = false;
 
     for await (const evt of stream) {
+      req.onTransportActivity?.();
+      const elapsed = performance.now() - requestStartedAt;
+      firstEventMs ??= elapsed;
       const type = evt.type as string | undefined;
       if (!type) continue;
+      if (firstContentMs === null && (
+        (typeof evt.delta === 'string' && evt.delta.length > 0)
+        || (type === 'response.output_item.done'
+          && ['message', 'function_call', 'custom_tool_call'].includes(String((evt.item as { type?: string })?.type)))
+      )) firstContentMs = elapsed;
 
       // Incremental text from the assistant message.
       if (type === 'response.output_text.delta') {
@@ -544,6 +585,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // official Codex CLI does too — see
       // codex-rs/codex-api/src/sse/responses.rs::process_responses_event.
       if (type === 'response.output_item.done') {
+        if (evt.item && typeof evt.item === 'object') {
+          const index = typeof evt.output_index === 'number' ? evt.output_index : outputItems.size;
+          outputItems.set(index, evt.item as Record<string, unknown>);
+        }
         const item = evt.item as
           | {
               type?: string;
@@ -644,6 +689,23 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // the runner sees a complete tool_use block instead of silently
       // dropping it.
       if (type === 'response.completed') {
+        const totalMs = performance.now() - requestStartedAt;
+        const finalOutput = (evt.response as { output?: unknown } | undefined)?.output;
+        const state = replayScope ? responsesReplayState(replayScope, Array.isArray(finalOutput)
+          ? finalOutput : [...outputItems].sort(([a], [b]) => a - b).map(([, item]) => item)) : null;
+        if (state) yield { type: 'provider_replay', state };
+        yield { type: 'response_meta', meta: {
+          path: '/responses',
+          request: { api_model: this.model, stream: true, effort: reasoningEffort },
+          timing: {
+            transport: socketRequest ? 'websocket' : 'sse', headers_ms: headersMs, first_event_ms: firstEventMs,
+            first_content_ms: firstContentMs, total_ms: totalMs, input_items: socketRequest?.inputItems ?? input.length,
+            incremental: socketRequest?.incremental ?? false,
+            ...(socketRequest ? { continuation_reason: socketRequest.continuationReason,
+              continuation_reset_fields: socketRequest.changedConfigFields } : {}),
+            replayed_reasoning_items: input.filter((item) => 'type' in item && item.type === 'reasoning').length,
+          },
+        } };
         for (const [, acc] of toolAcc) {
           if (!acc.name) continue;
           let parsed: Record<string, unknown> = {};
@@ -676,6 +738,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
                 };
                 output_tokens_details?: {
                   orchestration_output_tokens?: number;
+                  reasoning_tokens?: number;
                 };
               };
               status?: string;
@@ -721,6 +784,9 @@ export class ChatGPTCodexProvider implements ChatProvider {
               cache_creation_input_tokens: cacheWriteTokens,
               // Responses API: input_tokens already INCLUDES cached tokens.
               prompt_tokens_total: inputTokens,
+              ...(typeof u.output_tokens_details?.reasoning_tokens === 'number'
+                ? { thinking_tokens: u.output_tokens_details.reasoning_tokens }
+                : {}),
             },
           };
         }
@@ -752,6 +818,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
 // ─── Message conversion (AgentMessage → Responses `input`) ─────
 
 type ResponsesInputItem =
+  | Record<string, unknown>
   | {
       role: 'user' | 'assistant' | 'system' | 'developer';
       phase?: AssistantMessagePhase;
@@ -765,8 +832,16 @@ type ResponsesInputItem =
   | { type: 'function_call'; call_id: string; name: string; arguments: string }
   | { type: 'function_call_output'; call_id: string; output: string };
 
-export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[] {
+export function toResponsesInput(messages: AgentMessage[], replayScope?: string): ResponsesInputItem[] {
   const out: ResponsesInputItem[] = [];
+  const replayByMessage = new Map<AgentMessage, Record<string, unknown>[]>();
+  const customCalls = new Set<string>();
+  if (replayScope) for (const message of messages) {
+    const replay = providerReplayItems(message, replayScope);
+    if (!replay) continue;
+    replayByMessage.set(message, replay);
+    for (const item of replay) if (item.type === 'custom_tool_call' && typeof item.call_id === 'string') customCalls.add(item.call_id);
+  }
 
   for (const m of messages) {
     if (m.role === 'tool') {
@@ -774,7 +849,7 @@ export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[]
       for (const b of m.content) {
         if (b.type !== 'tool_result') continue;
         out.push({
-          type: 'function_call_output',
+          type: customCalls.has(b.tool_use_id) ? 'custom_tool_call_output' : 'function_call_output',
           call_id: b.tool_use_id,
           output: b.content,
         });
@@ -818,7 +893,7 @@ export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[]
       }
       for (const tr of toolResults) {
         out.push({
-          type: 'function_call_output',
+          type: customCalls.has(tr.tool_use_id) ? 'custom_tool_call_output' : 'function_call_output',
           call_id: tr.tool_use_id,
           output: tr.content,
         });
@@ -827,6 +902,11 @@ export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[]
     }
 
     if (m.role === 'assistant') {
+      const replay = replayByMessage.get(m);
+      if (replay) {
+        out.push(...replay);
+        continue;
+      }
       const text = m.content
         .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
         .map((b) => b.text)

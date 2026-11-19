@@ -51,6 +51,44 @@ function makeRunner(provider: ChatProvider): CoderRunner {
   });
 }
 
+describe('OpenRouter prompt cache accounting', () => {
+  it.each([1, 2])('completes after %i tool rounds when every long prompt reports zero cached tokens', async (toolRounds) => {
+    const inputTokens = 114_807;
+    let calls = 0;
+    const provider: ChatProvider = {
+      name: 'openrouter', model: 'test-model', setModel() {},
+      async *chat(): AsyncIterable<ChatDelta> {
+        const page = ++calls;
+        if (page <= toolRounds) {
+          yield { type: 'tool_call_end', id: 'read-' + page, name: 'read_note', input: { page } };
+        } else {
+          yield { type: 'text_delta', text: 'All pages read.' };
+        }
+        yield { type: 'usage', usage: { input_tokens: inputTokens, output_tokens: 3,
+          prompt_tokens_total: inputTokens, cache_read_input_tokens: 0 } };
+        yield { type: 'done' };
+      },
+    };
+    const pages: number[] = [];
+    const registry = new ToolRegistry();
+    registry.register({ name: 'read_note', description: 'Read a page', source: 'native',
+      parameters: { type: 'object', properties: { page: { type: 'integer' } }, required: ['page'] },
+      handler: async ({ page }) => { pages.push(Number(page)); return { content: 'Page ' + page }; } });
+    const runner = new CoderRunner({ provider, registry, contextWindow: 1_000_000, systemPrompt: 'sys',
+      toolContext: { cwd: '/tmp', projectName: 'test' },
+      initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'Read the requested pages.' }] }] });
+    const terminalEvents: string[] = [];
+    runner.on('done', reason => terminalEvents.push(reason));
+    const result = await runner.run();
+    expect(result.reason).toBe('completed');
+    expect(terminalEvents).toEqual(['completed']);
+    expect(pages).toEqual(toolRounds === 1 ? [1] : [1, 2]);
+    expect(calls).toBe(toolRounds + 1);
+    expect(result.totalUsage).toMatchObject({ input_tokens: inputTokens * calls, output_tokens: 3 * calls, cache_read_input_tokens: 0 });
+    expect(runner.messages.at(-1)?.content).toContainEqual({ type: 'text', text: 'All pages read.' });
+  });
+});
+
 describe('runner lifecycle events', () => {
   it('emits run_started with a stable runId before any turn_start', async () => {
     const r = makeRunner(new TextOnlyProvider());

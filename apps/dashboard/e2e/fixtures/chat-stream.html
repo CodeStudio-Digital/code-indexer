@@ -6,6 +6,7 @@ import {createRoot} from 'react-dom/client';
 import {MessageList} from '/features/chat/messages/MessageList.tsx';
 import {buildTranscriptProjection} from '/features/chat/transcript-projection.ts';
 import { TooltipProvider } from '/components/ui/tooltip.tsx';
+import { DialogProvider } from '/components/ui/dialog-provider.tsx';
 import { i18nReady } from '/i18n/index.ts';
 import { filesToAttachments } from '/features/chat/chat-attachments.ts';
 import '/index.css';
@@ -19,8 +20,9 @@ function Fixture() {
   const [count,setCount]=useState(80); const [images,setImages]=useState([]); const [session,setSession]=useState('fixture-one');
   const [stored,setStored]=useState(false);
   const [layoutText,setLayoutText]=useState(null);
+  const [transcript,setTranscript]=useState(null);
   useEffect(()=>{if(!running)return; const timer=setInterval(()=>setTick(n=>n+1),80);return()=>clearInterval(timer);},[running]);
-  window.chatFixture={pause:()=>setRunning(false),resume:()=>setRunning(true),gallery:async()=>{
+  window.chatFixture={transcript:value=>{setRunning(false);setTranscript(value);},pause:()=>setRunning(false),resume:()=>setRunning(true),gallery:async()=>{
     const bytes=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
     const files=Array.from({length:15},(_,i)=>new File([bytes],`Projeto ${i+1}.png`,{type:'image/png'}));
     setImages(await filesToAttachments(files));setRunning(false);setCount(0);
@@ -39,8 +41,12 @@ function Fixture() {
     {type:'tool',call:{id:'search',name:'mcp__search',input:{query:'architecture'},status:'running',startedAt:Date.now()}},
     {type:'text',id:'stream',text:Array.from({length:Math.floor(tick/4)+1},(_,i)=>`Trecho ${i+1}: analisando o fluxo de mensagens e a arquitetura.`).join('\n\n')}
   ],text:'',thinking:'',toolCalls:[],startedAt:Date.now()};
-  return React.createElement(MessageList,{sessionData:data,currentTurn:turn,streaming:running,doneReason:null,error:null,tasksState:null,handlers:{sessionId:session},projection:buildTranscriptProjection(data,turn)});
+  const history=transcript?{...data,...transcript.data}:data;
+  const current=transcript?transcript.turn:turn;
+  return React.createElement(MessageList,{sessionData:history,currentTurn:current,streaming:transcript?!!transcript.streaming:running,
+    preflight:transcript?.preflight??null,doneReason:transcript?.doneReason??null,error:transcript?.error??null,
+    tasksState:null,handlers:{sessionId:session},projection:buildTranscriptProjection(history,current)});
 }
 await i18nReady;
-createRoot(document.getElementById('root')).render(React.createElement(TooltipProvider,null,React.createElement(Fixture)));
+createRoot(document.getElementById('root')).render(React.createElement(TooltipProvider,null,React.createElement(DialogProvider,null,React.createElement(Fixture))));
 </script></body></html>

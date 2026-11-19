@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, ChartNoAxesCombined, Compass, Ellipsis, GitCompare, Library, MonitorPlay, Network, ScrollText, Settings, Workflow } from 'lucide-react';
+import { Bot, ChartNoAxesCombined, Compass, Ellipsis, Gauge, GitCompare, Library, MonitorPlay, Network, ScrollText, Settings, Workflow } from 'lucide-react';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
@@ -48,7 +48,7 @@ export const ChatRightRail = memo(function ChatRightRail({
   const contextActive = activePanelId === 'drive' || activePanelId === 'chapters';
   const showSubagents = subagentsAvailable || activePanelId === 'subagents';
   const moreActive = activePanelId != null && !stateActive && !contextActive
-    && !['config', 'notifications', 'subagents', 'collaboration'].includes(activePanelId);
+    && !['config', 'notifications', 'subagents', 'collaboration', 'usage-quota'].includes(activePanelId);
   const toggle = (id: RightPanelId, active = activePanelId === id) => onSelectPanel(active ? null : id);
   const advanced = [
     { id: 'insights' as const, icon: ChartNoAxesCombined, label: t('rightRail.insights') },
@@ -69,6 +69,8 @@ export const ChatRightRail = memo(function ChatRightRail({
       <RailButton icon={GitCompare} label={pendingSnapshots > 0
         ? t('rightRail.pendingChanges', { count: pendingSnapshots }) : t('rightRail.changes')}
         side="right" active={false} onClick={() => onOpenSnapshots?.()} disabled={!onOpenSnapshots} badge={pendingSnapshots} />
+      <RailButton icon={Gauge} label={t('rightRail.usageQuota')} side="right" role="toggle"
+        active={activePanelId === 'usage-quota'} onClick={() => toggle('usage-quota')} />
       <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>
         <DropdownMenuTrigger asChild>
           <button type="button" aria-label={t('rightRail.more')} title={t('rightRail.more')}

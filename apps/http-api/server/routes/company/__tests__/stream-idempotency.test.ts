@@ -87,6 +87,7 @@ vi.mock('@mcp/company/services/CompanySessionFiles.js', () => ({
 import { mountCompanyStreamRoutes } from '../stream.js';
 import { createBus, markEnded, publish, type CoderRunBus } from '../../../../coder-bus.js';
 import type { ServerDeps } from '../../../deps.js';
+import { SessionRecoveryError } from '../../../../control-plane-recovery-error.js';
 
 const SESSION_ID = '00000000-0000-4000-8000-000000000001';
 const sessionPath = (suffix: string): string =>
@@ -391,6 +392,26 @@ describe('company POST /resume idempotency', () => {
       code: 'IDEMPOTENCY_AUTHORITY_UNAVAILABLE',
     });
     expect(orch.sendMessageToMaster).not.toHaveBeenCalled();
+  });
+
+  it('retries admission after session storage recovers and delivers to the master only once', async () => {
+    const orch = makeOrch();
+    H.orch = orch;
+    const h = setup();
+    vi.spyOn(h.deps.controlPlaneStore!, 'acceptCommand').mockRejectedValueOnce(
+      new SessionRecoveryError(SESSION_ID, new Error('unreadable session directory')),
+    );
+    const body = { message: 'retry after storage recovery', client_msg_id: 'storage-retry' };
+    const first = await h.post(sessionPath('/resume'), body);
+    expect(first.status).toBe(503);
+    expect(await first.json()).toMatchObject({ code: 'SESSION_RECOVERY_UNAVAILABLE', session_id: SESSION_ID });
+    expect(orch.sendMessageToMaster).not.toHaveBeenCalled();
+
+    expect((await h.post(sessionPath('/resume'), body)).status).toBe(200);
+    expect((await h.post(sessionPath('/resume'), body)).status).toBe(200);
+    expect(orch.sendMessageToMaster).toHaveBeenCalledOnce();
+    expect(h.commands.size).toBe(1);
+    markEnded(orch.metaBus as CoderRunBus, 'done', {});
   });
 
   it('a retry with the same client_msg_id does not re-send to the master', async () => {

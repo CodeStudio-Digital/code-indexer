@@ -1,8 +1,7 @@
 /**
  * Two-way sync between the URL bar (path_template, which may carry `?query`) and
- * the Query key/value grid. Editing one updates the other. Parsing is manual (no
- * URLSearchParams — it would reorder and decode `{{var}}` templates); encoding is
- * deferred to the server at send time.
+ * the Query key/value grid. Rows hold decoded values, including repeated keys.
+ * Templates remain editable in the URL and resolve at send time.
  *
  * Disabled query rows aren't representable in the URL string, so editing the URL
  * bar keeps existing disabled rows and replaces the enabled ones.
@@ -10,22 +9,16 @@
 import type { KvRow } from './types.js';
 
 export function serializeQuery(rows: KvRow[]): string {
-  return rows.filter((r) => r.enabled && r.key).map((r) => `${r.key}=${r.value}`).join('&');
+  const encode = (s: string) => new URLSearchParams([['', s]]).toString().slice(1)
+    .replace(/%7B%7B([\w.-]+)%7D%7D/gi, '{{$1}}');
+  return rows.filter(r => r.enabled && r.key).map(r => `${encode(r.key)}=${encode(r.value)}`).join('&');
 }
 
-function parseQuery(qs: string): KvRow[] {
-  if (!qs) return [];
-  return qs.split('&').filter(Boolean).map((pair) => {
-    const eq = pair.indexOf('=');
-    return eq < 0
-      ? { key: pair, value: '', enabled: true }
-      : { key: pair.slice(0, eq), value: pair.slice(eq + 1), enabled: true };
-  });
-}
-
-export function stripQuery(url: string): string {
-  const q = url.indexOf('?');
-  return q < 0 ? url : url.slice(0, q);
+export function withQuery(url: string, rows: KvRow[]): string {
+  const hash = url.indexOf('#');
+  const path = hash < 0 ? url : url.slice(0, hash);
+  const query = serializeQuery(rows);
+  return path.split('?')[0] + (query ? '?' + query : '') + (hash < 0 ? '' : url.slice(hash));
 }
 
 export function useQuerySync(args: {
@@ -38,8 +31,9 @@ export function useQuerySync(args: {
 
   const onUrlEdit = (next: string): void => {
     onPath(next);
-    const q = next.indexOf('?');
-    const parsed = q < 0 ? [] : parseQuery(next.slice(q + 1));
+    const path = next.split('#', 1)[0];
+    const q = path.indexOf('?');
+    const parsed = q < 0 ? [] : Array.from(new URLSearchParams(path.slice(q + 1)), ([key, value]) => ({ key, value, enabled: true }));
     // Map the parsed (enabled) params back onto the existing rows positionally,
     // keeping disabled rows exactly where they are. Enabled rows are replaced in
     // order; extra parsed rows are appended; removed ones drop out.
@@ -55,9 +49,7 @@ export function useQuerySync(args: {
 
   const onRowsEdit = (rows: KvRow[]): void => {
     onQuery(rows);
-    const qs = serializeQuery(rows);
-    const basePath = stripQuery(pathTemplate);
-    onPath(qs ? `${basePath}?${qs}` : basePath);
+    onPath(withQuery(pathTemplate, rows));
   };
 
   return { onUrlEdit, onRowsEdit };

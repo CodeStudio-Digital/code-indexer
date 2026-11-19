@@ -13,16 +13,20 @@
  */
 
 import path from 'node:path';
-import { promises as fs, type Stats } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import { ApiError, type FilesApi, type FileTreeNode } from '@mcp/api-bus';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
 import {
   clearProjectIgnoreRulesCache,
+  directoryIgnoreRules,
+  getProjectDiscoveryCacheVersion,
+  isProjectDiscoveryMarker,
   getProjectIgnoreRulesAsync,
   shouldIgnoreProjectPath,
 } from '@mcp/shared/utils/project-ignore.js';
 import { mapLimit } from '@mcp/shared/utils/map-limit.js';
+import { readProjectDirectory } from '@mcp/shared/utils/project-directory-reads.js';
 import type { HandlerDeps } from '../types.js';
 import { createDirCache } from './dir-cache.js';
 import { cancelArchive, runArchiveJob, runArchiveJobToEnd } from './archive-runner.js';
@@ -61,7 +65,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
   const cacheEnabled = (): boolean => process.env.MCP_TREE_DIR_CACHE !== '0';
 
   function requireProject(projectId: number) {
-    const project = db.getProject(projectId);
+    const project = db.getProjectCatalogEntry(projectId);
     if (!project) throw new ApiError('not_found', 404, 'project not found');
     return project;
   }
@@ -177,13 +181,13 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       await captureLocalHistory(deps, projectId, rel, { kind: 'save', readFrom: abs });
       // Ensure parent dir exists — saving a new file under a fresh folder
       // (common when scaffolding) shouldn't require a separate mkdir call.
-      await fs.mkdir(path.dirname(abs), { recursive: true });
+      const createdDirectory = await fs.mkdir(path.dirname(abs), { recursive: true });
       await fs.writeFile(abs, buf);
       const stat = await fs.stat(abs);
       // Fast-path: symbols/FTS fresh in ~ms instead of waiting for the
       // chokidar debounce (the watcher event later short-circuits on hash).
       deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'upsert' }]);
-      clearProjectIgnoreRulesCache(project.root_path);
+      if (createdDirectory || isProjectDiscoveryMarker(abs)) clearProjectIgnoreRulesCache(project.root_path);
       dirCache.invalidate(projectId, rel); // próximo tree do parent reflete o arquivo novo
       return { ok: true as const, last_modified: stat.mtime.toISOString() };
     },
@@ -206,7 +210,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           await fs.unlink(abs);
           deps.projectIndexService.markDirty(projectId, [{ path: rel.replace(/\\/g, '/'), kind: 'delete' }]);
         }
-        clearProjectIgnoreRulesCache(project.root_path);
+        if (stat.isDirectory() || isProjectDiscoveryMarker(abs)) clearProjectIgnoreRulesCache(project.root_path);
         dirCache.invalidate(projectId, rel);
         return { ok: true as const };
       } catch (err) {
@@ -249,7 +253,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           { path: to.replace(/\\/g, '/'), kind: 'upsert' },
         ]);
       }
-      clearProjectIgnoreRulesCache(project.root_path);
+      if (!isFile || isProjectDiscoveryMarker(absFrom) || isProjectDiscoveryMarker(absTo)) clearProjectIgnoreRulesCache(project.root_path);
       dirCache.invalidate(projectId, from);
       dirCache.invalidate(projectId, to);
       return { ok: true as const, last_modified: lastModified };
@@ -309,11 +313,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       return { ok: true as const, cancelled: cancelArchive(archiveId) };
     },
 
-    async tree({ projectId, maxDepth = 6, root = '.', withStats }) {
+    async tree({ projectId, maxDepth = 6, root = '.', withStats }, ctx) {
       const project = requireProject(projectId);
       const startAbs = resolveSafe(project.root_path, root);
       const startRel = root === '.' ? '' : root;
-      const projectIgnore = await getProjectIgnoreRulesAsync(project.root_path);
 
       // Fast path — the lazy explorer (maxDepth 1) is the hot caller. ONE
       // readdir; entry types come from the Dirents (the old walk re-statted
@@ -322,44 +325,46 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       // optimistically for dirs (IntelliJ/VS Code do the same — an empty
       // dir just expands to nothing).
       if (maxDepth <= 1) {
-        // Skip the cache entirely for withStats requests — a previously cached
-        // zero-stat node (from the FileTreeRail) would lack size/mtime/mode and
-        // render the SFTP columns blank.
+        const signal = ctx?.signal;
+        signal?.throwIfAborted();
+        const version = getProjectDiscoveryCacheVersion(project.root_path);
         const variant = withStats ? 'stats' : 'plain';
         if (cacheEnabled()) {
           const cached = dirCache.get(projectId, startRel, variant);
           if (cached) return cached;
         }
-        const entries = await fs.readdir(startAbs, { withFileTypes: true }).catch(() => []);
-        const filtered = entries.filter((e) => {
-          const relPath = path.posix.join(startRel, e.name);
-          return !shouldIgnoreProjectPath(projectIgnore, relPath, e.isDirectory());
-        });
-        // Bounded fan-out. `Promise.all` over every child queued one fs.stat per
-        // entry against a 4-thread libuv pool — a 5k-entry directory starved
-        // every other async fs op in the process while it drained.
-        const children = await mapLimit(filtered, STAT_CONCURRENCY, async (e): Promise<FileTreeNode> => {
-          const relPath = path.posix.join(startRel, e.name);
-          // Symlinked dirs (pnpm links) report as symlink, not directory —
-          // they're the only case worth a stat (rare outside node_modules).
-          let isDir = e.isDirectory();
-          // withStats: one stat per child to populate size/mtime/mode for the
-          // SFTP file pane's columns. Skipped by the default FileTreeRail path.
-          let st: Stats | null = null;
-          if (withStats || (!isDir && e.isSymbolicLink())) {
-            st = await fs.stat(path.join(startAbs, e.name)).catch(() => null);
-            if (!isDir && e.isSymbolicLink()) isDir = st?.isDirectory() ?? false;
+        const entries = await readProjectDirectory(project.root_path, startAbs, version, true).catch(() => []);
+        signal?.throwIfAborted();
+        const projectIgnore = await directoryIgnoreRules(project.root_path, startAbs, entries);
+        signal?.throwIfAborted();
+        const children: FileTreeNode[] = [];
+        const needsStat: FileTreeNode[] = [];
+        for (const [index, e] of entries.entries()) {
+          if (index > 0 && index % 512 === 0) {
+            await new Promise<void>(done => setImmediate(done));
+            signal?.throwIfAborted();
           }
-          const node: FileTreeNode = isDir
+          const relPath = path.posix.join(startRel, e.name);
+          if (shouldIgnoreProjectPath(projectIgnore, relPath, e.isDirectory())) continue;
+          const child: FileTreeNode = e.isDirectory()
             ? { name: e.name, path: relPath, type: 'dir', hasChildren: true }
             : { name: e.name, path: relPath, type: 'file' };
-          if (st) {
-            node.size = st.size;
-            node.mtime = st.mtimeMs;
-            node.mode = st.mode;
+          children.push(child);
+          if (withStats || e.isSymbolicLink()) needsStat.push(child);
+        }
+        await mapLimit(needsStat, STAT_CONCURRENCY, async child => {
+          signal?.throwIfAborted();
+          const st = await fs.stat(path.join(startAbs, child.name)).catch(() => null);
+          if (!st) return;
+          if (st.isDirectory()) {
+            child.type = 'dir';
+            child.hasChildren = true;
           }
-          return node;
+          child.size = st.size;
+          child.mtime = st.mtimeMs;
+          child.mode = st.mode;
         });
+        signal?.throwIfAborted();
         children.sort((a, b) => {
           if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
           return a.name.localeCompare(b.name);
@@ -373,10 +378,13 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
         // Cached per VARIANT, so a zero-stat FileTreeRail node can never be
         // served to the SFTP pane (which would render its columns blank) and
         // the pane's repeated navigations stop re-statting the whole directory.
-        if (cacheEnabled()) dirCache.set(projectId, startRel, node, variant);
+        if (cacheEnabled() && version === getProjectDiscoveryCacheVersion(project.root_path)) {
+          dirCache.set(projectId, startRel, node, variant);
+        }
         return node;
       }
 
+      const projectIgnore = await getProjectIgnoreRulesAsync(project.root_path);
       async function walk(absPath: string, relPath: string, depth: number): Promise<FileTreeNode> {
         const name = path.basename(absPath) || project.name;
         const stat = await fs.stat(absPath).catch(() => null);

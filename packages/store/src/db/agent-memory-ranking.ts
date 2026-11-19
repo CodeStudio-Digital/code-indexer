@@ -24,26 +24,6 @@ export const INDEX_SOURCE_WEIGHT: Record<string, number> = {
   session: 0.65,
 };
 
-export function memoryTitleTokens(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((token) => token.length > 2),
-  );
-}
-
-export function nearDuplicateTitle(a: string, b: string): boolean {
-  const left = memoryTitleTokens(a);
-  const right = memoryTitleTokens(b);
-  if (left.size === 0 || right.size === 0) return false;
-  let shared = 0;
-  for (const token of left) if (right.has(token)) shared += 1;
-  if (shared < 2) return false;
-  const union = left.size + right.size - shared;
-  return union > 0 && shared / union >= 0.5;
-}
-
 /**
  * Logical-frontmatter index for `recall_memory(mode:'list')` and the turn-1
  * memory index. Ranked by importance × 30-day recency decay × type weight.
@@ -94,16 +74,8 @@ export function listMemoryIndex(
     };
   });
   scored.sort((a, b) => b.score - a.score);
-  const diverse: typeof scored = [];
-  for (const candidate of scored) {
-    // Explicit facts can share title words while describing different decisions.
-    // Only automatic distillation is eligible for lossy title diversification.
-    if (diverse.some(({ r }) => (['session', 'distill'].includes(r.source) || ['session', 'distill'].includes(candidate.r.source))
-      && nearDuplicateTitle(r.name, candidate.r.name))) continue;
-    diverse.push(candidate);
-    if (diverse.length >= Math.max(1, limit)) break;
-  }
-  return diverse.map(({ r }) => ({
+  // A title-only index cannot establish that two facts are equivalent.
+  return scored.slice(0, Math.max(1, limit)).map(({ r }) => ({
     id: r.id,
     name: r.name,
     description: r.description,

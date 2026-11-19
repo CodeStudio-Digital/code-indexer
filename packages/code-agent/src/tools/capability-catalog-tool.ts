@@ -5,6 +5,7 @@ import { capabilityDiscoveryEntries } from '@mcp/code-agent/core/capability-disc
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import { structuredResult } from '@mcp/code-agent/core/model-output.js';
+import { canInvokeInsideCodeExec } from './code-exec-eligibility.js';
 import {
   deriveCapabilityDescriptor,
   resolveCapabilitySet,
@@ -235,6 +236,7 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
 
       if (op !== 'activate') return err(`Unsupported capability_catalog op '${op}'.`);
       const runner = ctx.runner as {
+        stableToolCatalog?: boolean;
         promoteTool?: (name: string) => string[];
         runId?: string;
       } | undefined;
@@ -252,8 +254,10 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
             rejected.push({ capabilityId: id, reason: 'runner_activation_unavailable' });
             continue;
           }
-          const evicted = runner.promoteTool(toolEntry.tool.name);
-          activated.push({ capabilityId: id, effective: 'pending_projection', evicted });
+          const evicted = runner.stableToolCatalog ? [] : runner.promoteTool(toolEntry.tool.name);
+          const invocation = canInvokeInsideCodeExec(toolEntry.tool) ? 'code_exec' : 'top_level';
+          activated.push({ capabilityId: id, effective: runner.stableToolCatalog ? invocation : 'pending_projection', evicted,
+            ...(runner.stableToolCatalog ? { name: toolEntry.tool.name, inputSchema: toolEntry.tool.parameters } : {}) });
           continue;
         }
         const skillEntry = skillById.get(id as CapabilityId);
@@ -295,7 +299,7 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
       return catalogResult({
         capabilitySetDigest: capabilitySetHash,
         projectionDigest: null,
-        projectionState: 'recomputed_at_next_turn_boundary',
+        projectionState: runner?.stableToolCatalog ? 'unchanged' : 'recomputed_at_next_turn_boundary',
         activationDigest: digest({ capabilitySet: capabilitySetHash, activated, rejected }),
         activated,
         rejected,

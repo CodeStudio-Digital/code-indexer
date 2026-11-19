@@ -51,6 +51,7 @@ import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
 import { setCompanyDocCorpus } from '@mcp/company/services/company-doc-corpus.js';
 import { setDbToolsStores, setDbSecretDecryptor } from '@mcp/code-agent/tools/db/index.js';
 import { getMainSecretDecryptor } from './server/secret-decrypt-port.js';
+import { FIGMA_SERVER_ID } from './server/figma/integration.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
 import {
   createFileInboxWatchdogSource,
@@ -231,7 +232,7 @@ function scheduleCompanyAutoResume(sessionIds: CompanySessionId[]): void {
   (timer as { unref?: () => void }).unref?.();
 }
 
-export function createApp() {
+export function createApp(desktopBrowser?: import('@mcp/services/research-browser/types.js').ResearchBrowserHost) {
   registerShutdownTask('exec-command-sessions-stop', () => disposeExecCommandSessions('app-shutdown'));
   if (heapLogTimer) {
     registerShutdownTask('heap-monitor-stop', () => {
@@ -277,7 +278,7 @@ export function createApp() {
       'In-process coder execution is not supported.',
     );
   }
-  const deps = createDeps();
+  const deps = createDeps(desktopBrowser);
   // createDeps migrates a fresh database before the worker pool reads its
   // persisted runtime policy. Still fail before mounting any routes.
   getCoderWorkerPool();
@@ -426,7 +427,7 @@ export function createApp() {
     qaRunStore: deps.qaTestRunStore,
   });
   setChromeService(chromeService);
-  setGlobalResearchBrowser(new ResearchBrowserService(() => chromeService.connectBrowser()));
+  setGlobalResearchBrowser(new ResearchBrowserService(async () => desktopBrowser ?? await chromeService.connectBrowser()));
   // Hand the same ChromeService to the doc indexer's BrowserBackend so
   // bot-blocked fetches can escalate to Chromium via the existing WS
   // endpoint instead of spinning up a private browser per request.
@@ -1123,7 +1124,9 @@ export function createApp() {
   const mcpPool = new McpExternalPool({
     dbPath: deps.config.dbPath,
     bearerResolver: deps.mcpBearerResolver ?? null,
+    embedded: deps.figmaMcp,
   });
+  deps.figmaMcp.refresh = () => mcpPool.refreshServer(FIGMA_SERVER_ID);
   setCoderWorkerMcpPool(mcpPool);
   // Also publish through the shared singleton for non-runner MCP consumers.
   setGlobalMcpExternalPool(mcpPool);

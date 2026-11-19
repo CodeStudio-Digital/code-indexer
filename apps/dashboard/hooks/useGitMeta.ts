@@ -19,8 +19,8 @@ interface GitMetaFrameDTO {
 
 export function useGitMeta(projectId: number | null, onFrame: (frame: GitMetaFrameDTO) => void): void {
   // Latest-callback ref so consumers don't resubscribe per render.
-  const cb = useRef(onFrame);
-  cb.current = onFrame;
+  const latest = useRef({ projectId, onFrame });
+  latest.current = { projectId, onFrame };
 
   useEffect(() => {
     if (projectId == null) return;
@@ -37,7 +37,9 @@ export function useGitMeta(projectId: number | null, onFrame: (frame: GitMetaFra
         retryMs: 2000,
         replay: 'none',
       },
-      (frame: GitMetaFrameDTO) => cb.current(frame),
+      (frame: GitMetaFrameDTO) => {
+        if (latest.current.projectId === projectId) latest.current.onFrame(frame);
+      },
     );
     markRouteEvent('gitMeta:subscribed', { projectId });
     return unsubscribe;

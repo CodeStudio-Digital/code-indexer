@@ -71,6 +71,8 @@ import {
   type ResolvedRuntimePolicyV1,
 } from '@mcp/agent-runtime-contracts';
 import {
+  asSessionId,
+  isUuid,
   releaseSessionWriterLeaseForOwner,
   type ProjectId,
   type SessionId,
@@ -312,6 +314,7 @@ interface CoderWorkerPoolOpts {
   handoffSessionWriter?: (
     context: SessionRuntimeContext,
   ) => Promise<void>;
+  importPublishedChat?: (parentId: SessionId, childId: SessionId) => Promise<SessionId> | undefined;
   /** Idle TTL before eviction. Default 5 min — only used between runs. */
   ttlMs?: number;
   /**
@@ -742,6 +745,16 @@ export class CoderWorkerPool {
       },
       { timeoutMs: 15_000 },
     );
+    return true;
+  }
+
+  async appendPipelineDiagnostic(sessionId: SessionId, event: unknown): Promise<boolean> {
+    if (this.evictions.has(sessionId)) return true;
+    const starting = this.entryStarts.get(sessionId);
+    if (starting) await starting;
+    const entry = this.entries.get(sessionId);
+    if (!entry) return false;
+    await entry.host.requireBridge().request('appendPipelineDiagnostic', { event }, { timeoutMs: 5_000 });
     return true;
   }
 
@@ -1640,6 +1653,19 @@ export class CoderWorkerPool {
     const bridge = host.requireBridge();
     // ─── Wire RPC bridges from worker → main ─────────────────────────
     const offAttemptAdmission = bridge.handle('attempt.admit', (payload) => this.admitRuntimeAttempt(sessionId, payload));
+    const offChatCreated = bridge.handle('chat.created', async (payload) => {
+      const { childId, runId } = (payload ?? {}) as { childId?: unknown; runId?: number };
+      const caller = this.entries.get(sessionId);
+      if (!caller || caller.host !== host || caller.currentRunId !== runId || !caller.runInProgress
+        || typeof childId !== 'string' || !isUuid(childId)) return;
+      const child = asSessionId(childId);
+      const rootId = await this.opts.importPublishedChat?.(sessionId, child);
+      if (rootId == null || this.entries.get(sessionId) !== caller || caller.currentRunId !== runId) return;
+      for (const target of new Set([sessionId, rootId])) {
+        const bus = this.getBus(target);
+        if (bus && !bus.ended) publish(bus, 'chat_session_created', { sessionId: child });
+      }
+    });
     // `rag_search_docs` runs in the worker. Only structural navigation and
     // deep research cross this bridge; the navigation verbs are short SQLite
     // reads and the methods remain optional for compatibility with old hosts.
@@ -1754,7 +1780,7 @@ export class CoderWorkerPool {
       };
       assertOwner();
       if (request.authority !== undefined) throw new Error('External MCP request contains unsupported authority');
-      return assertOwner;
+      return { assertDispatch: assertOwner, projectId: owner?.sessionContext.projectId ?? undefined };
     });
 
     const offEvent = bridge.on('bus.event', (payload) => {
@@ -1882,6 +1908,7 @@ export class CoderWorkerPool {
       controlPlaneLeaseRenewTimer: null,
       detachBusMirror: () => {
         try { offAttemptAdmission(); } catch { /* best-effort */ }
+        try { offChatCreated(); } catch { /* best-effort */ }
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }

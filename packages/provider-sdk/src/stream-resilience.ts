@@ -37,6 +37,9 @@ export function isPrematureClose(err: unknown): boolean {
  */
 export function withStreamResilience(inner: ChatProvider): ChatProvider {
   return {
+    get inferenceOnly() {
+      return inner.inferenceOnly;
+    },
     get reasoningCapabilities() {
       return inner.reasoningCapabilities;
     },

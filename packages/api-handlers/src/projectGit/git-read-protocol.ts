@@ -13,6 +13,7 @@ export function isReadOnlyGit(args: readonly string[], profile?: 'read' | 'mutat
   if (profile === 'mutation' || profile === 'network') return false;
   if (args.some(arg => arg === '--output' || arg.startsWith('--output='))) return false;
   const [command, ...rest] = args;
+  if (command === 'worktree') return rest[0] === 'list';
   if (['status', 'rev-parse', 'check-ignore', 'check-ref-format', 'show-ref', 'rev-list',
     'for-each-ref', 'ls-files', 'ls-tree', 'cat-file', 'merge-base', 'log', 'show', 'diff'].includes(command ?? '')) {
     return !rest.some(arg => arg === '--output' || arg.startsWith('--output='));

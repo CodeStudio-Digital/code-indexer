@@ -11,6 +11,21 @@ beforeEach(() => vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout'
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe('provider stream liveness', () => {
+  it('measures latency for any adapter without inventing HTTP headers or dropping provider metadata', async () => {
+    async function* stream(): AsyncIterable<ChatDelta> {
+      yield { type: 'response_meta', meta: { path: '/vendor/stream', response: { request_id: 'request-fixture' } } };
+      await sleep(20);
+      yield { type: 'text_delta', text: 'done' };
+      await sleep(30);
+      yield { type: 'done' };
+    }
+    const pending = consumeStream({ stream: stream() });
+    await vi.advanceTimersByTimeAsync(50);
+    const result = await pending;
+    expect(result.responseMeta).toMatchObject({ path: '/vendor/stream', response: { request_id: 'request-fixture' },
+      timing: { transport: 'stream', headers_ms: null, first_event_ms: 0, first_content_ms: 20, total_ms: 50 } });
+  });
+
   it('allows 35 minutes of active thinking, then commits the answer without retries', async () => {
     vi.stubEnv('CODER_STREAM_THINKING_ONLY_TIMEOUT_MS', '1'); // retired setting cannot resurrect the cutoff
     const cancelStream = vi.fn();

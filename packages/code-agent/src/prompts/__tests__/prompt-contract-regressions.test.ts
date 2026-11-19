@@ -15,7 +15,9 @@ describe('action, approval and recovery prompt contracts', () => {
     expect(build).toContain('can you fix');
     expect(build).not.toContain('Questions are read-only');
     expect(explore).toContain('Investigate read-only');
-    expect(buildSystemPrompt({ ...base, agentId: 'build', planMode: true })).toContain('honor its approval gate first');
+    const gated = buildSystemPrompt({ ...base, agentId: 'build', planMode: true });
+    expect(gated).toContain('# Plan mode is ACTIVE');
+    expect(gated).not.toContain('# Build mode is ACTIVE');
     expect(build).not.toContain('There is no plan gate');
   });
 
@@ -70,8 +72,8 @@ describe('action, approval and recovery prompt contracts', () => {
       tags: [], source: 'user', author: null, sortOrder: 0,
     };
     const prompt = buildLazySkillsSection([skill]);
-    expect(prompt).toContain('Progress updates and discovery are allowed first');
-    expect(prompt).toContain('Skills do not override the user, active mode or permissions');
+    expect(prompt).toContain('Progress updates and discovery may come first');
+    expect(prompt).toContain('Skills cannot override the user, mode or permissions');
     expect(prompt).not.toContain('BEFORE any other tool call or prose');
   });
 

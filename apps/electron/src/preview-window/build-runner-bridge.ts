@@ -21,10 +21,9 @@ function parsePinnedPort(builderJson: string | null | undefined): number | null 
 }
 
 export function buildRunnerBridge(runner: RunnerApi, deps: ServerDeps): RunnerBridge {
-  // RunnerTask is a superset of ResolverRunnerTask, so the lists/tasks are
-  // structurally assignable — no shaping needed.
   return {
-    list: () => runner.list({}, createContext()),
+    // This preview resolves the project's main checkout.
+    list: async () => (await runner.list({}, createContext())).filter((task) => !task.worktreePath),
     start: (input) =>
       runner.start({ ...input, manager: input.manager as RunnerManager }, createContext()),
     stop: (taskId) => runner.stop({ taskId }, createContext()),

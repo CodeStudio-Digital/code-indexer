@@ -36,7 +36,7 @@ export function mountProjectGitRoutes(app: Hono, deps: ServerDeps): void {
         input: Record<string, unknown>,
         ctx: ReturnType<typeof createContext>,
       ) => Promise<unknown>;
-      return c.json(await fn({ ...body, projectId: parseIdParam(c) }, createContext()));
+      return c.json(await fn({ ...body, projectId: parseIdParam(c) }, createContext({ signal: c.req.raw.signal })));
     } catch (err) {
       return mapApiError(c, err);
     }
@@ -59,7 +59,7 @@ export function mountProjectGitRoutes(app: Hono, deps: ServerDeps): void {
     try {
       const body = await c.req.json<{ path?: string; staged?: boolean }>();
       return c.json(
-        await h.diff({ projectId: parseIdParam(c), path: body.path, staged: body.staged }, createContext()),
+        await h.diff({ projectId: parseIdParam(c), path: body.path, staged: body.staged }, createContext({ signal: c.req.raw.signal })),
       );
     } catch (err) {
       return mapApiError(c, err);

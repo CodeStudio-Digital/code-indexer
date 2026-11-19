@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSystemPrompt, type ProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
+import { buildSystemPrompt, normalizeProviderFamily, type ProviderFamily } from '@mcp/code-agent/core/system-prompt.js';
 
 const base = {
   projectName: 'acme/app',
@@ -20,10 +20,18 @@ describe('buildSystemPrompt per-provider preambles', () => {
     expect(prefixes.size).toBe(distinctFamilies.length);
   });
 
-  it('uses the OpenAI-compatible preamble for OpenRouter', () => {
-    const openai = buildSystemPrompt({ ...base, providerFamily: 'openai' });
+  it.each(['copilot', 'bedrock', 'openai', 'anthropic'])('does not infer a model identity from the local %s connection', (kind) => {
+    const prompt = buildSystemPrompt({ ...base, providerFamily: normalizeProviderFamily(kind) });
+    expect(prompt).not.toMatch(/Claude family|OpenAI GPT family|Codex family/i);
+  });
+
+  it('uses the family-neutral preamble for OpenRouter', () => {
+    // An OpenRouter route may serve any model family (Claude, GPT, Gemini…),
+    // so it must not claim the OpenAI GPT identity (bafca3dc, 2026-11-08).
+    const generic = buildSystemPrompt({ ...base, providerFamily: 'generic' });
     const openrouter = buildSystemPrompt({ ...base, providerFamily: 'openrouter' });
-    expect(openrouter.slice(0, 120)).toBe(openai.slice(0, 120));
+    expect(openrouter.slice(0, 120)).toBe(generic.slice(0, 120));
+    expect(openrouter).not.toContain('OpenAI GPT family');
   });
 
   it('is bit-stable across calls (critical for prefix cache)', () => {

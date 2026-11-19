@@ -75,6 +75,6 @@ export async function sshExec(
       });
     });
   } finally {
-    manager.release(spec.hostId);
+    manager.release(spec.hostId, client);
   }
 }

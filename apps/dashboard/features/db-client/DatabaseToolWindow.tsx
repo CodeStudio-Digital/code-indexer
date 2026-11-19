@@ -43,12 +43,14 @@ function buildDatabaseSpecialistPrompt(projectName: string, conn: DbConnection):
 
 export function DatabaseToolWindow({
   projectId,
+  workspaceId = projectId,
   projectName,
   host,
   editorHost,
   embeddedEditor = false,
 }: {
   projectId: number;
+  workspaceId?: number | null;
   projectName: string;
   host: HTMLDivElement | null;
   /** Optional center-surface host used by workbenches outside ProjectView. */
@@ -60,19 +62,20 @@ export function DatabaseToolWindow({
   const dbRef = useRef<UseDbClient | null>(null);
   const openDatabaseTab = useWorkspaceStore((state) => state.openDatabaseTab);
   const onOpenWorkTab = useCallback((workTab: WorkTab) => {
-    if (embeddedEditor) return;
+    if (embeddedEditor || workspaceId == null) return;
     const db = dbRef.current;
     const connection = db?.connections.find((item) => item.id === workTab.connectionId);
     openDatabaseTab({
       kind: 'database',
-      projectId,
+      projectId: workspaceId,
+      connectionProjectId: workspaceId === projectId ? undefined : projectId,
       path: `database:${workTab.id}`,
       title: workTab.title || t('tabs.query') + (workTab.seq ? ` ${workTab.seq}` : ''),
       workTab,
       engine: connection?.engine,
       suggestions: db?.treeSuggestions(workTab.connectionId) ?? [],
     });
-  }, [embeddedEditor, openDatabaseTab, projectId, t]);
+  }, [embeddedEditor, openDatabaseTab, projectId, workspaceId, t]);
   const db = useDbClient(projectId, { onOpenWorkTab });
   dbRef.current = db;
 

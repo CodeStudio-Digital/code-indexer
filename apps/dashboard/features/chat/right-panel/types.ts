@@ -17,6 +17,7 @@ export type BuiltinRightPanelId =
   | 'collaboration'
   | 'subagents'   // Live + persisted spawned-agent groups with inline detail
   | 'insights'    // Summary + token/cost metrics + tool stats + captured inputs
+  | 'usage-quota' // Account usage from the provider
   | 'plans'       // submit_plan history (was the Details "Planos" tab)
   | 'diagram'     // Live embedded draw.io editor (wide panel) for the diagram agent
   | 'notifications' // Session notification center: loop/run/quality notices + history

@@ -288,6 +288,9 @@ export class FsConversationWriter {
           buildToolCallRecord(assistantSeq, call, outputs[index], nested),
       );
       const topLevelCalls = toolCalls.filter((call) => !call.nested);
+      // Context is display metadata. Keep the request key compatible with
+      // retries of turns written before the measurement was persisted.
+      if (input.context) prepared.stored.usage.context = input.context;
       const messages: FsStoredMessage[] = [];
       const patches = [];
       if (existingSeq == null) {
@@ -325,6 +328,9 @@ export class FsConversationWriter {
         operation_id: operation,
         payload: toJsonValue(payload),
         artifacts: prepared.artifacts,
+        // bumpUsage below durably writes session.json, including updated_at.
+        // Do not first flush a second copy that differs only in its timestamp.
+        touch_session: false,
       });
       await this.writeTurnMetric(
         entry.location,

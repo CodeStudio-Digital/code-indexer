@@ -27,7 +27,12 @@ function manualKey(projectId: number): string {
   return `mcp.preview.url.${projectId}`;
 }
 
-export function useProjectDevServer(projectId: number, opts: { pinnedPort?: number } = {}) {
+export function useProjectDevServer(projectId: number, opts: {
+  pinnedPort?: number;
+  runnerProjectId?: number;
+  worktreePath?: string | null;
+} = {}) {
+  const { runnerProjectId = projectId, worktreePath = null } = opts;
   const tasks = useRunningTasks((s) => s.tasks);
   const [detectedUrl, setDetectedUrl] = useState<string | null>(null);
   const [manualUrl, setManualUrlState] = useState<string>(() => {
@@ -55,10 +60,10 @@ export function useProjectDevServer(projectId: number, opts: { pinnedPort?: numb
   }, [projectId]);
 
   const devTask: RunnerTask | undefined = useMemo(() => {
-    const mine = tasksForProject(tasks, projectId);
+    const mine = tasksForProject(tasks, runnerProjectId, worktreePath);
     // Prefer a running dev server; fall back to any dev-ish task.
     return mine.find((t) => t.status === 'running' && isDevServerTask(t)) ?? mine.find(isDevServerTask);
-  }, [tasks, projectId]);
+  }, [tasks, runnerProjectId, worktreePath]);
 
   // Auto-detect the URL from the dev task's terminal output (when not
   // pinned and no manual override). Resets when the task changes.

@@ -30,7 +30,7 @@ export function RequestTimeline({ projectId, requestId, refreshToken }: Props) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (requestId == null) { setRows([]); return; }
+    if (requestId == null || requestId < 0) { setRows([]); return; }
     let alive = true;
     setLoading(true);
     listRequestHistory(projectId, requestId)

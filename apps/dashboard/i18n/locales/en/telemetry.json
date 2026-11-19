@@ -122,6 +122,7 @@
   "coverage.allPriced": "Every turn with usage has pricing — the estimated cost is complete.",
   "coverage.title": "{{turns}} turn(s) without pricing ({{tokens}} tokens) — excluded from the estimated cost",
   "prices.sync": "Sync prices",
+  "prices.syncDisabled": "Online price sync is disabled in Settings.",
   "prices.backfill": "Recalculate historical costs",
   "prices.filter": "Filter by model or source…",
   "prices.syncDone": "Sync",

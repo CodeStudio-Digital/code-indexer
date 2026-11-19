@@ -30,7 +30,7 @@ export function ImportCurlDialog({ projectId, collectionId, open, onOpenChange, 
     try {
       const cid = collectionId ?? await ensureCollection();
       const request = await api.importCurl(projectId, cid, text);
-      onImported(cid, request.id);
+      await onImported(cid, request.id);
       setText('');
       onOpenChange(false);
     } catch (e) {

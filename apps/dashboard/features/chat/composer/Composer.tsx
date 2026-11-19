@@ -172,7 +172,7 @@ interface ComposerProps {
     mode: QueueMode,
     attachments: AgentAttachment[],
     skillIds?: string[],
-  ) => void;
+  ) => boolean | void;
   queuedStrip?: React.ReactNode;
 }
 
@@ -224,6 +224,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(start + replacement.length, start + replacement.length); });
     };
     const pendingSkill = useRef(false);
+    const queueSubmission = useRef(false);
     const currentDraft = useRef({ input, attachments, sessionId: props.sessionId });
     currentDraft.current = { input, attachments, sessionId: props.sessionId };
     const resolveTypedSkill = useCallback(async (command: string) => {
@@ -367,46 +368,43 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
     // (next turn vs end of session) is decided by the queue. Attachments travel
     // with the queued item so they cannot bleed into a later immediate send.
     const handleQueue = useCallback(async (mode: QueueMode) => {
-      if (props.sendBlocked || (!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length) || !props.onQueue) return;
-      const text = input.trim()
-        ? input
-        : attachments.length ? t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' }) : t('composer.useSkills');
-      const picks = props.filePicks ?? [];
-      const skillIds = [...new Set([...(props.skillPicks ?? []), ...picker.picks.map(item => item.id)])];
-      const atts = attachments;
-      if (!await references.commit()) return;
-      // Slash command: same interception as handleSend — the typed `/cmd`
-      // stays as the message, the matched skill rides as a pick (no file_refs
-      // prefix), so a queued slash command behaves like a sent one.
-      if (text.startsWith('/') && props.sessionId) {
-        const spaceIdx = text.indexOf(' ');
-        const cmd = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
-        const match = await resolveTypedSkill(cmd);
-        if (match === undefined) return;
-        if (match) {
-          setInput('');
-          setAttachments([]);
-          clearDraft();
-          picker.clear();
-          references.clear();
-          props.onClearPicks?.();
-          props.onClearSkillPicks?.();
-          const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
-          props.onQueue(text, mode, atts, merged);
-          return;
+      if (queueSubmission.current || props.sendBlocked || (!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length) || !props.onQueue) return;
+      queueSubmission.current = true;
+      try {
+        const snapshot = currentDraft.current;
+        const text = input.trim()
+          ? input
+          : attachments.length ? t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' }) : t('composer.useSkills');
+        const picks = props.filePicks ?? [];
+        let skillIds = [...new Set([...(props.skillPicks ?? []), ...picker.picks.map(item => item.id)])];
+        const atts = attachments;
+        if (!await references.commit()) return;
+        // Slash command: same interception as handleSend — the typed `/cmd`
+        // stays as the message, the matched skill rides as a pick (no file_refs
+        // prefix), so a queued slash command behaves like a sent one.
+        if (text.startsWith('/') && props.sessionId) {
+          const spaceIdx = text.indexOf(' ');
+          const cmd = spaceIdx > 0 ? text.slice(1, spaceIdx) : text.slice(1);
+          const match = await resolveTypedSkill(cmd);
+          if (match === undefined) return;
+          if (match) {
+            skillIds = [match.id, ...skillIds.filter((s) => s !== match.id)];
+          }
         }
-      }
-      const finalText = picks.length > 0
-        ? `<file_refs>\n${picks.map((p) => `- ${p}`).join('\n')}\n</file_refs>\n\n${text}`
-        : text;
-      setInput('');
-      setAttachments([]);
-      clearDraft();
-      picker.clear();
-      references.clear();
-      props.onClearPicks?.();
-      props.onClearSkillPicks?.();
-      props.onQueue(finalText, mode, atts, skillIds.length > 0 ? skillIds : undefined);
+        const current = currentDraft.current;
+        if (current.input !== snapshot.input || current.attachments !== snapshot.attachments || current.sessionId !== snapshot.sessionId) return;
+        const finalText = picks.length > 0
+          ? `<file_refs>\n${picks.map((p) => `- ${p}`).join('\n')}\n</file_refs>\n\n${text}`
+          : text;
+        if (props.onQueue(finalText, mode, atts, skillIds.length > 0 ? skillIds : undefined) === false) return;
+        setInput('');
+        setAttachments([]);
+        clearDraft();
+        picker.clear();
+        references.clear();
+        props.onClearPicks?.();
+        props.onClearSkillPicks?.();
+      } finally { queueSubmission.current = false; }
     }, [input, attachments, picker.picks, resolveTypedSkill, references.commit, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, props.sendBlocked, clearDraft, t]);
 
     const filePicks = props.filePicks ?? [];
@@ -601,7 +599,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 if (streaming) {
-                  if (props.queueable && hasInput) handleQueue('next-turn');
+                  if (props.queueable && hasInput) handleQueue(e.shiftKey ? 'end-of-session' : 'next-turn');
                 } else if (!props.sendBlocked) {
                   handleSend();
                 }

@@ -1,6 +1,8 @@
 /** Shared, behavior-neutral accounting for direct and nested tool calls. */
 import { stableArgsKey } from './runner/dup-utils.js';
 import type { ToolRiskLevel } from './tool.js';
+import { isDocumentationOnlyWrite, validationTargetsDocumentation } from './documentation-write.js';
+import { validationInvocationParts, isVerificationObservation, unwrapValidationExecutable } from './validation-command.js';
 
 export interface ToolCallLedgerEntry {
   seq: number;
@@ -20,6 +22,10 @@ export interface ToolCallLedgerEntry {
   executionClass?: string;
   repeatPolicy?: string;
   readCoverage?: { path: string; start: number | null; end: number | null };
+  /** Known native file edits affecting plain prose only; no raw input retained. */
+  documentationOnly?: true;
+  /** Known inspection only; does not affect permission, replay or scheduling. */
+  verificationObservation?: true;
   resultNovel: boolean;
   coverageNovel: boolean;
   /** Allowlisted validation command/tool label; never a raw command line. */
@@ -68,6 +74,7 @@ export function logicalOperationId(name: string, args: unknown): string {
 
 class ToolCallAccounting {
   readonly terminalValidations = new Map<string, { signal: string; startedSeq: number }>();
+  readonly terminalObservations = new Set<string>();
   seq = 0;
   readonly entries: ToolCallLedgerEntry[] = [];
   readonly resultsByOperation = new Map<string, Set<string>>();
@@ -79,6 +86,7 @@ class ToolCallAccounting {
 export class ToolCallLedger {
   constructor(private readonly accounting = new ToolCallAccounting()) {}
   private get terminalValidations() { return this.accounting.terminalValidations; }
+  private get terminalObservations() { return this.accounting.terminalObservations; }
   private get seq() { return this.accounting.seq; }
   private set seq(value: number) { this.accounting.seq = value; }
   private get entries() { return this.accounting.entries; }
@@ -222,6 +230,7 @@ export class ToolCallLedger {
           ? 'refusal'
           : input.isError ? 'tool_error' : 'success';
     let validationSignal = extractValidationSignal(input.name, argRecord);
+    let verificationObservation = isVerificationObservation(input.name, argRecord);
     let validationStartedSeq = this.seq + 1;
     let validationOutcome: ToolCallLedgerEntry['validationOutcome'];
     const terminalTool = ['exec_command', 'write_stdin', 'poll_session'].includes(input.name);
@@ -230,6 +239,16 @@ export class ToolCallLedger {
     const sessionId = typeof result.sessionId === 'string' ? result.sessionId
       : typeof argRecord.session_id === 'string' ? argRecord.session_id : undefined;
     if (terminalTool && sessionId) {
+      if (input.name === 'exec_command') {
+        if (verificationObservation) this.terminalObservations.add(sessionId);
+        else this.terminalObservations.delete(sessionId);
+      } else {
+        if (typeof argRecord.chars === 'string' && argRecord.chars.length > 0) {
+          this.terminalObservations.delete(sessionId);
+        }
+        verificationObservation = this.terminalObservations.has(sessionId);
+      }
+      if (result.state === 'exited' || outcome !== 'success') this.terminalObservations.delete(sessionId);
       if (input.name === 'exec_command' && validationSignal) {
         this.terminalValidations.set(sessionId, { signal: validationSignal, startedSeq: validationStartedSeq });
       } else if (input.name !== 'exec_command') {
@@ -253,6 +272,7 @@ export class ToolCallLedger {
     }
     // Bound abandoned sessions independently from the retained ledger window.
     if (this.terminalValidations.size > 500) this.terminalValidations.delete(this.terminalValidations.keys().next().value!);
+    if (this.terminalObservations.size > 500) this.terminalObservations.delete(this.terminalObservations.values().next().value!);
     const recoveryOperationId = extractRecoveryOperationId(
       input.name,
       argRecord,
@@ -274,6 +294,8 @@ export class ToolCallLedger {
       ...(input.executionClass ? { executionClass: input.executionClass } : {}),
       ...(input.repeatPolicy ? { repeatPolicy: input.repeatPolicy } : {}),
       ...(readCoverage ? { readCoverage } : {}),
+      ...(isDocumentationOnlyWrite(input.name, argRecord) ? { documentationOnly: true as const } : {}),
+      ...(verificationObservation ? { verificationObservation: true as const } : {}),
       resultNovel: novel,
       coverageNovel,
       ...(validationSignal ? { validationSignal, validationOutcome, validationStartedSeq } : {}),
@@ -401,17 +423,21 @@ function extractRecoveryOperationId(
   return undefined;
 }
 
-/** Conservative recognition of a direct invocation, never a substring in echoed text.
- * Composite shell programs need a structured per-command receipt before they can
- * count as verification. Missing evidence must not turn into a success claim. */
+/** Direct checks and success-only chains; output redirection preserves exit status.
+ * Every component must be a known check. Pipelines, OR chains and arbitrary shell
+ * programs cannot turn unrelated exit-zero results into validation evidence. */
 export function extractValidationSignal(name: string, args: Record<string, unknown>): string | undefined {
   if (!['run_command', 'exec_command', 'shell_command'].includes(name)) return undefined;
-  const command = [args.command, args.cmd, args.script].find((value): value is string => typeof value === 'string');
-  if (command) {
-    // Reject chaining, piping, substitution and redirection: exit zero for the
-    // whole shell is not evidence that the validation command ran/passed.
-    if (/[;&|<>`\r\n$#]/.test(command)) return undefined;
-    const normalized = command.replace(/\s+/g, ' ').trim().toLowerCase();
+  const parts = validationInvocationParts(args);
+  if (!parts) return undefined;
+  const labels = parts.map(extractDirectValidationSignal);
+  if (labels.some(label => !label)) return undefined;
+  const label = [...new Set(labels)].join(' && ');
+  return validationTargetsDocumentation(parts.join(' ')) ? `${label} (documentation)` : label;
+}
+
+function extractDirectValidationSignal(command: string): string | undefined {
+    const normalized = unwrapValidationExecutable(command.replace(/\s+/g, ' '));
     if (/(?:^|\s)(?:--help|-h|--version|--dry-run|--list(?:tests)?|--collect-only|--showconfig|--show-config)(?:[=\s]|$)/.test(normalized)) return undefined;
     if (/^(?:npm|pnpm|yarn|bun)\b/.test(normalized)
       && /(?:^|\s)(?:--cwd|--dir|--prefix|-c)(?:[=\s]+)(?!\.(?:\s|$))/.test(normalized)) return undefined;
@@ -431,18 +457,18 @@ export function extractValidationSignal(name: string, args: Record<string, unkno
       [/^git diff --check\b/, 'git diff --check'],
       [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?vitest(?: run)?\b/, 'vitest run'],
       [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?jest\b/, 'jest'],
+      [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?ava\b/, 'ava'],
       [/^(?:(?:python|python3) -m )?pytest\b/, 'pytest'],
       [/^cargo (?:test|check|clippy|build)\b/, 'cargo validation'],
       [/^go (?:test|vet|build)\b/, 'go validation'],
       [/^dotnet (?:test|build)\b/, 'dotnet validation'],
       [/^(?:mvn|gradle|gradlew) (?:test|verify|check|build)\b/, 'jvm validation'],
       [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?tsc(?: --noemit)?\b/, 'tsc --noEmit'],
-      [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?(?:eslint|biome check|ruff check|vite build)\b/, 'static validation'],
+      [/^(?:(?:npx|pnpm exec|npm exec|yarn exec|bunx) )?(?:eslint|xo|biome check|ruff check|vite build)\b/, 'static validation'],
     ];
     for (const [pattern, label] of patterns) {
       const match = normalized.match(pattern);
       if (match) return label;
     }
-  }
   return undefined;
 }

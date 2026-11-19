@@ -5,7 +5,7 @@
  */
 import { apiCall } from '../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
-import { getActiveEditor, modelFor } from './editor-models.js';
+import { flushEditorContentMirror, getActiveEditor, modelFor } from './editor-models.js';
 import { saveSftpEdit } from './sftp-edit-session.js';
 import { getEffectiveEditorSettings } from '../../../state/editor-settings.js';
 
@@ -23,6 +23,7 @@ export async function saveFile(projectId: number, path: string): Promise<boolean
   if (settings.formatOnSave && getActiveEditor()?.getModel() === model) {
     await getActiveEditor()?.getAction('editor.action.formatDocument')?.run();
   }
+  if (model?.isDisposed()) return false;
   let value = model?.getValue() ?? stored;
   if (value == null) return false; // never-loaded tab — nothing to persist
   if (settings.trimTrailingWhitespace) value = value.replace(/[\t ]+$/gm, '');
@@ -30,11 +31,13 @@ export async function saveFile(projectId: number, path: string): Promise<boolean
   if (settings.endOfLine === 'lf') value = value.replace(/\r\n/g, '\n');
   if (settings.endOfLine === 'crlf') value = value.replace(/\r?\n/g, '\r\n');
   if (model && model.getValue() !== value) model.setValue(value);
+  useWorkspaceStore.getState().syncEditorContent(projectId, path, value);
   try {
     const res = await apiCall<{ ok: true; last_modified: string }>('files.write', {
       projectId, path, content: value,
     });
-    useWorkspaceStore.getState().markClean(projectId, path, res.last_modified);
+    flushEditorContentMirror(modelFor(projectId, path));
+    useWorkspaceStore.getState().markClean(projectId, path, res.last_modified, value);
     return true;
   } catch (err) {
     console.error('[workspace] save failed:', err);

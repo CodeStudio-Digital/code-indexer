@@ -97,7 +97,10 @@ export function RunningTasksDropdown() {
                 <StatusDot status={task.status} />
                 <button
                   type="button"
-                  onClick={() => navigate(`/projects/${task.projectId}?tab=runners`)}
+                    onClick={() => {
+                      const search = new URLSearchParams({ tab: 'runners', worktree: task.worktreePath ?? '' });
+                      navigate(`/projects/${task.projectId}?${search}`);
+                    }}
                   className="flex-1 min-w-0 text-left"
                 >
                   <span className="block text-xs font-medium truncate">{task.label}</span>

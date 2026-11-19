@@ -18,6 +18,7 @@
 import { create } from 'zustand';
 import type { SshConnectSpec } from '@mcp/api-bus';
 import type { DbEngine, WorkTab } from '../features/db-client/types.js';
+import { acceptsWorkspaceTab } from './active-surface.js';
 
 export interface OpenFile {
   /** Discriminator — regular editable file. */
@@ -140,6 +141,7 @@ export interface OpenSftpFile {
 export interface OpenDatabaseTab {
   kind: 'database';
   projectId: number;
+  connectionProjectId?: number;
   /** Synthetic identity, stable for tables and unique for ad-hoc queries. */
   path: string;
   title: string;
@@ -209,7 +211,7 @@ interface WorkspaceState {
   activePaneId: string;
 
   /** Atomic project switch: persist outgoing tabs, drop them, hydrate incoming. */
-  setProject: (projectId: number) => void;
+  setProject: (projectId: number, keepDrafts?: boolean) => void;
   openFile: (file: OpenFile) => void;
   openDiff: (diff: OpenDiff) => void;
   openGitLog: (tab: OpenGitLog) => void;
@@ -251,7 +253,7 @@ interface WorkspaceState {
   /** Refresh the debounced Monaco mirror without changing the current dirty state. */
   syncEditorContent: (projectId: number, path: string, content: string) => void;
   setContent: (projectId: number, path: string, content: string) => void;
-  markClean: (projectId: number, path: string, lastModified: string) => void;
+  markClean: (projectId: number, path: string, lastModified: string, savedContent?: string) => void;
   /** External (disk) content landed on a NON-dirty tab — replace without dirtying. */
   applyExternalContent: (projectId: number, path: string, content: string, lastModified: string | null) => void;
   /** Disk changed under a DIRTY tab — flag the conflict, keep the user's buffer. */
@@ -568,6 +570,11 @@ export function savePersistedTabs(
 }
 
 const INITIAL_PANE_ID = nextPaneId();
+const parkedWorkspaces = new Map<number, Pick<WorkspaceState, 'openFiles' | 'panes' | 'activePaneId' | 'splitDir' | 'activeFilePath'>>();
+
+export function isParkedSftpTab(projectId: number, path: string): boolean {
+  return parkedWorkspaces.get(projectId)?.openFiles.some((file) => file.kind === 'sftp' && file.path === path) ?? false;
+}
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   openFiles: [],
@@ -577,7 +584,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   splitDir: null,
   activePaneId: INITIAL_PANE_ID,
 
-  setProject: (projectId) =>
+  setProject: (projectId, keepDrafts = false) =>
     set((s) => {
       if (s.activeProjectId === projectId) return s; // idempotente
       // Persiste as abas do projeto que SAI (filtradas por segurança), depois dropa-as
@@ -585,14 +592,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       // do projeto antigo (→ documentSync didClose). Hidrata o projeto que entra com
       // content:null (refetch lazy na ativação, igual ao useEnsureFileContent).
       if (s.activeProjectId !== null) {
+        const tabs = s.openFiles.filter((f) => f.projectId === s.activeProjectId);
         savePersistedTabs(
           s.activeProjectId,
-          s.openFiles.filter((f) => f.projectId === s.activeProjectId),
+          tabs,
           s.activeFilePath,
           s.panes,
           s.splitDir,
           s.activePaneId,
         );
+        if (keepDrafts && tabs.some(tab => tab.kind === 'sftp' || ('dirty' in tab && tab.dirty))) {
+          parkedWorkspaces.set(s.activeProjectId, {
+            openFiles: tabs.map(tab => (tab.kind === undefined || tab.kind === 'file') && !tab.dirty ? { ...tab, content: null } : tab),
+            panes: s.panes, activePaneId: s.activePaneId, splitDir: s.splitDir, activeFilePath: s.activeFilePath,
+          });
+        }
+      }
+      const parked = parkedWorkspaces.get(projectId);
+      if (parked) {
+        parkedWorkspaces.delete(projectId);
+        return { activeProjectId: projectId, ...parked };
       }
       const persisted = loadPersistedTabs(projectId);
       const validPaths = persisted.openFiles
@@ -621,6 +640,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   openFile: (file) =>
     set((s) => {
+      if (!acceptsWorkspaceTab(file.projectId)) return s;
       const inPool = s.openFiles.some((f) => sameTab(f, file));
       const openFiles = inPool ? s.openFiles : [...s.openFiles, file];
       const { panes, activePaneId } = placePath(s.panes, s.activePaneId, file.path);
@@ -634,11 +654,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     }),
 
   openDiff: (diff) => {
+    if (!acceptsWorkspaceTab(diff.projectId)) return;
     set((s) => upsertVirtualTab(s, diff));
     requestEditorSurface(diff.projectId);
   },
 
   openGitLog: (tab) => {
+    if (!acceptsWorkspaceTab(tab.projectId)) return;
     set((s) => upsertVirtualTab(s, tab));
     requestEditorSurface(tab.projectId);
   },
@@ -653,16 +675,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     })),
 
   openGitStash: (tab) => {
+    if (!acceptsWorkspaceTab(tab.projectId)) return;
     set((s) => upsertVirtualTab(s, tab));
     requestEditorSurface(tab.projectId);
   },
 
   openMerge: (tab) => {
+    if (!acceptsWorkspaceTab(tab.projectId)) return;
     set((s) => upsertVirtualTab(s, tab));
     requestEditorSurface(tab.projectId);
   },
 
   openDatabaseTab: (tab) => {
+    if (!acceptsWorkspaceTab(tab.projectId)) return;
     set((s) => upsertVirtualTab(s, tab));
     const state = useWorkspaceStore.getState();
     savePersistedTabs(tab.projectId, state.openFiles, state.activeFilePath, state.panes, state.splitDir, state.activePaneId);
@@ -670,6 +695,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   },
 
   updateDatabaseTab: (projectId, path, patch) => {
+    if (useWorkspaceStore.getState().activeProjectId !== projectId) return;
     set((state) => ({
       openFiles: state.openFiles.map((file) => file.kind === 'database' && sameTab(file, { projectId, path }) ? { ...file, ...patch, kind: 'database', projectId, path } : file),
     }));
@@ -678,6 +704,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   },
 
   openSftpFile: (tab) => {
+    if (!acceptsWorkspaceTab(tab.projectId)) return;
     set((s) => {
       // Already open (same host+remote path) → focus it, KEEPING any in-progress
       // edits rather than re-downloading over them.
@@ -698,12 +725,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       ),
     })),
 
-  markSftpSaved: (projectId, path, content) =>
-    set((s) => ({
-      openFiles: s.openFiles.map((f) =>
-        f.kind === 'sftp' && sameTab(f, { path, projectId }) ? { ...f, content, dirty: false } : f,
-      ),
-    })),
+  markSftpSaved: (projectId, path, content) => {
+    const saved = (file: OpenTab) => file.kind === 'sftp' && sameTab(file, { path, projectId })
+      ? { ...file, content, dirty: false } : file;
+    const parked = parkedWorkspaces.get(projectId);
+    if (parked) parked.openFiles = parked.openFiles.map(saved);
+    set((s) => ({ openFiles: s.openFiles.map(saved) }));
+  },
 
   closeFile: (projectId, path) => {
     set((s) => {
@@ -887,14 +915,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       ),
     })),
 
-  markClean: (projectId, path, lastModified) =>
-    set((s) => ({
-      openFiles: s.openFiles.map((f) =>
-        (f.kind === undefined || f.kind === 'file') && sameTab(f, { path, projectId })
-          ? { ...f, dirty: false, lastModified, externallyChanged: false }
-          : f,
-      ),
-    })),
+  markClean: (projectId, path, lastModified, savedContent) => {
+    const clean = (file: OpenTab, parked: boolean): OpenTab => {
+      if ((file.kind !== undefined && file.kind !== 'file') || !sameTab(file, { path, projectId })) return file;
+      const dirty = file.dirty && savedContent !== undefined && file.content !== savedContent;
+      return {
+        ...file,
+        content: parked && !dirty ? null : file.content,
+        dirty,
+        lastModified,
+        externallyChanged: false,
+      };
+    };
+    const parked = parkedWorkspaces.get(projectId);
+    if (parked) parked.openFiles = parked.openFiles.map((file) => clean(file, true));
+    set((s) => ({ openFiles: s.openFiles.map((file) => clean(file, false)) }));
+  },
 
   applyExternalContent: (projectId, path, content, lastModified) =>
     set((s) => ({

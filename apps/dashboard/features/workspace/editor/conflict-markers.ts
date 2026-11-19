@@ -41,37 +41,55 @@ export function hasConflictMarkers(text: string): boolean {
 export function parseConflictRegions(text: string): ConflictRegion[] {
   const lines = text.split('\n');
   const regions: ConflictRegion[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    if (!RE_START.test(lines[i])) { i++; continue; }
-    const s = i;
-    let base = -1;
-    let sep = -1;
-    let end = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (base === -1 && RE_BASE.test(lines[j])) base = j;
-      else if (sep === -1 && RE_SEP.test(lines[j])) sep = j;
-      else if (RE_END.test(lines[j])) { end = j; break; }
+  let start = -1;
+  let base = -1;
+  let sep = -1;
+  for (let line = 0; line < lines.length; line++) {
+    const text = lines[line];
+    if (start === -1) {
+      if (RE_START.test(text)) start = line;
+      continue;
     }
-    if (sep !== -1 && end !== -1) {
-      const curEnd = base !== -1 ? base : sep; // exclusive (array index of marker)
-      regions.push({
-        startLine: s + 1,
-        sepLine: sep + 1,
-        endLine: end + 1,
-        baseLine: base !== -1 ? base + 1 : undefined,
-        currentText: lines.slice(s + 1, curEnd).join('\n'),
-        incomingText: lines.slice(sep + 1, end).join('\n'),
-      });
-      i = end + 1;
-    } else {
-      i++;
+    if (base === -1 && RE_BASE.test(text)) base = line;
+    else if (sep === -1 && RE_SEP.test(text)) sep = line;
+    else if (RE_END.test(text)) {
+      if (sep !== -1) {
+        const curEnd = base !== -1 ? base : sep; // exclusive (array index of marker)
+        regions.push({
+          startLine: start + 1,
+          sepLine: sep + 1,
+          endLine: line + 1,
+          baseLine: base !== -1 ? base + 1 : undefined,
+          currentText: lines.slice(start + 1, curEnd).join('\n'),
+          incomingText: lines.slice(sep + 1, line).join('\n'),
+        });
+      }
+      start = base = sep = -1;
     }
   }
   return regions;
 }
 
 type ConflictSide = 'current' | 'incoming' | 'both';
+const REFRESH_DELAY_MS = 100;
+
+interface ConflictSnapshot {
+  id: number;
+  version: number;
+  regions: ConflictRegion[];
+}
+
+const snapshots = new WeakMap<MonacoNs.editor.ITextModel, ConflictSnapshot>();
+let nextSnapshotId = 0;
+
+function snapshotOf(model: MonacoNs.editor.ITextModel): ConflictSnapshot {
+  const version = model.getVersionId();
+  const cached = snapshots.get(model);
+  if (cached?.version === version) return cached;
+  const snapshot = { id: ++nextSnapshotId, version, regions: parseConflictRegions(model.getValue()) };
+  snapshots.set(model, snapshot);
+  return snapshot;
+}
 
 interface ConflictLabels {
   current: string;
@@ -91,8 +109,8 @@ export function computeResolutionText(region: ConflictRegion, side: ConflictSide
 }
 
 /**
- * Apply a resolution to a model in one undoable edit. Re-parses live so the
- * edit is correct even if earlier accepts shifted lines. When the chosen
+ * Apply a resolution to a model in one undoable edit, rejecting stale lenses
+ * if earlier edits shifted lines. When the chosen
  * side is empty, the range extends through the START of the next line so the
  * whole block is removed instead of collapsing into a stray blank line
  * (unless the block is the last line in the file, where there's nothing to
@@ -100,11 +118,9 @@ export function computeResolutionText(region: ConflictRegion, side: ConflictSide
  */
 function applyToModel(
   model: MonacoNs.editor.ITextModel,
-  startLine: number,
+  region: ConflictRegion,
   side: ConflictSide,
 ): void {
-  const region = parseConflictRegions(model.getValue()).find((r) => r.startLine === startLine);
-  if (!region) return;
   const text = computeResolutionText(region, side);
   const range =
     text === '' && region.endLine < model.getLineCount()
@@ -128,9 +144,13 @@ let applyCommandId: string | null = null;
 function ensureApplyCommand(monaco: typeof MonacoNs): string {
   if (applyCommandId) return applyCommandId;
   const id = 'mcp.conflict.applyResolution';
-  monaco.editor.registerCommand(id, (_accessor, uriStr: string, startLine: number, side: ConflictSide) => {
+  monaco.editor.registerCommand(id, (_accessor, uriStr: string, snapshotId: number, startLine: number, side: ConflictSide) => {
     const model = monaco.editor.getModel(monaco.Uri.parse(uriStr));
-    if (model) applyToModel(model, startLine, side);
+    if (!model || model.isDisposed()) return;
+    const snapshot = snapshots.get(model);
+    if (snapshot?.id !== snapshotId || snapshot.version !== model.getVersionId()) return;
+    const region = snapshot.regions.find((r) => r.startLine === startLine);
+    if (region) applyToModel(model, region, side);
   });
   applyCommandId = id;
   return id;
@@ -146,9 +166,9 @@ export function attachConflictUI(
   const uri = model.uri.toString();
   const collection = editor.createDecorationsCollection([]);
 
-  const refresh = () => {
+  const renderRegions = (regions: ConflictRegion[]) => {
     const decos: MonacoNs.editor.IModelDeltaDecoration[] = [];
-    for (const r of parseConflictRegions(model.getValue())) {
+    for (const r of regions) {
       const curEnd = (r.baseLine ?? r.sepLine) - 1;
       if (curEnd >= r.startLine + 1) {
         decos.push({
@@ -165,21 +185,21 @@ export function attachConflictUI(
     }
     collection.set(decos);
   };
-  refresh();
-
   const cmdId = ensureApplyCommand(monaco);
 
   const emitter = new monaco.Emitter<MonacoNs.languages.CodeLensProvider>();
   const lensProvider: MonacoNs.languages.CodeLensProvider = {
     onDidChange: emitter.event,
     provideCodeLenses: (m) => {
-      if (m.uri.toString() !== uri) return { lenses: [], dispose() { /* */ } };
-      const lenses = parseConflictRegions(m.getValue()).flatMap((r) => {
+      const snapshot = m === model ? snapshots.get(model) : undefined;
+      if (!snapshot || snapshot.version !== m.getVersionId()) return { lenses: [], dispose() { /* */ } };
+      const lenses = snapshot.regions.flatMap((r) => {
         const range = new monaco.Range(r.startLine, 1, r.startLine, 1);
+        const args = [uri, snapshot.id, r.startLine];
         return [
-          { range, command: { id: cmdId, title: labels.current, arguments: [uri, r.startLine, 'current'] } },
-          { range, command: { id: cmdId, title: labels.incoming, arguments: [uri, r.startLine, 'incoming'] } },
-          { range, command: { id: cmdId, title: labels.both, arguments: [uri, r.startLine, 'both'] } },
+          { range, command: { id: cmdId, title: labels.current, arguments: [...args, 'current'] } },
+          { range, command: { id: cmdId, title: labels.incoming, arguments: [...args, 'incoming'] } },
+          { range, command: { id: cmdId, title: labels.both, arguments: [...args, 'both'] } },
         ];
       });
       return { lenses, dispose() { /* */ } };
@@ -187,10 +207,23 @@ export function attachConflictUI(
   };
   const provider = monaco.languages.registerCodeLensProvider('*', lensProvider);
 
-  const sub = model.onDidChangeContent(() => { refresh(); emitter.fire(lensProvider); });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const refresh = (): void => {
+    timer = undefined;
+    if (model.isDisposed() || editor.getModel() !== model) return;
+    renderRegions(snapshotOf(model).regions);
+    emitter.fire(lensProvider);
+  };
+  const schedule = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(refresh, REFRESH_DELAY_MS);
+  };
+  schedule();
+  const sub = model.onDidChangeContent(schedule);
 
   return {
     dispose() {
+      clearTimeout(timer);
       collection.clear();
       provider.dispose();
       sub.dispose();

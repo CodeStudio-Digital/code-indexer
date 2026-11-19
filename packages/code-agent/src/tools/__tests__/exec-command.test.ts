@@ -30,7 +30,8 @@ async function collectUntil(content: string, expected: string, ctx: ToolContext)
   const deadline = Date.now() + 10_000;
   const sessionId = extractSessionId(content);
   while (!content.includes(expected) && Date.now() < deadline) {
-    content += (await writeStdin.handler({ session_id: sessionId, yield_time_ms: 250 }, ctx)).content;
+    await new Promise(resolve => setTimeout(resolve, 25));
+    content += (await writeStdin.handler({ session_id: sessionId, yield_time_ms: 0 }, ctx)).content;
   }
   return content;
 }
@@ -66,6 +67,43 @@ afterEach(async () => {
 });
 
 describe('exec_command + write_stdin', () => {
+  it.each([
+    { args: {}, expected: 10_000 },
+    { args: { chars: '' }, expected: 10_000 },
+    { args: { chars: 'input\n' }, expected: 250 },
+    { args: { yield_time_ms: 500 }, expected: process.platform === 'win32' ? 5_000 : 500 },
+    { args: { chars: 'x', yield_time_ms: 50 }, expected: 50 },
+    { args: { yield_time_ms: 120_000 }, expected: 60_000 },
+    { args: { yield_time_ms: 0 }, expected: 0 },
+  ])('uses platform wait bounds for empty polls while preserving immediate and interactive input: $args', async ({ args, expected }) => {
+    const write = vi.fn().mockResolvedValue({ content: 'status=running' });
+    const ctx: ToolContext = {
+      ...makeCtx(),
+      ports: { commands: {
+        mutationFenceAttested: true,
+        start: vi.fn(), write, list: vi.fn(), close: vi.fn(),
+      } },
+    };
+    await writeStdin.handler({ session_id: 'owned-session', ...args }, ctx);
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'owned-session', chars: 'chars' in args ? args.chars : '', yieldMs: expected,
+    }));
+  });
+
+  it.each([
+    { wait: 1_000, expected: process.platform === 'win32' ? 10_000 : 1_000 },
+    { wait: 0, expected: 0 },
+    { wait: 30_000, expected: 30_000 },
+  ])('starts persistent commands with the effective platform wait: $wait', async ({ wait, expected }) => {
+    const start = vi.fn().mockResolvedValue({ content: 'status=running' });
+    await execCommand.handler({ cmd: 'echo ready', yield_time_ms: wait }, {
+      ...makeCtx(), ports: { commands: {
+        mutationFenceAttested: true, start, write: vi.fn(), list: vi.fn(), close: vi.fn(),
+      } },
+    });
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ yieldMs: expected }));
+  });
+
   it('rejects empty cmd', async () => {
     const result = await execCommand.handler({ cmd: '' }, makeCtx());
     expect(result.isError).toBe(true);
@@ -103,7 +141,7 @@ describe('exec_command + write_stdin', () => {
 
   it('keeps a long-running session alive and returns session_id', async () => {
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 0 },
       makeCtx(),
     );
     expect(r1.isError).toBeFalsy();
@@ -117,7 +155,7 @@ describe('exec_command + write_stdin', () => {
 
   it('write_stdin delivers bytes to the session and yields new output', async () => {
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 0 },
       makeCtx(),
     );
     const sid = extractSessionId(r1.content);
@@ -141,19 +179,34 @@ describe('exec_command + write_stdin', () => {
 
   it('empty-chars write_stdin acts as a non-destructive poll', async () => {
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 0 },
       makeCtx(),
     );
     const sid = extractSessionId(r1.content);
 
     const poll = await writeStdin.handler(
-      { session_id: sid, chars: '', yield_time_ms: 300 },
+      { session_id: sid, chars: '', yield_time_ms: 0 },
       makeCtx(),
     );
     expect(poll.isError).toBeFalsy();
     expect(poll.content).toContain('status=running');
     // No bytes written → no new output expected from the echo script.
     expect(poll.content).not.toContain('echo:');
+  });
+
+  it('cancels a long empty wait without waiting for its timeout', async () => {
+    const launched = await execCommand.handler({ cmd: `node ${scriptPath}`, yield_time_ms: 0 }, makeCtx());
+    const controller = new AbortController();
+    const pending = writeStdin.handler({ session_id: extractSessionId(launched.content), yield_time_ms: 30_000 }, {
+      ...makeCtx(), signal: controller.signal,
+    });
+    controller.abort();
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([pending, new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('Cancelled poll did not settle')), 2_000);
+      })]);
+    } finally { clearTimeout(deadline); }
   });
 
   it('returns an error for unknown session_id', async () => {
@@ -187,7 +240,8 @@ describe('exec_command + write_stdin', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('MISFIRE');
-    expect(result.content).toContain('expand_toolset');
+    expect(result.content).toContain('find_tools');
+    expect(result.content).toContain('code_exec');
   });
 
   it('does NOT flag a genuine (hex-shaped) but expired session_id as a misfire', async () => {
@@ -203,7 +257,7 @@ describe('exec_command + write_stdin', () => {
   it('PR 5: write_stdin error lists active sessions for self-correction', async () => {
     // Spawn one long-running session so the error has something to list.
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 0 },
       makeCtx(),
     );
     const sid = extractSessionId(r1.content);
@@ -237,7 +291,7 @@ describe('exec_command + write_stdin', () => {
 
   it('PR 5 list_sessions: lists active sessions with id, status, mode and age', async () => {
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 1500 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 0 },
       makeCtx(),
     );
     const sid = extractSessionId(r1.content);
@@ -258,7 +312,7 @@ describe('exec_command + write_stdin', () => {
       toolOutputStore: { put },
     } as unknown as ToolContext;
     const r1 = await execCommand.handler(
-      { cmd: `node ${scriptPath}`, yield_time_ms: 5000, max_output_chars: 1000 },
+      { cmd: `node ${scriptPath}`, yield_time_ms: 0, max_output_chars: 1000 },
       storeCtx,
     );
     const sid = extractSessionId(r1.content);

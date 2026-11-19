@@ -21,9 +21,12 @@ export function commandSpec(raw: unknown, legacy: unknown): CommandSpec {
     && ['cmd','powershell','pwsh','sh','bash'].includes(String(c.shell))) return c as CommandSpec;
   throw new Error('Invalid command: use argv {executable,args} or shell {script,shell}');
 }
-export function commandLaunch(spec: CommandSpec): { executable: string; args: string[] } {
+export function commandLaunch(spec: CommandSpec): { executable: string; args: string[]; windowsVerbatimArguments?: boolean } {
   if (spec.kind === 'argv') return spec;
-  if (spec.shell === 'cmd') return { executable: 'cmd.exe', args: ['/d','/s','/c',spec.script] };
+  // cmd.exe parses a command line, not CRT argv. Match Node's shell launch:
+  // /s strips this outer pair; inner quotes/metacharacters belong to the script.
+  // CRT escaping would insert backslashes and pass literal quotes to children.
+  if (spec.shell === 'cmd') return { executable: 'cmd.exe', args: ['/d','/s','/c',`"${spec.script}"`], windowsVerbatimArguments: true };
   if (spec.shell === 'powershell' || spec.shell === 'pwsh') return { executable: spec.shell === 'powershell' ? 'powershell.exe' : 'pwsh', args: ['-NoLogo','-NoProfile','-NonInteractive','-Command',spec.script] };
   return { executable: spec.shell === 'sh' ? '/bin/sh' : 'bash', args: ['-c',spec.script] };
 }

@@ -14,6 +14,7 @@ import { TERMINAL_COMMAND_STATUSES,TERMINAL_RUN_STATUSES,cleanJson,eventId,iso,p
 import { assertNoRuntimeCancellation,commitRuntimeRequest,commitRuntimeRoute } from './runtime-attempt-ledger.js';
 
 import type { ControlPlaneFileContext } from './control-plane-file-context.js';
+import { SessionRecoveryError } from './control-plane-recovery-error.js';
 
 export const operations = {
 async getCommand(this: ControlPlaneFileContext,
@@ -119,7 +120,16 @@ recoverInterruptedRuns(this: ControlPlaneFileContext,
     reason = 'process-restart',
     occurredAt = new Date().toISOString(),
   ): Promise<number> {
-    this.internalRecoveryPromise ??= this.internalPerformRecovery(reason, occurredAt);
+    this.internalRecoveryRequest ??= { reason, occurredAt };
+    if (!this.internalRecoveryPromise) {
+      const request = this.internalRecoveryRequest;
+      const recovery = this.internalPerformRecovery(request.reason, request.occurredAt);
+      this.internalRecoveryPromise = recovery;
+      void recovery.catch(() => {
+        // A failed catalog read must not poison every subsequent admission.
+        if (this.internalRecoveryPromise === recovery) this.internalRecoveryPromise = null;
+      });
+    }
     return this.internalRecoveryPromise;
   },
 
@@ -131,18 +141,41 @@ async internalPerformRecovery(this: ControlPlaneFileContext,
     let recovered = 0;
     for (const entry of this.internalSessions.catalog.list()) {
       const sessionId = entry.session.id;
-      recovered += await this.internalEnqueue(sessionId, async () => {
+      try {
+        recovered += await this.internalEnqueue(sessionId, () =>
+          this.internalRecoverSession(sessionId, reason, occurredAt));
+      } catch (error) {
+        this.internalRecoveryFailures.set(sessionId, { reason, occurredAt });
+        console.warn(`[control-plane] session recovery unavailable session=${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return recovered;
+  },
+
+async internalEnsureSessionRecovered(this: ControlPlaneFileContext, sessionId: SessionId): Promise<void> {
+    const failed = this.internalRecoveryFailures.get(sessionId);
+    if (!failed) return;
+    try {
+      // Called inside the same session's mutation queue. Only this failed
+      // session is retried; a later recovery must not fence new healthy runs.
+      await this.internalRecoverSession(sessionId, failed.reason, failed.occurredAt);
+    } catch (error) {
+      throw new SessionRecoveryError(sessionId, error);
+    }
+  },
+
+async internalRecoverSession(this: ControlPlaneFileContext, sessionId: SessionId, reason: string, occurredAt: string): Promise<number> {
         const repository = await this.internalRepository(sessionId);
         const runs = (await this.internalListAll(repository, 'run'))
           .map(persistedRun)
           .filter((run): run is AgentRun => run != null);
         let count = 0;
         for (const run of runs) {
+          if (TERMINAL_RUN_STATUSES.has(run.status)) continue;
           const at = iso(occurredAt);
           const attempt = run.activeAttemptId
             ? await this.internalAttempt(repository, String(run.activeAttemptId))
             : null;
-          if (TERMINAL_RUN_STATUSES.has(run.status)) continue;
           if (attempt && attempt.status !== 'terminal') {
             await this.internalUpdateAttempt(
               repository,
@@ -162,13 +195,6 @@ async internalPerformRecovery(this: ControlPlaneFileContext,
               sessionId,
             );
           }
-          await this.internalUpdateRun(repository, {
-            ...run,
-            status: 'interrupted',
-            terminalReason: run.terminalReason ?? reason,
-            finishedAt: run.finishedAt ?? at,
-            version: run.version + 1,
-          });
           const command = await this.internalCommand(
             repository,
             String(run.commandId),
@@ -185,11 +211,18 @@ async internalPerformRecovery(this: ControlPlaneFileContext,
               updatedAt: at,
             });
           }
+          // Commit the run last: if an earlier write fails, retry still sees
+          // a non-terminal run and completes the remaining recovery writes.
+          await this.internalUpdateRun(repository, {
+            ...run,
+            status: 'interrupted',
+            terminalReason: run.terminalReason ?? reason,
+            finishedAt: run.finishedAt ?? at,
+            version: run.version + 1,
+          });
           count += 1;
         }
+        this.internalRecoveryFailures.delete(sessionId);
         return count;
-      });
-    }
-    return recovered;
   }
 };

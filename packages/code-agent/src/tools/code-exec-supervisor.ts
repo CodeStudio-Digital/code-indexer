@@ -93,7 +93,7 @@ export function superviseCodeExec(input: CodeExecBootstrap & { blocked?: string[
     }
     if (now - lastHeartbeat > (ready ? Math.max(100, input.timeoutMs) : 10_000)) {
       settled = true;
-      rejectRun(Object.assign(new Error('code_exec evaluator stopped responding'), { code: 'CODE_EXEC_JS_TIMEOUT' }));
+      rejectRun(Object.assign(new Error('code_exec timed out waiting for the evaluator to respond'), { code: 'CODE_EXEC_JS_TIMEOUT' }));
     }
   }, 50);
   watchdog.unref();

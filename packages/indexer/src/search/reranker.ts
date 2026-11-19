@@ -12,6 +12,7 @@
  *   - Null (passthrough, for when no reranker is configured)
  */
 
+import { noteFreeModelRateLimit, waitForFreeModelSlot } from './free-model-rate-limit.js';
 import type {
   RerankCandidate,
   RerankResult,
@@ -309,6 +310,7 @@ export class OpenAICompatibleReranker implements RerankerService {
     if (this.options.apiKey) headers.Authorization = `Bearer ${this.options.apiKey}`;
     let response: Response;
     try {
+      await waitForFreeModelSlot(this.options.endpoint, this.options.model, this.options.apiKey);
       response = await fetch(this.options.endpoint, {
         method: 'POST',
         headers,
@@ -325,7 +327,8 @@ export class OpenAICompatibleReranker implements RerankerService {
     }
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      const message = `${this.name} rerank failed: ${response.status}${detail ? ` ${detail.slice(0, 300)}` : ''}`;
+      const retry = noteFreeModelRateLimit(this.options.endpoint, this.options.model, this.options.apiKey, response, detail);
+      const message = `${this.name} rerank failed: ${response.status}${retry}${detail ? ` ${detail.slice(0, 300)}` : ''}`;
       this.runtime.failure(startedAt, message);
       if (this.options.strict) throw new Error(message);
       console.error(`[reranker] ${message}`);

@@ -376,6 +376,7 @@ export interface StreamNotice {
 }
 
 export type StreamBlock =
+  | { type: 'usage'; id: string; tokens: import('../../lib/turn-tokens.js').TurnTokens; toolIds: string[] }
   | { type: 'text'; text: string; id?: string }
   | { type: 'thinking'; text: string; id?: string }
   | StreamActivityBlock
@@ -519,6 +520,8 @@ export interface FailureStreakIntervention {
 }
 
 export interface SessionState {
+  /** Bounded confirmation of follow-ups consumed at a runner turn boundary. */
+  consumedMessageIds?: number[];
   streaming: boolean;
   currentTurn: AssistantTurn | null;
   doneReason: string | null;

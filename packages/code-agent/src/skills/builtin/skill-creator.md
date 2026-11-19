@@ -5,11 +5,11 @@ slash-command: skill
 allowed-tools:
   - read_file
   - glob
-  - grep_code
+  - mcp__grep_code
   - list_skill_namespaces
   - get_skills_list
   - get_skill_content
-  - expand_toolset
+  - code_exec
   - find_tools
   - create_skill
 context-mode: both
@@ -35,9 +35,9 @@ A skill reaches the agent through three paths — design for the right one:
 2. **Auto-injection** — the matcher loads the skill when a session signal matches `trigger_roles` / `trigger_tags` / `trigger_paths` (globs vs recent files). It does **NOT** read natural language. If you want auto-loading, you MUST set a trigger.
 3. **Discovery** — with no triggers, the skill is found only when the agent browses the catalog and reads its `description`. Then the `description` must be specific and discriminating.
 
-## Phase 0 — Unlock the tool
+## Phase 0 — Locate the tool
 
-`create_skill` lives in the `navigate` tier. If you don't see it in your tools, call `expand_toolset({ tier: "navigate" })` once before proceeding.
+Use `create_skill` directly when visible. Otherwise look up its exact schema with `find_tools` and follow the returned invocation route.
 
 ## Phase 1 — Interview
 

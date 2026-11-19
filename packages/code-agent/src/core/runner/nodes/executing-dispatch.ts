@@ -229,6 +229,12 @@ export interface DispatchArgs {
     turn: number,
   ) => string | null;
   /**
+   * Drains facts that changed while the batch ran (e.g. a command the model
+   * left running exited). Appended to the batch's last result so the model
+   * learns them without a poll-only inference round.
+   */
+  collectBackgroundNotices?: () => string | null;
+  /**
    * Telemetry hook — fired BEFORE each tool invocation lands. Lets the
    * dashboard show a "tool started" badge in real time. Skipped when the
    * call is refused by toolGate, pre-read, or dedup (the synthesized
@@ -1225,6 +1231,13 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     });
     if (entry) result.ledgerEntry = entry;
   }
+
+  // Appended after every result is final (and after the ledger snapshot) so
+  // the notice never changes dedup/no-progress signatures of the carrier.
+  let notice: string | null = null;
+  try { notice = args.collectBackgroundNotices?.() ?? null; } catch { notice = null; }
+  const carrier = results[results.length - 1];
+  if (notice && carrier) carrier.content = `${carrier.content}\n\n${notice}`;
 
   return { results, toolLoopDetected, loopGuard, loopDetail, ...(outcomeUnknown ? { outcomeUnknown: true } : {}) };
 }

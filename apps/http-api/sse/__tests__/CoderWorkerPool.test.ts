@@ -46,6 +46,7 @@ const mockWorker = vi.hoisted(() => {
   class MockBridge {
     requests: Array<{ type: string; payload: unknown; opts?: { timeoutMs?: number } }> = [];
     listeners = new Map<string, Set<Listener>>();
+    handlers = new Map<string, (payload: unknown) => unknown>();
 
     async request(type: string, payload: unknown, opts?: { timeoutMs?: number }): Promise<unknown> {
       this.requests.push({ type, payload, opts });
@@ -62,8 +63,9 @@ const mockWorker = vi.hoisted(() => {
       return { ok: true };
     }
 
-    handle(): () => void {
-      return () => undefined;
+    handle(type: string, handler: (payload: unknown) => unknown): () => void {
+      this.handlers.set(type, handler);
+      return () => { this.handlers.delete(type); };
     }
 
     on(type: string, listener: Listener): () => void {
@@ -229,6 +231,37 @@ describe('CoderWorkerPool', () => {
     expect(resolveRuntimePolicy).not.toHaveBeenCalled();
     expect(handoffSessionWriter).not.toHaveBeenCalled();
     expect(mockWorker.state.hosts).toHaveLength(0);
+  });
+
+  it('routes derived diagnostics to the current owner without starting a new worker', async () => {
+    const p = createPool();
+    const event = { sessionId: sid(99), stage: 'candidate' };
+    await expect(p.appendPipelineDiagnostic(sid(99), event)).resolves.toBe(false);
+    expect(mockWorker.state.hosts).toHaveLength(0);
+    await p.runFresh(sid(99), { userMessage: 'first' });
+    await expect(p.appendPipelineDiagnostic(sid(99), event)).resolves.toBe(true);
+    expect(mockWorker.state.hosts[0].bridge.requests.at(-1)).toMatchObject({ type: 'appendPipelineDiagnostic', payload: { event } });
+    expect(mockWorker.state.hosts).toHaveLength(1);
+  });
+
+  it('announces an agent-created child only after the host imports its published session', async () => {
+    const parent = sid(89), child = sid(90);
+    let finishImport!: (rootId: SessionId) => void;
+    const importPublishedChat = vi.fn(() => new Promise<SessionId>(resolve => { finishImport = resolve; }));
+    pool = new CoderWorkerPool({ workerFile: 'mock-worker.js', dbPath: ':memory:',
+      resolveSessionRuntimeContext: resolveTestSessionRuntimeContext, importPublishedChat, log: () => undefined });
+    const bus = await pool.runFresh(parent, { userMessage: 'Create a child chat' });
+    const runId = getRunId(bus);
+    const handler = mockWorker.state.hosts[0].bridge.handlers.get('chat.created')!;
+
+    await handler({ runId: -1, childId: child });
+    expect(importPublishedChat).not.toHaveBeenCalled();
+    const pending = handler({ runId, childId: child });
+    expect(importPublishedChat).toHaveBeenCalledWith(parent, child);
+    expect(bus.buffer.some(event => event.event === 'chat_session_created')).toBe(false);
+    finishImport(parent);
+    await pending;
+    expect(bus.buffer).toContainEqual(expect.objectContaining({ event: 'chat_session_created', data: { sessionId: child } }));
   });
 
   it('recreates an evicted worker for retained history without launching a model or run', async () => {

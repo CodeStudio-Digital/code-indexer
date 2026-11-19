@@ -221,7 +221,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
           {props.streaming ? (
             <>
               {props.queueable && props.onQueueSend && (
-                <QueueSplitButton hasInput={props.hasInput} onQueue={props.onQueueSend} compact />
+                <QueueSplitButton hasInput={props.hasInput && !props.sendBlocked} onQueue={props.onQueueSend} compact />
               )}
               <Button onClick={props.onAbort} variant="destructive" size="sm" className="h-7">
                 <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}

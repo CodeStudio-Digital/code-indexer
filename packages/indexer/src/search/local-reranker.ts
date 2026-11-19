@@ -16,6 +16,7 @@
  * host instantiates this engine only inside semantic-vector-worker.
  */
 import { createIdleResource, type IdleResource } from '@mcp/shared/utils/idle-disposer.js';
+import { onnxSessionOptions } from './onnx-resource-policy.js';
 import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
 import { resolveModelCacheDir } from './model-cache.js';
 import { resolveOnnxIdleTtlMs } from './onnx-idle.js';
@@ -65,6 +66,7 @@ export class LocalReranker implements RerankerService {
   private dtype: SemanticOnnxDtype;
   private maxTokens?: number;
   private strict: boolean;
+  private localFilesOnly: boolean;
   private executionProvider: string;
   private lastLatencyMs: number | null = null;
   private lease: IdleResource<CrossEncoder>;
@@ -74,6 +76,7 @@ export class LocalReranker implements RerankerService {
   }
 
   constructor(opts?: {
+    localFilesOnly?: boolean;
     model?: string;
     cacheDir?: string;
     revision?: string;
@@ -85,6 +88,7 @@ export class LocalReranker implements RerankerService {
     idleTtlMs?: number;
   }) {
     this.model = opts?.model || DEFAULT_MODEL;
+    this.localFilesOnly = opts?.localFilesOnly ?? false;
     // Only the explicit admin override is stored here; the auto default
     // (~/.mcp/models) is resolved lazily at load time via resolveModelCacheDir.
     this.cacheDir = opts?.cacheDir;
@@ -106,14 +110,13 @@ export class LocalReranker implements RerankerService {
 
   private async loadEncoder(): Promise<CrossEncoder> {
     let mod: {
-      AutoTokenizer: { from_pretrained: (m: string, opts?: { revision?: string }) => Promise<unknown> };
+      AutoTokenizer: { from_pretrained: (m: string, opts?: Record<string, unknown>) => Promise<unknown> };
       AutoModelForSequenceClassification: {
         from_pretrained: (
           m: string,
-          opts?: { revision?: string; dtype?: SemanticOnnxDtype },
+          opts?: Record<string, unknown>,
         ) => Promise<unknown>;
       };
-      env?: Record<string, unknown>;
     };
     try {
       const modName = '@huggingface/transformers';
@@ -124,13 +127,15 @@ export class LocalReranker implements RerankerService {
           `Install it with: pnpm add @huggingface/transformers (${(e as Error).message})`,
       );
     }
-    // Auto-resolve (and create) ~/.mcp/models unless overridden. No env
-    // var or manual folder setup required.
-    if (mod.env) (mod.env as { cacheDir?: string }).cacheDir = resolveModelCacheDir(this.cacheDir);
-    const tokenizerOptions = this.revision ? { revision: this.revision } : undefined;
-    const modelOptions = {
-      dtype: this.dtype,
+    const tokenizerOptions = {
+      cache_dir: resolveModelCacheDir(this.cacheDir),
+      local_files_only: this.localFilesOnly,
       ...(this.revision ? { revision: this.revision } : {}),
+    };
+    const modelOptions = {
+      ...tokenizerOptions,
+      dtype: this.dtype,
+      session_options: onnxSessionOptions(),
     };
     const [tokenizer, model] = await Promise.all([
       mod.AutoTokenizer.from_pretrained(this.model, tokenizerOptions),

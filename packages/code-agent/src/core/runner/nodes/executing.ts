@@ -5,6 +5,7 @@ import { rejectedProviderTools, toolSchemaRecoveryPrompt } from '../provider-sch
 import { toolExtraUserMessages } from '../../tool-extra-user-messages.js';
 import { projectVisionContext } from '../../vision-context.js';
 import { BoundaryPreparation } from '../boundary-preparation.js';
+import { TurnPersistenceBarrier } from '../turn-persistence-barrier.js';
 /**
  * Executing node — drives ONE full provider turn.
  *
@@ -31,6 +32,7 @@ import type { ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { ProviderAttemptTelemetry } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentRunId } from '@mcp/agent-runtime-contracts';
 import { promptTokensTotal } from '@mcp/code-agent/core/messages.js';
+import { bindProviderReplay } from '@mcp/code-agent/core/provider-replay.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { events } from '../machine/events.js';
 import { accumulateUsage, resetProviderRetrySequence } from '../machine/context.js';
@@ -40,6 +42,7 @@ import { assembleMessagesForChat } from '../assembly/messages.js';
 import { buildTools, buildToolsCacheKey, fingerprintToolsJson, type BuildToolsResult } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import { approvedPlanForRevision } from '@mcp/code-agent/tools/plan.js';
 import { resolveProviderCapabilityProjection } from '@mcp/code-agent/core/capability-catalog.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
 import { maybeKickSummaryPrecompute, shouldKickPrecompute } from '../compaction/precompute.js';
@@ -74,6 +77,7 @@ import { maybePlanNudge } from './executing-plan-gate.js';
 import { evaluateVerificationReadinessAtFinish, maybeVerificationNudge } from './executing-verification-gate.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage, type DispatchedToolResult } from './executing-dispatch.js';
+import { drainBackgroundNotices } from '../../background-notices.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
 import { evaluatePerTurnLoops } from './executing-loop-guards.js';
 import { applyVisionFallback } from '../vision-fallback.js';
@@ -84,10 +88,6 @@ import {
 } from './executing-decisions.js';
 import { withAbort, isAbortError } from './executing-abort.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
-import {
-  observePromptCache,
-  promptCacheMissGuardMessage,
-} from '../guards/prompt-cache-miss.js';
 import {
   promoteDynamicToolPin,
   touchDynamicToolPin,
@@ -175,19 +175,17 @@ export class ExecutingNode implements BehaviorNode {
   readonly state = 'Executing' as const;
 
   async execute(ctx: RunContext, _lastEvent: BehaviorEvent | null): Promise<BehaviorEvent> {
-    if (ctx.cacheMissGuardError) {
-      ctx.stopReason = 'error';
-      ctx.error = ctx.cacheMissGuardError;
-      return events.aborted();
-    }
     ctx.turn++;
+    const preparationStartedAt = performance.now();
     ctx.emit('turn_start', ctx.turn);
-    // `turn_start` synchronously asks the host to enqueue persistence for the
-    // preceding assistant/tool turn. Do not let a new provider call — and thus
-    // no new tool side effect — overtake that transaction. Rejections bubble to
-    // the orchestrator, which emits a terminal error instead of continuing on
-    // transcript state that failed to persist.
-    await ctx.bridge?.awaitTurnPersistence?.();
+    // The transcript is already in RAM. Only verified inference-only providers
+    // may read it while the preceding turn is flushing; all effects and terminal
+    // completion still wait for durability, and a failed flush cancels inference.
+    const persistence = new TurnPersistenceBarrier(() => ctx.bridge?.awaitTurnPersistence?.());
+    try {
+    if (ctx.opts.provider.inferenceOnly !== true || process.env.CODER_OVERLAP_PERSISTENCE === '0') {
+      await persistence.wait();
+    }
     // Drain any messages queued via `runner.pushUserMessage` (master →
     // subordinate forward, SSE-side push from the dashboard, etc.) so
     // they appear in `ctx.messages` BEFORE we build the request. The
@@ -562,17 +560,21 @@ export class ExecutingNode implements BehaviorNode {
     const toolsMemoKey =
       buildToolsCacheKey({
         activeTiers: ctx.activeTiers,
-        pinnedTools: ctx.pinnedTools,
         requiredPinnedTools: requiredPinnedToolsForBuild,
       }) +
       `|cap=${ctx.opts.sessionToolCap ?? ''}` +
       `|terse=${String(ctx.terseDescriptionsLock)}` +
-      `|model=${ctx.opts.provider.model ?? ''}`;
+      `|mode=${Boolean(ctx.opts.toolContext.runner?.planMode)}:${Boolean(ctx.opts.toolContext.runner?.specMode)}` +
+      `|planRevision=${!!approvedPlanForRevision(ctx.opts.toolContext)}` +
+      `|hardLimit=${ctx.opts.provider.toolLimits?.maxCount ?? ''}` +
+      `|model=${ctx.opts.provider.model ?? ''}` +
+      `|disabled=${JSON.stringify([[...(ctx.opts.globalDisabledTools ?? [])].sort(), [...(ctx.opts.sessionDisabledTools ?? [])].sort()])}`;
     let toolsBuilt: BuildToolsResult;
     if (ctx.toolsMemo && ctx.toolsMemo.key === toolsMemoKey) {
       toolsBuilt = ctx.toolsMemo.built;
     } else {
       toolsBuilt = buildTools({
+        stableCatalog: true,
         registry: ctx.opts.registry,
         globalDisabledTools: ctx.opts.globalDisabledTools,
         sessionDisabledTools: ctx.opts.sessionDisabledTools,
@@ -605,7 +607,9 @@ export class ExecutingNode implements BehaviorNode {
     }
     const availableTools = toolsVariant.tools;
     let toolsForModel = availableTools;
-    if (ctx.opts.toolSelectionFilter) {
+    // A relevance selection is made once per authorized catalog, not once per
+    // turn. New discoveries cannot evict a previously cached tool schema.
+    if (ctx.opts.toolSelectionFilter && !toolsVariant.selectionApplied) {
       try {
         const recentUserTexts: string[] = [];
         for (let i = messagesForChat.length - 1; i >= 0; i--) {
@@ -640,11 +644,17 @@ export class ExecutingNode implements BehaviorNode {
           // Selection is relevance-ranked internally, but provider tool order
           // is not a recommendation channel. Keep a stable catalog order so
           // identical memberships retain the same prompt-cache prefix.
-          toolsForModel = [...selected].sort((a, b) => a.name.localeCompare(b.name));
+          const selectedNames = new Set(selected.map(tool => tool.name));
+          // A relevance filter may choose optional tools, never remove a
+          // workflow dependency or inject a definition outside this projection.
+          toolsForModel = availableTools.filter(tool => selectedNames.has(tool.name)
+            || toolsBuilt.protectedToolNames.has(tool.name));
         }
       } catch (e) {
         console.warn(`[coder] tool-selection failed: ${e instanceof Error ? e.message : String(e)}`);
       }
+      toolsVariant.tools = toolsForModel;
+      toolsVariant.selectionApplied = true;
     }
     const rejectedSchemas = rejectedProviderTools(ctx);
     if (rejectedSchemas.size) toolsForModel = toolsForModel.filter(tool => !rejectedSchemas.has(tool.name));
@@ -677,14 +687,17 @@ export class ExecutingNode implements BehaviorNode {
       );
     }
     const effectiveToolNames = new Set(toolsForModel.map((tool) => tool.name));
+    const authorizedToolNames = new Set(toolsBuilt.authorizedTools.map(tool => tool.name));
     const runnerToolState = ctx.opts.toolContext.runner as
       | {
           visibleToolNames?: ReadonlySet<string> | null;
+          authorizedToolNames?: ReadonlySet<string> | null;
           promoteTool?: (name: string) => string[];
           requestedToolNames?: ReadonlySet<string>;
           projectionReceipt?: import('../../tool-projection.js').ToolProjectionReceipt | null;
         }
       | undefined;
+    if (runnerToolState) runnerToolState.authorizedToolNames = authorizedToolNames;
     dbg(`tools=${toolsForModel.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
 
     const systemPrompt = ctx.opts.systemPrompt + outcomeRecoveryPrompt(ctx.opts.toolContext.outcomeRecovery,
@@ -787,6 +800,10 @@ export class ExecutingNode implements BehaviorNode {
       model: ctx.opts.provider.model,
       toolCount: toolsForModel.length,
       historyChars,
+      timing: {
+        preparation_ms: Math.round(performance.now() - preparationStartedAt),
+        persistence_wait_ms: Math.round(persistence.waitMs),
+      },
     });
 
     const providerOpId = `provider-chat:${ctx.runId}:${ctx.turn}`;
@@ -896,6 +913,9 @@ export class ExecutingNode implements BehaviorNode {
     let lastTransportActivityAt: number | undefined;
     const parentSignal = ctx.opts.toolContext.signal;
     const relayProviderAbort = () => providerRequest.abort(parentSignal?.reason);
+    const relayPersistenceFailure = () => providerRequest.abort(persistence.failureSignal.reason);
+    persistence.failureSignal.addEventListener('abort', relayPersistenceFailure, { once: true });
+    if (persistence.failureSignal.aborted) relayPersistenceFailure();
     parentSignal?.addEventListener?.('abort', relayProviderAbort, { once: true });
     if (parentSignal?.aborted) relayProviderAbort();
     try {
@@ -993,7 +1013,7 @@ export class ExecutingNode implements BehaviorNode {
     try {
       result = await consumeStream({
         stream,
-        signal: ctx.opts.toolContext.signal,
+        signal: providerRequest.signal,
         cancelStream: (reason) => providerRequest.abort(reason),
         lastTransportActivityAt: () => lastTransportActivityAt,
         onTextDelta: (text, meta) => {
@@ -1089,6 +1109,7 @@ export class ExecutingNode implements BehaviorNode {
     };
     } finally {
       parentSignal?.removeEventListener?.('abort', relayProviderAbort);
+      persistence.failureSignal.removeEventListener('abort', relayPersistenceFailure);
       providerRequest.abort();
       if (ctx.opts.hookBus) {
         try {
@@ -1112,19 +1133,6 @@ export class ExecutingNode implements BehaviorNode {
     // A successful provider response ends the retry sequence for this logical
     // call, regardless of whether the model now requests tools.
     resetProviderRetrySequence(ctx);
-
-    const cacheObservation = observePromptCache(
-      ctx.opts.provider.name,
-      result.usage,
-      ctx.consecutiveLargePromptCacheMisses,
-    );
-    ctx.consecutiveLargePromptCacheMisses = cacheObservation.consecutiveMisses;
-    if (cacheObservation.tripped) {
-      ctx.cacheMissGuardError = new Error(
-        promptCacheMissGuardMessage(cacheObservation),
-      );
-      console.warn(`[coder] ${ctx.cacheMissGuardError.message}`);
-    }
 
     if (result.responseId !== null && result.responseMessageCount !== null) {
       ctx.bridge?.onResponseId?.(result.responseId, result.responseMessageCount);
@@ -1209,6 +1217,11 @@ export class ExecutingNode implements BehaviorNode {
       }
     };
 
+    await persistence.wait();
+    if (result.responseMeta?.timing) {
+      result.responseMeta.timing.persistence_duration_ms = persistence.durationMs;
+      result.responseMeta.timing.persistence_wait_ms = persistence.waitMs;
+    }
     // Block order MUST be: thinking → text → tool_use. The provider rejects
     // (Anthropic 400) when extended-thinking content arrives after text or
     // tool_use in the SAME assistant message — preserve the legacy order.
@@ -1223,16 +1236,6 @@ export class ExecutingNode implements BehaviorNode {
     for (const tu of result.toolUses) {
       assistantContent.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
     }
-    if (assistantContent.length > 0) {
-      const assistantMessage = {
-        role: 'assistant' as const,
-        content: assistantContent,
-        phase: result.messagePhase,
-      };
-      ctx.messages.push(assistantMessage);
-      ctx.emit('message_complete', assistantMessage, result.usage);
-    }
-
     // ── Honest context accounting (single source of truth) ──────────────
     // True prompt size of the call we just made: adapter-normalized usage
     // (`prompt_tokens_total` — includes cached slices on Anthropic-style
@@ -1250,16 +1253,19 @@ export class ExecutingNode implements BehaviorNode {
     const promptTokens =
       realPromptTokens ?? Math.round(estPromptTokens * (ctx.estimateCalibration ?? 1));
     const usageSource: 'usage' | 'estimate' = realPromptTokens != null ? 'usage' : 'estimate';
-    {
-      const limits = deriveTokenLimits(ctx.opts.provider.model, ctx.opts.contextWindow);
-      ctx.emit('context_status', {
-        turn: ctx.turn,
-        prompt_tokens: promptTokens,
-        source: usageSource,
-        context_window: limits.effective,
-        ratio: limits.effective > 0 ? promptTokens / limits.effective : 0,
-      });
+    const limits = deriveTokenLimits(ctx.opts.provider.model, ctx.opts.contextWindow);
+    const context = { prompt_tokens: promptTokens, source: usageSource, context_window: limits.effective };
+    if (assistantContent.length > 0) {
+      const assistantMessage = {
+        role: 'assistant' as const,
+        content: assistantContent,
+        phase: result.messagePhase,
+      };
+      if (result.providerReplay) bindProviderReplay(assistantMessage, result.providerReplay);
+      ctx.messages.push(assistantMessage);
+      ctx.emit('message_complete', assistantMessage, result.usage, `assistant:${ctx.runId}:message:${ctx.turn}`, context);
     }
+    ctx.emit('context_status', { ...context, turn: ctx.turn, ratio: promptTokens / limits.effective });
 
     // Dashboard telemetry — preview the batch before dispatch so the UI
     // can render the pending tool list immediately (legacy parity).
@@ -1271,12 +1277,6 @@ export class ExecutingNode implements BehaviorNode {
     });
 
     if (result.toolUses.length === 0) {
-      if (ctx.cacheMissGuardError) {
-        runPersistTelemetry([]);
-        ctx.stopReason = 'error';
-        ctx.error = ctx.cacheMissGuardError;
-        return events.aborted();
-      }
       // Mandatory-plan gate: in plan mode the deliverable IS a plan. If the
       // model tries to end with bare text (no submit_plan/submit_tasks, no
       // approval), inject a ONE-SHOT reminder as the next user message and
@@ -1284,6 +1284,7 @@ export class ExecutingNode implements BehaviorNode {
       // genuinely conversational reply still terminates. See executing-plan-gate.
       const planNudge = maybePlanNudge(ctx);
       if (planNudge) {
+        runPersistTelemetry([]);
         ctx.messages.push({ role: 'user', content: [{ type: 'text', text: planNudge }] });
         return events.turnSucceeded({ hasToolCalls: false });
       }
@@ -1295,6 +1296,7 @@ export class ExecutingNode implements BehaviorNode {
         const readiness = await evaluateVerificationReadinessAtFinish(ctx);
         const verificationNudge = maybeVerificationNudge(ctx, readiness);
         if (verificationNudge) {
+          runPersistTelemetry([]);
           ctx.messages.push({
             role: 'user',
             content: [{ type: 'text', text: verificationNudge }],
@@ -1406,6 +1408,9 @@ export class ExecutingNode implements BehaviorNode {
         }
       },
       isToolBlocked: (name) => {
+        if (!authorizedToolNames.has(name)) {
+          return `[tool-disabled] '${name}' is outside the authorized attempt catalog.`;
+        }
         if (ctx.opts.globalDisabledTools?.has(name)) {
           return `[tool-disabled] '${name}' is disabled globally by the admin — pick another tool (find_tools lists alternatives).`;
         }
@@ -1470,6 +1475,7 @@ export class ExecutingNode implements BehaviorNode {
         return bridged ? { content, isError } : null;
       },
       detectPollingStuck: ctx.bridge?.detectPollingStuck,
+      collectBackgroundNotices: () => drainBackgroundNotices(ctx.opts.toolContext),
       onToolCallStart: (id, name, input) => {
         ctx.operations.start({
           opId: `tool:${id}`,
@@ -1700,5 +1706,9 @@ export class ExecutingNode implements BehaviorNode {
     // trigger should start a fresh no-op streak.
     ctx.consecutiveNoopCompactions = 0;
     return decideTerminal(ctx);
+    } finally {
+      // Includes preparation exits, stream failures, cancellation and clean finish.
+      await persistence.wait();
+    }
   }
 }

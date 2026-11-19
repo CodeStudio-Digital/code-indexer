@@ -32,15 +32,17 @@ export function buildAnthropic(spec: ProviderSpec): WireParts {
       const selectedModel =
         model ?? spec.defaultModel ?? spec.defaultModels[0] ?? 'claude-sonnet-5';
       const wireModel = parseRuntimeModelRef(selectedModel).id;
+      const baseURL = creds.baseURL?.replace(/\/+$/, '').replace(/\/v1$/, '');
+      const official = !baseURL || new URL(baseURL).origin === 'https://api.anthropic.com';
       return new AnthropicChatProvider({
         apiKey: creds.apiKey,
-        baseURL: creds.baseURL,
+        baseURL,
         model: wireModel,
         defaultThinking: spec.wireOpts?.defaultThinking,
-        defaultBetas: [ANTHROPIC_EXTENDED_CACHE_TTL_BETA],
-        useBetaMessages: true,
-        cacheMessages: true,
-        promptCacheTtl: '1h',
+        defaultBetas: official ? [ANTHROPIC_EXTENDED_CACHE_TTL_BETA] : undefined,
+        useBetaMessages: official,
+        cacheMessages: official,
+        promptCacheTtl: official ? '1h' : undefined,
         resolveModel: (activeModel, req) =>
           resolveAnthropicRequestModel(
             parseRuntimeModelRef(activeModel).id,

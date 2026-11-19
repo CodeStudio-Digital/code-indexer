@@ -3,6 +3,7 @@ import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseIntQuery, notFound } from './_helpers.js';
 import { memoryPage, mountAgentMemoryCurationRoutes } from './agent-memory-curation.js';
 import { mountAgentMemorySemanticRoutes } from './agent-memory-semantic.js';
+import { mountAgentMemoryEvolutionRoutes } from './agent-memory-evolution.js';
 
 /**
  * Agent-memory curation — the human feedback loop over the LIVE store
@@ -15,6 +16,7 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
   const { db, agentMemoryService } = deps;
   mountAgentMemoryCurationRoutes(app, deps);
   mountAgentMemorySemanticRoutes(app, deps);
+  mountAgentMemoryEvolutionRoutes(app, deps);
 
   /** Query endpoint for out-of-process agents. The http-api process owns the
    * memory embedder and vector worker; callers never open sqlite-vec. The
@@ -82,7 +84,13 @@ export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/agent-memory/:id/restore', async (c) => {
     const id = parseIdParam(c);
-    const row = await agentMemoryService.runRelationalWrite(() => agentMemoryService.restore(id));
+    const row = await agentMemoryService.runRelationalWrite(() => db.transaction(() => {
+      const restored = agentMemoryService.restore(id);
+      // Human restoration is an explicit decision. Automatic maintenance must
+      // not immediately archive the same version again.
+      if (restored) db.raw().prepare("UPDATE agent_memory SET source='manual' WHERE id=?").run(id);
+      return restored;
+    }));
     if (!row) {
       return c.json({ ok: false, error: 'not restorable (unknown, live, or a live row holds the same name)' }, 409);
     }

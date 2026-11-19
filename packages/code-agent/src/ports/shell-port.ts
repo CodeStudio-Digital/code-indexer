@@ -62,6 +62,14 @@ export function applyRuntimeEnv(
 ): NodeJS.ProcessEnv {
   if (!runtimeEnv) return base;
   const env: NodeJS.ProcessEnv = { ...base, ...runtimeEnv.extraEnv };
+  if (process.platform === 'win32') {
+    for (const key of Object.keys(runtimeEnv.extraEnv)) {
+      if (!['PYTHONUTF8', 'PYTHONIOENCODING'].includes(key.toUpperCase())) continue;
+      for (const existing of Object.keys(env)) {
+        if (existing !== key && existing.toUpperCase() === key.toUpperCase()) delete env[existing];
+      }
+    }
+  }
   const prepend = (runtimeEnv.pathPrepend ?? []).filter(Boolean);
   if (prepend.length > 0) {
     const prev = env.PATH ?? env.Path ?? '';
@@ -171,12 +179,24 @@ export interface IShellPort {
  * (flags electron.exe as Node interpreter — only valid for our own
  * subprocesses like the MCP bridge, never for user code).
  */
-export function cleanProcessEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+export function cleanProcessEnv(
+  base: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
   delete env.NODE_OPTIONS;
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.MCP_DEV_HTTP;
   delete env.MCP_ELECTRON_DEV_URL;
+  // Agent inputs and captured output are UTF-8. Windows Python otherwise uses
+  // the legacy code page for pathlib/open() and redirected streams, which can
+  // truncate a file before raising UnicodeEncodeError. Respect explicit host
+  // settings (case-insensitive on Windows) and later project runtime overrides.
+  if (platform === 'win32') {
+    for (const [key, value] of Object.entries({ PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' })) {
+      if (!Object.keys(env).some(existing => existing.toUpperCase() === key && env[existing] != null)) env[key] = value;
+    }
+  }
   return env;
 }
 

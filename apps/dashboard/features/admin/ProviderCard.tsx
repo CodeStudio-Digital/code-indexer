@@ -109,9 +109,9 @@ export function ProviderCard({
             {!p.enabled && <Badge variant="secondary">{t('admin:provider.disabled')}</Badge>}
             {p.has_key ? (
               <span className="text-xs text-muted-foreground font-mono">{p.api_key_masked}</span>
-            ) : (
+            ) : p.auth_mode === 'api_key' ? (
               <span className="text-xs text-amber-600">{t('admin:provider.noKey')}</span>
-            )}
+            ) : null}
             {tr &&
               (tr.ok ? (
                 <span className="flex items-center gap-1 text-xs text-emerald-600">

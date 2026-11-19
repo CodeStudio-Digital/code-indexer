@@ -77,8 +77,9 @@ export function wireRunnerEventsToBus(
   runner.on('operation_finished', (payload) => {
     publish(bus, 'operation_finished', payload);
   });
-  runner.on('message_complete', (message, usage) => {
-    publish(bus, 'message_complete', { message, usage });
+  runner.on('message_complete', (message, usage, operationId) => {
+    const { providerReplay: _opaqueContinuation, ...publicMessage } = message;
+    publish(bus, 'message_complete', { message: publicMessage, usage, operation_id: operationId });
   });
   runner.on('user_message_boundary', ({ roundMessageIds }) => {
     publish(bus, 'user_message_boundary', {

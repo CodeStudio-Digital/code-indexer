@@ -8,16 +8,13 @@
 
 import { parentPort, workerData } from 'node:worker_threads';
 import { ApiError } from '@mcp/api-bus';
-import type { Runtime, RuntimeKind } from '@mcp/api-bus';
+import type { PreflightReport, Runtime, RuntimeKind } from '@mcp/api-bus';
 import { listFor } from './detect-all.js';
 
-export interface DetectWorkerJob {
-  kind: RuntimeKind;
-  dataDir: string;
-}
+export type DetectWorkerJob = { kind: RuntimeKind; dataDir: string } | { dbPath: string };
 
 export type DetectWorkerMessage =
-  | { type: 'done'; runtimes: Runtime[] }
+  | { type: 'done'; value: Runtime[] | PreflightReport }
   | { type: 'error'; code: string; status: number; message: string };
 
 const port = parentPort;
@@ -34,8 +31,14 @@ if (!job) {
   port.postMessage(msg);
 } else {
   try {
-    const runtimes = listFor(job.kind, job.dataDir);
-    port.postMessage({ type: 'done', runtimes } satisfies DetectWorkerMessage);
+    let value: Runtime[] | PreflightReport;
+    if ('dbPath' in job) {
+      const { runPreflight } = await import('@mcp/services/preflight/index.js');
+      value = await runPreflight({ dbPath: job.dbPath });
+    } else {
+      value = listFor(job.kind, job.dataDir);
+    }
+    port.postMessage({ type: 'done', value } satisfies DetectWorkerMessage);
   } catch (err) {
     // ApiError carries the status the route should surface; anything else is a
     // genuine bug in a detector and becomes a 500.

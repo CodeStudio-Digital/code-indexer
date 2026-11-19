@@ -1,8 +1,25 @@
 import type { AgentMessage, ContentBlock, ImageBlock } from './messages.js';
-import type { ToolContext } from './tool.js';
+import type { ToolContext, ToolResult } from './tool.js';
 
 // Avoid hashing/stringifying historical base64 on every streamed tool iteration.
 const references = new WeakMap<ImageBlock, { store: object; id: string }>();
+
+/** Register original tool images before publishing the result, even if no next inference runs. */
+export async function saveToolResultImages(
+  result: ToolResult, toolName: string, store: ToolContext['toolOutputStore'],
+): Promise<ToolResult> {
+  const blocks = result.extraUserBlocks;
+  if (!store?.putImage || !blocks?.some(block => block.type === 'image' && block.base64 && !block.sourceImageId)) {
+    return result;
+  }
+  const extraUserBlocks = await Promise.all(blocks.map(async (block, index) => {
+    if (block.type !== 'image' || !block.base64 || block.sourceImageId) return block;
+    const image = { ...block, name: block.name || `${toolName} ${index + 1}` };
+    const id = store.saveImage ? await store.saveImage(image) : store.putImage!(image);
+    return id ? { ...image, sourceImageId: id } : block;
+  }));
+  return { ...result, extraUserBlocks };
+}
 
 /** Keep the durable transcript intact; send pixels only when the agent asks. */
 export function projectVisionContext(messages: AgentMessage[], store: ToolContext['toolOutputStore']): AgentMessage[] {

@@ -22,6 +22,7 @@ export type {
   ThinkingBlock,
   ContentBlock,
   AgentMessage,
+  ProviderReplayState,
   ChatUsage,
   ChatProviderResponseMeta,
   ChatDelta,

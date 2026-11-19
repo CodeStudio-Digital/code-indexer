@@ -14,7 +14,7 @@ export async function discoverAnthropicModels(
   cfg: ProviderConfig,
 ): Promise<UpsertModelInput[]> {
   const { api_key, base_url } = cfg;
-  const base = (base_url ?? 'https://api.anthropic.com').replace(/\/$/, '');
+  const base = (base_url ?? 'https://api.anthropic.com').replace(/\/+$/, '').replace(/\/v1$/, '');
   const r = await fetch(`${base}/v1/models`, {
     headers: {
       'x-api-key': api_key ?? '',

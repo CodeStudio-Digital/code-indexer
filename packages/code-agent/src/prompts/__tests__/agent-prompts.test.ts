@@ -125,6 +125,34 @@ describe('capability-aligned composition', () => {
     availableTools: new Set(['read_file', 'execute_tasks']),
   };
 
+  const reviewTools = new Set(['submit_spec', 'submit_plan', 'submit_tasks', 'task_list', 'find_tools']);
+
+  it('publishes only the approval route available in the current mode', () => {
+    const context = { ...BASE_CTX, availableTools: reviewTools };
+    const build = buildSystemPrompt(context);
+    expect(build).not.toMatch(/submit_plan|submit_spec|submit_tasks/);
+    const revision = buildSystemPrompt({ ...context, canRevisePlan: true });
+    expect(revision).toContain('revision: true');
+    expect(revision).not.toMatch(/submit_spec|submit_tasks/);
+    const spec = buildSystemPrompt({ ...context, specMode: true, planMode: true });
+    expect(spec).toContain('# Spec mode is ACTIVE');
+    expect(spec).toContain('submit_spec');
+    expect(spec).not.toMatch(/# (Build|Plan) mode is ACTIVE|submit_plan|submit_tasks/);
+    const plan = buildSystemPrompt({ ...context, agentId: 'plan', planMode: true });
+    expect(plan).toContain('submit_plan');
+    expect(plan).toContain("gate:'approve'");
+    expect(plan).not.toMatch(/submit_tasks|submit_spec/);
+  });
+
+  it('explains a missing review route without inventing tools or shell checks', () => {
+    const prompt = buildSystemPrompt({
+      ...BASE_CTX, agentId: 'plan', planMode: true, availableTools: new Set(['find_tools']),
+      verifyCommands: 'project-specific-typecheck',
+    });
+    expect(prompt).toContain('Plan review is unavailable');
+    expect(prompt).not.toMatch(/submit_plan|submit_tasks|task_list|code_exec|project-specific-typecheck/);
+  });
+
   it('inserts session-fixed extensions before the dynamic boundary', () => {
     const prompt = appendStaticPromptSection(buildSystemPrompt(BASE_CTX), '# Fixed extension');
     const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
@@ -170,6 +198,13 @@ describe('lean execution contracts', () => {
     const prompt = buildSystemPrompt({ ...BASE_CTX, agentId: 'build' });
     expect(prompt).toContain('Use `mcp__prepare_edit` when callers/tests or a shared contract matter');
     expect(prompt).not.toContain('Before editing an existing symbol: call `mcp__prepare_edit` first');
+  });
+
+  it('keeps Git inspection tied to the task in Build mode', () => {
+    const prompt = buildSystemPrompt({ ...BASE_CTX, agentId: 'build' });
+    expect(prompt).toContain('only when the request needs repository state or review of changes');
+    expect(prompt).toContain('Reuse the latest result for the same scope');
+    expect(prompt).not.toContain('Collect final checks and diff');
   });
 });
 

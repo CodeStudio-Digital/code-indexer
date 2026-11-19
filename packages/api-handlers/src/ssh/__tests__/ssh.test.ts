@@ -82,10 +82,26 @@ describe('adaptChannelToIPty', () => {
     expect(ipty.rows).toBe(40);
   });
 
+  it('preserves split UTF-8 on independent streams and distinguishes a dropped transport from exit 0', () => {
+    const ch = fakeChannel();
+    const pty = adaptChannelToIPty(asChannel(ch), { cols: 80, rows: 24 });
+    const output: string[] = [];
+    const exit = vi.fn();
+    pty.onData(s => output.push(s));
+    pty.onExit(exit);
+    const bytes = Buffer.from('ação');
+    ch.emit('data', bytes.subarray(0, 2));
+    ch.stderr.emit('data', Buffer.from('✓'));
+    ch.emit('data', bytes.subarray(2));
+    ch.emit('close');
+    expect(output.join('')).toBe('a✓ção');
+    expect(exit).toHaveBeenCalledWith({ exitCode: null });
+  });
+
   it('reports the captured remote exit code on close', () => {
     const ch = fakeChannel();
     const ipty = adaptChannelToIPty(asChannel(ch), { cols: 80, rows: 24 });
-    const exits: Array<{ exitCode: number }> = [];
+    const exits: Array<{ exitCode: number | null }> = [];
     ipty.onExit((e) => exits.push(e));
     ch.emit('exit', 3); // remote shell exited code 3
     ch.emit('close');
@@ -255,7 +271,7 @@ describe('TunnelManager validation', () => {
     expect(tunnel.bindHost).toBe('127.0.0.1');
     expect(tunnel.bindPort).toBeGreaterThan(0);
     tunnels.stop(tunnel.id);
-    expect(manager.release).toHaveBeenCalledWith(spec.hostId);
+    expect(manager.release).toHaveBeenCalledWith(spec.hostId, await vi.mocked(manager.acquire).mock.results[0].value);
   });
 
   it('rejects missing local-forward destination before acquiring an SSH connection', async () => {

@@ -75,10 +75,11 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Workspace': 1100, // includes the platform-derived shell descriptor
   '# Tool tiers': 170,
   '# Tool tiers (IMPORTANT)': 240,
+  '# Tool discovery': 480,
   '# Code retrieval': 430,
   '# Tool strategy — index starting': 280,
   '# Tool strategy — native only (MCP bridge unavailable)': 200,
-  '# Tool contract': 200,
+  '# Tool contract': 400, // code_exec batching + exit-code evidence (2026-11-11); measured 353
   '# Images & vision': 330, // attachment recovery, one-inference pixels, crop/video and fallback; compressed from 500
   '# Session overlay (automatic freshness)': 150,
   '# Subagents (isolated delegation)': 320,
@@ -97,7 +98,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Plan mode is ACTIVE': 1750,
 
   '# Explore mode is ACTIVE': 950,
-  '# Build mode is ACTIVE': 1200,
+  '# Build mode is ACTIVE': 1700, // bounded discovery, batched edits and evidence-based completion
   '# Builder mode is ACTIVE': 1600,
 
   '# Admin mode is ACTIVE': 2450,

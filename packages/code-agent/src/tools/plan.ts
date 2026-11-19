@@ -18,6 +18,22 @@ function hashPlan(text: string): string {
   return createHash('sha1').update(text.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
 }
 
+/** A Build session can reopen review of its latest approved plan. */
+export function approvedPlanForRevision(
+  ctx: ToolContext,
+  runner: Pick<NonNullable<ToolContext['runner']>, 'agentId' | 'planMode' | 'specMode' | 'isSubagent'> | undefined = ctx.runner,
+): { text: string } | undefined {
+  if (runner?.agentId !== 'build' || runner.planMode || runner.specMode || runner.isSubagent
+      || ctx.companyContext || !ctx.setSessionAgent) return undefined;
+  const plan = ctx.getActivePlan?.();
+  return plan?.status === 'approved' ? plan : undefined;
+}
+
+export const PLAN_APPROVAL_REMINDER =
+  '<system-reminder>Mode transition: Plan → Build. Implement the approved plan and verify the changes. ' +
+  'If the user asks to revise this plan, call the visible submit_plan directly with the updated plan and revision: true before making further changes. ' +
+  'If the review tool is unavailable, explain that a new review requires Plan mode.</system-reminder>';
+
 /**
  * Format the tool_result content for a submit_plan response. Shared between
  * the live tool handler and the server-side resume path so a session resumed
@@ -55,12 +71,7 @@ export async function applyPlanApproval(
     extraUserBlocks: [
       {
         type: 'text',
-        text:
-          '<system-reminder>Mode transition: Plan → Build. The plan was approved. ' +
-          'Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body ' +
-          'before editing, apply changes, run the project verify (npm test / pnpm typecheck / ' +
-          'appropriate) after each batch, and report concrete diffs. No further plan submission ' +
-          'needed — proceed directly to edits.</system-reminder>',
+        text: PLAN_APPROVAL_REMINDER,
       },
     ],
   };
@@ -81,9 +92,7 @@ export const submitPlan: CoderTool = {
       plan: {
         type: 'string',
         description:
-          'Numbered, concise plan of the next concrete steps you intend to take. ' +
-          'For informational answers, use a 1-line plan describing what you are about to explain — ' +
-          'the user still needs to approve before you continue.',
+          'The full draft for review, including the approach and verification. Answer ordinary factual questions directly.',
       },
       kind: {
         type: 'string',
@@ -92,6 +101,10 @@ export const submitPlan: CoderTool = {
           'Optional. "informational" hints the plan is an answer-only deliverable (no edits/shell follow-up); ' +
           'when no mutating tool ran in the last few turns, the runner may still pause for user review but the ' +
           'dashboard shows a quick-approve cue. Default: "mutating".',
+      },
+      revision: {
+        type: 'boolean',
+        description: 'In Build, set to true only when the user asks to revise the approved plan. Submitting it reopens Plan and pauses for a new approval.',
       },
     },
     required: ['plan'],
@@ -109,6 +122,11 @@ export const submitPlan: CoderTool = {
           'approving a regular plan cannot release the spec gate.',
       );
     }
+    const fromBuild = runner.agentId === 'build' && !(ctx.runner?.planMode ?? ctx.planMode);
+    const approvedPlan = fromBuild ? approvedPlanForRevision(ctx) : undefined;
+    if (fromBuild && (!approvedPlan || args.revision !== true)) {
+      return err('In Build, submit_plan is reserved for a user-requested revision of the latest approved plan. Pass revision: true with the updated plan. For a new plan, select Plan mode.');
+    }
 
     // Idempotency guard: if the user already requested revisions to this exact plan in
     // this session, refuse the resubmission instead of pausing the runner
@@ -116,6 +134,9 @@ export const submitPlan: CoderTool = {
     // and produce a materially different plan, not retry with cosmetic
     // edits.
     const hash = hashPlan(plan);
+    if (approvedPlan && hashPlan(approvedPlan.text) === hash) {
+      return err('This is the already approved plan. Apply the requested changes to the plan before submitting it for review.');
+    }
     let reviseRequested = REVISE_REQUESTED_PLAN_HASHES.get(runner as unknown as object);
     if (!reviseRequested) {
       reviseRequested = new Set();
@@ -140,6 +161,7 @@ export const submitPlan: CoderTool = {
 
     const id = ctx.ports?.interactions && ctx.currentToolUseId
       ? ctx.currentToolUseId : `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    if (approvedPlan) await ctx.setSessionAgent?.('plan');
     // Persist the plan up-front so the dashboard's "Plans" tab shows it
     // even while still pending. The status is updated below once the
     // user responds.

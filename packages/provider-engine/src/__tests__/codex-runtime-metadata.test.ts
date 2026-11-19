@@ -24,6 +24,15 @@ describe('codex runtime model metadata', () => {
     constructedWith.length = 0;
   });
 
+  it.each(['gpt-5.6-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra::deep'])(
+    'allows batched function planning for %s without changing the selected model', (model) => {
+      buildCodex(chatgptSpec).createCoder!({ apiKey: 'k', extra: {} }, model);
+      expect(constructedWith.at(-1)).toMatchObject({
+        model: model.split('::')[0], parallelToolCalls: true,
+      });
+    },
+  );
+
   it('strips the host mode from the wire and selects its exact capabilities', () => {
     const wire = buildCodex(chatgptSpec);
     wire.createCoder!(

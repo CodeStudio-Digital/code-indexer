@@ -164,6 +164,8 @@ export interface AgentMessage {
   content: ContentBlock[];
   /** Provider-native public phase when available, otherwise runner-inferred. */
   phase?: AssistantMessagePhase;
+  /** Opaque provider continuation. Internal only: never render or inject as text. */
+  providerReplay?: ProviderReplayState;
   /**
    * When true, the dashboard hides the message from the user-visible
    * transcript while the model still sees it in context. Used for
@@ -177,6 +179,15 @@ export interface AgentMessage {
    * inside `content`, never serialized by any adapter.
    */
   selectedSkillIds?: string[];
+}
+
+/** Ordered Responses output, including encrypted reasoning, bound to its public message. */
+export interface ProviderReplayState {
+  format: 'openai-responses-v1';
+  scope: string;
+  items: Record<string, unknown>[];
+  /** Set by the runner after assembling the canonical assistant message. */
+  messageDigest?: string;
 }
 
 // ─── Usage + streaming deltas (was core/messages.ts) ─────────────
@@ -200,6 +211,23 @@ export interface ChatUsage {
 }
 
 export interface ChatProviderResponseMeta {
+  /** Monotonic client observations, not an estimate of server queue/compute time. */
+  timing?: {
+    transport: 'sse' | 'websocket' | 'stream';
+    headers_ms: number | null;
+    first_event_ms: number | null;
+    first_content_ms: number | null;
+    total_ms: number;
+    input_items?: number;
+    incremental?: boolean;
+    /** Local continuation decision, not a claim about server-side prompt cache. */
+    continuation_reason?: string;
+    continuation_reset_fields?: string[];
+    replayed_reasoning_items?: number;
+    consumer_callback_ms?: number;
+    persistence_duration_ms?: number;
+    persistence_wait_ms?: number;
+  };
   /**
    * Provider endpoint path, sanitized to exclude host, query secrets, and body.
    * Example: `/v1/messages`.
@@ -246,6 +274,7 @@ export type ChatDelta =
   | { type: 'tool_call_end'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'usage'; usage: ChatUsage }
   | { type: 'response_meta'; meta: ChatProviderResponseMeta }
+  | { type: 'provider_replay'; state: ProviderReplayState }
   /**
    * Server-side response identifier returned by stateful APIs (currently only
    * the OpenAI Responses API used by ChatGPT/Codex with `store: true`).

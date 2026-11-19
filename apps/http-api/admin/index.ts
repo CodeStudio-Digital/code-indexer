@@ -16,6 +16,7 @@ import { modelsRouter } from './models.routes.js';
 import { semanticRouter, type SemanticAdminRuntime } from './semantic.routes.js';
 import { oauthRouter } from './oauth.routes.js';
 import { copilotOAuthRouter } from './oauth-copilot.routes.js';
+import { copilotQuotaRouter } from './copilot-quota.routes.js';
 import { openaiOAuthRouter } from './oauth-openai.routes.js';
 import { claudeCodeOAuthRouter } from './oauth-claude-code.routes.js';
 import { bedrockOAuthRouter } from './oauth-bedrock.routes.js';
@@ -43,6 +44,7 @@ export function createAdminRouter(
   app.route('/', semanticRouter(store, semantic));
   app.route('/', oauthRouter(store));
   app.route('/', copilotOAuthRouter(store));
+  app.route('/', copilotQuotaRouter(store));
   app.route('/', openaiOAuthRouter(store));
   app.route('/', claudeCodeOAuthRouter(store));
   app.route('/', bedrockOAuthRouter(store));

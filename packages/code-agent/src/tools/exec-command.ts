@@ -31,7 +31,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { applyRuntimeEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
+import { applyRuntimeEnv, cleanProcessEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { electronWindowsPtyOptions } from '@mcp/shared/utils/windows-pty.js';
 import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
@@ -39,11 +39,23 @@ import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 import { commandSpec, commandLaunch, commandDisplay, type CommandSpec } from './command-spec.js';
 import { ProcessOutput, readProcessOutput } from './process-output.js';
+import { registerBackgroundNoticeSource } from '@mcp/code-agent/core/background-notices.js';
 
 // ─── Tunables ──────────────────────────────────────────────────────
 
-const DEFAULT_EXEC_YIELD_MS = 10_000;
+// Long enough for typical focused tests/lint/builds to finish inside the
+// first call; exit still releases the wait immediately.
+const DEFAULT_EXEC_YIELD_MS = 30_000;
 const DEFAULT_WRITE_YIELD_MS = 250;
+const DEFAULT_POLL_YIELD_MS = 10_000;
+/**
+ * An empty poll of a command that never received stdin is a wait for
+ * completion: it returns as soon as the process exits, so a long floor costs
+ * nothing for fast processes and removes repeated poll-only model rounds for
+ * slow ones (each round re-sends the whole transcript). Interactive sessions
+ * keep the short platform waits.
+ */
+const COMPLETION_POLL_FLOOR_MS = 30_000;
 const MAX_YIELD_MS = 60_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 20_000;
 const HARD_MAX_OUTPUT_CHARS = 200_000;
@@ -109,6 +121,18 @@ interface SessionRecord {
   startedAtMs: number;
   /** Timestamp of the last interaction; used for idle TTL eviction. */
   lastTouchMs: number;
+  /** pty, or stdin was written: empty polls keep short interactive waits. */
+  interactive: boolean;
+  /** The model was told this session is running (it may now work meanwhile). */
+  runningReported: boolean;
+  /**
+   * Agent (runner) that last saw `running`. Subagents share the session id,
+   * so only this agent may receive the exit notice; a runner that is gone
+   * simply leaves the exit for a normal poll.
+   */
+  recipient: unknown;
+  /** The model has seen this session's exit (poll or background notice). */
+  exitReported: boolean;
   /** Resolved when the process exits — lets yield logic short-circuit. */
   exitedPromise: Promise<void>;
   /** Trips the exitedPromise. */
@@ -118,9 +142,18 @@ interface SessionRecord {
 }
 
 const sessions = new Map<string, SessionRecord>();
+/**
+ * Exits already delivered through a background notice. A later poll of the
+ * same id answers from here instead of failing as an unknown session.
+ */
+interface ReportedExit { owner: string; exitCode: number | null; outputRef: string }
+const reportedExits = new Map<string, ReportedExit>();
+const MAX_REPORTED_EXITS = 64;
 let admissionReservations = 0;
 let sweeper: ReturnType<typeof setInterval> | undefined;
-function sessionOwner(ctx: ToolContext): string { return ctx.sessionId ?? `legacy:${ctx.projectName}:${ctx.cwd}`; }
+function sessionOwner(ctx: Pick<ToolContext, 'sessionId' | 'projectName' | 'cwd'>): string {
+  return ctx.sessionId ?? `legacy:${ctx.projectName}:${ctx.cwd}`;
+}
 
 let cachedPty: NodePtyModule | null | undefined = undefined;
 
@@ -282,9 +315,28 @@ function drainPending(rec: SessionRecord): {
   return { output: formatted.output, truncated, omittedChars: formatted.omittedChars, inputChars };
 }
 
-function clampYield(raw: unknown, fallback: number): number {
+function clampYield(raw: unknown, fallback: number, kind: 'start' | 'poll' | 'input' = 'input'): number {
   const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback;
-  return Math.min(Math.max(0, n), MAX_YIELD_MS);
+  // Windows process startup and test runners commonly outlive a 1s poll.
+  // Keep zero as an explicit async launch/poll; positive waits give the
+  // process time to finish without requiring another model round. Exit and
+  // cancellation still release the wait immediately; interactive input stays fast.
+  const minimum = process.platform === 'win32' && n > 0
+    ? kind === 'start' ? 10_000 : kind === 'poll' ? 5_000 : 0
+    : 0;
+  return Math.min(Math.max(0, minimum, n), MAX_YIELD_MS);
+}
+
+/**
+ * Wait bound for an empty poll. Non-interactive commands (tests, builds,
+ * lint) are awaited to completion up to a long floor; explicit zero still
+ * polls immediately. Interactive sessions keep the platform poll bounds.
+ */
+function emptyPollYield(raw: unknown, rec: SessionRecord): number {
+  if (rec.interactive) return clampYield(raw, DEFAULT_POLL_YIELD_MS, 'poll');
+  const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : DEFAULT_POLL_YIELD_MS;
+  if (n <= 0) return 0;
+  return Math.min(Math.max(n, COMPLETION_POLL_FLOOR_MS), MAX_YIELD_MS);
 }
 
 function clampMaxChars(raw: unknown): number {
@@ -331,7 +383,14 @@ function describeResult(
 function resultForDrain(
   rec: SessionRecord,
   drained: { output: string; truncated: boolean; omittedChars: number; inputChars: number },
+  recipient?: unknown,
 ): ToolResult {
+  if (rec.status === 'running') {
+    rec.runningReported = true;
+    rec.recipient = recipient ?? null;
+  } else {
+    rec.exitReported = true;
+  }
   const content = describeResult(rec, drained);
   // Inline reduction and source loss are distinct. The spool can recover the
   // former only while its own acquisition remained complete.
@@ -352,18 +411,6 @@ function resultForDrain(
   };
 }
 
-// Strips dev-only env vars that leak from our parent (Electron/tsx) into
-// user-spawned shells. Mirrors pty.ts. Without this, `node script.js`
-// inside an exec session crashes with ERR_MODULE_NOT_FOUND: 'tsx'.
-function cleanEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.NODE_OPTIONS;
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.MCP_DEV_HTTP;
-  delete env.MCP_ELECTRON_DEV_URL;
-  return env;
-}
-
 // ─── Spawn helpers ─────────────────────────────────────────────────
 
 async function spawnSession(opts: {
@@ -380,7 +427,7 @@ async function spawnSession(opts: {
   /** Revalidate ownership immediately before the physical spawn. */
   assertFence?: () => void;
 }): Promise<SessionRecord> {
-  const env = applyRuntimeEnv(cleanEnv(), opts.runtimeEnv);
+  const env = applyRuntimeEnv(cleanProcessEnv(), opts.runtimeEnv);
   const id = randomUUID().slice(0, 8);
   let proc: ChildProcess | NodePtyProcess;
   let resolveExit!: () => void;
@@ -400,7 +447,8 @@ async function spawnSession(opts: {
       );
     }
     opts.assertFence?.();
-    proc = pty.spawn(launch.executable, launch.args, {
+    proc = pty.spawn(launch.executable,
+      process.platform === 'win32' && launch.windowsVerbatimArguments ? launch.args.join(' ') : launch.args, {
       name: 'xterm-color',
       cols: opts.cols,
       rows: opts.rows,
@@ -417,6 +465,7 @@ async function spawnSession(opts: {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: !isWindows,
       windowsHide: true,
+      windowsVerbatimArguments: launch.windowsVerbatimArguments,
     });
   }
   } catch (error) { output.finish(); throw error; }
@@ -440,6 +489,10 @@ async function spawnSession(opts: {
     truncated: false,
     startedAtMs: nowMs(),
     lastTouchMs: nowMs(),
+    interactive: opts.mode === 'pty',
+    runningReported: false,
+    recipient: null,
+    exitReported: false,
     exitedPromise,
     markExited: (code) => {
       if (rec.status === 'exited') return;
@@ -499,6 +552,7 @@ async function spawnSession(opts: {
 
 function writeToSession(rec: SessionRecord, chars: string): void {
   if (!chars) return;
+  rec.interactive = true;
   if (rec.mode === 'pty') {
     (rec.proc as NodePtyProcess).write(chars);
   } else {
@@ -530,14 +584,16 @@ const EXEC_COMMAND_DESC =
   'Spawn a shell command as a PERSISTENT session and return whatever it emits within a short yield window. ' +
   'If the process is still alive when yield expires, you get back a `session_id` you can drive with `write_stdin`.\n' +
   '\n' +
-  'USE: when the command needs to interact across multiple turns — REPLs (`node`, `python -i`, `psql`), ' +
+  'USE: for long builds/tests, overlapping independent checks, or commands that interact across turns — REPLs (`node`, `python -i`, `psql`), ' +
   'interactive scaffolders (`npm init`, `gh auth login`), TUI commands that prompt for choices.\n' +
   'USE: when you need to send several lines of stdin separated by reading responses.\n' +
-  "DON'T: use as a replacement for `run_command` — one-shot commands are cheaper there. " +
-  "exec_command holds resources open until you `write_stdin({chars:''})` to confirm exit or the TTL reaps it.\n" +
+  'Completed commands return their exit code and need no polling. Only poll a returned running session with `write_stdin`; short queries can use `run_command`.\n' +
+  'The call waits up to `yield_time_ms` and returns as soon as the process exits: keep the default for checks you will wait on. ' +
+  'If a session you left running exits while you do other work, its final status and unread output are attached to your next tool result.\n' +
+  'Output is retained (`output_ref`) and returned as beginning + true tail within `max_output_chars`; do not redirect it to a file just to shorten it.\n' +
   "DON'T: spawn long-running servers (`npm run dev`, watch modes) here — the session will be evicted after " +
   '10 min of model inactivity even if the server is healthy. Use a background terminal for those.\n' +
-  'An evicted session is GONE (process killed, no reconnect) — call `list_sessions` to check which session_ids are still alive before writing to one.\n' +
+  'An evicted session is gone. Use `list_sessions` only for a lost ID or a session-not-active error; known running IDs can be used directly.\n' +
   "The shell is the platform default (cmd.exe on Windows, /bin/sh on POSIX) — see the system prompt's OS line for shell-specific dos/don'ts.\n" +
   '\n' +
   `Defaults: tty=false (pipe); yields after ~${DEFAULT_EXEC_YIELD_MS}ms; output capped at ~${DEFAULT_MAX_OUTPUT_CHARS} chars. ` +
@@ -571,7 +627,7 @@ export const execCommand: CoderTool = {
       },
       yield_time_ms: {
         type: 'number',
-        description: `Maximum time to collect output before returning the session id. Default ${DEFAULT_EXEC_YIELD_MS}, maximum ${MAX_YIELD_MS}.`,
+        description: `Wait for output/exit; returns early on exit or cancellation. Default ${DEFAULT_EXEC_YIELD_MS}, max ${MAX_YIELD_MS}. On Windows positive waits are at least 10000ms. Pass a short wait or zero only when you have independent work to do meanwhile.`,
       },
       cols: { type: 'number', description: 'PTY columns. Defaults to 120.' },
       rows: { type: 'number', description: 'PTY rows. Defaults to 30.' },
@@ -594,7 +650,7 @@ export const execCommand: CoderTool = {
     if (!workdir.ok) return err(`exec_command: ${workdir.reason}`);
     const cwd = workdir.cwd;
     const mode: 'pipe' | 'pty' = args.tty === true ? 'pty' : 'pipe';
-    const yieldMs = clampYield(args.yield_time_ms, DEFAULT_EXEC_YIELD_MS);
+    const yieldMs = clampYield(args.yield_time_ms, DEFAULT_EXEC_YIELD_MS, 'start');
     const maxChars = clampMaxChars(args.max_output_chars ?? (typeof args.max_output_tokens === 'number' ? args.max_output_tokens * 4 : undefined));
     const cols = typeof args.cols === 'number' && Number.isFinite(args.cols) ? args.cols : 120;
     const rows = typeof args.rows === 'number' && Number.isFinite(args.rows) ? args.rows : 30;
@@ -660,7 +716,7 @@ export const execCommand: CoderTool = {
       sessions.delete(rec.id);
     }
 
-    return resultForDrain(rec, drained);
+    return resultForDrain(rec, drained, ctx.runner);
   },
 };
 
@@ -669,7 +725,8 @@ export const execCommand: CoderTool = {
 const WRITE_STDIN_DESC =
   'Send bytes to an exec_command session\'s stdin, then yield briefly to collect new output. ' +
   'Use `chars=""` (default) as a non-destructive poll to check whether the session is still alive ' +
-  'and pick up output emitted since the last read.\n' +
+  'and pick up output emitted since the last read. For a command that never received input, an empty poll ' +
+  `waits until the process exits (up to yield_time_ms, at least ${COMPLETION_POLL_FLOOR_MS}ms) and returns immediately on exit.\n` +
   '\n' +
   'USE: after `exec_command` returned with status=running and you have an answer/command to push.\n' +
   'USE: with empty chars to poll a session that needs more time to produce its prompt.\n' +
@@ -712,10 +769,10 @@ function detectMisfireHint(id: string, rawChars: unknown): string {
     `session's stdin; it does NOT create or edit files.`;
   const tail = looksLikeFile
     ? ` It looks like you meant to WRITE A FILE. If \`write_file\` isn't in your tools, ` +
-      `first \`expand_toolset({ tier: 'navigate' })\`, then call ` +
-      `\`write_file({ path, content })\` (or \`create_file\` for a new file).`
+      `use \`find_tools\` for its schema and call it through \`code_exec\`: ` +
+      `\`return await tools.write_file({ path, content });\`.`
     : ` If you meant to call a different tool (e.g. \`${id}\`), call it directly — and ` +
-      `\`expand_toolset({ tier: 'navigate' })\` first if it isn't visible yet.`;
+      `use \`find_tools\` and \`code_exec\` if it isn't visible.`;
   return `${base}${tail}\n\n`;
 }
 
@@ -753,7 +810,6 @@ function snapshotSessions(owner?: string): SessionSnapshot[] {
 
 const LIST_SESSIONS_DESC =
   'List the active exec_command sessions in this runner (id, status, age, idle). ' +
-  'Use BEFORE `write_stdin` to confirm the session you want still exists. ' +
   'Returns `(no active sessions)` when the registry is empty.\n\n' +
   'USE: when you forgot the session_id, or when write_stdin returned ' +
   '"session not active" and you want to know which ids ARE valid.\n' +
@@ -812,7 +868,7 @@ export const writeStdin: CoderTool = {
       },
       yield_time_ms: {
         type: 'number',
-        description: `How long to wait for output after writing. Default ${DEFAULT_WRITE_YIELD_MS}, max ${MAX_YIELD_MS}.`,
+        description: `Wait for output/exit; returns early on exit or cancellation. Empty polls of non-interactive commands wait at least ${COMPLETION_POLL_FLOOR_MS} (max ${MAX_YIELD_MS}) for completion; interactive empty polls default to ${DEFAULT_POLL_YIELD_MS} (Windows minimum 5000); input writes default to ${DEFAULT_WRITE_YIELD_MS}. Zero polls immediately.`,
       },
     },
     required: ['session_id'],
@@ -822,12 +878,23 @@ export const writeStdin: CoderTool = {
     reapIdleSessions();
     const id = String(args.session_id ?? '').trim();
     if (!id) return err('write_stdin: session_id is required');
+    const chars = typeof args.chars === 'string' ? args.chars : '';
     if (ctx.ports?.commands) {
-      return ctx.ports.commands.write({ sessionId: id, chars: typeof args.chars === 'string' ? args.chars : '',
-        yieldMs: clampYield(args.yield_time_ms, DEFAULT_WRITE_YIELD_MS), signal: ctx.signal,
+      const yieldMs = clampYield(args.yield_time_ms, chars ? DEFAULT_WRITE_YIELD_MS : DEFAULT_POLL_YIELD_MS, chars ? 'input' : 'poll');
+      return ctx.ports.commands.write({ sessionId: id, chars,
+        yieldMs, signal: ctx.signal,
         assertFence: () => assertMutationFence(ctx.mutationFence, { kind: 'control', operation: 'write_stdin', resource: id }) });
     }
     const rec = sessions.get(id);
+    const reported = reportedExits.get(id);
+    if (!rec && !chars && reported && reported.owner === sessionOwner(ctx)) {
+      // The exit was already delivered with an earlier tool result. A poll
+      // is harmless; answer it truthfully instead of as an unknown session.
+      return ok(
+        `session_id=${id} status=exited output_ref=${reported.outputRef} exit=${reported.exitCode ?? 'signal'}\n\n` +
+        '(no new output — this exit was already reported; do not poll this session again)',
+      );
+    }
     if (!rec || rec.owner !== sessionOwner(ctx)) {
       // PR 5 — rich error payload: list the IDs that ARE active so the
       // model can immediately self-correct instead of rotating
@@ -856,8 +923,6 @@ export const writeStdin: CoderTool = {
       );
     }
 
-    const chars = typeof args.chars === 'string' ? args.chars : '';
-    const yieldMs = clampYield(args.yield_time_ms, DEFAULT_WRITE_YIELD_MS);
 
     if (chars && rec.status === 'running') {
       try {
@@ -872,6 +937,9 @@ export const writeStdin: CoderTool = {
       }
     }
 
+    const yieldMs = chars
+      ? clampYield(args.yield_time_ms, DEFAULT_WRITE_YIELD_MS, 'input')
+      : emptyPollYield(args.yield_time_ms, rec);
     await awaitYield(rec, yieldMs, ctx.signal);
     rec.lastTouchMs = nowMs();
     const drained = drainPending(rec);
@@ -880,7 +948,7 @@ export const writeStdin: CoderTool = {
       sessions.delete(rec.id);
     }
 
-    return resultForDrain(rec, drained);
+    return resultForDrain(rec, drained, ctx.runner);
   },
 };
 
@@ -906,14 +974,62 @@ export async function disposeExecCommandSessions(reason = 'shutdown'): Promise<v
   for (const rec of owned) sessions.delete(rec.id);
 }
 
+// ─── Background exit notices ──────────────────────────────────────
+//
+// A session the model left running (it yielded `status=running`) and that
+// exited unobserved is reported once, with the same body a poll would have
+// returned. This replaces a poll-only model round with text appended to the
+// tool result the model was already going to read.
+
+function shortCommand(cmd: string): string {
+  const flat = cmd.replace(/\s+/g, ' ').trim();
+  return flat.length > 160 ? `${flat.slice(0, 157)}...` : flat;
+}
+
+function rememberReportedExit(rec: SessionRecord): void {
+  reportedExits.set(rec.id, { owner: rec.owner, exitCode: rec.exitCode, outputRef: rec.output.id });
+  while (reportedExits.size > MAX_REPORTED_EXITS) {
+    const oldest = reportedExits.keys().next().value;
+    if (oldest === undefined) break;
+    reportedExits.delete(oldest);
+  }
+}
+
+/**
+ * Drain unobserved exits for one owner; each becomes a self-contained notice.
+ * `recipient` is the draining agent; a session left running by another agent
+ * of the same session (parent vs subagent) stays for that agent.
+ */
+export function takeUnreportedExitNotices(owner: string, recipient?: unknown): string[] {
+  const notices: string[] = [];
+  for (const rec of [...sessions.values()].sort((a, b) => a.startedAtMs - b.startedAtMs)) {
+    if (rec.owner !== owner || rec.status !== 'exited' || rec.closing) continue;
+    if (!rec.runningReported || rec.exitReported) continue;
+    if (rec.recipient != null && rec.recipient !== recipient) continue;
+    const drained = drainPending(rec);
+    const body = resultForDrain(rec, drained).content;
+    sessions.delete(rec.id);
+    rememberReportedExit(rec);
+    notices.push(
+      `[background exec] session ${rec.id} exited while you worked (no poll needed). ` +
+        `cmd: ${shortCommand(rec.cmd)}\n${body}`,
+    );
+  }
+  return notices;
+}
+
+registerBackgroundNoticeSource((ctx) => takeUnreportedExitNotices(sessionOwner(ctx), ctx.runner));
+
 // ─── Test hooks ────────────────────────────────────────────────────
 // Exported only so unit tests can poke the registry. Not part of the
 // stable surface; do not import from runner code.
 
 export const __testing = {
   sessions,
+  reportedExits,
   reapIdleSessions,
   disposeAll(): Promise<void> {
+    reportedExits.clear();
     return disposeExecCommandSessions('test-reset');
   },
 };

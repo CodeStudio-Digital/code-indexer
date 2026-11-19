@@ -1,5 +1,5 @@
 import type { PreflightReport } from '@mcp/api-bus';
-import { runPreflight } from '@mcp/services/preflight/index.js';
+import { detectHostPreflight } from '../runtime/detect-runner.js';
 import type { HandlerDeps } from '../types.js';
 
 /**
@@ -8,5 +8,5 @@ import type { HandlerDeps } from '../types.js';
  * the data dir derived from the SQLite db path.
  */
 export function getPreflight(deps: HandlerDeps): Promise<PreflightReport> {
-  return runPreflight({ dbPath: deps.config.dbPath });
+  return detectHostPreflight(deps.config.dbPath);
 }

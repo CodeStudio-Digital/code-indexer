@@ -29,15 +29,23 @@ An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, 
 ## Quick start
 
 ```bash
-# 1. Install
-pnpm install
-pnpm electron:rebuild    # rebuild better-sqlite3 against Electron's Node ABI
+# 1. Install dependencies and prepare SQLite for Electron
+pnpm electron:setup
 
 # 2. Run the dashboard in Electron (dev mode)
 pnpm electron:dev
 ```
 
 The Electron window opens at the project list. Pick a project to enter the Workspace — the legacy analytics view is still reachable at `/projects/:id/analytics`.
+
+Starting Electron in development builds and installs the bundled providers, Angular, Figma and the JavaScript debugger. Restart the dev app after editing a bundled plugin. Windows development data lives in `%LOCALAPPDATA%\CodeStudio-dev\data`. Set `MCP_DATA_DIR` to reuse a specific development profile.
+
+### Figma, Copilot and offline search
+
+- Open **Figma** in the workspace’s right rail and connect a Figma personal access token with `current_user:read` and `file_content:read`. The agent can read layers and design tokens, render previews and get asset URLs. Enterprise variables need `file_variables:read`. The project cache survives restarts. Use `cache_only` for offline reads or `refresh` to request the latest design. A later message in the same chat can reopen a saved image by its attachment ID.
+- Connect **GitHub Copilot** in **Settings → Providers & Models**. Open its card or the chat’s **Usage quotas** side panel to see the quota returned by GitHub. Existing token-based connections can reconnect to enable the quota panel.
+- The default semantic index uses the bundled IBM Granite Multilingual R2 model. The installer and checkout contain the q8 weights and tokenizer. Rebuild an existing E5 index when you want to switch its active vectors to Granite.
+- Turn off **Sync model prices online** in **Settings → App settings → Models and prices** to use stored prices. Set `MODEL_PRICING_REMOTE_ENABLED=0` to disable OpenRouter and LiteLLM price requests from the first launch.
 
 **Don't have a project yet?** Click `+ New project` on the home screen, point at any folder on your disk, and hit `Index`. The agent + Monaco LSP both work against that path.
 

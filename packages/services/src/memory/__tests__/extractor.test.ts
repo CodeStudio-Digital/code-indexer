@@ -39,8 +39,8 @@ describe('MemoryExtractor', () => {
     const w = fakeWriter();
     const ex = new MemoryExtractor(fakeDistiller([{ title: 'User preference', content: 'same fact', category, importance: 0.7 }]),
       w.writer, fakeSearch([snap(7, 'User preference', 'same fact', category === 'user' ? 'feedback' : 'user')]));
-    expect(await ex.extractAndPersist(0, '', 'agent', {})).toEqual({ created: 0, merged: 1, skipped: 0 });
-    expect(w.creates).toHaveLength(0); expect(w.updates).toHaveLength(1);
+    expect(await ex.extractAndPersist(0, '', 'agent', {})).toEqual({ created: 0, merged: 0, skipped: 1 });
+    expect(w.creates).toHaveLength(0); expect(w.updates).toHaveLength(0);
   });
   it('creates new memory with the given source + importance when no duplicate', async () => {
     const w = fakeWriter();
@@ -62,33 +62,27 @@ describe('MemoryExtractor', () => {
     expect(w.creates[0].data.importance).toBe(0.7); // floored: max(0.1, decision floor 0.7)
   });
 
-  it('merges into an existing near-duplicate (same category + similar title)', async () => {
+  it('keeps different facts separate despite similar titles and never auto-pins', async () => {
     const w = fakeWriter();
     const ex = new MemoryExtractor(
       fakeDistiller([{ title: 'Use JWT auth', content: 'new detail', category: 'decision', importance: 0.9 }]),
       w.writer, fakeSearch([snap(7, 'Use JWT for auth', 'original content', 'decision')]),
     );
     const r = await ex.extractAndPersist(1, 'proj', 'session', {});
-    expect(r).toEqual({ created: 0, merged: 1, skipped: 0 });
-    expect(w.updates[0].id).toBe(7);
-    expect(String(w.updates[0].updates.content)).toContain('new detail');
-    // Corroboration bumps importance: min(1, 0.5 + 0.02).
-    expect(w.updates[0].updates.importance).toBeCloseTo(0.52);
-    expect(w.creates).toHaveLength(0);
+    expect(r).toEqual({ created: 1, merged: 0, skipped: 0 });
+    expect(w.updates).toHaveLength(0);
+    expect(w.creates[0].data).toMatchObject({ content: 'new detail', importance: 0.85 });
   });
 
-  it('bumps importance without rewriting content when the body is already present', async () => {
+  it('does not inflate importance or recapture file hashes on repeated content', async () => {
     const w = fakeWriter();
     const ex = new MemoryExtractor(
       fakeDistiller([{ title: 'Use JWT auth', content: 'original content', category: 'decision', importance: 0.9 }]),
       w.writer, fakeSearch([snap(7, 'Use JWT for auth', 'original content', 'decision')]),
     );
     const r = await ex.extractAndPersist(1, 'proj', 'session', {});
-    expect(r).toEqual({ created: 0, merged: 1, skipped: 0 });
-    // Body unchanged → stays on the cheap metadata path (no content key), but
-    // importance is still bumped.
-    expect(w.updates[0].updates.content).toBeUndefined();
-    expect(w.updates[0].updates.importance).toBeCloseTo(0.52);
+    expect(r).toEqual({ created: 0, merged: 0, skipped: 1 });
+    expect(w.updates).toHaveLength(0);
   });
 
   it('does not merge across different categories', async () => {
@@ -109,13 +103,12 @@ describe('MemoryExtractor', () => {
     expect(r).toEqual({ created: 0, merged: 0, skipped: 1 });
   });
 
-  it('returns zeros when distillation throws (non-fatal)', async () => {
+  it('propagates unknown extraction failures so the orchestrator retains a retryable input', async () => {
     const w = fakeWriter();
-    const r = await new MemoryExtractor(
+    await expect(new MemoryExtractor(
       { async distill() { throw new Error('llm down'); } },
       w.writer, fakeSearch([]),
-    ).extractAndPersist(1, 'proj', 'session', {});
-    expect(r).toEqual({ created: 0, merged: 0, skipped: 0 });
+    ).extractAndPersist(1, 'proj', 'session', {})).rejects.toThrow('llm down');
     expect(w.creates).toHaveLength(0);
   });
 });

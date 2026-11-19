@@ -1,5 +1,6 @@
 import type { ProviderSpec } from '@mcp/provider-sdk';
 import { OPENAI_API_MODELS } from '@mcp/shared/providers/openai-api-models.js';
+import { ZAI_MODELS } from '@mcp/shared/providers/zai-models.js';
 
 /**
  * Declarative specs for the OpenAI-compatible built-ins. Provider-specific
@@ -8,7 +9,7 @@ import { OPENAI_API_MODELS } from '@mcp/shared/providers/openai-api-models.js';
 
 export const openaiSpec: ProviderSpec = {
   kind: 'openai',
-  displayName: 'OpenAI',
+  displayName: 'OpenAI Compatible',
   visual: { icon: 'Brain', fg: 'text-emerald-500', bg: 'bg-emerald-500/15' },
   credKind: 'api-key',
   envVars: ['OPENAI_API_KEY'],
@@ -99,6 +100,8 @@ export const zaiSpec: ProviderSpec = {
   defaultBaseURL: 'https://api.z.ai/api/paas/v4',
   defaultModels: [
     'glm-5.1',
+    'glm-5.3',
+    'glm-5.3-flash',
     'glm-5-turbo',
     'glm-5',
     'glm-4.7',
@@ -127,6 +130,7 @@ export const zaiSpec: ProviderSpec = {
     'glm-4': { inputPer1M: 1.4, outputPer1M: 1.4 },
   },
   capabilities: { zaiCodingMode: true, supportsThinking: true },
+  models: ZAI_MODELS,
   wire: 'openai-compat',
   wireOpts: {
     vendor: 'zai',

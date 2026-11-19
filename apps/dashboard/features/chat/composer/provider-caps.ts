@@ -1,5 +1,6 @@
 import type { ProviderOption } from '../types.js';
 import { selectedProviderModel } from '../execution-mode-state.js';
+import { getZaiModelReasoning } from '@mcp/shared/providers/zai-models.js';
 
 /**
  * Resolve whether a provider supports extended thinking. The capability flag
@@ -24,14 +25,11 @@ export function providerSupportsThinking(
     if (option.kind === 'copilot') {
       return resolveReasoningLevels(providerId, providerOptions, model).length > 0;
     }
-    // Z.AI's "thinking" parameter is accepted by GLM-4.5+ and the entire
-    // GLM-5 family (per docs.z.ai/guides/capabilities/thinking). Older
-    // GLM-4.x (4.4, 4.3, 4-air, 4-flash, …) reject it with a 400, so we
-    // keep the regex narrow:
-    //   - glm-5, glm-5.1, glm-5-turbo, … (5 anything)
-    //   - glm-4.5, glm-4.6, glm-4.7 and their variants (.5-air, .6-flash, .7-flashx, …)
     if (option.kind === 'zai') {
-      const bare = (model ?? '').split('::')[0];
+      const selected = model ?? '';
+      // GLM-5.3's reasoning is controlled by the effort selector.
+      if (getZaiModelReasoning(selected)) return false;
+      const [bare = ''] = selected.split('::');
       return /^glm-(?:5(?:[.\-]|$)|4\.[567])/.test(bare);
     }
     return true;

@@ -34,6 +34,21 @@ const call = (command: string, at: string, result = 'done exit=0', isError = fal
 });
 
 describe('buildVerifyEvidence', () => {
+  it('keeps prose review separate without hiding a source edit among many reports', async () => {
+    const docs = Array.from({ length: 20 }, (_, i) => ({ file_path: `docs/${i}.md`, applied_at: '2026-11-11 01:01:00' }));
+    const source = stubSource([call('pnpm test > check.log', '2026-11-11 01:00:00')], docs);
+    const prose = (await buildVerifyEvidence(source, SESSION_ID))!;
+    expect(formatVerifyEvidence(prose)).not.toContain('STALE');
+    expect(formatVerifyEvidence(prose)).toContain('Review prose separately');
+    const mixed = (await buildVerifyEvidence(stubSource([call('pnpm test', '2026-11-11 01:00:00')], [
+      ...docs, { file_path: 'src/last.ts', applied_at: '2026-11-11 01:01:00' },
+    ]), SESSION_ID))!;
+    expect(formatVerifyEvidence(mixed)).toContain('STALE');
+    expect(formatVerifyEvidence(mixed)).toContain('src/last.ts');
+    const docsCheck = (await buildVerifyEvidence(stubSource([call('pnpm run lint:docs', '2026-11-11 01:00:00')], docs), SESSION_ID))!;
+    expect(formatVerifyEvidence(docsCheck)).toContain('STALE');
+  });
+
   it.each([
     ['$ pnpm test\nexit code: 0\nall passed', 0],
     ['$ pnpm test\nexit code: 2\nprinted exit=0', 2],

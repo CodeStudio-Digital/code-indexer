@@ -97,8 +97,6 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     transientRetriesThisTurn: 0,
     transportRetriesThisTurn: 0,
     providerAttempts: 0,
-    consecutiveLargePromptCacheMisses: 0,
-    cacheMissGuardError: null,
     dupCalls: new Map(),
     noProgressTracker: new NoProgressTracker(),
     autoContinues: 0,

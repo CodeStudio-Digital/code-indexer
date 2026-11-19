@@ -24,6 +24,8 @@ import { EnvironmentList, EnvManagerDialog } from './EnvManagerDialog.js';
 import { RequestTabBar } from './RequestTabBar.js';
 import { RequestEditor } from './RequestEditor.js';
 import { ResponseViewer } from './ResponseViewer.js';
+import { ResponseComparison } from './response/ResponseComparison.js';
+import { ApiClientSelect } from './ApiClientSelect.js';
 import { RequestTimeline } from './RequestTimeline.js';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../../components/ui/dropdown-menu.js';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
@@ -33,6 +35,7 @@ import { SaveRequestDialog } from './SaveRequestDialog.js';
 import { EnvEditor } from './EnvEditor.js';
 import { ImportOpenApiDialog } from './ImportOpenApiDialog.js';
 import { ImportCurlDialog } from './ImportCurlDialog.js';
+import { ImportPostmanDialog } from './ImportPostmanDialog.js';
 import { CodeDialog } from './CodeDialog.js';
 import { PublishDocsDialog } from './PublishDocsDialog.js';
 import { CloudSyncDialog } from './CloudSyncDialog.js';
@@ -41,15 +44,17 @@ import { useDockPortalRoot, ModeBtn } from './api-client-tab-controls.js';
 import { useRequestDeletion } from './use-request-deletion.js';
 import { NAV_TABS, RESP_TABS, DocsStudioView } from './api-client-tab-options.js';
 
-export function ApiClientTab({
-  projectId,
-  docsAccess = false,
-  workbenchSlots,
-}: {
+interface ApiClientTabProps {
   projectId: number;
   docsAccess?: boolean;
   workbenchSlots?: ApiClientWorkbenchSlots;
-}) {
+}
+
+export function ApiClientTab(props: ApiClientTabProps) {
+  return <ApiClientWorkspace key={props.projectId} {...props} />;
+}
+
+function ApiClientWorkspace({ projectId, docsAccess = false, workbenchSlots }: ApiClientTabProps) {
   const { t } = useTranslation('apiClient');
   const c = useApiClient(projectId);
   const { state } = c;
@@ -61,8 +66,9 @@ export function ApiClientTab({
   const [envEditId, setEnvEditId] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [curlOpen, setCurlOpen] = useState(false);
+  const [postmanOpen, setPostmanOpen] = useState(false);
   const [regressionOpen, setRegressionOpen] = useState(false);
-  const [respTab, setRespTab] = useState<'response' | 'history'>('response');
+  const [respTab, setRespTab] = useState<'response' | 'history' | 'compare'>('response');
   const [navTab, setNavTab] = useState<'collections' | 'environments'>('collections');
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeRid, setCodeRid] = useState<number | null>(null);
@@ -94,19 +100,10 @@ export function ApiClientTab({
     c.selectCollection(collectionId);
   };
 
-  const onCurlImported = async (collectionId: number, requestId: number) => {
-    await c.refreshCollections();
-    c.selectCollection(collectionId);
-    c.reloadRequests();
-    c.selectRequest(requestId);
-  };
-
   // Used by the curl-import dialog when there's no collection yet.
   const ensureCollection = async (): Promise<number> => {
     if (state.activeCollectionId != null) return state.activeCollectionId;
     const col = await api.createCollection(projectId, t('toolbar.importedCollectionName'));
-    await c.refreshCollections();
-    c.selectCollection(col.id);
     return col.id;
   };
 
@@ -289,7 +286,8 @@ export function ApiClientTab({
         onCloseAll={onCloseAllTabs}
       />
       <div className="min-h-0 flex-1">
-        <RequestEditor
+        {editing ? <RequestEditor
+          key={editing.id}
           request={editing}
           isDraft={isDraft}
           baseUrl={selectedEnv?.base_url ?? ''}
@@ -297,12 +295,15 @@ export function ApiClientTab({
           responseShape={responseShape}
           onSave={(rid, patch) => (isDraft ? c.updateDraft(patch) : c.saveRequest(rid, patch))}
           onSend={c.send}
-          onSendDraft={c.sendDraft}
+          onCancel={c.cancel}
           onSaveDraft={(draft) => { setSaveDraftObj(draft); setSaveOpen(true); }}
           onDiscardDraft={discardDraftGuarded}
           onOpenCode={openCode}
           onAssist={(payload) => api.scriptAssist(projectId, payload)}
-        />
+        /> : <div className="flex h-full flex-col items-center justify-center gap-3 p-4">
+          <Button size="sm" onClick={c.newDraft}><Plus className="mr-1 h-4 w-4" />{t('collections.newRequest')}</Button>
+          <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setCurlOpen(true)}>{t('toolbar.importCurl')}</button>
+        </div>}
       </div>
     </div>
   );
@@ -319,17 +320,19 @@ export function ApiClientTab({
         className="h-8 shrink-0 bg-[var(--workbench-canvas)]"
       />
       <div className="min-h-0 flex-1">
-        {respTab === 'response' ? (
+        {respTab === 'compare' ? <ResponseComparison current={state.response} previous={state.previousResponse} /> : respTab === 'response' ? (
           <ResponseViewer
             response={state.response}
             error={state.error}
             sending={state.sending}
+            cancelled={state.cancelled}
             verifiedStatus={activeRequest?.verified ? activeRequest.expected_status : null}
             onMarkVerified={activeRequest ? (status) => c.verifyRequest(activeRequest.id, status) : undefined}
             onSaveExample={state.response && activeRequest && !isDraft ? saveExample : undefined}
           />
         ) : (
           <RequestTimeline
+            key={state.activeRequestId ?? 'none'}
             projectId={projectId}
             requestId={state.activeRequestId}
             refreshToken={state.response}
@@ -341,7 +344,7 @@ export function ApiClientTab({
 
   const clientToolbar = (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--workbench-border)] px-2 text-xs">
-      <span className="font-medium">API</span>
+      {editing && <Button size="sm" variant="ghost" title={t('collections.newRequest')} aria-label={t('collections.newRequest')} className="h-7 w-7 p-0" onClick={c.newDraft}><Plus className="h-4 w-4" /></Button>}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="sm" variant="outline" className="h-7 gap-1">
@@ -350,6 +353,7 @@ export function ApiClientTab({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={() => setImportOpen(true)}>OpenAPI / Swagger</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setPostmanOpen(true)}>Postman v2.1</DropdownMenuItem>
           <DropdownMenuItem onClick={() => setCurlOpen(true)}>cURL / bash</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -370,7 +374,11 @@ export function ApiClientTab({
       </Button>
       <div className="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground" title={selectedEnv?.base_url}>
         <Globe className="h-3 w-3 shrink-0" />
-        <span className="max-w-40 truncate">{selectedEnv?.name ?? t('toolbar.noEnvironments')}</span>
+        {state.environments.length ? <ApiClientSelect
+          value={String(state.selectedEnvId ?? '')} ariaLabel={t('toolbar.environments')}
+          options={state.environments.map(env => ({ value: String(env.id), label: env.name }))}
+          onValueChange={value => c.selectEnv(Number(value))} triggerClassName="h-7 max-w-40 text-xs"
+        /> : <button type="button" onClick={() => setEnvManagerOpen(true)} className="truncate hover:text-foreground">{t('toolbar.noEnvironments')}</button>}
       </div>
     </div>
   );
@@ -459,9 +467,11 @@ export function ApiClientTab({
         collectionId={state.activeCollectionId}
         open={curlOpen}
         onOpenChange={setCurlOpen}
-        onImported={onCurlImported}
+        onImported={c.openRequestInCollection}
         ensureCollection={ensureCollection}
       />
+      {postmanOpen && <ImportPostmanDialog projectId={projectId} onClose={() => setPostmanOpen(false)}
+        onImported={async id => { await Promise.all([onImported(id), c.refreshEnvironments()]); }} />}
       <CodeDialog
         projectId={projectId}
         requestId={codeRid}

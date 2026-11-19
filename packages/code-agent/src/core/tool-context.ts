@@ -10,6 +10,8 @@ export interface ToolContextServices {
   /** Runner-local handle consumed by one registry invocation, never its children. */
   toolOutcomeControl?: { scope?: import('./tool-outcome-observer.js').ToolOutcomeScope };
   sessionNetwork?: import('../runtime/session-network.js').SessionNetwork;
+  /** Provider catalog preference at run startup. The network checks live authorization on create. */
+  agenticChat?: boolean;
   ultraBudget?: import('../runtime/ultra-budget.js').UltraAgentBudget;
   ultraPolicy?: import('@mcp/agent-runtime-contracts').PresetResolution;
   /** Session/peer mailbox independent of Company orchestration. */
@@ -86,6 +88,8 @@ export interface ToolContextServices {
   toolOutputStore?: {
     put(content: string): string | null;
     putImage?(image: { name?: string; mediaType: string; base64: string }): string | null;
+    saveImage?(image: { name?: string; mediaType: string; base64: string }): Promise<string | null>;
+    getImage?(id: string): { id: string; name: string; mediaType: string; base64: string } | null;
     listImages?(): Array<{ id: string; name: string; mediaType: string }>;
     get(id: string, signal?: AbortSignal): string | null | Promise<string | null>;
     hasOutputs(): boolean;
@@ -200,6 +204,7 @@ export interface ToolContextServices {
    * store available simply leave these undefined.
    */
   recordPlan?: (toolUseId: string, planText: string) => void | Promise<void>;
+  getActivePlan?: () => { text: string; status: string } | null;
   resolvePlan?: (
     toolUseId: string,
     status: 'approved' | 'rejected' | 'aborted',
@@ -207,11 +212,8 @@ export interface ToolContextServices {
   ) => void | Promise<void>;
   /**
    * Persist a new built-in agent for the current session — used by mode
-   * transitions (e.g. plan→build after a plan is approved). When wired by
-   * runCoder() it delegates to `SessionStore.setSessionAgent` so the NEXT
-   * runner creation picks up the new agent's defaults (planMode, profile,
-   * etc.) automatically. The in-memory runner's `opts.agentId` stays put;
-   * the transition takes full effect on the next message turn.
+   * transitions between plan and build. The host persists the choice for the
+   * next run and updates the current runner's mode and approval gate.
    */
   setSessionAgent?: (
     agent: import('@mcp/code-agent/agents/index.js').AgentId,

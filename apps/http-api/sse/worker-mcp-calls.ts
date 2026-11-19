@@ -7,10 +7,15 @@ interface WorkerMcpCallRequest {
   catalogueRevision?: string; runId?: number; authority?: unknown;
 }
 
+interface WorkerMcpDispatch {
+  assertDispatch: () => void;
+  projectId?: number;
+}
+
 /** Cancellation belongs to this worker's bridge, never to the shared server.
  * A cancellation ACK does not establish whether a remote mutation occurred. */
 export function registerWorkerMcpCalls(bridge: MessageBridge, getPool: () => McpExternalPool | null,
-  authorize?: (request: WorkerMcpCallRequest) => (() => void) | Promise<() => void>): () => void {
+  authorize?: (request: WorkerMcpCallRequest) => WorkerMcpDispatch | Promise<WorkerMcpDispatch>): () => void {
   const active = new Map<string, AbortController>();
   const envelope = (result: ReturnType<typeof err>) => ({ ok: !result.isError, text: result.content, result });
   const offCall = bridge.handle('mcpExt.callTool', async (payload) => {
@@ -26,10 +31,11 @@ export function registerWorkerMcpCalls(bridge: MessageBridge, getPool: () => Mcp
     const timer = setTimeout(() => controller.abort(new Error('External MCP deadline elapsed')), 10 * 60_000);
     timer.unref();
     try {
-      let assertDispatch: (() => void) | undefined;
-      try { assertDispatch = await authorize?.(p); controller.signal.throwIfAborted(); assertDispatch?.(); }
+      let dispatch: WorkerMcpDispatch | undefined;
+      try { dispatch = await authorize?.(p); controller.signal.throwIfAborted(); dispatch?.assertDispatch(); }
       catch { return envelope(err('External MCP request belongs to an inactive or cancelled worker run.')); }
-      return await pool.callTool(p.serverId, p.toolName, p.args, controller.signal, p.catalogueRevision, assertDispatch);
+      return await pool.callTool(p.serverId, p.toolName, p.args, controller.signal, p.catalogueRevision,
+        dispatch?.assertDispatch, dispatch?.projectId);
     } catch (error) {
       return envelope(unknownToolOutcome('External MCP dispatch failed: ' + String(error) + '. Reconcile before retrying.'));
     } finally {

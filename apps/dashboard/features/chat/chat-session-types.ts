@@ -1,17 +1,22 @@
 import type { DecisionAnswers, SessionId, StreamTask, StreamTaskExecutionMode } from '../../hooks/useAgentStream.js';
 import type { AgentPreset } from '@mcp/api-bus';
+import type { WorktreeSelection } from '../../state/worktree-selection.js';
+import type { SessionContextStats } from './prompt-cache-metrics.js';
 
 export interface AgentChatWorkbenchSlots {
   toolbarHost?: HTMLElement | null;
   sessionsHost: HTMLElement | null;
   rightPanelHost: HTMLElement | null;
   rightRailHost: HTMLElement | null;
+  worktreeSelection?: WorktreeSelection;
   onSessionStateChange?: (state: { hasSession: boolean; rightPanelOpen: boolean }) => void;
   onSessionSelected?: (sessionId: SessionId) => void;
 }
 
 /** Optional project preview contributed to the session's right activity rail. */
 export interface AgentChatPreviewConfig {
+  workspaceId?: number;
+  worktreePath?: string | null;
   /** Builder projects pin the dev port in their generated Vite config. */
   pinnedPort?: number;
   /** Enables source-aware element and region selection for stamped builders. */
@@ -67,6 +72,7 @@ export interface AgentChatProps {
 export interface CoderSession {
   worktree_path?: string | null;
   id: SessionId;
+  parent_session_id?: SessionId | null;
   project_id: number;
   /** Global (multi-project) session flag (migration 152). */
   is_global?: boolean;
@@ -175,18 +181,12 @@ export interface CoderSessionGroup {
   updated_at: string;
 }
 
-export interface CoderSessionStats {
+export interface CoderSessionStats extends SessionContextStats {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cache_read_tokens: number;
   total_cache_creation_tokens: number;
   last_turn_input_tokens: number;
-  /** Cache-inclusive prompt size of the last assistant turn (input + cache
-   *  read + cache creation) — the at-rest counterpart of the live
-   *  `context_status.prompt_tokens`. Null for sessions with no turns. */
-  last_turn_prompt_tokens?: number | null;
-  /** Model context window size — returned by the stats API. */
-  context_window?: number | null;
   message_count: number;
   assistant_turns: number;
   tool_call_count: number;
@@ -230,6 +230,8 @@ export interface PersistedMessage {
 }
 
 export interface MessageRow {
+  /** Joins streamed provider usage to its committed or checkpointed row. */
+  operation_id?: string;
   /** Stable UUID record identity. Never use it for ordering or pagination. */
   id: string;
   /** Monotonic conversation order within this session. */

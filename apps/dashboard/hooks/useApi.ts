@@ -163,14 +163,15 @@ async function failure(res: Response, fallback: string): Promise<Error> {
   return err;
 }
 
-export async function apiPost<T>(url: string, body: unknown): Promise<T> {
+export async function apiPost<T>(url: string, body: unknown, signal?: AbortSignal, options?: { invalidateReads?: boolean }): Promise<T> {
   const res = await fetch(`${apiBaseUrl()}/api${url}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) throw await failure(res, `POST ${url} failed`);
-  invalidateAll(); // mutation succeeded — drop the short-TTL read cache so siblings revalidate
+  if (options?.invalidateReads !== false) invalidateAll();
   return res.json() as Promise<T>;
 }
 

@@ -6,7 +6,7 @@ import { useApi } from '../../hooks/useApi.js';
 import { copyText } from '../../lib/clipboard.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
 import { formatDuration } from './utils.js';
-import { promptCacheHitRatio, promptInputTokens } from './prompt-cache-metrics.js';
+import { promptCacheHitRatio, promptInputTokens, sessionContextUsage, type SessionContextStats } from './prompt-cache-metrics.js';
 
 type SessionInputKind =
   | 'system_prompt'
@@ -39,7 +39,7 @@ const INPUT_KIND_STYLES: Record<SessionInputKind, string> = {
   preflight: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400',
 };
 
-export interface SessionStatsLike {
+export interface SessionStatsLike extends SessionContextStats {
   message_count: number;
   assistant_turns: number;
   tool_call_count: number;
@@ -48,8 +48,6 @@ export interface SessionStatsLike {
   subagent_call_count: number;
   total_tool_duration_ms: number;
   duration_ms: number;
-  last_turn_input_tokens?: number;
-  context_window?: number | null;
 }
 
 export interface SessionLike {
@@ -74,7 +72,7 @@ function formatK(n: number): string {
 }
 
 export function SessionSummaryView({ session, stats }: { session: SessionLike; stats: SessionStatsLike | null }) {
-  const { t } = useTranslation('chat');
+  const { t, i18n } = useTranslation('chat');
   const totalIn = session.total_input_tokens;
   const totalOut = session.total_output_tokens;
   const totalCR = session.total_cache_read_tokens ?? 0;
@@ -89,11 +87,7 @@ export function SessionSummaryView({ session, stats }: { session: SessionLike; s
   const hitRate = Math.round((promptCacheHitRatio(usage) ?? 0) * 100);
   const savedTokens = Math.round(totalCR * 0.5);
 
-  const lastTurnInput = session.last_turn_input_tokens ?? stats?.last_turn_input_tokens ?? 0;
-  const contextWindow = stats?.context_window ?? null;
-  const ctxPct = contextWindow && lastTurnInput > 0
-    ? Math.min(Math.round((lastTurnInput / contextWindow) * 100), 100)
-    : null;
+  const { tokens: lastTurnInput, window: contextWindow, percent: ctxPct, estimated } = sessionContextUsage(session, stats);
 
   // `text-xs` + `gap-x-3` keeps the two-column key/value rows readable
   // when the panel is at minSize (≈220px). The labels are left-aligned
@@ -106,10 +100,10 @@ export function SessionSummaryView({ session, stats }: { session: SessionLike; s
           <SectionTitle>{t('header.contextWindow')}</SectionTitle>
           <KvGrid>
             <Kv label={t('header.currentContext')}>
-              {lastTurnInput.toLocaleString()} <span className="text-muted-foreground">({formatK(lastTurnInput)})</span>
+              {estimated && '≈'}{lastTurnInput.toLocaleString(i18n.resolvedLanguage)} <span className="text-muted-foreground">({formatK(lastTurnInput)})</span>
             </Kv>
             <Kv label={t('header.windowSize')}>
-              {contextWindow.toLocaleString()} <span className="text-muted-foreground">({formatK(contextWindow)})</span>
+              {contextWindow.toLocaleString(i18n.resolvedLanguage)} <span className="text-muted-foreground">({formatK(contextWindow)})</span>
             </Kv>
             <Kv
               label={t('header.contextUsage')}
@@ -118,7 +112,7 @@ export function SessionSummaryView({ session, stats }: { session: SessionLike; s
                 ctxPct > 90 ? 'text-red-500' : ctxPct > 70 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400',
               )}
             >
-              {ctxPct}%
+              {ctxPct.toLocaleString(i18n.resolvedLanguage)}%
             </Kv>
           </KvGrid>
           <div className="mt-2 w-full h-1.5 bg-muted rounded-full overflow-hidden">

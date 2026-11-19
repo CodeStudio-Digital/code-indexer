@@ -1,202 +1,151 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../../components/ui/dialog.js';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
 import { Input } from '../../components/ui/input.js';
-import type { CopilotFlowState, CopilotOpts } from './types.js';
 
-interface CopilotConnectionDialogProps {
+interface Props {
+  providerId?: string;
+  initialHost?: string;
   onClose: () => void;
-  /** Called after a successful connection so the parent can reload providers. */
-  onConnected: (providerId?: string) => Promise<void> | void;
+  onConnected: (providerId: string) => Promise<void> | void;
 }
 
-export function CopilotConnectionDialog({ onClose, onConnected }: CopilotConnectionDialogProps) {
-  const { t } = useTranslation(['admin', 'common']);
-  const [flow, setFlow] = useState<CopilotFlowState>({ state: 'picker' });
-  const [enterpriseHost, setEnterpriseHost] = useState('');
-  const [enterpriseIntegrationId, setEnterpriseIntegrationId] = useState('');
+type Device = { device_code: string; user_code: string; verification_uri: string };
+type Account = { selectionId: string; login: string; host: string };
+type Step = { kind: 'device'; device: Device } | { kind: 'accounts'; accounts: Account[] };
+type PollResponse =
+  | { status: 'authorized'; provider_id: string }
+  | { status: 'pending'; interval: number }
+  | { status: 'choose_account'; accounts: Account[] };
+type Attempt = { controller: AbortController; flowId?: string; timer?: ReturnType<typeof setTimeout> };
 
-  async function runFlow(opts: CopilotOpts) {
-    setFlow({ state: 'idle' });
+async function request<T>(path: string, body: object, signal?: AbortSignal): Promise<T> {
+  const response = await fetch('/api/admin/oauth/copilot/' + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
+  });
+  const result = await response.json();
+  if (!response.ok) throw Object.assign(new Error(result.error || `HTTP ${response.status}`), { code: result.code ?? result.status });
+  return result as T;
+}
+
+function cancelFlow(flowId: string) {
+  void request('cancel', { device_code: flowId }).catch(() => {});
+}
+
+export function CopilotConnectionDialog({ providerId, initialHost, onClose, onConnected }: Props) {
+  const { t } = useTranslation(['admin', 'common']);
+  const [host, setHost] = useState(initialHost?.endsWith('.ghe.com') ? initialHost : '');
+  const [step, setStep] = useState<Step | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef<Attempt | null>(null);
+
+  useEffect(() => () => {
+    const active = pending.current;
+    if (!active) return;
+    pending.current = null;
+    clearTimeout(active.timer);
+    active.controller.abort();
+    if (active.flowId) cancelFlow(active.flowId);
+  }, []);
+
+  function showFailure(active: Attempt, cause: unknown) {
+    if (pending.current !== active) return;
+    pending.current = null;
+    if (active.flowId) cancelFlow(active.flowId);
+    const code = (cause as { code?: string } | undefined)?.code;
+    const message = code === 'expired' ? t('admin:copilot.codeExpired')
+      : code === 'credential_store_unavailable' ? t('admin:copilot.credentialVaultUnavailable')
+      : cause instanceof Error ? cause.message : t('admin:copilot.connectFailed');
+    setError(message);
+    setStep(null);
+    setConnecting(false);
+  }
+
+  async function advance(active: Attempt, selectionId?: string) {
+    setConnecting(true);
     try {
-      const r = await fetch('/api/admin/oauth/copilot/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(opts),
-      });
-      const j = (await r.json()) as {
-        device_code: string;
-        user_code: string;
-        verification_uri: string;
-        interval: number;
-        opts?: CopilotOpts;
-        error?: string;
-      };
-      if (!j.device_code) throw new Error(j.error ?? 'unexpected response');
-      setFlow({
-        state: 'waiting',
-        userCode: j.user_code,
-        verificationUri: j.verification_uri,
-        deviceCode: j.device_code,
-      });
-      const resolvedOpts = j.opts ?? opts;
-      const poll = async () => {
-        try {
-          const p = await fetch('/api/admin/oauth/copilot/poll', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ device_code: j.device_code, opts: resolvedOpts }),
-          });
-          const pj = (await p.json()) as {
-            status: string;
-            error?: string;
-            provider_id?: string;
-            model_count?: number;
-          };
-          if (pj.status === 'authorized') {
-            setFlow({ state: 'success', providerId: pj.provider_id, modelCount: pj.model_count });
-            await onConnected(pj.provider_id);
-            return;
-          }
-          if (pj.status === 'expired' || pj.status === 'error') {
-            setFlow({ state: 'error', message: pj.error ?? 'flow expired' });
-            return;
-          }
-          setTimeout(() => {
-            void poll();
-          }, Math.max((j.interval ?? 5) * 1000, 5000));
-        } catch (e) {
-          setFlow({ state: 'error', message: (e as Error).message });
+      const result = await request<PollResponse>('poll', {
+        device_code: active.flowId, selection_id: selectionId,
+      }, active.controller.signal);
+      if (pending.current !== active) return;
+      if (result.status === 'pending') {
+        active.timer = setTimeout(() => void advance(active), result.interval * 1000);
+      } else if (result.status === 'choose_account') {
+        setStep({ kind: 'accounts', accounts: result.accounts });
+        setConnecting(false);
+      } else if (result.status === 'authorized') {
+        active.flowId = undefined;
+        await onConnected(result.provider_id);
+        if (pending.current === active) {
+          pending.current = null;
+          onClose();
         }
-      };
-      void poll();
-    } catch (e) {
-      setFlow({ state: 'error', message: (e as Error).message });
+      } else {
+        throw new Error(t('admin:copilot.connectFailed'));
+      }
+    } catch (cause) {
+      showFailure(active, cause);
     }
   }
 
-  function submitEnterprise() {
-    const host = enterpriseHost.trim();
-    if (!host) {
-      setFlow({ state: 'error', message: 'GHES host is required' });
-      return;
+  async function connect(edition: 'individual' | 'enterprise') {
+    const active: Attempt = { controller: new AbortController() };
+    pending.current = active;
+    setConnecting(true);
+    setError(null);
+    try {
+      const started = await request<Device>('start', { provider_id: providerId, edition, ghes_host: host }, active.controller.signal);
+      if (pending.current !== active) {
+        cancelFlow(started.device_code);
+        return;
+      }
+      active.flowId = started.device_code;
+      setStep({ kind: 'device', device: started });
+      await advance(active);
+    } catch (cause) {
+      showFailure(active, cause);
     }
-    void runFlow({
-      edition: 'enterprise',
-      ghes_host: host,
-      integration_id: enterpriseIntegrationId.trim() || undefined,
-    });
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
       <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>{t('admin:copilot.title')}</DialogTitle>
-        </DialogHeader>
-        {flow.state === 'picker' && (
-          <div className="space-y-3 text-sm">
-            <p className="text-muted-foreground">
-              {t('admin:copilot.description')}
-            </p>
-            <div className="grid gap-2">
-              <Button
-                variant="outline"
-                className="justify-start h-auto py-3"
-                onClick={() => void runFlow({ edition: 'individual' })}
-              >
-                <div className="text-left">
-                  <div className="font-medium">{t('admin:copilot.individual')}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {t('admin:copilot.individualDesc')}
-                  </div>
-                </div>
+        <DialogHeader><DialogTitle>{t('admin:copilot.title')}</DialogTitle></DialogHeader>
+        {step?.kind === 'device' ? (
+          <div className="space-y-2 text-sm">
+            <button type="button" className="text-primary underline" onClick={() => window.electronAPI?.openExternal?.(step.device.verification_uri)}>
+              {t('admin:copilot.openGitHub')}
+            </button>
+            <div className="select-all rounded border p-3 text-center font-mono text-xl">{step.device.user_code}</div>
+            <p role="status" className="text-xs text-muted-foreground">{t('admin:copilot.autoUpdate')}</p>
+          </div>
+        ) : step?.kind === 'accounts' ? (
+          <div className="space-y-2 text-sm">
+            <p>{t('admin:copilot.chooseAccount')}</p>
+            {step.accounts.map(account => (
+              <Button key={account.selectionId} variant="outline" className="w-full justify-start" disabled={connecting}
+                onClick={() => { if (pending.current) void advance(pending.current, account.selectionId); }}>
+                {account.login} · {account.host}
               </Button>
-              <Button
-                variant="outline"
-                className="justify-start h-auto py-3"
-                onClick={() => setFlow({ state: 'enterprise_form' })}
-              >
-                <div className="text-left">
-                  <div className="font-medium">{t('admin:copilot.enterprise')}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {t('admin:copilot.enterpriseDesc')}
-                  </div>
-                </div>
-              </Button>
-            </div>
+            ))}
+            {connecting && <p role="status" className="text-xs text-muted-foreground">{t('common:actions.loading')}</p>}
           </div>
-        )}
-        {flow.state === 'enterprise_form' && (
-          <div className="space-y-3 text-sm">
-            <p className="text-xs text-muted-foreground">
-              {t('admin:copilot.ghesHelp')}
-            </p>
-            <div>
-              <label className="text-xs font-medium">{t('admin:copilot.ghesHost')}</label>
-              <Input
-                value={enterpriseHost}
-                onChange={(e) => setEnterpriseHost(e.target.value)}
-                placeholder={t('admin:copilot.ghesHostPlaceholder')}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium">{t('admin:copilot.integrationId')}</label>
-              <Input
-                value={enterpriseIntegrationId}
-                onChange={(e) => setEnterpriseIntegrationId(e.target.value)}
-                placeholder={t('admin:copilot.integrationIdPlaceholder')}
-              />
-            </div>
-          </div>
-        )}
-        {flow.state === 'waiting' && (
-          <div className="space-y-3 text-sm">
-            <p>
-              {t('admin:copilot.openUrl')}{' '}
-              <a
-                href={flow.verificationUri}
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary underline"
-              >
-                {flow.verificationUri}
-              </a>{' '}
-              {t('admin:copilot.typeCode')}
-            </p>
-            <div className="font-mono text-2xl font-bold tracking-widest text-center py-4 bg-muted rounded-lg">
-              {flow.userCode}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t('admin:copilot.autoUpdate')}
-            </p>
-          </div>
-        )}
-        {flow.state === 'success' && (
-          <div className="text-sm text-emerald-600">
-            {t('admin:copilot.connected')}
-            {typeof flow.modelCount === 'number' ? ` \u2014 ${flow.modelCount} models loaded` : ''}.
-            {' '}{t('admin:copilot.available')}
-          </div>
-        )}
-        {flow.state === 'error' && <div className="text-sm text-red-600 break-all">{flow.message}</div>}
-        <DialogFooter>
-          {flow.state === 'enterprise_form' && (
-            <Button onClick={submitEnterprise} disabled={!enterpriseHost.trim()}>
-              {t('admin:copilot.continue')}
+        ) : (
+          <div className="space-y-3">
+            <Button onClick={() => void connect('individual')} disabled={connecting}>{t('admin:copilot.individual')}</Button>
+            <label className="block text-xs">{t('admin:copilot.ghesHost')}
+              <Input value={host} onChange={event => setHost(event.target.value)} placeholder="org.ghe.com" spellCheck={false} />
+            </label>
+            <Button variant="outline" onClick={() => void connect('enterprise')} disabled={connecting || !host.trim()}>
+              {t('admin:copilot.enterprise')}
             </Button>
-          )}
-          <Button variant="ghost" onClick={onClose}>
-            {t('common:actions.close')}
-          </Button>
-        </DialogFooter>
+            {connecting && <p role="status" className="text-xs text-muted-foreground">{t('common:actions.loading')}</p>}
+          </div>
+        )}
+        {error && <p role="alert" className="break-words text-xs text-destructive">{error}</p>}
+        <DialogFooter><Button variant="ghost" onClick={onClose}>{t('common:actions.close')}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

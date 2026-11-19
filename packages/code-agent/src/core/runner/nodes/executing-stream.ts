@@ -19,6 +19,7 @@ import type {
   ChatUsage,
   ChatProviderResponseMeta,
   ImageBlock,
+  ProviderReplayState,
 } from '@mcp/code-agent/core/messages.js';
 import { AbortError, TimeoutError } from './executing-abort.js';
 
@@ -48,6 +49,7 @@ export interface StreamResult {
    * session's immutable turn metric.
    */
   responseMeta: ChatProviderResponseMeta | null;
+  providerReplay: ProviderReplayState | null;
   /** Provider-native phase, or a deterministic fallback for legacy wires. */
   messagePhase: AssistantMessagePhase;
 }
@@ -87,6 +89,14 @@ export interface ConsumeStreamArgs {
 }
 
 export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResult> {
+  const startedAt = performance.now();
+  let firstEventMs: number | null = null;
+  let firstContentMs: number | null = null;
+  let callbackMs = 0;
+  const observe = (callback: () => void) => {
+    const start = performance.now();
+    try { callback(); } finally { callbackMs += performance.now() - start; }
+  };
   const textBlocks: string[] = [];
   const thinkingBlocks: string[] = [];
   const imagesById = new Map<string, ImageBlock>();
@@ -99,6 +109,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   let responseId: string | null = null;
   let responseMessageCount: number | null = null;
   let responseMeta: ChatProviderResponseMeta | null = null;
+  let providerReplay: ProviderReplayState | null = null;
   const messagePhases = new Set<AssistantMessagePhase>();
 
   const idleMs = args.idleTimeoutMs ?? 90_000;
@@ -144,23 +155,27 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     }
     if (next.done) break;
     const delta = next.value;
+    firstEventMs ??= performance.now() - startedAt;
+    if (firstContentMs === null && ['text_delta', 'thinking_delta', 'tool_call_args', 'tool_call_end'].includes(delta.type)) {
+      firstContentMs = performance.now() - startedAt;
+    }
     receivedAny = true;
 
     switch (delta.type) {
       case 'text_delta':
         currentText += delta.text;
         if (delta.phase) messagePhases.add(delta.phase);
-        args.onTextDelta?.(delta.text, {
+        observe(() => args.onTextDelta?.(delta.text, {
           ...(delta.itemId ? { itemId: delta.itemId } : {}),
           ...(delta.phase ? { phase: delta.phase } : {}),
-        });
+        }));
         break;
 
       case 'thinking_delta':
         // Reasoning is productive stream activity, regardless of its duration.
         // Retrying a live response discards that work and repeats its cost.
         currentThinking += delta.text;
-        args.onThinkingDelta?.(delta.text);
+        observe(() => args.onThinkingDelta?.(delta.text));
         break;
 
       case 'tool_call_start': {
@@ -176,7 +191,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
           textBlocks.push(currentText);
           currentText = '';
         }
-        args.onToolCallStart?.(delta.id, delta.name);
+        observe(() => args.onToolCallStart?.(delta.id, delta.name));
         break;
       }
 
@@ -221,6 +236,10 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
         // emission (providers send it at most once per turn). Telemetry
         // (mig 093) consumes this on the BT side via `result.responseMeta`.
         responseMeta = delta.meta;
+        break;
+
+      case 'provider_replay':
+        providerReplay = delta.state;
         break;
 
       case 'image_generated': {
@@ -292,6 +311,14 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
       ? 'commentary'
       : 'final_answer';
 
+  responseMeta = { ...responseMeta, timing: {
+    ...(responseMeta?.timing ?? {
+      transport: 'stream', headers_ms: null, first_event_ms: firstEventMs,
+      first_content_ms: firstContentMs, total_ms: performance.now() - startedAt,
+    }),
+    consumer_callback_ms: callbackMs,
+  } };
+
   return {
     textBlocks,
     toolUses,
@@ -302,6 +329,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     responseId,
     responseMessageCount,
     responseMeta,
+    providerReplay,
     messagePhase,
   };
 }

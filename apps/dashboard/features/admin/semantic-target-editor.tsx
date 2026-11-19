@@ -1,5 +1,6 @@
 import { fetchSemanticModels, type SemanticModelView, type SemanticOnnxDtype, type SemanticTarget, type SemanticTargetKind } from './semantic-api.js';
 import type { AdminProvider } from './types.js';
+import { BUNDLED_EMBEDDING_TARGET } from '@mcp/shared/providers/bundled-semantic-model.js';
 import { useTranslation } from 'react-i18next';
 import { useEffect, useMemo, useState } from 'react';
 import { Badge } from '../../components/ui/badge.js';
@@ -212,7 +213,7 @@ export function TargetEditor({ capability, target, providers, onChange }: Target
                   onChange={(event) => update({ model: event.target.value })}
                   placeholder={
                     capability === 'embedding'
-                      ? 'Xenova/multilingual-e5-small'
+                      ? BUNDLED_EMBEDDING_TARGET.model
                       : 'Xenova/bge-reranker-base'
                   }
                 />

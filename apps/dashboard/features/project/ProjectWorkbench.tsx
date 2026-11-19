@@ -4,6 +4,9 @@ import { Panel, PanelGroup } from 'react-resizable-panels';
 import { Brain } from 'lucide-react';
 import type { ContribToolWindow } from '../../state/contribution-registry.js';
 import { useWorkspaceLayout } from '../../state/workspace-layout.js';
+import { useWorktreeSelection, worktreeKey, type WorktreeSelection } from '../../state/worktree-selection.js';
+import { SessionWorkspaceBar } from '../chat/SessionWorkspaceBar.js';
+import { useWorktreeInventory } from '../chat/useSessionWorktrees.js';
 import {
   WorkbenchPanelHeader,
   WorkbenchResizeHandle,
@@ -33,6 +36,10 @@ interface ProjectWorkbenchProps {
   projectId: number;
   projectName: string;
   projectRoot?: string | null;
+  mainRoot?: string | null;
+  workspaceId?: number | null;
+  workspaceError?: string;
+  worktreeSelection?: WorktreeSelection;
   initialSessionId?: string;
   activeFilePath: string | null;
   onOpenFile: (path: string) => void;
@@ -52,9 +59,36 @@ function pluginTab(window: ContribToolWindow): TabDef {
   };
 }
 
+function ProjectCheckoutBar({ projectId, selection }: { projectId: number; selection: WorktreeSelection }) {
+  const { data, loading, error, refetch } = useWorktreeInventory(projectId);
+  if (!data?.isGit && !selection.path) return null;
+  const unavailable = !!selection.path && !loading && !data?.worktrees.some(
+    (item) => !item.prunable && worktreeKey(item.path) === worktreeKey(selection.path),
+  );
+  return (
+    <SessionWorkspaceBar
+      key={projectId}
+      projectId={projectId}
+      isGlobal={false}
+      path={selection.path}
+      data={data}
+      loading={loading}
+      error={error}
+      unavailable={unavailable}
+      sessionError={null}
+      actionsRef={null}
+      onSelect={selection.select}
+      onRefresh={refetch}
+    />
+  );
+}
+
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
-  const { t } = useTranslation('projects');
+  const { t } = useTranslation(['projects', 'chat']);
   const layout = useWorkspaceLayout();
+  const localSelection = useWorktreeSelection(props.worktreeSelection ? undefined : props.projectId);
+  const worktreeSelection = props.worktreeSelection ?? localSelection;
+  const workspaceId = props.workspaceId === undefined ? props.projectId : props.workspaceId;
   const [sessionsHostRef, sessionsHost] = usePortalHost<HTMLDivElement>();
   const [sessionToolbarHostRef, sessionToolbarHost] = usePortalHost<HTMLDivElement>();
   const [databaseHostRef, databaseHost] = usePortalHost<HTMLDivElement>();
@@ -106,9 +140,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     sessionsHost,
     rightPanelHost: sessionRightPanelHost,
     rightRailHost: sessionRightRailHost,
+    worktreeSelection,
     onSessionStateChange: handleSessionStateChange,
     onSessionSelected: handleSessionSelected,
-  }), [handleSessionSelected, handleSessionStateChange, sessionRightPanelHost, sessionRightRailHost, sessionsHost, sessionToolbarHost]);
+  }), [handleSessionSelected, handleSessionStateChange, sessionRightPanelHost, sessionRightRailHost, sessionsHost, sessionToolbarHost, worktreeSelection]);
   const leftPlugins = useMemo(
     () => props.contribWindows.filter((window) => window.side === 'left'),
     [props.contribWindows],
@@ -148,8 +183,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (layout.activeBottom && !bottomKnown) layout.setActiveBottom(null);
   }, [bottomKnown, layout.activeBottom, layout.setActiveBottom]);
   useEffect(() => {
-    if (layout.primarySurface === 'preview' && !props.previewEnabled) layout.setPrimarySurface('editor');
-  }, [layout.primarySurface, layout.setPrimarySurface, props.previewEnabled]);
+    if (workspaceId != null && layout.primarySurface === 'preview' && !props.previewEnabled) {
+      layout.setPrimarySurface('editor');
+    }
+  }, [layout.primarySurface, layout.setPrimarySurface, props.previewEnabled, workspaceId]);
   useEffect(() => {
     // v2/deep-link compatibility: Database is now a left tool window whose
     // objects open in the editor, never a dedicated primary surface.
@@ -166,9 +203,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     }
     if (!editorMode) return null;
     if (layout.activeLeft === 'files') {
-      return (
+      return workspaceId != null && (
         <FileTreeView
-          projectId={props.projectId}
+          key={workspaceId}
+          projectId={workspaceId}
           active
           activePath={props.activeFilePath}
           projectRoot={props.projectRoot}
@@ -183,13 +221,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
     if (layout.activeLeft === 'databases') {
       return <div key="databases" ref={databaseHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
-    if (activeLeftPlugin) {
+    if (activeLeftPlugin && workspaceId != null) {
       return (
         <WebviewWindow
           namespace={activeLeftPlugin.pluginNs}
           title={activeLeftPlugin.title}
           entry={activeLeftPlugin.entry}
-          projectId={props.projectId}
+          key={workspaceId}
+          projectId={workspaceId}
           onClose={() => layout.setActiveLeft(null)}
         />
       );
@@ -205,10 +244,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       return <div key="api-inspector" ref={apiRightHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
     if (!editorMode) return null;
-    if (layout.activeRight === 'chat') {
+    if (layout.activeRight === 'chat' && workspaceId != null) {
       return (
         <EditorChatRail
+          key={workspaceId}
           projectId={props.projectId}
+          workspaceId={workspaceId}
+          worktreePath={worktreeSelection.path}
+          mainRoot={props.mainRoot}
           projectName={props.projectName}
           onClose={() => layout.setActiveRight(null)}
         />
@@ -236,13 +279,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
         </div>
       );
     }
-    if (activeRightPlugin) {
+    if (activeRightPlugin && workspaceId != null) {
       return (
         <WebviewWindow
           namespace={activeRightPlugin.pluginNs}
           title={activeRightPlugin.title}
           entry={activeRightPlugin.entry}
-          projectId={props.projectId}
+          key={workspaceId}
+          projectId={workspaceId}
           onClose={() => layout.setActiveRight(null)}
         />
       );
@@ -264,16 +308,19 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       <DatabaseToolWindow
         key={props.projectId}
         projectId={props.projectId}
+        workspaceId={workspaceId}
         projectName={props.projectName}
         host={databaseHost}
       />
-      <GitWindow
-        key={`git-${props.projectId}`}
-        projectId={props.projectId}
-        host={gitHost}
-        active={editorMode && layout.activeLeft === 'git'}
-        onClose={() => layout.setActiveLeft(null)}
-      />
+      {workspaceId != null && (
+        <GitWindow
+          key={`git-${workspaceId}`}
+          projectId={workspaceId}
+          host={gitHost}
+          active={editorMode && layout.activeLeft === 'git'}
+          onClose={() => layout.setActiveLeft(null)}
+        />
+      )}
       <div className="flex min-h-0 flex-1">
         <ProjectRail
           projectId={props.projectId}
@@ -289,7 +336,14 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           pluginTabs={leftPlugins.map(pluginTab)}
         />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 p-1.5">
-          {sessionsMode && <div ref={sessionToolbarHostRef} className="shrink-0" />}
+          {sessionsMode
+            ? <div ref={sessionToolbarHostRef} className="shrink-0" />
+            : <ProjectCheckoutBar projectId={props.projectId} selection={worktreeSelection} />}
+          {workspaceId == null && (
+            <div className="shrink-0 px-2 text-xs text-muted-foreground" role={props.workspaceError ? 'alert' : 'status'}>
+              {props.workspaceError ?? t('chat:worktrees.resolving')}
+            </div>
+          )}
           <PanelGroup direction="vertical" autoSaveId={`mcp-workbench-vertical-${props.projectId}`}>
             <Panel id="workbench-main" order={1} minSize={28} className="min-h-0">
               <PanelGroup
@@ -309,6 +363,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                     <ProjectPrimarySurface
                       surface={layout.primarySurface}
                       projectId={props.projectId}
+                      workspaceId={workspaceId}
+                      worktreePath={worktreeSelection.path}
                       projectName={props.projectName}
                       onOpenFile={props.onOpenFile}
                       initialSessionId={props.initialSessionId}
@@ -338,6 +394,8 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
                   <WorkbenchSurface className="h-full">
                     <BottomPanel
                       projectId={props.projectId}
+                      workspaceId={workspaceId}
+                      worktreePath={worktreeSelection.path}
                       isOpen
                       onToggle={() => layout.toggleBottom(layout.activeBottom!)}
                       onClose={() => layout.setActiveBottom(null)}
@@ -367,7 +425,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           />
         ) : null}
       </div>
-      <StatusBar projectId={props.projectId} projectName={props.projectName} />
+      {workspaceId != null && <StatusBar key={`status-${workspaceId}`} projectId={workspaceId} projectName={props.projectName} />}
     </WorkbenchShell>
   );
 }

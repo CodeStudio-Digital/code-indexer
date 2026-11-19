@@ -53,8 +53,13 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   // sessions, but a navigate/build session must never lose its basic mutation
   // and verification route merely because plugins made the catalog large.
   'edit_file',
+  'apply_patch',
   'write_file',
   'run_command',
+  'exec_command',
+  'write_stdin',
+  'list_sessions',
+  'get_tool_output',
   'glob',
   'ask_user',
   // plan.txt requires this for genuine multi-option forks. If the catalog cap

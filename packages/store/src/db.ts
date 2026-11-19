@@ -8,10 +8,11 @@ import type {
   AgentMemoryRow, AgentMemoryScope, AgentMemoryType,
 } from '@mcp/shared/types.js';
 import { Database, type DB, type PathAlias } from './db/types.js';
-import { applyTuningPragmas } from './db/pragmas.js';
+import { applyTuningPragmas, DEFAULT_BUSY_TIMEOUT_MS } from './db/pragmas.js';
 import { installSqlTiming } from './db/sql-timing.js';
 import { existsSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { setTimeout as wait } from 'node:timers/promises';
 import { projectDbFlags, type ProjectDbFlags } from '@mcp/shared/utils/config.js';
 import type { EditorSettingsOverride } from '@mcp/shared/editor-settings.js';
 import {
@@ -92,6 +93,14 @@ export interface EmbeddingCoverage {
   symbol_bodies_embedded: number;
 }
 
+type ProjectSettings = Partial<Pick<Project, 'node_version' | 'runtime_versions' | 'runner_shell' | 'package_managers' |
+  'wsl_runtime_versions' | 'wsl_package_managers' | 'editor_settings'>>;
+
+function isSettingsBusy(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  return typeof code === 'string' && /^SQLITE_(BUSY|LOCKED)(_|$)/.test(code);
+}
+
 export class CodeIndexDB {
   structuralJournal() { return structuralJournal(this.db); }
   getStructuralRevision(projectId: number): string { return readStructuralRevision(this.idx(projectId), projectId); }
@@ -104,6 +113,7 @@ export class CodeIndexDB {
   private readonly pdbFlags: ProjectDbFlags;
   /** Per-project DB pool (tiered-hybrid split). Lazily opens project DBs. */
   private readonly projectPool: ProjectDbPool;
+  private configReader?: { id: number; path: string; db: DB; settings?: ProjectSettings };
   /** Cache of the routing decision per project id (avoids a SELECT per call). */
   private readonly routeCache = new Map<number, boolean>();
   private routeDataVersion: number | undefined;
@@ -197,7 +207,10 @@ export class CodeIndexDB {
     this.projectPool = new ProjectDbPool({
       maxOpen: this.pdbFlags.maxOpen,
       idleTtlMs: this.pdbFlags.idleMs,
-      resolve: (projectId) => ({ dbPath: this.resolveProjectDbPath(projectId) }),
+      resolve: (projectId) => {
+        this.closeConfigReader(projectId);
+        return { dbPath: this.resolveProjectDbPath(projectId) };
+      },
       onCheckpoint: (_projectId, projectDbPath) => opts.projectDbCheckpoint?.(projectDbPath),
       // When a project's DB handle is LRU/idle-evicted, drop the sibling
       // per-project caches keyed by the same id so they don't linger for
@@ -249,7 +262,7 @@ export class CodeIndexDB {
       clearInterval(this.walCheckpointTimer);
       this.walCheckpointTimer = null;
     }
-    this.projectPool.closeAll();
+    this.closeProjectPool();
     // Final full checkpoint so the next boot doesn't inherit a large -wal. Only
     // the checkpoint owner does this; TRUNCATE may block briefly until readers
     // drain, but at close time there are no more route reads to stall.
@@ -292,10 +305,20 @@ export class CodeIndexDB {
   }
 
   /** Close + checkpoint all pooled project handles (shutdown / before file ops). */
-  closeProjectPool(): void { this.projectPool.closeAll(); }
+  closeProjectPool(): void {
+    this.closeConfigReader();
+    this.projectPool.closeAll();
+  }
+
+  private closeConfigReader(id?: number): void {
+    if (!this.configReader || (id !== undefined && this.configReader.id !== id)) return;
+    this.configReader.db.close();
+    this.configReader = undefined;
+  }
 
   /** Drop one project's pooled handle (e.g. before deleting its files). */
   evictProject(projectId: number): void {
+    this.closeConfigReader(projectId);
     this.projectPool.evict(projectId);
     this.routeCache.delete(projectId);
   }
@@ -430,7 +453,7 @@ export class CodeIndexDB {
     let outcome: SplitOutcome | null = null;
     if (this.getProjectSplitStatus(projectId) !== 'done') {
       // Release any open handle on the file we may delete + recreate.
-      this.projectPool.evict(projectId);
+      this.evictProject(projectId);
       outcome = splitProject({
         central: this.db,
         centralDbPath: this.centralDbPath,
@@ -505,15 +528,59 @@ export class CodeIndexDB {
     this.readCache.invalidateKey('projects:list');
     return project;
   }
+  /** Identity and root for navigation without opening a per-project settings database. */
+  getProjectCatalogEntry(id: number): Project | undefined { return projects.get(this.db, id); }
   getProject(id: number): Project | undefined {
-    const project = projects.get(this.db, id);
-    return project ? this.overlayEditorConfig(this.overlayRuntimeConfig(project, id), id) : project;
+    return this.resolveProjectSettings(id, false);
+  }
+
+  /** Commands need the committed settings of the selected checkout. Let SQLite locks
+   * clear between ticks so the Electron main thread can continue serving other views. */
+  async getProjectAsync(id: number, signal?: AbortSignal): Promise<Project | undefined> {
+    const deadline = performance.now() + DEFAULT_BUSY_TIMEOUT_MS;
+    let delayMs = 20;
+    for (;;) {
+      signal?.throwIfAborted();
+      try { return this.resolveProjectSettings(id, true); }
+      catch (error) {
+        const remaining = deadline - performance.now();
+        if (!isSettingsBusy(error) || remaining <= 0) throw error;
+        await wait(Math.min(delayMs, remaining), undefined, { signal });
+        delayMs = Math.min(125, delayMs * 2);
+      }
+    }
+  }
+
+  private resolveProjectSettings(id: number, retryBusy: boolean): Project | undefined {
+    const project = this.getProjectCatalogEntry(id);
+    if (!project) return undefined;
+    if (!project.worktree_parent_id) return this.readProjectSettings(project, retryBusy);
+    const owner = this.resolveProjectSettings(project.worktree_parent_id, retryBusy);
+    if (!owner) return undefined;
+    return {
+      ...project,
+      name: owner.name,
+      provider: owner.provider,
+      model: owner.model,
+      index_ignore_patterns: owner.index_ignore_patterns,
+      editor_settings: owner.editor_settings,
+      language_levels: owner.language_levels,
+      node_version: owner.node_version,
+      runner_shell: owner.runner_shell,
+      runtime_versions: owner.runtime_versions,
+      package_managers: owner.package_managers,
+      wsl_runtime_versions: owner.wsl_runtime_versions,
+      wsl_package_managers: owner.wsl_package_managers,
+    };
+  }
+  getOrCreateWorktreeProject(parentId: number, rootPath: string): Project {
+    return projects.getOrCreateWorktree(this.db, parentId, rootPath);
   }
   /**
    * Read only the catalog root. Unlike getProject(), this never opens a
    * per-project DB to overlay runtime/editor settings.
    */
-  getProjectRootPath(id: number): string | undefined {
+  getProjectRootPath(id: number): Promise<string | undefined> {
     return projects.getRootPath(this.db, id);
   }
   getProjectByName(name: string): Project | undefined { return projects.getByName(this.db, name); }
@@ -574,33 +641,68 @@ export class CodeIndexDB {
     this.readCache.invalidateKey('projects:list');
   }
 
-  /**
-   * Overlay the 3 runtime/shell fields from the routed `project_runtime_config`
-   * table onto a central project row. Reads via `idx(id)` (per-project DB when
-   * the project is split+routed, else central); falls back to the central row
-   * when a routed per-project DB has no config row yet (project split BEFORE
-   * migration 168). Tolerant of a missing table (DBs not yet at mig 168).
-   */
-  private overlayRuntimeConfig(project: Project, id: number): Project {
+  /** Navigation reads settings even before indexing has opened the project database.
+   * A cold read must not switch journal mode, create the file or migrate its schema. */
+  private readProjectSettings(project: Project, retryBusy: boolean): Project {
+    const id = project.id;
+    let routed: DB | undefined;
     try {
-      const sql = 'SELECT node_version, runtime_versions, runner_shell, package_managers, wsl_runtime_versions, wsl_package_managers FROM project_runtime_config WHERE project_id = ?';
-      const routed = this.idx(id);
-      let cfg = routed.prepare(sql).get(id) as
-        | { node_version: string | null; runtime_versions: string | null; runner_shell: string | null; package_managers: string | null; wsl_runtime_versions: string | null; wsl_package_managers: string | null }
-        | undefined;
-      if (!cfg && routed !== this.db) cfg = this.db.prepare(sql).get(id) as typeof cfg;
-      if (cfg) {
-        project.node_version = cfg.node_version ?? null;
-        project.runtime_versions = cfg.runtime_versions ?? null;
-        project.runner_shell = cfg.runner_shell ?? null;
-        project.package_managers = cfg.package_managers ?? null;
-        project.wsl_runtime_versions = cfg.wsl_runtime_versions ?? null;
-        project.wsl_package_managers = cfg.wsl_package_managers ?? null;
+      routed = this.projectSettingsConnection(id);
+      const settings = this.loadProjectSettings(id, routed);
+      if (this.configReader?.db === routed) this.configReader.settings = settings;
+      return Object.assign(project, settings);
+    } catch (error) {
+      if (routed === this.db) throw error;
+      if (isSettingsBusy(error)) {
+        if (retryBusy) throw error;
+        if (this.configReader?.id === id && this.configReader.settings) return Object.assign(project, this.configReader.settings);
+      } else {
+        this.closeConfigReader(id);
       }
-    } catch {
-      /* pre-168 DB (no table) — keep the legacy central columns as-is */
+      return Object.assign(project, this.loadProjectSettings(id, this.db));
     }
-    return project;
+  }
+
+  private projectSettingsConnection(id: number): DB {
+    if (!this.useProjectDb(id)) return this.db;
+    if (this.projectPool.has(id)) {
+      const writer = this.projectPool.get(id).raw();
+      if (writer.inTransaction) return writer;
+    }
+    const path = this.resolveProjectDbPath(id);
+    if (this.configReader?.id === id && this.configReader.path === path) return this.configReader.db;
+    // All linked checkouts share the owner's settings. Reusing one read-only
+    // handle avoids parsing the whole SQLite schema on each navigation.
+    this.closeConfigReader();
+    try {
+      const db = new Database(path, { readonly: true, fileMustExist: true, timeout: 0 });
+      this.configReader = { id, path, db };
+      return db;
+    } catch (error) {
+      if (isSettingsBusy(error)) throw error;
+      return this.db;
+    }
+  }
+
+  private loadProjectSettings(id: number, routed: DB): ProjectSettings {
+    const cfg = projects.readRuntimeConfig(routed, id) ?? (routed !== this.db ? projects.readRuntimeConfig(this.db, id) : undefined);
+    const settings: ProjectSettings = { editor_settings: null };
+    if (cfg) {
+      settings.node_version = cfg.node_version ?? null;
+      settings.runtime_versions = cfg.runtime_versions ?? null;
+      settings.runner_shell = cfg.runner_shell ?? null;
+      settings.package_managers = cfg.package_managers ?? null;
+      settings.wsl_runtime_versions = cfg.wsl_runtime_versions ?? null;
+      settings.wsl_package_managers = cfg.wsl_package_managers ?? null;
+    }
+    const editor = projects.readEditorConfig(routed, id) ?? (routed !== this.db ? projects.readEditorConfig(this.db, id) : undefined);
+    if (editor?.settings_json) {
+      try {
+        const parsed = JSON.parse(editor.settings_json) as EditorSettingsOverride;
+        if (parsed && typeof parsed === 'object') settings.editor_settings = parsed;
+      } catch { /* malformed older setting */ }
+    }
+    return settings;
   }
 
   /** Upsert the runtime/shell config row in the routed DB for a project. */
@@ -632,22 +734,6 @@ export class CodeIndexDB {
     projects.markStructuralChecked(this.db, id, checkedAt);
     this.readCache.invalidateProject(id);
     this.readCache.invalidateKey('projects:list');
-  }
-
-  private overlayEditorConfig(project: Project, id: number): Project {
-    try {
-      const sql = 'SELECT settings_json FROM project_editor_config WHERE project_id = ?';
-      const routed = this.idx(id);
-      let row = routed.prepare(sql).get(id) as { settings_json: string | null } | undefined;
-      if (!row && routed !== this.db) row = this.db.prepare(sql).get(id) as typeof row;
-      if (row?.settings_json) {
-        const parsed = JSON.parse(row.settings_json) as EditorSettingsOverride;
-        project.editor_settings = parsed && typeof parsed === 'object' ? parsed : null;
-      } else project.editor_settings = null;
-    } catch {
-      project.editor_settings = null;
-    }
-    return project;
   }
 
   private writeEditorConfig(id: number, settings: EditorSettingsOverride | null): void {
@@ -716,8 +802,7 @@ export class CodeIndexDB {
 
   /** Evict the pooled handle and delete a project's DB files (index + vectors). */
   private removeProjectDbFiles(projectId: number): void {
-    this.projectPool.evict(projectId);
-    this.routeCache.delete(projectId);
+    this.evictProject(projectId);
     this.seededRows.delete(projectId);
     const row = this.db.prepare('SELECT root_path, db_path FROM projects WHERE id = ?')
       .get(projectId) as { root_path?: string; db_path?: string } | undefined;

@@ -13,7 +13,7 @@
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { ApiError } from '@mcp/api-bus';
-import type { Runtime, RuntimeKind } from '@mcp/api-bus';
+import type { PreflightReport, Runtime, RuntimeKind } from '@mcp/api-bus';
 import { listFor } from './detect-all.js';
 import type { DetectWorkerJob, DetectWorkerMessage } from './detect-worker.js';
 
@@ -46,11 +46,20 @@ function workerSpec(): { url: URL; bootstrapData?: { tsEntry: string } } {
 /** Detect installed runtimes of one kind without blocking the caller's loop. */
 export function detectRuntimes(kind: RuntimeKind, dataDir: string): Promise<Runtime[]> {
   if (!workerEnabled()) return Promise.resolve(listFor(kind, dataDir));
+  return runDetectionWorker({ kind, dataDir });
+}
 
+/** Creating a child process can itself block on Windows, even when its output is awaited asynchronously. */
+export function detectHostPreflight(dbPath: string): Promise<PreflightReport> {
+  return runDetectionWorker({ dbPath });
+}
+
+function runDetectionWorker(job: { kind: RuntimeKind; dataDir: string }): Promise<Runtime[]>;
+function runDetectionWorker(job: { dbPath: string }): Promise<PreflightReport>;
+function runDetectionWorker(job: DetectWorkerJob): Promise<Runtime[] | PreflightReport> {
   const spec = workerSpec();
-  const job: DetectWorkerJob = { kind, dataDir };
 
-  return new Promise<Runtime[]>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const worker = new Worker(spec.url, { workerData: { job, ...(spec.bootstrapData ?? {}) } });
     let settled = false;
 
@@ -62,12 +71,13 @@ export function detectRuntimes(kind: RuntimeKind, dataDir: string): Promise<Runt
       fn();
     };
 
-    const timer = setTimeout(() => {
-      finish(() => reject(new ApiError('timeout', 504, `runtime detection for '${kind}' timed out`)));
-    }, DETECT_TIMEOUT_MS);
+    // Preflight owns the deadlines and cleanup for its asynchronous CLI children.
+    const timer = 'kind' in job ? setTimeout(() => {
+      finish(() => reject(new ApiError('timeout', 504, `runtime detection for '${job.kind}' timed out`)));
+    }, DETECT_TIMEOUT_MS) : undefined;
 
     worker.on('message', (msg: DetectWorkerMessage) => {
-      if (msg.type === 'done') finish(() => resolve(msg.runtimes));
+      if (msg.type === 'done') finish(() => resolve(msg.value));
       else finish(() => reject(new ApiError(msg.code, msg.status, msg.message)));
     });
     worker.on('error', (err) => {

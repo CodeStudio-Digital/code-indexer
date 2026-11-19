@@ -20,7 +20,7 @@ function shapeOf(value: unknown, depth: number): unknown {
 
 /** JSON body → shape string (keys+types). Returns undefined for non-JSON bodies. */
 export function jsonShape(body: string | null | undefined): string | undefined {
-  if (!body || !body.trim()) return undefined;
+  if (!body || body.length > 256 * 1024 || !body.trim()) return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(body); } catch { return undefined; }
   try {

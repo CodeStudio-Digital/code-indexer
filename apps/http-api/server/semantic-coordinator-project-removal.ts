@@ -130,28 +130,7 @@ async performProjectRemoval(this: SemanticCoordinatorContext,
   },
 
 recoverInterruptedJobsPassively(this: SemanticCoordinatorContext): void {
-    for (const job of this.deps.semanticStore.listJobs({
-      statuses: ['pending', 'running', 'paused'],
-    })) {
-      const open = job.status === 'pending' || job.status === 'running' || job.status === 'paused';
-      if (open
-        && job.generation_id !== null
-        && (job.kind === 'backfill' || job.kind === 'build')
-        && !this.jobGenerationIsReferenced(job)) {
-        this.deps.semanticStore.updateJob(job.id, {
-          status: 'cancelled',
-          error: 'superseded by a newer active or building generation',
-        });
-        continue;
-      }
-      if (job.status !== 'running') continue;
-      if (job.kind === 'cleanup' || job.cursor?.reason === 'mutation-fence') continue;
-      this.deps.semanticStore.updateJob(job.id, {
-        status: 'paused',
-        processed_items: 0,
-        error: 'interrupted by application restart; waiting for an explicit resume',
-      });
-    }
+    this.deps.semanticStore.recoverInterruptedJobs();
   },
 
 jobGenerationIsReferenced(this: SemanticCoordinatorContext, job: SemanticJobRow): boolean {

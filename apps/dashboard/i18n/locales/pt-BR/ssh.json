@@ -1,5 +1,10 @@
 {
   "panel": {
+    "finished": "Sessão encerrada.",
+    "split": "Dividir terminais lado a lado",
+    "noMatches": "Nenhum host corresponde à busca.",
+    "retry": "Tentar novamente",
+    "dismiss": "Fechar aviso",
     "empty": "Nenhuma conexão SSH aberta",
     "emptyHint": "Crie uma conexão para abrir um terminal remoto.",
     "newConnection": "Nova conexão",

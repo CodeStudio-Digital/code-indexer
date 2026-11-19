@@ -118,6 +118,18 @@ describe('SSH connection manager — in-process sshd E2E', () => {
     ).toThrow(ApiError);
   });
 
+  it('shares one handshake between concurrent acquisitions and ignores a late release after reconnect', async () => {
+    manager.trust(await offeredKey());
+    const [first, second] = await Promise.all([manager.acquire(spec()), manager.acquire(spec())]);
+    expect(first).toBe(second);
+    manager.disconnect('h1');
+    const replacement = await manager.acquire(spec());
+    manager.release('h1', first);
+    expect(await manager.acquire(spec())).toBe(replacement);
+    manager.release('h1', replacement);
+    manager.release('h1', replacement);
+  });
+
   it('rejects a CHANGED host key (possible MITM)', async () => {
     // Pin a fingerprint that DIFFERS from what the server presents.
     const store = new KnownHostsStore(storeFile);

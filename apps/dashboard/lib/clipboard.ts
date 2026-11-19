@@ -32,7 +32,10 @@ export async function copyText(text: string): Promise<boolean> {
   ta.style.left = '0';
   ta.style.opacity = '0';
   ta.style.pointerEvents = 'none';
-  document.body.appendChild(ta);
+  // A modal's focus trap must allow the temporary selection.
+  const container = focused?.closest('[role="dialog"], [role="alertdialog"], dialog[open]') ?? document.body;
+  container.appendChild(ta);
+  ta.focus({ preventScroll: true });
   ta.select();
   ta.setSelectionRange(0, text.length);
   let ok = false;
@@ -41,7 +44,7 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     ok = false;
   }
-  document.body.removeChild(ta);
+  ta.remove();
   focused?.focus({ preventScroll: true });
   if (selection) {
     selection.removeAllRanges();

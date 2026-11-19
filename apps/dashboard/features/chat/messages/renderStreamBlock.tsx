@@ -20,6 +20,7 @@ import { NoticeBlock } from './NoticeBlock.js';
 import { liveBlockPersistedSignature } from '../utils.js';
 
 export function renderStreamBlock(block: StreamBlock, key: number, handlers: PromptHandlers) {
+  if (block.type === 'usage') return null; // The associated rows carry the usage control.
   if (block.type === 'thinking') {
     return <LiveThinkingBlock key={`th-${block.id ?? key}`} text={block.text} />;
   }

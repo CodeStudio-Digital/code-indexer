@@ -168,7 +168,7 @@ export function noteSyncLeaf(label: string, ms: number): void {
 }
 
 /** Convenience wrapper for a synchronous callback. */
-function noteSyncSection<T>(label: string, fn: () => T): T {
+export function noteSyncSection<T>(label: string, fn: () => T): T {
   const token = enterSyncSection(label);
   try {
     return fn();

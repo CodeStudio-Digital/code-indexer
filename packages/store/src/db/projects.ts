@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Project } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 import { repairCodeFtsIndexes } from './schema/fts.js';
@@ -33,11 +36,67 @@ export function get(db: DB, id: number): Project | undefined {
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
 }
 
+type RuntimeConfig = Pick<Project, 'node_version' | 'runtime_versions' | 'runner_shell' | 'package_managers' | 'wsl_runtime_versions' | 'wsl_package_managers'>;
+
+export function readRuntimeConfig(db: DB, id: number): Partial<RuntimeConfig> | undefined {
+  try {
+    // Old partitions may predate package_managers or the WSL columns.
+    return db.prepare('SELECT * FROM project_runtime_config WHERE project_id = ?').get(id) as Partial<RuntimeConfig> | undefined;
+  } catch (error) {
+    // Settings overlays have always been best effort. The catalog still describes
+    // the project while a partition is unavailable or waiting for repair.
+    if (!/no such table: project_runtime_config/i.test((error as Error).message)) throw error;
+    // Read the same nonempty legacy values migration 168 would backfill.
+    try {
+      return db.prepare(`SELECT node_version, runtime_versions, runner_shell FROM projects
+        WHERE id = ? AND (node_version IS NOT NULL OR runtime_versions IS NOT NULL OR runner_shell IS NOT NULL)`)
+        .get(id) as Partial<RuntimeConfig> | undefined;
+    } catch (legacyError) {
+      if (/no such table|no such column/i.test((legacyError as Error).message)) return undefined;
+      throw legacyError;
+    }
+  }
+}
+
+export function readEditorConfig(db: DB, id: number): { settings_json: string | null } | undefined {
+  try {
+    return db.prepare('SELECT settings_json FROM project_editor_config WHERE project_id = ?').get(id) as { settings_json: string | null } | undefined;
+  } catch (error) {
+    if (!/no such table: project_editor_config/i.test((error as Error).message)) throw error;
+    return undefined;
+  }
+}
+
+/** One catalog identity per validated checkout, even with concurrent windows. */
+export function getOrCreateWorktree(db: DB, parentId: number, rootPath: string): Project {
+  const lookup = db.prepare('SELECT * FROM projects WHERE worktree_parent_id = ? AND root_path = ?');
+  const existing = lookup.get(parentId, rootPath) as Project | undefined;
+  if (existing) return existing;
+  const suffix = createHash('sha256').update(rootPath).digest('hex');
+  db.prepare(`INSERT INTO projects (name, root_path, worktree_parent_id, is_loose, embeddings_enabled, index_ignore_patterns)
+    SELECT ?, ?, id, 1, 0, index_ignore_patterns FROM projects WHERE id = ? AND worktree_parent_id IS NULL
+    ON CONFLICT(worktree_parent_id, root_path) WHERE worktree_parent_id IS NOT NULL DO NOTHING`)
+    .run(`.worktree/${parentId}/${suffix}`, rootPath, parentId);
+  const result = lookup.get(parentId, rootPath) as Project | undefined;
+  if (!result) throw new Error('Worktree project owner is unavailable');
+  return result;
+}
+
 /** Catalog-only lookup for callers that need no per-project overlays. */
-export function getRootPath(db: DB, id: number): string | undefined {
-  return (db.prepare('SELECT root_path FROM projects WHERE id = ?').get(id) as
-    | { root_path: string }
-    | undefined)?.root_path;
+export async function getRootPath(db: DB, id: number): Promise<string | undefined> {
+  const row = db.prepare('SELECT root_path, worktree_parent_id FROM projects WHERE id = ?')
+    .get(id) as Pick<Project, 'root_path' | 'worktree_parent_id'> | undefined;
+  // A removed linked checkout may still be a subdirectory of the main
+  // checkout. Refuse to let Git discover the parent repository from there.
+  if (row?.worktree_parent_id) {
+    try {
+      if (!(await stat(join(row.root_path, '.git'))).isFile()) return undefined;
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return undefined;
+      throw error;
+    }
+  }
+  return row?.root_path;
 }
 
 export function getByName(db: DB, name: string): Project | undefined {
@@ -50,14 +109,14 @@ function normalizeRootPath(p: string): string {
 }
 
 export function getByPath(db: DB, rootPath: string): Project | undefined {
-  const exact = db.prepare('SELECT * FROM projects WHERE root_path = ?').get(rootPath) as Project | undefined;
+  const exact = db.prepare('SELECT * FROM projects WHERE root_path = ? AND worktree_parent_id IS NULL').get(rootPath) as Project | undefined;
   if (exact) return exact;
   // The old fallback was `LIKE '%' || ?` — a SUFFIX match that could resolve
   // a DIFFERENT project (e.g. any root ending in "\backend") and feed the
   // structural indexer the wrong root (worst case: empty scan → index wipe,
   // now also blocked by the anti-wipe guard). Normalized equality only.
   const target = normalizeRootPath(rootPath);
-  return (db.prepare('SELECT * FROM projects').all() as Project[])
+  return (db.prepare('SELECT * FROM projects WHERE worktree_parent_id IS NULL').all() as Project[])
     .find((p) => p.root_path && normalizeRootPath(p.root_path) === target);
 }
 
@@ -70,7 +129,7 @@ export function list(db: DB): Project[] {
   // not user-facing in the "Projetos" grid.
   return db
     .prepare(
-      "SELECT * FROM projects WHERE id <> 0 AND COALESCE(is_synthetic, 0) = 0 AND COALESCE(is_loose, 0) = 0 ORDER BY name",
+      "SELECT * FROM projects WHERE id <> 0 AND COALESCE(is_synthetic, 0) = 0 AND COALESCE(is_loose, 0) = 0 AND worktree_parent_id IS NULL ORDER BY name",
     )
     .all() as Project[];
 }
@@ -80,7 +139,7 @@ export function list(db: DB): Project[] {
  *  (those would nest a workspace inside a workspace). Superset of `list()`. */
 export function listForGlobalPicker(db: DB): Project[] {
   return db
-    .prepare("SELECT * FROM projects WHERE id <> 0 AND COALESCE(is_synthetic, 0) = 0 ORDER BY name")
+    .prepare("SELECT * FROM projects WHERE id <> 0 AND COALESCE(is_synthetic, 0) = 0 AND worktree_parent_id IS NULL ORDER BY name")
     .all() as Project[];
 }
 

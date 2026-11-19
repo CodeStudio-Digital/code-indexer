@@ -34,6 +34,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, copyFileSync, cpSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { probeElectronSqlite } from './electron-sqlite-probe.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
@@ -172,7 +173,7 @@ await buildPreload();
 
 // 3d. Bundled provider plugins → dist/bundled-plugins/ (electron-builder ships
 //     it via extraResources → resourcesPath/bundled-plugins; seeded on first boot).
-run('node', ['scripts/build-bundled-plugins.mjs']);
+run('node', ['scripts/build-bundled-plugins.mjs', '--if-changed']);
 run('node', ['scripts/ensure-electron-script-runtime.mjs']);
 
 if (noPackage) {
@@ -187,9 +188,8 @@ if (noPackage) {
 //     no rebuild; better-sqlite3 uses the V8 C++ API and MUST be rebuilt for
 //     Electron. Probe the actual runtime first: a compatible addon may be in
 //     use by desktop workers, and rebuilding it gratuitously fails on Windows.
-const sqliteProbe = spawnSync(resolve(root, 'node_modules/electron/dist', process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'),
-  ['-e', 'const D=require("better-sqlite3");const d=new D(":memory:");if(d.prepare("SELECT 1 AS ok").get().ok!==1)process.exit(1);d.close();'],
-  { cwd: root, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true, timeout: 15_000 });
+const sqliteProbe = probeElectronSqlite(resolve(root, 'node_modules/electron/dist',
+  process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'), root);
 if (sqliteProbe.status === 0) console.log('Electron SQLite ABI probe passed; retaining the compatible native addon.');
 else runTool('@electron/rebuild', 'electron-rebuild', ['-f', '-o', 'better-sqlite3']);
 

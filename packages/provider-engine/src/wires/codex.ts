@@ -7,6 +7,7 @@ import {
   type CreateCoderOpts,
 } from '@mcp/provider-sdk';
 import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
+import { supportsCodexSessionCapabilities } from '@mcp/code-agent/providers/codex-capabilities.js';
 import { getStore } from '@mcp/services/providers/shared/store.js';
 
 type WireParts = Pick<
@@ -63,16 +64,13 @@ export function buildCodex(spec: ProviderSpec): WireParts {
         reasoning,
         reasoningSummary: 'auto',
         reasoningSummaryFromThinking: true,
-        parallelToolCalls: GPT_56_CODEX_MODELS.has(wireModel.toLowerCase()),
+        parallelToolCalls: supportsCodexSessionCapabilities(wireModel),
+        textVerbosity: supportsCodexSessionCapabilities(wireModel) ? 'low' : null,
+        websocketMode: process.env.CODEX_WEBSOCKET_MODE !== '0'
+          && (creds.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, '') === DEFAULT_BASE_URL,
         applyPatchToolType,
         imageGenerationEnabled,
       });
     },
   };
 }
-
-const GPT_56_CODEX_MODELS = new Set([
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-]);

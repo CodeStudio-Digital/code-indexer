@@ -28,13 +28,13 @@ async buildSnapshotNamespace(this: SemanticCoordinatorContext, projectId: number
       const total = this.deps.db.listSnapshotsForSemanticIndex(projectId).length;
       const activating = before?.active_generation_id !== generation.id;
       if (activating) this.prepareNamespaceGeneration(namespace, 'memory', generation.id, total);
-      const job = this.deps.semanticStore.getOrCreateBuildJob({
+      const job = this.deps.semanticStore.claimBuildJob({
         generation_id: generation.id,
         namespace,
         kind: before?.active_generation_id ? 'build' : 'backfill',
         expected_items: total,
       });
-      this.deps.semanticStore.updateJob(job.id, { status: 'running' });
+      if (!job) throw new DeltaBuildPendingError(namespace);
       try {
         const result = await this.deps.snapshotService.backfillEmbeddings(projectId);
         if (result.failed > 0) throw new Error(`snapshot embedding failed for ${result.failed}/${result.total} source(s)`);
@@ -102,7 +102,7 @@ async buildMemoryNamespace(this: SemanticCoordinatorContext,
         ? this.memorySourceRows(scope, projectId).length + investigationRows.length
         : targetedKeys.length;
       if (activating) this.prepareNamespaceGeneration(namespace, 'memory', generation.id, total);
-      const job = this.deps.semanticStore.getOrCreateBuildJob({
+      const job = this.deps.semanticStore.claimBuildJob({
         generation_id: generation.id,
         namespace,
         kind: before?.active_generation_id ? 'build' : 'backfill',
@@ -114,7 +114,7 @@ async buildMemoryNamespace(this: SemanticCoordinatorContext,
           },
         }),
       });
-      this.deps.semanticStore.updateJob(job.id, { status: 'running' });
+      if (!job) throw new DeltaBuildPendingError(namespace);
       try {
         if (targetedKeys !== null) {
           const delta = await this.reconcileTargetedMemoryMutation(
@@ -162,7 +162,7 @@ async buildMemoryNamespace(this: SemanticCoordinatorContext,
           failed_items: result.failed + investigationResult.failed,
         });
         const failed = result.failed + investigationResult.failed;
-        if (failed > 0) throw new Error(`memory embedding failed for ${failed}/${total} source(s)`);
+        if (failed > 0) throw new Error(`memory embedding failed for ${failed}/${total} source(s)${result.error ? `: ${result.error}` : ''}`);
         const indexed = await this.verifyMemoryVectorCoverage(scope, projectId, generation.id, namespace);
         const finish = this.deps.semanticStore.finishNamespaceMutationPass({
           namespace,

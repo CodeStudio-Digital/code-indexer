@@ -24,6 +24,7 @@
  * the tool's text content, or thrown Error when the tool reports isError.
  */
 import { Buffer } from 'node:buffer';
+import { canInvokeInsideCodeExec as isSafeTool } from './code-exec-eligibility.js';
 import type { Context } from 'node:vm';
 import { superviseCodeExec } from './code-exec-supervisor.js';
 import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } from '@mcp/code-agent/core/tool.js';
@@ -46,6 +47,7 @@ import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
 import { buildStashSandboxApi, createCodeExecStash } from '@mcp/code-agent/tools/code-exec-stash.js';
 import { buildChangeSandboxApi } from '@mcp/code-agent/tools/code-exec-change.js';
+import { completedReadResults } from './code-exec-partial-results.js';
 import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
 import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
@@ -53,6 +55,7 @@ import { stableArgsKey } from '@mcp/code-agent/core/runner/dup-utils.js';
 import { normalizeGuardInput } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
 import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import { renderBatchReturn } from '@mcp/code-agent/core/batch-return-format.js';
 import { nestedToolConcurrencyGate } from './code-exec-concurrency.js';
 import { preserveCodeExecEffectOutcome } from './code-exec-effect-outcome.js';
 
@@ -95,7 +98,7 @@ const CODE_EXEC_DESC =
   'Execute a JS snippet that batches tool calls in one turn. Saves round-trips when you need to chain reads/searches/edits with logic, loops, or filtering.\n' +
   '\n' +
   'API inside the snippet:\n' +
-  '  - `tools.<name>(args)` OR `<name>(args)` — both work. Calls any registered tool that is callable inside code_exec, INCLUDING non-interactive tools that are NOT in your current visible toolset / tier, so you never need `expand_toolset` to reach those tools from here (the per-call plan-mode / task-scope policy still applies to each call). The bare-global alias exists for every tool whose name does not collide with a JS builtin (read_file, edit_file, mcp__grep_code, etc). Returns the tool\'s text content (string). Throws on tool error.\n' +
+  '  - `tools["exact-name"](args)` calls any registered tool that is callable inside code_exec, including hidden non-interactive tools under the same plan-mode and scope policy. Keep punctuation in the registered name, for example `tools["ext_codestudio-figma__get_metadata"](args)`. Dot notation and bare calls work for JavaScript identifier names such as `read_file`. Returns the tool text and throws on tool error.\n' +
   '  - `attempt(toolPromise)` — use ONLY for one probe that may legitimately fail. Returns `{ok:true,value}` or `{ok:false,error:{tool,code,kind,message,retryable,suggestedAction}}` so the rest of a `Promise.all` batch can finish. Policy refusals, permission errors, timeouts, and cancellations still throw.\n' +
   '  - `list_tools()` → `[{name, tier, params, description}]` for EVERY tool callable inside code_exec. `tool_schema(name)` introspects ANY registered tool and returns its full JSON Schema plus `callableInsideCodeExec` and `invokeAs`. When `invokeAs` is `top_level`, call that tool directly outside code_exec. Use these (or `find_tools({query})`) to discover exact names and args.\n' +
   '  - `log(...)` — appends to the captured output. JSON-friendly.\n' +
@@ -107,7 +110,7 @@ const CODE_EXEC_DESC =
   '\n' +
   'Policy: every tool call inside the script goes through the same plan-mode / task-scope policy as a direct call. ' +
   'Mutations must satisfy active mode, permission and task-scope gates. When Plan/Spec is active, obtain its required approval first; ordinary action mode does not create a new plan requirement. ' +
-  'Interactive prompts (decision_gate, submit_plan, submit_tasks, task_list, ask_user), orchestration tools (spawn_*, expand_toolset), and lifecycle tools (task_complete, execute_task) are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
+  'Interactive approvals, spawn/resume controls, task_complete and image/video tools are NOT executable inside code_exec — call them directly as top-level tools. `tool_schema(name)` remains safe for introspection.\n' +
   '\n' +
   'Limits: ' + DEFAULT_TIMEOUT_MS + ' ms default budget for the script\'s OWN JS time (max ' + MAX_TIMEOUT_MS + '); the clock PAUSES while a nested tool call runs, so long installs/builds via run_command/exec_command are fine (each keeps its own timeout). An absolute ' + WALL_TIMEOUT_MS + ' ms wall-clock backstop still bounds the whole batch. ' + MAX_TOOL_CALLS + ' tool calls per script, at most ' + MAX_PARALLEL_TOOL_CALLS + ' independent read calls at once; writes, commands and unknown classifications form sequential barriers, ' + (MAX_OUTPUT_BYTES / 1024) + ' KB captured console-log cap. Excess console output is counted and elided without aborting the script; the structured return is serialized separately.\n' +
   '\n' +
@@ -157,21 +160,6 @@ const CODE_EXEC_DESC =
  *    result and durable session transition must stay attributable to a direct
  *    top-level tool_use id.
  */
-function isSafeTool(tool: CoderTool): boolean {
-  if (resolveToolMetadata(tool).interactive) return false;
-  if (
-    tool.name === 'spawn_agent' ||
-    tool.name === 'resume_agent' ||
-    tool.name === 'code_exec' ||
-    tool.name.startsWith('spawn_') ||
-    tool.name === 'execute_task' ||
-    tool.name === 'task_complete' ||
-    tool.name === 'expand_toolset' ||
-    tool.name === 'view_image' || tool.name === 'view_video'
-  ) return false;
-  return true;
-}
-
 type NestedRefusalError = Error & {
   code: string;
   refusalKind: string;
@@ -191,6 +179,7 @@ interface NestedOutcome {
   content: string;
   isError: boolean;
   delivered: boolean;
+  readOnly: boolean;
   durationMs: number;
   status: 'succeeded' | 'failed' | 'refused' | 'cancelled';
   refusalKind?: string;
@@ -644,6 +633,7 @@ export function buildCodeExecTool(
               content: input.content,
               isError: input.isError,
               delivered,
+              readOnly: metadata.executionClass === 'read' && !metadata.mutates,
               durationMs: input.durationMs,
               status: !input.isError
                 ? 'succeeded'
@@ -1426,17 +1416,18 @@ export function buildCodeExecTool(
         const counts =
           `total=${summary.total}, succeeded=${summary.succeeded}, failed=${summary.failed}, ` +
           `refused=${summary.refused}, cancelled=${summary.cancelled}, unsettled=${summary.unsettled}`;
+        const reads = completedReadResults(nestedOutcomes);
         if (outputId) {
           return {
             note: `\n\n[nested call summary: ${counts}; ` +
-              `full outcomes preserved in get_tool_output({output_id:"${outputId}"}).]`,
+              `full outcomes preserved in get_tool_output({output_id:"${outputId}"}).]${reads}`,
             summary,
             outputId,
           };
         }
         const names = nestedOutcomes.map((entry) => `${entry.name}:${entry.status}`).slice(0, 8).join(', ');
         return {
-          note: `\n\n[nested call summary: ${counts}${names ? `; ${names}` : ''}.]`,
+          note: `\n\n[nested call summary: ${counts}${names ? `; ${names}` : ''}.]${reads}`,
           summary,
           outputId: null,
         };
@@ -1622,11 +1613,9 @@ export function buildCodeExecTool(
       if (returnValue !== undefined) {
         lines.push('');
         lines.push('[return]');
-        if (typeof returnValue === 'string') {
-          lines.push(returnValue);
-        } else {
-          try { lines.push(JSON.stringify(returnValue, null, 2)); } catch { lines.push(String(returnValue)); }
-        }
+        // Text values (tool outputs) stay raw in labeled sections instead of
+        // one JSON-escaped string; small structured values remain JSON.
+        lines.push(renderBatchReturn(returnValue));
       }
       const out = lines.join('\n');
       // Console capture is already memory-bounded above. A large structured

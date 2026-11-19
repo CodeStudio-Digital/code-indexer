@@ -117,7 +117,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
         {streaming ? (
           <>
             {queueable && onQueueSend && (
-              <QueueSplitButton hasInput={hasInput} onQueue={onQueueSend} />
+              <QueueSplitButton hasInput={hasInput && !sendBlocked} onQueue={onQueueSend} />
             )}
             <Button onClick={onAbort} variant="destructive" size="sm">
               <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}

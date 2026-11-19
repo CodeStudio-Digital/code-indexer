@@ -46,7 +46,7 @@ export async function discoverModels(
       // The only ETag/304 producer — returns a full DiscoveryResult.
       return discoverChatgptModels(spec, cfg, previousEtag ?? null);
     case 'sdk:copilot':
-      return wrap(await discoverCopilotModels(spec, cfg, requireStore(store, from)));
+      return wrap(await discoverCopilotModels(spec, cfg, store));
     case 'sdk:kimi-code':
       return wrap(await discoverKimiCodeModels(spec, cfg, requireStore(store, from)));
     case 'sdk:claude-code':

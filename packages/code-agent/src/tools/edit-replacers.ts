@@ -67,30 +67,6 @@ function stripCommonIndent(lines: string[]): { stripped: string[]; indent: numbe
   return { stripped: lines.map((l) => (l.length >= min ? l.slice(min) : l)), indent: min };
 }
 
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  const prev = new Array(b.length + 1);
-  const cur = new Array(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    cur[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-    }
-    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
-  }
-  return prev[b.length];
-}
-
-function similarity(a: string, b: string): number {
-  const max = Math.max(a.length, b.length);
-  if (max === 0) return 1;
-  return 1 - levenshtein(a, b) / max;
-}
-
 // ---------- replacers ----------
 
 /**
@@ -171,61 +147,6 @@ export const indentationFlexibleReplacer: Replacer = (content, oldString) => {
 };
 
 /**
- * Block-anchor match: first and last lines of old_string must match exactly
- * (after trim) at a contiguous range of the same length in the content. Middle
- * lines can be anything. Useful when the LLM copied slightly stale middle
- * content but got the boundaries right. Requires ≥3 lines.
- */
-export const blockAnchorReplacer: Replacer = (content, oldString) => {
-  const oldLines = splitLines(oldString);
-  const trimmed = oldLines[oldLines.length - 1] === '' ? oldLines.slice(0, -1) : oldLines;
-  if (trimmed.length < 3) return [];
-  const firstAnchor = trimmed[0].trim();
-  const lastAnchor = trimmed[trimmed.length - 1].trim();
-  if (!firstAnchor || !lastAnchor) return [];
-
-  const contentLines = splitLines(content);
-  const lineOffsets = lineStartOffsets(content);
-  const hits: ReplacerHit[] = [];
-  for (let i = 0; i + trimmed.length <= contentLines.length; i++) {
-    if (contentLines[i].trim() !== firstAnchor) continue;
-    const last = i + trimmed.length - 1;
-    if (contentLines[last].trim() !== lastAnchor) continue;
-    hits.push(rangeFromLines(content, lineOffsets, i, i + trimmed.length));
-  }
-  return hits;
-};
-
-/**
- * Context-aware match: same anchor rule as block-anchor, but also requires the
- * middle body to be at least 50% similar (Levenshtein) to the candidate. This
- * lets block-anchor succeed on distant files without picking a wrong block.
- */
-export const contextAwareReplacer: Replacer = (content, oldString) => {
-  const oldLines = splitLines(oldString);
-  const trimmed = oldLines[oldLines.length - 1] === '' ? oldLines.slice(0, -1) : oldLines;
-  if (trimmed.length < 3) return [];
-  const firstAnchor = trimmed[0].trim();
-  const lastAnchor = trimmed[trimmed.length - 1].trim();
-  if (!firstAnchor || !lastAnchor) return [];
-  const oldMiddle = trimmed.slice(1, -1).join('\n');
-
-  const contentLines = splitLines(content);
-  const lineOffsets = lineStartOffsets(content);
-  const hits: ReplacerHit[] = [];
-  for (let i = 0; i + trimmed.length <= contentLines.length; i++) {
-    if (contentLines[i].trim() !== firstAnchor) continue;
-    const last = i + trimmed.length - 1;
-    if (contentLines[last].trim() !== lastAnchor) continue;
-    const candidateMiddle = contentLines.slice(i + 1, last).join('\n');
-    if (similarity(candidateMiddle, oldMiddle) >= 0.5) {
-      hits.push(rangeFromLines(content, lineOffsets, i, i + trimmed.length));
-    }
-  }
-  return hits;
-};
-
-/**
  * The full cascade, in order of strictness. Each entry has a label that is
  * surfaced back to the LLM on success so it can learn what drift it
  * introduced.
@@ -234,6 +155,4 @@ export const CASCADING_REPLACERS: Array<{ label: string; run: Replacer }> = [
   { label: 'quote normalized', run: quoteNormalizedReplacer },
   { label: 'escape normalized', run: escapeNormalizedReplacer },
   { label: 'indentation flexible', run: indentationFlexibleReplacer },
-  { label: 'block anchor', run: blockAnchorReplacer },
-  { label: 'context aware', run: contextAwareReplacer },
 ];

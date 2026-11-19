@@ -161,6 +161,30 @@ describe('MCP OAuth through real HTTP, SDK, SQLite and runtime catalogue', () =>
     expect(f.pool.getSnapshot().tools).toHaveLength(0);
   });
 
+  it('keeps admitted calls and the transport after a server registers and tests the same settings again', async () => {
+    const f = await fixture();
+    await f.authorize();
+    const previousTimestamp = '2026-01-01T00:00:00.000Z';
+    f.db.prepare('UPDATE mcp_server_configs SET updated_at = ? WHERE id = ?').run(previousTimestamp, 'fixture');
+    await f.pool.boot();
+    const admitted = (await f.pool.listAllTools()).tools.find(tool => tool.name === 'ext_fixture__read')!;
+    const initializations = f.state.initializes;
+    const revision = f.pool.getSnapshot().tools.find(tool => tool.toolName === 'read')!.catalogueRevision;
+
+    const saved = await f.app.request('/api/admin/mcp-servers', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'fixture', name: 'Fixture', transport: 'streamable_http',
+        url: f.endpoint + '/mcp', auth_type: 'oauth2', enabled: true }),
+    });
+    expect(saved.status).toBe(201);
+    expect((await saved.json()).updated_at).not.toBe(previousTimestamp);
+    expect(await (await f.post('/test')).json()).toMatchObject({ ok: true, toolCount: 2 });
+    expect(f.state.initializes).toBe(initializations);
+    expect(f.pool.getSnapshot().tools.find(tool => tool.toolName === 'read')!.catalogueRevision).toBe(revision);
+    expect(await admitted.handler({}, {} as import('@mcp/code-agent/core/tool.js').ToolContext))
+      .toMatchObject({ content: 'fixture result' });
+  });
+
   it('updates a single server without replacing unrelated connections or revisions', async () => {
     const f = await fixture(); await f.authorize();
     f.store.upsertServer({ id: 'other', name: 'Other', transport: 'streamable_http', url: f.endpoint + '/mcp', auth_type: 'bearer', auth_token: f.state.token });

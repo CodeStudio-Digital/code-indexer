@@ -6,14 +6,19 @@ export type { AgentMemoryHit } from './agent-memory-ranking.js';
 export { agentMemoryEmbeddingTextHash, agentMemoryEmbeddingTexts, dedupeAgentMemoryHits } from './agent-memory-ranking.js';
 
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { boundAgentMemoryQuery } from '@mcp/store/db/fts-query.js';
 import { abortableRead } from '@mcp/shared/utils/abortable.js';
 import type { AgentMemoryRow, AgentMemoryScope, AgentMemoryType, VectorRecord } from '@mcp/shared/types.js';
-import { embedDocumentsForNamespace, embedQueryForNamespace, type EmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { embedDocumentsForNamespace, embedQueryForNamespace, type EmbeddingService, type NamespaceDocumentEmbedding } from '@mcp/indexer/search/embeddings.js';
 import type { VectorItemState, VectorStore, VectorWriteTarget } from '@mcp/store/vectors.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker-types.js';
 
 import { projectMemoryNamespace, userMemoryNamespace } from '@mcp/shared/vector-namespace.js';
 import type { SemanticMutation, SemanticMutationSink } from '../semantic-mutation-sink.js';
+
+type MemoryFtsSearch = (
+  scope: AgentMemoryScope, projectId: number, query: string, limit: number, signal?: AbortSignal,
+) => Promise<AgentMemoryRow[]>;
 
 export class AgentMemoryService {
   private readonly mutations: MemoryMutationCoordinator;
@@ -29,6 +34,7 @@ export class AgentMemoryService {
     mutationExecution: AgentMemoryMutationExecution = {
       execute: <T>(operation: () => T): T => operation(),
     },
+    private readonly searchFts?: MemoryFtsSearch,
   ) {
     this.mutations = new MemoryMutationCoordinator(db, semanticMutationSink, mutationExecution);
   }
@@ -220,6 +226,7 @@ export class AgentMemoryService {
    */
   async embedAndUpsert(
     row: AgentMemoryRow,
+    prepared?: NamespaceDocumentEmbedding,
   ): Promise<{ ok: boolean; error?: string; skipped?: 'no-backend' | 'unchanged' }> {
     if (!this.embeddingService || !this.vectorStore) return { ok: true, skipped: 'no-backend' };
     const initialHash = agentMemoryEmbeddingTextHash(row, this.fingerprint());
@@ -230,9 +237,9 @@ export class AgentMemoryService {
       if (await this.isCurrent(namespace, `agent_memory:${row.id}`, initialHash, chunkTexts.length)) {
         return { ok: true, skipped: 'unchanged' };
       }
-      const embedded = await embedDocumentsForNamespace(this.embeddingService, namespace, chunkTexts);
+      const embedded = prepared ?? await embedDocumentsForNamespace(this.embeddingService, namespace, chunkTexts);
       const { vectors, writeTarget } = embedded;
-      if (vectors.length === 0 || vectors[0].length === 0) {
+      if (vectors.length !== chunkTexts.length || vectors.some(vector => !vector.length || vector.some(value => !Number.isFinite(value)))) {
         return { ok: false, error: 'embedding service returned no vectors' };
       }
       const newHash = agentMemoryEmbeddingTextHash(
@@ -315,12 +322,23 @@ export class AgentMemoryService {
     limit: number,
     type?: AgentMemoryType,
     signal?: AbortSignal,
+    options: { deduplicate?: boolean; rerank?: boolean } = {},
   ): Promise<AgentMemoryHit[]> {
     signal?.throwIfAborted();
-    const q = query.trim();
+    const q = boundAgentMemoryQuery(query);
     if (!q) return [];
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error('Memory search limit must be 1..128');
-    const ftsRows = this.db.searchAgentMemoryFts(scope, projectId, q, Math.max(limit * 3, 15));
+    const ftsLimit = Math.max(limit * 3, 15);
+    let ftsRows: AgentMemoryRow[] = [];
+    try {
+      ftsRows = this.searchFts
+        ? await this.searchFts(scope, projectId, q, ftsLimit, signal)
+        : this.db.searchAgentMemoryFts(scope, projectId, q, ftsLimit);
+    } catch (error) {
+      signal?.throwIfAborted();
+      console.warn('[agent-memory-search] FTS unavailable:', error instanceof Error ? error.message : String(error));
+    }
+    signal?.throwIfAborted();
     const ftsFiltered = type ? ftsRows.filter((r) => r.type === type) : ftsRows;
 
     let vectorRows: AgentMemoryRow[] = [];
@@ -371,12 +389,6 @@ export class AgentMemoryService {
       }
     }
 
-    if (vectorRows.length === 0) {
-      return dedupeAgentMemoryHits(
-        ftsFiltered.map((r) => ({ ...r, score: 0 })),
-      ).slice(0, limit);
-    }
-
     // RRF merge — rank is position within each list.
     const scoreMap = new Map<number, { row: AgentMemoryRow; score: number }>();
     for (let rank = 0; rank < ftsFiltered.length; rank++) {
@@ -391,12 +403,12 @@ export class AgentMemoryService {
       else scoreMap.set(r.id, { row: r, score: delta });
     }
 
-    const fused = dedupeAgentMemoryHits(
-      Array.from(scoreMap.values())
+    const ranked = vectorRows.length === 0 ? ftsFiltered.map(row => ({ ...row, score: 0 }))
+      : Array.from(scoreMap.values())
         .sort((a, b) => b.score - a.score)
-        .map(({ row, score }) => ({ ...row, score })),
-    );
-    if (this.reranker && this.reranker.name !== 'null' && fused.length > 0) {
+        .map(({ row, score }) => ({ ...row, score }));
+    const fused = options.deduplicate === false ? ranked : dedupeAgentMemoryHits(ranked);
+    if (options.rerank !== false && this.reranker && this.reranker.name !== 'null' && fused.length > 0) {
       const depth = Math.min(
         fused.length,
         this.reranker.candidatePoolSize?.(limit) ?? Math.max(limit * 2, 20),
@@ -440,7 +452,7 @@ export class AgentMemoryService {
     projectId?: number,
     limit = 200,
     scope?: 'project' | 'user',
-  ): Promise<{ embedded: number; failed: number; skipped: number; total: number }> {
+  ): Promise<{ embedded: number; failed: number; skipped: number; total: number; error?: string }> {
     if (!this.hasEmbeddingBackend()) return { embedded: 0, failed: 0, skipped: 0, total: 0 };
     const rows = (() => {
       if (scope === 'user') {
@@ -463,12 +475,43 @@ export class AgentMemoryService {
     let embedded = 0;
     let failed = 0;
     let skipped = 0;
+    let error: string | undefined;
+    let batch: Array<{ row: AgentMemoryRow; texts: string[] }> = [];
+    let namespace = '';
+    let chunks = 0;
+    const flush = async (): Promise<boolean> => {
+      if (!batch.length) return true;
+      try {
+        // One request serves many memories. The immutable namespace/generation
+        // pin is carried into every write, so vectors never cross vector spaces.
+        const prepared = await embedDocumentsForNamespace(this.embeddingService!, namespace, batch.flatMap(item => item.texts));
+        if (prepared.vectors.length !== chunks) throw new Error('Embedding API returned incomplete memory batch');
+        let offset = 0;
+        for (const item of batch) {
+          const res = await this.embedAndUpsert(item.row, { ...prepared, vectors: prepared.vectors.slice(offset, offset + item.texts.length) });
+          offset += item.texts.length;
+          if (res.ok && !res.skipped) embedded++;
+          else if (res.ok) skipped++;
+          else { failed++; error ??= res.error; }
+        }
+      } catch (cause) {
+        failed += batch.length;
+        error ??= cause instanceof Error ? cause.message : String(cause);
+      }
+      batch = []; chunks = 0;
+      return !error;
+    };
     for (const row of rows) {
-      const res = await this.embedAndUpsert(row);
-      if (res.ok && !res.skipped) embedded++;
-      else if (res.ok) skipped++;
-      else if (!res.ok) failed++;
+      const texts = agentMemoryEmbeddingTexts(row);
+      const nextNamespace = this.namespace(row.scope, row.project_id);
+      if (await this.isCurrent(nextNamespace, `agent_memory:${row.id}`,
+        agentMemoryEmbeddingTextHash(row, this.fingerprint()), texts.length)) { skipped++; continue; }
+      if (batch.length && (nextNamespace !== namespace || chunks + texts.length > 32)) {
+        if (!await flush()) break;
+      }
+      namespace = nextNamespace; batch.push({ row, texts }); chunks += texts.length;
     }
-    return { embedded, failed, skipped, total: rows.length };
+    if (!error) await flush();
+    return { embedded, failed, skipped, total: rows.length, ...(error ? { error } : {}) };
   }
 }

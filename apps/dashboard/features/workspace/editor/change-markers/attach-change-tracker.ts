@@ -12,7 +12,8 @@
  */
 
 import type * as MonacoNs from 'monaco-editor';
-import { computeChanges, anchorLine, changeCoversLine, type Change } from './diff-to-changes.js';
+import { anchorLine, changeCoversLine, type Change } from './diff-to-changes.js';
+import { createChangeDiffQueue } from './change-diff-queue.js';
 import { buildChangeDecorations } from './change-decorations.js';
 import { rollbackChange, copyOriginal } from './change-edits.js';
 import { createChangeWidget, type ChangeWidget } from './change-widget.js';
@@ -24,11 +25,11 @@ const RECOMPUTE_DEBOUNCE_MS = 150;
 // barra inicial, ex. `p5/src/x.ts` — mesma forma que editor-models usa). Os
 // comandos next/prev change (nav-commands.ts) leem daqui em vez de alcançar
 // dentro do closure do tracker. Atualizado a cada recompute; limpo no dispose.
-const changesByModel = new Map<string, Change[]>();
+const changesByModel = new Map<string, Set<Change[]>>();
 
 /** Snapshot dos change-blocks do modelo (vazio quando sem tracker/repo). */
 export function getChangeRanges(modelUriKey: string): readonly Change[] {
-  return changesByModel.get(modelUriKey) ?? [];
+  return changesByModel.get(modelUriKey)?.values().next().value ?? [];
 }
 
 /** 1-based line range on the working-tree (new) side, for partial staging. */
@@ -67,20 +68,35 @@ export function attachChangeTracker(
   if (!model) return { setBaseline() {}, dispose() {} };
 
   let baseline = initialBaseline;
-  let changes: Change[] = [];
+  let changes: Change[] | null = null;
   let activeIdx = -1;
   const collection = editor.createDecorationsCollection([]);
   const uriKey = model.uri.path.replace(/^\//, '');
+  const isCurrentModel = (): boolean => !model.isDisposed() && editor.getModel() === model;
 
-  const recompute = (): void => {
-    if (model.isDisposed()) return;
-    changes = computeChanges(baseline, model.getValue());
-    changesByModel.set(uriKey, changes);
-    collection.set(buildChangeDecorations(monaco, changes, model.getLineCount()));
+  const clearRanges = (): void => {
+    const ranges = changesByModel.get(uriKey);
+    if (changes) ranges?.delete(changes);
+    if (ranges?.size === 0) changesByModel.delete(uriKey);
+    changes = null;
+    activeIdx = -1;
   };
 
+  const queue = createChangeDiffQueue(
+    () => isCurrentModel() ? { baseline, current: model.getValue() } : null,
+    (result) => {
+      if (!isCurrentModel()) return;
+      clearRanges();
+      changes = result;
+      const ranges = changesByModel.get(uriKey) ?? new Set<Change[]>();
+      ranges.add(result);
+      changesByModel.set(uriKey, ranges);
+      collection.set(buildChangeDecorations(monaco, result, model.getLineCount()));
+    },
+  );
+
   const openAt = (idx: number): void => {
-    if (idx < 0 || idx >= changes.length) return;
+    if (!isCurrentModel() || !changes || idx < 0 || idx >= changes.length) return;
     activeIdx = idx;
     const change = changes[idx];
     const line = anchorLine(change, model.getLineCount());
@@ -88,11 +104,11 @@ export function attachChangeTracker(
     widget.show(line, change.baselineText);
   };
 
-  const active = (): Change | undefined => changes[activeIdx];
+  const active = (): Change | undefined => isCurrentModel() ? changes?.[activeIdx] : undefined;
 
   const widget: ChangeWidget = createChangeWidget(editor, monaco, deps.labels, {
-    onPrev: () => openAt(activeIdx > 0 ? activeIdx - 1 : changes.length - 1),
-    onNext: () => openAt(activeIdx < changes.length - 1 ? activeIdx + 1 : 0),
+    onPrev: () => { if (changes) openAt(activeIdx > 0 ? activeIdx - 1 : changes.length - 1); },
+    onNext: () => { if (changes) openAt(activeIdx < changes.length - 1 ? activeIdx + 1 : 0); },
     onRollback: () => {
       const c = active();
       if (c) rollbackChange(monaco, model, c);
@@ -116,17 +132,26 @@ export function attachChangeTracker(
   });
 
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const schedule = (): void => {
-    if (widget.isOpen()) widget.hide(); // an edit shifts the blocks
+  const invalidate = (): void => {
+    if (widget.isOpen()) widget.hide();
     if (timer) clearTimeout(timer);
-    timer = setTimeout(recompute, RECOMPUTE_DEBOUNCE_MS);
+    timer = null;
+    clearRanges();
+    queue.invalidate();
+  };
+  const schedule = (): void => {
+    invalidate();
+    timer = setTimeout(() => {
+      timer = null;
+      queue.request();
+    }, RECOMPUTE_DEBOUNCE_MS);
   };
 
-  recompute();
+  queue.request();
   const subContent = model.onDidChangeContent(schedule);
   const subMouse = editor.onMouseDown((e) => {
     const line = e.target.position?.lineNumber;
-    if (e.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS && line) {
+    if (changes && e.target.type === monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS && line) {
       const idx = changes.findIndex((c) => changeCoversLine(c, line, model.getLineCount()));
       if (idx >= 0) {
         openAt(idx);
@@ -139,11 +164,13 @@ export function attachChangeTracker(
   return {
     setBaseline(content: string) {
       baseline = content;
-      recompute();
+      invalidate();
+      queue.request();
     },
     dispose() {
       if (timer) clearTimeout(timer);
-      changesByModel.delete(uriKey);
+      queue.dispose();
+      clearRanges();
       subContent.dispose();
       subMouse.dispose();
       widget.dispose();

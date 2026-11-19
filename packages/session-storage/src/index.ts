@@ -7,6 +7,7 @@ export * from './path-safety.js';
 export * from './session-catalog.js';
 export * from './session-locator.js';
 export * from './session-writer.js';
+export * from './storage-timing.js';
 export * from './sqlite-disposition.js';
 export * from './types.js';
 export * from './entities/entity-file-repository.js';

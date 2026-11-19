@@ -11,7 +11,7 @@ import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { maskKey } from './shared/mask.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import type { ToolMeta } from '@mcp/code-agent/tools/tiers.js';
-import { getGlobalMcpExternalPool } from '../sse/McpExternalPool.js';
+import { getGlobalMcpExternalPool, type McpExternalPool } from '../sse/McpExternalPool.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 
 interface ExternalToolInfo {
@@ -23,10 +23,13 @@ interface ExternalToolInfo {
 }
 
 /** Keep the process-wide catalogue in lockstep with persisted admin changes. */
-export async function refreshGlobalMcpExternalPool(serverId?: string): Promise<void> {
+export async function refreshGlobalMcpExternalPool(
+  serverId?: string,
+  options?: Parameters<McpExternalPool['refreshServer']>[1],
+): Promise<void> {
   const pool = getGlobalMcpExternalPool();
   if (pool) {
-    if (serverId) await pool.refreshServer(serverId);
+    if (serverId) await pool.refreshServer(serverId, options);
     else await pool.refresh();
   }
 }
@@ -185,7 +188,7 @@ export function mcpServersRouter(runtime: McpAdminRuntime = {}): Hono {
     } finally {
       store.close();
     }
-    await refreshGlobalMcpExternalPool(server.id).catch(() => undefined);
+    await refreshGlobalMcpExternalPool(server.id, { reuseConnection: true }).catch(() => undefined);
     return c.json(publicServer(server), 201);
   });
 
@@ -232,7 +235,7 @@ export function mcpServersRouter(runtime: McpAdminRuntime = {}): Hono {
     } finally {
       store.close();
     }
-    await refreshGlobalMcpExternalPool(server.id).catch(() => undefined);
+    await refreshGlobalMcpExternalPool(server.id, { reuseConnection: true }).catch(() => undefined);
     return c.json(publicServer(server));
   });
 
@@ -249,7 +252,7 @@ export function mcpServersRouter(runtime: McpAdminRuntime = {}): Hono {
 
   /**
    * POST /mcp-servers/:id/test — connectivity test.
-   * Connects to the server, lists tools, disconnects. Returns tool count + latency.
+   * Probes the shared connection when available. Returns tool count + latency.
    */
   app.post('/mcp-servers/:id/test', async (c) => {
     const store = getStore();
@@ -261,7 +264,7 @@ export function mcpServersRouter(runtime: McpAdminRuntime = {}): Hono {
       if (pool && server.enabled) {
         const start = Date.now();
         try {
-          const snapshot = await pool.refreshServer(server.id);
+          const snapshot = await pool.refreshServer(server.id, { reuseConnection: true });
           const tools = snapshot.tools.filter(t => t.serverId === server.id)
             .map(t => ({ name: t.toolName, description: t.description }));
           if (tools.some(t => t.name === 'broker_get_status')) {

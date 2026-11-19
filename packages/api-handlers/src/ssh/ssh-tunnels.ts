@@ -21,6 +21,7 @@ import type { SshConnectionManager } from './ssh-connection-manager.js';
 interface ActiveTunnel {
   meta: SshTunnel;
   hostId: string;
+  client?: Client;
   stop: () => void;
 }
 
@@ -62,6 +63,7 @@ export class TunnelManager {
             ? await this.startRemote(client, input, meta)
             : await this.startDynamic(client, input, meta);
       const stop = active.stop;
+      active.client = client;
       const onConnectionClose = (): void => this.stop(meta.id);
       client.once('close', onConnectionClose);
       active.stop = () => {
@@ -71,7 +73,7 @@ export class TunnelManager {
       this.tunnels.set(meta.id, active);
       return meta;
     } catch (err) {
-      this.manager.release(input.spec.hostId);
+      this.manager.release(input.spec.hostId, client);
       throw err;
     }
   }
@@ -80,11 +82,7 @@ export class TunnelManager {
     const t = this.tunnels.get(tunnelId);
     if (!t) return;
     this.tunnels.delete(tunnelId);
-    try {
-      t.stop();
-    } finally {
-      this.manager.release(t.hostId);
-    }
+    try { t.stop(); } finally { this.manager.release(t.hostId, t.client); }
   }
 
   list(): SshTunnel[] {

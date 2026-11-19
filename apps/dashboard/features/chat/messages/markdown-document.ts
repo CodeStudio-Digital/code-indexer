@@ -3,7 +3,7 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkRehype from 'remark-rehype';
-import { defaultUrlTransform } from 'react-markdown';
+import { markdownUrlTransform, nextHeadingSlug } from './markdown-links.js';
 import { urlAttributes } from 'html-url-attributes';
 
 export interface MarkdownDocument {
@@ -23,13 +23,12 @@ export function parseMarkdownDocument(text: string): MarkdownDocument {
     const parent = pending.pop()!;
     for (let index = 0; index < parent.children.length; index++) {
       const child = parent.children[index];
-      // Match react-markdown's safe defaults. Raw HTML is literal text, and
-      // every URL-bearing property uses the upstream protocol allowlist.
+      // Match the short-message renderer, including its file link handling.
       if (child.type === 'raw') parent.children[index] = { type: 'text', value: child.value };
       else if (child.type === 'element') {
         for (const [key, tags] of Object.entries(urlAttributes)) {
           if (Object.hasOwn(child.properties, key) && (tags === null || tags.includes(child.tagName))) {
-            child.properties[key] = defaultUrlTransform(String(child.properties[key] || ''));
+            child.properties[key] = markdownUrlTransform(String(child.properties[key] || ''), key, child);
           }
         }
         pending.push(child);
@@ -39,17 +38,24 @@ export function parseMarkdownDocument(text: string): MarkdownDocument {
   const rows = tree.children.filter(node => node.type !== 'text' || node.value.trim() !== '')
     .flatMap(node => splitContainer(node, MAX_MARKDOWN_ROW_NODES));
   const anchors: Record<string, number> = Object.create(null);
+  const headings = new Map<string, number>();
   rows.forEach((row, index) => {
     const stack = [row];
     while (stack.length) {
       const node = stack.pop()!;
       if (node.type === 'element') {
         if (typeof node.properties.id === 'string') anchors[node.properties.id] = index;
-        stack.push(...node.children);
+        if (/^h[1-6]$/.test(node.tagName)) anchors[nextHeadingSlug(node.children.map(headingText).join(''), headings)] = index;
+        for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
       }
     }
   });
   return { rows, anchors };
+}
+
+function headingText(node: RootContent): string {
+  if (node.type === 'text') return node.value;
+  return node.type === 'element' ? node.children.map(headingText).join('') : '';
 }
 
 // Bound descendants, not just direct children: one list item or quoted list

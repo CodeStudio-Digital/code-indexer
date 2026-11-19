@@ -390,7 +390,9 @@ describe('ExecutingNode', () => {
       executionClass: 'write',
     });
     ctx.opts.verificationEvidenceEnabled = true;
+    const persistTurnTelemetry = vi.fn();
     ctx.bridge = {
+      persistTurnTelemetry,
       getSessionStateData: () => ({
         activePlan: null,
         todos: [],
@@ -406,12 +408,33 @@ describe('ExecutingNode', () => {
     expect(ctx.messages.at(-1)?.role).toBe('user');
     expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('[verification-required]');
     expect(ctx.verification.nudges).toBe(1);
+    expect(persistTurnTelemetry).toHaveBeenCalledTimes(1);
 
     const second = await node.execute(ctx, null);
     expect(second.kind).toBe('CleanFinish');
     expect(ctx.stopReason).toBe('completed');
     expect(ctx.messages.at(-1)?.role).toBe('assistant');
     expect(ctx.verification.nudges).toBe(1);
+    expect(persistTurnTelemetry).toHaveBeenCalledTimes(2);
+  });
+
+  it('finishes after successful validation and a report without another provider round', async () => {
+    const ledger = new ToolCallLedger();
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'text_delta', text: 'Implemented, tested and documented.' },
+        { type: 'done', stop_reason: 'end_turn' },
+      ]),
+      registry: makeRegistry({}),
+      toolContext: { ...emptyToolContext(), toolCallLedger: ledger },
+    });
+    ledger.record({ name: 'edit_file', args: { path: 'src/a.ts' }, content: 'ok', isError: false, mutates: true, executionClass: 'write' });
+    ledger.record({ name: 'run_command', args: { command: 'pnpm test > test.log && node node_modules/typescript/bin/tsc --noEmit' }, content: 'exit code 0', isError: false, executionClass: 'execute' });
+    ledger.record({ name: 'edit_file', args: { path: 'REPORT.md' }, content: 'ok', isError: false, mutates: true, executionClass: 'write' });
+    ctx.opts.verificationEvidenceEnabled = true;
+    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('CleanFinish');
+    expect(ctx.verification.nudges).toBe(0);
+    expect(JSON.stringify(ctx.messages)).not.toContain('[verification-required]');
   });
 
   it('compacts from the tokenizer estimate when the provider omits usage (Fix B regression)', async () => {
@@ -588,6 +611,9 @@ describe('ExecutingNode', () => {
     expect(payload.source).toBe('usage');
     expect(payload.context_window).toBeGreaterThan(0);
     expect(payload.ratio).toBeCloseTo(1000 / payload.context_window, 5);
+    expect(recordedEvents.find(e => e.event === 'message_complete')?.args[3]).toEqual({
+      prompt_tokens: 1000, source: 'usage', context_window: payload.context_window,
+    });
   });
 
   it('emits context_status from the estimate when the provider omits usage', async () => {
@@ -608,6 +634,9 @@ describe('ExecutingNode', () => {
     const payload = (cs!.args as [{ prompt_tokens: number; source: string }])[0];
     expect(payload.source).toBe('estimate');
     expect(payload.prompt_tokens).toBeGreaterThan(0);
+    expect(recordedEvents.find(e => e.event === 'message_complete')?.args[3]).toMatchObject({
+      prompt_tokens: payload.prompt_tokens, source: 'estimate',
+    });
   });
 
   it('continues after repeated authorized local mutations', async () => {

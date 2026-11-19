@@ -6,6 +6,31 @@ import type { DB } from './semantic-store-types.js';
 export class SemanticJobs {
   constructor(private readonly db: DB) {}
 
+  recoverInterruptedJobs(): void {
+    const openBuild = `kind IN ('build','backfill') AND status IN ('pending','running','paused')
+      AND generation_id IS NOT NULL`;
+    // Thousands of jobs can share one generation. Compare distinct pairs from
+    // the partial index before touching any job payload or taking a write lock.
+    const obsoletePairs = `SELECT g.namespace, g.generation_id FROM
+      (SELECT DISTINCT namespace, generation_id FROM semantic_jobs WHERE ${openBuild}) g
+      LEFT JOIN semantic_namespace_generations n ON n.namespace = g.namespace
+      WHERE g.generation_id IS NOT n.active_generation_id AND g.generation_id IS NOT n.building_generation_id`;
+    const interrupted = `status = 'running' AND kind <> 'cleanup'
+      AND json_extract(cursor, '$.reason') IS NOT 'mutation-fence'`;
+    if (!this.db.prepare(`${obsoletePairs} LIMIT 1`).get()
+      && !this.db.prepare(`SELECT 1 FROM semantic_jobs WHERE ${interrupted} LIMIT 1`).get()) return;
+
+    this.db.transaction(() => {
+      this.db.prepare(`UPDATE semantic_jobs SET status = 'cancelled',
+        error = 'superseded by a newer active or building generation',
+        completed_at = datetime('now'), updated_at = datetime('now')
+        WHERE ${openBuild} AND (namespace, generation_id) IN (${obsoletePairs})`).run();
+      this.db.prepare(`UPDATE semantic_jobs SET status = 'paused', processed_items = 0,
+        error = 'interrupted by application restart; waiting for an explicit resume',
+        updated_at = datetime('now') WHERE ${interrupted}`).run();
+    })();
+  }
+
   createJob(input: {
     generation_id?: number | null;
     namespace: string;
@@ -36,6 +61,9 @@ export class SemanticJobs {
     expected_items: number;
   }): SemanticJobRow {
     return this.db.transaction(() => {
+      const running = this.db.prepare(`SELECT * FROM semantic_jobs WHERE namespace = ? AND generation_id = ?
+        AND kind = ? AND status = 'running' ORDER BY id DESC LIMIT 1`).get(input.namespace, input.generation_id, input.kind) as JsonJobRow | undefined;
+      if (running) return hydrateJob(running);
       const row = this.db.prepare(`
         SELECT * FROM semantic_jobs WHERE namespace = ? AND generation_id = ?
           AND kind = ? AND status IN ('pending', 'paused') ORDER BY id DESC LIMIT 1
@@ -47,7 +75,15 @@ export class SemanticJobs {
         processed_items: 0, failed_items: 0, error: null,
         cursor: { ...input.cursor, ...(current.cursor?.retry ? { retry: current.cursor.retry } : {}) },
       })!;
-    })();
+    }).immediate();
+  }
+
+  /** Reserve a retry and publish its running state in the same transaction. */
+  claimBuildJob(input: Parameters<SemanticJobs['getOrCreateBuildJob']>[0]): SemanticJobRow | null {
+    return this.db.transaction(() => {
+      const job = this.getOrCreateBuildJob(input);
+      return job.status === 'running' ? null : this.updateJob(job.id, { status: 'running' });
+    }).immediate();
   }
 
   /** Checks need one boolean, not thousands of deserialized historical jobs. */
@@ -61,14 +97,19 @@ export class SemanticJobs {
 
   getNamespaceBuildRetry(namespace: string): { attempt: number; not_before_ms: number; blocked?: boolean } | null {
     const row = this.db.prepare(`
-      SELECT json_extract(j.cursor, '$.retry') AS retry FROM semantic_jobs j
+      SELECT json_extract(j.cursor, '$.retry') AS retry, j.error FROM semantic_jobs j
       JOIN semantic_namespace_generations n ON n.namespace = j.namespace
       WHERE j.namespace = ? AND j.kind IN ('build', 'backfill') AND j.status = 'paused'
         AND j.generation_id = COALESCE(n.building_generation_id, n.active_generation_id)
         AND json_type(j.cursor, '$.retry') = 'object'
       ORDER BY j.id DESC LIMIT 1
-    `).get(namespace) as { retry: string } | undefined;
-    return row ? parseJson(row.retry) : null;
+    `).get(namespace) as { retry: string; error: string | null } | undefined;
+    if (!row) return null;
+    const retry = parseJson(row.retry) as { attempt: number; not_before_ms: number; blocked?: boolean };
+    // Older builds permanently latched the circuit even for a temporary free
+    // quota. Preserve its cooldown but allow recovery when that window closes.
+    if (/\b429\b|rate.limit|quota/i.test(row.error ?? '')) return { ...retry, blocked: false };
+    return retry;
   }
 
   getJob(id: number): SemanticJobRow | null {

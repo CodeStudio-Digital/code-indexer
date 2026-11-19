@@ -23,7 +23,8 @@ const ApiClientTab = lazy(() => import('../../api-client/ApiClientTab.js').then(
 const DbClientTab = lazy(() => import('../../db-client/DbClientTab.js').then((m) => ({ default: m.DbClientTab })));
 const DiagramsView = lazy(() => import('../diagrams/DiagramsView.js').then((m) => ({ default: m.DiagramsView })));
 
-type SshPanelComponent = ComponentType<{ projectId: number }>;
+type SshPanelProps = { projectId: number; workspaceId?: number | null };
+type SshPanelComponent = ComponentType<SshPanelProps>;
 
 const loadSshPanel = (): Promise<SshPanelComponent> =>
   import('../../ssh/SshPanel.js').then((module) => module.SshPanel);
@@ -36,7 +37,7 @@ const SSH_PANEL_LOAD_TIMEOUT_MS = 30_000;
  * resolved the module. Explicit state makes completion observable and lets the
  * error boundary remount/retry a failed or genuinely stalled chunk.
  */
-function AsyncSshPanel({ projectId }: { projectId: number }) {
+function AsyncSshPanel(props: SshPanelProps) {
   const [Panel, setPanel] = useState<SshPanelComponent | null>(null);
   const [loadError, setLoadError] = useState<Error | null>(null);
 
@@ -68,7 +69,7 @@ function AsyncSshPanel({ projectId }: { projectId: number }) {
   }, []);
 
   if (loadError) throw loadError;
-  return Panel ? <Panel projectId={projectId} /> : <TabSpinner />;
+  return Panel ? <Panel {...props} /> : <TabSpinner />;
 }
 
 /** Fallback dos chunks lazy de aba. */
@@ -83,6 +84,8 @@ function TabSpinner() {
 interface TransientSurfaceProps {
   tab: ProjectTabId;
   projectId: number;
+  workspaceId?: number | null;
+  worktreePath?: string | null;
   projectName: string;
   onOpenFile: (path: string) => void;
   contribWindows: ContribToolWindow[];
@@ -91,7 +94,7 @@ interface TransientSurfaceProps {
   apiWorkbenchSlots?: ApiClientWorkbenchSlots;
 }
 
-export function TransientSurface({ tab, projectId, projectName, onOpenFile, contribWindows, builderJson, framework, apiWorkbenchSlots }: TransientSurfaceProps) {
+export function TransientSurface({ tab, projectId, workspaceId = projectId, worktreePath, projectName, onOpenFile, contribWindows, builderJson, framework, apiWorkbenchSlots }: TransientSurfaceProps) {
   // Snapshots owns its own master/detail layout (full height, inner scroll).
   // key={projectId} → remount per project (matches ProjectPreview/DiagramsView)
   // so an open create/edit SnapshotForm can't carry the previous project's
@@ -118,18 +121,20 @@ export function TransientSurface({ tab, projectId, projectName, onOpenFile, cont
     // The key still hard-isolates that live state when the project changes.
     return (
       <ErrorBoundary label="SSH" resetKey={projectId}>
-        <AsyncSshPanel key={projectId} projectId={projectId} />
+        <AsyncSshPanel key={projectId} projectId={projectId} workspaceId={workspaceId} />
       </ErrorBoundary>
     );
   }
 
   // Preview tab — the live dev-server preview, full-width.
   if (tab === 'preview') {
-    return (
+    return workspaceId != null && (
       <ProjectPreview
-        key={projectId}
-        projectId={projectId}
-        pinnedPort={builderJson?.port}
+        key={workspaceId}
+        projectId={workspaceId}
+        runnerProjectId={projectId}
+        worktreePath={worktreePath}
+        pinnedPort={worktreePath ? undefined : builderJson?.port}
         selectionEnabled={!!builderJson}
         framework={framework}
       />
@@ -138,33 +143,34 @@ export function TransientSurface({ tab, projectId, projectName, onOpenFile, cont
 
   // Diagrams tab — full-area draw.io workspace.
   if (tab === 'diagrams') {
-    return (
+    return workspaceId != null && (
       <Suspense fallback={<TabSpinner />}>
-        <DiagramsView key={projectId} projectId={projectId} />
+        <DiagramsView key={workspaceId} projectId={workspaceId} />
       </Suspense>
     );
   }
 
   // Plugin-contributed tool window → its sandboxed webview fills the area.
   const pluginWin = contribWindows.find((w) => w.id === tab);
-  if (pluginWin) {
+  if (pluginWin && workspaceId != null) {
     return (
       <div className="h-full overflow-hidden">
         <WebviewWindow
           namespace={pluginWin.pluginNs}
           title={pluginWin.title}
           entry={pluginWin.entry}
-          projectId={projectId}
+          key={workspaceId}
+          projectId={workspaceId}
         />
       </div>
     );
   }
 
   // Search + analytics-style tabs → uniform padded scrollable surface.
-  return (
+  return workspaceId != null && (
     <div className="h-full overflow-auto">
       <Suspense fallback={<TabSpinner />}>
-        <ToolSurface tab={tab} projectId={projectId} projectName={projectName} onOpenFile={onOpenFile} />
+        <ToolSurface key={workspaceId} tab={tab} projectId={workspaceId} projectName={projectName} onOpenFile={onOpenFile} />
       </Suspense>
     </div>
   );

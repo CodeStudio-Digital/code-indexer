@@ -25,9 +25,11 @@ describe('system prompt — tool visibility (cap) block', () => {
     const prompt = buildSystemPrompt(baseCtx({ toolCap: { maxTools: 32, approxCatalog: 90 } }));
     const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
     expect(suffix).toContain('# Tool visibility');
-    expect(suffix).toContain('capped at 32 of ~90 tools');
+    expect(suffix).toContain('32 of ~90 registered tools');
+    expect(suffix).toContain('Required controls can exceed this target');
     expect(suffix).toContain('find_tools');
-    expect(suffix).toContain('discovered tools are pinned');
+    expect(prefix).toContain('Use visible tools directly');
+    expect(prefix).toContain('tools["exact-name"](args)');
     expect(prefix).not.toContain('# Tool visibility');
   });
 

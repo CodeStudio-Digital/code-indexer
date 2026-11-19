@@ -1,6 +1,7 @@
 import type { OpenAICompatVendor } from './openai-messages.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import { getMaxOutputTokens } from '@mcp/code-agent/providers/capabilities.js';
+import { getZaiModelReasoning } from '@mcp/shared/providers/zai-models.js';
 export function normalizeDeepSeekEffort(value: string | null | undefined): 'high' | 'max' | null {
   const effort = value?.trim().toLowerCase();
   if (!effort || effort === 'none') return null;
@@ -61,17 +62,17 @@ export function buildOpenAIRequestExtras(req: ChatRequest, vendor: OpenAICompatV
     const zaiExtras: Record<string, unknown> = {};
     if (vendor === 'zai') {
       zaiExtras.tool_stream = true;
-      // `thinking` is accepted by GLM-4.5+ and the entire GLM-5 family
-      // (docs.z.ai/guides/capabilities/thinking). Earlier GLM-4.x
-      // variants (4-air, 4-flash, 4.3, 4.4, …) reject it with HTTP 400
-      // "unknown field", so we keep the regex narrow:
-      //   - `glm-5`, `glm-5.1`, `glm-5-turbo`     (5 anything)
-      //   - `glm-4.5`, `glm-4.6`, `glm-4.7`        and `.x-air`/`.x-flash` variants
-      // We always set it explicitly (enabled OR disabled) instead of
-      // omitting on `false`. Z.AI's server default for these models is
-      // "model decides" — omitting would let it think even when the
-      // user didn't toggle the composer flag, mismatching the UI.
-      if (/^glm-(?:5(?:[.\-]|$)|4\.[567])/.test(model)) {
+      const reasoning = getZaiModelReasoning(model);
+      if (reasoning) {
+        const requested = req.reasoningEffort?.trim().toLowerCase();
+        const selected = reasoning.supportedReasoningLevels.find(level => level === requested);
+        zaiExtras.thinking = { type: 'enabled' };
+        // A legacy request that only disables thinking maps to Low. The host
+        // represents Auto as null after resolving any saved model default.
+        const legacyDisabled = requested === 'none' || (req.reasoningEffort === undefined && req.thinking === false);
+        zaiExtras.reasoning_effort = selected ?? (legacyDisabled ? 'low' : reasoning.defaultReasoningLevel);
+      } else if (/^glm-(?:5(?:[.\-]|$)|4\.[567])/.test(model)) {
+        // Retain the boolean control for earlier GLM models that accept it.
         zaiExtras.thinking = { type: req.thinking ? 'enabled' : 'disabled' };
       }
       // Keep the wire payload aligned with the model capability used for

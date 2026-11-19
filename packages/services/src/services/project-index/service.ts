@@ -79,7 +79,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     delayMs: number | null;
     largeProject: boolean;
   } {
-    const project = this.db.getProject(projectId);
+    const project = this.db.getProjectCatalogEntry(projectId);
     const largeProject = !!project && (
       (project.file_count ?? 0) >= LARGE_PROJECT_FILE_COUNT
       || isUnityProjectRoot(project.root_path)

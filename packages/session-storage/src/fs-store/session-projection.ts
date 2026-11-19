@@ -224,6 +224,7 @@ export function mapCatalogEntry(
   const boundary = compactionBoundary(state);
   return {
     id: entry.session.id,
+    parent_session_id: entry.session.parent_session_id ?? null,
     kind: entry.session.kind,
     storage_scope: entry.session.storage_scope,
     project_id: entry.session.owner_project_id,

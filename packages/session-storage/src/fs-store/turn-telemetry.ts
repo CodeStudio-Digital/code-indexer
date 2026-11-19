@@ -124,7 +124,7 @@ export class FsTurnTelemetryRepository implements FsTurnTelemetrySink {
         return id;
       }
 
-      await this.sessions.repository.writeEntity(
+      const accepted = this.sessions.repository.enqueueDiagnostic(
         entry.location,
         'metrics/turns',
         id,
@@ -156,7 +156,7 @@ export class FsTurnTelemetryRepository implements FsTurnTelemetrySink {
           },
         }),
       );
-      return id;
+      return accepted ? id : null;
     } catch (error) {
       // Diagnostics must never break a real turn. Unlike the old path this
       // only degrades to "no telemetry id"; it never writes SQLite.

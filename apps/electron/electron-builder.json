@@ -23,6 +23,8 @@
     "onlyLoadAppFromAsar": true
   },
   "asarUnpack": [
+    "node_modules/@microsoft/copilot-sdk-*/**/*",
+    "node_modules/koffi/**/*",
     "node_modules/better-sqlite3/**/*",
     "node_modules/node-pty/**/*",
     "node_modules/sqlite-vec/**/*",
@@ -48,6 +50,11 @@
     {
       "from": "dist/bundled-plugins",
       "to": "bundled-plugins"
+    },
+    {
+      "from": "assets/semantic-models",
+      "to": "semantic-models",
+      "filter": ["**/*", "!.gitattributes"]
     },
     {
       "from": "node_modules/typescript/lib",

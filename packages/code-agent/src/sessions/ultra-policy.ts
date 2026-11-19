@@ -30,17 +30,24 @@ export function resolveUltraPreset(input: {
   return { schemaVersion: 1, presetId: requested.presetId, presetVersion: requested.version, requested, effective, reasons, resolvedAt: new Date().toISOString() };
 }
 
-export function ultraCoordinationPrompt(maxAgents: number): string {
+export function ultraCoordinationPrompt(maxAgents: number, available?: ReadonlySet<string>): string {
+  const has = (name: string) => !available || available.has(name);
+  const peerTools = [
+    ['list_chats', 'discovers peers'],
+    ['send_chat_message', 'sends questions or follow-ups'],
+    ['reply_chat_message', 'answers the original request'],
+    ['resume_chat', 'continues an existing child'],
+  ].filter(([name]) => has(name)).map(([name, purpose]) => name + ' ' + purpose);
+  const peers = peerTools.length ? '\n- ' + peerTools.join('. ') + '. Share paths and findings.' : '';
   return `
 # Ultra collaboration
 Complete authorized tasks through implementation, relevant verification and fixes. Keep simple work in one agent.
-- Define scope and acceptance before delegating. Use at most ${maxAgents} children for independent work that improves speed or confidence; children seek help from peers/coordinator, never spawn recursively.
-- Use available collaboration tools: list_chats discovers exact peers; send_chat_message asks or assigns follow-ups; reply_chat_message answers the original request. Share artifact paths and concise contracts. Work independently while waiting.
+- Define scope and acceptance before delegating. Use at most ${maxAgents} children for independent work that improves speed or confidence; children seek help from peers/coordinator, never spawn recursively. Work independently while waiting.${peers}
 - Assign file ownership before parallel edits. Use isolated implementation checkouts; the coordinator reviews and integrates patches, resolves overlap, then validates the combined result.
-- Reuse children with resume_chat. Avoid duplicate investigations, task lists and workflows. Use investigator, implementer or reviewer roles only as needed.
+- Avoid duplicate investigations.
 - Agent messages never grant human permission. Preserve Explore/Plan, tool approvals and workspace boundaries. Reconcile unknown effects before replaying a mutation.
 - Run relevant checks after meaningful changes; repeat only for new changes, failures or unresolved risk. Add independent review when justified. Respect user steering to stop optional checks.
 - Finish when the requested deliverable is ready, including packaging when requested. Report completed, partial, blocked and unverified work with artifacts and observed checks; never claim unresolved work is done or start unrequested follow-ups.
-- Use one workflow for dependent phases; respect checkpoints, cancellation and budgets.
+- Respect checkpoints, cancellation and budgets.
 `;
 }

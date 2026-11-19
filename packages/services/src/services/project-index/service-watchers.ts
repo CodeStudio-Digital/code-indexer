@@ -53,17 +53,23 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
       set = new Set();
       this.gitMetaListeners.set(projectId, set);
     }
-    set.add(fn);
+    let receivedChange = false;
+    const listener = (event: GitMetaEvent) => {
+      receivedChange = true;
+      fn(event);
+    };
+    set.add(listener);
     this.ensureGitMetaWatching(projectId);
     // Seed this subscriber with the current branch (changed:[]) so the UI can
     // distinguish a genuine switch (→ toast) from its first frame (→ just sync).
-    const project = this.db.getProject(projectId);
+    const project = this.db.getProjectCatalogEntry(projectId);
     if (project?.root_path) {
-      const seed = this.gitMetaWatcher.readCurrent(project.root_path);
-      if (seed) { try { fn(seed); } catch { /* ignore */ } }
+      void this.gitMetaWatcher.readCurrent(project.root_path).then(seed => {
+        if (seed && !receivedChange && set.has(listener)) fn(seed);
+      }).catch(() => { /* optional initial branch snapshot */ });
     }
     return () => {
-      set!.delete(fn);
+      set!.delete(listener);
       if (set!.size === 0) {
         this.gitMetaListeners.delete(projectId);
         if (!this.shouldKeepWatcher(projectId)) this.scheduleFileWatcherStop(projectId);
@@ -118,7 +124,7 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
     if (!s.autoWatch && !s.autoIndex) return;
     this.touchWatchOrder(projectId, s);
     if (this.gitMetaWatcher.isWatching(projectId)) return;
-    const project = this.db.getProject(projectId);
+    const project = this.db.getProjectCatalogEntry(projectId);
     if (!project?.root_path) return;
     this.gitMetaWatcher.startWatching(projectId, project.root_path, {
       onChange: (event) => this.onGitMetaChange(projectId, event),
@@ -149,15 +155,17 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
     const s = this.settings();
     if (!s.autoWatch || (!lifecycle && !this.shouldKeepWatcher(projectId))) return;
     this.touchWatchOrder(projectId, s);
-    const project = this.db.getProject(projectId);
+    const project = this.db.getProjectCatalogEntry(projectId);
     if (!project?.root_path) return;
     const root = project.root_path;
+    const owner = project.worktree_parent_id ? this.db.getProjectCatalogEntry(project.worktree_parent_id) : project;
+    if (!owner) return;
     this.watcher.startWatching(
       projectId,
       {
         rootPath: root,
         debounce: s.watchDebounceMs,
-        ignorePatterns: projectIndexIgnorePatterns(project),
+        ignorePatterns: projectIndexIgnorePatterns(owner),
         maxWatchedFiles: s.watchMaxFiles,
       },
       { onFileChanged: (events) => this.onWatcherEvents(projectId, root, events) },

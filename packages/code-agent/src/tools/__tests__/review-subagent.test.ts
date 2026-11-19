@@ -30,6 +30,10 @@ describe('reviewSystemPrompt — target framing', () => {
 });
 
 describe('parseReviewBlock — code_location', () => {
+  it('parses the clean-review response exactly as instructed', () => {
+    const example = /For a clean review return exactly (.*?<\/review>)/.exec(reviewSystemPrompt())?.[1];
+    expect(parseReviewBlock(example ?? '')).toEqual({ findings: [] });
+  });
   it('parses the new code_location shape and mirrors file/line', () => {
     const text = `<review>{"findings":[{"severity":"high","code_location":{"file":"src/a.ts","line_range":{"start":42,"end":48}},"issue":"bug","suggested_fix":"fix it"}]}</review>`;
     const out = parseReviewBlock(text)!;

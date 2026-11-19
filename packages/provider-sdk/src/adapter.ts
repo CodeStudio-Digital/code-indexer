@@ -99,6 +99,8 @@ export interface ChatRequest {
  * A provider-agnostic streaming chat interface with tool-calling.
  */
 export interface ChatProvider {
+  /** True only when chat generates output and cannot execute server-side tools. */
+  readonly inferenceOnly?: boolean;
   /** Same capabilities used by the final wire guard, exposed for truthful UI/policy. */
   readonly reasoningCapabilities?: import('./reasoning.js').NativeReasoningCapability;
   /** Verified by the adapter/transport. Absent means unknown, not unlimited. */

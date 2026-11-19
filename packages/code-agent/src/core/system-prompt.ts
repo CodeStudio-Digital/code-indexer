@@ -109,6 +109,9 @@ export interface PromptContext {
   globalWorkspace?: ToolContext['globalWorkspace'];
   os: string;
   planMode?: boolean;
+  specMode?: boolean;
+  /** The latest written plan can be reopened in this Build session. */
+  canRevisePlan?: boolean;
   providerFamily?: ProviderFamily;
   /** Profile the runner started in ('bootstrap' | 'navigate' | 'full'). Controls the tier hint. */
   profile?: 'bootstrap' | 'navigate' | 'full';
@@ -122,9 +125,7 @@ export interface PromptContext {
    * start. When the cap is smaller than the catalog, a "Tool visibility"
    * block renders BELOW the dynamic boundary (it varies by model and
    * registry size, so it must not pollute the shared static prefix)
-   * teaching the model the find_tools → direct-call-pins → expand_toolset
-   * ladder. Numbers are session-start values — fine if slightly stale
-   * after tier promotions.
+   * directing the model to schema discovery. These are session-start estimates.
    */
   toolCap?: { maxTools: number; approxCatalog: number };
   /** Session ID for skill template variable interpolation. */
@@ -278,8 +279,8 @@ function providerPreamble(family: ProviderFamily): string {
   switch (family) {
     case 'anthropic':
     case 'claude-code':
-      // Claude already obeys XML tags and handles long contexts — keep it brief.
-      return `<role>Coding agent (Claude family).</role>
+      // Compatible gateways may serve different models over the same wire format.
+      return `<role>CodeStudio coding agent.</role>
 <formatting>
 - Batch independent reads when supported; serialize dependent calls and effects.
 - Text output to the user is rendered as markdown. Keep it terse.
@@ -298,7 +299,7 @@ You are a coding agent (OpenAI Codex family).
     case 'openai':
       // OpenAI-compatible models respond well to explicit checklist-style cues.
       return `# Role
-You are a coding agent (OpenAI GPT family).
+You are a coding agent in CodeStudio.
 
 # Formatting rules
 - Use tools for actions and accompany substantial work with concise progress updates.
@@ -377,11 +378,17 @@ function nativeToolsSection(available?: ReadonlySet<string>): string {
   ])
     ? ' Read the target before editing.'
     : '';
-  const discovery = toolAvailable(available, 'find_tools')
-    ? ' Use `find_tools` for a missing capability; do not guess tool names.'
+  // `find_tools` guidance lives in "# Tool discovery" (rendered under the same
+  // availability condition) and in the find_tools contract, which also covers
+  // not rediscovering visible schemas; repeating it here only grew the prefix.
+  const batching = toolAvailable(available, 'code_exec')
+    ? '\nBatch independent reads with Promise.allSettled in code_exec and inspect each result. Serialize dependencies and mutations. Reuse fresh results.'
+    : '';
+  const checks = toolAvailable(available, 'exec_command')
+    ? ' Collect the exit code for long checks.'
     : '';
   return `# Tool contract
-Use each visible tool according to its schema.${readBeforeWrite}${discovery}
+Use each visible tool according to its schema.${readBeforeWrite}${batching}${checks}
 `;
 }
 
@@ -401,8 +408,8 @@ MCP reads reflect files changed in this session; no re-index is needed after an 
 `;
 }
 
-function subagentsSection(available?: ReadonlySet<string>): string {
-  if (!toolAvailable(available, 'spawn_agent')) return '';
+function subagentsSection(available?: ReadonlySet<string>, mode?: PromptContext['multiAgentMode']): string {
+  if (!toolAvailable(available, 'spawn_agent') || mode) return '';
   return `# Subagents (isolated delegation)
 Delegate only independent work that saves context or wall time; work locally for small or tightly coupled tasks. Give each child a bounded scope and completion criterion, then synthesize its result without repeating the same investigation.
 
@@ -430,7 +437,7 @@ function multiAgentModeSection(
 Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.`;
   }
 
-  return ultraCoordinationPrompt(policy?.effective.parallelism.maxAgents ?? 3);
+  return ultraCoordinationPrompt(policy?.effective.parallelism.maxAgents ?? 3, available);
 }
 
 /** Insert a session-fixed extension immediately before the cache boundary. */
@@ -460,10 +467,11 @@ export function promoteIndexReadySystemPrompt(
     mcpAvailable?: boolean;
     sessionDrive?: boolean;
     repoMap?: string;
+    availableTools?: ReadonlySet<string>;
   },
 ): string {
-  const waitingSection = mcpSection(opts.mcpAvailable, false, opts.sessionDrive);
-  const readySection = mcpSection(opts.mcpAvailable, true, opts.sessionDrive);
+  const waitingSection = mcpSection(opts.mcpAvailable, false, opts.sessionDrive, opts.availableTools);
+  const readySection = mcpSection(opts.mcpAvailable, true, opts.sessionDrive, opts.availableTools);
   let promoted = waitingSection !== readySection && prompt.includes(waitingSection)
     ? prompt.replace(waitingSection, readySection)
     : prompt;
@@ -515,13 +523,13 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     // Rich, platform-derived shell descriptor (not a bare "win32"): tells the
     // model the real shell (cmd.exe vs bash) + what NOT to reach for. Cuts the
     // ~69% run_command failure rate from Unix idioms on Windows.
-    os: describeShell(ctx.os),
-    tierHint: toolAvailable(ctx.availableTools, 'expand_toolset') ? tierHint(ctx.profile) : '',
+    os: anyToolAvailable(ctx.availableTools, ['run_command', 'exec_command']) ? describeShell(ctx.os) : ctx.os,
+    tierHint: toolAvailable(ctx.availableTools, 'find_tools') ? tierHint(ctx.availableTools) : '',
     mcpSection: hasCodeNavigation ? mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive, ctx.availableTools) : '',
     nativeToolsSection: nativeToolsSection(ctx.availableTools),
     overlaySection: overlaySection(ctx.availableTools),
-    subagentsSection: subagentsSection(ctx.availableTools),
-    visionSection: toolAvailable(ctx.availableTools, 'view_image') ? visionSection(ctx.modelCanSeeImages) : '',
+    subagentsSection: subagentsSection(ctx.availableTools, ctx.multiAgentMode),
+    visionSection: toolAvailable(ctx.availableTools, 'view_image') ? visionSection(ctx.modelCanSeeImages, ctx.availableTools) : '',
     memorySection: hasMemory ? memorySection(ctx.sessionDrive) : '',
   });
 
@@ -529,7 +537,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // isn't `spec` (spec mode has its own gate via submit_spec / spec.txt and
   // should NOT also load plan.txt to avoid contradictory tool-discipline
   // instructions).
-  const planSection = ctx.planMode && ctx.agentId !== 'spec'
+  const isSpec = ctx.specMode ?? ctx.agentId === 'spec';
+  const isPlan = ctx.planMode && !isSpec;
+  const planSection = isPlan
     ? `\n\n${loadPrompt('plan')}`
     : '';
 
@@ -537,7 +547,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // (so it folds into the "# Plan mode is ACTIVE" section, not a new H1). Gives
   // the planning agent a target ambition per the user's Simple/Normal/Complex
   // pick. Only when plan mode is active and the agent isn't `spec`.
-  const planDepthSection = ctx.planMode && ctx.agentId !== 'spec'
+  const planDepthSection = isPlan
     ? `\n\n${buildPlanDepthBlock(ctx.planDepth ?? 'normal')}`
     : '';
 
@@ -545,39 +555,38 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // agent (`explore` / `build` / `admin`). 'plan' is already covered by
   // planSection via plan.txt, so we don't double-load it. Fixed at session
   // creation → cache-stable; sits above the dynamic boundary.
+  const role = isSpec ? 'spec' : isPlan ? 'plan' : ctx.agentId === 'spec' ? undefined : ctx.agentId;
   const agentSection =
-    ctx.agentId && ctx.agentId !== 'plan'
-      ? `\n\n${loadPrompt(ctx.agentId)}`
+    role && role !== 'plan'
+      ? `\n\n${loadPrompt(role)}`
       : '';
+  const editHint = role === 'build' && !isPlan && toolAvailable(ctx.availableTools, 'mcp__prepare_edit')
+    ? '\nUse `mcp__prepare_edit` when callers/tests or a shared contract matter.' : '';
 
-  // Interactive-tools footer — small enough to keep inline, and the two lines
-  // that mention submit_plan/submit_tasks depend on planMode so they'd need
-  // a second placeholder dance in the txt file for no real benefit.
-  const isSpec = ctx.agentId === 'spec';
+  // Keep approval routes in sync with the active mode and its offered controls.
   const interactionLines: string[] = [];
   if (toolAvailable(ctx.availableTools, 'ask_user')) {
-    interactionLines.push('- `ask_user`: request a genuine user decision. Provide options for multiple choice; do not ask what you can verify.');
+    interactionLines.push('- `ask_user` for a necessary user decision.');
   }
-  if (toolAvailable(ctx.availableTools, 'submit_spec')) {
-    interactionLines.push(`- \`submit_spec\`: ${isSpec ? 'REQUIRED before mutation; wait for human approval.' : 'available for an explicitly requested specification.'}`);
+  if (isSpec) {
+    const review = ['submit_spec', 'submit_specification_to_master'].find(name => toolAvailable(ctx.availableTools, name));
+    interactionLines.push(review
+      ? `- Call \`${review}\` directly for approval. Wait for the verdict before implementation.`
+      : '- Spec review is unavailable. Report the blocker and keep the workspace read-only.');
   }
-  if (toolAvailable(ctx.availableTools, 'submit_plan')) {
-    interactionLines.push(`- \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec is the plan.' : ctx.planMode ? 'REQUIRED before mutating tools for one coherent change.' : 'optional when the user explicitly asks for a plan.'}`);
+  if (isPlan) {
+    interactionLines.push(planSubmissionGuidance(ctx.availableTools)
+      ?? 'Plan review is unavailable. Report the blocker and keep the workspace read-only.');
+  } else if (!isSpec && ctx.canRevisePlan && toolAvailable(ctx.availableTools, 'submit_plan')) {
+    interactionLines.push('- For a requested revision, stay read-only and call `submit_plan` directly with the revised plan and `revision: true`.');
   }
   if (toolAvailable(ctx.availableTools, 'task_list')) {
-    interactionLines.push(ctx.planMode
-      ? `- \`task_list\`: the single checklist/task tool. \`gate:'track'\` does not pause; \`gate:'approve'\` ${isSpec ? 'is blocked until spec approval' : 'pauses for multi-item approval'} and arms \`execute_tasks\`.`
-      : "- `task_list`: optional progress checklist. Only `gate:'track'` is available and it never pauses; keep executing the authorized work.");
+    interactionLines.push("- `task_list` with `gate:'track'` is an optional checklist and never pauses.");
   }
   const taskRuntime = ['execute_tasks', 'task_complete', 'list_tasks']
     .filter((name) => toolAvailable(ctx.availableTools, name));
   if (taskRuntime.length > 0) {
-    interactionLines.push(`- ${taskRuntime.map((n) => `\`${n}\``).join(' / ')}: execute or inspect an approved task list; backend ids use \`tsk_...\`.`);
-  }
-  const taskCleanup = ['cancel_tasks', 'delete_tasks', 'archive_task_list']
-    .filter((name) => toolAvailable(ctx.availableTools, name));
-  if (taskCleanup.length > 0) {
-    interactionLines.push(`- ${taskCleanup.map((n) => `\`${n}\``).join(' / ')}: abandon, remove or archive task rounds.`);
+    interactionLines.push(`- ${taskRuntime.join(' / ')} operate on an approved task list using its returned IDs.`);
   }
   const interactionSection = interactionLines.length > 0
     ? `\n\n# Interactive tools\n${interactionLines.join('\n')}`
@@ -593,8 +602,6 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Gated on ctx.agentLoopV2 so older sessions don't see the new framing on
   // resume — they keep behaving the way they were started.
   const agentLoopBlock = ctx.agentLoopV2 ? buildAgentLoopBlock() : '';
-
-  const agentlessHint = '';
 
   // Session-fixed directives (cache-stable, static prefix): response language,
   // output style, and autonomous (unsupervised) framing. Each collapses to ''
@@ -623,8 +630,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // on SYSTEM_PROMPT_DYNAMIC_BOUNDARY can place ephemeral breakpoints
   // exactly here.
 
-  const customTiersText = customTiersBlock(ctx.customTiers);
-  const toolCapText = toolCapBlock(ctx.toolCap);
+  const canDiscover = toolAvailable(ctx.availableTools, 'find_tools');
+  const customTiersText = canDiscover ? customTiersBlock(ctx.customTiers) : '';
+  const toolCapText = canDiscover ? toolCapBlock(ctx.toolCap) : '';
 
   // Plugin hook — projects can drop `.mcp-indexer/hooks/system-prompt.js`
   // to append extra instructions without forking the coder. Runs in a vm
@@ -647,7 +655,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Detected verify commands (B2-dyn) — hands the agent the project's REAL
   // test/typecheck/lint scripts so it doesn't guess `npm test` on a
   // pnpm/cargo project. Volatile (reads package.json) → below the boundary.
-  const verifyBlock = ctx.verifyCommands && ctx.verifyCommands.length > 0
+  const verifyBlock = ctx.verifyCommands && anyToolAvailable(ctx.availableTools, ['run_command', 'exec_command'])
     ? `\n\n${ctx.verifyCommands}`
     : '';
 
@@ -661,7 +669,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${permissionsBlock}${agentsMdBlock}${globalWorkspaceBlock}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${codeCommentsBlock}${autonomousBlock}${multiAgentModeBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${editHint}${permissionsBlock}${agentsMdBlock}${globalWorkspaceBlock}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${codeCommentsBlock}${autonomousBlock}${multiAgentModeBlock}${boundary}${dynamicSuffix}`;
 }
 
 /**
@@ -782,10 +790,19 @@ function autonomousSection(unsupervised?: boolean): string {
 Complete authorized work within mode and permission gates. No human is watching: report missing authority or a user-owned decision as a blocker, continue independent safe work, and never invent approval.`;
 }
 
+/** Top-level approval routes shared by Plan mode and its one-time reminder. */
+export function planSubmissionGuidance(available?: ReadonlySet<string>): string | undefined {
+  const routes: string[] = [];
+  if (toolAvailable(available, 'submit_plan')) routes.push('`submit_plan` for a written plan');
+  else if (available?.has('submit_plan_to_master')) routes.push('`submit_plan_to_master` for a written plan');
+  if (toolAvailable(available, 'task_list')) routes.push("`task_list` with `gate:'approve'` for independent tasks");
+  else if (available?.has('submit_tasks')) routes.push('`submit_tasks` for independent tasks');
+  else if (available?.has('submit_tasks_to_master')) routes.push('`submit_tasks_to_master` for independent tasks');
+  return routes.length ? `Call ${routes.join(' or ')} directly and wait for review.` : undefined;
+}
+
 /**
- * Emit a short hint about the tiered tool system when the runner started
- * with a profile smaller than 'full'. The agent needs to know that certain
- * tools are hidden and how to unlock them via `expand_toolset`. Profile is
+ * Explain the stable direct surface and schema discovery. Profile is
  * fixed at session start, so this text is byte-stable for the session and
  * lives in the cached prefix above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
  *
@@ -794,21 +811,12 @@ Complete authorized work within mode and permission gates. No human is watching:
  * the same project. They now render in `customTiersBlock` below the
  * boundary instead.
  */
-function tierHint(profile?: 'bootstrap' | 'navigate' | 'full'): string {
-  if (!profile || profile === 'full') {
-    return '';
-  }
-
-  if (profile === 'bootstrap') {
-    // No enumeration of VISIBLE tools — the model already sees them (with
-    // descriptions) in the tools array; the hint's job is what's hidden.
-    return `# Tool tiers (IMPORTANT)
-Bootstrap exposes focused read/search tools. Unlock \`navigate\` only for editing, shell or deeper impact analysis; unlock \`admin\` only for an explicitly requested privileged operation.
-`;
-  }
-  // navigate
-  return `# Tool tiers
-Navigate includes editing, shell and deep code navigation. Unlock \`admin\` only for an explicitly requested privileged operation.
+function tierHint(available?: ReadonlySet<string>): string {
+  const nested = toolAvailable(available, 'code_exec')
+    ? ' Call deferred non-interactive tools in `code_exec` using `tools["exact-name"](args)`, including hyphens.'
+    : '';
+  return `# Tool discovery
+Use visible tools directly. Use \`find_tools\` for a missing capability or schema and follow its invocation route.${nested} Interactive and lifecycle tools require a top-level call. Repeating discovery cannot enable a blocked tool.
 `;
 }
 
@@ -825,8 +833,8 @@ function toolCapBlock(toolCap?: { maxTools: number; approxCatalog: number }): st
   if (!toolCap || toolCap.maxTools >= toolCap.approxCatalog) return '';
   return (
     '\n\n# Tool visibility\n' +
-    `The visible list is capped at ${toolCap.maxTools} of ~${toolCap.approxCatalog} tools. ` +
-    'Use `find_tools("<capability>")` for one hidden tool or `expand_toolset` for a needed tier; discovered tools are pinned. Do not guess names.\n'
+    `Direct-tool budget: ${toolCap.maxTools} of ~${toolCap.approxCatalog} registered tools. Required controls can exceed this target. ` +
+    'Use `find_tools` for a missing schema.\n'
   );
 }
 
@@ -846,9 +854,9 @@ function customTiersBlock(
   return (
     '\n\n# External tool groups (hidden, on-demand)\n' +
     'The following external MCP server tool groups are available but HIDDEN. ' +
-    'Call `expand_toolset({tier: "<name>"})` to unlock:\n' +
+    'Use `find_tools` with the server name and capability to obtain exact names and schemas:\n' +
     sorted.map((t) => `- "${t.tier}" (${t.toolCount} tools) — ${t.displayName}`).join('\n') +
-    '\nUnlock ONLY when your task requires them. They stay active for the rest of the session.\n'
+    '\n'
   );
 }
 
@@ -865,7 +873,7 @@ function customTiersBlock(
 function mcpSection(mcpAvailable?: boolean, isIndexed?: boolean, sessionDrive?: boolean, available?: ReadonlySet<string>): string {
   if (mcpAvailable === false) {
     return `# Tool strategy — native only (MCP bridge unavailable)
-MCP tools are unavailable. Use the visible native list/glob/read tools and shell text search; do not call \`mcp__*\`.
+The project index bridge is unavailable. Use the visible native search/read tools for project files.
 `;
   }
   if (available && (!available.has('mcp__search') || !available.has('mcp__grep_code'))) {
@@ -878,7 +886,7 @@ Use the visible search/read tools for focused discovery and exact text. Inspect 
 The structural index is building. Search may return \`INDEX_NOT_READY\` or fall back to disk/FTS; use grep, skeleton and focused reads now, then retry semantic/graph navigation later. Indexing is automatic.
 `;
   }
-  const searchMemoryParagraph = sessionDrive
+  const searchMemoryParagraph = sessionDrive || !toolAvailable(available, 'mcp__search_memory')
     ? ''
     : ' Use `mcp__search_memory` only when a prior project decision is likely.';
   return `# Code retrieval
@@ -887,10 +895,11 @@ Use \`mcp__search\` in \`auto\` for discovery; use \`mcp__grep_code\` for exact 
 }
 
 /** Explain on-demand pixels for both native vision and description fallback. */
-function visionSection(modelCanSeeImages?: boolean): string {
+function visionSection(modelCanSeeImages?: boolean, available?: ReadonlySet<string>): string {
+  const video = toolAvailable(available, 'view_video') ? ' Use `view_video` for frames.' : '';
   return `
 # Images & vision
-References lack pixels. Use \`view_image\` (attachment_id/authorized path; action=list after compaction). Pixels last one inference; reopen as needed. Crop for detail; \`view_video\` selects frames; browser/preview tools capture screenshots.${modelCanSeeImages === true ? '' : ' For [Image description] fallback, supply a task-specific describe hint.'}
+References lack pixels. Use \`view_image\` with a session attachment_id or authorized path. Use action=list to recover IDs after reopening or compaction. Pixels last one inference. Reopen or crop as needed.${video}${modelCanSeeImages === true ? '' : ' For [Image description] fallback, provide a describe hint.'}
 `;
 }
 

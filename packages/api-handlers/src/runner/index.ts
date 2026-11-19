@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
-import { ApiError, type RunnerApi, type RunnerManager, type RunnerTask, type RuntimeTarget, snippetRunFor } from '@mcp/api-bus';
+import { ApiError, type RunnerApi, type RunnerManager, type RunnerStartInput, type RunnerTask, type RuntimeTarget, type TerminalShell, snippetRunFor } from '@mcp/api-bus';
 import { parsePackageManagers } from '@mcp/shared/utils/package-managers.js';
 import { parseWslPackageManagers } from '@mcp/shared/utils/wsl-package-managers.js';
 import type { Project } from '@mcp/shared/types.js';
@@ -75,7 +75,7 @@ function sweepStaleSnippets(dir: string): void {
   }
 }
 
-export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
+export function createRunnerHandlers(deps: Pick<HandlerDeps, 'db' | 'resolveProjectWorktree'>): RunnerApi {
   const { db } = deps;
   const manager = sharedPtyManager;
   const tasks = new Map<string, RunnerTask>();
@@ -95,15 +95,15 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     bus.push(snapshot());
   }
 
-  function project(projectId: number) {
-    const p = db.getProject(projectId);
+  async function project(projectId: number, signal: AbortSignal) {
+    const p = await db.getProjectAsync(projectId, signal);
     if (!p) throw new ApiError('not_found', 404, 'project not found');
     return p;
   }
 
   /** The runtime target a run/detect applies to: explicit, else the project's runner_shell env. */
-  function effectiveTarget(p: Project, explicit: RuntimeTarget | undefined): RuntimeTarget {
-    return explicit ?? targetForShell(resolveShellById(p.runner_shell));
+  async function effectiveTarget(p: Project, explicit: RuntimeTarget | undefined): Promise<RuntimeTarget> {
+    return explicit ?? targetForShell(await resolveShellById(p.runner_shell));
   }
 
   /**
@@ -111,12 +111,13 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
    * each key before it becomes part of a spawnable command (the JSON is opaque
    * in the DB; an unknown value falls back to lockfile auto-detect).
    */
-  function detectOptionsFor(p: Project, target: RuntimeTarget): DetectOptions {
+  async function detectOptionsFor(p: Project, explicit?: RuntimeTarget): Promise<DetectOptions> {
+    const configuredShell = await resolveShellById(p.runner_shell);
+    const target = explicit ?? targetForShell(configuredShell);
     const pm =
       target.kind === 'wsl'
         ? parseWslPackageManagers(p.wsl_package_managers)[target.distro] ?? {}
         : parsePackageManagers(p.package_managers);
-    const configuredShell = resolveShellById(p.runner_shell);
     const shellFile = target.kind === 'wsl'
       ? 'wsl.exe'
       : configuredShell && targetForShell(configuredShell).kind !== 'wsl'
@@ -131,7 +132,29 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     };
   }
 
-  /** Resolve a project-relative cwd, confined to the project root (escape → root). */
+  async function worktreeFor(p: Project, requested: RunnerStartInput['worktreePath'], signal: AbortSignal) {
+    signal.throwIfAborted();
+    if (requested == null) return null;
+    try {
+      return await deps.resolveProjectWorktree(p.root_path, requested, { signal });
+    } catch (error) {
+      signal.throwIfAborted();
+      throw new ApiError('invalid_input', 400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function runnerCheckout(projectId: number, requested: RunnerStartInput['worktreePath'], signal: AbortSignal) {
+    const selected = db.getProjectCatalogEntry(projectId);
+    if (!selected) throw new ApiError('not_found', 404, 'project not found');
+    const owner = await project(selected.worktree_parent_id ?? projectId, signal);
+    if (!selected.worktree_parent_id) return { owner, checkout: await worktreeFor(owner, requested, signal) };
+    if (requested != null) throw new ApiError('invalid_input', 400, 'Project already identifies a worktree');
+    const checkout = await worktreeFor(owner, selected.root_path, signal);
+    if (!checkout) throw new ApiError('invalid_input', 400, 'Linked worktree is unavailable');
+    return { owner, checkout };
+  }
+
+  /** Resolve a checkout-relative cwd, confined to the checkout root (escape → root). */
   function resolveCwdInRoot(root: string, rel: string | undefined): string {
     if (!rel) return root;
     const abs = resolve(root, rel);
@@ -139,20 +162,12 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     return r.startsWith('..') || isAbsolute(r) ? root : abs;
   }
 
-  function launch(input: {
-    projectId: number;
-    command: string;
-    label: string;
-    manager: RunnerTask['manager'];
-    cwd?: string;
-    target?: RuntimeTarget;
-  }): RunnerTask {
-    const p = project(input.projectId);
+  function launch(p: Project, input: RunnerStartInput, worktreePath: string | null, configuredShell: TerminalShell | null): RunnerTask {
+    const cwd = resolveCwdInRoot(worktreePath ?? p.root_path, input.cwd);
     // Per-project runner shell — resolve the stored id to a spawnable
     // {file,args}; null falls back to the system default shell. The shell
     // decides the runtime target: a WSL distro gets its Linux managed runtimes
     // on the POSIX PATH, everything else (incl. Git Bash) the Windows ones.
-    const configuredShell = resolveShellById(p.runner_shell);
     const configuredTarget = targetForShell(configuredShell);
     const runTarget = input.target ?? configuredTarget;
     const shellSel = input.target?.kind === 'wsl'
@@ -168,7 +183,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     );
     const { id: terminalId } = manager.spawn({
       command: input.command,
-      cwd: resolveCwdInRoot(p.root_path, input.cwd),
+      cwd,
       cols: 80,
       rows: 24,
       pathPrepend,
@@ -182,7 +197,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       retainOnExit: true,
       meta: {
         label: `${p.name}: ${input.label}`,
-        cwd: resolveCwdInRoot(p.root_path, input.cwd),
+        cwd,
         kind: 'runner',
       },
     });
@@ -195,6 +210,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       command: input.command,
       manager: input.manager,
       cwd: input.cwd,
+      worktreePath: worktreePath ?? undefined,
       target: input.target,
       status: 'running',
       exitCode: null,
@@ -215,20 +231,21 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
   }
 
   return {
-    async detect({ projectId, target }) {
+    async detect({ projectId, target, worktreePath }, { signal }) {
       // Per-project package-manager override (settings) wins over the lockfile
       // auto-detect, resolved for the run ENVIRONMENT (host or a WSL distro) so
       // the WSL list/commands honour the distro's chosen manager.
-      const p = project(projectId);
-      return detectRunnersAsync(p.root_path, detectOptionsFor(p, effectiveTarget(p, target)));
+      const { owner: p, checkout } = await runnerCheckout(projectId, worktreePath, signal);
+      signal.throwIfAborted();
+      return detectRunnersAsync(checkout ?? p.root_path, await detectOptionsFor(p, target));
     },
 
-    async managerStatus({ projectId, manager, target }) {
+    async managerStatus({ projectId, manager, target }, { signal }) {
       // Probe `<manager> --version` on the project's effective PATH for the
       // environment: host PATH, or inside the WSL distro with its managed
       // runtimes prepended.
-      const p = project(projectId);
-      const rt = effectiveTarget(p, target);
+      const p = await project(projectId, signal);
+      const rt = await effectiveTarget(p, target);
       if (rt.kind === 'wsl') {
         const env = resolveProjectRuntimeEnv(db, projectId, ensureDataDir(), { target: rt });
         return probeWslManagerStatus(manager, rt.distro, env, p.root_path);
@@ -238,21 +255,20 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
     },
 
     async searchPackages({ projectId, manager, query, limit }) {
-      project(projectId);
+      if (!db.getProjectCatalogEntry(projectId)) throw new ApiError('not_found', 404, 'project not found');
       return searchPackageRegistry(manager, query, limit);
     },
 
-    async addDependency({ projectId, manager, packageId, version, projectFile, target }) {
-      const p = project(projectId);
-      const rt = effectiveTarget(p, target);
+    async addDependency({ projectId, manager, packageId, version, projectFile, target }, { signal }) {
+      const p = await project(projectId, signal);
+      const rt = await effectiveTarget(p, target);
       const env = resolveProjectRuntimeEnv(db, projectId, ensureDataDir(), { target: rt });
       return addDependency({ root: p.root_path, manager, packageId, version, projectFile, target: rt, env });
     },
 
-    async fileRunTarget({ projectId, file, content, script, target }) {
-      const p = project(projectId);
-      const rt = effectiveTarget(p, target);
-      const options = detectOptionsFor(p, rt);
+    async fileRunTarget({ projectId, file, content, script, target }, { signal }) {
+      const p = await project(projectId, signal);
+      const options = await detectOptionsFor(p, target);
       let detectionRoot = p.root_path;
       const base = basename(file).toLowerCase();
       if ((script && ['package.json', 'composer.json'].includes(base))
@@ -266,14 +282,19 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       return resolveFileRunTargetAsync(p.root_path, file, content, groups, options.shellFamily, script);
     },
 
-    async start(input) {
-      return launch(input);
+    async start(input, { signal }) {
+      const { owner, checkout } = await runnerCheckout(input.projectId, input.worktreePath, signal);
+      const shell = await resolveShellById(owner.runner_shell);
+      signal.throwIfAborted();
+      return launch(owner, { ...input, projectId: owner.id }, checkout, shell);
     },
 
-    async runSnippet({ projectId, language, code, label }) {
+    async runSnippet({ projectId, language, code, label }, { signal }) {
       // Validate the project + language BEFORE writing a temp file (so an
       // unknown language / missing project never orphans one).
-      project(projectId);
+      const { owner, checkout } = await runnerCheckout(projectId, null, signal);
+      const shell = await resolveShellById(owner.runner_shell);
+      signal.throwIfAborted();
       const run = snippetRunFor(language);
       if (!run) throw new ApiError('invalid_input', 400, `unsupported snippet language: ${language}`);
       const file = join(snippetsDir, `${randomUUID()}.${run.ext}`);
@@ -289,7 +310,7 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       // snippetCmdPath: Git Bash needs a POSIX /c/… path, native binaries take
       // the C:/… form).
       const cmdPath = snippetCmdPath(file, run.bin);
-      const task = launch({ projectId, command: `${run.bin} ${cmdPath}`, label, manager: run.manager });
+      const task = launch(owner, { projectId: owner.id, command: `${run.bin} ${cmdPath}`, label, manager: run.manager }, checkout, shell);
       // Delete the temp file once the run exits — by then the interpreter has
       // read it. (A second onExit hook; the PtyManager keeps a hook Set, so this
       // doesn't clobber launch()'s status-flip hook.)
@@ -319,24 +340,26 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       emit();
     },
 
-    async restart({ taskId }) {
+    async restart({ taskId }, { signal }) {
       const task = tasks.get(taskId);
       if (!task) throw new ApiError('not_found', 404, 'task not found');
+      const p = await project(task.projectId, signal);
+      const checkout = await worktreeFor(p, task.worktreePath, signal);
+      const shell = await resolveShellById(p.runner_shell);
+      signal.throwIfAborted();
+      if (tasks.get(taskId) !== task) throw new ApiError('not_found', 404, 'task not found');
       try {
         manager.release(task.terminalId);
       } catch {
         /* already gone */
       }
       tasks.delete(taskId);
-      const next = launch({
-        projectId: task.projectId,
-        command: task.command,
-        label: task.label,
-        manager: task.manager,
-        cwd: task.cwd,
-        target: task.target,
-      });
-      return next;
+      try {
+        return launch(p, task, checkout, shell);
+      } catch (error) {
+        emit();
+        throw error;
+      }
     },
 
     async list() {

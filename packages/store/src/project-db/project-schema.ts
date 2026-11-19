@@ -32,18 +32,22 @@ export function initProjectSchema(db: DB): void {
     (latest, migration) => Math.max(latest, migration.version),
     0,
   );
-  // A normal reopen used to recreate the complete central schema and then drop
-  // ~110 tables again. If both migration and trim markers are current, the
-  // project-only schema is already authoritative and no bootstrap is needed.
-  if (
-    getSchemaVersion(db) >= latestVersion
-    && isProjectSchemaTrimCurrent(db)
-  ) {
-    assertSessionScopedSqliteAbsent(db);
-    return;
+  // A global-only update must not bootstrap/drop the central schema in every
+  // project or sweep all indexed rows. Older/shared migrations retain the full
+  // bootstrap: some historical migrations require those base tables to exist.
+  if (isProjectSchemaTrimCurrent(db)) {
+    const currentVersion = getSchemaVersion(db);
+    const onlyCentralUpdates = MIGRATIONS
+      .filter((migration) => migration.version > currentVersion)
+      .every((migration) => migration.scope === 'central');
+    if (currentVersion >= latestVersion || onlyCentralUpdates) {
+      if (currentVersion < latestVersion) runMigrations(db, { scope: 'project' });
+      assertSessionScopedSqliteAbsent(db);
+      return;
+    }
   }
   initSchema(db);
-  runMigrations(db);
+  runMigrations(db, { scope: 'project' });
   trimProjectSchema(db);
   // Project DBs do not carry the global layout marker after trimming, but they
   // are still forbidden from retaining any operational session table/column.

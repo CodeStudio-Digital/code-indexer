@@ -48,12 +48,16 @@ function openPreviewWindow(url: string): Window | null {
  */
 export function ProjectPreview({
   projectId,
+  runnerProjectId = projectId,
+  worktreePath,
   pinnedPort,
   selectionEnabled = false,
   framework,
   onHide,
 }: {
   projectId: number;
+  runnerProjectId?: number;
+  worktreePath?: string | null;
   /** Builder projects pin the dev port in vite.config; others auto-detect. */
   pinnedPort?: number;
   /** Element selection (builder projects with the source-stamp only). */
@@ -64,6 +68,8 @@ export function ProjectPreview({
 }) {
   const { status, url, start, restart, manualUrl, setManualUrl } = useProjectDevServer(projectId, {
     pinnedPort,
+    runnerProjectId,
+    worktreePath,
   });
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const popupRef = useRef<Window | null>(null);

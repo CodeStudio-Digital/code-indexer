@@ -21,6 +21,7 @@ import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
+import type { PromptContextMeasurement } from '@mcp/provider-sdk/prompt-cache-metrics.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { admitCoderAttempt, prepareCoderAttempt } from './runtime/attempt-preparation.js';
 import { asAgentRunId } from '@mcp/agent-runtime-contracts';
@@ -31,6 +32,7 @@ import { inlineRunProjection } from './tools/execute-tasks/inline-run-projection
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { tunablesFromRuntimePolicy } from '@mcp/code-agent/core/tunables.js';
 import { FsTurnTelemetryRepository } from '@mcp/session-storage/fs-store/turn-telemetry.js';
+import { traceStorageOperation, measureStorage, recordStorageElapsed } from '@mcp/session-storage/storage-timing.js';
 import { createPolicyShadowPort } from '@mcp/code-agent/core/policy-shadow-adapter.js';
 import { hasStructuredToolTruncation } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import type {
@@ -68,6 +70,7 @@ import {
   buildSystemPrompt,
   normalizeProviderFamily,
   promoteIndexReadySystemPrompt,
+  type PromptContext,
 } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
@@ -91,7 +94,7 @@ import { SessionSnapshotService } from '@mcp/services/services/session-snapshots
 import { filterReviewableDiffs } from '@mcp/services/services/snapshot-review-ignore.js';
 import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox-filesystem-adapter.js';
 import { SandboxShellAdapter } from '@mcp/services/sandbox/adapters/sandbox-shell-adapter.js';
-import { planTools } from '@mcp/code-agent/tools/plan.js';
+import { approvedPlanForRevision, planTools } from '@mcp/code-agent/tools/plan.js';
 import { specTools } from '@mcp/code-agent/tools/spec/index.js';
 import {
   tasksTools,
@@ -1433,6 +1436,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     : undefined;
   const sessionNetwork = collaboration ? new SessionNetwork({ sessions: store, mailbox: collaboration.store,
     project: id => db.getProject(id),
+    onChatCreated: opts.onChatCreated,
     validateModel: (providerId, modelId) => {
       const catalog = new ProviderStore(config.dbPath);
       try {
@@ -1461,6 +1465,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   const toolContext: ToolContext = {
     sessionNetwork,
+    agenticChat: budgetNetwork?.enabled === true && budgetRoot?.enabled === true,
     collaboration,
     ultraPolicy: ultraPreset,
     ultraBudget: sharedBudget ? new UltraAgentBudget(ultraPreset.effective.parallelism.maxAgents, 24, sharedBudget) : undefined,
@@ -1527,6 +1532,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     signal: opts.signal,
     // Persistence hooks for submit_plan — let the dashboard list plans
     // long after the live tool_use scrolled out of view.
+    getActivePlan: () => activePlanCache,
     recordPlan: async (toolUseId, planText) => {
       try {
         await store.recordPlan({
@@ -1562,6 +1568,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try {
         await store.setSessionAgent(session.id, agent);
       } catch (e) {
+        if (agent === 'plan') throw e;
         console.warn(`[coder] setSessionAgent failed: ${e instanceof Error ? e.message : String(e)}`);
       }
       // Apply the NEW agent's defaults to the LIVE runner so the next
@@ -1989,7 +1996,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Detected verify commands (B2-dyn) — package.json scripts + package
   // manager, rendered below the dynamic boundary next to the repo map so the
   // agent runs the project's REAL test/typecheck instead of guessing.
-  const verifyCommands = detectVerifyCommands(project.root_path);
+  const verifyCommands = sandboxBinding ? undefined : detectVerifyCommands(effectiveCwd);
 
   // The current agent loop is the only supported product behavior.
   const agentLoopV2EnvFlag = true;
@@ -2065,12 +2072,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ),
   );
   const effectiveMcpAvailable = [...availableTools].some((name) => name.startsWith('mcp__'));
-  let systemPrompt = buildSystemPrompt({
+  const promptContext: PromptContext = {
     projectName: project.name,
     projectRoot: project.root_path,
     globalWorkspace: toolContext.globalWorkspace,
     os: process.platform,
     planMode: opts.planMode,
+    specMode: opts.specMode ?? effectiveAgentId === 'spec',
     providerFamily: normalizeProviderFamily(session.provider),
     profile: preResolvedProfile,
     sessionId: String(session.id),
@@ -2124,10 +2132,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Registry is fully populated by now (native + company + MCP); the
     // count is a session-start approximation, which is all the hint needs.
     toolCap: {
-      maxTools: sessionToolCap != null
-        ? Math.min(getModelMaxTools(session.model), sessionToolCap)
-        : getModelMaxTools(session.model),
-      approxCatalog: registry.list().length,
+      maxTools: Math.min(getModelMaxTools(session.model), provider.toolLimits?.maxCount ?? Infinity,
+        sessionToolCap && sessionToolCap > 0 ? sessionToolCap : 28),
+      approxCatalog: availableTools.size,
     },
     // Effective permission/sandbox policy surfaced to the model: the real
     // writable root (sandbox workdir or project root) + the approval mode.
@@ -2150,30 +2157,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         : undefined,
     ultraPolicy: ultraPreset,
     availableTools,
-  });
+  };
 
-  if (sessionNetwork) systemPrompt += '\n\n' + await sessionNetwork.context(session.id);
-  if (opts.customAgentPrompt?.trim()) {
-    systemPrompt = appendStaticPromptSection(
-      systemPrompt,
-      `# Custom agent instructions\n${opts.customAgentPrompt.trim()}`,
-    );
-  }
-
-  // Append company prompt block (master orchestration or subordinate instructions)
-  if (opts.companyPromptBlock) {
-    systemPrompt = appendStaticPromptSection(systemPrompt, opts.companyPromptBlock);
-  }
-
-  // Draw.io diagram guidance — appended only when the `diagram` tier will be
-  // active (the `diagram` agent, or a session that persisted
-  // expand_toolset('diagram')). Static + byte-stable → prompt-cache safe.
-  const diagramTierActive =
-    effectiveAgentId === 'diagram' ||
-    (persistedToolset?.extraTiers?.includes('diagram') ?? false);
-  if (diagramTierActive) {
-    systemPrompt = appendStaticPromptSection(systemPrompt, buildDiagramGuidance());
-  }
+  const fixedSections = [
+    opts.customAgentPrompt?.trim() ? `# Custom agent instructions\n${opts.customAgentPrompt.trim()}` : '',
+    opts.companyPromptBlock ?? '',
+  ];
+  let sessionSuffix = sessionNetwork ? '\n\n' + await sessionNetwork.context(session.id) : '';
 
   // Append skill awareness block. Mode resolution priority:
   //   1. Explicit env CODER_SKILLS_PROMPT_MODE = lazy | compact | matched | full
@@ -2189,8 +2179,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (resolvedSkills.length > 0) {
     const inCompany = !!opts.companyContext;
     if (!inCompany) {
-      systemPrompt += buildLazySkillsSection(resolvedSkills);
-      skillsModeUsed = 'lazy';
+      sessionSuffix += buildLazySkillsSection(resolvedSkills, availableTools);
+      if (availableTools.has('get_skill_content')) skillsModeUsed = 'lazy';
     } else {
       // Path triggers fire from `recentFiles`. Outside company context we
       // approximate that with file-shaped tokens in the user message
@@ -2207,16 +2197,29 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       };
       const matched = matchSkills(resolvedSkills, matchCtx);
       if (matched.length > 0) {
-        systemPrompt += buildMatchedSkillsPromptSection(matched, skillTemplateCtx);
-        skillsModeUsed = 'matched';
+        const instructions = buildMatchedSkillsPromptSection(matched, skillTemplateCtx, availableTools);
+        sessionSuffix += instructions;
+        if (instructions) skillsModeUsed = 'matched';
       } else {
         // No matches: degrade to lazy rather than dumping the full list.
-        systemPrompt += buildLazySkillsSection(resolvedSkills);
-        skillsModeUsed = 'lazy';
+        sessionSuffix += buildLazySkillsSection(resolvedSkills, availableTools);
+        if (availableTools.has('get_skill_content')) skillsModeUsed = 'lazy';
       }
     }
   }
 
+  function composeSessionPrompt(): string {
+    const { agentId, planMode = false, specMode = false } = promptContext;
+    const canRevisePlan = !!approvedPlanForRevision(toolContext, { agentId, planMode, specMode, isSubagent: false });
+    let prompt = buildSystemPrompt({ ...promptContext, canRevisePlan });
+    for (const section of fixedSections) prompt = appendStaticPromptSection(prompt, section);
+    if (availableTools.has('diagram_create') && (agentId === 'diagram' || persistedToolset?.extraTiers?.includes('diagram'))) {
+      prompt = appendStaticPromptSection(prompt, buildDiagramGuidance());
+    }
+    return prompt + sessionSuffix;
+  }
+
+  let systemPrompt = composeSessionPrompt();
   // Persist the fully assembled system prompt for the Input tab in the
   // session details modal. Dedup by hash inside SessionStore — typical
   // restarts are byte-identical (cache prefix is intentionally stable).
@@ -2541,9 +2544,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // attempt assembled by the host.
   registry.seal();
 
-  // Fase 2.5 — Policy Engine shadow composition. Returns null when every
-  // CODER_* policy flag is off, so the port is absent and dispatch stays
-  // byte-identical to legacy. The legacy context is read LIVE through
+  // Optional Policy Engine comparison diagnostics. Production defaults leave
+  // the observer absent; real permission/scope/recovery gates stay active.
+  // The legacy context for explicit diagnostic runs is read LIVE through
   // `runnerRef` (assigned right after construction) so mid-run plan/spec
   // approval applies to the next shadow evaluation.
   // ClaudeOpen exposes one ordered lifecycle registry spanning provider,
@@ -2604,6 +2607,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     systemPrompt,
+    systemPromptForAgent: (agent) => {
+      promptContext.agentId = agent.id;
+      promptContext.planMode = agent.planMode;
+      promptContext.specMode = !!agent.specMode;
+      systemPrompt = composeSessionPrompt();
+      return systemPrompt;
+    },
     toolContext,
     initialMessages,
     sessionId: session.id,
@@ -2891,9 +2901,12 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         const liveRepoMap = liveRepoMapBudget > 0
           ? buildRepoMap(db, project.id, liveRepoMapBudget)
           : '';
+        promptContext.isIndexed = true;
+        promptContext.repoMap = liveRepoMap;
         systemPrompt = promoteIndexReadySystemPrompt(systemPrompt, {
-          mcpAvailable: effectiveMcpAvailable,
-          sessionDrive: availableTools.has('save_note') || availableTools.has('read_plan'),
+          mcpAvailable: promptContext.mcpAvailable,
+          sessionDrive: promptContext.sessionDrive,
+          availableTools,
           repoMap: liveRepoMap,
         });
         runner.setSystemPromptForNextTurn(systemPrompt);
@@ -3057,6 +3070,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   interface PendingTurn {
     message: AgentMessage;
     usage: ChatUsage | null;
+    context?: PromptContextMeasurement;
     toolCalls: Array<{
       tool_use_id: string;
       tool_name: string;
@@ -3131,7 +3145,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     checkpoint?: { promise: Promise<void>; messageId: number | null };
   }
   let pendingTurn: PendingTurn | null = null;
-  let assistantMessageOrdinal = 0;
 
   const flushPendingTurn = (): Promise<void> => {
     // Detach the buffer synchronously. EventEmitter callers intentionally do
@@ -3166,6 +3179,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       operation_id: `${turn.operationId}:commit`,
       message: turn.message,
       usage: turn.usage,
+      context: turn.context,
       tool_calls: turn.toolCalls,
       nested_tool_calls: turn.nestedToolCalls.length > 0 ? turn.nestedToolCalls : undefined,
       subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
@@ -3174,8 +3188,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       existing_message_seq: turn.checkpoint?.messageId ?? undefined,
     };
     try {
-      await toolOutputStore.drain();
-      await store.persistAssistantTurn(payload);
+      await measureStorage('tool-output.drain', () => toolOutputStore.drain());
+      await measureStorage('assistant.persist', () => store.persistAssistantTurn(payload));
       if (turn.toolCalls.some(call => call.effect_outcome === 'unknown')) {
         // Recovery evidence is additive. A failed receipt commit leaves the
         // original incident pending; it never invalidates the transcript.
@@ -3195,7 +3209,14 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     };
     // Preserve assistant/tool row order and let a compaction checkpoint await
     // every earlier fire-and-forget flush before reading the visible DB span.
-    const scheduled = flushChain.then(persist, persist);
+    const queuedAt = performance.now();
+    const previousFlush = flushChain;
+    const run = () => {
+      recordStorageElapsed('transcript.queue', queuedAt);
+      return persist();
+    };
+    const scheduled = traceStorageOperation({ sessionId: session.id, operationId: turn.operationId },
+      () => previousFlush.then(run, run));
     flushChain = scheduled.catch(() => undefined);
     return scheduled;
   };
@@ -3230,6 +3251,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         operation_id: `${turn.operationId}:checkpoint`,
         message: turn.message,
         usage: null,
+        context: turn.context,
         tool_calls: [],
       };
       try {
@@ -3255,7 +3277,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   let completionFinalText: string | null = null;
   runner.on('user_message_boundary', () => { completionFinalText = null; });
-  runner.on('message_complete', (message, usage) => {
+  runner.on('message_complete', (message, usage, operationId, context) => {
     if (message.role === 'assistant' && message.phase !== 'commentary' && !message.content.some(block => block.type === 'tool_use')) {
       completionFinalText = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n').slice(0, 16000) || null;
     }
@@ -3265,8 +3287,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     flushPendingTurn();
     pendingTurn = {
       message,
-      operationId: `assistant:${runner.runId}:message:${++assistantMessageOrdinal}`,
+      operationId,
       usage: usage ?? null,
+      context,
       toolCalls: [],
       nestedToolCalls: [],
       subagentUsage: {

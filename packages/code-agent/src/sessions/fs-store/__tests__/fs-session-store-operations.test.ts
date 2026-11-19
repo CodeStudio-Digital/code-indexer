@@ -36,6 +36,45 @@ afterEach(async () => {
 });
 
 describe('filesystem session operations', () => {
+  it.each([
+    ['zai', 159_126, 158_976, 0],
+    ['claude-code', 100, 158_976, 50],
+  ])('recovers the last measured context for a legacy %s session and its copy', async (provider, input, read, write) => {
+    const session = await store.createSession({ project_id: 7, title: 'Context', provider, model: 'test' });
+    await store.persistAssistantTurn({
+      session_id: session.id, message: { role: 'assistant', content: [{ type: 'text', text: 'Measured' }] },
+      usage: { input_tokens: input, output_tokens: 24, cache_read_input_tokens: read, cache_creation_input_tokens: write },
+      tool_calls: [],
+    });
+    await store.persistAssistantTurn({
+      session_id: session.id, message: { role: 'assistant', content: [{ type: 'text', text: 'Checkpoint' }] },
+      usage: null, tool_calls: [],
+    });
+    const copy = await store.duplicateSession(session.id);
+    for (const id of [session.id, copy.id]) {
+      expect((await store.getSessionStats(id))?.last_turn_prompt_tokens).toBe(159_126);
+    }
+  });
+
+  it('keeps a runner estimate through checkpoint, commit, replay, and copy without adding billed tokens', async () => {
+    const session = await store.createSession({ project_id: 7, title: 'Estimate', provider: 'zai', model: 'glm-5.3' });
+    const context = { prompt_tokens: 158_989, context_window: 991_808, source: 'estimate' as const };
+    const turn = {
+      session_id: session.id, message: { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'Ready' }] },
+      usage: null, tool_calls: [], context,
+    };
+    const seq = await store.persistAssistantTurn({ ...turn, operation_id: 'checkpoint' });
+    expect((await store.getSessionStats(session.id))?.last_turn_context).toEqual(context);
+    const commit = { ...turn, operation_id: 'finish', existing_message_seq: seq };
+    await store.persistAssistantTurn(commit);
+    expect(await store.persistAssistantTurn(commit)).toBe(seq);
+    const copy = await store.duplicateSession(session.id);
+    expect(await store.getSessionStats(copy.id)).toMatchObject({
+      last_turn_prompt_tokens: 158_989, last_turn_context: context,
+      total_input_tokens: 0, total_output_tokens: 0, assistant_turns: 1,
+    });
+  });
+
   it('duplicates and forks conversation artifacts without SQLite', async () => {
     const source = await store.createSession({
       project_id: 7,

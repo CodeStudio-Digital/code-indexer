@@ -24,8 +24,9 @@ function fixture(options: { gates?: ReturnType<typeof deferred>[]; failure?: 'to
     indexFiles: vi.fn(async () => ({ indexed: 0, skippedUnchanged: 0, skippedIgnored: 0, removed: 0, errors: 0 })),
     removeFiles: vi.fn(async () => ({ removed: 0 })),
   } satisfies StructuralExecutor;
-  const db = { getProject: () => ({ id: 1, root_path: 'D:/fake', file_count: 2, symbol_count: 3,
-    structural_indexed_at: '2026-01-01T00:00:00Z', last_indexed: null }), countSemanticStale: () => 1 };
+  const project = { id: 1, root_path: 'D:/fake', file_count: 2, symbol_count: 3,
+    structural_indexed_at: '2026-01-01T00:00:00Z', last_indexed: null };
+  const db = { getProjectCatalogEntry: () => project, getProject: () => project, countSemanticStale: () => 1 };
   const watcher = { startWatching() {}, async waitUntilReady() {}, async flushPending() { await options.flushGate?.promise; },
     async stopWatching() {}, async stopAll() {}, isWatching: () => Boolean(options.flushGate) };
   const svc = new ProjectIndexService(db as never, executor, watcher as never, () => ({

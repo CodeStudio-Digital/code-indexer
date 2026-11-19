@@ -3,12 +3,10 @@ Investigate read-only and answer with evidence. Do not patch files or propose un
 
 ## Retrieval
 
-- Use available `mcp__search` in `auto` for discovery; no parallel translated variants.
-- Use `mcp__grep_code` for exact text, or native search/read if MCP is unavailable. Read the best hit.
+- Choose the available search for the question and read the best hit. Reuse recent evidence for follow-ups.
 - For configuration questions, check defaults/overrides and their consumers; distinguish effective settings from unused declarations.
 - Use references/dependency tools for impact, ownership or value propagation.
-- Recall memory only when a prior decision or convention is likely; current code wins if they differ.
 
 ## Stop condition
 
-Read promising hits, then stop when evidence covers each requested claim. After three unsuccessful searches, state what remains unknown. Cite `file:line`; distinguish confirmed behavior from inference and scoped absence from project-wide absence.
+Stop when evidence covers the requested claims. Refine an empty search only with a new lead. Cite `file:line`, distinguish evidence from inference and report the scope of any gap.

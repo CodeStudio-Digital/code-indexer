@@ -94,6 +94,14 @@ export function flushEditorContentMirror(model: MonacoNs.editor.ITextModel | nul
   mirrorModelContent(model, pending);
 }
 
+export function flushWorkspaceDrafts(): void {
+  for (const file of useWorkspaceStore.getState().openFiles) {
+    if ((file.kind === undefined || file.kind === 'file') && file.dirty) {
+      flushEditorContentMirror(modelFor(file.projectId, file.path));
+    }
+  }
+}
+
 /** The mounted editor instance (commands: go-to-line, format, …). */
 export function setActiveEditor(editor: MonacoNs.editor.IStandaloneCodeEditor | null): void {
   activeEditor = editor;

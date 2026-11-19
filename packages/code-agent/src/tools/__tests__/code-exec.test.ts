@@ -536,6 +536,42 @@ describe('code_exec import hints (telemetry: "A dynamic import callback was not 
 });
 
 describe('code_exec tools-proxy misses (telemetry: "tools.X is not a function")', () => {
+  it('explains the bracket call when a hyphenated tool is parsed as subtraction', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('ext_codestudio-figma__get_metadata'));
+    const result = await buildCodeExecTool(registry).handler({
+      code: 'return await tools.ext_codestudio-figma__get_metadata({});',
+    }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('await tools["ext_codestudio-figma__get_metadata"](args)');
+    expect(result.content).toContain('parsed as subtraction');
+  });
+
+  it('routes the unique underscore alias of a hyphenated MCP tool to its canonical handler', async () => {
+    const registry = new ToolRegistry();
+    const handler = vi.fn(async () => ({ content: 'Figma metadata' }));
+    registry.register({ ...noopTool('ext_codestudio-figma__get_metadata'), handler });
+    const result = await buildCodeExecTool(registry).handler({ code: `
+      return await (tools.ext_codestudio_figma__get_metadata
+        ? tools.ext_codestudio_figma__get_metadata({})
+        : tools["ext_codestudio-figma__get_metadata"]({}));
+    ` }, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('Figma metadata');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an ambiguous alias with valid bracket notation in the hint', async () => {
+    const registry = new ToolRegistry();
+    registry.register(noopTool('ext_foo-bar_baz__read'));
+    registry.register(noopTool('ext_foo_bar-baz__read'));
+    const result = await buildCodeExecTool(registry).handler({
+      code: 'return await tools.ext_foo_bar_baz__read({});',
+    }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/did you mean `tools\["ext_foo(?:-bar_baz|_bar-baz)__read"\]`\?/);
+  });
+
   it('throws a suggestion-bearing error on an unknown tools.<name> access', async () => {
     const registry = new ToolRegistry();
     registry.register(noopTool('mcp__grep_code'));
@@ -1068,6 +1104,8 @@ describe('code_exec metadata safety and scheduling', () => {
       expect(editInvocations).toBe(2);
       expect(siblingSettled).toBe(true);
       expect(result.content).toContain('output_id:"abc123def456"');
+      expect(result.content).toContain('sibling-read-result');
+      expect(result.content).not.toContain('edit:1');
       expect(put).toHaveBeenCalledWith(expect.stringContaining('sibling-read-result'));
       expect(result.content).toContain('nested call summary');
       expect(result.content).toContain('succeeded=3');

@@ -76,6 +76,8 @@ export interface RuntimeToolTierMetadata {
 export interface CoderTool {
   name: string;
   description: string;
+  /** Authored compact contract for the stable catalog; never inferred by truncation. */
+  catalogDescription?: string;
   parameters: JsonSchema;
   /** Tool source — used by the UI for rendering and by the registry for filtering. */
   source: 'native' | 'mcp' | 'mcp_external';

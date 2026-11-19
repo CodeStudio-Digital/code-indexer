@@ -7,10 +7,11 @@ export type { ProjectIgnoreKind } from './project-ignore-profiles.js';
  * names such as `bin` are generated output in .NET/Java projects, but can be
  * legitimate source directories in a mixed monorepo.
  */
-import { readdirSync, statSync } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { readdirSync, statSync, type Dirent } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { basename, join, relative, resolve } from 'node:path';
 import { TREE_BLOCK_DIRS } from './fs-ignore.js';
+import { readProjectDirectory } from './project-directory-reads.js';
 
 export interface ProjectIgnoreScope {
   /** Project-relative directory; empty string means the workspace root. */
@@ -32,6 +33,12 @@ const DOTNET_EXACT_MARKERS = new Set([
   'directory.packages.props', 'nuget.config',
 ]);
 const DOTNET_MARKER_SUFFIXES = ['.csproj', '.fsproj', '.vbproj', '.sln', '.slnx'];
+
+export function isProjectDiscoveryMarker(filePath: string): boolean {
+  const name = basename(filePath).toLowerCase();
+  return name === 'composer.json' || name === 'projectversion.txt' || JAVA_MARKERS.has(name)
+    || DOTNET_EXACT_MARKERS.has(name) || isFileMarker(name, DOTNET_MARKER_SUFFIXES);
+}
 
 const BASELINE_DIRS_LOWER = new Set(TREE_BLOCK_DIRS.map((name) => name.toLowerCase()));
 const DISCOVERY_SKIP = new Set([
@@ -169,6 +176,37 @@ export interface ProjectTreeScanOptions {
   yieldEvery?: number;
   /** Collect only files useful to the caller; paths use forward slashes. */
   acceptFile?: (nameLower: string, relativePath: string) => boolean;
+  includeUnityContents?: boolean;
+  skipDirectory?: (nameLower: string, siblings: readonly Dirent[]) => boolean;
+}
+
+async function addDirectoryScope(scopes: ProjectIgnoreScope[], dir: string, rel: string, entries: Dirent[]): Promise<boolean> {
+  const dirs = new Set(entries.filter(entry => entry.isDirectory()).map(entry => entry.name.toLowerCase()));
+  const unity = dirs.has('assets') && dirs.has('projectsettings') && await isRegularFileAsync(join(dir, 'ProjectSettings', 'ProjectVersion.txt'));
+  addDetectedScopes(scopes, rel, entries.filter(entry => entry.isFile()).map(entry => entry.name.toLowerCase()), unity);
+  return unity;
+}
+
+/** Only the displayed directory and its ancestors can affect its immediate children. */
+export async function directoryIgnoreRules(rootPath: string, directory: string, entries: Dirent[]): Promise<ProjectIgnoreRules> {
+  const scopes: ProjectIgnoreScope[] = [];
+  const version = getProjectDiscoveryCacheVersion(rootPath);
+  const ancestors: Array<{ dir: string; rel: string }> = [];
+  const segments = relative(rootPath, directory).split(/[\\/]/).filter(Boolean);
+  let dir = rootPath;
+  let rel = '';
+  for (const segment of segments) {
+    ancestors.push({ dir, rel });
+    dir = join(dir, segment);
+    rel = rel ? `${rel}/${segment}` : segment;
+  }
+  const parents = await Promise.all(ancestors.map(parent =>
+    readProjectDirectory(rootPath, parent.dir, version).catch(() => [])));
+  for (const [i, parent] of ancestors.entries()) {
+    await addDirectoryScope(scopes, parent.dir, parent.rel, parents[i]!);
+  }
+  await addDirectoryScope(scopes, directory, rel, entries);
+  return { rootPath, scopes };
 }
 
 export interface ProjectTreeScanResult {
@@ -208,37 +246,28 @@ export async function scanProjectTree(
       truncated = true;
       break;
     }
-    const current = queue[queueIndex++]!;
-    visitedDirectories++;
-    let entries;
-    try {
-      entries = await readdir(current.abs, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    const dirs = new Set(
-      entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name.toLowerCase()),
-    );
-    const names = entries.filter((entry) => entry.isFile()).map((entry) => entry.name.toLowerCase());
-    const unity = dirs.has('assets') && dirs.has('projectsettings')
-      && await isRegularFileAsync(join(current.abs, 'ProjectSettings', 'ProjectVersion.txt'));
-    addDetectedScopes(scopes, current.rel, names, unity);
-
-    if (!unity) {
+    const batch = queue.slice(queueIndex, queueIndex + Math.min(8, maxDirectories - visitedDirectories));
+    queueIndex += batch.length;
+    visitedDirectories += batch.length;
+    const listings = await Promise.all(batch.map(dir =>
+      readProjectDirectory(normalizedRoot, dir.abs, discoveryVersion).catch(() => [])));
+    for (const [index, current] of batch.entries()) {
+      const entries = listings[index]!;
+      const unity = await addDirectoryScope(scopes, current.abs, current.rel, entries);
+      if (unity && !options.includeUnityContents) continue;
       for (const entry of entries) {
-        if (!entry.isFile()) continue;
+        if (!options.acceptFile || !entry.isFile()) continue;
         const relativePath = current.rel ? `${current.rel}/${entry.name}` : entry.name;
         const lower = entry.name.toLowerCase();
-        if (shouldIgnoreProjectPath(rules, relativePath, false)) continue;
-        if (options.acceptFile?.(lower, relativePath)) files.push(relativePath);
+        if (options.acceptFile(lower, relativePath) && !shouldIgnoreProjectPath(rules, relativePath, false)) files.push(relativePath);
       }
 
       if (current.depth < maxDepth) {
         for (const entry of entries) {
-          if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+          if (!entry.isDirectory() || entry.name.startsWith('.') || options.skipDirectory?.(entry.name.toLowerCase(), entries)) continue;
           const relativePath = current.rel ? `${current.rel}/${entry.name}` : entry.name;
           if (shouldIgnoreProjectPath(rules, relativePath, true)) continue;
+          if (queue.length >= maxDirectories) { truncated = true; break; }
           queue.push({
             abs: join(current.abs, entry.name),
             rel: relativePath,
@@ -250,12 +279,13 @@ export async function scanProjectTree(
       }
     }
 
-    if (visitedDirectories % yieldEvery === 0) {
+    if (visitedDirectories % yieldEvery < batch.length) {
       await new Promise<void>((resolveYield) => setImmediate(resolveYield));
     }
   }
 
-  if (getProjectDiscoveryCacheVersion(normalizedRoot) === discoveryVersion) {
+  if (!options.skipDirectory && maxDepth === DISCOVERY_MAX_DEPTH && maxDirectories === DISCOVERY_MAX_DIRS
+      && getProjectDiscoveryCacheVersion(normalizedRoot) === discoveryVersion) {
     cache.set(normalizedRoot, { expiresAt: Date.now() + CACHE_TTL_MS, rules });
   }
   return { rules, files, visitedDirectories, truncated };

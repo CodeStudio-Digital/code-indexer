@@ -60,6 +60,7 @@ export type CoderProvider = 'anthropic' | 'openai' | 'openrouter' | 'gemini' | '
 export interface CoderSession {
   worktree_path?: string | null;
   id: SessionId;
+  parent_session_id?: SessionId | null;
   project_id: number | null;
   title: string;
   provider: string;

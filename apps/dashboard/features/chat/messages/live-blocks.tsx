@@ -38,7 +38,7 @@ export const LiveTextBlock = memo(function LiveTextBlock({ text }: { text: strin
   const deferred = useDeferredValue(throttled);
   return (
     <div className="text-[13px] leading-5 text-foreground/90">
-      <Markdown text={deferred} />
+      <Markdown text={deferred} showDocumentCopy={false} />
     </div>
   );
 });

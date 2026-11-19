@@ -3,7 +3,7 @@ import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
 import { resolveProjectPath } from '../workspace/paths.js';
 import { listDirFiltered, listFilesRecursive, searchFiles } from './project-files.js';
-import { resolveProjectWorktree } from '@mcp/code-agent/tools/project-worktrees.js';
+import { resolveProjectWorktree } from '../../worktree-reads.js';
 import { resolveSafe } from '@mcp/code-agent/tools/paths.js';
 
 export function mountCoderProjectTreeRoutes(app: Hono, deps: ServerDeps): void {

@@ -10,6 +10,7 @@ export function budgetedProvider(provider: ChatProvider, ledger?: CollaborationB
   if (!ledger) return provider;
   if (wrapped.get(provider) === ledger.rootId) return provider;
   const result: ChatProvider = {
+    get inferenceOnly() { return provider.inferenceOnly; },
     get reasoningCapabilities() { return provider.reasoningCapabilities; },
     get name() { return provider.name; }, get model() { return provider.model; }, set model(value) { provider.model = value; },
     get toolLimits() { return provider.toolLimits; }, setModel: model => provider.setModel(model),

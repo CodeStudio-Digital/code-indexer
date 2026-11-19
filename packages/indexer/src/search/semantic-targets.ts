@@ -7,6 +7,7 @@
  * move vector storage out of the workstation.
  */
 import type { ProviderStore } from '@mcp/store/provider-store.js';
+import { readBedrockCredentials } from '@mcp/provider-sdk';
 import type {
   EmbeddingTarget,
   RerankerTarget,
@@ -149,29 +150,6 @@ export class NormalizedEmbeddingService implements EmbeddingService {
   }
 }
 
-function bedrockCredentials(store: ProviderStore, id: string): {
-  region?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
-  sessionToken?: string;
-} {
-  const provider = store.getProvider(id);
-  const token = store.getOAuth(id);
-  const extra = token?.extra ?? {};
-  return {
-    region: String(
-      extra.region
-        ?? provider?.extra.aws_region
-        ?? process.env.AWS_REGION
-        ?? process.env.AWS_DEFAULT_REGION
-        ?? 'us-east-1',
-    ),
-    accessKeyId: typeof extra.accessKeyId === 'string' ? extra.accessKeyId : undefined,
-    secretAccessKey: typeof extra.secretAccessKey === 'string' ? extra.secretAccessKey : undefined,
-    sessionToken: typeof extra.sessionToken === 'string' ? extra.sessionToken : undefined,
-  };
-}
-
 export function createEmbeddingServiceForTarget(
   target: EmbeddingTarget,
   store: ProviderStore,
@@ -206,12 +184,8 @@ export function createEmbeddingServiceForTarget(
     const provider = store.getProvider(id);
     if (!provider || !provider.enabled) throw new Error(`Semantic provider ${id || '<empty>'} is unavailable`);
     if (provider.kind === 'bedrock' || target.protocol === 'bedrock') {
-      const credentials = bedrockCredentials(store, id);
       service = new BedrockTitanEmbeddingService({
-        region: credentials.region ?? 'us-east-1',
-        accessKeyId: credentials.accessKeyId,
-        secretAccessKey: credentials.secretAccessKey,
-        sessionToken: credentials.sessionToken,
+        ...readBedrockCredentials(store.getOAuth(id)?.extra, provider.extra.aws_region),
         modelId: target.model,
       });
     } else {
@@ -246,6 +220,7 @@ export function createRerankerForTarget(
     } else {
       service = new LocalReranker({
         model: resolved.model,
+        localFilesOnly: target.model === 'auto',
         revision: target.revision,
         cacheDir: target.cacheDir,
         dtype: resolved.dtype,
@@ -275,13 +250,9 @@ export function createRerankerForTarget(
     const provider = store.getProvider(id);
     if (!provider || !provider.enabled) throw new Error(`Semantic provider ${id || '<empty>'} is unavailable`);
     if (provider.kind === 'bedrock' || target.protocol === 'bedrock') {
-      const credentials = bedrockCredentials(store, id);
       service = new BedrockReranker({
         model: target.model,
-        region: credentials.region,
-        accessKeyId: credentials.accessKeyId,
-        secretAccessKey: credentials.secretAccessKey,
-        sessionToken: credentials.sessionToken,
+        ...readBedrockCredentials(store.getOAuth(id)?.extra, provider.extra.aws_region),
         strict: options.strict,
       });
     } else {
