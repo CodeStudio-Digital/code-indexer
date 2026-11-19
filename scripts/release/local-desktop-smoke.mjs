@@ -36,6 +36,7 @@ const figmaShotFile = figmaFile + '?node-id=0-1';
 const captureFigmaImage = 'Capture the Figma image fixture';
 const reopenFigmaImage = 'Reopen the previous Figma image fixture';
 const reopenedImageReply = 'Previous Figma attachment reopened.';
+const missingImageReply = 'Previous Figma attachment unavailable.';
 const figmaPng = await sharp({ create: { width: 96, height: 64, channels: 3, background: '#6366f1' } }).png().toBuffer();
 const figmaPngBase64 = figmaPng.toString('base64');
 const figmaImageId = createHash('sha256').update(JSON.stringify({ mediaType: 'image/png', base64: figmaPngBase64 })).digest('hex').slice(0, 24);
@@ -44,6 +45,7 @@ function figmaFixtureReply(request, currentPrompt) {
   const sawToolResult = predicate => request.messages.some(message => message.role === 'tool' && predicate(JSON.stringify(message.content)));
   if (currentPrompt.includes(reopenFigmaImage)) {
     if (sawToolResult(text => text.includes('original 96×64') && text.includes(figmaImageId))) return { text: reopenedImageReply };
+    if (sawToolResult(text => /Image reference not found|view_image:/.test(text))) return { text: missingImageReply };
     return { call: { name: 'view_image', input: { attachment_id: figmaImageId } } };
   }
   const screenshot = currentPrompt.includes(captureFigmaImage);
@@ -515,7 +517,13 @@ try {
   await api(figmaImageSession + '/messages', {
     content: `${reopenFigmaImage} with attachment_id=${figmaImageId}`, response_mode: 'json', max_turns: 3,
   });
-  await expect.poll(async () => JSON.stringify(await api(figmaImageSession + '/messages')), { timeout: 45000 }).toContain(reopenedImageReply);
+  let figmaReopenReply;
+  await expect.poll(async () => {
+    const text = JSON.stringify(await api(figmaImageSession + '/messages'));
+    figmaReopenReply = [reopenedImageReply, missingImageReply].find(message => text.includes(message));
+    return figmaReopenReply;
+  }, { timeout: 45000 }).toBeDefined();
+  assert.equal(figmaReopenReply, reopenedImageReply);
   assert.equal(await app.evaluate(() => globalThis.figmaImageReads), 0);
   const warmFigmaReads = await exerciseFigmaChat(projectId, 'Figma project cache after restart');
   assert.equal(warmFigmaReads, 0);

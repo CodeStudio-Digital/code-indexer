@@ -20,7 +20,7 @@ This is a GLOBAL multi-project session.
 ${projectLines}
 
 There is no virtual union directory. Native file tools route a <project-slug>/ prefix to the corresponding real root.
-For shell and Git commands, set cwd to the project slug, for example: run_command({cwd:"<project-slug>", command:"git status --short"}).
+For shell commands, set cwd to the project slug.
 Start orientation with native list_directory/glob when the project scope is unclear; their cross-project results use slug prefixes.
 The primary project's MCP tools keep their ordinary names. Secondary projects use mcp__<project-slug>__* tools.
 If a project root is unavailable, stop and report it; never fall back to another root.

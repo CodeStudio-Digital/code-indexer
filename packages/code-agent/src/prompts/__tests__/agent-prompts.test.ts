@@ -171,6 +171,13 @@ describe('lean execution contracts', () => {
     expect(prompt).toContain('Use `mcp__prepare_edit` when callers/tests or a shared contract matter');
     expect(prompt).not.toContain('Before editing an existing symbol: call `mcp__prepare_edit` first');
   });
+
+  it('keeps Git inspection tied to the task in Build mode', () => {
+    const prompt = buildSystemPrompt({ ...BASE_CTX, agentId: 'build' });
+    expect(prompt).toContain('only when the request needs repository state or review of changes');
+    expect(prompt).toContain('Reuse the latest result for the same scope');
+    expect(prompt).not.toContain('Collect final checks and diff');
+  });
 });
 
 describe('public progress contract', () => {

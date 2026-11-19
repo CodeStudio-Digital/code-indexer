@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import sharp from 'sharp';
+import { recoverSessionArtifacts } from '@mcp/session-storage';
 import { BundleToolOutputStore, FsSessionStore } from '../../sessions/fs-store/index.js';
 import { attachmentsToBlocks, type AgentMessage } from '../messages.js';
 import { projectVisionContext } from '../vision-context.js';
@@ -92,7 +93,9 @@ it('saves an MCP screenshot before a subsequent inference and reopens its ID in 
   const image = result.extraUserBlocks?.[0];
   if (image?.type !== 'image' || !image.sourceImageId) throw new Error(result.content);
   const id = image.sourceImageId;
+  const location = f.store.catalog.get(f.session.id)!.location;
   await f.store.close();
+  await recoverSessionArtifacts({ bundlePath: location.bundle_path, sessionId: f.session.id });
 
   const reopened = FsSessionStore.fromRoots(f.options);
   try {

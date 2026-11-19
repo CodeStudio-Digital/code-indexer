@@ -330,8 +330,10 @@ function collectApplicationMetadataRefs(
     }
     const metadata = requireObject(record.metadata, `${source}.metadata`);
     const outputId = metadata.output_id;
+    // The agent can reopen these records by ID even when the last turn never
+    // published their content to the conversation journal.
     const standalone =
-      metadata.purpose === 'truncated_tool_output' &&
+      (metadata.purpose === 'truncated_tool_output' || metadata.purpose === 'session_image') &&
       typeof outputId === 'string' &&
       /^[0-9a-f]{24}$/.test(outputId) &&
       callId === `spill:${outputId}`;

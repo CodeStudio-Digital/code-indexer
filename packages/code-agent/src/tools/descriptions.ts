@@ -81,15 +81,12 @@ export const LIST_DIRECTORY_NATIVE_DESC =
 // ---------- git (src/core/coder/tools/git.ts) ----------
 
 export const GIT_STATUS_DESC =
-  'Show working tree status (git status --short).\n' +
-  "USE: before committing, or to verify what the user's latest changes touched.\n" +
-  "DON'T: run this every turn as a sanity check — git state rarely changes between your own tool calls.";
+  'Show working tree status when the task needs current Git state.\n' +
+  "USE: before committing, or to identify the user's latest changes. Reuse the result while the working tree and index are unchanged.";
 
 export const GIT_DIFF_DESC =
-  "Show the working tree diff (pass `staged: true` for the staged diff).\n" +
-  "USE: reviewing what you (or the user) are about to commit.\n" +
-  "USE: answering 'what changed?' questions about uncommitted work.\n" +
-  "DON'T: diff a whole repo to understand history — use git_log for that.";
+  'Show a Git diff for reviewing relevant changes. Pass `path` to scope the diff.\n' +
+  'USE: compare uncommitted edits or inspect staged changes before a commit with `staged: true`. Reuse the result until the relevant files or Git state change.';
 
 export const GIT_LOG_DESC =
   'Show recent commit history (default last 10).\n' +
