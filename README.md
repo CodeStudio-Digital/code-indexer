@@ -33,9 +33,8 @@ Project chats reuse Figma layers, design tokens and PNG previews from the CodeSt
 ## Quick start
 
 ```bash
-# 1. Install
-pnpm install
-pnpm electron:rebuild    # rebuild better-sqlite3 against Electron's Node ABI
+# 1. Set up dependencies with a prebuilt Electron-compatible SQLite module
+pnpm electron:setup
 
 # 2. Run the dashboard in Electron (dev mode)
 pnpm electron:dev
