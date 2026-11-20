@@ -1,11 +1,9 @@
 /**
  * PR-6 (Rows 23 + 24) — subagent isolation.
  *
- * Row 24: session-scoped hooks (completion / fallback / error) are
- * suppressed when isSubagent=true so a parallel spawn_agents run doesn't
- * spam the parent's hook listeners with N×completion fires per subagent.
- * Tool-scoped hooks (fireToolCall) keep working — they enforce policy
- * that should apply uniformly across the whole runner tree.
+ * Row 24: the session-scoped completion hook is suppressed when
+ * isSubagent=true so a parallel spawn_agents run doesn't spam the parent's
+ * hook listeners with N×completion fires per subagent.
  *
  * Row 23: subagent system prompts get the short v2 framing block
  * (persistence + don't re-read) appended when the parent runs with v2.
@@ -30,27 +28,15 @@ class TextOnlyProvider implements ChatProvider {
 
 interface FakeHookRegistry {
   fireCompletion: (...args: unknown[]) => Promise<void>;
-  fireFallback: (...args: unknown[]) => Promise<void>;
-  fireError: (...args: unknown[]) => Promise<void>;
-  fireToolCall: (...args: unknown[]) => Promise<void>;
   hasHandlers: boolean;
   completionFires: number;
-  fallbackFires: number;
-  errorFires: number;
-  toolCallFires: number;
 }
 
 function makeHookRegistry(): FakeHookRegistry {
   const reg: FakeHookRegistry = {
     completionFires: 0,
-    fallbackFires: 0,
-    errorFires: 0,
-    toolCallFires: 0,
     hasHandlers: true,
     async fireCompletion() { reg.completionFires++; },
-    async fireFallback() { reg.fallbackFires++; },
-    async fireError() { reg.errorFires++; },
-    async fireToolCall() { reg.toolCallFires++; },
   };
   return reg;
 }
@@ -82,8 +68,6 @@ describe('PR-6 R24 — session-scoped hooks suppressed for subagents', () => {
     const runner = makeRunner(new TextOnlyProvider(), /* isSubagent */ true, reg);
     await runner.run();
     expect(reg.completionFires).toBe(0);
-    // Sanity: the run still completed cleanly even though the hook didn't fire.
-    expect(reg.errorFires).toBe(0);
   });
 });
 
@@ -91,8 +75,8 @@ describe('PR-6 R23 — buildSubagentLoopFraming exports a discipline block', () 
   it('contains persistence framing without the active-context pointer', () => {
     const block = buildSubagentLoopFraming();
     expect(block).toContain('# Subagent contract');
-    expect(block).toContain('implementation delivers the scoped change plus verification');
-    expect(block).toContain('Reuse content already in context');
+    expect(block).toContain('implement and verify the assigned change');
+    expect(block).toContain('Reuse evidence');
     // Active context is NOT mentioned — subagents don't get that injection.
     expect(block).not.toContain('<active-context>');
     expect(block).not.toContain('# Active context');
@@ -100,13 +84,13 @@ describe('PR-6 R23 — buildSubagentLoopFraming exports a discipline block', () 
 
   it('bounds delegation and preserves the investigation scope', () => {
     const block = buildSubagentLoopFraming();
-    expect(block).toContain('An investigation returns evidence and citations without edits');
+    expect(block).toContain('investigate without edits');
     expect(block).toContain('Do not spawn children');
   });
 
   it('directs recovery through supported tool discovery', () => {
     const block = buildSubagentLoopFraming();
-    expect(block).toContain('use `find_tools` instead of guessing names');
+    expect(block).toContain('Discover tools by schema, never guess names');
   });
 });
 

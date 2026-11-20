@@ -4,25 +4,19 @@
  * `this`-bound state.
  *
  * Steps (identical to the legacy `assembleMessagesForChat`):
- *   1. Apply `compactHistoryForLLM` — rolling reduction + char compaction.
+ *   1. Apply `compactHistoryForLLM` — rolling-reduction detection + pairing repair.
  *   2. Build `<active_skills>` + `<active-context>` blocks (via callbacks
  *      so the caller can keep `this`-bound helpers intact for now).
  *   3. Append the extras onto the trailing user message (or push a new
  *      user message if the tail is assistant/tool).
  */
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
-import type { CoderTunables } from '@mcp/code-agent/core/tunables.js';
-import type { CompactionLimits } from '@mcp/code-agent/core/compaction.js';
 import { compactHistoryForLLM } from './compact-history.js';
 import { formatDynamicInjection, type DynamicInjectionResult } from './dynamic-injection.js';
 
 export interface AssembleMessagesArgs {
   /** Full history as held by the runner. NOT mutated. */
   messages: AgentMessage[];
-  /** Session tunables — flow through to `compactHistoryForLLM`. */
-  tunables: CoderTunables;
-  /** Char-based compaction limits (legacy path). Undefined => token path. */
-  compactionLimits: CompactionLimits | undefined;
   /** When true, the `<active-context>` callback fires (Agent Loop v2). */
   agentLoopV2: boolean;
   /**
@@ -53,8 +47,6 @@ export interface AssembleMessagesArgs {
 export function assembleMessagesForChat(args: AssembleMessagesArgs): AgentMessage[] {
   const compacted = compactHistoryForLLM(
     args.messages,
-    args.compactionLimits,
-    args.tunables,
     args.onReducerStats,
   );
 

@@ -62,7 +62,6 @@ export interface AdminProvider {
   use_for_general: boolean;
   is_default: boolean;
   extra: Record<string, unknown>;
-  fallback_provider_id: string | null;
   /** Visual identity from the provider definition (null for unknown kinds). */
   visual?: ProviderVisualData | null;
 }

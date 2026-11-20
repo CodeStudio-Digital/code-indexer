@@ -27,6 +27,14 @@ describe('MCP tool contract', () => {
     }
   });
 
+  it('exposes the documentation tools with the read scope', () => {
+    expect(allTools.filter((tool) => tool.name.startsWith('rag_')).map((tool) => [tool.name, tool.scope])).toEqual([
+      ['rag_search_docs', 'mcp:read'],
+      ['rag_read_doc', 'mcp:read'],
+      ['rag_doc_outline', 'mcp:read'],
+    ]);
+  });
+
   it('keeps the bootstrap catalog invokable by a read-scoped token', () => {
     const bootstrap = allTools.filter((tool) => isToolAllowedForTier(tool, 'bootstrap'));
     expect(bootstrap.length).toBeGreaterThan(0);

@@ -75,11 +75,9 @@ export interface SummarizeSpanV3Options {
 /**
  * LLM-driven compaction summarizer.
  *
- * Complements the deterministic `compactMessages` in core/compaction.ts: when
- * the accumulated history is large enough to trigger compaction, instead of
- * (only) replacing old tool_result contents with deterministic markers, we
- * can ask a cheap model to produce a structured summary that preserves the
- * salient facts (files touched, decisions, next steps, user preferences).
+ * When the accumulated history is large enough to trigger compaction, a
+ * cheap model produces a structured summary that preserves the salient facts
+ * (files touched, decisions, next steps, user preferences).
  *
  * The summary replaces a span of old messages with a single synthetic
  * assistant message of ~500 tokens. The continuing agent sees the summary
@@ -103,14 +101,11 @@ export interface CompactionSummary {
 }
 
 /**
- * 9-section summary used when CODER_NEW_COMPACTION is enabled. Mirrors
+ * 9-section summary (V2). Mirrors
  * Claude Code's compact prompt structure (Primary Request, Key Concepts,
  * Files, Errors, Problem Solving, User Messages, Pending Tasks, Current
  * Work, Next Step) — empirically the right level of detail to let the
  * continuing agent resume cleanly without re-reading the pruned span.
- *
- * Backwards compatible: `toLegacy()` projects this onto the older 6-field
- * shape so the existing `renderSummary` keeps working during the rollout.
  */
 export interface CompactionSummaryV2 {
   primary_request: string;

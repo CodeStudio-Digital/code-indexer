@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
@@ -25,10 +25,6 @@ function readTool(
   };
 }
 
-afterEach(() => {
-  delete process.env.CODER_RETRIEVAL_GUARD;
-});
-
 describe('dispatchTools — deterministic retrieval batch guard', () => {
   it('returns balanced non-error results while avoiding a redundant broad invocation', async () => {
     const invoked: string[] = [];
@@ -46,7 +42,6 @@ describe('dispatchTools — deterministic retrieval batch guard', () => {
       registry,
       toolContext,
       turn: 1,
-      dupCalls: new Map(),
       onToolCallStart: (id) => started.push(id),
     });
 
@@ -78,7 +73,6 @@ describe('dispatchTools — deterministic retrieval batch guard', () => {
       registry,
       toolContext,
       turn: 1,
-      dupCalls: new Map(),
     });
 
     expect(inputs).toEqual([{

@@ -163,9 +163,6 @@ export function wireRunnerEventsToBus(
     // diagram_export → ask the live embedded editor to render + persist an image.
     publish(bus, 'diagram_export_request', payload);
   });
-  runner.on('fallback_activated', (payload) => {
-    publish(bus, 'fallback_activated', payload);
-  });
   runner.on('history_compacted', (payload) => {
     publish(bus, 'history_compacted', payload);
   });

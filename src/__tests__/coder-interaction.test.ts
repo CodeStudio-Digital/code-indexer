@@ -146,7 +146,7 @@ describe('buildToolResultBlock — push-time monotone truncation', () => {
 
 describe('compactHistoryForLLM — pass-through (legacy compat)', () => {
   it('does not compact messages below the threshold (content equivalent, input not mutated)', () => {
-    // 6 turns × 5000 chars = 30k total — below PRUNE_MINIMUM (60k), so no compaction.
+    // The per-turn view never prunes tool_result content (only the LLM compactor does).
     const msgs = buildSyntheticHistory({ toolTurns: 6, toolResultSize: 5000 });
     const snapshot = JSON.stringify(msgs);
     const out = compactHistoryForLLM(msgs);

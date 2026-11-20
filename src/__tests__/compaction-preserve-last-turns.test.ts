@@ -3,7 +3,7 @@
  * Tests `recedeToPreserveLastNTurns` in isolation + interaction with
  * `snapCutoffPreservingPairs` so the combined cutoff behaves correctly.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   recedeToPreserveLastNTurns,
   snapCutoffPreservingPairs,
@@ -104,7 +104,7 @@ describe('R4 + R5 interaction (recede + pair-preserve)', () => {
       user('c'),
       assistant('final'),
     ];
-    // Suppose computeCutoffIndex returned 6 (only tail = user c + assistant
+    // Suppose the cutoff were 6 (only tail = user c + assistant
     // final). With N=2 we should recede to include user b at index 3.
     // Then snap pairs should leave it alone (no pair is split).
     const receded = recedeToPreserveLastNTurns(msgs, 6, 2);
@@ -122,7 +122,7 @@ describe('R4 + R5 interaction (recede + pair-preserve)', () => {
       user('b'),                       // 4
       assistant('B'),                  // 5
     ];
-    // computeCutoffIndex=3 would split the pair (use=2, result=3). After
+    // A cutoff of 3 would split the pair (use=2, result=3). After
     // recede to preserve user('a') (already in head) the cutoff is still 3
     // for N=1 (user('b') alone in tail). snap pairs recedes to 2 to keep
     // both halves of the pair on the same side.
@@ -133,27 +133,7 @@ describe('R4 + R5 interaction (recede + pair-preserve)', () => {
 });
 
 describe('message-count floor — compactWithLLM keeps recent turns on a dense, user-turn-free tail', () => {
-  const ENV_KEYS = [
-    'CODER_COMPACT_PRESERVE_LAST_N_TURNS',
-    'CODER_COMPACT_MIN_TAIL_TURNS',
-    'CODER_COMPACT_MIN_TAIL_FRACTION',
-  ] as const;
-  const saved: Record<string, string | undefined> = {};
-  afterEach(() => {
-    for (const k of ENV_KEYS) {
-      if (saved[k] === undefined) delete process.env[k];
-      else process.env[k] = saved[k];
-    }
-  });
-
   it('an autonomous run (1 user turn, dense tool results) still retains >= floor renderable turns', async () => {
-    for (const k of ENV_KEYS) saved[k] = process.env[k];
-    // Isolate the floor: disable the user-turn recede (only 1 user turn exists
-    // anyway) and pin the floor to exactly 8 renderable turns.
-    process.env.CODER_COMPACT_PRESERVE_LAST_N_TURNS = '0';
-    process.env.CODER_COMPACT_MIN_TAIL_TURNS = '8';
-    process.env.CODER_COMPACT_MIN_TAIL_FRACTION = '0';
-
     // 1 user request, then 20 autonomous (assistant tool_use → big tool_result)
     // turns — no further user messages. The token cutoff alone would keep only a
     // couple of these dense turns.

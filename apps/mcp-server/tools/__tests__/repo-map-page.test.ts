@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import type { LLMSymbol } from '@mcp/shared/types.js';
 import type { ToolContext } from '../../context.js';
-import { getRepoMap } from '../repo-map.js';
+import { getRepoMap } from '@mcp/indexer/agent-tools/tools/repo-map.js';
 import { buildRepoMap as promptMap } from '@mcp/code-agent/core/repo-map.js';
 
 const cleanup: Array<() => void> = [];

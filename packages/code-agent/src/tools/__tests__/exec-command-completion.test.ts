@@ -123,7 +123,6 @@ describe('unobserved exits become background notices', () => {
       registry,
       toolContext: ctx(),
       turn: 1,
-      dupCalls: new Map(),
       collectBackgroundNotices: () => '[background exec] session 1234abcd exited',
     });
     expect(batch.results[0].content).toBe('file text');

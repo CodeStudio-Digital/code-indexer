@@ -741,16 +741,6 @@ export const SMART_REDUCERS: Record<string, (input: ReducerInput) => ReducerOutp
  * fallback to rank rows by relevance. It is captured once at tool-finalize and
  * the shaped result is persisted, so query-dependence never thrashes the cache.
  */
-export function applySmartReducer(
-  toolName: string,
-  content: string,
-  cap: number,
-  opts?: SmartReducerOptions,
-): string {
-  return applySmartReducerDetailed(toolName, content, cap, opts).content;
-}
-
-/** Same reducer path as `applySmartReducer`, with loss accounting attached. */
 export function applySmartReducerDetailed(
   toolName: string,
   content: string,

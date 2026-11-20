@@ -36,7 +36,6 @@ import {
   evaluateToolInvocation,
   findScopeViolations,
   resolveToolInvocationMetadata,
-  resolveToolMetadata,
   isExplicitlyParallelSafeRead,
   type PolicyContext,
 } from '@mcp/code-agent/core/policy.js';
@@ -482,8 +481,6 @@ export function buildCodeExecTool(
         taskScope: runner && runner.currentTaskScopeId()
           ? { id: runner.currentTaskScopeId()!, files: runner.currentTaskScopeFiles() ?? [] }
           : null,
-        strict: false,
-        adminOverride: true,
         sandboxBound: !!ctx.ports?.fs || !!ctx.ports?.shell,
         readOnly: isReadOnlyAgent(runner?.agentId),
       });

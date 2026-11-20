@@ -15,16 +15,6 @@ export const events = {
     ratio: opts.ratio,
     ...(opts.trigger != null ? { trigger: opts.trigger } : {}),
   }),
-  toolLoopDetected: (opts: {
-    guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
-    toolName?: string;
-    count?: number;
-  }): BehaviorEvent => ({
-    kind: 'ToolLoopDetected',
-    guard: opts.guard,
-    ...(opts.toolName != null ? { toolName: opts.toolName } : {}),
-    ...(opts.count != null ? { count: opts.count } : {}),
-  }),
   maxTurnsReached: (opts: { autoContinueLeft: number }): BehaviorEvent => ({
     kind: 'MaxTurnsReached',
     autoContinueLeft: opts.autoContinueLeft,
@@ -50,6 +40,5 @@ export const events = {
     collapsedTo: opts.collapsedTo,
   }),
   cleanFinish: (): BehaviorEvent => ({ kind: 'CleanFinish' }),
-  toolOutcomeUnknown: (): BehaviorEvent => ({ kind: 'ToolOutcomeUnknown' }),
   aborted: (): BehaviorEvent => ({ kind: 'Aborted' }),
 } as const;

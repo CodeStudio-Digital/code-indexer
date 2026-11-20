@@ -156,19 +156,6 @@ export class SubagentJobManager {
     return this.activeCount(sessionId) > 0;
   }
 
-  /**
-   * A terminal notification is intentionally not an acknowledgement: the
-   * compact reminder does not contain the full findings. Goal completion must
-   * remain fenced until collect_agents has delivered the terminal payload.
-   */
-  hasUncollectedTerminalJobs(sessionId: SessionId): boolean {
-    this.sweep(sessionId);
-    for (const job of this.bySession.get(sessionId)?.values() ?? []) {
-      if (job.status !== 'running' && job.delivery !== 'collected') return true;
-    }
-    return false;
-  }
-
   activeCount(sessionId: SessionId): number {
     let n = 0;
     for (const j of this.bySession.get(sessionId)?.values() ?? []) if (j.status === 'running') n++;

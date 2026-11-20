@@ -25,8 +25,6 @@ const baseCtx: PolicyContext = {
   planMode: false,
   planApproved: false,
   taskScope: null,
-  strict: false,
-  adminOverride: true,
   sandboxBound: false,
 };
 
@@ -149,27 +147,6 @@ describe('evaluateToolInvocation', () => {
   it('allows when sandbox is required and bound', () => {
     const tool = makeTool({ name: 'sandbox_only_tool', requiresSandbox: true });
     const decision = evaluateToolInvocation(tool, {}, { ...baseCtx, sandboxBound: true });
-    expect(decision.allowed).toBe(true);
-  });
-
-  it('strict mode blocks execute/admin tools without adminOverride', () => {
-    const tool = makeTool({ name: 'admin_action', riskLevel: 'admin', mutates: false });
-    const decision = evaluateToolInvocation(tool, {}, {
-      ...baseCtx,
-      strict: true,
-      adminOverride: false,
-    });
-    expect(decision.allowed).toBe(false);
-    if (!decision.allowed) expect(decision.reason).toBe('admin_required');
-  });
-
-  it('strict mode lets execute/admin tools through with adminOverride', () => {
-    const tool = makeTool({ name: 'admin_action', riskLevel: 'admin', mutates: false });
-    const decision = evaluateToolInvocation(tool, {}, {
-      ...baseCtx,
-      strict: true,
-      adminOverride: true,
-    });
     expect(decision.allowed).toBe(true);
   });
 });

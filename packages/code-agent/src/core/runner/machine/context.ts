@@ -67,7 +67,6 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     transientRetriesThisTurn: 0,
     transportRetriesThisTurn: 0,
     providerAttempts: 0,
-    dupCalls: new Map(),
     noProgressTracker: new NoProgressTracker(),
     autoContinues: 0,
     preEmitCompactions: 0,
@@ -77,7 +76,6 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       ledgerStartSeq: args.opts.toolContext.toolCallLedger?.lastSeq ?? 0,
       nudges: 0,
     },
-    lastStrategyNudgeTurnByKey: new Map(),
     // Perf W1 — background summary precompute + buildTools memo start empty.
     summaryPrecompute: null,
     toolsMemo: null,
@@ -121,9 +119,6 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
       lastInjectedConversationChapterIds: new Set<string>(),
       lastInjectedUserMemoryHash: null,
       lastInjectedPreflightHash: null,
-      // Fix A — self_review nudge gate state (empty = nudge allowed once
-      // there are unreviewed pending changes).
-      selfReview: { suppressed: false },
       correctionNudge: { lastHash: null, count: 0 },
     },
   };

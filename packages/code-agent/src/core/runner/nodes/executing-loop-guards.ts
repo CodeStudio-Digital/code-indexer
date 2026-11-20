@@ -5,9 +5,8 @@
  *     text. Catches the silent-grind runaway (the 200–700-turn sessions in
  *     telemetry) when other tools intersperse enough to keep doom-loop quiet.
  *
- * Both windows are fed every tool-turn. The node acts on the returned verdict
- * only when the per-call guards (tuple-hash / failure-streak) didn't already
- * flag a loop — they're more specific, so they win.
+ * Both windows are fed every tool-turn. The node reports the returned verdict
+ * as an informational `tool_loop_intervention`.
  *
  * Pollable tools resolved from ToolMetadata are filtered out first: a string
  * of identical polls can be the legitimate workflow, so result-aware
@@ -19,7 +18,7 @@ import type { CoderTool } from '../../tool.js';
 import { dominanceWindow, dominanceRatio } from '../constants.js';
 
 export interface PerTurnLoopVerdict {
-  /** Guard kind for the `ToolLoopDetected` BehaviorEvent. */
+  /** Guard kind that fired. */
   guard: 'dominance';
   /** Finer kind for the dashboard `tool_loop_intervention` banner. */
   interventionKind: 'dominance';

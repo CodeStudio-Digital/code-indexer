@@ -1,43 +1,23 @@
 import type { AgentMessage } from '../../messages.js';
-import { envTunables, type CoderTunables } from '../../tunables.js';
 import { applyRollingReduction } from '../../compaction.js';
 import { repairToolPairing } from '../../transcript-repair.js';
-import { approxChars } from '../pure-helpers.js';
 /**
  * Per-turn history transformer applied right before the request hits the
- * provider. Two-layer strategy:
- *
- *   1. Push-time truncation (already done at block creation) keeps the
- *      PER-BLOCK size bounded, which is enough for 99% of sessions.
- *
- *   2. Auto-compaction (delegated to core/compaction.ts) kicks in ONLY when
- *      the accumulated total still exceeds PRUNE_MINIMUM, at which point
- *      older tool_result contents get swapped for deterministic markers
- *      until the protected tail fits under PRUNE_PROTECT.
- *
- * The compaction is a pure transformation — the persistent history on disk
- * stays intact — and uses a deterministic cutoff so repeated calls on the
- * same prefix produce byte-identical output. That keeps prompt-prefix caches
- * hot across turns even after compaction has fired.
+ * provider. Push-time truncation already bounds each block; this view only
+ * detects rolling-reduction retirements (applied durably by the Compacting
+ * node) and repairs tool_use/tool_result pairing. Destructive compaction is
+ * the LLM compactor's job. The transformation is pure and deterministic, so
+ * repeated calls on the same prefix keep prompt-prefix caches hot.
  */
 export function compactHistoryForLLM(
   messages: AgentMessage[],
-  limits?: { minimum: number; protect: number },
-  /**
-   * Optional tunables snapshot. When omitted, defaults to `envTunables()` —
-   * env-driven behavior identical to the legacy module-level constants.
-   * Runner instances pass `this.tunables` so per-session/per-tier overrides
-   * flow through to the turn-budget warning threshold.
-   */
-  tunables?: CoderTunables,
   /** Per-turn reducer stats observer (telemetry — mig 143). */
   onReducerStats?: (s: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number }) => void,
 ): AgentMessage[] {
-  const effectiveTunables = tunables ?? envTunables();
   // Camada 5 — rolling reduction runs FIRST and is cheap (linear scan,
   // pure function, deterministic). It retires stale repeated reads/searches
   // before the size-based compaction even sees them, so sessions grow
-  // sublinearly. Disabled via CODER_ROLLING_REDUCER=0 for diagnostics.
+  // sublinearly. Always on (no env switch).
   // DEFAULT: defer-all. In-place rewrites bust the provider prompt-cache
   // from that point on, and telemetry showed a mid-run flush trading ~2k
   // freed chars for a ~70k-token uncached re-prefill. So the per-turn view
@@ -60,22 +40,7 @@ export function compactHistoryForLLM(
     );
     working = rolled.messages;
   }
-  // Frente B (PR 2 da reavaliação) — char-based `compactMessages` foi
-  // REMOVIDO. A compactação destrutiva agora é feita exclusivamente pelo
-  // LLM compactor no nó `Compacting` (que dispara em ~75% do effective
-  // context window). Aqui ficamos só com a `applyRollingReduction` acima
-  // (Camada 5) e a sanitização de tool_use/tool_result orfãos abaixo.
-  // O parâmetro `limits` agora é ignorado — assinatura mantida só por
-  // compat de chamadores.
-  void limits;
   const result = { messages: working, applied: false, prunedBlocks: 0, prunedChars: 0 };
-  const total = approxChars(result.messages);
-  if (total > effectiveTunables.turnBudgetChars) {
-    console.warn(
-      `[coder] turn payload ${total} chars exceeds budget ${effectiveTunables.turnBudgetChars}. ` +
-      `Lower CODER_PUSH_TIME_CAP or increase CODER_TURN_BUDGET_CHARS.`,
-    );
-  }
 
   // Safety nets (orphan tool_result removal → synthetic tool_result
   // injection for orphaned tool_use → consecutive same-role merge) live in

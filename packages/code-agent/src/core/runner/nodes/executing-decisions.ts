@@ -12,8 +12,6 @@ import { checkMaxTurns, maxAutoContinues } from '../guards/max-turns.js';
 import { providerTransportError } from '@mcp/provider-sdk/transport-error.js';
 import { isToolSchemaRejection } from '../provider-schema-recovery.js';
 
-const DEBUG = process.env.CODER_BT_DEBUG === '1';
-
 /**
  * Decide the terminal event for a turn that produced tool calls. Applies
  * the max-turns guard: continue, auto-continue (with recap reminder), or

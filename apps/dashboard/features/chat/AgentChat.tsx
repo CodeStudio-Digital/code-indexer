@@ -176,8 +176,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const [maxAutoContinues, setMaxAutoContinues] = useState(
     DEFAULT_SESSION_MAX_AUTO_CONTINUES,
   );
-  const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
-  const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   const [planDepth, setPlanDepth] = useState<string | null>(null);
@@ -911,18 +909,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
   }, [selectedId, updateSessionData]);
 
-  // Fallback: load from session when selected, save when changed
-  useEffect(() => {
-    if (!selectedId) return;
-    fetch(`/api/coder/sessions/${selectedId}/fallback`)
-      .then((r) => r.json())
-      .then((data: { fallback_provider: string | null; fallback_model: string | null }) => {
-        setFallbackProvider(data.fallback_provider);
-        setFallbackModel(data.fallback_model);
-      })
-      .catch(() => {});
-  }, [selectedId]);
-
   // Temperature override: load from the selected session row. The full session
   // payload already includes `temperature_override` since the column flows
   // through `SELECT *` mapping; no extra endpoint needed for read.
@@ -1138,18 +1124,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       await apiPatch(`/coder/sessions/${selectedId}/tool-permission-mode`, { mode: next });
     } catch {
       /* ignore — UI optimistic, server is the source of truth on next refetch */
-    }
-  }, [selectedId]);
-
-  const handleFallbackChange = useCallback(async (fbProvider: string | null, fbModel: string | null) => {
-    setFallbackProvider(fbProvider);
-    setFallbackModel(fbModel);
-    if (selectedId) {
-      await fetch(`/api/coder/sessions/${selectedId}/fallback`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: fbProvider, model: fbModel }),
-      });
     }
   }, [selectedId]);
 
@@ -1852,9 +1826,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 setDescribeImages={setDescribeImages}
                 blockCodeComments={blockCodeComments}
                 setBlockCodeComments={handleBlockCodeCommentsChange}
-                fallbackProvider={fallbackProvider}
-                fallbackModel={fallbackModel}
-                onFallbackChange={handleFallbackChange}
                 temperature={sessionTemperature}
                 setTemperature={handleTemperatureChange}
                 reasoningEffort={reasoningEffort}

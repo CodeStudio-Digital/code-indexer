@@ -675,9 +675,8 @@ export class SandboxService {
 
   /**
    * Emit a `sandbox.file_changed` event on the metaBus so the dashboard
-   * can auto-reload the preview iframe. Called from the subordinate
-   * runner's `onToolCall('after')` hook whenever a file-writing tool
-   * succeeds inside a builder session.
+   * can auto-reload the preview iframe. Called by the coder's tool-result
+   * observer whenever a file-writing tool succeeds inside a builder session.
    */
   publishFileChanged(paths: string[]): void {
     this.publisher.publish('sandbox.file_changed', {

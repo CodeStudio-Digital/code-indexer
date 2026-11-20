@@ -14,7 +14,7 @@
  *    varied-args retry of the same path (refusals teach range-jitter).
  *  - Never wired into rolling-reduction/elision: eliding distinct chunks
  *    was the session-609 regression (the model re-read MORE).
- *  - Honesty rule (see buildRichRefusal): only claim "in your context" when
+ *  - Honesty rule: only claim "in your context" when
  *    the covering tool_results are verifiably still visible AND still SHOW
  *    the claimed lines — the ledger records what the tool emitted, but the
  *    smart reducer / finalize cap can trim the delivered content AFTER
@@ -26,7 +26,7 @@
  *  - Top-level only: nested code_exec reads deliver into script space, not
  *    history — counting them would gaslight the model about its context.
  *
- * Kill switch: CODER_READ_COVERAGE_DISABLE=1.
+ * Always on; there is no kill switch.
  */
 
 export function readCoverageEnabled(): boolean {
@@ -184,8 +184,7 @@ export function parseServedRange(
 /**
  * Deterministic pointer returned INSTEAD of re-fetched content (auto-
  * downgrade style, non-error). Budget-conscious: 2-3 lines — the refusal
- * must never cost more tokens than the content it prevents (see the
- * buildRichRefusal design note).
+ * must never cost more tokens than the content it prevents.
  */
 export function buildCoveragePointer(args: {
   toolName: string;

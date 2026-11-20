@@ -198,36 +198,6 @@ export class FsAdvancedStateRepository {
     })).then(() => undefined);
   }
 
-  getFallback(
-    id: SessionId | string,
-  ): Promise<{ provider: string; model: string } | null> {
-    return this.get(id).then((state) =>
-      state.fallback_provider && state.fallback_model
-        ? {
-            provider: state.fallback_provider,
-            model: state.fallback_model,
-          }
-        : null,
-    );
-  }
-
-  setFallback(
-    id: SessionId | string,
-    provider: string | null,
-    model: string | null,
-  ): Promise<void> {
-    if ((provider == null) !== (model == null)) {
-      return Promise.reject(
-        new TypeError('fallback provider and model must be set or cleared together'),
-      );
-    }
-    return this.mutate(id, (current) => ({
-      ...current,
-      fallback_provider: provider,
-      fallback_model: model,
-    })).then(() => undefined);
-  }
-
   markReviewedNow(id: SessionId | string): Promise<void> {
     return this.mutate(id, (current) => ({
       ...current,

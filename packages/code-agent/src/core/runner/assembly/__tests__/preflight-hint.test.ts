@@ -11,7 +11,6 @@ describe('renderPreflightHint', () => {
     const hint = renderPreflightHint({
       profile: 'navigate',
       taskKind: 'bugfix',
-      pinTools: ['read_file', 'edit_file'],
       targetProjects: [{ slug: 'poa-intranet-angular', reason: 'task names intranet' }],
       suggestedSkills: [{ id: 'api-collection', reason: 'build the HTTP client', evidence: 'project_scope' }],
       memories: [
@@ -68,8 +67,14 @@ describe('renderPreflightHint', () => {
     expect(hint).not.toContain('recall_memory');
   });
 
-  it('tools-only seed omits the memories and skills blocks', () => {
-    const hint = renderPreflightHint({ profile: 'bootstrap', pinTools: ['read_file'] });
+  it('a seed cached with legacy tool pins renders exactly like one without', () => {
+    const legacy = { profile: 'bootstrap' as const, taskKind: 'explore', pinTools: ['read_file', 'ext_srv__call'] };
+    const { pinTools: _pins, ...current } = legacy;
+    expect(renderPreflightHint(legacy as Parameters<typeof renderPreflightHint>[0])).toBe(renderPreflightHint(current));
+  });
+
+  it('profile-only seed omits the memories and skills blocks', () => {
+    const hint = renderPreflightHint({ profile: 'bootstrap' });
     expect(hint).toContain('profile=bootstrap');
     expect(hint).not.toContain('recall_memory');
     expect(hint).not.toContain('get_skill_content');

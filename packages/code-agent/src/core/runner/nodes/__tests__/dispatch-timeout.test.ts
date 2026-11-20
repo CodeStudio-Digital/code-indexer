@@ -46,7 +46,7 @@ function registryWithSlowTool(name: string, timeoutMs?: number): ToolRegistry {
 const toolContext = { cwd: process.cwd(), projectName: 'test' } as ToolContext;
 
 function args(registry: ToolRegistry, name: string): DispatchArgs {
-  return { toolUses: [{ id: 't1', name, input: {} }], registry, toolContext, turn: 1, dupCalls: new Map() };
+  return { toolUses: [{ id: 't1', name, input: {} }], registry, toolContext, turn: 1 };
 }
 
 describe('dispatchTools — interactive tools are exempt from the timeout', () => {

@@ -45,7 +45,6 @@ export function publicProvider(p: ProviderConfig) {
     use_for_general: p.use_for_general,
     is_default: p.is_default,
     extra: publicExtra(p.extra) as Record<string, unknown>,
-    fallback_provider_id: p.fallback_provider_id ?? null,
     created_at: p.created_at,
     updated_at: p.updated_at,
   };

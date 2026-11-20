@@ -37,12 +37,11 @@ export interface CompactionThresholdDecision {
 
 /**
  * História do ratio: 0.90 → 0.75 (Frente B) → 0.70 (Fix B, sessão 887) →
- * **0.90 de novo** por decisão do operador: 0.70 desperdiçava ~30% da janela
- * resumindo cedo demais, e a continuidade pós-resumo agora é carregada pelo
- * estado vivo da sessão + memória durável injetados, não por uma cauda longa.
- * O valor é o knob único `resolveTriggerRatio()` (env
- * `CODER_COMPACT_TRIGGER_RATIO`, clamp 0.50–0.95) — também dirige o gate de
- * body (ratio − 0.05) e o backstop token-budget de `deriveTokenLimits`.
+ * **0.90 again** by operator decision: 0.70 wasted ~30% of the window by
+ * summarizing too early, and post-summary continuity now comes from the live
+ * session state + durable memory injection, not a long tail. The value is the
+ * single fixed knob `resolveTriggerRatio()` (no env var) — it also drives the
+ * body gate (ratio − 0.05) and the token-budget backstop of `deriveTokenLimits`.
  */
 export const DEFAULT_TRIGGER_RATIO = DEFAULT_COMPACT_TRIGGER_RATIO;
 export { resolveTriggerRatio };
@@ -88,12 +87,12 @@ export interface ProtectTokensInputs {
  * its just-gathered working state and re-explored. 0.30 keeps a meaningful
  * recent tail; the companion message-count floor
  * (`recedeToPreserveLastNRenderableTurns`) guarantees the tail never collapses
- * below the last N turns regardless of token density. Override per-install via
- * `CODER_COMPACT_PROTECT_RATIO` (Settings → exposed).
+ * below the last N turns regardless of token density. Fixed; no env var or
+ * setting overrides it.
  */
 export const DEFAULT_PROTECT_RATIO = 0.3;
 
-/** Env-resolved protect ratio, clamped so a typo can't zero/expand the tail. */
+/** The fixed protect ratio. */
 export function resolveProtectRatio(): number {
   return DEFAULT_PROTECT_RATIO;
 }
@@ -113,8 +112,8 @@ export function computeProtectTokens(inp: ProtectTokensInputs): number {
  * loop, confirmed in telemetry: one run churned 94 consecutive no-ops). Capping
  * the tail at 50% of the effective window — comfortably below the trigger
  * ratio, leaving room for the synthetic summary — guarantees the post-compaction
- * prompt lands below the trigger. Override via `CODER_COMPACT_RECEDE_TAIL_RATIO`,
- * clamped to stay above the protect floor and below the trigger.
+ * prompt lands below the trigger. Fixed (no env var); clamped to stay above the
+ * protect floor and below the trigger.
  */
 export const DEFAULT_RECEDE_TAIL_RATIO = 0.5;
 

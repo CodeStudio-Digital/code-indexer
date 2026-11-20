@@ -29,16 +29,18 @@ describe('external index ownership contract', () => {
     const mcp = [
       'apps/mcp-server/context.ts',
       'apps/mcp-server/index.ts',
-      'apps/mcp-server/tools/projects.ts',
-      'apps/mcp-server/tools/snapshots.ts',
+      'apps/mcp-server/tools/index-project.ts',
+      'packages/indexer/src/agent-tools/context.ts',
+      'packages/indexer/src/agent-tools/tools/projects.ts',
+      'packages/indexer/src/agent-tools/tools/snapshots.ts',
     ].map(source).join('\n');
 
     expect(mcp).not.toMatch(/from ['"]@mcp\/store\/local-vector-router/);
     expect(mcp).not.toMatch(/from ['"][^'"]*sqlite-vec/);
     expect(mcp).not.toMatch(/\bnew\s+IndexAgent\s*\(/);
-    expect(source('apps/mcp-server/tools/projects.ts')).toContain('requestMcpLocalServer');
-    expect(source('apps/mcp-server/context.ts')).toContain('createMcpSemanticSearchClient(config)');
-    expect(source('apps/mcp-server/context.ts')).toContain(
+    expect(source('apps/mcp-server/tools/index-project.ts')).toContain('requestMcpLocalServer');
+    expect(source('packages/indexer/src/agent-tools/context.ts')).toContain('createMcpSemanticSearchClient(config)');
+    expect(source('packages/indexer/src/agent-tools/context.ts')).toContain(
       'new HybridSearch(db, null, new NullEmbeddingService())',
     );
   });

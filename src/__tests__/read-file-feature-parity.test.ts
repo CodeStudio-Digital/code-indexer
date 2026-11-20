@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { fileTools } from '@apps/mcp-server/tools/file.js';
+import { fileTools } from '@mcp/indexer/agent-tools/tools/file.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 

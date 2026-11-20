@@ -9,7 +9,7 @@
  * Window + ratio come from fixed product constants (8 turns, 0.75). The
  * zero-text condition is deliberate: when the
  * agent narrates a turn it's reasoning, not stuck, so we stay quiet — keeps the
- * false-positive rate near zero for a guard that forces a Planning turn.
+ * false-positive rate near zero.
  *
  * Pure + deterministic. The runner owns the env-tunables and passes them in so
  * the same window/ratio drive both the check and the dashboard banner.

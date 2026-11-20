@@ -171,7 +171,6 @@ export function providersRouter(store: ProviderStore): HttpRouter {
       use_for_general?: boolean;
       is_default?: boolean;
       extra?: Record<string, unknown>;
-      fallback_provider_id?: string | null;
     }>();
     const targetKind = body.kind ?? existing.kind;
     if (targetKind === 'kimi-code') {
@@ -206,10 +205,6 @@ export function providersRouter(store: ProviderStore): HttpRouter {
       extra: body.extra ?? existing.extra,
     });
     if (targetKind === 'kimi-code') store.deleteOAuth(id);
-    // Handle fallback_provider_id separately (not part of upsertProvider)
-    if (body.fallback_provider_id !== undefined) {
-      store.setFallbackProvider(id, body.fallback_provider_id);
-    }
     return c.json(publicProvider(updated));
   });
 

@@ -89,10 +89,6 @@ export class NoProgressTracker {
       stateEpoch,
     };
   }
-
-  clear(): void {
-    this.observations.clear();
-  }
 }
 
 function fingerprint(content: string): string {

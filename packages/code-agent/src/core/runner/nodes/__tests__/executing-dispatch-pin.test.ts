@@ -12,7 +12,6 @@
 import { describe, it, expect } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { DupCallEntry } from '../../machine/types.js';
 import { dispatchTools, type DispatchArgs } from '../executing-dispatch.js';
 
 function makeTool(name: string, opts?: Partial<CoderTool>): CoderTool {
@@ -32,7 +31,6 @@ function pinArgs(registry: ToolRegistry, overrides?: Partial<DispatchArgs>): Dis
     registry,
     toolContext: { cwd: process.cwd(), projectName: 'pin-test' } as ToolContext,
     turn: 1,
-    dupCalls: new Map<string, DupCallEntry>(),
     visibleToolNames: new Set(['visible_tool']),
     ...overrides,
   };

@@ -200,25 +200,11 @@ export class HookBus {
 }
 
 /**
- * Process-local registration surface for built-ins/plugins loaded inside the
- * coder worker. Definitions are copied into a fresh bus per run so ordering
- * and dispatch state cannot leak between concurrent sessions.
+ * Fresh per-run bus. Nothing registers process-wide hooks today; hosts that
+ * need hooks inject a populated bus through `RunCoderOptions.hookBus`.
  */
-const runtimeHookDefinitions: HookDefinition<unknown>[] = [];
-
-export function registerRuntimeHook<Ctx>(definition: HookDefinition<Ctx>): () => void {
-  const stored = definition as HookDefinition<unknown>;
-  runtimeHookDefinitions.push(stored);
-  return () => {
-    const index = runtimeHookDefinitions.indexOf(stored);
-    if (index >= 0) runtimeHookDefinitions.splice(index, 1);
-  };
-}
-
 export function createRuntimeHookBus(): HookBus {
-  const bus = new HookBus();
-  for (const definition of runtimeHookDefinitions) bus.register(definition);
-  return bus;
+  return new HookBus();
 }
 
 /** Structural validation of a JSON Patch proposal — invalid patches are dropped. */

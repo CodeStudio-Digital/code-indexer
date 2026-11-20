@@ -178,10 +178,6 @@ export class ToolCallLedger {
     return count >= 3 ? { operationId, count: count + 1 } : null;
   }
 
-  resetNoProgress(): void {
-    this.noProgressByOperation.clear();
-  }
-
   record(input: {
     name: string;
     args: unknown;

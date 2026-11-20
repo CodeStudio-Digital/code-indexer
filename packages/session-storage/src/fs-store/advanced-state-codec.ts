@@ -68,8 +68,6 @@ export function runtimeFromState(state: SessionState): FsRuntimeSessionState {
       ? (runtime.last_response_message_count as number)
       : null,
     worktree_path: nullableString(runtime.worktree_path),
-    fallback_provider: nullableString(runtime.fallback_provider),
-    fallback_model: nullableString(runtime.fallback_model),
     cloudcode_session_id: nullableString(runtime.cloudcode_session_id),
     base_commit_sha: nullableString(runtime.base_commit_sha),
     last_review_at: nullableString(runtime.last_review_at),

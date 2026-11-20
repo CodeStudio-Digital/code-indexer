@@ -91,8 +91,6 @@ export class ProviderStore {
   setAppSetting(key: string, value: string): void { appSettings.setAppSetting(this.db, key, value); }
   getGeneralDefault(): { providerId: string; modelId: string } | null { return appSettings.getGeneralDefault(this.db); }
   setGeneralDefault(providerId: string, modelId: string): void { appSettings.setGeneralDefault(this.db, providerId, modelId); }
-  getFallbackChain(providerId: string): Array<{ provider: string; model: string }> { return appSettings.getFallbackChain(this.db, providerId); }
-  setFallbackProvider(providerId: string, fallbackProviderId: string | null): void { appSettings.setFallbackProvider(this.db, providerId, fallbackProviderId); }
 
   // ─── Catalog ETag ──────────────────────────────────────────────
   getProviderCatalogEtag(providerId: string): string | null { return catalogEtag.get(this.db, providerId); }

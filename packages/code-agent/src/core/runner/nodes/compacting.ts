@@ -1,9 +1,8 @@
 /**
  * Compacting node — LLM-based context summarization. Entered after Executing
  * emits `TokenThresholdHit`. Delegates the heavy lifting to
- * `compactWithLLM`, then either yields `CompactionDone` so Reviewing can
- * sanity-check the new history, or bumps the `compact-failure` counter and
- * routes to Recovering via `ProviderError`.
+ * `compactWithLLM` and yields `CompactionDone` so Reviewing can sanity-check
+ * the new history.
  *
  * Strategy (per the BT plan §3):
  *   - cutoff via `computeCutoffIndexByTokens` with protect = 15% of effective
@@ -15,13 +14,16 @@
  *   - replace head with a single synthetic `user` message rendered from
  *     the bounded V3 resume (tagged blocks).
  *
- * On failure, the `compact-failure` circuit breaker (`recoveryCap=3` by
- * default) eventually aborts the run with `stopReason='compact_failure'`.
+ * A failed summary is retried once in the same visit (a transient blip still
+ * yields a summary). A second failure drops the head mechanically instead:
+ * losing the summary is strictly better than losing the run. Neither path
+ * goes through `ProviderError`, so compaction failures never spend the
+ * per-turn transient retry budget nor add pre-emit passes. When even the cut
+ * frees nothing, the visit is a no-op and the pre-emit gate's own cap decides
+ * (`compact_exhausted`).
  */
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import { events } from '../machine/events.js';
-import { bumpRecovery } from '../machine/context.js';
-import { recoveryCap } from '../recovery-config.js';
 import { compactWithLLM, truncateHeadMechanically } from '../compaction/llm-compactor.js';
 import { computeProtectTokens, resolveRecedeTailRatio } from '../compaction/threshold.js';
 import { spillOversizedToolResults } from '../compaction/spill-oversized.js';
@@ -145,7 +147,7 @@ export class CompactingNode implements BehaviorNode {
         );
       }
     }
-    const result = precomputed ?? await compactWithLLM({
+    const summarize = () => compactWithLLM({
       messages: ctx.messages,
       protectTokens,
       maxTailTokens: effectiveMaxTailTokens,
@@ -158,100 +160,66 @@ export class CompactingNode implements BehaviorNode {
       // call) can be cancelled instead of stalling the whole Compacting node.
       signal: ctx.opts.toolContext.signal,
     });
+    let result = precomputed ?? await summarize();
+    // One retry absorbs a transient summarizer failure in this same visit.
+    if (!result.ok && !ctx.opts.toolContext.signal?.aborted) result = await summarize();
+    let summaryError: string | null = null;
 
     if (!result.ok) {
-      const attempts = bumpRecovery(ctx, 'compact-failure');
-      const cap = recoveryCap('compact-failure');
-
-      ctx.emit('history_compacted', {
-        strategy: 'none',
-        pruned_messages: 0,
-        pruned_chars: 0,
-        total_chars_before: charsBefore,
-        total_chars_after: charsBefore,
-        auto_continue: ctx.autoContinues,
-        trigger,
-      });
-
-      if (attempts > cap) {
-        // Last resort before killing the run: the summarizer is unavailable
-        // (cap consecutive failures), but the history may still shrink
-        // mechanically — losing the summary is strictly better than losing
-        // the run. Abort only when even the deterministic cut is a no-op —
-        // or when the "failure" is actually the user's abort signal (a run
-        // the user cancelled must not be revived by the fallback).
-        const fallback = ctx.opts.toolContext.signal?.aborted
-          ? null
-          : truncateHeadMechanically({
-              messages: ctx.messages,
-              protectTokens,
-              maxTailTokens: effectiveMaxTailTokens,
-            });
-        if (fallback && fallback.collapsedFrom > 0) {
-          ctx.messages.splice(0, ctx.messages.length, ...fallback.messages);
-          flushRollingReductionDurable(ctx);
-          ctx.consecutiveNoopCompactions = 0;
-          ctx.recovery.set('compact-failure', 0);
-          ctx.injectionState.recentCompactionAt = ctx.turn;
-          // Checkpoint the loop-aware signals like the summarizer path does,
-          // so `cumulative` / `stuck-progress` don't re-fire immediately.
-          ctx.cumulativeAtLastCompaction = ctx.cumulativeInputTokens;
-          ctx.consecutiveNoTextTurns = 0;
-          const charsAfter = approxChars(ctx.messages);
-          ctx.emit('history_compacted', {
-            strategy: 'deterministic',
-            pruned_messages: Math.max(0, fallback.collapsedFrom - fallback.collapsedTo),
-            pruned_chars: Math.max(0, charsBefore - charsAfter),
-            total_chars_before: charsBefore,
-            total_chars_after: charsAfter,
-            auto_continue: ctx.autoContinues,
-            trigger,
-          });
-          await finishAttempt({
-            status: 'deterministic_fallback',
-            strategy: 'deterministic',
-            summarizer_ran: true,
-            history_chars_after: charsAfter,
-            pruned_messages: Math.max(0, fallback.collapsedFrom - fallback.collapsedTo),
-            error_message: result.error?.message ?? null,
-          });
-          if (isMilestone) ctx.bridge?.clearMilestoneCompaction?.();
-          return events.compactionDone({
-            collapsedFrom: fallback.collapsedFrom,
-            collapsedTo: fallback.collapsedTo,
-          });
-        }
-
-        ctx.emit('recovery_aborted', {
-          kind: 'compact-failure',
-          attempts,
-          cap,
-          contextHint: result.error?.message ?? null,
-        });
-        ctx.stopReason = 'compact_failure';
-        ctx.transition = 'compact-pre-turn';
-        ctx.error = result.error ?? new Error('Compaction failed');
+      summaryError = result.error?.message ?? 'summary providers failed';
+      // A user abort must stay an abort: never revive a cancelled run with a cut.
+      if (ctx.opts.toolContext.signal?.aborted) {
+        ctx.aborted = true;
+        ctx.stopReason = 'aborted';
         await finishAttempt({
           status: 'noop',
           strategy: 'none',
           summarizer_ran: true,
           history_chars_after: charsBefore,
-          error_message: result.error?.message ?? 'compaction aborted',
+          error_message: summaryError,
         });
         return events.aborted();
       }
-
-      // Below cap — surface as a retryable provider error so Recovering
-      // applies backoff and the loop tries another turn (which may or may
-      // not re-cross the token threshold).
-      await finishAttempt({
-        status: 'noop',
-        strategy: 'none',
-        summarizer_ran: true,
-        history_chars_after: charsBefore,
-        error_message: result.error?.message ?? 'summary providers failed',
+      const fallback = truncateHeadMechanically({
+        messages: ctx.messages,
+        protectTokens,
+        maxTailTokens: effectiveMaxTailTokens,
       });
-      return events.providerError({ retryable: true, status: 500 });
+      if (fallback.collapsedFrom > 0) {
+        ctx.messages.splice(0, ctx.messages.length, ...fallback.messages);
+        flushRollingReductionDurable(ctx);
+        ctx.consecutiveNoopCompactions = 0;
+        ctx.injectionState.recentCompactionAt = ctx.turn;
+        // Checkpoint the loop-aware signals like the summarizer path does,
+        // so `cumulative` / `stuck-progress` don't re-fire immediately.
+        ctx.cumulativeAtLastCompaction = ctx.cumulativeInputTokens;
+        ctx.consecutiveNoTextTurns = 0;
+        const charsAfter = approxChars(ctx.messages);
+        ctx.emit('history_compacted', {
+          strategy: 'deterministic',
+          pruned_messages: Math.max(0, fallback.collapsedFrom - fallback.collapsedTo),
+          pruned_chars: Math.max(0, charsBefore - charsAfter),
+          total_chars_before: charsBefore,
+          total_chars_after: charsAfter,
+          auto_continue: ctx.autoContinues,
+          trigger,
+        });
+        await finishAttempt({
+          status: 'deterministic_fallback',
+          strategy: 'deterministic',
+          summarizer_ran: true,
+          history_chars_after: charsAfter,
+          pruned_messages: Math.max(0, fallback.collapsedFrom - fallback.collapsedTo),
+          error_message: summaryError,
+        });
+        if (isMilestone) ctx.bridge?.clearMilestoneCompaction?.();
+        return events.compactionDone({
+          collapsedFrom: fallback.collapsedFrom,
+          collapsedTo: fallback.collapsedTo,
+        });
+      }
+      // The cut frees nothing either: handle it like any other no-op below.
+      result = fallback;
     }
 
     // Fix B — checkpoint the loop-aware compaction signals once we've reached a
@@ -281,10 +249,9 @@ export class CompactingNode implements BehaviorNode {
       if (spill.spilled > 0 && spill.freedChars > 0) {
         ctx.messages.splice(0, ctx.messages.length, ...spill.messages);
         flushRollingReductionDurable(ctx);
-        // A real reduction freed space — clear the no-op streak and the
-        // compact-failure breaker, same as the summarizer path below.
+        // A real reduction freed space — clear the no-op streak, same as the
+        // summarizer path below.
         ctx.consecutiveNoopCompactions = 0;
-        ctx.recovery.set('compact-failure', 0);
         ctx.injectionState.recentCompactionAt = ctx.turn;
         const charsAfter = approxChars(ctx.messages);
         ctx.emit('history_compacted', {
@@ -325,8 +292,9 @@ export class CompactingNode implements BehaviorNode {
       await finishAttempt({
         status: 'noop',
         strategy: 'none',
-        summarizer_ran: false,
+        summarizer_ran: summaryError != null,
         history_chars_after: charsBefore,
+        ...(summaryError != null ? { error_message: summaryError } : {}),
       });
       return events.compactionDone({ collapsedFrom: 0, collapsedTo: 0 });
     }
@@ -368,9 +336,6 @@ export class CompactingNode implements BehaviorNode {
     flushRollingReductionDurable(ctx);
     // A real compaction freed space — clear the no-op streak.
     ctx.consecutiveNoopCompactions = 0;
-    // Reset the compact-failure counter on a clean run — the circuit
-    // breaker should fire only on CONSECUTIVE failures.
-    ctx.recovery.set('compact-failure', 0);
     // PR-F dynamic injection — mark the compaction so the next Executing
     // turn renders a "context summarized" reminder. Carries for ≤2 turns
     // (clamped inside the dynamic-injection helper) then auto-clears.

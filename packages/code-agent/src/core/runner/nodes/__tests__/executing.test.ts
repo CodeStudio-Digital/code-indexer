@@ -3,8 +3,8 @@
  * single hand-rolled tool plus an async-generator provider so the node's
  * pipeline runs end-to-end without external dependencies.
  *
- * Scope: the three terminal outcomes Commit 6 covers — CleanFinish,
- * TurnSucceeded (with tools), ToolLoopDetected (via dedup refusal). Token-
+ * Scope: the terminal outcomes Commit 6 covers — CleanFinish and
+ * TurnSucceeded (with tools). Token-
  * threshold and provider-error paths are exercised by the threshold /
  * recovering tests respectively; here we focus on the integration glue.
  */

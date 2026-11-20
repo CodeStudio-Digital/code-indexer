@@ -132,11 +132,7 @@ import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bind
 import { PipelineProviderResolver, generalDefaultAsFallback } from '@mcp/services/pipelines/index.js';
 import { TaskPreflightService } from '@mcp/services/services/task-preflight/index.js';
 import { setSandboxArchiveBundleResolver } from '@mcp/services/sandbox/archive.js';
-import { getAllKnownToolsMeta } from '@mcp/code-agent/tools/tiers.js';
-import {
-  buildPreflightToolCatalog,
-  buildPreflightSkillCatalog,
-} from './preflight-capability-catalog.js';
+import { buildPreflightSkillCatalog } from './preflight-capability-catalog.js';
 import { createGitHubAppManagedGitClient } from './github-app-managed-git/client.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import { SubAgentResultCacheStore } from '@mcp/store/sub-agent-result-cache-store.js';
@@ -1144,16 +1140,12 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
   // per-stage telemetry. The references here are the same instances.
   // Task preflight — analyzes the FIRST prompt of a fresh coder session.
   // Runs zero-config: a `code-agent/preflight` binding wins, else the general
-  // default model (getFallbackDefault). The catalog spans native tools +
-  // cached external MCP tools + active skills, so the analyzer can pin MCP
-  // tools and suggest task-relevant skills. The memory index reads the same
+  // default model (getFallbackDefault). The analyzer sees active skills (to
+  // suggest task-relevant ones) and the memory index, which reads the same
   // store that feeds the runner's MEMORY.md-style block.
-  const nativeToolMeta = () =>
-    getAllKnownToolsMeta().map((t) => ({ name: t.name, tier: t.tier, description: t.description }));
   const taskPreflight = new TaskPreflightService({
     resolver: pipelineProviderResolver,
     getFallbackDefault: () => generalDefaultAsFallback(providerStore),
-    getToolCatalog: () => buildPreflightToolCatalog(config.dbPath, nativeToolMeta()),
     getSkillCatalog: (_sessionId, projectId, projectRoot, activeSkillIds) =>
       buildPreflightSkillCatalog(
         skillStore,

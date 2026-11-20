@@ -97,7 +97,6 @@ export default function Admin() {
     setSubagentTarget,
     setSubagentEffort,
     setSubagentLimits,
-    setFallback,
   } = useAdminProviders();
 
   // Pre-fetch the model list for every provider so the grid tile can
@@ -359,7 +358,6 @@ export default function Admin() {
                 }
                 onSetModelMaxTools={(modelId, mode, value) => expanded && setModelMaxTools(expanded, modelId, mode, value)}
                 onBackfillContextWindows={backfillContextWindows}
-                onSetFallback={setFallback}
                 onSetSubagentTarget={setSubagentTarget}
                 onSetSubagentEffort={setSubagentEffort}
                 onSetSubagentLimits={setSubagentLimits}

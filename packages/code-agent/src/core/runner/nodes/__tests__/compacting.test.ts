@@ -5,7 +5,7 @@
  * inject via `summarizeOverride` so tests don't depend on the real
  * provider streaming path (that's covered by `llm-compactor.test.ts`).
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { CompactionSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import { CompactingNode } from '../compacting.js';
@@ -38,13 +38,6 @@ const STUB_SUMMARY: CompactionSummaryV2 = {
   next_step: 'commit',
 };
 
-beforeEach(() => {
-  vi.stubEnv('CODER_STRUCTURED_SUMMARY', '1');
-  vi.stubEnv('CODER_NEW_COMPACTION', '1');
-});
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 describe('CompactingNode', () => {
   it('compacts a long history, splices a synthetic summary, emits CompactionDone', async () => {
@@ -162,28 +155,8 @@ describe('CompactingNode', () => {
     expect(ctx.messages).toEqual([user('short'), assistant('also short')]);
   });
 
-  it('falls through to ProviderError(retryable) when summarize fails under cap', async () => {
-    const { ctx } = makeTestContext();
-    const messages: AgentMessage[] = [];
-    for (let i = 0; i < 20; i++) {
-      messages.push(user(`u${i}`));
-      messages.push(assistant(`a${i}`));
-    }
-    ctx.messages = messages;
-
-    const event = await new CompactingNode({
-      protectTokensOverride: 10,
-      summarizeOverride: async () => null,
-    }).execute(ctx, null);
-
-    expect(event.kind).toBe('ProviderError');
-    expect(ctx.recovery.get('compact-failure')).toBe(1);
-    expect(ctx.stopReason).toBe(null);
-  });
-
-  it('falls back to mechanical truncation instead of aborting when over the recovery cap', async () => {
+  it('cuts mechanically in the same visit when the summarizer keeps failing', async () => {
     const { ctx, recordedEvents } = makeTestContext();
-    ctx.recovery.set('compact-failure', 3);
     const messages: AgentMessage[] = [];
     for (let i = 0; i < 20; i++) {
       messages.push(user(`u${i}`));
@@ -191,52 +164,72 @@ describe('CompactingNode', () => {
     }
     const originalLength = messages.length;
     ctx.messages = messages;
+    let calls = 0;
 
-    // The next failure is over the product cap → deterministic head-drop.
-    const second = await new CompactingNode({
+    const event = await new CompactingNode({
       protectTokensOverride: 10,
-      summarizeOverride: async () => null,
+      summarizeOverride: async () => { calls++; return null; },
     }).execute(ctx, null);
-    expect(second.kind).toBe('CompactionDone');
+
+    expect(event.kind).toBe('CompactionDone');
+    expect(calls).toBe(2);
     expect(ctx.stopReason).toBe(null);
     expect(ctx.messages.length).toBeLessThan(originalLength);
-    const marker = ctx.messages[0].content[0] as { text: string };
-    expect(marker.text).toContain('[context truncated]');
-    // Breaker resets so the NEXT summarizer failure gets fresh retries.
-    expect(ctx.recovery.get('compact-failure')).toBe(0);
-    expect(recordedEvents.find((r) => r.event === 'recovery_aborted')).toBeUndefined();
+    expect((ctx.messages[0].content[0] as { text: string }).text).toContain('[context truncated]');
     const strategies = recordedEvents
       .filter((r) => r.event === 'history_compacted')
       .map((r) => (r.args[0] as { strategy: string }).strategy);
-    expect(strategies).toContain('deterministic');
+    expect(strategies).toEqual(['deterministic']);
   });
 
-  it('still aborts over cap when the failure came from the user abort signal', async () => {
-    const abort = new AbortController();
-    abort.abort();
-    const { ctx, recordedEvents } = makeTestContext({
-      toolContext: { signal: abort.signal } as never,
-    });
-    ctx.recovery.set('compact-failure', 3);
+  it('retries a one-off summarizer failure and keeps the summary', async () => {
+    const { ctx, recordedEvents } = makeTestContext();
     const messages: AgentMessage[] = [];
     for (let i = 0; i < 20; i++) {
       messages.push(user(`u${i}`));
       messages.push(assistant(`a${i}`));
     }
     ctx.messages = messages;
+    let calls = 0;
 
-    // Already at the product cap; the next failure is over it. Aborted signal blocks
-    // the mechanical fallback (a cancelled run must stay cancelled).
     const event = await new CompactingNode({
       protectTokensOverride: 10,
-      summarizeOverride: async () => null,
+      summarizeOverride: async () => (++calls === 1 ? null : STUB_SUMMARY),
+    }).execute(ctx, null);
+
+    expect(event.kind).toBe('CompactionDone');
+    expect(calls).toBe(2);
+    expect((ctx.messages[0].content[0] as { text: string }).text).not.toContain('[context truncated]');
+    const strategies = recordedEvents
+      .filter((r) => r.event === 'history_compacted')
+      .map((r) => (r.args[0] as { strategy: string }).strategy);
+    expect(strategies).toEqual(['summarizer']);
+  });
+
+  it('keeps a user abort during a failed summary an abort (no retry, no cut)', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const { ctx, recordedEvents } = makeTestContext({
+      toolContext: { signal: abort.signal } as never,
+    });
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      messages.push(user(`u${i}`));
+      messages.push(assistant(`a${i}`));
+    }
+    ctx.messages = messages;
+    let calls = 0;
+
+    // A cancelled run must stay cancelled: no retry and no mechanical cut.
+    const event = await new CompactingNode({
+      protectTokensOverride: 10,
+      summarizeOverride: async () => { calls++; return null; },
     }).execute(ctx, null);
     expect(event.kind).toBe('Aborted');
-    expect(ctx.stopReason).toBe('compact_failure');
-
-    const aborted = recordedEvents.find((r) => r.event === 'recovery_aborted');
-    expect(aborted).toBeDefined();
-    expect((aborted!.args[0] as { kind: string }).kind).toBe('compact-failure');
+    expect(ctx.stopReason).toBe('aborted');
+    expect(calls).toBeLessThanOrEqual(1);
+    expect(ctx.messages).toHaveLength(40);
+    expect(recordedEvents.find((r) => r.event === 'history_compacted')).toBeUndefined();
   });
 
   it('increments consecutiveNoopCompactions on a no-op (collapsedFrom=0)', async () => {

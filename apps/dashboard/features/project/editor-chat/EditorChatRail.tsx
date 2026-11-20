@@ -356,9 +356,6 @@ export function EditorChatRail({
           setOutputCapLevel={s.setOutputCapLevel}
           toolPermissionMode={s.toolPermissionMode}
           setToolPermissionMode={s.setToolPermissionMode}
-          fallbackProvider={s.fallbackProvider}
-          fallbackModel={s.fallbackModel}
-          onFallbackChange={s.onFallbackChange}
           temperature={s.temperature}
           setTemperature={s.setTemperature}
           reasoningEffort={s.reasoningEffort}

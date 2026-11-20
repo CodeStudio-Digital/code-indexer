@@ -65,8 +65,6 @@ export interface FsCoderSession {
   agent: string | null;
   todos_json: string | null;
   worktree_path: string | null;
-  fallback_provider: string | null;
-  fallback_model: string | null;
   cloudcode_session_id: string | null;
   last_response_id: string | null;
   last_response_message_count: number | null;

@@ -73,7 +73,7 @@ describe('edit_file fuzzy matching', () => {
     expect(r.content).toContain('Do not retry');
   });
 
-  it('fuzzy hint surfaces a nearby line when old_string partially matches', async () => {
+  it('failure hint surfaces the closest region when old_string partially matches', async () => {
     writeFileSync(join(root, 'hint.ts'), 'line a\nline b: actual content here\nline c\n');
     const r = await editFile.handler({
       path: 'hint.ts',
@@ -81,7 +81,7 @@ describe('edit_file fuzzy matching', () => {
       new_string: 'replaced',
     }, ctx);
     expect(r.isError).toBe(true);
-    expect(r.content).toMatch(/Match.*near line \d+/);
+    expect(r.content).toMatch(/Closest region: lines \d+-\d+/);
     expect(r.content).toContain('line b: actual content here');
   });
 
@@ -141,29 +141,6 @@ describe('edit_file fuzzy matching', () => {
     expect(r.isError).toBeUndefined();
     expect(r.content).toContain('indentation flexible');
     expect(readFileSync(join(root, 'indent.ts'), 'utf-8')).toContain('return 42;');
-  });
-
-  it('block-anchor: matches when middle body differs slightly', async () => {
-    const src = [
-      'function compute(a, b) {',
-      '  const temp = a * 2;',
-      '  const result = temp + b;',
-      '  return result;',
-      '}',
-      '',
-    ].join('\n');
-    writeFileSync(join(root, 'block.ts'), src);
-    // Old middle is completely wrong but anchors (first/last line) match exactly
-    const r = await editFile.handler({
-      path: 'block.ts',
-      old_string: 'function compute(a, b) {\n  // stale middle\n  // more stale\n  // even more stale\n}',
-      new_string: 'function compute(a, b) {\n  return a + b;\n}',
-    }, ctx);
-    // Block-anchor requires same line count; give it the right count:
-    // Our old has 5 lines, src's function is 5 lines too. Should match.
-    expect(r.isError).toBeUndefined();
-    expect(r.content).toMatch(/block anchor|context aware/);
-    expect(readFileSync(join(root, 'block.ts'), 'utf-8')).toContain('return a + b;');
   });
 
   it('context-aware: rejects block-anchor match when middle is dissimilar beyond threshold', async () => {

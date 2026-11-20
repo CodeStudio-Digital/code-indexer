@@ -1,6 +1,6 @@
 /**
  * Shown while the BLOCKING task-preflight analysis runs on the first message of
- * a fresh session — the model is picking the tool profile / MCP tools / skills
+ * a fresh session — the model is picking the tool profile / skills / memories
  * before the run starts. Replaces the bare spinner with a labelled indicator +
  * elapsed seconds so a ~10s wait doesn't read as frozen.
  */

@@ -10,8 +10,8 @@
  * the agent validates its own work before claiming done. The agent then decides
  * which findings to accept and applies the fixes with edit_file.
  *
- * Always registered (bootstrap tier). A settings toggle (CODER_SELF_REVIEW)
- * only controls the proactive reminder, not availability.
+ * Always registered (bootstrap tier). The runner pushes no proactive reminder
+ * to call it, and no setting toggles it.
  */
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';

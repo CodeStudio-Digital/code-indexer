@@ -14,7 +14,6 @@
  *   - observer methods never throw (telemetry sink failures are swallowed).
  */
 import { describe, it, expect } from 'vitest';
-import type { DupCallEntry } from '../../machine/types.js';
 import type { FailureStreakState } from '../failure-streak.js';
 import { NoProgressTracker } from '../no-progress.js';
 import { ToolCallLedger } from '../../../tool-call-ledger.js';
@@ -23,7 +22,6 @@ import { buildNestedToolObserver, nestedGuardsEnabled } from '../nested-observer
 
 function deps(over?: Partial<Parameters<typeof buildNestedToolObserver>[0]>) {
   return {
-    dupCalls: new Map<string, DupCallEntry>(),
     failureStreaks: { streaks: new Map() } as FailureStreakState,
     turn: 7,
     parentToolUseId: 'ce_parent_1',
@@ -42,18 +40,14 @@ const afterArgs = (name: string, isError: boolean, preview = isError ? 'err' : '
 });
 
 describe('nested invocation-local dedup', () => {
-  it('never blocks stable reads, even when the legacy shared table is populated', () => {
-    const d = deps({
-      dupCalls: new Map([['read_file|legacy', { count: 99, firstTurn: 1, lastUseId: 'old' }]]),
-    });
-    const obs = buildNestedToolObserver(d);
+  it('never blocks stable reads', () => {
+    const obs = buildNestedToolObserver(deps());
 
     for (let i = 0; i < 5; i++) {
       expect(obs.beforeNestedCall('read_file', { path: 'a.ts' }, {
         repeatPolicy: 'stable', executionClass: 'read', stateEpoch: 0,
       })).toBeNull();
     }
-    expect(d.dupCalls.get('read_file|legacy')?.count).toBe(99);
   });
 
   it('records repeated mutations as observations with a child attempt id', () => {

@@ -438,6 +438,53 @@ describe('POST /messages idempotency', () => {
     );
   });
 
+  it('reads a cached seed written before tool pins were retired, without passing the pins on', async () => {
+    vi.stubEnv('CODER_PREFLIGHT', '1');
+    const content = 'fix the retry race';
+    const h = setup(new RecentMessageKeys(), {
+      projectFresh: true,
+      preflightSeedJson: JSON.stringify({
+        h: preflightHash(`${content}\0`),
+        seed: { taskKind: 'bugfix', profile: 'navigate', pinTools: ['read_file', 'ext_srv__call'] },
+      }),
+    });
+
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
+      content,
+      client_msg_id: 'preflight-legacy-pins',
+    });
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    expect(h.taskPreflightRun).not.toHaveBeenCalled();
+    const call = poolMock.runFresh.mock.calls[0]![1] as { preflight?: unknown };
+    expect(call.preflight).toEqual({ taskKind: 'bugfix', profile: 'navigate' });
+  });
+
+  it('records the preflight trail without tool pins', async () => {
+    vi.stubEnv('CODER_PREFLIGHT', '1');
+    const taskPreflightRun = vi.fn(async () => ({
+      status: 'ok' as const,
+      seed: { taskKind: 'bugfix', profile: 'navigate' as const },
+      raw: '{}',
+      latencyMs: 3,
+    }));
+    const h = setup(new RecentMessageKeys(), { projectFresh: true, taskPreflightRun });
+
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
+      content: 'fix the login race',
+      client_msg_id: 'preflight-trail',
+    });
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
+    const trail = h.inputCalls.find((input) => (input as { kind?: string }).kind === 'preflight') as
+      { meta?: Record<string, unknown> } | undefined;
+    expect(trail?.meta).toMatchObject({ status: 'ok', task_kind: 'bugfix', profile: 'navigate' });
+    expect(trail?.meta).not.toHaveProperty('tools');
+    expect(trail?.meta).not.toHaveProperty('ext_tools');
+  });
+
   it('rejects a concurrent payload conflict before duplicate preflight or run side effects', async () => {
     vi.stubEnv('CODER_PREFLIGHT', '1');
     let releasePreflight!: () => void;

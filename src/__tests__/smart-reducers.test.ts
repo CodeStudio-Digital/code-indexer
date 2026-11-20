@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  applySmartReducer,
+  applySmartReducerDetailed,
   reduceGitLog,
   reduceGitDiff,
   reduceGrep,
@@ -117,26 +117,26 @@ describe('reduceRunCommand — keep head + tail (errors usually at the end)', ()
   });
 });
 
-describe('applySmartReducer — registry dispatch', () => {
+describe('applySmartReducerDetailed — registry dispatch', () => {
   it('returns content unchanged for unregistered tools', () => {
     const content = 'x'.repeat(50_000);
-    expect(applySmartReducer('write_file', content, 1_000)).toBe(content);
+    expect(applySmartReducerDetailed('write_file', content, 1_000).content).toBe(content);
   });
 
   it('routes git_log / git_diff / grep_code / run_command to their reducers', () => {
     const log = Array.from({ length: 20 }, (_, i) => `commit ${'a'.repeat(40)}\n${'msg ' + i + ' ' + 'x'.repeat(200)}`).join('\n');
-    expect(applySmartReducer('git_log', log, 2_000).length).toBeLessThan(log.length);
+    expect(applySmartReducerDetailed('git_log', log, 2_000).content.length).toBeLessThan(log.length);
 
     const grep = Array.from({ length: 30 }, (_, i) => `f.ts:${i}: hit ${'x'.repeat(60)}`).join('\n');
-    expect(applySmartReducer('grep_code', grep, 500).length).toBeLessThan(grep.length);
+    expect(applySmartReducerDetailed('grep_code', grep, 500).content.length).toBeLessThan(grep.length);
     // mcp__grep_code routes to the same reducer
-    expect(applySmartReducer('mcp__grep_code', grep, 500).length).toBeLessThan(grep.length);
+    expect(applySmartReducerDetailed('mcp__grep_code', grep, 500).content.length).toBeLessThan(grep.length);
   });
 
   it('is idempotent — applying twice == applying once', () => {
     const content = Array.from({ length: 30 }, (_, i) => `f.ts:${i}: hit ${'x'.repeat(80)}`).join('\n');
-    const once = applySmartReducer('grep_code', content, 1_000);
-    const twice = applySmartReducer('grep_code', once, 1_000);
+    const once = applySmartReducerDetailed('grep_code', content, 1_000).content;
+    const twice = applySmartReducerDetailed('grep_code', once, 1_000).content;
     expect(twice).toBe(once);
   });
 });
@@ -385,7 +385,7 @@ describe('reduceRunCommand — per-command dispatch', () => {
     expect(r1.content).toBe(r2.content);
   });
 
-  it('is idempotent — applying twice via applySmartReducer == applying once', () => {
+  it('is idempotent — applying twice via applySmartReducerDetailed == applying once', () => {
     const stdout = [
       'On branch main',
       'Changes not staged for commit:',
@@ -393,8 +393,8 @@ describe('reduceRunCommand — per-command dispatch', () => {
       ...Array.from({ length: 30 }, (_, i) => `\tmodified:   file${i}.ts`),
     ].join('\n');
     const content = envelope('git status', 0, stdout);
-    const once = applySmartReducer('run_command', content, 400);
-    const twice = applySmartReducer('run_command', once, 400);
+    const once = applySmartReducerDetailed('run_command', content, 400).content;
+    const twice = applySmartReducerDetailed('run_command', once, 400).content;
     expect(twice).toBe(once);
   });
 

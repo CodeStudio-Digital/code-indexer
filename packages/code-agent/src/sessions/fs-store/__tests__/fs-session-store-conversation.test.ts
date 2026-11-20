@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ArtifactStore, toolOutputRecordFileName } from '@mcp/session-storage';
 import { FsSessionStore } from '../fs-session-store.js';
-import { unresolvedToolOutcome } from '../../../core/uncertain-tool-outcome.js';
+import { unresolvedToolOutcomes } from '../../../core/uncertain-tool-outcome.js';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -140,7 +140,7 @@ describe('FsSessionStore conversation journal', () => {
       listProjectRoots: () => [{ project_id: 7, root_path: projectRoot }],
     } });
     const history = await store.listMessagesAfter(session.id, 0);
-    expect(unresolvedToolOutcome(history.messages)).toBe('uncertain-call');
+    expect(unresolvedToolOutcomes(history.messages)[0]).toBe('uncertain-call');
     const boundary = (await store.loadSessionWithMessages(session.id))!.message_rows.at(-1)!.seq;
     await store.setCompactionBoundary(session.id, 'The operation was interrupted.', boundary, 'manual');
     await store.appendMessage({ session_id: session.id, message: { role: 'user', content: [{ type: 'text', text: 'Continue' }] } });
@@ -150,7 +150,7 @@ describe('FsSessionStore conversation journal', () => {
       listProjectRoots: () => [{ project_id: 7, root_path: projectRoot }],
     } });
     const compacted = await store.loadSessionWithMessages(session.id);
-    expect(unresolvedToolOutcome(compacted!.messages)).toBeUndefined();
+    expect(unresolvedToolOutcomes(compacted!.messages)[0]).toBeUndefined();
     expect(compacted!.unresolved_tool_outcomes).toEqual(['uncertain-call']);
   });
   it('persists warmed turns without rereading the full journal', async () => {

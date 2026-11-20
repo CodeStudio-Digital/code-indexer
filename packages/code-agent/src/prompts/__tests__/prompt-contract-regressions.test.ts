@@ -87,20 +87,7 @@ describe('action, approval and recovery prompt contracts', () => {
 });
 
 describe('compaction input boundaries', () => {
-  it('bounds legacy verbatim excerpts without sacrificing pending authority or the JSON schema', () => {
-    const prompt = loadPrompt('summarize-v2').replace(/\r\n/g, '\n');
-    const start = prompt.indexOf('{');
-    const end = prompt.indexOf('\n}\n', start) + 2;
-    const schema = JSON.parse(prompt.slice(start, end)) as Record<string, unknown>;
-    expect(Object.keys(schema)).toEqual(['primary_request', 'key_concepts', 'files_and_code', 'errors_and_fixes', 'problem_solving', 'all_user_messages', 'pending_tasks', 'current_work', 'next_step']);
-    expect(prompt).toContain('at most 8 entries including an omission marker');
-    expect(prompt).toContain('budget takes precedence over the excerpt count');
-    expect(prompt).toContain('pending approvals and unknown effects');
-    expect(prompt).not.toContain('never trim user messages');
-    expect(prompt.length).toBeLessThanOrEqual(3200);
-  });
-
-  it.each(['summarize', 'summarize-v2', 'summarize-v3'])('treats %s input as data without inventing authority', (name: string) => {
+  it.each(['summarize-v3'])('treats %s input as data without inventing authority', (name: string) => {
     expect(loadPrompt(name)).toMatch(/data.*(not instructions|never instructions)/s);
   });
 });

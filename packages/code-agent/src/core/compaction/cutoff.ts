@@ -1,27 +1,5 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { estimateMessageTokens } from '@mcp/code-agent/core/token-accounting.js';
-import { messageChars } from './char-counts.js';
-import { PRUNE_PROTECT } from './limits.js';
-
-/**
- * Determine the cutoff index: the smallest index `i` such that the combined
- * size of `messages[i..]` is ≤ `protect`. Messages strictly before this index
- * are candidates for compaction.
- */
-export function computeCutoffIndex(messages: AgentMessage[], protect = PRUNE_PROTECT): number {
-  let running = 0;
-  // Walk from tail toward head, growing the protected tail.
-  for (let i = messages.length - 1; i >= 0; i--) {
-    running += messageChars(messages[i]);
-    if (running > protect) {
-      // messages[i] pushed us over the budget — everything BEFORE i is
-      // compactable, i itself stays.
-      return i + 1;
-    }
-  }
-  // Entire history fits under the protect budget.
-  return 0;
-}
 
 /**
  * Token-based cutoff: walk from the tail and keep messages until their
@@ -221,23 +199,4 @@ export function recedeToPreserveLastNRenderableTurns(
   // budget the loop returned a SAFE bounded boundary unless everything fit
   // (then `safe` reached 0). Either way `safe` is the furthest valid recede.
   return safe;
-}
-
-/**
- * Adjust cutoff so it never falls between an assistant message (with tool_use
- * blocks) and its paired tool message (with tool_result blocks).
- *
- * @deprecated Use `snapCutoffPreservingPairs` — handles split pairs correctly.
- */
-export function snapCutoffToRoleBoundary(messages: AgentMessage[], cutoff: number): number {
-  while (cutoff < messages.length && messages[cutoff].role === 'tool') {
-    cutoff++;
-  }
-  if (cutoff < messages.length && messages[cutoff].role === 'assistant') {
-    cutoff++;
-    while (cutoff < messages.length && messages[cutoff].role === 'tool') {
-      cutoff++;
-    }
-  }
-  return cutoff;
 }

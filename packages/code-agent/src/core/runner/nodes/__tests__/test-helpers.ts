@@ -95,7 +95,6 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     transientRetriesThisTurn: 0,
     transportRetriesThisTurn: 0,
     providerAttempts: 0,
-    dupCalls: new Map(),
     noProgressTracker: new NoProgressTracker(),
     autoContinues: 0,
     preEmitCompactions: 0,
@@ -105,7 +104,6 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       ledgerStartSeq: overrides.toolContext?.toolCallLedger?.lastSeq ?? 0,
       nudges: 0,
     },
-    lastStrategyNudgeTurnByKey: new Map(),
     estimateCalibration: null,
     // Perf W1 — precompute/memo slots start empty like production context.
     summaryPrecompute: null,
@@ -143,7 +141,6 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       lastInjectedUserMemoryHash: null,
       lastInjectedPreflightHash: null,
       // Fix A — self_review nudge gate state.
-      selfReview: { suppressed: false },
       correctionNudge: { lastHash: null, count: 0 },
     },
   };

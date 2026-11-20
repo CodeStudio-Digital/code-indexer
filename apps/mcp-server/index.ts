@@ -13,7 +13,7 @@ import { buildContext } from './context.js';
 import { allTools, buildToolRegistry } from './tools/index.js';
 import { allResources, collectListedResources, readResource } from './resources/index.js';
 import { resourcePage } from './resources/page.js';
-import { coerceArgs } from './utils.js';
+import { coerceArgs } from '@mcp/indexer/agent-tools/utils.js';
 import { VERSION, PACKAGE_NAME } from '@mcp/shared/version.js';
 import { disposeIndexerProcessResources } from '@mcp/indexer/bootstrap/dispose.js';
 import { normalizeMcpToolResult, mcpToolResultFields } from './tool.js';

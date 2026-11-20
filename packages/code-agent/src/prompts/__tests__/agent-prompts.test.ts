@@ -45,7 +45,7 @@ describe('standalone prompts', () => {
   // summarizers (core/summarizer.ts), the crash-recovery briefing
   // (company reestablish-master route). A rename/delete would break
   // those call sites at runtime with no other guard.
-  const STANDALONE = ['summarize', 'summarize-v2', 'summarize-v3', 'master-recovery'];
+  const STANDALONE = ['summarize-v3', 'master-recovery'];
   for (const name of STANDALONE) {
     it(`standalone prompt "${name}" is loadable`, () => {
       expect(() => loadPrompt(name)).not.toThrow();

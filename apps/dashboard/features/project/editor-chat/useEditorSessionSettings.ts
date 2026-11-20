@@ -1,8 +1,8 @@
 /**
  * Per-session composer settings for the editor rail — the same controls the
  * full chat exposes (describe-images, unrestricted tool output, tool
- * permission mode, fallback). Reads the session row / fallback endpoint on
- * select and PATCHes on change (optimistic). Extracted so
+ * permission mode). Reads the session row on select and PATCHes on change
+ * (optimistic). Extracted so
  * `useEditorChatSession` stays lean.
  */
 import { useCallback, useEffect, useState } from 'react';
@@ -27,8 +27,6 @@ export function useEditorSessionSettings(
   const [blockCodeComments, setBlockCodeComments] = useState(true);
   const [outputCapLevel, setOutputCapLevel] = useState<OutputCapLevel>('economic');
   const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
-  const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
-  const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const executionModeState = useSessionExecutionMode({
     selectedId,
     sessionData,
@@ -48,25 +46,6 @@ export function useEditorSessionSettings(
     setToolPermissionMode(s.tool_permission_mode ?? 'auto');
     setBlockCodeComments(s.block_code_comments !== false);
   }, [selectedId, sessionData?.session]);
-
-  // Fallback lives behind its own endpoint.
-  useEffect(() => {
-    if (!selectedId) {
-      setFallbackProvider(null);
-      setFallbackModel(null);
-      return;
-    }
-    let cancelled = false;
-    fetch(`/api/coder/sessions/${selectedId}/fallback`)
-      .then((r) => r.json())
-      .then((data: { fallback_provider: string | null; fallback_model: string | null }) => {
-        if (cancelled) return;
-        setFallbackProvider(data.fallback_provider);
-        setFallbackModel(data.fallback_model);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [selectedId]);
 
   const changeOutputCapLevel = useCallback(async (next: OutputCapLevel) => {
     setOutputCapLevel(next);
@@ -88,19 +67,6 @@ export function useEditorSessionSettings(
     } catch { /* optimistic */ }
   }, [selectedId]);
 
-  const changeFallback = useCallback(async (provider: string | null, model: string | null) => {
-    setFallbackProvider(provider);
-    setFallbackModel(model);
-    if (!selectedId) return;
-    try {
-      await fetch(`/api/coder/sessions/${selectedId}/fallback`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, model }),
-      });
-    } catch { /* optimistic */ }
-  }, [selectedId]);
-
   return {
     describeImages,
     setDescribeImages,
@@ -110,9 +76,6 @@ export function useEditorSessionSettings(
     setOutputCapLevel: changeOutputCapLevel,
     toolPermissionMode,
     setToolPermissionMode: changePermissionMode,
-    fallbackProvider,
-    fallbackModel,
-    onFallbackChange: changeFallback,
     ...executionModeState,
   };
 }

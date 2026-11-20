@@ -8,7 +8,7 @@
  *   - `normalizeMessageForCache` (runner.ts) — resume-path re-truncation
  *   - migration 078 schema — adds the column with a NULL default
  *
- * Auto-compaction (PRUNE_MINIMUM/PRUNE_PROTECT) is intentionally NOT under
+ * Context-window compaction is intentionally NOT under
  * test here because it operates on accumulated history, not per-block, and
  * keeps running with the same defaults regardless of the toggle.
  */

@@ -23,7 +23,7 @@ import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { createHash } from 'node:crypto';
 import { stableArgsKey } from './runner/dup-utils.js';
 import { needsOutcomeRecoveryApproval } from './uncertain-tool-outcome.js';
-import { isIrreversibleTool, resolveToolInvocationMetadata } from './policy.js';
+import { resolveToolInvocationMetadata } from './policy.js';
 import type { OutcomeRecoverySnapshot } from './outcome-recovery-state.js';
 
 export type ToolPermissionMode = 'ask' | 'auto' | 'unrestricted';
@@ -104,7 +104,7 @@ export function classifyForGate(
   // MCP/plugin tool with no metadata at all — classify by name.
   if (DESTRUCTIVE_VERB_REGEX.test(name)) return 'admin';
   if (READ_VERB_REGEX.test(name)) return 'allow';
-  return isIrreversibleTool(name) ? 'write' : 'write';
+  return 'write';
 }
 
 /**

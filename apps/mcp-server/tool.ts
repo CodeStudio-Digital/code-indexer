@@ -1,48 +1,16 @@
 import type { AuthContext } from '@mcp/services/auth/domain/auth-context.js';
 import type { McpTier } from '@mcp/services/auth/domain/api-token.js';
+import type { IndexTool, McpToolInputSchema, McpToolResult } from '@mcp/indexer/agent-tools/tool.js';
 import type { ToolContext } from './context.js';
 
-export interface McpToolInputSchema {
-  type: 'object';
-  properties: Record<string, unknown>;
-  required?: string[];
-}
-
-export interface McpSourceTruncation {
-  technique: string;
-  inputSize: number;
-  inputSizeExact?: boolean;
-  outputSize: number;
-  unit: 'chars' | 'bytes' | 'lines' | 'rows' | 'items';
-  recoverable: boolean;
-}
-
-export interface McpToolOutput {
-  text: string;
-  /** An owner lost confirmation after a mutating dispatch. Never infer failure. */
-  effectOutcome?: 'unknown';
-  /** Machine-readable result mirrored alongside legacy text content. */
-  structuredContent?: Record<string, unknown>;
-  /** Structured producer-side omission proof transported in CallToolResult._meta. */
-  sourceTruncations?: McpSourceTruncation[];
-}
-
-export type McpToolResult = string | McpToolOutput;
-
-export function normalizeMcpToolResult(result: McpToolResult): McpToolOutput {
-  return typeof result === 'string' ? { text: result } : result;
-}
-
-export function mcpToolResultFields(result: McpToolOutput) {
-  return {
-    ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
-    ...(result.effectOutcome === 'unknown' ? { isError: true } : {}),
-    ...(result.sourceTruncations?.length || result.effectOutcome ? { _meta: {
-      ...(result.sourceTruncations?.length ? { sourceTruncations: result.sourceTruncations } : {}),
-      ...(result.effectOutcome ? { effectOutcome: result.effectOutcome } : {}),
-    } } : {}),
-  };
-}
+// The result contract lives with the transport-neutral index tool core.
+export {
+  normalizeMcpToolResult,
+  mcpToolResultFields,
+  type McpToolInputSchema,
+  type McpToolOutput,
+  type McpToolResult,
+} from '@mcp/indexer/agent-tools/tool.js';
 
 const MCP_ACCESS = {
   read: {
@@ -117,4 +85,12 @@ export interface McpTool {
  */
 export function defineTool(tool: McpTool): McpTool {
   return tool;
+}
+
+/** Expose a transport-neutral index tool over MCP with its coupled scope and hints. */
+export function fromIndexTool(tool: Pick<IndexTool, 'name' | 'description' | 'tier' | 'access' | 'inputSchema'> & {
+  handler(args: Record<string, unknown>, ctx: ToolContext): Promise<McpToolResult> | McpToolResult;
+}): McpTool {
+  const { access, ...definition } = tool;
+  return defineTool({ ...definition, ...mcpAccess(access) });
 }

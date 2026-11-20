@@ -51,7 +51,7 @@ it('sends one real HTTP mutation when the server executes it then drops the ACK'
     const calls = [1, 2].map(index => ({ id: `call-${index}`, name: tools[0].name, input: {} }));
     const output = await dispatchTools({ registry, toolContext: {
       cwd: process.cwd(), projectName: 'lost-ack', toolCallLedger: new ToolCallLedger(),
-    }, turn: 1, dupCalls: new Map(), toolUses: calls });
+    }, turn: 1, toolUses: calls });
     expect(output.outcomeUnknown).toBe(true);
     expect(output.results[0].effectOutcome).toBe('unknown');
     expect(output.results[1].refusalKind).toBe('gate');

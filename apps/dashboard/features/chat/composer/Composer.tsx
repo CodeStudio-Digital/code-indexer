@@ -153,10 +153,6 @@ interface ComposerProps {
   /** Session rule: generated code should contain no newly added comments. */
   blockCodeComments?: boolean;
   setBlockCodeComments?: (v: boolean) => void;
-  /** Fallback configuration. */
-  fallbackProvider?: string | null;
-  fallbackModel?: string | null;
-  onFallbackChange?: (provider: string | null, model: string | null) => void;
   getModelsForProvider?: (providerId: string) => EnrichedProviderModel[];
   /** Hide the agent picker (guided surfaces like App Studio lock the agent). */
   hideAgentPicker?: boolean;
@@ -647,9 +643,6 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               setPlanDepth={props.setPlanDepth}
               outputCapLevel={props.outputCapLevel ?? 'economic'}
               setOutputCapLevel={props.setOutputCapLevel}
-              fallbackProvider={props.fallbackProvider ?? null}
-              fallbackModel={props.fallbackModel ?? null}
-              onFallbackChange={props.onFallbackChange ?? (() => {})}
               getModelsForProvider={props.getModelsForProvider ?? (() => [])}
               sessionId={props.sessionId ?? null}
               thinking={props.thinking}
@@ -775,9 +768,6 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             setResponseLanguage={props.setResponseLanguage}
             outputStyle={props.outputStyle ?? null}
             setOutputStyle={props.setOutputStyle}
-            fallbackProvider={props.fallbackProvider ?? null}
-            fallbackModel={props.fallbackModel ?? null}
-            onFallbackChange={props.onFallbackChange ?? (() => {})}
             getModelsForProvider={props.getModelsForProvider ?? (() => [])}
           />
           </>

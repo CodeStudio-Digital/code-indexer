@@ -13,12 +13,8 @@ describe('isIrreversibleTool — internal set', () => {
     expect(isIrreversibleTool('exit_worktree')).toBe(true);
   });
 
-  it('flags MCP project/snapshot/index mutations', () => {
+  it('flags the MCP index mutation', () => {
     expect(isIrreversibleTool('mcp__index_project')).toBe(true);
-    expect(isIrreversibleTool('mcp__delete_project')).toBe(true);
-    expect(isIrreversibleTool('mcp__add_snapshot')).toBe(true);
-    expect(isIrreversibleTool('mcp__update_snapshot')).toBe(true);
-    expect(isIrreversibleTool('mcp__delete_snapshot')).toBe(true);
   });
 
   it('does NOT flag native git read tools', () => {

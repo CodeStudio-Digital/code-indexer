@@ -47,8 +47,6 @@ describe('CoderTunables', () => {
       subagentPushTimeCap: 12_000,
       unrestrictedPushTimeCap: 1_000_000,
       unrestrictedSubagentPushTimeCap: 500_000,
-      turnBudgetChars: 30_000,
-      interventionCooldownTurns: 5,
     });
   });
   const original: Record<string, string | undefined> = {};
@@ -73,8 +71,6 @@ describe('CoderTunables', () => {
       expect(DEFAULT_TUNABLES.subagentPushTimeCap).toBe(12_000);
       expect(DEFAULT_TUNABLES.unrestrictedPushTimeCap).toBe(1_000_000);
       expect(DEFAULT_TUNABLES.unrestrictedSubagentPushTimeCap).toBe(500_000);
-      expect(DEFAULT_TUNABLES.turnBudgetChars).toBe(30_000);
-      expect(DEFAULT_TUNABLES.interventionCooldownTurns).toBe(5);
     });
 
     it('is frozen', () => {
@@ -118,10 +114,10 @@ describe('CoderTunables', () => {
     it('applies finite positive numeric overrides', () => {
       const merged = mergeTunables(base, {
         pushTimeCap: 48_000,
-        turnBudgetChars: 100_000,
+        unrestrictedPushTimeCap: 2_000_000,
       });
       expect(merged.pushTimeCap).toBe(48_000);
-      expect(merged.turnBudgetChars).toBe(100_000);
+      expect(merged.unrestrictedPushTimeCap).toBe(2_000_000);
       expect(merged.subagentPushTimeCap).toBe(base.subagentPushTimeCap);
     });
 
@@ -129,12 +125,11 @@ describe('CoderTunables', () => {
       const merged = mergeTunables(base, {
         pushTimeCap: 'lots' as unknown as number,
         subagentPushTimeCap: NaN,
-        turnBudgetChars: Infinity,
         unrestrictedPushTimeCap: 0,
         unrestrictedSubagentPushTimeCap: -1,
-        interventionCooldownTurns: null as unknown as number,
       });
       expect(merged).toEqual(base);
+      expect(mergeTunables(base, { pushTimeCap: Infinity })).toEqual(base);
     });
 
     it('does not mutate the base or the override', () => {

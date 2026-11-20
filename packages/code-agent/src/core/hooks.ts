@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createContext, Script } from 'node:vm';
 
@@ -38,12 +38,33 @@ export interface ToolSummary {
   source: string;
 }
 
-/** Cache compiled scripts per project root so we don't re-read/parse every session. */
-const scriptCache = new Map<string, { scripts: Record<string, Script | null>; mtime: number }>();
+/**
+ * Compiled scripts keyed by file path. Each lookup costs one `stat`; the file
+ * is read and compiled again only when its mtime or size changed, so an edited
+ * hook applies on the next prompt/catalog build and a deleted one stops.
+ */
+const scriptCache = new Map<string, { mtimeMs: number; size: number; script: Script | null }>();
 
 function loadHookScript(projectRoot: string, name: string): Script | null {
   const path = join(projectRoot, '.mcp-indexer', 'hooks', `${name}.js`);
-  if (!existsSync(path)) return null;
+  let stat: ReturnType<typeof statSync> | undefined;
+  try {
+    stat = statSync(path, { throwIfNoEntry: false });
+  } catch {
+    stat = undefined; // unreadable path behaves like a missing hook (as existsSync did)
+  }
+  if (!stat?.isFile()) {
+    scriptCache.delete(path);
+    return null;
+  }
+  const cached = scriptCache.get(path);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.script;
+  const script = compileHookScript(path, name);
+  scriptCache.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, script });
+  return script;
+}
+
+function compileHookScript(path: string, name: string): Script | null {
   try {
     const code = readFileSync(path, 'utf-8');
     // Wrap in CommonJS-ish shim so `module.exports =` works.
@@ -72,14 +93,8 @@ function runHook<T>(script: Script, ctx: unknown, defaultValue: T): T {
 }
 
 export function runSystemPromptHook(projectRoot: string, ctx: SystemPromptHookContext): string {
-  const cached = scriptCache.get(projectRoot);
-  const script = cached?.scripts['system-prompt'] ?? loadHookScript(projectRoot, 'system-prompt');
+  const script = loadHookScript(projectRoot, 'system-prompt');
   if (!script) return '';
-  if (!cached) {
-    scriptCache.set(projectRoot, { scripts: { 'system-prompt': script }, mtime: Date.now() });
-  } else {
-    cached.scripts['system-prompt'] = script;
-  }
   const extra = runHook<string>(script, ctx, '');
   return typeof extra === 'string' ? extra : '';
 }
@@ -89,14 +104,8 @@ export function runToolFilterHook(
   tools: ToolSummary[],
   ctx: ToolFilterHookContext,
 ): Set<string> | null {
-  const cached = scriptCache.get(projectRoot);
-  const script = cached?.scripts['tool-filter'] ?? loadHookScript(projectRoot, 'tool-filter');
+  const script = loadHookScript(projectRoot, 'tool-filter');
   if (!script) return null;
-  if (!cached) {
-    scriptCache.set(projectRoot, { scripts: { 'tool-filter': script }, mtime: Date.now() });
-  } else {
-    cached.scripts['tool-filter'] = script;
-  }
   const result = runHook<unknown>(script, { tools, ...ctx }, null);
   if (!Array.isArray(result)) return null;
   const allowed = new Set<string>();

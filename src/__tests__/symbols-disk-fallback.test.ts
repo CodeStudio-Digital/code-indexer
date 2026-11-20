@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { symbolTools } from '@apps/mcp-server/tools/symbols.js';
+import { symbolTools } from '@mcp/indexer/agent-tools/tools/symbols.js';
 
 const find_references = symbolTools.find((t) => t.name === 'find_references')!;
 const trace_usage = symbolTools.find((t) => t.name === 'trace_usage')!;

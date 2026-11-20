@@ -28,7 +28,7 @@ it('overlaps four independent reads, publishes the fast result and preserves mod
   } });
   const visible: string[] = [];
   const tools = Array.from({ length: 6 }, (_, index) => call(index));
-  const result = await dispatchTools({ registry, toolUses: tools, toolContext: context, turn: 1, dupCalls: new Map(),
+  const result = await dispatchTools({ registry, toolUses: tools, toolContext: context, turn: 1,
     onToolResult(value) {
       visible.push(value.toolUseId);
       if (value.toolUseId === 'tool:1') { expect(slowDone).toBe(false); releaseSlow(); }
@@ -59,7 +59,7 @@ it('preserves duplicate-read reuse and mutation epoch protection across windows'
   const tools = [call(0), { ...call(1), input: call(0).input }, call(2, 'write_probe'),
     { ...call(3, 'write_probe'), input: call(2).input }, { ...call(4, 'write_probe'), input: call(2).input },
     { ...call(5), input: call(0).input }];
-  const result = await dispatchTools({ registry, toolUses: tools, toolContext: context, turn: 1, dupCalls: new Map() });
+  const result = await dispatchTools({ registry, toolUses: tools, toolContext: context, turn: 1 });
   expect(read).toHaveBeenCalledTimes(2);
   expect(write).toHaveBeenCalledTimes(3);
   expect(result.results[4]?.refusalKind).toBeUndefined();
@@ -89,7 +89,7 @@ it('cancels a started window without entering the following interactive or mutat
   registry.register({ ...base, name: 'ask_user', interactive: true, handler: mutation });
   const tools = [...Array.from({ length: 4 }, (_, index) => call(index)), call(4, 'ask_user')];
   const result = await dispatchTools({ registry, toolUses: tools, toolContext: { ...context, signal: controller.signal },
-    turn: 1, dupCalls: new Map() });
+    turn: 1 });
   expect(entered).toBe(4);
   expect(mutation).not.toHaveBeenCalled();
   expect(result.results[4]?.refusalKind).toBe('abort');

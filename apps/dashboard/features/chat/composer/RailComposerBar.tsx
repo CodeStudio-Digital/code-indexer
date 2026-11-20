@@ -70,9 +70,6 @@ interface RailComposerBarProps {
   setPlanDepth?: (v: string | null) => void;
   outputCapLevel: OutputCapLevel;
   setOutputCapLevel?: (v: OutputCapLevel) => void;
-  fallbackProvider: string | null;
-  fallbackModel: string | null;
-  onFallbackChange: (provider: string | null, model: string | null) => void;
   getModelsForProvider: (providerId: string) => EnrichedProviderModel[];
   sessionId: string | null;
   thinking?: boolean;
@@ -263,9 +260,6 @@ export function RailComposerBar(props: RailComposerBarProps) {
         executionModeLocked={props.executionModeLocked}
         planDepth={props.planDepth}
         setPlanDepth={props.setPlanDepth}
-        fallbackProvider={props.fallbackProvider}
-        fallbackModel={props.fallbackModel}
-        onFallbackChange={props.onFallbackChange}
         getModelsForProvider={props.getModelsForProvider}
       />
     </div>

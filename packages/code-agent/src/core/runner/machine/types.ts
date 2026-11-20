@@ -1,5 +1,3 @@
-import type { DupCallEntry } from '../guards/dup-call-entry.js';
-export type { DupCallEntry } from '../guards/dup-call-entry.js';
 /**
  * Behavior Tree types — declarative states, events, nodes, and run context.
  *
@@ -23,7 +21,6 @@ import type { NoProgressTracker } from '../guards/no-progress.js';
 
 export type NodeState =
   | 'Bootstrap'
-  | 'Planning'
   | 'Executing'
   | 'Compacting'
   | 'Reviewing'
@@ -39,20 +36,10 @@ export type BehaviorEvent =
        *  | 'token-budget' | 'body-after-prefix' | 'context-overflow'). */
       trigger?: string;
     }
-  | {
-      kind: 'ToolLoopDetected';
-      guard: 'tuple-hash' | 'doom-loop' | 'dominance' | 'failure-streak';
-      /** Tool that tripped the guard + repetition count — lets Planning name
-       *  the loop in its reflection reminder. Optional: older emit sites and
-       *  defensive paths omit them. */
-      toolName?: string;
-      count?: number;
-    }
   | { kind: 'MaxTurnsReached'; autoContinueLeft: number }
   | { kind: 'ProviderError'; retryable: boolean; status: number; message?: string; code?: string }
   | { kind: 'CompactionDone'; collapsedFrom: number; collapsedTo: number }
   | { kind: 'CleanFinish' }
-  | { kind: 'ToolOutcomeUnknown' }
   | { kind: 'Aborted' };
 
 export type BehaviorEventKind = BehaviorEvent['kind'];
@@ -92,8 +79,6 @@ export interface RunContext {
   transportRetriesThisTurn: number;
   /** Run-wide ordinal for physical upstream attempts persisted to telemetry. */
   providerAttempts: number;
-  /** Deprecated compatibility table; cleared while callers migrate. */
-  dupCalls: Map<string, DupCallEntry>;
   /** Cross-turn post-result observation + monotonic workspace state epoch. */
   noProgressTracker: NoProgressTracker;
   autoContinues: number;
@@ -104,7 +89,7 @@ export interface RunContext {
    * compaction that keeps firing without ever freeing enough space. This
    * counter does: the Executing node aborts the run with
    * `stopReason='compact_exhausted'` once it exceeds
-   * `CODER_PREEMIT_COMPACT_MAX` (default 3). Reset to 0 whenever the gate
+   * the fixed cap of 3. Reset to 0 whenever the gate
    * passes and the provider call proceeds.
    */
   preEmitCompactions: number;
@@ -115,7 +100,7 @@ export interface RunContext {
    * that can't shrink (e.g. a tool_result larger than the recede ceiling) would
    * otherwise re-trigger Compacting every turn — a no-op loop (confirmed in
    * telemetry: one run churned 94 consecutive no-ops). After
-   * `CODER_POSTTURN_COMPACT_NOOP_MAX` (default 2) the size gate is suppressed —
+   * 2 such passes (fixed cap) the size gate is suppressed —
    * NOT aborted (unlike pre-emit); the model keeps progressing. Incremented in
    * CompactingNode on a no-op, reset on a real compaction or when the gate goes
    * quiet (prompt fell back below the trigger).
@@ -138,8 +123,6 @@ export interface RunContext {
     ledgerStartSeq: number;
     nudges: number;
   };
-  /** Dedup deterministic loop-strategy reminders for five turns. */
-  lastStrategyNudgeTurnByKey: Map<string, number>;
   /**
    * Perf W1 — background compaction-summary precompute. Kicked by the
    * Executing post-turn gate when the size ratio nears the trigger, consumed
@@ -281,21 +264,6 @@ export interface RunContext {
     lastInjectedUserMemoryHash: string | null;
     /** Hash of the last injected `<preflight>` hint — re-inject on milestones only. */
     lastInjectedPreflightHash: string | null;
-    /**
-     * self_review nudge state (Fix A). The nudge in `dynamic-injection.ts`
-     * is recomputed every turn while changes are pending; without this gate
-     * the `self_review` tool (which never closes snapshots) loops forever —
-     * the agent re-reviews, applies findings (= MORE pending changes), and
-     * re-reviews again, ignoring even an explicit user "stop".
-     *   - `lastNudgedFingerprint` — pending-change fingerprint last nudged;
-     *     re-nudge only when the pending set actually changes.
-     *   - `suppressed`            — hard stop for the rest of the run (user
-     *     declined, or K auto-reviews ran with no new edit after them).
-     */
-    selfReview: {
-      lastNudgedFingerprint?: string;
-      suppressed: boolean;
-    };
     /**
      * Project memory retrieved THIS turn (async, before assembly) so the
      * synchronous dynamic injector can include it. Reset each turn.
@@ -574,13 +542,6 @@ export interface BridgeCallbacks {
    */
   hasPendingMessages?: () => boolean;
   /**
-   * Inject a steering `<system-reminder>` as a user message that lands at
-   * the START of the next turn (wraps `runner.pushUserMessage`). Used by the
-   * Executing node to deliver loop-enforcement text when the same call has
-   * been refused across multiple planning cycles. No-op when unset.
-   */
-  injectSystemReminder?: (text: string) => void;
-  /**
    * Per-turn telemetry persistence — wraps the pure
    * `core/runner/telemetry/persist-turn.ts` helper. Returns the written turn metric UUID so the
    * Executing node can update `ctx.lastTurnTelemetryId` for the host's
@@ -624,8 +585,6 @@ export interface BridgeCallbacks {
    */
   backgroundJobs?: {
     hasActive: () => boolean;
-    /** Terminal full results still waiting for collect_agents acknowledgement. */
-    hasUncollectedTerminal: () => boolean;
     park: (signal: AbortSignal) => Promise<'work' | 'message' | 'aborted' | 'timeout'>;
   };
 }

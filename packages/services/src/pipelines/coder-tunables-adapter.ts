@@ -25,15 +25,12 @@
  *   - `runner_tunables.subagentPushTimeCap`
  *   - `runner_tunables.unrestrictedPushTimeCap`
  *   - `runner_tunables.unrestrictedSubagentPushTimeCap`
- *   - `runner_tunables.turnBudgetChars`
- *   - `runner_tunables.interventionCooldownTurns`
  *
  * Example admin usage (writes to the session bundle configuration):
  *   {
  *     "pipelines": {
  *       "runner_tunables": {
- *         "pushTimeCap": 48000,
- *         "turnBudgetChars": 60000
+ *         "pushTimeCap": 48000
  *       }
  *     }
  *   }
@@ -50,8 +47,6 @@ const TUNABLE_KEYS: ReadonlyArray<keyof CoderTunables> = [
   'subagentPushTimeCap',
   'unrestrictedPushTimeCap',
   'unrestrictedSubagentPushTimeCap',
-  'turnBudgetChars',
-  'interventionCooldownTurns',
 ];
 
 /**

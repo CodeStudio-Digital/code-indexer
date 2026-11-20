@@ -140,13 +140,6 @@ describe('PR-2 R1 — session-wide circuit breaker', () => {
       systemPrompt: 'sys',
       toolContext: { cwd: '/tmp', projectName: 'test' },
       initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
-      // 401 path needs createProvider to even attempt the refresh.
-      createProvider: async (name, model) => {
-        const p = new FlakyProvider(10, 401, 'token expired');
-        p.model = model;
-        Object.defineProperty(p, 'name', { value: name });
-        return p;
-      },
     });
     const aborts: Array<{ kind: string; cap: number; attempts: number }> = [];
     runner.on('recovery_aborted', (p) => aborts.push({ kind: p.kind, cap: p.cap, attempts: p.attempts }));

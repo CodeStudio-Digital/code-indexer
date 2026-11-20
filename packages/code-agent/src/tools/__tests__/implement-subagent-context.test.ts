@@ -226,13 +226,14 @@ describe('runSubagent context inheritance', () => {
         },
       },
       repository: {
-        async writeEntity(
+        enqueueDiagnostic(
           _location: unknown,
           _directory: string,
           _id: string,
           data: Record<string, unknown>,
         ) {
           turns.push(data);
+          return true;
         },
       },
       async startSubagentRun(input: Record<string, unknown>) {
@@ -281,7 +282,9 @@ describe('runSubagent context inheritance', () => {
 
     expect(result.reason).toBe(uncertain ? 'error' : 'completed');
     expect(result.effectOutcome).toBe(uncertain ? 'unknown' : undefined);
-    expect(turns).toHaveLength(uncertain ? 1 : 2);
+    // An unknown effect stops only its batch; the child inspects the result in a
+    // second turn (no replay) and then ends classified as outcome_unknown.
+    expect(turns).toHaveLength(2);
     expect(turns.every((turn) => turn.is_subagent === true)).toBe(true);
     expect(turns.every((turn) => turn.parent_run_id === PARENT_RUN_ID)).toBe(true);
     expect(turns.every((turn) => turn.subagent_profile === 'explore')).toBe(true);
@@ -292,6 +295,6 @@ describe('runSubagent context inheritance', () => {
     expect(calls[0].logical_operation_id).toEqual(expect.any(String));
     expect(completions).toHaveLength(1);
     expect(completions[0]).toMatchObject({ run_id: starts[0].run_id, reason: uncertain ? 'outcome_unknown' : 'completed',
-      turns: uncertain ? 1 : 2, tool_calls: 1 });
+      turns: 2, tool_calls: 1 });
   });
 });

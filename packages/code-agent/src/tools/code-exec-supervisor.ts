@@ -3,6 +3,16 @@ import { CODE_EXEC_EVALUATOR } from './code-exec-evaluator.js';
 import { CODE_EXEC_FRAME_BYTES, decodeCodeExecError, encodeCodeExecError, type CodeExecBootstrap } from './code-exec-protocol.js';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 
+/**
+ * The host budget clock (armed on `ready`) and the evaluator's vm timeout use
+ * the script budget; the watchdog ticks every 50 ms. A stall threshold equal to
+ * the budget let a tick land first and report "stopped responding" instead of
+ * the deterministic budget error. This margin (five ticks) keeps the budget
+ * error first while a truly stuck evaluator is still reported within
+ * budget + margin.
+ */
+export const WATCHDOG_BUDGET_MARGIN_MS = 250;
+
 export function superviseCodeExec(input: CodeExecBootstrap & { blocked?: string[] }, handlers: {
   invoke(kind: string, name: string, args: unknown): unknown;
   log(level: string, parts: unknown[], inputBytes: number): void;
@@ -91,7 +101,7 @@ export function superviseCodeExec(input: CodeExecBootstrap & { blocked?: string[
       lastHeartbeat = now;
       return;
     }
-    if (now - lastHeartbeat > (ready ? Math.max(100, input.timeoutMs) : 10_000)) {
+    if (now - lastHeartbeat > (ready ? Math.max(100, input.timeoutMs) + WATCHDOG_BUDGET_MARGIN_MS : 10_000)) {
       settled = true;
       rejectRun(Object.assign(new Error('code_exec timed out waiting for the evaluator to respond'), { code: 'CODE_EXEC_JS_TIMEOUT' }));
     }

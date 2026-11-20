@@ -304,9 +304,8 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
       async setActive({ sessionId, provider: _p, model: _m }) {
         const session = await sessionStore.getSession(sessionId);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
-        // SessionStore exposes only `setSessionFallback`; switching the
-        // primary provider/model on an existing session isn't supported
-        // by the store yet. Fork-and-recreate is the current pattern;
+        // SessionStore has no mutation for the primary provider/model of an
+        // existing session yet. Fork-and-recreate is the current pattern;
         // wiring a dedicated mutation is a v1.1 follow-up.
         throw new ApiError(
           'not_implemented',

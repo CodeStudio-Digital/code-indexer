@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@mcp/shared/types.js';
 import type { ToolContext } from '../../context.js';
-import { projectTools } from '../projects.js';
-import { miscTools } from '../misc.js';
-import { fileTools } from '../file.js';
+import { projectTools } from '@mcp/indexer/agent-tools/tools/projects.js';
+import { miscTools } from '@mcp/indexer/agent-tools/tools/misc.js';
+import { fileTools } from '@mcp/indexer/agent-tools/tools/file.js';
+import { index_project } from '../index-project.js';
 import { projectResources } from '../../resources/projects.js';
 
 const project = {
@@ -85,7 +86,7 @@ describe('retired project indexer surfaces', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
     const ctx = context(); ctx.signal = abort.signal;
-    const pending = Promise.resolve(projectTools.find(t => t.name === 'index_project')!.handler({ project_path: 'D:/demo' }, ctx));
+    const pending = Promise.resolve(index_project.handler({ project_path: 'D:/demo' }, ctx));
     const rejected = expect(pending).rejects.toThrow('stopped');
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     abort.abort(new Error('stopped')); await rejected;
@@ -95,7 +96,7 @@ describe('retired project indexer surfaces', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ ok: true, status: { phase: 'ready' } }))
       .mockRejectedValueOnce(new Error('connection lost after commit'));
     vi.stubGlobal('fetch', fetchMock);
-    const result = await projectTools.find(t => t.name === 'index_project')!.handler({ project_path: 'D:/demo' }, context());
+    const result = await index_project.handler({ project_path: 'D:/demo' }, context());
     expect(result).toMatchObject({ effectOutcome: 'unknown' });
     expect(JSON.stringify(result)).not.toContain('was not started');
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -114,7 +115,7 @@ describe('retired project indexer surfaces', () => {
       });
     });
     vi.stubGlobal('fetch', fetchMock);
-    const tool = projectTools.find((entry) => entry.name === 'index_project')!;
+    const tool = index_project;
 
     const output = await tool.handler({ project_path: 'D:/demo' }, context());
 
