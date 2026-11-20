@@ -395,7 +395,7 @@ function overlaySection(available?: ReadonlySet<string>): string {
   ]);
   if (!canWrite || !canReadOverlay) return '';
   return `# Session overlay (automatic freshness)
-MCP reads reflect files changed in this session; no re-index is needed after an edit.
+Reads, grep, skeletons and listings show this session's edits; index results (search, references) may lag.
 
 `;
 }

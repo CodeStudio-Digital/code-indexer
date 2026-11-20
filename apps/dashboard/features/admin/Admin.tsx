@@ -12,8 +12,6 @@ import {
   Database,
   Gauge,
   GitFork,
-  Globe,
-  KeyRound,
   Network,
   Plug,
   Plus,
@@ -44,7 +42,6 @@ import { EditDialog } from './EditDialog.js';
 import { ProviderTile } from './providers/ProviderTile.js';
 import { ProviderModal } from './providers/ProviderModal.js';
 import { McpServersPanel } from './McpServersPanel.js';
-import { McpHttpStatusPanel } from './McpHttpStatusPanel.js';
 import { AppSettingsPanel } from './AppSettingsPanel.js';
 import { CapabilityFallbacksPanel } from './CapabilityFallbacksPanel.js';
 import { CustomAgentsPanel } from './CustomAgentsPanel.js';
@@ -54,7 +51,6 @@ import { SemanticIndexingPanel } from './SemanticIndexingPanel.js';
 import { HygienePanel } from './HygienePanel.js';
 import { LspServersPanel } from './LspServersPanel.js';
 import { ToolsPanel } from './ToolsPanel.js';
-import { AuthPanel } from './AuthPanel.js';
 import { GeneralAiPanel } from './GeneralAiPanel.js';
 import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
 import PerfMonitorPanel from './perf/PerfMonitorPanel.js';
@@ -169,8 +165,6 @@ export default function Admin() {
       hint: 'Instalar/gerenciar plugins + navegar o Market' },
     { id: 'mcp-servers',       label: t('admin:tabs.mcpServers'), icon: Network,       group: 'extensions',
       hint: 'Servidores MCP externos conectados' },
-    { id: 'mcp-http',          label: 'MCP HTTP',                 icon: Globe,         group: 'extensions',
-      hint: 'Expor nossas tools (incl. RAG) pra outros agentes' },
     // Serviços
     { id: 'lsp-servers',       label: 'Language Servers',         icon: Languages,     group: 'services',
       hint: 'LSP por linguagem (PHP, Python, …) — instalar/gerenciar' },
@@ -179,8 +173,6 @@ export default function Admin() {
       hint: 'Env vars persistidas: limites, flags, tuning' },
     { id: 'perf',              label: t('admin:perf.tabLabel'),   icon: Gauge,         group: 'system',
       hint: t('admin:perf.hint') },
-    { id: 'auth',              label: t('admin:tabs.auth'),       icon: KeyRound,      group: 'system',
-      hint: 'OAuth 2.1, API tokens, audit log' },
   ];
 
   const active = sections.find((s) => s.id === section) ?? sections[0];
@@ -348,14 +340,12 @@ export default function Admin() {
           {section === 'hygiene'           && <HygienePanel />}
           {section === 'tools'             && <ToolsPanel />}
           {section === 'mcp-servers'       && <McpServersPanel />}
-          {section === 'mcp-http'          && <McpHttpStatusPanel />}
           {section === 'skills'            && <SkillsPanel />}
           {section === 'plugins'           && <PluginsPanel />}
           {section === 'ai-geral'          && <GeneralAiPanel />}
           {section === 'lsp-servers'       && <LspServersPanel />}
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
           {section === 'perf'              && <PerfMonitorPanel />}
-          {section === 'auth'              && <AuthPanel />}
               </div>
             </WorkbenchSurface>
           </Panel>

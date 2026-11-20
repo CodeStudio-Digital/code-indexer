@@ -18,15 +18,15 @@ A namespace convention is **cheap insurance** against that class of bug.
 | `company_` | `packages/company` | `company_sessions`, `company_agent_runs`, `company_board`, `company_session_projects`, `company_role_assignments`, `company_templates` |
 | `kanban_` | `packages/company` (board feature) | `kanban_cards`, `kanban_comments`, `kanban_card_agents` |
 | `provider_` | `packages/services/providers` | `provider_configs`, `provider_models` |
-| `oauth_` | `packages/services/auth` | `oauth_tokens`, `oauth_clients`, `oauth_auth_codes`, `oauth_refresh_tokens` |
-| `mcp_` | `packages/services/mcp` + `apps/mcp-server` | `mcp_server_configs`, `mcp_server_tools`, `mcp_oauth_*` |
+| `oauth_` | `packages/services/providers` + `packages/services/src/services/oauth` (provider logins) | `oauth_tokens`. Legacy, no code since the inbound auth removal (tables kept): `oauth_clients`, `oauth_auth_codes`, `oauth_refresh_tokens` |
+| `mcp_` | `packages/services/mcp` | `mcp_server_configs`, `mcp_server_tools`, `mcp_oauth_*` |
 | `skill_` | `packages/code-agent/skills` + `packages/store/skill-store` | `skill_definitions`, `skill_session_config`, `skill_usage_log` |
 | `embedding_` | `packages/indexer/embedding` | `embedding_configs` |
 | `snapshot_` | `packages/services/snapshots` | `snapshot_files` |
 | `vector_` | `packages/indexer/vector` | `vector_store_configs` |
 | `docs_` | `packages/docs-agent` | `docs_research_sessions`, `doc_corpus`, `doc_sources`, `doc_rerank_cache` |
-| `auth_` | `packages/services/auth` | `auth_audit_log` |
-| `api_` | `apps/http-api` | `api_tokens` |
+| `auth_` | — (legacy, no code since the inbound auth removal; table kept) | `auth_audit_log` |
+| `api_` | — (legacy, no code since the inbound auth removal; table kept) | `api_tokens` |
 | `quality_` | `packages/services/quality` | `quality_classifications`, `quality_interventions` |
 | `pipeline_` | `packages/company/role-pipeline` | (uses `company_pipeline_*` — pipeline is a sub-domain of company) |
 

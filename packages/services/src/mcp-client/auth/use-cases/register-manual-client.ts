@@ -1,5 +1,5 @@
-import type { Clock } from '../../../auth/ports/clock.js';
-import type { TokenHasher } from '../../../auth/ports/token-hasher.js';
+import type { Clock } from '../support/ports/clock.js';
+import type { TokenHasher } from '../support/ports/token-hasher.js';
 import type { AuthorizationServerMetadata } from '../domain/authorization-server.js';
 import { McpOAuthRegistration } from '../domain/oauth-registration.js';
 import type { McpOAuthRegistrationAdminRepo } from '../ports/oauth-registration-repository.js';

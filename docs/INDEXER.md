@@ -1,6 +1,6 @@
 # MCP Code Indexer v3.11
 
-Plataforma de indexacao de codebases usando LLMs com busca hibrida (FTS5 + vector embeddings), MCP Server para integracao com Claude Code, dashboard web, memoria de contexto, grafo de dependencias, call graph, hierarquia de symbols, metadata arquitetural, file watching, webhooks, export de docs, diff de versoes e tracking de custos. Alem do indexer, inclui um **Coder Agent** multi-provider com 60+ tools, sistema de tiers, LSP in-process, plugin hooks, e dashboard com chat persistente.
+Plataforma de indexacao de codebases usando LLMs com busca hibrida (FTS5 + vector embeddings), tools de indice para o agente, dashboard web, memoria de contexto, grafo de dependencias, call graph, hierarquia de symbols, metadata arquitetural, file watching, webhooks, export de docs, diff de versoes e tracking de custos. Alem do indexer, inclui um **Coder Agent** multi-provider com 60+ tools, sistema de tiers, LSP in-process, plugin hooks, e dashboard com chat persistente.
 
 ## Novidades v3.11 — Coder Agent overhaul
 
@@ -487,59 +487,13 @@ mcp-code-indexer serve
 mcp-code-indexer serve --port 4000
 ```
 
-## MCP Server (Claude Code)
+## Tools de indice do agente
 
-### Configuracao
-
-Adicione ao `claude_desktop_config.json` ou `.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "code-indexer": {
-      "command": "node",
-      "args": ["F:/CodeStudio/MCP-CodeBase/dist/mcp/server.js"],
-      "env": {
-        "ZAI_API_KEY": "sua-chave"
-      }
-    }
-  }
-}
-```
-
-### Tools MCP disponiveis (29)
-
-| Tool | Descricao |
-|------|-----------|
-| `list_projects` | Listar projetos indexados |
-| `index_project` | Indexar/re-indexar projeto |
-| `search` | Busca hibrida em projeto |
-| `search_global` | Busca em todos os projetos |
-| `search_concepts` | Buscar por conceito |
-| `search_by_kind` | Buscar symbols por kind (function, class, interface, etc.) |
-| `get_file_structure` | Detalhes de arquivo + symbols |
-| `get_symbol_details` | Detalhes de symbol |
-| `get_class_members` | Membros de classe |
-| `get_project_overview` | Overview do projeto |
-| `get_project_stats` | Estatisticas |
-| `get_project_context` | Contexto (snapshots) |
-| `list_snapshots` | Listar snapshots |
-| `add_snapshot` | Criar snapshot |
-| `update_snapshot` | Editar snapshot |
-| `delete_snapshot` | Remover snapshot |
-| `get_snapshot_history` | Historico de versoes de um snapshot |
-| `get_diff` | Diff entre runs |
-| `get_costs` | Custos |
-| `estimate_cost` | Estimar custo |
-| `export_docs` | Exportar documentacao |
-| `list_models` | Listar modelos |
-| `delete_project` | Deletar projeto |
-| `get_dependencies` | Dependencias de um arquivo (imports) |
-| `get_dependents` | Arquivos que dependem de um arquivo |
-| `find_references` | Encontrar referencias a um symbol |
-| `get_hierarchy` | Hierarquia de symbol (extends/implements/subclasses) |
-| `find_implementations` | Encontrar implementacoes de uma interface |
-| `get_architecture` | Overview de arquitetura (arquivos por layer) |
+O servidor MCP (stdio e HTTP) que expunha estas tools a clientes externos foi
+removido. As tools de indice existem so dentro do agente, com o prefixo
+`mcp__` (`mcp__search`, `mcp__read_file`, ...): o worker do Coder e o da
+Company servem em processo, pela porta de tools de indice. A lista atual esta em
+[catalogo-tools-e-agentes.md](architecture/catalogo-tools-e-agentes.md).
 
 ## REST API
 
@@ -647,7 +601,6 @@ busca e exclusao de vetores sempre usam os bancos sqlite-vec locais.
 | `npm run dev:server` | Dev server (apenas API) |
 | `npm run dev:dashboard` | Dev server (apenas dashboard) |
 | `npm start` | CLI |
-| `npm run start:server` | MCP Server |
 | `npm run start:api` | REST API Server |
 
 ## Arquitetura

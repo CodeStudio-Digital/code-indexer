@@ -172,8 +172,8 @@ export interface RunnerOptions {
   tunables?: CoderTunables;
   /**
    * Per-session tool-output cap LEVEL (economic|medium|high|extra|max|ultra).
-   * Resolves `effectivePushTimeCap` via `capFor`; also threads to mcp-bridge /
-   * code_exec / read_file through the ToolContext. Undefined → 'economic'.
+   * Resolves `effectivePushTimeCap` via `capFor`; also threads to the index
+   * tools / code_exec / read_file through the ToolContext. Undefined → 'economic'.
    * Auto-compaction still runs.
    */
   toolOutputCapLevel?: import('./output-caps.js').ToolOutputCapLevel;

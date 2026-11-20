@@ -18,6 +18,7 @@ import { WORKFLOW_CATALOG_CONTRACTS } from '../../../tools/catalog-contracts.js'
 import { approvedPlanForRevision } from '../../../tools/plan.js';
 import { readOnlySessionAuthority } from '../../policy.js';
 import { isReadOnlyAgent } from '../../../agents/index.js';
+import { publishedToolSource } from '../../index-tool-identity.js';
 
 export interface SerializedTool {
   name: string;
@@ -121,7 +122,7 @@ function buildWorkflowTools(
     return true;
   });
   const hookAllow = runToolFilterHook(args.toolContext.cwd,
-    authorized.map(tool => ({ name: tool.name, source: tool.source })), {
+    authorized.map(tool => ({ name: tool.name, source: publishedToolSource(tool) })), {
       projectName: args.toolContext.projectName, providerName: args.provider.name,
       model: args.provider.model,
       profile: args.activeTiers ? [...args.activeTiers].sort().join(',') : undefined,

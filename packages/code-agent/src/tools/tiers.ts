@@ -856,7 +856,8 @@ const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
 export interface ToolMeta {
   name: string;
   tier: ToolTier;
-  source: 'native' | 'mcp' | 'mcp_external';
+  /** Display family: 'index' for the in-process index tools (mcp__*). */
+  source: 'native' | 'index' | 'mcp_external';
   description: string;
 }
 
@@ -872,7 +873,7 @@ export function getAllKnownToolsMeta(): ToolMeta[] {
       result.push({
         name,
         tier,
-        source: name.startsWith('mcp__') ? 'mcp' : 'native',
+        source: name.startsWith('mcp__') ? 'index' : 'native',
         description: SHORT_DESCRIPTIONS[name] ?? FUNCTIONAL_DESCRIPTIONS[name] ?? '',
       });
     }

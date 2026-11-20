@@ -499,20 +499,6 @@ export function mountCoderSessionsRoutes(
     });
   });
 
-  app.get('/api/coder/mcp-runs', async (c) => {
-    const principal = c.req.query('principal');
-    if (!principal || principal.length > 1024) return c.json({ error: 'principal required (up to 1024 characters)' }, 400);
-    const profile = c.req.query('profile_id');
-    if (profile && profile.length > 256) return c.json({ error: 'profile_id is too long' }, 400);
-    const active = c.req.query('mode') === 'active';
-    const activeSessionIds = active ? new Set(workerPool.snapshot().map(entry => entry.sessionId)
-      .filter(id => workerPool.isRunning(id))) : undefined;
-    return c.json(await sessionStore.listMcpRunMetadata({ principal,
-      ...(profile !== undefined ? { profileId: profile || null } : {}), activeSessionIds,
-      limit: active ? 0 : Math.max(1, Math.min(200, parseIntQuery(c, 'limit', 50))),
-    }));
-  });
-
   app.get('/api/coder/sessions', async (c) => {
     const projectId = parseIntQuery(c, 'project_id', 0);
     if (!projectId) return c.json({ error: 'project_id required' }, 400);

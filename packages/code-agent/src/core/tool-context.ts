@@ -113,9 +113,9 @@ export interface ToolContextServices {
   /**
    * Per-session tool-output cap LEVEL (economic|medium|high|extra|max|ultra).
    * Replaces the legacy binary `unrestrictedToolOutput`. Each cap site calls
-   * `capFor(level, <its base>, <its ceiling>)` (`MCP_OUTPUT_HARD_CAP` in
-   * mcp-bridge, `MAX_OUTPUT_BYTES` in code_exec, `READ_FILE_HARD_MAX` clamp on
-   * read_file, and the runner push-time cap). Undefined → 'economic' (production
+   * `capFor(level, <its base>, <its ceiling>)` (`READ_FILE_HARD_MAX` clamp on
+   * mcp__read_file in the index tool adapter, `MAX_OUTPUT_BYTES` in code_exec,
+   * and the runner push-time cap). Undefined → 'economic' (production
    * defaults). Auto-compaction still runs. Mirrors the bundle state projection.
    */
   toolOutputCapLevel?: import('./runner/output-caps.js').ToolOutputCapLevel;
@@ -303,7 +303,6 @@ export interface ToolContextServices {
    * `recall_memory` tool. Undefined → tools answer with a clear message
    * instead of throwing (company sessions, subagents, tests).
    */
-  agentReads?: import('@mcp/code-agent/ports/agent-read-port.js').AgentReadPort;
   projectMemory?: {
     save(entry: {
       title: string;

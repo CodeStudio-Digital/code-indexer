@@ -8,11 +8,11 @@ import { HybridSearch } from '../search/hybrid.js';
 import { FileSemanticSearchTelemetryStore } from '../search/search-telemetry.js';
 import { ModelDiscovery } from '../indexer/providers/model-discovery.js';
 import { NullEmbeddingService } from '../search/embeddings.js';
-import { createMcpSemanticMutationSink } from './loopback/server-control.js';
+import { createMcpSemanticMutationSink } from './semantic-mutation-sink.js';
 import {
-  createMcpSemanticSearchClient,
+  UNAVAILABLE_SEMANTIC_SEARCH_CLIENT,
   type McpSemanticSearchClient,
-} from './loopback/semantic-search-client.js';
+} from './semantic-client.js';
 
 export interface IndexToolContext {
   /** Per-request cancellation; never store a request signal on the shared context. */
@@ -24,19 +24,31 @@ export interface IndexToolContext {
   /** Dedicated Agent Memory (migration 181) — backs the bridged save_memory/search_memory. */
   agentMemoryService: AgentMemoryService;
   modelDiscovery: ModelDiscovery;
-  /** Semantic reads are delegated to the localhost server/worker owner. */
+  /** Semantic reads are delegated to the semantic owner (the host process). */
   semanticSearchClient: McpSemanticSearchClient;
-  /** In-process lexical fallback used when the localhost owner is unavailable. */
+  /** In-process lexical fallback used when the semantic owner is unavailable. */
   hybridSearch: HybridSearch;
 }
 
+/** The host's edges: the semantic owner client and the namespace wake. Without
+ * a client every semantic read falls back to FTS; without a wake the durable
+ * mutation job waits for the next owner wake. */
+export interface IndexToolContextOverrides {
+  semanticSearchClient?: McpSemanticSearchClient;
+  mutationSinkWake?: (namespace: string) => void | Promise<void>;
+}
+
 /** Services the index tools need, built over the caller's database handle. */
-export function createIndexToolContext(config: IndexerConfig, db: CodeIndexDB): IndexToolContext {
+export function createIndexToolContext(
+  config: IndexerConfig,
+  db: CodeIndexDB,
+  overrides: IndexToolContextOverrides = {},
+): IndexToolContext {
   const semanticStore = new SemanticStore(db.raw());
-  // The MCP process is intentionally incapable of loading an embedding model
-  // or opening a vector database. Semantic reads go through localhost RPC;
-  // this tiny HybridSearch instance exists only for the always-available FTS
-  // fallback when the app/server is stopped.
+  // The index tools never load an embedding model or open a vector database.
+  // Semantic reads go to the owner through the host's client; this tiny
+  // HybridSearch instance exists only for the always-available FTS fallback
+  // when there is no owner to ask.
   const searchTelemetry = new FileSemanticSearchTelemetryStore((projectId) => {
     const project = db.getProject(projectId);
     return project && !project.is_synthetic ? project.root_path : null;
@@ -44,7 +56,7 @@ export function createIndexToolContext(config: IndexerConfig, db: CodeIndexDB): 
   const hybridSearch = new HybridSearch(
     db, null, new NullEmbeddingService(), null, null, null, null, null, null, searchTelemetry,
   );
-  const semanticMutationSink = createMcpSemanticMutationSink(semanticStore);
+  const semanticMutationSink = createMcpSemanticMutationSink(semanticStore, { wake: overrides.mutationSinkWake });
 
   return {
     db,
@@ -59,7 +71,7 @@ export function createIndexToolContext(config: IndexerConfig, db: CodeIndexDB): 
       semanticMutationSink,
     ),
     modelDiscovery: new ModelDiscovery(db),
-    semanticSearchClient: createMcpSemanticSearchClient(config),
+    semanticSearchClient: overrides.semanticSearchClient ?? UNAVAILABLE_SEMANTIC_SEARCH_CLIENT,
     hybridSearch,
   };
 }

@@ -7,7 +7,6 @@ import { serve } from '@hono/node-server';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { createDeps } from './server/deps.js';
-import { createOwnedAgentReads } from './server/owned-agent-reads.js';
 import { createOwnedProjectIndex } from './server/owned-project-index.js';
 import { mountProjectsRoutes } from './server/routes/projects.js';
 import { mountBuilderCheckpointRoutes } from './server/routes/builder-checkpoints.js';
@@ -67,18 +66,8 @@ import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 // AgentSupervisor: workers-only architecture — each company-worker
 // owns its own supervisor instance. Main process holds nothing.
 import { subordinateCompletionBus } from '@mcp/company/services/subordinate/completion-events.js';
-import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
-import { composeAuth } from './auth/composition.js';
-import { bearerMiddleware, getAuthCtx } from './auth/bearer-middleware.js';
-import { localhostOnlyMiddleware } from './server/middleware/localhost-only.js';
 import { buildCorsOrigin } from './server/middleware/cors-origin.js';
-import { createApiTokensRouter } from './admin/api-tokens.routes.js';
-import { createMcpHttpStatusRouter } from './admin/mcp-http-status.routes.js';
 import { createAppSettingsRouter } from './admin/app-settings.routes.js';
-import { createOAuthClientsRouter } from './admin/oauth-clients.routes.js';
-import { createAuditLogRouter } from './admin/audit-log.routes.js';
-import { createWellKnownRouter } from './oauth/well-known.routes.js';
-import { createOAuthRouter } from './oauth/index.js';
 import { composeMcpClientAuth } from '@mcp/services/mcp-client/auth/composition.js';
 import { createMcpServersOauthRouter } from './admin/mcp-servers-oauth.routes.js';
 import { mergeDBCapabilities } from '@mcp/code-agent/providers/capabilities.js';
@@ -154,6 +143,7 @@ import { createLspExecutor } from './sse/lsp-executor.js';
 import { setWorkerLspDeps } from './sse/worker-lsp-handlers.js';
 import { setGlobalAgentLspBackend } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
 import { setCompanyWorkerDocDeps, getWorkerOrchestratorPool } from './sse/workerPoolSingleton.js';
+import { createIndexSearchService, scheduleNamespaceReconcile } from './server/index-search-service.js';
 import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool.js';
 // Frente E — periodic watchdog for stuck filesystem session projections. Started during
 // server bootstrap below; auto-`unref()` so it never holds process exit.
@@ -713,65 +703,15 @@ export function createApp(browser: ResearchBrowserHost | null = null) {
   // contents, SSH hosts and secrets. See middleware/cors-origin.ts.
   app.use('*', cors({ origin: buildCorsOrigin(deps.config.mcp.http.corsOrigins), credentials: true }));
 
-  // Auth subsystem — instantiated once per process. Adapters and use-cases
-  // are wired here exclusively. Routes and middlewares depend on the bundle.
-  const auth = composeAuth(deps.config);
-
-  app.route('/api/admin', createApiTokensRouter(auth));
-  app.route('/api/admin', createMcpHttpStatusRouter(deps.config, deps.db, deps.providerStore));
   app.route('/api/admin', createAppSettingsRouter(deps.config.dbPath));
-  app.route('/api/admin', createOAuthClientsRouter(auth));
-  app.route('/api/admin', createAuditLogRouter(deps.config));
 
   // MCP client auth — enables OAuth 2.1 against external MCP servers that
-  // our agent connects to. Independent from the inbound OAuth AS above.
+  // our agent connects to.
   const mcpClientAuth = composeMcpClientAuth(deps.config.dbPath);
   deps.mcpBearerResolver = mcpClientAuth.resolveBearer;
   const publicBaseUrl = (): string =>
     `http://${deps.config.dashboard.host === '0.0.0.0' ? 'localhost' : deps.config.dashboard.host}:${deps.config.dashboard.port}`;
   app.route('/api/admin', createMcpServersOauthRouter(mcpClientAuth, publicBaseUrl));
-
-  if (deps.config.mcp.oauth.enabled) {
-    app.route('/', createWellKnownRouter(deps.config));
-    app.route('/oauth', createOAuthRouter(auth, deps.config));
-    console.log(`OAuth 2.1 AS enabled (issuer=${deps.config.mcp.oauth.issuer || '<auto>'}, dcr=${deps.config.mcp.oauth.allowDcr})`);
-  }
-
-  if (deps.config.mcp.http.enabled) {
-    const authEnabled = deps.config.mcp.auth.enabled;
-    const middleware = authEnabled
-      ? bearerMiddleware({
-          validate: auth.validate,
-          enforceRate: auth.enforceRate,
-          audit: auth.audit,
-          issuer: deps.config.mcp.oauth.issuer || undefined,
-          newRequestId: auth.newRequestId,
-        })
-      : undefined;
-
-    // Stack the localhost guard first, then auth. The guard refuses
-    // off-loopback peers BEFORE we hash + look up a token, so a leaked
-    // token outside the box still can't reach the tool catalogue.
-    // (Operator can opt-in to LAN access via the admin section later.)
-    const composed: import('hono').MiddlewareHandler = middleware
-      ? async (c, next) =>
-          localhostOnlyMiddleware()(c, async () => {
-            await middleware(c, next);
-          })
-      : localhostOnlyMiddleware();
-
-    const mcpApp = createMcpHttpApp(deps.config, {
-      beforeTransport: composed,
-      resolveAuthContext: getAuthCtx,
-      enforceScope: authEnabled ? auth.enforceScope : undefined,
-      audit: auth.audit,
-    });
-    app.route(deps.config.mcp.http.path, mcpApp);
-    console.log(
-      `MCP HTTP endpoint mounted at ${deps.config.mcp.http.path}` +
-        ` (stateful=${deps.config.mcp.http.stateful}, auth=${authEnabled})`,
-    );
-  }
 
   mountProjectsRoutes(app, deps);
   mountBuilderCheckpointRoutes(app, deps);
@@ -807,29 +747,9 @@ export function createApp(browser: ResearchBrowserHost | null = null) {
   app.post('/api/semantic/namespaces/reconcile', async (c) => {
     const body: { namespace?: unknown } = await c.req.json<{ namespace?: unknown }>()
       .catch(() => ({}));
-    const namespace = body.namespace;
-    if (typeof namespace !== 'string'
-      || !/^(?:snapshot:p\d+|memory:project:p\d+|memory:user)$/.test(namespace)) {
-      return c.json({ error: 'unsupported semantic namespace' }, 400);
-    }
-    const state = deps.semanticStore.listNamespaceGenerations({ namespace })[0];
-    const firstGeneration = !state?.active_generation_id && !state?.building_generation_id;
-    queueMicrotask(() => {
-      // This route is already the operator's explicit remote-provider action.
-      // Let it create the first generation for this one namespace instead of
-      // forcing the global profile reindex to fan out over every project.
-      const reconcile = firstGeneration
-        ? deps.semanticCoordinator.ensureMemoryNamespace(namespace)
-        : deps.semanticCoordinator.catchUpMemoryNamespace(namespace);
-      void reconcile.catch((error) =>
-        console.warn(`[semantic] targeted reconcile paused for ${namespace}: ${error instanceof Error ? error.message : String(error)}`));
-    });
-    return c.json({
-      ok: true,
-      namespace,
-      scheduled: true,
-      first_generation: firstGeneration,
-    }, 202);
+    const outcome = scheduleNamespaceReconcile(deps, body.namespace);
+    if (!outcome.ok) return c.json({ error: outcome.error }, 400);
+    return c.json(outcome, 202);
   });
   app.route('/api/admin', createAdminRouter(deps.providerStore, {
     store: deps.semanticStore,
@@ -905,8 +825,11 @@ export function createApp(browser: ResearchBrowserHost | null = null) {
   // Mem C across workers: workers reach the canonical services through the
   // memoryRetrieve/memoryExtract/memoryIsConfigured RPC handlers, preserving
   // per-turn injection and run-end distillation without main-loop execution.
+  // Index tools served in agent workers reach vector search, memory search
+  // and the namespace wake-up through the same functions as the HTTP routes.
+  const indexSearch = createIndexSearchService(deps);
   setCoderWorkerDocDeps({
-    agentReads: createOwnedAgentReads(app, deps),
+    indexSearch,
     documentExport: deps.exportService,
     projectIndex: createOwnedProjectIndex(deps),
     docSearch: docSearchBackend,
@@ -923,6 +846,7 @@ export function createApp(browser: ResearchBrowserHost | null = null) {
   // this, `rag_search_docs` from a company subordinate errors with "doc corpus
   // backend is not wired into this process". Reuses the same backends.
   setCompanyWorkerDocDeps({
+    indexSearch,
     docSearch: docSearchBackend,
     docsResearch: docsResearchBridge,
     vision: visionDescriber,

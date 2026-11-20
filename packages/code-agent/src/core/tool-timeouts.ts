@@ -29,6 +29,7 @@
  * the static `tool.timeoutMs` value.
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { isIndexTool } from './index-tool-identity.js';
 
 const NORMAL_DEFAULT_MS = 5 * 60_000;
 const SLOW_DEFAULT_MS = 30 * 60_000;
@@ -80,8 +81,10 @@ export const SLOW_TIMEOUT_MS = SLOW_DEFAULT_MS;
  *   4. name in `SLOW_NATIVE_NAMES`  → SLOW
  *   5. name matches `SLOW_NAME_RE`  → SLOW
  *   6. name starts with `SLOW_MCP_PREFIX` → SLOW
- *   7. `tool.source === 'mcp' | 'mcp_external'` → SLOW (latency unknown)
- *   8. otherwise → NORMAL
+ *   7. an index tool (mcp__*, `isIndexTool`) → SLOW: the value they had as
+ *      MCP tools, kept now that they are native
+ *   8. `tool.source === 'mcp' | 'mcp_external'` → SLOW (latency unknown)
+ *   9. otherwise → NORMAL
  */
 export function resolveToolTimeoutMs(
   tool: CoderTool,
@@ -101,6 +104,7 @@ export function resolveToolTimeoutMs(
   if (SLOW_NATIVE_NAMES.has(tool.name)) return SLOW_TIMEOUT_MS;
   if (SLOW_NAME_RE.test(tool.name)) return SLOW_TIMEOUT_MS;
   if (tool.name.startsWith(SLOW_MCP_PREFIX)) return SLOW_TIMEOUT_MS;
+  if (isIndexTool(tool)) return SLOW_TIMEOUT_MS;
   if (tool.source === 'mcp' || tool.source === 'mcp_external') return SLOW_TIMEOUT_MS;
   return NORMAL_TIMEOUT_MS;
 }

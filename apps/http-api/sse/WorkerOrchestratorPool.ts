@@ -46,6 +46,7 @@ import {
 } from './supervisor-incident-bus.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers } from './worker-memory-handlers.js';
+import { registerWorkerIndexHandlers } from './worker-index-handlers.js';
 import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerDiagramRender } from './worker-diagram-render.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
@@ -557,6 +558,10 @@ export class WorkerOrchestratorPool {
     // `setCompanyMemoryPorts` in company-worker.ts (spawn-time PROJECT MEMORY
     // block + run-end distillation for subordinates).
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
+    // Native index tools: the Company session is always THIS worker's; a
+    // subordinate's claimed coder session is validated like the HTTP headers.
+    const offIndexSearch = registerWorkerIndexHandlers(bridge,
+      () => ({ ids: { companySessionId: String(sessionId) }, fixed: ['companySessionId'] }), () => this.opts.docDeps?.indexSearch);
     // Secret decryption (`enc:`/`plain:` blobs) — safeStorage lives only in
     // the Electron main process; db_* tools in the worker RPC here.
     const offSecrets = registerWorkerSecretsHandlers(bridge);
@@ -670,6 +675,7 @@ export class WorkerOrchestratorPool {
       try { offPreviewDevtoolsCancel(); } catch { /* best-effort */ }
       try { offVisionDescribe(); } catch { /* best-effort */ }
       try { offMemory(); } catch { /* best-effort */ }
+      try { offIndexSearch(); } catch { /* best-effort */ }
       try { offSecrets(); } catch { /* best-effort */ }
       try { offLsp(); } catch { /* best-effort */ }
     };

@@ -4,24 +4,12 @@ import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface McpHttpConfig {
-  enabled: boolean;
-  path: string;
-  stateful: boolean;
+  /**
+   * Extra CORS origins for the app's own HTTP API (MCP_HTTP_CORS_ORIGINS).
+   * "mcp" is the project name here: the MCP server and its inbound auth
+   * were removed; the key keeps its name so existing .env files still work.
+   */
   corsOrigins: string[];
-}
-
-export interface McpAuthConfig {
-  enabled: boolean;
-  rateLimitPerMin: number;
-}
-
-export interface McpOAuthConfig {
-  enabled: boolean;
-  issuer: string;
-  jwtSecret: string;
-  accessTtlSec: number;
-  refreshTtlSec: number;
-  allowDcr: boolean;
 }
 
 /**
@@ -54,8 +42,6 @@ export interface IndexerConfig {
   };
   mcp: {
     http: McpHttpConfig;
-    auth: McpAuthConfig;
-    oauth: McpOAuthConfig;
   };
 }
 
@@ -179,24 +165,7 @@ const DEFAULT_CONFIG: IndexerConfig = {
   },
   mcp: {
     http: {
-      // Loopback-only endpoint: useful out of the box for local Claude/Codex
-      // clients while the server-level peer guard still rejects LAN callers.
-      enabled: true,
-      path: '/mcp',
-      stateful: false,
       corsOrigins: [],
-    },
-    auth: {
-      enabled: false,
-      rateLimitPerMin: 120,
-    },
-    oauth: {
-      enabled: false,
-      issuer: '',
-      jwtSecret: '',
-      accessTtlSec: 3600,
-      refreshTtlSec: 30 * 24 * 3600,
-      allowDcr: true,
     },
   },
 };
@@ -219,47 +188,13 @@ function applyEnvOverrides(config: IndexerConfig): void {
     config.budget = parseFloat(process.env.MCP_INDEX_BUDGET);
   }
 
-  // MCP HTTP
-  if (process.env.MCP_HTTP_ENABLED) {
-    config.mcp.http.enabled = process.env.MCP_HTTP_ENABLED === 'true';
-  }
-  if (process.env.MCP_HTTP_PATH) {
-    config.mcp.http.path = process.env.MCP_HTTP_PATH;
-  }
-  if (process.env.MCP_HTTP_STATEFUL) {
-    config.mcp.http.stateful = process.env.MCP_HTTP_STATEFUL === 'true';
-  }
+  // CORS of the app's own HTTP API. The former MCP_HTTP_ENABLED/_PATH/_STATEFUL,
+  // MCP_AUTH_* and MCP_OAUTH_* (except MCP_OAUTH_REDIRECT_BASE, read by the
+  // outbound MCP OAuth) configured the removed MCP server and inbound auth;
+  // an old .env that still sets them is ignored.
   if (process.env.MCP_HTTP_CORS_ORIGINS) {
     config.mcp.http.corsOrigins = process.env.MCP_HTTP_CORS_ORIGINS
       .split(',').map((s) => s.trim()).filter(Boolean);
-  }
-
-  // MCP auth (API tokens)
-  if (process.env.MCP_AUTH_ENABLED) {
-    config.mcp.auth.enabled = process.env.MCP_AUTH_ENABLED === 'true';
-  }
-  if (process.env.MCP_AUTH_RATE_LIMIT) {
-    config.mcp.auth.rateLimitPerMin = parseInt(process.env.MCP_AUTH_RATE_LIMIT, 10);
-  }
-
-  // MCP OAuth
-  if (process.env.MCP_OAUTH_ENABLED) {
-    config.mcp.oauth.enabled = process.env.MCP_OAUTH_ENABLED === 'true';
-  }
-  if (process.env.MCP_OAUTH_ISSUER) {
-    config.mcp.oauth.issuer = process.env.MCP_OAUTH_ISSUER;
-  }
-  if (process.env.MCP_OAUTH_JWT_SECRET) {
-    config.mcp.oauth.jwtSecret = process.env.MCP_OAUTH_JWT_SECRET;
-  }
-  if (process.env.MCP_OAUTH_ACCESS_TTL) {
-    config.mcp.oauth.accessTtlSec = parseInt(process.env.MCP_OAUTH_ACCESS_TTL, 10);
-  }
-  if (process.env.MCP_OAUTH_REFRESH_TTL) {
-    config.mcp.oauth.refreshTtlSec = parseInt(process.env.MCP_OAUTH_REFRESH_TTL, 10);
-  }
-  if (process.env.MCP_OAUTH_ALLOW_DCR) {
-    config.mcp.oauth.allowDcr = process.env.MCP_OAUTH_ALLOW_DCR === 'true';
   }
 }
 

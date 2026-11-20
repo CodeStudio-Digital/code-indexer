@@ -4,6 +4,7 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { capabilityDiscoveryEntries } from '@mcp/code-agent/core/capability-discovery.js';
 import { getToolTier, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { canInvokeInsideCodeExec } from './code-exec-eligibility.js';
+import { publishedToolSource } from '../core/index-tool-identity.js';
 import { codeExecToolAccessor } from './code-exec-hints.js';
 import {
   getToolText,
@@ -156,7 +157,7 @@ export function buildFindToolsTool(
         all.push({
           name: t.name,
           tier,
-          source: t.source,
+          source: publishedToolSource(t),
           description: t.description ?? '',
           params: paramSummary(t.parameters),
           schema: t.parameters,

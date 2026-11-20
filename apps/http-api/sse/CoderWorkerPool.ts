@@ -38,7 +38,6 @@ import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { ToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { registerWorkerPreviewCalls } from './worker-preview-calls.js';
-import { registerWorkerAgentReadCalls, type OwnedAgentReadService } from './worker-agent-read-calls.js';
 import { registerWorkerDiagramRender } from './worker-diagram-render.js';
 import { registerWorkerBrowserCalls } from './worker-browser-calls.js';
 import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
@@ -55,6 +54,8 @@ import type { CompanyRecommendFn } from '@mcp/company/services/scheduler/recomme
 import type { McpExternalPool } from './McpExternalPool.js';
 import { installRuntimeEventLog } from './runtime-event-log.js';
 import { registerWorkerMemoryHandlers, type WorkerMemoryDeps } from './worker-memory-handlers.js';
+import { registerWorkerIndexHandlers } from './worker-index-handlers.js';
+import type { IndexSearchService } from '../server/index-search-service.js';
 import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 import {
@@ -272,7 +273,8 @@ function mirrorBusLifecycleEvent(
 export interface CoderWorkerDocDeps extends WorkerMemoryDeps {
   projectIndex?: OwnedProjectIndexService | null;
   documentExport?: Pick<import('@mcp/services/services/exporter.js').ExportService, 'exportProject'> | null;
-  agentReads?: OwnedAgentReadService | null;
+  /** Vector/memory search and namespace wake-up for index tools served in the worker. */
+  indexSearch?: IndexSearchService | null;
   docSearch?: DocSearchBackend | null;
   docsResearch?: DocsResearchBridge | null;
   /** Main-side vision describer; worker reaches it via `visionDescribe` RPC. */
@@ -1715,7 +1717,6 @@ export class CoderWorkerPool {
         signal: owner!.bus.ctrl.signal, assertOwner };
     };
     const offPreviewDevtools = registerWorkerPreviewCalls(bridge, applicationOwner);
-    const offAgentReads = registerWorkerAgentReadCalls(bridge, applicationOwner, () => this.opts.docDeps?.agentReads);
     const offDiagramRender = registerWorkerDiagramRender(bridge, applicationOwner);
     const offResearchBrowser = registerWorkerBrowserCalls(bridge, applicationOwner);
     // Vision fallback — routes image→text describe to the main-process vision
@@ -1737,6 +1738,9 @@ export class CoderWorkerPool {
     // injection AND run-end distillation (regression vs the in-process path
     // in routes/coder/stream.ts, which passes deps.memoryRetriever directly).
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
+    // Native index tools: a claimed session id is validated like the HTTP
+    // headers; without one, telemetry goes to THIS worker's session.
+    const offIndexSearch = registerWorkerIndexHandlers(bridge, () => ({ ids: { sessionId: String(sessionId) } }), () => this.opts.docDeps?.indexSearch);
     // Secret decryption (`enc:`/`plain:` blobs) — safeStorage lives only in
     // the Electron main process; db_* tools in the worker RPC here.
     const offSecrets = registerWorkerSecretsHandlers(bridge, runId => applicationOwner(runId).assertOwner);
@@ -1917,11 +1921,11 @@ export class CoderWorkerPool {
         try { offDocOutline(); } catch { /* best-effort */ }
         try { offDocsResearch(); } catch { /* best-effort */ }
         try { offPreviewDevtools(); } catch { /* best-effort */ }
-        try { offAgentReads(); } catch { /* best-effort */ }
         try { offDiagramRender(); } catch { /* best-effort */ }
         try { offResearchBrowser(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }
         try { offMemory(); } catch { /* best-effort */ }
+        try { offIndexSearch(); } catch { /* best-effort */ }
         try { offSecrets(); } catch { /* best-effort */ }
         try { offLsp(); } catch { /* best-effort */ }
         try { offMcpSnapshot(); } catch { /* best-effort */ }

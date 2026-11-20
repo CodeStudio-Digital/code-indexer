@@ -1,36 +1,28 @@
 /**
- * Overlay handlers — serve local disk reads for MCP tool calls when the
- * target file has been touched in the current session.
+ * Overlay handlers — what the index tools still need for files touched in
+ * the current session (created/edited/written).
  *
- * Each handler returns a ToolResult (pre-intercept) to short-circuit the
- * MCP call entirely, or null to signal "delegate to MCP". Some tools
- * (list_directory, grep_code) also expose a `postProcess` that merges
- * dirty-file data into the MCP result.
- *
- * All parsing reuses helpers from src/services/code-reader.ts — no
- * duplication of regex or brace-balancing logic.
+ * read_file, get_symbol_body and grep_code read current disk bytes in the
+ * index tool core, so they need nothing here. Two gaps remain because the
+ * structural index only refreshes symbols of already-indexed files:
+ *   - get_file_skeleton answers from indexed symbols; a dirty file asks the
+ *     core for its disk outline instead (internal `__prefer_disk`).
+ *   - list_directory lists indexed files; a dirty file that is not indexed
+ *     yet is added once, in the listing's own `path` form.
  */
 import { statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import type { ToolResult } from '@mcp/code-agent/core/tool.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
+import { ok } from '@mcp/code-agent/core/tool.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
-import {
-  readFileSlice,
-  extractSkeletonFromFile,
-  findSymbolDeclLine,
-  extractSymbolBody,
-  grepInFiles,
-} from '@mcp/services/services/code-reader.js';
 
 const OVERLAY_TAG = '[session overlay]';
 
 export interface OverlayHandler {
-  /** Called BEFORE delegating to MCP. Return non-null to short-circuit. */
-  pre?: (args: Record<string, unknown>, overlay: SessionOverlay, projectRoot: string) => ToolResult | null;
-  /** Called AFTER a successful MCP call. Returns the final ToolResult (possibly augmented). */
-  postProcess?: (mcpText: string, args: Record<string, unknown>, overlay: SessionOverlay, projectRoot: string) => ToolResult;
+  /** Internal arguments to add before dispatch (never visible to the model). */
+  internalArgs?: (args: Record<string, unknown>, overlay: SessionOverlay) => Record<string, unknown> | null;
+  /** Called AFTER a successful call. Returns the final ToolResult (possibly augmented). */
+  postProcess?: (text: string, args: Record<string, unknown>, overlay: SessionOverlay, projectRoot: string) => ToolResult;
 }
 
 function getStr(args: Record<string, unknown>, key: string): string | undefined {
@@ -38,193 +30,52 @@ function getStr(args: Record<string, unknown>, key: string): string | undefined 
   return typeof v === 'string' ? v : undefined;
 }
 
-// ─── read_file ────────────────────────────────────────────────────
-
-const handleReadFile: OverlayHandler = {
-  pre: (args, overlay, projectRoot) => {
-    const filePath = getStr(args, 'file_path');
-    if (!filePath || !overlay.isDirty(filePath)) return null;
-
-    const start = typeof args.start_line === 'number' ? args.start_line : 1;
-    const maxLines = typeof args.max_lines === 'number' ? args.max_lines : 400;
-    const end = typeof args.end_line === 'number' ? args.end_line : start + maxLines - 1;
-
-    try {
-      const { lines, total } = readFileSlice(join(projectRoot, filePath), start, end);
-      const actualEnd = Math.min(total, end);
-      const header = `${filePath} ${OVERLAY_TAG} (lines ${start}-${actualEnd} of ${total})`;
-      const body = lines.map((l, i) => `${(start + i).toString().padStart(5)}\t${l}`).join('\n');
-      const footer = actualEnd < total
-        ? `\n... ${truncationMarker(`${total - actualEnd} more lines`, 'pass start_line/end_line to read more')}`
-        : '';
-      return {
-        content: `${header}\n${body}${footer}`,
-        ...(actualEnd < total
-          ? {
-              sourceTruncations: [{
-                technique: 'overlay-read-file-line-window',
-                inputSize: total,
-                outputSize: lines.length,
-                unit: 'lines' as const,
-                recoverable: true,
-              }],
-            }
-          : {}),
-      };
-    } catch (e) {
-      return err(`overlay read_file failed for ${filePath}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  },
-};
-
 // ─── get_file_skeleton ───────────────────────────────────────────
 
-function skeletonResult(filePath: string, projectRoot: string): ToolResult {
-  const abs = join(projectRoot, filePath);
-  let totalLines = 0;
-  try {
-    const { total } = readFileSlice(abs, 1, 1);
-    totalLines = total;
-  } catch {
-    return err(`overlay: file ${filePath} not found on disk`);
-  }
-  const entries = extractSkeletonFromFile(abs);
-  const header = `${filePath} | ? | ? | ${totalLines}L | ? ${OVERLAY_TAG}`;
-  if (entries.length === 0) {
-    return ok(`${header}\n(no symbols extracted — regex scan found nothing)`);
-  }
-  const lines = entries.map((e) => `${e.line.toString().padStart(5)}\t${e.kind}\t${e.name}\t${e.signature}`);
-  return ok([header, ...lines].join('\n'));
-}
-
 const handleGetFileSkeleton: OverlayHandler = {
-  pre: (args, overlay, projectRoot) => {
+  internalArgs: (args, overlay) => {
     const filePath = getStr(args, 'file_path');
-    if (!filePath || !overlay.isDirty(filePath)) return null;
-    return skeletonResult(filePath, projectRoot);
-  },
-};
-
-// ─── get_symbol_body ─────────────────────────────────────────────
-
-const handleGetSymbolBody: OverlayHandler = {
-  pre: (args, overlay, projectRoot) => {
-    const filePath = getStr(args, 'file_path');
-    const symbolName = getStr(args, 'symbol_name');
-    if (!filePath || !symbolName) return null;
-    if (!overlay.isDirty(filePath)) return null;
-
-    const abs = join(projectRoot, filePath);
-    const line = findSymbolDeclLine(abs, symbolName);
-    if (line === null) {
-      return err(`overlay: symbol '${symbolName}' not found in ${filePath}`);
-    }
-    try {
-      const body = extractSymbolBody(projectRoot, filePath, line);
-      return ok(`${body.file}:${body.start_line}-${body.end_line} ${OVERLAY_TAG}\n${body.body}`);
-    } catch (e) {
-      return err(`overlay get_symbol_body failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    return filePath && overlay.isDirty(filePath) ? { __prefer_disk: true } : null;
   },
 };
 
 // ─── list_directory (merge) ──────────────────────────────────────
 
+/** `src/a.ts (12L)`, `src/a.ts (340B)` or `src/dir/` → the listed path. */
+function listedPath(line: string): string {
+  return line.replace(/ \(\d+[LB]\)$/, '').replace(/\/$/, '');
+}
+
 const handleListDirectory: OverlayHandler = {
-  postProcess: (mcpText, args, overlay, _projectRoot) => {
-    const prefix = getStr(args, 'path') ?? '';
-    const overlayFiles = overlay.filterDirty(prefix);
-    if (overlayFiles.length === 0) return ok(mcpText);
-
-    // Only add files not already listed by the MCP server.
-    // Matching by basename alone caused false positives: a dirty
-    // `src/foo/index.ts` would be skipped if the listing contained
-    // `src/bar/index.ts` at a different indent. Match on the exact
-    // indent+basename line shape the MCP server produces.
-    const prefixDepth = prefix ? prefix.split('/').filter(Boolean).length : 0;
-    const extras = overlayFiles.filter((p) => {
-      const parts = p.split('/');
-      const indent = '  '.repeat(Math.max(0, parts.length - prefixDepth - 1));
-      const base = parts[parts.length - 1];
-      const escaped = (indent + base).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const re = new RegExp(`^${escaped}($|[\\s(])`, 'm');
-      return !re.test(mcpText);
-    });
-    if (extras.length === 0) return ok(mcpText);
-
-    const extraLines = extras.map((p) => {
-      const parts = p.split('/');
-      const baseDepth = prefix ? prefix.split('/').filter(Boolean).length : 0;
-      const indent = '  '.repeat(Math.max(0, parts.length - baseDepth - 1));
-      return `${indent}${parts[parts.length - 1]} ${OVERLAY_TAG}`;
-    });
-
-    const body = mcpText === 'Empty.' ? '' : mcpText;
-    return ok([body, `-- session overlay (${extras.length}) --`, ...extraLines].filter(Boolean).join('\n'));
+  postProcess: (text, args, overlay, projectRoot) => {
+    // Extras belong to the first page only, so paging never repeats them.
+    if (typeof args.offset === 'number' && args.offset > 0) return ok(text);
+    const prefix = normalizePrefix(getStr(args, 'path') ?? '');
+    const depth = typeof args.depth === 'number' ? args.depth : 2;
+    const maxSlashes = depth + (prefix ? prefix.split('/').length : 0);
+    const listed = new Set(text.split('\n').map(listedPath));
+    const extras = overlay.filterDirty(prefix).filter((p) => {
+      if (listed.has(p) || p.split('/').length - 1 > maxSlashes) return false;
+      try { return statSync(join(projectRoot, p)).isFile(); } catch { return false; }
+    }).sort();
+    if (extras.length === 0) return ok(text);
+    const body = text === 'Empty.' ? '' : text;
+    return ok([body, `-- session overlay (${extras.length}) --`, ...extras.map((p) => `${p} ${OVERLAY_TAG}`)]
+      .filter(Boolean).join('\n'));
   },
 };
 
-// ─── grep_code (merge) ───────────────────────────────────────────
-
-const handleGrepCode: OverlayHandler = {
-  postProcess: (mcpText, args, overlay, projectRoot) => {
-    const overlayFiles = overlay.filterDirty();
-    if (overlayFiles.length === 0) return ok(mcpText);
-
-    const pattern = getStr(args, 'pattern');
-    if (!pattern) return ok(mcpText);
-
-    const literal = args.literal === true;
-    const ci = args.case_sensitive !== true;
-    const maxResults = typeof args.max_results === 'number' ? args.max_results : 50;
-
-    const escaped = literal ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern;
-    let re: RegExp;
-    try {
-      re = new RegExp(escaped, ci ? 'i' : '');
-    } catch {
-      return ok(mcpText);
-    }
-
-    // Filter dirty files that actually exist on disk
-    const existingDirty = overlayFiles.filter((p) => {
-      try { statSync(join(projectRoot, p)); return true; } catch { return false; }
-    });
-    if (existingDirty.length === 0) return ok(mcpText);
-
-    const hits = grepInFiles(projectRoot, existingDirty, re, maxResults);
-    if (hits.length === 0) return ok(mcpText);
-
-    // Dedupe against hits already present in the MCP result — otherwise an
-    // indexed-but-also-dirty file shows up twice (once from the DB grep, once
-    // from the overlay disk grep). Key: `file:line`.
-    const existingHits = new Set<string>();
-    for (const line of mcpText.split('\n')) {
-      const m = line.match(/^([^\s:]+):(\d+):/);
-      if (m) existingHits.add(`${m[1]}:${m[2]}`);
-    }
-    const newHits = hits.filter((h) => !existingHits.has(`${h.file}:${h.line}`));
-    if (newHits.length === 0) return ok(mcpText);
-
-    const overlayLines = newHits.map((h) => `${h.file}:${h.line}: ${h.text} ${OVERLAY_TAG}`);
-    const body = mcpText === 'No matches.' ? '' : mcpText;
-    return ok([body, ...overlayLines].filter(Boolean).join('\n'));
-  },
-};
+function normalizePrefix(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '');
+}
 
 // ─── Lookup table ────────────────────────────────────────────────
 
 const HANDLERS: Record<string, OverlayHandler> = {
-  read_file: handleReadFile,
   get_file_skeleton: handleGetFileSkeleton,
-  get_symbol_body: handleGetSymbolBody,
   list_directory: handleListDirectory,
-  grep_code: handleGrepCode,
 };
 
 export function getOverlayHandler(toolName: string): OverlayHandler | undefined {
   return HANDLERS[toolName];
 }
-
-// Silence unused warning for `dirname` — kept in imports for possible future use
-void dirname;

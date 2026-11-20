@@ -18,8 +18,6 @@
       ],
       "entry": [
         "apps/cli/index.ts",
-        "apps/mcp-server/index.ts",
-        "apps/mcp-server/scripts/generate-internal-mcp-catalog.ts",
         "apps/http-api/server.ts",
         "apps/http-api/server/github-app-managed-git/runtime.ts",
         "apps/http-api/workers/*.{ts,mjs}",

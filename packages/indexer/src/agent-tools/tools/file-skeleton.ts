@@ -34,11 +34,18 @@ export const fileSkeleton = defineTool({
       if (read.totalBytes > 1024 * 1024) throw new Error('Interactive skeleton exceeds 1 MiB; index the file or read bounded ranges');
       return read;
     };
-    if (!file && !indexed.files) {
+    // Internal (outside the schema): the agent touched this file in its session,
+    // so the indexed symbols may be stale; outline the current disk bytes.
+    // The store answers a file with `file` set (and files = 1) and a directory
+    // with no `file` and a count; only a directory stays on the index.
+    const preferDisk = args.__prefer_disk === true && (!!file || !indexed.files);
+    if (preferDisk || (!file && !indexed.files)) {
       let read;
       try { read = await readOutline(); }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`File "${path}" not found in index nor on disk`);
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error(preferDisk && file ? `File "${path}" not found on disk` : `File "${path}" not found in index nor on disk`);
+        }
         throw error;
       }
       const parsed = await treeSitterSymbols(path, read.content, { signal });

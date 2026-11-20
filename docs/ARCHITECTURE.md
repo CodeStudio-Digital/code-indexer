@@ -167,7 +167,8 @@ The IPC path:
 
 Hono still exists because: (a) `pnpm dev` (browser only) needs it,
 (b) the standalone API server (`pnpm start:api`) is the integration
-surface for external MCP clients, (c) `MCP_DEV_HTTP=1` makes debugging
+surface for the CLI and scripts such as the live agent bench (the MCP
+server for external clients was removed), (c) `MCP_DEV_HTTP=1` makes debugging
 with curl trivial.
 
 ## Auth + billing (planned)

@@ -29,8 +29,8 @@ function ToolRow({
           >
             {tool.name}
           </span>
-          {tool.source === 'mcp' && (
-            <Badge variant="outline" className="h-4 text-[10px] shrink-0">{t('toolConfig.mcp')}</Badge>
+          {tool.source === 'index' && (
+            <Badge variant="outline" className="h-4 text-[10px] shrink-0">{t('toolConfig.index')}</Badge>
           )}
           {tool.source === 'mcp_external' && (
             <Badge variant="outline" className="h-4 text-[10px] shrink-0 border-blue-300 text-blue-600">{t('toolConfig.ext')}</Badge>

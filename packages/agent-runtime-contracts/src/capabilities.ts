@@ -19,6 +19,11 @@ export interface SideEffectContract {
 }
 
 export interface CapabilitySource {
+  /**
+   * 'mcp_internal' has no producer since the index tools (mcp__*) became
+   * native (providerId 'code-indexer'); it stays so capability records
+   * written before that keep their type.
+   */
   kind: 'native' | 'mcp_internal' | 'mcp_external' | 'plugin' | 'skill' | 'remote';
   providerId: string;
   serverId?: string;

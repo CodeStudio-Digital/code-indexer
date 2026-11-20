@@ -16,6 +16,7 @@ import { runWithSnapshotInvocation } from '../ports/snapshot-invocation.js';
 import { beginInvocation, finishInvocation } from './invocation-evidence.js';
 import { createToolOutcomeScope } from './tool-outcome-observer.js';
 import { saveToolResultImages } from './vision-context.js';
+import { isIndexTool } from './index-tool-identity.js';
 import {
   mutationFencedFilesystemPort,
   mutationFencedShellPort,
@@ -114,7 +115,9 @@ export class ToolRegistry {
       scope?.settle(execution.rawResult, readOnly, execution.dispatched);
     }
     return finishInvocation(result, invocation, started, readOnly,
-      tool?.source === 'mcp_external' || tool?.source === 'mcp' ? 'mcp' : tool?.source === 'native' ? 'native' : 'other', ctx);
+      // Index tools keep the 'mcp' label this event always gave them (core/index-tool-identity.ts).
+      isIndexTool(tool) || tool?.source === 'mcp_external' || tool?.source === 'mcp' ? 'mcp'
+        : tool?.source === 'native' ? 'native' : 'other', ctx);
   }
 
   private async invokeInternal(

@@ -1,4 +1,5 @@
-import type { McpTier } from '@mcp/services/auth/domain/api-token.js';
+/** Tier label of an index tool definition (bootstrap < navigate < admin). */
+export type McpTier = 'bootstrap' | 'navigate' | 'admin';
 import type { IndexToolContext } from './context.js';
 
 export interface McpToolInputSchema {

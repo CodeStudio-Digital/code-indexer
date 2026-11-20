@@ -88,3 +88,23 @@ describe('isMasterAllowed — retired App Studio tools', () => {
     },
   );
 });
+
+describe('isMasterAllowed — index tools (mcp__*) are native since E7b', () => {
+  // As registered for a company project: source native, code-indexer identity.
+  const indexTool = (name: string): CoderTool => ({ ...native(name),
+    capabilityProvenance: { kind: 'native', providerId: 'code-indexer', provenanceRef: 'index-native:code-indexer' } }) as CoderTool;
+
+  it.each(['mcp__acme__search', 'mcp__acme__get_project_pulse', 'mcp__search', 'mcp__list_directory'])(
+    'still keeps %s by its suffix, not by source', (name) => {
+      expect(isMasterAllowed(indexTool(name))).toBe(true);
+      expect(isMasterAllowed({ ...indexTool(name), source: 'mcp' } as CoderTool)).toBe(true);
+    },
+  );
+
+  it.each(['mcp__acme__read_file', 'mcp__acme__save_memory', 'mcp__grep_code'])(
+    'still strips %s, which is not on the master suffix list', (name) => {
+      expect(isMasterAllowed(indexTool(name))).toBe(false);
+      expect(isMasterAllowed({ ...indexTool(name), source: 'mcp' } as CoderTool)).toBe(false);
+    },
+  );
+});

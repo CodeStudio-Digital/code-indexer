@@ -1,4 +1,4 @@
-import type { Clock } from '../../../auth/ports/clock.js';
+import type { Clock } from '../support/ports/clock.js';
 import type { McpOAuthTokensReaderRepo } from '../ports/oauth-tokens-repository.js';
 import type { RefreshMcpAccessToken } from './refresh-mcp-access-token.js';
 import { err, ok, type Result } from './result.js';

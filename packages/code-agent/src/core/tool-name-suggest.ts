@@ -23,6 +23,8 @@
  * replacement takes different arguments. Consulted only when the name is not
  * registered (top-level dispatch, code_exec's `tools.<name>` and bare globals).
  */
+const AGENT_RUN_API_RETIRED = 'The agent-run API was removed together with the MCP server; there is no replacement tool.';
+
 export const RETIRED_TOOL_REPLACEMENTS: Readonly<Record<string, string>> = {
   multi_edit: 'Use edit_file with `edits: [{ old_string, new_string, replace_all? }]` — all edits to one file apply atomically.',
   create_file: 'Use write_file — it creates a new file, and refuses to replace an existing one this session has not read.',
@@ -32,12 +34,36 @@ export const RETIRED_TOOL_REPLACEMENTS: Readonly<Record<string, string>> = {
   poll_session: 'Use write_stdin with the session_id and empty (or omitted) `chars` — an empty write is the poll.',
   expand_toolset: 'Use find_tools to discover a tool and its schema; call hidden non-interactive tools inside code_exec. The visible catalog never changes mid-run.',
   capability_catalog: 'Use find_tools for tools; for skills use get_skills_list and get_skill_content.',
+  // Application/CLI actions; the index tools the agent registers leave them out.
+  mcp__index_project: 'Indexing is an application/CLI action, not an agent tool: the application maintains the project index. Check its coverage with mcp__get_project_overview; files missing from the index can still be read directly.',
+  mcp__export_docs: 'Documentation export is an application/CLI action, not an agent tool. For a structural summary use mcp__get_project_overview and mcp__get_repo_map.',
+  // The code index's MCP resources were retired together with the MCP bridge.
+  mcp_list_resources: 'The code index no longer publishes MCP resources. For the project overview and repo map use mcp__get_project_overview and mcp__get_repo_map.',
+  mcp_read_resource: 'The code index no longer publishes MCP resources. For the project overview and repo map use mcp__get_project_overview and mcp__get_repo_map.',
+  // Agent-run reads, answered by the application's agent-run API.
+  mcp__list_agents: AGENT_RUN_API_RETIRED,
+  mcp__list_agent_runs: AGENT_RUN_API_RETIRED,
+  mcp__get_agent_run: AGENT_RUN_API_RETIRED,
+  mcp__get_agent_result: AGENT_RUN_API_RETIRED,
 };
+
+/**
+ * The per-project form `mcp__<slug>__<tool>` of the retired index tools: a
+ * Company master and a global session's secondary projects only have that
+ * form. The slug may contain `_`.
+ */
+const PREFIXED_RETIRED_INDEX_TOOL =
+  /^mcp__(.+)__(index_project|export_docs|list_agents|list_agent_runs|get_agent_run|get_agent_result)$/;
 
 /** The error text for a retired tool name, or null when the name was never retired. */
 export function retiredToolInstruction(name: string): string | null {
   const replacement = Object.hasOwn(RETIRED_TOOL_REPLACEMENTS, name) ? RETIRED_TOOL_REPLACEMENTS[name] : undefined;
-  return replacement ? `${name} was retired. ${replacement}` : null;
+  if (replacement) return `${name} was retired. ${replacement}`;
+  const prefixed = PREFIXED_RETIRED_INDEX_TOOL.exec(name);
+  if (!prefixed) return null;
+  // Point at the same project's tools, which carry the same prefix.
+  const text = RETIRED_TOOL_REPLACEMENTS[`mcp__${prefixed[2]}`].split('mcp__').join(`mcp__${prefixed[1]}__`);
+  return `${name} was retired. ${text}`;
 }
 
 /**

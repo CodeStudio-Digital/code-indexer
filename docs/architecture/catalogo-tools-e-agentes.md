@@ -2,20 +2,20 @@
 
 Inventário de nomes conferido no checkpoint anterior à remoção do runtime, em 23/10/2026. A execução atual é TypeScript; as contagens foram ajustadas em 27/10/2026 para a remoção da funcionalidade Meta. Escopo: definições do produto; não consulta credenciais nem presume quais agentes personalizados, plugins ou servidores externos estão habilitados no perfil do usuário.
 
-O catálogo principal possui **239 nomes** em **240 definições** (244/245 no inventário de 23/10/2026, menos cinco nomes do Coder aposentados em nov/2026: `create_file`, `multi_edit`, `todo_write`, `update_todo`, `submit_tasks`). Nomes de compatibilidade e superfícies diferentes são contados separadamente. A definição de `respond_to_inbox` aparece em dois papéis Company, mas conta como um nome.
+O catálogo principal possui **229 nomes** em **230 definições** (244/245 no inventário de 23/10/2026, menos sete nomes do Coder aposentados em nov/2026: `create_file`, `multi_edit`, `todo_write`, `update_todo`, `submit_tasks` e os recursos MCP `mcp_list_resources` e `mcp_read_resource`, que saíram com a ponte MCP; e menos os quatro nomes que só o servidor MCP publicava, removido com ele: `mcp__index_project`, `mcp__export_docs`, `mcp__start_agent_run` e `mcp__cancel_agent_run`; e menos as quatro leituras de execuções de agente, aposentadas com a API de execuções do aplicativo: `mcp__list_agents`, `mcp__list_agent_runs`, `mcp__get_agent_run` e `mcp__get_agent_result`). Nomes de compatibilidade e superfícies diferentes são contados separadamente. A definição de `respond_to_inbox` aparece em dois papéis Company, mas conta como um nome.
 
 ## Separação por superfície
 
 | Superfície | Nomes |
 | --- | ---: |
-| Coder | 119 |
+| Coder | 117 |
 | Company e App Studio | 77 |
 | DocsAgent | 6 |
-| MCP interno/público | 33 |
+| Tools de índice (`mcp__*`) | 25 |
 | Skills | 4 |
-| **Total** | **239** |
+| **Total** | **229** |
 
-A composição efetivamente disponível depende do preset, perfil de ferramentas, permissões, capacidades registradas e contexto da sessão. Não se fornecem automaticamente as 239 ferramentas a todos os agentes.
+A composição efetivamente disponível depende do preset, perfil de ferramentas, permissões, capacidades registradas e contexto da sessão. Não se fornecem automaticamente as 229 ferramentas a todos os agentes.
 
 ## Todas as ferramentas do catálogo principal, por função
 
@@ -91,10 +91,6 @@ A composição efetivamente disponível depende do preset, perfil de ferramentas
 
 `capability_catalog`, `find_tools`, `expand_toolset`, `get_tool_output`.
 
-**Recursos MCP (2).** Listar e ler recursos expostos por servidores MCP.
-
-`mcp_list_resources`, `mcp_read_resource`.
-
 **Criação de skills (1).** Criar uma skill reutilizável.
 
 `create_skill`.
@@ -151,29 +147,25 @@ A composição efetivamente disponível depende do preset, perfil de ferramentas
 
 `docs_plan`, `docs_list_sources`, `docs_search`, `docs_read_chunk`, `docs_synthesize`, `docs_finish`.
 
-### MCP interno/público
+### Tools de índice (`mcp__*`)
 
 **Leitura, busca e navegação de código (12).** Pesquisa textual/semântica e navegação estrutural no código indexado.
 
 `mcp__search`, `mcp__grep_code`, `mcp__read_file`, `mcp__list_directory`, `mcp__get_file_skeleton`, `mcp__get_symbol_body`, `mcp__find_references`, `mcp__find_implementations`, `mcp__get_hierarchy`, `mcp__trace_usage`, `mcp__semantic_neighbors`, `mcp__prepare_edit`.
 
-**Projeto e indexação (7).** Mapas, dependências, visão geral, atividade e atualização do índice.
+**Projeto (6).** Mapas, dependências, visão geral e atividade do projeto indexado.
 
-`mcp__get_dependencies`, `mcp__get_dependents`, `mcp__get_project_overview`, `mcp__get_project_pulse`, `mcp__get_recently_modified_files`, `mcp__get_repo_map`, `mcp__index_project`.
+`mcp__get_dependencies`, `mcp__get_dependents`, `mcp__get_project_overview`, `mcp__get_project_pulse`, `mcp__get_recently_modified_files`, `mcp__get_repo_map`.
 
-**Documentação (4).** Pesquisar/ler documentação indexada, navegar sumário e exportar.
+**Documentação (3).** Pesquisar/ler documentação indexada e navegar o sumário.
 
-`mcp__rag_search_docs`, `mcp__rag_read_doc`, `mcp__rag_doc_outline`, `mcp__export_docs`.
+`mcp__rag_search_docs`, `mcp__rag_read_doc`, `mcp__rag_doc_outline`.
 
-**Memória do índice (2).** Salvar e pesquisar memória pela API MCP.
+**Memória do índice (2).** Salvar e pesquisar a memória do projeto.
 
 `mcp__save_memory`, `mcp__search_memory`.
 
-**Catálogo e execuções de agentes (6).** Descobrir agentes e iniciar/acompanhar/cancelar execuções pela fachada pública.
-
-`mcp__list_agents`, `mcp__start_agent_run`, `mcp__list_agent_runs`, `mcp__get_agent_run`, `mcp__get_agent_result`, `mcp__cancel_agent_run`.
-
-Os agentes internos recebem só as quatro de leitura: nenhuma bridge interna (projeto primário, prefixadas do master e dos projetos secundários de sessão global) registra `mcp__start_agent_run` nem `mcp__cancel_agent_run`. Clientes MCP externos continuam vendo as seis.
+Dentro do Coder, as tools `mcp__*` de índice rodam no próprio processo, pela porta de tools de índice que os workers do Coder e da Company registram; não há processo filho nem stdio. Nome, descrição e schema vêm do catálogo da porta, em ordem alfabética. `mcp__index_project` e `mcp__export_docs` são ações da aplicação/CLI: o agente não as registra. Um processo sem porta registrada executa sem tools de índice e avisa a cada execução. Elas são `source: 'native'`, com procedência `kind: 'native'`, `providerId: 'code-indexer'` e `provenanceRef: 'index-native:code-indexer'`; o tempo-limite lento, a exclusão dos filhos Ultra isolados e o rótulo `mcp` nos contratos já publicados (evento operacional, hook `tool-filter` do projeto e listagem do `find_tools`) são regras explícitas em [index-tool-identity.ts](../../packages/code-agent/src/core/index-tool-identity.ts). No painel de tools elas aparecem com o selo "índice".
 
 **Modelos e custos (2).** Consultar modelos e métricas de custo.
 
@@ -188,9 +180,9 @@ Os agentes internos recebem só as quatro de leitura: nenhuma bridge interna (pr
 ## Distinções importantes das ferramentas
 
 - `preview_*`: janela Electron do aplicativo local, com inspeção por CDP. `browser_*`: navegador de pesquisa para páginas públicas. `web_search`/`web_fetch`: pesquisa e extração sem o mesmo fluxo de interação visual.
-- O prefixo `mcp__` é o nome dentro do Coder; no servidor MCP público, a declaração normalmente usa o nome sem esse prefixo. `list_agents` da árvore do Coder e `mcp__list_agents` do catálogo público têm finalidades diferentes.
+- O prefixo `mcp__` marca as tools de índice dentro do Coder; a porta as publica sem o prefixo. `list_agents` é a da árvore de agentes; `mcp__list_agents` (catálogo de agentes do aplicativo) foi aposentada.
 - `docs_*` da Company gerencia documentos de equipe; as seis `docs_*` do DocsAgent controlam seu ciclo de pesquisa; `rag_*` consulta documentação indexada. São superfícies distintas.
-- Nomes aposentados não são aliases: `multi_edit`, `create_file`, `todo_write`, `update_todo`, `submit_tasks` e `poll_session` falham com a instrução da substituta (`edit_file` com `edits`, `write_file`, `task_list`, `write_stdin` com `chars` vazio), no nível principal e dentro do `code_exec`. Um `write_stdin` com `chars` vazio é uma leitura (poll), não uma escrita.
+- Nomes aposentados não são aliases: `multi_edit`, `create_file`, `todo_write`, `update_todo`, `submit_tasks` e `poll_session` falham com a instrução da substituta (`edit_file` com `edits`, `write_file`, `task_list`, `write_stdin` com `chars` vazio), no nível principal e dentro do `code_exec`. O mesmo vale para `mcp__index_project`, `mcp__export_docs`, `mcp_list_resources` e `mcp_read_resource`, que apontam para `mcp__get_project_overview` e `mcp__get_repo_map`, e para as quatro leituras de execuções de agente (`mcp__list_agents`, `mcp__list_agent_runs`, `mcp__get_agent_run`, `mcp__get_agent_result`, também na forma `mcp__<projeto>__*`): a API de execuções saiu com o servidor MCP e não há substituta. `start_agent_run` e `cancel_agent_run` nunca foram registradas pelos agentes internos; uma chamada recebe o erro comum de tool desconhecida. Um `write_stdin` com `chars` vazio é uma leitura (poll), não uma escrita.
 
 ## Tipos de agentes, modos e extensões
 
@@ -263,7 +255,6 @@ Fonte: [DocsAgent](../../packages/docs-agent/src/index.ts).
 ### Agentes personalizados, plugins e MCP
 
 - **Personalizados:** `custom:<id>`, herdando um dos onze presets e acrescentando prompt, skills, tiers, pins e allowlist. Podem ser criados pelo usuário ou gerenciados por extensão. A quantidade e os nomes dependem do perfil configurado. [Fonte](../../apps/http-api/custom-agents.ts#L10).
-- **Agentes via MCP:** o servidor expõe o catálogo built-in/custom e encaminha a execução para sessões do Coder. É outra forma de acesso aos agentes, não um engine independente. [Fonte](../../apps/mcp-server/agent-run-manager.ts#L171).
 
 ### Perfis, modos e runtime: eixos separados
 
@@ -304,7 +295,7 @@ Fonte: [catálogo de pipelines](../../packages/services/src/pipelines/catalog.ts
 
 ## Catálogos dinâmicos e extensões do checkout
 
-MCPs externos, plugins e agentes personalizados variam conforme configuração e permissões. Seus catálogos efetivos não podem ser deduzidos apenas do inventário fixo de 239 nomes. Recursos e prompts MCP também não são contados como tools.
+MCPs externos, plugins e agentes personalizados variam conforme configuração e permissões. Seus catálogos efetivos não podem ser deduzidos apenas do inventário fixo de 229 nomes. Recursos e prompts MCP também não são contados como tools.
 
 <!-- EXTENSION_CATALOG -->
 
@@ -312,7 +303,7 @@ MCPs externos, plugins e agentes personalizados variam conforme configuração e
 
 - [Remoção do runtime e localização do checkpoint histórico](./runtime-retirement.md).
 - [Definições das ferramentas Coder](../../packages/code-agent/src/tools/).
-- [Definições MCP](../../apps/mcp-server/tools/).
+- [Definições das tools de índice](../../packages/indexer/src/agent-tools/tools/) e [documentação](../../packages/code-agent/src/tools/index-docs/docs.ts).
 
 
-A classificação funcional foi conferida por igualdade de conjuntos: os 244 nomes do inventário de 23/10/2026 apareciam exatamente uma vez na seção principal e pertenciam à superfície declarada; a atualização de nov/2026 só retirou os cinco nomes aposentados. Nenhum aplicativo ou provider foi iniciado para este levantamento.
+A classificação funcional foi conferida por igualdade de conjuntos: os 244 nomes do inventário de 23/10/2026 apareciam exatamente uma vez na seção principal e pertenciam à superfície declarada; as atualizações de nov/2026 só retiraram os sete nomes aposentados do Coder e os quatro nomes que só o servidor MCP publicava. Nenhum aplicativo ou provider foi iniciado para este levantamento.

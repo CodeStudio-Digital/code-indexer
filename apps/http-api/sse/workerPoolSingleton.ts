@@ -135,6 +135,7 @@ function peekWorkerOrchestratorPool(): WorkerOrchestratorPool | null {
  */
 export function setCompanyWorkerDocDeps(
   deps: {
+    indexSearch?: CoderWorkerDocDeps['indexSearch'];
     docSearch?: CoderWorkerDocDeps['docSearch'];
     docsResearch?: CoderWorkerDocDeps['docsResearch'];
     vision?: CoderWorkerDocDeps['vision'];
@@ -149,6 +150,7 @@ export function setCompanyWorkerDocDeps(
     for (const key of Object.keys(docDeps) as Array<keyof CoderWorkerDocDeps>) delete docDeps[key];
     return;
   }
+  if (deps.indexSearch !== undefined) docDeps.indexSearch = deps.indexSearch;
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
   if (deps.vision !== undefined) docDeps.vision = deps.vision;

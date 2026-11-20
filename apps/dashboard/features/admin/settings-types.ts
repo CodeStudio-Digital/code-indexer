@@ -14,15 +14,13 @@ export type SectionId =
   | 'hygiene'
   | 'tools'
   | 'mcp-servers'
-  | 'mcp-http'
   | 'skills'
   | 'agents'
   | 'plugins'
   | 'ai-geral'
   | 'lsp-servers'
   | 'pipeline-bindings'
-  | 'perf'
-  | 'auth';
+  | 'perf';
 
 export type GroupId = 'models' | 'knowledge' | 'extensions' | 'services' | 'system';
 

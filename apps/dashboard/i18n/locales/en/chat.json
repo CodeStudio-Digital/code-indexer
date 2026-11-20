@@ -544,7 +544,7 @@
   "toolConfig.sessionDisabled": "Session disabled: {{count}}",
   "toolConfig.globalDisabled": "Global disabled: {{count}}",
   "toolConfig.filterPlaceholder": "Filter tools...",
-  "toolConfig.mcp": "mcp",
+  "toolConfig.index": "index",
   "toolConfig.ext": "ext",
   "toolConfig.globalOff": "global off",
   "toolConfig.bootstrap": "Bootstrap",

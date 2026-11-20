@@ -26,8 +26,8 @@ function ToolRow({ tool, onToggle }: { tool: ToolConfigItem; onToggle: (name: st
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-mono text-sm truncate">{tool.name}</span>
-          {tool.source === 'mcp' && (
-            <Badge variant="outline" className="h-4 text-[10px] shrink-0">{t('tools.mcp')}</Badge>
+          {tool.source === 'index' && (
+            <Badge variant="outline" className="h-4 text-[10px] shrink-0">{t('tools.index')}</Badge>
           )}
           {tool.source === 'mcp_external' && (
             <Badge variant="outline" className="h-4 text-[10px] shrink-0 border-blue-300 text-blue-600">{t('tools.ext')}</Badge>

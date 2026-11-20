@@ -2,7 +2,6 @@
 
 /apps/dashboard/ @Dellacurtais
 /apps/electron/ @Dellacurtais
-/apps/mcp-server/ @Dellacurtais
 /apps/http-api/ @Dellacurtais
 /packages/agent-runtime-contracts/ @Dellacurtais
 /packages/agent-runtime-host/ @Dellacurtais

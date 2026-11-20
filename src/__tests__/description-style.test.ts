@@ -51,8 +51,11 @@ import { sandboxTools } from '@mcp/company/tools/sandbox-tools.js';
 import { docsTools as companyDocsTools } from '@mcp/company/tools/docs-tools.js';
 import { envTools } from '@mcp/company/tools/env-tools.js';
 
-// ── MCP server surface (descriptions flow to the LLM through the bridge) ───
-import { allTools as mcpServerTools } from '@apps/mcp-server/tools/index.js';
+// ── Index tools (mcp__*): the port's core tools and documentation readers;
+// their descriptions reach the model through the adapter ──
+import { indexCoreTools } from '@mcp/indexer/agent-tools/index.js';
+import { docsTools as indexDocsTools } from '@mcp/code-agent/tools/index-docs/docs.js';
+const mcpServerTools = [...indexCoreTools, ...indexDocsTools];
 
 type NamedTool = { name: string; description?: string };
 const arr = (x: NamedTool | readonly NamedTool[]): NamedTool[] =>
@@ -99,7 +102,7 @@ function violations(tools: NamedTool[], transform: (d: string) => string): strin
 describe('description style — terse-safety contract', () => {
   it('sanity: surfaces actually imported (guards against silent import breakage)', () => {
     expect(CODE_AGENT_TOOLS.length).toBeGreaterThanOrEqual(80);
-    // 27 after the 2026-07 audit retirements (33 − 6).
+    // The 25 the port serves (the index/export actions are not agent tools).
     expect(mcpServerTools.length).toBeGreaterThanOrEqual(25);
   });
 
@@ -108,7 +111,7 @@ describe('description style — terse-safety contract', () => {
     expect(bad, `terse-unsafe descriptions (fix the first sentence):\n${bad.join('\n')}`).toEqual([]);
   });
 
-  it('MCP server tools have a self-contained first sentence', () => {
+  it('index tools have a self-contained first sentence', () => {
     const bad = violations(mcpServerTools as NamedTool[], firstSentence);
     expect(bad, `terse-unsafe descriptions (fix the first sentence):\n${bad.join('\n')}`).toEqual([]);
   });

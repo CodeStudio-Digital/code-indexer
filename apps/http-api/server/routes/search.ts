@@ -2,9 +2,8 @@ import type { Context, Hono } from 'hono';
 import { createSearchHandlers, createContext } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
-import type { SearchConsumer } from '@mcp/api-bus';
-import { resolveSessionProjectAuthority } from '@mcp/session-storage/fs-store/index.js';
 import type { ServerDeps } from '../deps.js';
+import { searchConsumer, validateTelemetryScope } from '../index-search-service.js';
 import { parseIdParam, parseIntQuery } from './_helpers.js';
 
 function mapApiError(c: Context, err: unknown) {
@@ -14,52 +13,15 @@ function mapApiError(c: Context, err: unknown) {
   throw err;
 }
 
-const SEARCH_CONSUMERS = new Set<SearchConsumer>([
-  'agent',
-  'search_everywhere',
-  'monaco',
-  'semantic_test',
-  'api',
-  'cli',
-  'benchmark',
-  'unknown',
-]);
-
-function searchConsumer(value: string | undefined): SearchConsumer {
-  return value && SEARCH_CONSUMERS.has(value as SearchConsumer)
-    ? value as SearchConsumer
-    : 'api';
-}
-
 async function validatedTelemetryScope(
   c: Context,
   deps: ServerDeps,
   projectId: number,
 ): Promise<{ sessionId?: string; companySessionId?: string } | undefined> {
-  const values = [
-    ['sessionId', c.req.header('x-mcp-session-id')],
-    ['companySessionId', c.req.header('x-mcp-company-session-id')],
-  ] as const;
-  const scope: { sessionId?: string; companySessionId?: string } = {};
-  for (const [key, value] of values) {
-    const id = value?.trim();
-    if (!id || id.length > 128) continue;
-    const session = await deps.sessionStore.getSession(id).catch(() => null);
-    if (!session) continue;
-    const authority = resolveSessionProjectAuthority(session, (candidateId) => {
-      const project = deps.db.getProject(candidateId);
-      return project && !project.is_synthetic
-        ? {
-            project_id: project.id,
-            name: project.name,
-            root_path: project.root_path,
-          }
-        : null;
-    });
-    if (!authority?.projects.some((project) => project.project_id === projectId)) continue;
-    scope[key] = id;
-  }
-  return scope.sessionId || scope.companySessionId ? scope : undefined;
+  return validateTelemetryScope(deps, projectId, {
+    sessionId: c.req.header('x-mcp-session-id'),
+    companySessionId: c.req.header('x-mcp-company-session-id'),
+  });
 }
 
 export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {

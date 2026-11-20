@@ -4,7 +4,9 @@
  * a parameter that exists in THAT tool's schema, and passing it must bypass.
  * The native read_file keeps its slim schema (no force_reread — pinned by
  * tool-schema-invariants); its `force` ("the full, current content") is the
- * fresh-read argument. The MCP reads declare force_reread.
+ * fresh-read argument. The MCP reads declare force_reread: their schemas come
+ * from the index tools port, so that half lives in
+ * apps/http-api/workers/__tests__/index-read-fresh-param.test.ts.
  */
 import { describe, expect, it } from 'vitest';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -20,19 +22,15 @@ import {
   buildCoveragePointer, freshReadParam, requestsFreshRead, rereadAfterEditHeader,
 } from '../runner/guards/read-coverage.js';
 import { fsTools } from '../../tools/fs.js';
-import { INTERNAL_MCP_CATALOG } from '../../tools/generated/internal-mcp-catalog.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const proto = CoderRunner.prototype as any;
 
 function schemaOf(name: string): { properties: Record<string, unknown> } {
-  if (name.startsWith('mcp__')) {
-    const entry = INTERNAL_MCP_CATALOG.find(t => `mcp__${t.name}` === name);
-    if (!entry) throw new Error(`no catalog entry for ${name}`);
-    return entry.inputSchema as never;
-  }
   return fsTools.find(t => t.name === name)!.parameters as never;
 }
+/** The native reads; the index (mcp__*) reads are checked against the real port. */
+const NATIVE_READS = [...REDUCIBLE_READ_TOOLS].filter(name => !name.startsWith('mcp__'));
 
 function fakeRunner() {
   const transitions: string[] = [];
@@ -47,7 +45,7 @@ const enforce = (r: ReturnType<typeof fakeRunner>, tool: string, input: Record<s
   proto.enforcePreReadForBridge.call(r, tool, input, turn, id);
 
 describe('the fresh-read instruction names a real parameter of the tool that receives it', () => {
-  it.each([...REDUCIBLE_READ_TOOLS])('%s declares its fresh-read parameter as a boolean', (name) => {
+  it.each(NATIVE_READS)('%s declares its fresh-read parameter as a boolean', (name) => {
     expect(schemaOf(name).properties[freshReadParam(name)]).toMatchObject({ type: 'boolean' });
   });
 

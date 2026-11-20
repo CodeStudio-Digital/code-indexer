@@ -8,7 +8,6 @@ const ACTIVE_MIXED_STORES = [
   'sub-agent-result-cache-store.ts',
   join('db', 'agent-memory.ts'),
   join('db', 'memory-distill-log.ts'),
-  'mcp-connection-profile-store.ts',
 ] as const;
 
 describe('post-cut mixed SQLite stores', () => {

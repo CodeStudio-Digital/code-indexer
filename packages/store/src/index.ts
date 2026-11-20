@@ -1,5 +1,4 @@
 export * from './db.js';
-export * from './mcp-connection-profile-store.js';
 export * from './provider-store.js';
 export * from './vectors.js';
 export * from './semantic-store.js';
