@@ -1,6 +1,14 @@
 {
   "schema": 1,
   "metric": "One labeled file per query. A zero rank means absent from the returned window.",
+  "packageValidation": {
+    "platform": "win32-x64",
+    "runtimeCommit": "b60f3a85",
+    "version": "3.16.55",
+    "ragTests": { "files": 98, "passed": 930, "failed": 0, "skipped": 0 },
+    "bundledGranite": { "selectedExecutionProvider": "dml", "testedCpu": true, "dimensions": 384, "ipcHybridVectorCandidates": 2 },
+    "syntheticNemotron": { "embeddingDimensions": 2048, "rerankedPassages": 2, "reportedRequests": 3, "costReports": 3, "costUSD": 0 }
+  },
   "project": {
     "project": "CodeStudio/MCP-CodeBase",
     "namespace": "code:p1",

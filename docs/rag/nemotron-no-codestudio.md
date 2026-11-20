@@ -33,6 +33,12 @@ O projeto usa a constante 60 e o menor peso testado que atingiu a meta, **1,5 pa
 
 O reranker devolveu pontuações para **9 das 26 perguntas** na validação final. Nas outras 17, o OpenRouter havia respondido HTTP 422 por triagem de conteúdo. O avaliador registrou essa decisão e preservou a ordem da fusão. Todos os 26 casos entraram no denominador. Os diagnósticos confirmaram a geração e a recuperação de vizinhos vetoriais em cada consulta. A qualidade observada vale para esse conjunto e para a cobertura semântica selecionada.
 
+## Aplicativo Windows
+
+Passaram 930 testes em 98 arquivos de RAG, incluindo a inferência offline. O pacote 3.16.55 foi compilado a partir de `b60f3a85`. No painel do executável, um projeto temporário foi indexado e uma pergunta em português encontrou o arquivo esperado com dois candidatos vetoriais. O Granite embarcado produziu 384 dimensões em GPU via DirectML e também em CPU.
+
+No mesmo pacote, os adaptadores Nemotron produziram vetores de 2.048 dimensões e reordenaram duas passagens sintéticas. O OpenRouter informou US$ 0 nas três requisições. Esse teste usa três corpos HTTP fixos. A medição dos 26 arquivos rotulados usou o motor da branch e o catálogo instalado. [Teste do executável](../../scripts/bench-rag-packaged.mjs) · [Benchmark do projeto instalado](../../scripts/bench-rag-installed.ts)
+
 ## Reprodução
 
 O benchmark de subárvores reconstrói os arquivos atuais do checkout em índices isolados. A rodada final continha 132 arquivos e 1.722 vetores. Com o peso ajustado, acertou 18/18 tanto pela métrica histórica quanto pelo limite público de dez resultados. Os hashes no manifesto permitem identificar diferenças entre a estrutura instalada e o checkout.
@@ -45,6 +51,12 @@ $env:ELECTRON_RUN_AS_NODE = '1'
 & $electron --import tsx scripts/bench-rag-repository.ts --openrouter-free
 & $electron --import tsx scripts/bench-rag-installed.ts --openrouter-free
 Remove-Item Env:ELECTRON_RUN_AS_NODE
+```
+
+Para reproduzir a verificação do pacote, passe o caminho do executável Windows. O script cria um projeto de teste em um perfil temporário. A opção `--openrouter-free` acrescenta as três requisições sintéticas aos modelos NVIDIA.
+
+```powershell
+node scripts/bench-rag-packaged.mjs .tmp/rag-validation/desktop-nemotron/win-unpacked/CodeStudio.exe --openrouter-free
 ```
 
 O administrador pode salvar ou reverter um par por projeto em `PUT /api/admin/semantic/projects/:id/targets`. A rota exige os probes normais do catálogo e pastas selecionadas. O corpo `{"inherit":true}` volta a herdar os modelos globais. Em buscas globais, projetos com destinos de reranking diferentes preservam a ordenação da fusão. [Configuração administrativa](../../apps/http-api/admin/semantic-router.ts) · [Modelos por projeto](../../packages/indexer/src/search/semantic-profile-runtime.ts)

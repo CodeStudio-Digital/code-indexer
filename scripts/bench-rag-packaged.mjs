@@ -1,4 +1,6 @@
-/** Exercise the packaged Electron main process, real bundled weights and public renderer IPC. */
+/** Exercise the packaged Electron main process, real bundled weights and public renderer IPC.
+ * Pass --openrouter-free to also run the packaged NVIDIA adapters on fixed synthetic inputs.
+ */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -95,6 +97,56 @@ try {
   Object.assign(report, { semantic: { generation: diagnostics.generationUsed, embedder: diagnostics.embedder,
     candidates: diagnostics.vectorRehydrated, activationToHybridMs: Date.now() - semanticStart } });
   await invoke('projects.deactivate', activation);
+  if (process.argv.includes('--openrouter-free')) {
+    report.nemotron = await app.evaluate(probeFreeNemotron);
+    assert.equal(report.nemotron.embedding.dimension, 2048);
+    assert.equal(report.nemotron.ranking.model, 'nvidia/nemotron-3.5-rerank-8b:free');
+    assert.equal(report.nemotron.requests, 3);
+    assert.equal(report.nemotron.costUSD, 0);
+  }
   writeFileSync(join(dir, 'result.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ dir, ...report }));
 } finally { await app.close(); }
+
+// Playwright serializes this function into the main process of the packaged app.
+async function probeFreeNemotron({ app }) {
+  const path = process.getBuiltinModule('node:path');
+  const os = process.getBuiltinModule('node:os');
+  const load = process.getBuiltinModule('node:module').createRequire(path.join(app.getAppPath(), 'package.json'));
+  const { probeEmbeddingTarget, probeRerankerTarget } = load('./dist/packages/indexer/src/search/semantic-targets.js');
+  const Database = load('better-sqlite3');
+  const catalog = new Database(path.join(os.homedir(), '.mcp-code-indexer', 'index.db'), { readonly: true, fileMustExist: true });
+  let provider;
+  try {
+    provider = catalog.prepare("SELECT id,kind,base_url,enabled,api_key FROM provider_configs WHERE id='openrouter' AND enabled=1").get();
+  } finally { catalog.close(); }
+  const base = 'https://openrouter.ai/api/v1';
+  if (!provider?.api_key || (provider.base_url && provider.base_url.replace(/\/$/, '') !== base)) throw new Error('Expected the configured OpenRouter provider');
+  const store = { getProvider: id => id === 'openrouter' ? provider : null };
+  const embed = 'nvidia/nemotron-3-embed-1b:free';
+  const rerank = 'nvidia/nemotron-3.5-rerank-8b:free';
+  const requests = new Map([
+    [JSON.stringify({ model: embed, input: ['passage: semantic probe document', 'passage: different retrieval passage'] }), base + '/embeddings'],
+    [JSON.stringify({ model: embed, input: ['query: semantic probe query'] }), base + '/embeddings'],
+    [JSON.stringify({ model: rerank, query: 'cache implementation', documents: [
+      'The cache stores values and evicts least recently used entries.', 'This function paints a blue button.',
+    ], top_n: 2 }), base + '/rerank'],
+  ]);
+  const previousFetch = globalThis.fetch;
+  const usage = { requests: 0, costReports: 0, costUSD: 0 };
+  globalThis.fetch = async (url, init) => {
+    if (init?.method !== 'POST' || requests.get(init.body) !== String(url)) throw new Error('Request outside the fixed Nemotron fixture');
+    requests.delete(init.body);
+    const response = await previousFetch(url, { ...init, redirect: 'error' });
+    const reported = (await response.clone().json()).usage;
+    if (typeof reported?.cost === 'number') { usage.costUSD += reported.cost; usage.costReports++; }
+    usage.requests++;
+    return response;
+  };
+  try {
+    const embedding = await probeEmbeddingTarget({ kind: 'provider', providerId: 'openrouter', model: embed,
+      protocol: 'openai-embeddings', inputFormat: 'query-passage' }, store);
+    const ranking = await probeRerankerTarget({ kind: 'provider', providerId: 'openrouter', model: rerank, protocol: 'openai-rerank' }, store);
+    return { embedding, ranking, ...usage };
+  } finally { globalThis.fetch = previousFetch; }
+}

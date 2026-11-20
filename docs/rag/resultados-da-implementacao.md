@@ -110,6 +110,10 @@ No projeto descartável criado pelo pacote, o avaliador público de código exec
 
 O benchmark de código real registra os hashes dos arquivos usados em cada subárvore. Uma rodada anterior recuperou 14/18 com o padrão. Na medição final, com os arquivos atualizados e as pastas selecionadas explicitamente, o resultado foi 15/18. Essa variação inclui a mudança do corpus entre as rodadas. [Manifesto e resultados](../../evals/rag/resultados-2026-11-19.json)
 
-## Critérios de liberação em aberto
+## Evolução no projeto instalado
 
-O projeto instalado `CodeStudio/MCP-CodeBase` tinha `active_generation_id = null` na consulta somente leitura ao catálogo. O conjunto sintético cumpriu o piso de Recall@10 em código. A configuração padrão encontrou 15 dos 18 arquivos rotulados na amostra real, abaixo desse piso. Os testes de agentes demonstraram perda de completude em três tarefas com planejamento. Uma promoção geral ainda depende do aceite nas consultas reais, da avaliação cega de afirmações por revisores independentes e de uma geração piloto do corpus de produção. As medições da cópia portátil e das fixtures são reproduzíveis sem alterar o perfil instalado.
+Em 19 de novembro, o catálogo de `CodeStudio/MCP-CodeBase` tinha `active_generation_id = null`. O conjunto sintético cumpriu o piso de recuperação e a configuração padrão encontrou 15 dos 18 arquivos rotulados na amostra real.
+
+Em 20 de novembro, a geração 9 entrou em operação nas duas pastas avaliadas do projeto instalado. A busca com os modelos Nemotron e peso vetorial 1,5 encontrou os 18 arquivos esperados, além dos oito arquivos do conjunto reservado. O estudo registra a cobertura do índice, o resultado por consulta e a participação efetiva do reranker. [Validação no CodeStudio/MCP-CodeBase](nemotron-no-codestudio.md)
+
+A avaliação das respostas dos agentes é uma etapa distinta. Os testes de 19 de novembro encontraram perda de completude em três tarefas com planejamento. A revisão cega das afirmações por avaliadores independentes continua pendente.
