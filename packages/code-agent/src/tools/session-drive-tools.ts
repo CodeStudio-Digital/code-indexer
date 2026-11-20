@@ -13,7 +13,7 @@
  *                             distillers).
  *   - list_notes            — browse the session notes you saved.
  *   - recall_investigations — find a past sub-agent exploration BEFORE you
- *                             spawn a new one, to avoid re-running the query.
+ *                             delegate a new one, to avoid re-running the query.
  *
  * The MCP twins `mcp__save_memory` / `mcp__search_memory` remain the
  * bridge-only alternative path (company / external MCP clients).
@@ -233,8 +233,8 @@ export const recallInvestigationsTool: CoderTool = {
   // Repeatable: not a list_/wait_ prefix, so flag it explicitly.
   name: 'recall_investigations',
   description:
-    'Search past sub-agent explorations (auto-saved when a spawn_agent finishes) for this project ' +
-    'BEFORE you spawn a new one — reuse a prior finding instead of paying to re-investigate. ' +
+    'Search past sub-agent explorations saved for this project BEFORE you delegate a new investigation ' +
+    '— reuse a prior finding instead of paying to re-investigate. ' +
     'Keyword-matches the topic/summary. Returns the digests; read the matching one rather than re-running it.',
   source: 'native',
   mutates: false,

@@ -98,7 +98,6 @@ describe('base.txt interpolation contract', () => {
     'mcpSection',
     'nativeToolsSection',
     'overlaySection',
-    'subagentsSection',
     'visionSection',
     'memorySection',
   ]);

@@ -1,7 +1,7 @@
 import { err, ok, type CoderTool } from '../core/tool.js';
 import { okStructured } from '../core/model-output.js';
 import { integrateUltraWorkspace, archiveIntegratedWorkspace, type UltraWorkspace } from '../runtime/ultra-workspace.js';
-import type { ChatCheckpoint } from './chat-resume.js';
+import type { ChatCheckpoint } from '../runtime/chat-checkpoint.js';
 
 export const chatChangesTools: CoderTool[] = (['read_chat_changes', 'integrate_chat_changes'] as const).map(name => ({
   name, source: 'native', mutates: name === 'integrate_chat_changes', riskLevel: name === 'integrate_chat_changes' ? 'write' : 'read',

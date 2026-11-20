@@ -1,11 +1,7 @@
 /**
- * spawn-agent-resume — glue between spawn_agent's result loop and the
+ * spawn-agent-resume — glue between workflow's result loop and the
  * in-memory resume registry. Maps finished agents to `ResumableAgentState`
- * and retains the group so `resume_agent` can relaunch failed agents with
- * their transcript intact.
- *
- * Kept out of spawn-agent.ts to respect its LOC budget and so the async
- * (background) path can retain groups through the same door.
+ * and retains the group so the Transcript tab can read it.
  */
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { StopReason } from '@mcp/code-agent/core/runner.js';
@@ -43,7 +39,7 @@ export interface SpawnRetentionAgent {
 }
 
 /** Count tool_use blocks in a transcript (single-agent path has no counter). */
-export function countToolUses(transcript: AgentMessage[] | undefined): number {
+function countToolUses(transcript: AgentMessage[] | undefined): number {
   if (!transcript) return 0;
   let n = 0;
   for (const m of transcript) {
@@ -54,7 +50,7 @@ export function countToolUses(transcript: AgentMessage[] | undefined): number {
 }
 
 /** How many agents did NOT complete — drives the resume-hint footer. */
-export function countFailed(agents: Array<{ reason: StopReason }>): number {
+function countFailed(agents: Array<{ reason: StopReason }>): number {
   return agents.filter((a) => a.reason !== 'completed').length;
 }
 
@@ -62,7 +58,7 @@ export function countFailed(agents: Array<{ reason: StopReason }>): number {
  * Build + retain a resumable/readable group from finished spawn results.
  * Skipped only when there is no session (retention is session-scoped).
  * All-completed groups ARE retained now — their transcripts back
- * read_agent_transcript and the dashboard Transcript tab; with
+ * the dashboard Transcript tab; with
  * CODER_RESUME_RETAIN_COMPLETED=0 the old failed-only economy returns.
  */
 export async function retainSpawnGroup(args: {

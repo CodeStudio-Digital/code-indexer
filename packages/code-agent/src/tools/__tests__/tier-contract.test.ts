@@ -96,12 +96,11 @@ const STATIC_TOOLS: NamedTool[] = [
  * always-on factory tool is added.
  */
 const FACTORY_ALWAYS_ON = [
-  'code_exec', 'find_tools', 'spawn_agent', 'request_review', 'self_review',
+  'code_exec', 'find_tools', 'request_review', 'self_review',
   'invoke_skill', 'get_skills_list', 'get_skill_content', 'list_skill_namespaces', 'create_skill',
   'read_plan', 'save_note', 'list_notes', 'recall_investigations',
   // Agent Memory (migration 181): durable write + read on the turn-1 surface.
   'remember', 'recall_memory',
-  'mcp_list_resources', 'mcp_read_resource',
   // DocsAgent escalation — installed per-runner via installDocsDeepResearch
   // (string only: importing @mcp/docs-agent here would create a cycle).
   'docs_deep_research',
@@ -150,7 +149,7 @@ describe('tier contract — Phase A/B placements are locked', () => {
       'read_plan', 'list_notes',
       // mcp__get_repo_map: explicitly tiered so it no longer rides the
       // getToolTier bootstrap fallback (regression guard for the leak fix).
-      'mcp__search_memory', 'mcp__get_repo_map', 'mcp_list_resources',
+      'mcp__search_memory', 'mcp__get_repo_map',
     ]) {
       expect(getToolTier(n), n).toBe('navigate');
     }

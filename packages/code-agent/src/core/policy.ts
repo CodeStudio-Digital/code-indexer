@@ -266,7 +266,7 @@ const READ_ONLY_SESSION_ALLOWED: ReadonlySet<string> = new Set(['remember', 'sav
 // agent that can write — an indirect write path out of a read-only session.
 // stop_chat only ends work, but a read-only session never delegates, so it has none to stop.
 const READ_ONLY_SESSION_DELEGATION: ReadonlySet<string> = new Set([
-  'create_chat', 'create_chat_trigger', 'resume_chat', 'send_chat_message',
+  'create_chat', 'create_chat_trigger', 'send_chat_message',
   'send_message', 'send_input', 'followup_task', 'stop_chat',
 ]);
 

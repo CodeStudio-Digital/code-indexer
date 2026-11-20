@@ -5,31 +5,31 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sanitizeCheckpointValue } from '../orchestration-checkpoint-redaction.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
-import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { FsSessionStore } from '../../sessions/fs-store/fs-session-store.js';
 import type { SessionId } from '@mcp/session-storage';
 import {
-  clearSession,
   configureResumeRegistryForTests,
+  forgetResumeSessionForTests,
   getGroup,
-  listReadableGroups,
-  listResumable,
   peekSessionGroupCountForTests,
   retainCompletedTranscripts,
   retainGroup,
-  reloadGroupUnderLease,
-  tryAcquireResume,
-  releaseResume,
   stopResumeSweepForTests,
   type ResumableAgentState,
   type ResumableGroup,
+  type ResumeCheckpointStore,
 } from '../subagent-resume-registry.js';
 import { retainSpawnGroup } from '../spawn-agent-resume.js';
 import {
-  buildReadAgentTranscriptTool,
   findRetainedAgent,
-  renderAgentTranscript,
+  renderAgentTranscriptAsync,
 } from '../read-agent-transcript.js';
+
+/** What the Transcript tab does (coder-worker readAgentTranscript): locate the agent, render its digest. */
+async function readTranscript(sessionId: SessionId, spawnId: string, agentRef: string | number, store: ResumeCheckpointStore, maxChars?: number) {
+  const agent = await findRetainedAgent(sessionId, spawnId, agentRef, store);
+  return { found: !!agent, content: agent ? await renderAgentTranscriptAsync(agent, { maxChars }) : '' };
+}
 
 let temporaryRoot: string;
 let projectRoot: string;
@@ -111,7 +111,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await clearSession(sid);
+  forgetResumeSessionForTests(sid);
   await store.close();
   configureResumeRegistryForTests(null);
   stopResumeSweepForTests();
@@ -133,11 +133,11 @@ describe('completed-transcript retention (P1)', () => {
     expect(stored?.agents[0].spillPath).toBeTruthy();
     expect(stored?.agents[0].approxBytes).toBe(0);
     expect(existsSync(stored!.agents[0].spillPath!)).toBe(true);
-    // Resumable (error) → stays in RAM so resume_agent can relaunch it.
+    // Failed (error) → stays in RAM; only completed transcripts spill.
     expect(stored?.agents[1].transcript?.length).toBeGreaterThan(0);
     expect(stored?.agents[1].spillPath).toBeUndefined();
-    // Spilled transcripts still count as readable via their pointer.
-    expect((await listReadableGroups(sid, store))[0].agents[0].hasTranscript).toBe(true);
+    // Spilled transcripts are still readable via their pointer.
+    expect((await readTranscript(sid, `grp-${sid}`, 1, store)).content).toContain('→ read_file');
   });
 
   it('drops completed transcripts when the kill switch is 0 (old economy)', async () => {
@@ -150,19 +150,6 @@ describe('completed-transcript retention (P1)', () => {
     const stored = await getGroup(sid, `grp-${sid}`, store);
     expect(stored?.agents[0].transcript).toBeUndefined();
     expect(stored?.agents[1].transcript?.length).toBeGreaterThan(0);
-  });
-
-  it('never lists completed agents as RESUMABLE even with a transcript', async () => {
-    await retainGroup(
-      sid,
-      group(sid, ['completed', 'tool_budget']),
-      store,
-    );
-    const resumable = listResumable(sid);
-    expect(resumable).toHaveLength(1);
-    expect(resumable[0].reason).toBe('tool_budget');
-    const readable = await listReadableGroups(sid, store);
-    expect(readable[0].agents.filter((a) => a.hasTranscript)).toHaveLength(2);
   });
 
   it('retainSpawnGroup keeps ALL-COMPLETED groups now (observability)', async () => {
@@ -191,11 +178,11 @@ describe('completed-transcript retention (P1)', () => {
     // The all-completed roster is retained, but its transcript lives on disk.
     expect(stored?.agents[0].transcript).toBeUndefined();
     expect(stored?.agents[0].spillPath).toBeTruthy();
-    expect((await listReadableGroups(sid, store))[0].agents[0].hasTranscript).toBe(true);
+    expect((await readTranscript(sid, 'spawn-ok', 1, store)).content).toContain('→ read_file');
   });
 });
 
-describe('read_agent_transcript rendering', () => {
+describe('retained transcript rendering (Transcript tab)', () => {
   it('renders header, tool calls with inputs, results and final text', async () => {
     configureResumeRegistryForTests({ spillTerminalTranscripts: false });
     await retainGroup(sid, group(sid, ['completed']), store);
@@ -206,7 +193,7 @@ describe('read_agent_transcript rendering', () => {
       store,
     );
     expect(agent).toBeDefined();
-    const text = renderAgentTranscript(agent!);
+    const text = await renderAgentTranscriptAsync(agent!);
     expect(text).toContain('"agent-1"');
     expect(text).toContain('profile=explore');
     expect(text).toContain('→ read_file');
@@ -232,7 +219,7 @@ describe('read_agent_transcript rendering', () => {
       'agent-1',
       store,
     );
-    const text = renderAgentTranscript(agent!, { maxChars: 2_500 });
+    const text = await renderAgentTranscriptAsync(agent!, { maxChars: 2_500 });
     expect(text.length).toBeLessThanOrEqual(3_200);
     expect(text).toContain('earlier event(s) elided');
   });
@@ -245,11 +232,8 @@ describe('read_agent_transcript rendering', () => {
       store,
     );
 
-    const result = await buildReadAgentTranscriptTool(store).handler(
-      { spawn_id: `grp-${sid}`, agent: 0, max_chars: 24_000 },
-      { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
-    );
-    expect(result.isError).not.toBe(true);
+    const result = await readTranscript(sid, `grp-${sid}`, 0, store, 24_000);
+    expect(result.found).toBe(true);
     expect(result.content).toContain('[transcript agent=#1 "agent-1"');
 
     expect(
@@ -268,24 +252,21 @@ describe('read_agent_transcript rendering', () => {
 });
 
 describe('terminal-transcript spill to disk (part b)', () => {
-  it('read_agent_transcript renders the full body back from the spill file', async () => {
+  it('the Transcript tab renders the full body back from the spill file', async () => {
     await retainGroup(sid, group(sid, ['completed']), store);
     const stored = await getGroup(sid, `grp-${sid}`, store);
     expect(stored?.agents[0].transcript).toBeUndefined(); // dropped from RAM
     expect(stored?.agents[0].spillPath).toBeTruthy();      // only the pointer stays
 
-    const result = await buildReadAgentTranscriptTool(store).handler(
-      { spawn_id: `grp-${sid}`, agent: 1 },
-      { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
-    );
-    expect(result.isError).not.toBe(true);
+    const result = await readTranscript(sid, `grp-${sid}`, 1, store);
+    expect(result.found).toBe(true);
     // Tool-call bodies came back from disk — not just the in-RAM metadata header.
     expect(result.content).toContain('→ read_file');
     expect(result.content).toContain('src/auth.ts');
     expect(result.content).toContain('← read_file');
   });
 
-  it('keeps FAILED/ABORTED transcripts in RAM so resume_agent stays intact', async () => {
+  it('keeps FAILED/ABORTED transcripts in RAM (only completed ones spill)', async () => {
     await retainGroup(
       sid,
       group(sid, ['error', 'aborted']),
@@ -293,10 +274,9 @@ describe('terminal-transcript spill to disk (part b)', () => {
     );
     const stored = await getGroup(sid, `grp-${sid}`, store);
     for (const a of stored!.agents) {
-      expect(a.transcript?.length).toBeGreaterThan(0); // resumable → resident
+      expect(a.transcript?.length).toBeGreaterThan(0); // failed → resident
       expect(a.spillPath).toBeUndefined();             // nothing spilled
     }
-    expect(listResumable(sid)).toHaveLength(2);
   });
 
   it('keeps completed transcripts in RAM in the explicit no-spill projection', async () => {
@@ -313,11 +293,8 @@ describe('terminal-transcript spill to disk (part b)', () => {
       await getGroup(sid, `grp-${sid}`, store)
     )!.agents[0].spillPath!;
     rmSync(spillPath, { force: true }); // external cleanup between spill and read
-    const result = await buildReadAgentTranscriptTool(store).handler(
-      { spawn_id: `grp-${sid}`, agent: 1 },
-      { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
-    );
-    expect(result.isError).not.toBe(true);
+    const result = await readTranscript(sid, `grp-${sid}`, 1, store);
+    expect(result.found).toBe(true);
     expect(result.content).toContain('[final] Done — login() lives in src/auth.ts.');
   });
 
@@ -327,13 +304,13 @@ describe('terminal-transcript spill to disk (part b)', () => {
       await getGroup(sid, `grp-${sid}`, store)
     )!.agents[0].spillPath!;
     expect(existsSync(spillPath)).toBe(true);
-    await clearSession(sid);
+    forgetResumeSessionForTests(sid);
     expect(existsSync(spillPath)).toBe(true);
   });
 
   it('re-hydrates a completed transcript entity after registry recreation', async () => {
     await retainGroup(sid, group(sid, ['completed']), store);
-    await clearSession(sid);
+    forgetResumeSessionForTests(sid);
 
     const restored = await findRetainedAgent(
       sid,
@@ -343,7 +320,7 @@ describe('terminal-transcript spill to disk (part b)', () => {
     );
     expect(restored?.spillPath).toBeTruthy();
     expect(existsSync(restored!.spillPath!)).toBe(true);
-    expect(renderAgentTranscript(restored!)).toContain('→ read_file');
+    expect(await renderAgentTranscriptAsync(restored!)).toContain('→ read_file');
   });
 });
 

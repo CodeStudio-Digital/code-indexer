@@ -43,7 +43,7 @@ export interface ToolCallEvent {
 /** A PermissionGate request waiting for the user's verdict. */
 export interface PendingToolApproval {
   toolUseId: string;
-  /** Chat-visible anchor block id (code_exec / spawn_agent) when nested. */
+  /** Chat-visible anchor block id (code_exec / workflow; spawn_agent in old sessions) when nested. */
   parentToolUseId?: string;
   toolName: string;
   argsSummary: string;
@@ -287,7 +287,7 @@ export interface ParallelAgent {
   idleMs?: number;
   deadlineMs?: number;
   lastToolName?: string;
-  /** Retry attempt (>=2 when this agent was resumed via resume_agent). */
+  /** Retry attempt (>=2 when an old session's agent was resumed via resume_agent). */
   attempt?: number;
   /** Terminal stop reason, from history — shown in the detail modal. */
   reason?: string;
@@ -308,7 +308,7 @@ export interface AgentsGroup {
   model?: string;
   totalUsage?: Usage;
   status: 'running' | 'completed';
-  /** Fire-and-forget background job (spawn_agent background:true). */
+  /** Old sessions only: a fire-and-forget spawn_agent background:true job. */
   background?: boolean;
   /** Background job handle — for collect/notification correlation. */
   jobId?: string;

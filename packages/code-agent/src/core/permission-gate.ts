@@ -59,9 +59,9 @@ export function buildUserDeniedText(toolName: string, note?: string): string {
  * gated individually (double-gating would pause twice for one action).
  */
 const NEVER_GATE: ReadonlySet<string> = new Set([
-  'code_exec', 'spawn_agent', 'spawn_agents', 'execute_tasks', 'get_tool_output',
-  // A task to a child chat delegates like spawn_agent: the child's own calls are
-  // gated with the permissions it inherited.
+  'code_exec', 'execute_tasks', 'get_tool_output',
+  // A task to a child chat delegates: the child's own calls are gated with the
+  // permissions it inherited.
   'send_chat_message',
   // workflow — DAG orchestrator; its steps' INNER tool calls are gated
   // individually inside each subagent (same rationale as execute_tasks).
@@ -193,27 +193,6 @@ export class PermissionGate {
   /** Event-driven: a live mode switch can release an already waiting new call. */
   refreshPending(): void {
     for (const check of this.pendingPolicyChecks) check();
-  }
-
-  /**
-   * A gate clone for BACKGROUND (fire-and-forget) subagents. Same allow logic
-   * — the parent's live `getMode` and a snapshot of its "always allow" grants —
-   * but any decision that WOULD pause for the user instead auto-denies: a
-   * background job may settle between runs, where there is no runner/SSE to
-   * surface or resolve an approval prompt (it would hang until a watchdog
-   * kills it). The denial is tagged `[user-denied` so it stays out of error
-   * telemetry and failure-streak counting, with a note explaining the cause.
-   */
-  forBackground(): PermissionGate {
-    return new PermissionGate({
-      getMode: this.deps.getMode,
-      emit: () => { /* no approval UI in a detached background context */ },
-      initialGrants: [...this.grants],
-      waitForUserInput: async () => JSON.stringify({
-        note: 'background agents run non-interactively — grant "always allow" first, '
-          + 'or run this in a foreground spawn_agent',
-      }),
-    });
   }
 
   async check(req: ApprovalCheckInput): Promise<ApprovalCheckResult> {

@@ -110,7 +110,7 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
     // steer them to a direct top-level call.
     return (
       `\n\nHint: \`${name}\` is a registered tool but is NOT exposed inside code_exec ` +
-      `— it's a control/lifecycle tool (e.g. ${ctx.replacedInRun && Object.hasOwn(ctx.replacedInRun, 'spawn_agent') ? 'task_complete, create_chat or ask_user' : 'task_complete, spawn_agent or ask_user'}) ` +
+      `— it's a control/lifecycle tool (e.g. ${ctx.allToolNames.has('create_chat') ? 'task_complete, create_chat or ask_user' : 'task_complete or ask_user'}) ` +
       `that needs the runner's own turn cycle. End this code_exec and call \`${name}\` directly as a top-level tool call.`
     );
   }

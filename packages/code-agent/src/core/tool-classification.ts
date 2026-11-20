@@ -62,9 +62,7 @@ export const BUILTIN_CLASSIFICATION: Record<
   enter_worktree:   { mutates: true, parallelSafe: false, riskLevel: 'admin' },
   exit_worktree:    { mutates: true, parallelSafe: false, riskLevel: 'admin' },
 
-  // ─── Subagent / orchestration ─────────────────────────────────
-  spawn_agent:      { mutates: false, parallelSafe: false, riskLevel: 'admin', executionClass: 'execute' },
-  resume_agent:     { mutates: false, parallelSafe: false, riskLevel: 'admin', executionClass: 'execute' },
+  // ─── Skills ───────────────────────────────────────────────────
   invoke_skill:     { mutates: false, parallelSafe: false, riskLevel: 'read' },
 
   // ─── Interactive (pause for human) ────────────────────────────

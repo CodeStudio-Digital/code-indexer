@@ -36,7 +36,7 @@ export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, 
     .then(() => childAgents.deliverCompletions())
     .catch(error => console.error('[child-agent] boot resume failed:', error));
   setChildAgentCascade((sessionId, reason) => ready.then(() => childAgents.stopSession(sessionId, reason)));
-  // The workers' child-chat tools (CODER_CHILD_SESSION_AGENTS) reach the host through this, as their own session.
+  // The workers' child-chat tools reach the host through this, as their own session.
   void ready.then(() => setCoderWorkerChildChats(createChildChatPort(childAgents, { sessions: deps.sessionStore, mailbox })));
   mountSessionNetworkRoutes(app, deps, network, ready);
   setCoderWorkerPublishedChatImporter(async (parentId, childId) => {

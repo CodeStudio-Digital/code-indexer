@@ -29,7 +29,7 @@ describe('coder runtime notification feed', () => {
     expect(items[0].payload).toEqual({ kind: 'run-done', reason: 'completed' });
   });
 
-  it('tracks background groups while the conversation route is closed', () => {
+  it('raises nothing for agent-group events now that background jobs are gone', () => {
     recordCoderRuntimeNotification({
       id: 10, ts: 10, sessionId: BACKGROUND_SESSION_ID, event: 'agents_group_start',
       data: { groupId: 'g1', background: true, jobId: 'job-1' },
@@ -46,19 +46,6 @@ describe('coder runtime notification feed', () => {
       },
     });
 
-    expect(getNotifications(BACKGROUND_SESSION_ID).map((item) => item.payload.kind)).toEqual([
-      'background-agents-done',
-    ]);
-    expect(getNotifications(BACKGROUND_SESSION_ID)[0].payload).toEqual({
-      kind: 'background-agents-done',
-      jobId: 'job-1',
-      groupId: 'g1',
-      agentCount: 3,
-      successCount: 1,
-      completedCount: 1,
-      partialCount: 1,
-      failedCount: 1,
-      resumableCount: 2,
-    });
+    expect(getNotifications(BACKGROUND_SESSION_ID)).toEqual([]);
   });
 });

@@ -10,7 +10,7 @@ export const WORKFLOW_DESC =
   'USE: for multi-step work with a real dependency structure — e.g. N parallel investigations feeding one implementation, then a verify step.\n' +
   'USE: `workflow({resume_workflow_id, retry_failed:true})` to relaunch failed/skipped steps of a previous run without redoing completed ones.\n' +
   'When integrations are pending, review with read_chat_changes and integrate_chat_changes through normal tools, then resume. Dependents wait for integration.\n' +
-  "DON'T: wrap a single task — use spawn_agent.\n" +
+  "DON'T: wrap a single task — do it in this session.\n" +
   "DON'T: mirror an approved task list — execute_tasks already orchestrates it.\n" +
   'Token cost of every step IS billed to this session. Steps are capped at ' +
   `${WORKFLOW_MAX_STEPS}; results stream live to the Workflow card.`;

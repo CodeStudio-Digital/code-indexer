@@ -6,10 +6,9 @@ import { CollaborationRevisions } from '@mcp/session-storage/collaboration/revis
 import { CollaborationFollowups } from '@mcp/session-storage/collaboration/followups.js';
 import { reconcileUltraBudget } from './runtime/ultra-budget-recovery.js';
 import { chatChangesTools } from './tools/chat-changes.js';
-import { buildResumeChatTool } from './tools/chat-resume.js';
 import { resolveUltraPreset } from './sessions/ultra-policy.js';
-import { CHILD_CHAT_TOOL_NAMES, chatToolsForRun, withTalkDeferred } from './tools/chat-tool-set.js';
-import { childSessionAgentsEnabled, REPLACED_BY_CHILD_CHATS } from './tools/child-chat-surface.js';
+import { chatToolsForRun, withTalkDeferred } from './tools/chat-tool-set.js';
+import { REPLACED_BY_CHILD_CHATS, replacedInCompany } from './tools/child-chat-surface.js';
 import { withChildChatTexts } from './tools/child-chat-texts.js';
 import { childChatPort } from './ports/child-chat-port.js';
 import { SessionNetwork } from './runtime/session-network.js';
@@ -128,7 +127,6 @@ import {
   SUBAGENT_PROFILE_IDS,
   type MicroAgentProfileId,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
-import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
 import { buildDiagramGuidance } from '@mcp/code-agent/prompts/diagram-guidance.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
@@ -674,17 +672,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Tool registry: native tools + index tools (mcp__*)
   const registry = new ToolRegistry();
-  // CODER_CHILD_SESSION_AGENTS (on by default; never in Company): child chats replace
-  // spawn_agent and the old chat tools. Off, the registrations are exactly today's.
-  const childChats = !opts.companyContext && childSessionAgentsEnabled();
+  // Outside Company, child chats replace spawn_agent and the old chat tools;
+  // Company keeps them (its registrations are unchanged).
+  const childChats = !opts.companyContext;
   // Where create_chat would always be refused: sub-agents disabled, a read-only root agent.
   const cannotDelegate = (opts.runtimePolicy ? !opts.runtimePolicy.subagents.enabled : false) || isReadOnlyAgent(effectiveAgentId);
-  registry.registerAll(chatToolsForRun({ childChats, company: !!opts.companyContext, cannotDelegate }));
-  if (childChats) {
-    registry.setReplacedTools(REPLACED_BY_CHILD_CHATS);
-    // The switch-off chat tools only stand in for the catalog budget (never registered).
-    registry.addCatalogStandIns(chatToolsForRun({ childChats: false, company: false }), CHILD_CHAT_TOOL_NAMES);
-  }
+  registry.registerAll(chatToolsForRun({ company: !!opts.companyContext, cannotDelegate }));
+  if (childChats) registry.setReplacedTools(REPLACED_BY_CHILD_CHATS);
   registry.registerAll(chatChangesTools);
   // Mutable by design: code_exec/find_tools capture this map before external
   // MCP and plugin tools are registered, then observe the completed catalog
@@ -1025,7 +1019,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const childAgentRun = await loadChildAgentRun(store, session.id, async (profileId, creatorId) => {
     const creatorProvider = (await store.getSession(creatorId))?.provider ?? session.provider;
     return profileLimitsFromProviderStore(config.dbPath, creatorProvider)?.(profileId);
-  }, { childChats });
+  });
 
   // Custom agents can opt into an exact tool surface. Apply this after every
   // native/MCP/plugin tool has registered and before subagent snapshots are
@@ -1202,43 +1196,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
-  // Unified spawn tool — single entry point replacing the deprecated
-  // spawn_subagent/spawn_agents pair. Schema accepts an `agents` array
-  // (1 item → sequential, N → parallel, up to 8). Persistent kind delegates
-  // to spawn_subordinate_agent when in a Company master session.
-  // With child chats these are built only as catalog stand-ins, never registered.
-  if (subagentDeps || registry.get('spawn_subordinate_agent')) {
-    // Either subagent deps exist (ephemeral path) OR master has the
-    // subordinate path; in the latter we still register so the model has
-    // a single dispatcher even without ephemeral capability.
-    const fallbackDeps: SubagentDeps =
-      subagentDeps
-      ?? { provider, parentTools: [], sessionStore: store };
-    const spawnAgent = buildSpawnAgentTool(fallbackDeps, registry);
-    if (childChats) registry.addCatalogStandIns([spawnAgent]);
-    else registry.register(spawnAgent);
-  }
-
-  // resume_agent + collect_agents — the async companions of spawn_agent
-  // (relaunch failed ephemeral subagents; wait on/fetch background jobs).
-  // Ephemeral capability only (company masters have resume_subordinate).
-  // Child chats (send_chat_message, wait_chats, read_chat) replace all four.
-  if (subagentDeps) {
-    const [{ buildResumeAgentTool }, { buildCollectAgentsTool }, { buildReadAgentTranscriptTool }] = await Promise.all([
-      import('@mcp/code-agent/tools/resume-agent.js'),
-      import('@mcp/code-agent/tools/collect-agents.js'),
-      import('@mcp/code-agent/tools/read-agent-transcript.js'),
-    ]);
-    const companions = [
-      buildResumeAgentTool(subagentDeps),
-      buildResumeChatTool(subagentDeps),
-      buildCollectAgentsTool(subagentDeps),
-      // P1 (ultra-agent parity): read-only audit of a finished subagent's
-      // retained transcript — the observability half of spawn_agent.
-      buildReadAgentTranscriptTool(store),
-    ];
-    if (childChats) registry.addCatalogStandIns(companions);
-    else registry.registerAll(companions);
+  // spawn_agent and its companions (resume_agent, resume_chat, collect_agents,
+  // read_agent_transcript) are registered nowhere: child chats replace them
+  // outside Company; in Company the master delegates with
+  // spawn_subordinate_agent and a subordinate works itself (or with workflow
+  // under Ultra). A call to one of those names answers with that hint.
+  if (opts.companyContext) {
+    registry.setReplacedTools(replacedInCompany({ isMaster: opts.companyContext.isMaster, workflow: !!subagentDeps && ultraExecutionEnabled }));
   }
 
   // workflow — Ultra's standing declarative DAG orchestrator (P0 of the
@@ -1958,7 +1922,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (childChats) registry.reviseInPlace(withChildChatTexts); // workflow and later registrations
   // No one could answer a message here (no children possible, not a child, no Agêntico network).
   if (childChats && cannotDelegate && !childAgentRun && !toolContext.agenticChat) registry.reviseInPlace(withTalkDeferred);
-  if (childAgentRun) registry.filterInPlace((tool) => childAgentRun.allowsTool(tool), (tool) => childAgentRun.allowsRetiredTool(tool));
+  if (childAgentRun) registry.filterInPlace((tool) => childAgentRun.allowsTool(tool));
   const catalogOnlyCapabilities = resolvedSkills.map(skillAsCatalogCapability);
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
@@ -2141,8 +2105,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentsMd,
     // Codex-faithful mode switch: Ultra permits useful, bounded proactive
     // research; an explicit non-Ultra selection revokes that permission.
-    // The prompt builder fails closed when the delegation tool (spawn_agent,
-    // or create_chat with child chats) is unavailable.
+    // The prompt builder fails closed when the delegation tool (create_chat,
+    // or spawn_subordinate_agent/workflow in Company) is unavailable.
     multiAgentMode: ultraExecutionEnabled
       ? 'proactive'
       : sessionExecutionMode != null
@@ -2158,7 +2122,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     opts.companyPromptBlock ?? '',
     childAgentRun?.promptSection ?? '',
   ];
-  let sessionSuffix = sessionNetwork ? '\n\n' + await sessionNetwork.context(session.id, { childChats }) : '';
+  let sessionSuffix = sessionNetwork ? '\n\n' + await sessionNetwork.context(session.id) : '';
 
   // Append skill awareness block. Mode resolution priority:
   //   1. Explicit env CODER_SKILLS_PROMPT_MODE = lazy | compact | matched | full

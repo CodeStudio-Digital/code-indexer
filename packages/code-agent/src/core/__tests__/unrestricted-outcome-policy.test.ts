@@ -48,12 +48,10 @@ describe('unrestricted permission remains effective during historical recovery',
       expect(h.context.outcomeRecovery!.toolUseIds).toEqual(['legacy-call']);
     });
 
-  it('allows nested new edits and background agents under the same explicit mode', async () => {
+  it('allows nested new edits under the same explicit mode', async () => {
     const h = setup(), wrapper = buildCodeExecTool(h.registry);
     expect((await wrapper.handler({ code: 'return await tools.edit_file({path:"new.ts"});' }, h.context)).isError).toBeFalsy();
     expect(h.handler).toHaveBeenCalledOnce(); expect(h.wait).not.toHaveBeenCalled();
-    expect(await h.gate.forBackground().check(h.request(edit))).toEqual({ allowed: true });
-    expect(await h.gate.forBackground().check(h.request(oldWrapper, oldInput))).toMatchObject({ allowed: false });
   });
 
   it.each(['ask', 'auto'] as const)('retains explicit recovery approval in %s mode', async mode => {

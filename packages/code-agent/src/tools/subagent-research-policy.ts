@@ -1,4 +1,4 @@
-export const RESEARCH_DEPTHS = ['quick', 'standard', 'deep', 'exhaustive'] as const;
+const RESEARCH_DEPTHS = ['quick', 'standard', 'deep', 'exhaustive'] as const;
 
 export type ResearchDepth = typeof RESEARCH_DEPTHS[number];
 
@@ -52,14 +52,6 @@ export const RESEARCH_DEPTH_DEFAULTS: Readonly<Record<ResearchDepth, DepthDefaul
 const QUICK_PATTERN = /\b(quick|brief|r[aá]pid[oa]?|fast|triage|high[- ]level|resumo|vis[aã]o inicial|varredura inicial)\b/i;
 const DEEP_PATTERN = /\b(deep|slow|thorough|comprehensive|extensive|end[- ]to[- ]end|ponta a ponta|lent[oa]?|demorad[oa]?|aprofundad[oa]?|detalhad[oa]?|(?:mais )?extens[oa]?)\b/i;
 const EXHAUSTIVE_PATTERN = /\b(exhaustive|repository[- ]wide|repo[- ]wide|every file|all files|line by line|exaustiv[oa]?|repo(?:sit[oó]rio)? inteiro|todos os arquivos|linha por linha)\b/i;
-
-export function normalizeResearchDepth(value: unknown): ResearchDepth | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  return RESEARCH_DEPTHS.includes(normalized as ResearchDepth)
-    ? normalized as ResearchDepth
-    : undefined;
-}
 
 export function inferResearchDepth(task: string): ResearchDepth {
   // Most-specific wins. "Quick exhaustive audit" is still exhaustive unless
@@ -148,12 +140,4 @@ export function buildResearchSynthesisNudge(
     'On this turn, stop expanding the search and produce the final evidence-backed summary if the completion criteria are answered. ' +
     'If one named criterion is still unanswered, perform only the minimum direct lookup for that criterion, then summarize. ' +
     'Convert anything still uncertain into Open questions. Do not start another broad validation sweep.';
-}
-
-export function researchPolicyCacheKey(policy: SubagentResearchPolicy | undefined): string {
-  if (!policy) return 'research:none';
-  return [
-    'research', policy.depth, policy.softToolTarget, policy.softTimeTargetMs,
-    ...policy.completionCriteria,
-  ].join(':');
 }

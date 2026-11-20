@@ -247,9 +247,10 @@ export interface PromptContext {
    * Session-level multi-agent policy. `proactive` is the product's Ultra
    * execution mode; `explicit_request_only` revokes a previously-active
    * proactive policy. The block is session-fixed and therefore belongs above
-   * the dynamic cache boundary. When `spawn_agent` is unavailable, proactive
-   * delegation is reduced to the explicit-request policy instead of
-   * advertising a capability the runner cannot provide.
+   * the dynamic cache boundary. When the run cannot delegate (no create_chat;
+   * in Company no spawn_subordinate_agent or workflow), proactive delegation
+   * is reduced to the explicit-request policy instead of advertising a
+   * capability the runner cannot provide.
    */
   multiAgentMode?: 'proactive' | 'explicit_request_only';
   ultraPolicy?: import('@mcp/agent-runtime-contracts').PresetResolution;
@@ -262,7 +263,7 @@ export interface PromptContext {
   availableTools?: ReadonlySet<string>;
   /**
    * Delegation goes through child chats (create_chat, send_chat_message)
-   * instead of spawn_agent (CODER_CHILD_SESSION_AGENTS). Explicit rather than
+   * instead of spawn_agent (outside Company). Explicit rather than
    * read from the tool names: a read-only agent loses create_chat but still
    * runs with child chats.
    */
@@ -407,23 +408,13 @@ Reads, grep, skeletons and listings show this session's edits; index results (se
 `;
 }
 
-/** The tool that delegates in this run: create_chat with child chats, spawn_agent otherwise. */
-function delegationTool(childChats?: boolean): string {
-  return childChats ? 'create_chat' : 'spawn_agent';
-}
-
-function subagentsSection(available?: ReadonlySet<string>, mode?: PromptContext['multiAgentMode'], childChats?: boolean): string {
-  if (!toolAvailable(available, delegationTool(childChats)) || mode) return '';
-  if (childChats) {
-    return `# Child chats (delegation)
-Delegate only independent work that saves context or wall time; work locally for small or tightly coupled tasks. Give each child (create_chat) a self-contained prompt, the least capable profile that fits, a bounded scope and a completion criterion; synthesize its answer without repeating its investigation, and continue the same child with send_chat_message.
-
-`;
-  }
-  return `# Subagents (isolated delegation)
-Delegate only independent work that saves context or wall time; work locally for small or tightly coupled tasks. Give each child a bounded scope and completion criterion, then synthesize its result without repeating the same investigation.
-
-`;
+/**
+ * The tools that delegate in this run: create_chat with child chats; in
+ * Company, spawn_subordinate_agent (master) or workflow (a subordinate under
+ * Ultra).
+ */
+function delegationTools(childChats?: boolean): readonly string[] {
+  return childChats ? ['create_chat'] : ['spawn_subordinate_agent', 'workflow'];
 }
 
 /**
@@ -439,7 +430,7 @@ function multiAgentModeSection(
 ): string {
   if (!mode) return '';
 
-  if (mode !== 'proactive' || !toolAvailable(available, delegationTool(childChats))
+  if (mode !== 'proactive' || !delegationTools(childChats).some((name) => toolAvailable(available, name))
     || policy?.effective.orchestration === 'off'
     || (policy?.effective.parallelism.maxAgents ?? 3) <= 0) {
     return `
@@ -539,7 +530,6 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     mcpSection: hasCodeNavigation ? mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive, ctx.availableTools) : '',
     nativeToolsSection: nativeToolsSection(ctx.availableTools),
     overlaySection: overlaySection(ctx.availableTools),
-    subagentsSection: subagentsSection(ctx.availableTools, ctx.multiAgentMode, ctx.childChats),
     visionSection: toolAvailable(ctx.availableTools, 'view_image') ? visionSection(ctx.modelCanSeeImages, ctx.availableTools) : '',
     memorySection: hasMemory ? memorySection(ctx.sessionDrive) : '',
   });

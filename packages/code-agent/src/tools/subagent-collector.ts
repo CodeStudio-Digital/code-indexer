@@ -121,48 +121,4 @@ export class SubagentCollector {
   hasContent(): boolean {
     return this._memos.length + this._snapshots.length + this._boardPosts.length > 0;
   }
-
-  /** Compact text rendering for inclusion in the parent's tool_result. */
-  renderForParent(): string {
-    return renderCollectedSnapshotForParent(this.snapshot());
-  }
-}
-
-/**
- * Stand-alone renderer — accepts the plain snapshot returned by
- * `SubagentCollector.snapshot()` and produces the same compact Markdown
- * block. Exported so the parent's `spawn_agent` handler can append a
- * structured trail to the tool_result text without needing a live
- * collector instance (the sub only ships back the snapshot).
- *
- * Returns an empty string when nothing was collected — caller can blindly
- * concat without conditional guards.
- */
-export function renderCollectedSnapshotForParent(snap: {
-  memos: ReadonlyArray<SubagentMemo>;
-  snapshots: ReadonlyArray<SubagentSnapshotRef>;
-  boardPosts: ReadonlyArray<SubagentBoardPostRef>;
-}): string {
-  const total = snap.memos.length + snap.snapshots.length + snap.boardPosts.length;
-  if (total === 0) return '';
-  const lines: string[] = ['', '---', '## Subagent collected:'];
-  if (snap.memos.length > 0) {
-    lines.push('', '### Memos');
-    for (const m of snap.memos) {
-      lines.push(`- [${m.kind}] ${m.text}`);
-    }
-  }
-  if (snap.snapshots.length > 0) {
-    lines.push('', '### Snapshots');
-    for (const s of snap.snapshots) {
-      lines.push(`- ${s.category} (id=${s.id}): ${s.preview}`);
-    }
-  }
-  if (snap.boardPosts.length > 0) {
-    lines.push('', '### Board posts');
-    for (const p of snap.boardPosts) {
-      lines.push(`- ${p.kind}${p.id != null ? ` (id=${p.id})` : ''}: ${p.preview}`);
-    }
-  }
-  return lines.join('\n');
 }

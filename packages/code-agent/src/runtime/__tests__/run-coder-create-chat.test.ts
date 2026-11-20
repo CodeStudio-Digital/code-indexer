@@ -1,15 +1,14 @@
 /**
- * Integration: the real runCoder on the default path (CODER_CHILD_SESSION_AGENTS
- * unset: child chats on). The parent sees create_chat and send_chat_message,
+ * Integration: the real runCoder with child chats (every session outside
+ * Company). The parent sees create_chat and send_chat_message,
  * never spawn_agent, and no retired name in its prompt; its model calls
  * create_chat with a wait; the child session runs (the real runCoder again,
  * as the child's worker); its answer comes back in the same parent run, as
  * that tool's result, and its usage lands in the parent's turn metric
  * (subagent_usage with the run keys); then send_chat_message gives the same
  * child a second task, which is its next run. Each received conclusion is
- * recorded as an investigation, as spawn_agent's results were. With the switch
- * at 0 the old set (spawn_agent) comes back. The prompt has the explicit-only
- * multi-agent section in both: runCoder never renders the subagents section.
+ * recorded as an investigation, as spawn_agent's results were. The prompt has
+ * the explicit-only multi-agent section: runCoder never renders a delegation section.
  *
  * The app side is an in-process ChildChatPort over the child-agent runtime
  * (queue, admission, wait) with its own store instance. Opens SQLite: runs
@@ -30,7 +29,6 @@ mkdirSync(join(tmp, 'data', 'sessions', 'global'), { recursive: true });
 process.env.MCP_INDEX_DB = join(tmp, 'index.db');
 process.env.MCP_DATA_DIR = join(tmp, 'data');
 process.env.MCP_RUNTIME_COORDINATION_DIR = join(tmp, 'coordination');
-delete process.env.CODER_CHILD_SESSION_AGENTS;
 
 const CHILD_USAGE = { input_tokens: 13, output_tokens: 4 };
 const toolResults: string[] = [];
@@ -53,7 +51,7 @@ function scripted(model: string): ChatProvider {
   let call = 0;
   return { name: 'fixture', model, setModel() {}, async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
     if (call++ === 0) firstCall[model] = { system: request.system ?? '', tools: (request.tools ?? []).map((tool) => tool.name) };
-    if (model === 'child' || model === 'old') {
+    if (model === 'child') {
       childRuns++;
       yield { type: 'text_delta', text: `Child run ${childRuns}.` };
       yield { type: 'usage', usage: CHILD_USAGE };
@@ -87,7 +85,6 @@ vi.mock('@mcp/services/providers/factory.js', async (importOriginal) => ({
 }));
 
 let rootId: string;
-let oldId: string;
 let projectId: number;
 let closeApp: () => Promise<void>;
 
@@ -107,7 +104,6 @@ beforeAll(async () => {
     resolveProjectRoot: (id) => (id === projectId ? projectRoot : undefined),
     listProjectRoots: () => [{ project_id: projectId, root_path: projectRoot }] } });
   rootId = (await app.createSession({ project_id: projectId, title: 'Root', provider: 'fixture', model: 'parent', agent: 'build' })).id;
-  oldId = (await app.createSession({ project_id: projectId, title: 'Old', provider: 'fixture', model: 'old', agent: 'build' })).id;
   const mailbox = new ChatCollaborationStore(process.env.MCP_DATA_DIR!);
   await mailbox.init();
   const { runCoder } = await import('../../index.js');
@@ -166,16 +162,4 @@ describe('runCoder with child chats (the default)', () => {
       expect(recorded).toEqual(['Child run 1.', 'Child run 2.']);
     } finally { await reader.close(); }
   }, 180_000);
-
-  it('brings the old set and prompt back with the switch at 0', async () => {
-    const { runCoder } = await import('../../index.js');
-    process.env.CODER_CHILD_SESSION_AGENTS = '0';
-    try {
-      expect((await (await runCoder({ session: { id: oldId as never }, userMessage: 'Answer.' })).done).reason).toBe('completed');
-    } finally { delete process.env.CODER_CHILD_SESSION_AGENTS; }
-    expect(firstCall.old!.tools).toContain('spawn_agent');
-    for (const name of ['create_chat', 'stop_chat']) expect(firstCall.old!.tools).not.toContain(name);
-    expect(firstCall.old!.system.includes(EXPLICIT_ONLY), headers(firstCall.old!.system)).toBe(true);
-    expect(firstCall.old!.system.includes('# Child chats'), headers(firstCall.old!.system)).toBe(false);
-  }, 120_000);
 });

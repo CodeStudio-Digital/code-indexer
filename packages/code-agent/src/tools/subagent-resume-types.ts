@@ -26,7 +26,7 @@ export interface ResumableAgentState {
   transcript?: AgentMessage[];
   /**
    * Set when this agent's transcript was spilled to a bundle entity instead of
-   * kept in `transcript`. read_agent_transcript falls back to it. Only
+   * kept in `transcript`. The Transcript tab falls back to it. Only
    * completed (never-resumed) agents are spilled, so resume state is unaffected.
    */
   spillPath?: string;
@@ -34,7 +34,7 @@ export interface ResumableAgentState {
   effectOutcome?: 'unknown';
   /** Watchdog message / error text — feeds the continuation nudge. */
   failureNote?: string;
-  /** Final report text (capped) — read_agent_transcript's fallback/summary. */
+  /** Final report text (capped) — the Transcript tab's fallback/summary. */
   finalText?: string;
   toolCallCount: number;
   usage: ChatUsage;
@@ -65,7 +65,6 @@ export interface ResumeRegistryConfiguration {
   maxAgentBytes: number;
   maxSessionBytes: number;
   ttlMs: number;
-  leaseMs: number;
   spillTerminalTranscripts: boolean;
   retainCompletedTranscripts: boolean;
   sweepIntervalMs: number;
@@ -104,25 +103,6 @@ export interface ResumeCheckpointStore {
     scopeId: string,
     leaseToken?: string,
   ): Promise<void>;
-  tryAcquireOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-    leaseMs?: number,
-  ): Promise<string | null>;
-  releaseOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-    leaseToken: string,
-  ): Promise<void>;
-  renewOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-    leaseToken: string,
-    leaseMs?: number,
-  ): Promise<boolean>;
   writeSubagentTranscript(
     sessionId: SessionId,
     spawnId: string,

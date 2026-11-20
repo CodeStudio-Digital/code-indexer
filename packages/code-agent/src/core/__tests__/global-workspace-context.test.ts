@@ -40,6 +40,10 @@ describe('global workspace context', () => {
     expect(shared).toContain('For shell commands, set cwd to the project slug.');
   });
 
+  it('gives subagents no workspace briefing outside global sessions', () => {
+    expect(buildSubagentWorkspaceBriefing({ cwd: 'D:/poa/backend', projectName: 'poa-backend' } as ToolContext)).toBe('');
+  });
+
   it('injects the workspace map only into global system prompts', () => {
     const base = {
       projectName: 'poa-backend',

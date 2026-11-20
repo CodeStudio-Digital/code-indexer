@@ -8,14 +8,12 @@ import type { ChatProvider, AgentMessage } from '@mcp/provider-sdk';
 import type { AgentWorkResult, ScheduledOccurrence } from '@mcp/agent-runtime-contracts';
 import { budgetedProvider } from '../ultra-provider.js';
 import { requiredWorkResult, withEvidenceReference } from '../work-result.js';
-import { waitChats } from '../chat-wait.js';
 import { ChatScheduler } from '../chat-scheduler.js';
 import { reconcileUltraBudget } from '../ultra-budget-recovery.js';
 import { migrateChatCheckpoint } from '../chat-checkpoint-migration.js';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
-import type { ChatCheckpoint } from '../../tools/chat-resume.js';
+import type { ChatCheckpoint } from '../chat-checkpoint.js';
 import { runReadyWorkflow } from '../../tools/workflow/workflow-readiness.js';
-import { registerWait } from '@mcp/session-storage/collaboration/wait-graph.js';
 import { workflowTemplate } from '../../tools/workflow/workflow-templates.js';
 import { validateWorkflowSteps } from '../../tools/workflow/workflow-types.js';
 import type { WorkflowRecord, WorkflowStepState } from '../../tools/workflow/workflow-types.js';
@@ -76,20 +74,6 @@ it('preserves corrupt mailbox bytes and exposes the error instead of an empty in
   expect(await readFile(file, 'utf8')).toBe('{broken');
 });
 
-it('joins by cursor, distinguishes timeout/abort and releases every subscription', async () => {
-  await store.registerRoot('a', 'A'); await store.registerRoot('b', 'B'); await store.linkSessions('a', 'b', true);
-  const original = store.subscribe.bind(store); let listeners = 0;
-  vi.spyOn(store, 'subscribe').mockImplementation((callback: () => void) => { listeners++; const off = original(callback); return () => { listeners--; off(); }; });
-  await store.recordCompletion({ sessionId: 'b', runId: '1', at: 1, reason: 'completed' });
-  const first = await waitChats(store, 'a', ['b'], 'all', 1000);
-  expect(first.reason).toBe('completed'); expect(first.items).toHaveLength(1);
-  expect((await waitChats(store, 'a', ['b'], 'any', 10, first.cursor!)).reason).toBe('timeout');
-  const controller = new AbortController(); controller.abort();
-  expect((await waitChats(store, 'a', ['b'], 'any', 1000, first.cursor!, controller.signal)).reason).toBe('aborted');
-  expect((await waitChats(store, 'a', ['b'], 'all', 1000, 'bad')).reason).toBe('cursor_expired');
-  expect(listeners).toBe(0); expect((await store.participant('chat:b'))?.state).toBe('idle');
-});
-
 it('keeps an admitted but unconfirmed scheduled run uncertain until its original receipt arrives', async () => {
   let now = Date.now(); await store.registerRoot('a', 'A');
   const scheduler = new ChatScheduler(store, () => now);
@@ -102,24 +86,6 @@ it('keeps an admitted but unconfirmed scheduled run uncertain until its original
   expect((await scheduler.records.get<ScheduledOccurrence>('occurrences', row.id))?.state).toBe('outcome_unknown');
   await scheduler.reconcile(row.messageId!, 'succeeded');
   expect((await scheduler.records.get<ScheduledOccurrence>('occurrences', row.id))?.state).toBe('finished');
-});
-
-it('detects cross-chat cycles without blocking an ANY wait with an independent peer', async () => {
-  await store.registerRoot('a', 'A'); await store.registerRoot('b', 'B'); await store.registerRoot('c', 'C');
-  await store.linkSessions('a', 'b', true); await store.linkSessions('a', 'c', true);
-  const back = await registerWait(store.files, 'chat:b', ['chat:a'], 'all', Date.now() + 60000);
-  expect((await waitChats(store, 'a', ['b'], 'all', 1000)).reason).toBe('cycle_detected');
-  expect((await waitChats(store, 'a', ['b', 'c'], 'any', 15)).reason).toBe('timeout');
-  expect(await store.files.list('waits')).toHaveLength(1);
-  await back.dispose(); expect(await store.files.list('waits')).toHaveLength(0);
-});
-
-it('keeps a completion after the consumed cursor even when the wall clock moves backward', async () => {
-  await store.registerRoot('a', 'A'); await store.registerRoot('b', 'B'); await store.linkSessions('a', 'b', true);
-  await store.recordCompletion({ sessionId: 'b', runId: 'first', at: 100, reason: 'completed' });
-  const first = await waitChats(store, 'a', ['b'], 'any', 1000);
-  await store.recordCompletion({ sessionId: 'b', runId: 'second', at: 50, reason: 'completed' });
-  expect((await waitChats(store, 'a', ['b'], 'any', 1000, first.cursor!)).items.map(row => row.runId)).toEqual(['second']);
 });
 
 it('backs up a legacy checkpoint only when original terminal configuration is provable', async () => {

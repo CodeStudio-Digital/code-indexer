@@ -594,7 +594,7 @@ export function renderAssistantBlock(
   }
 
   // spawn_agents: render the rich parallel-agents group instead of raw JSON.
-  // The tool is named `spawn_agent` (singular); it dispatches 1 or N agents.
+  // Old sessions only: `spawn_agent` (singular, retired) dispatched 1 or N agents.
   // (`spawn_agents` kept for any legacy persisted data.)
   if (b.name === 'spawn_agent' || b.name === 'spawn_agents') {
     const group = parsePersistedAgentsGroup(b.input, result, b.id);

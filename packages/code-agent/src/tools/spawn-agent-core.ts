@@ -1,9 +1,7 @@
 /**
- * spawn-agent-core — shared shapes/helpers for the spawn_agent family
- * (blocking dispatch in spawn-agent.ts, background dispatch in
- * spawn-agent-background.ts). Extracted so the two dispatchers reuse the
- * normalized agent shape, per-profile limits, workspace briefing, and resume
- * retention mapping WITHOUT importing each other (no cycle).
+ * spawn-agent-core — shared shapes/helpers of in-process subagents (normalized
+ * agent shape, per-profile limits, workspace briefing, retention mapping), used
+ * by workflow; the spawn_agent dispatchers that shared them are retired.
  */
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';

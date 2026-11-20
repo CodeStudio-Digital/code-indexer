@@ -1,11 +1,10 @@
 /**
- * Subagent helpers shared by the unified `spawn_agent` tool.
+ * Subagent helpers shared by workflow and execute_tasks.
  *
  * Historical note: this file used to host the deprecated `spawn_subagent`
  * (single, sequential) and `spawn_agents` (parallel) tools. Both were
- * folded into `spawn_agent` (Opção A) — see `tools/spawn-agent.ts`. What
- * remains here are the system prompts + deps interface + provider helper
- * that the new tool re-uses.
+ * folded into `spawn_agent` (Opção A), itself retired for child chats. What
+ * remains here are the system prompts + deps interface + provider helper.
  */
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
@@ -24,7 +23,7 @@ export interface SubagentDeps {
   provider: ChatProvider;
   /**
    * Snapshot of the parent registry's tools at agent build time. The
-   * spawn_agent tool creates its own ToolRegistry containing only the
+   * subagent runner builds its own ToolRegistry containing only the
    * allowlisted subset (per-agent type → READ_ONLY / READ_WRITE / FULL).
    */
   parentTools: CoderTool[];

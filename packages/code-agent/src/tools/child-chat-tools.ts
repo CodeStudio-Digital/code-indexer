@@ -1,5 +1,5 @@
 /**
- * The two direct child-chat tools (CODER_CHILD_SESSION_AGENTS on):
+ * The two direct child-chat tools (outside Company):
  * create_chat delegates a task to a new child agent and, by default, waits
  * for its result; send_chat_message gives a child its next task, asks or
  * answers a question, or notifies, in normal and Agêntico sessions alike.

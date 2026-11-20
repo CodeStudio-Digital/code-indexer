@@ -8,7 +8,7 @@
  *    we include the master and every subordinate run. Roles are read from
  *    the orchestrator so abort/status/spawn happen via the existing master
  *    tools — `list_agents` is a strict read-only inventory.
- *  - Ephemeral subagents are tracked by spawn_agent and collect_agents.
+ *  - Ephemeral subagents (workflow, execute_tasks) are tracked by the active-agent registry.
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';

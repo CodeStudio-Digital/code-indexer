@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { MICRO_AGENT_PROFILES } from '../micro-agent-profiles.js';
 import { limitsForAgent, type NormalizedAgent } from '../spawn-agent-core.js';
 import { buildResearchPolicy, RESEARCH_DEPTH_DEFAULTS, type ResearchDepth } from '../subagent-research-policy.js';
-import { ToolRegistry } from '../../core/registry.js';
-import { buildSpawnAgentTool } from '../spawn-agent.js';
 
 function agent(
   profile: keyof typeof MICRO_AGENT_PROFILES,
@@ -114,16 +112,5 @@ describe('spawn agent limits', () => {
     const limits = limitsForAgent(agent('explore', 'deep'), deps);
     expect(limits.maxToolCalls).toBe(0);
     expect(limits.timeoutMs).toBe(RESEARCH_DEPTH_DEFAULTS.deep.softTimeTargetMs * 2);
-  });
-
-  it('advertises soft research depth separately from exact operational caps', () => {
-    const tool = buildSpawnAgentTool(new ToolRegistry());
-    const schema = tool.parameters as unknown as {
-      properties: { agents: { items: { properties: Record<string, { enum?: readonly string[]; description?: string }> } } };
-    };
-    const properties = schema.properties.agents.items.properties;
-    expect(properties.research_depth.enum).toEqual(['quick', 'standard', 'deep', 'exhaustive']);
-    expect(properties.target_minutes.description).toContain('soft synthesis target');
-    expect(properties.max_turns.description).toContain('exact turn cap');
   });
 });

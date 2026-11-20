@@ -14,7 +14,7 @@ import { chatCollaborationTools } from '../chat-collaboration.js';
 import { chatToolsForRun } from '../chat-tool-set.js';
 import { loadChildAgentRun } from '../../runtime/child-agent-run.js';
 
-const tools = new Map(chatToolsForRun({ childChats: true, company: false }).map((tool) => [tool.name, tool]));
+const tools = new Map(chatToolsForRun({ company: false }).map((tool) => [tool.name, tool]));
 const tool = (name: string) => tools.get(name)!;
 const THIRTY_ONE_MINUTES = 31 * 60_000;
 
@@ -66,10 +66,10 @@ describe('child-chat tool contracts', () => {
   });
 });
 
-describe('a child session with child chats on', () => {
+describe('a child session (always outside Company, so with child chats)', () => {
   const child = (depth: number, readOnly: boolean) => loadChildAgentRun({
     getChildAgentSession: async () => ({ id: 'c', parent_session_id: 'p', depth, profile: 'implement', read_only: readOnly } as never),
-  }, 'c', undefined, { childChats: true });
+  }, 'c');
   const admitted = async (depth: number, readOnly: boolean) => {
     const run = (await child(depth, readOnly))!;
     return [...tools.values()].filter((candidate: CoderTool) => run.allowsTool(candidate)).map((candidate) => candidate.name);
@@ -85,10 +85,4 @@ describe('a child session with child chats on', () => {
     }
   });
 
-  it('gets none of them with child chats off', async () => {
-    const run = (await loadChildAgentRun({
-      getChildAgentSession: async () => ({ id: 'c', parent_session_id: 'p', depth: 1, profile: 'implement', read_only: false } as never),
-    }, 'c'))!;
-    expect(run.allowsTool(tool('create_chat'))).toBe(false);
-  });
 });

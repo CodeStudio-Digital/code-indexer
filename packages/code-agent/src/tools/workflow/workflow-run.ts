@@ -1,7 +1,7 @@
 /**
  * workflow-run — wave executor for the `workflow` tool. Dispatches pending
  * steps whose dependencies completed, one parallel wave at a time, on the
- * SAME engine as spawn_agent/execute_tasks: per-profile provider/effort/
+ * SAME engine as execute_tasks: per-profile provider/effort/
  * limits, live agents_group_* events, resume retention and per-agent abort.
  * Dependency results are injected as bounded DIGESTS — never transcripts.
  */

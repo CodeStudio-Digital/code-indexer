@@ -129,7 +129,6 @@ import { isActivated } from '../../../packages/plugin-host/src/activation.js';
 import type { PluginPermissions } from '../../../packages/plugin-sdk/src/contributions/capabilities.js';
 import { InstalledPluginStore } from '../../../packages/store/src/installed-plugin-store.js';
 import { PluginStorageStore } from '../../../packages/store/src/plugin-storage-store.js';
-import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
 import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
 import { setGlobalIndexTools } from '@mcp/code-agent/ports/index-tools-port.js';
@@ -335,7 +334,7 @@ setGlobalVisionDescriber(visionShim);
 
 // ─── Child chats: create/wait/stop/message/list run in the main process's
 // child-agent host, always as this worker's own session (child-chat-bridge.ts).
-// runCoder uses the port only when CODER_CHILD_SESSION_AGENTS is on.
+// runCoder uses the port outside Company.
 setChildChatPort(createChildChatBridgeClient(bridge));
 
 // ─── Project-memory shim: route to the main process via RPC ──────────
@@ -460,11 +459,6 @@ function prepareWorkerStop(): Promise<void> {
       if (run?.runner?.isWaitingForInput()) {
         // Parked awaiting approval — its checkpoint is already durable.
       } else if (run) {
-        try {
-          getSubagentJobManager().abortSession(sessionId, 'worker stop');
-        } catch {
-          // best-effort
-        }
         run.ctrl.abort();
         // A stop can arrive while runFresh is still awaiting context, MCP or
         // attempt admission. That work owns this writer even before a handle
@@ -1171,7 +1165,7 @@ bridge.handle('setRunLimits', async (payload) => {
 });
 
 /**
- * Abort ONE running ephemeral subagent (spawn_agent row / workflow step)
+ * Abort ONE running ephemeral subagent (workflow step / execute_tasks agent)
  * without touching the parent run. Registry lives in THIS realm (module
  * globals don't cross workers), hence the RPC.
  */
@@ -1185,8 +1179,7 @@ bridge.handle('abortAgent', async (payload) => {
 
 /**
  * Render a finished subagent's retained transcript (resume registry) for the
- * dashboard's Transcript tab. Returns the digest text — same renderer the
- * `read_agent_transcript` tool uses.
+ * dashboard's Transcript tab. Returns the digest text.
  */
 bridge.handle('readAgentTranscript', async (payload) => {
   recordRpc('readAgentTranscript');
@@ -1235,9 +1228,6 @@ bridge.handle('swapProvider', async (payload) => {
 bridge.handle('abort', async () => {
   recordRpc('abort');
   try {
-    // User Stop kills background subagent jobs too (they're detached from the
-    // run signal, so run.runner.abort() alone would leave them running).
-    try { getSubagentJobManager().abortSession(sessionId, 'user abort'); } catch { /* best-effort */ }
     const run = activeRun;
     run?.ctrl.abort();
     if (run?.runner) {

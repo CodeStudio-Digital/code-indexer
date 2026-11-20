@@ -75,7 +75,6 @@ describe('checkTaskModeGate', () => {
       'archive_task_list',
       'update_task',
       'task_list',
-      'spawn_agent',
     ]) {
       expect(checkTaskModeGate({
         tasksState: state(),

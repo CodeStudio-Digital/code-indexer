@@ -56,7 +56,6 @@ describe('classifyForGate', () => {
   it('never gates interactive tools and wrapper tools', () => {
     expect(classifyForGate(tool({ name: 'ask_user' }), 'ask_user')).toBe('allow'); // builtin interactive
     expect(classifyForGate(tool({ name: 'code_exec', riskLevel: 'execute' }), 'code_exec')).toBe('allow');
-    expect(classifyForGate(tool({ name: 'spawn_agent' }), 'spawn_agent')).toBe('allow');
     expect(classifyForGate(tool({ name: 'execute_tasks' }), 'execute_tasks')).toBe('allow');
   });
 

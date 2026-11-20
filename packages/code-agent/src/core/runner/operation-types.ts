@@ -2,7 +2,6 @@
 export type AsyncOperationKind =
   | 'provider'
   | 'tool'
-  | 'spawn_agent'
   | 'subagent'
   | 'task'
   | 'other';

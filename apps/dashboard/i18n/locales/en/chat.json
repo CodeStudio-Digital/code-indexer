@@ -108,13 +108,6 @@
     "branchHint": "A new branch starts at the current HEAD. An existing branch opens in the worktree. You can create multiple sessions in the same worktree."
   },
   "interaction.responseFailed": "The response could not be sent. Please try again.",
-  "notifications.background.collectWith": "Collect with",
-  "notifications.background.resumeWith": "Resume {{count}} with",
-  "notifications.background.statusDone": "done",
-  "notifications.background.statusFailed": "{{count}} failed",
-  "notifications.background.statusPartial": "{{count}} partial",
-  "notifications.background.summary": "{{completed}} completed, {{partial}} partial, {{failed}} failed.",
-  "notifications.background.title": "Background agents finished",
   "notifications.childAgent.approvalBody": "{{title}} is waiting for an approval.",
   "notifications.childAgent.approvalTitle": "Child agent needs approval",
   "notifications.childAgent.reasonArchived": "The chat was archived, so its child chats stopped.",

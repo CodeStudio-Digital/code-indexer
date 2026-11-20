@@ -323,20 +323,15 @@ export interface RunnerEvents {
   worktree_entered: (payload: { path: string; originalCwd: string }) => void;
   /** Emitted when `exit_worktree` restores the session cwd to the project root. */
   worktree_exited: (payload: { path: string }) => void;
-  /** Emitted when spawn_agents starts a parallel agent group. */
+  /** Emitted when workflow or execute_tasks starts a parallel agent group. */
   agents_group_start: (payload: {
     groupId: string;
     /** Canonical parent tool_use id for live/history reconciliation. */
     toolUseId?: string;
     provider?: string;
     model?: string;
-    /** True for a fire-and-forget background job (spawn_agent background:true). */
-    background?: boolean;
-    /** Background job handle — present when `background`. */
-    jobId?: string;
-    /** True when a prior group is being relaunched (resume_agent, or a
-     *  cross-run re-emit of a still-running background job). Dashboard MERGES
-     *  by groupId instead of pushing a duplicate block. */
+    /** True when a group is re-emitted under a known groupId (no producer today; old persisted events carry it).
+     *  Dashboard MERGES by groupId instead of pushing a duplicate block. */
     resumed?: boolean;
     agents: Array<{
       index: number;
@@ -363,8 +358,6 @@ export interface RunnerEvents {
     agentIndex: number;
     label: string;
     task?: string;
-    background?: boolean;
-    jobId?: string;
     event: 'spawned' | 'heartbeat' | 'tool_call' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
     status?: 'pending' | 'running' | 'completed' | 'partial' | 'error' | 'timed_out' | 'aborted';
     provider?: string;
@@ -401,10 +394,6 @@ export interface RunnerEvents {
     partialCount: number;
     failedCount: number;
     resumableCount: number;
-    /** Background job handle — present for background groups. */
-    jobId?: string;
-    /** Terminal disposition of a background group. */
-    status?: 'completed' | 'aborted';
   }) => void;
   /**
    * Emitted when the `workflow` tool starts (or resumes) a declarative DAG

@@ -1,8 +1,7 @@
 /**
- * subagent-resume-registry — session-scoped retention for resume_agent.
+ * subagent-resume-registry — session-scoped retention of finished subagent groups.
  * Locks in: transcript kept only for failures, sanitization at retain,
- * front-eliding byte cap (tail protected), LRU group cap, TTL expiry, the
- * per-spawn resume lock, and clearSession.
+ * front-eliding byte cap (tail protected), LRU group cap and TTL expiry.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
@@ -11,11 +10,7 @@ import { newSessionId, type SessionId } from '@mcp/session-storage';
 import {
   retainGroup,
   getGroup,
-  replaceAgentState,
-  listResumable,
-  clearSession,
-  tryAcquireResume,
-  releaseResume,
+  forgetResumeSessionForTests,
   stopResumeSweepForTests,
   configureResumeRegistryForTests,
   type ResumableGroup,
@@ -68,7 +63,7 @@ beforeEach(() => {
   configureResumeRegistryForTests({ spillTerminalTranscripts: false });
 });
 afterEach(async () => {
-  await clearSession(SID);
+  forgetResumeSessionForTests(SID);
   configureResumeRegistryForTests(null);
   stopResumeSweepForTests();
   vi.useRealTimers();
@@ -166,34 +161,4 @@ describe('subagent-resume-registry', () => {
     expect(await getGroup(SID, 'g1')).toBeUndefined();
   });
 
-  it('listResumable only lists agents with a transcript', async () => {
-    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
-    const list = listResumable(SID);
-    expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ spawnId: 'g1', agentIndex: 0 });
-  });
-
-  it('replaceAgentState swaps a single agent in place', async () => {
-    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'error')]));
-    await replaceAgentState(SID, 'g1', agent(0, 'completed', { attempt: 2 }));
-    const g = (await getGroup(SID, 'g1'))!;
-    expect(g.agents[0].attempt).toBe(2);
-    // Completed resumes keep their transcript now (readable, never resumable).
-    expect(g.agents[0].transcript).toBeDefined();
-    expect(g.agents[1].reason).toBe('error');
-  });
-
-  it('the per-spawn resume lock is exclusive until released', async () => {
-    expect(await tryAcquireResume(SID, 'g1')).toBe(true);
-    expect(await tryAcquireResume(SID, 'g1')).toBe(false);
-    await releaseResume(SID, 'g1');
-    expect(await tryAcquireResume(SID, 'g1')).toBe(true);
-    await releaseResume(SID, 'g1');
-  });
-
-  it('clearSession removes all groups', async () => {
-    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error')]));
-    await clearSession(SID);
-    expect(await getGroup(SID, 'g1')).toBeUndefined();
-  });
 });

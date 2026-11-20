@@ -30,7 +30,7 @@ import { sendMessage } from '@mcp/code-agent/tools/send-message.js';
 const FOLLOWUP_TASK_DESC =
   'Assign new work to a live subordinate using its exact path from list_agents. ' +
   'Keep the task self-contained. Use send_message for status updates and send_input to supersede a pending question. ' +
-  'Human permission gates still apply. Terminal children must be resumed through resume_agent.';
+  'Human permission gates still apply. A finished subordinate is resumed by the master with resume_subordinate.';
 
 export const followupTask: CoderTool = {
   name: 'followup_task',

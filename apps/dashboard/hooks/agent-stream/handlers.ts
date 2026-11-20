@@ -832,8 +832,8 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         flush();
         return;
       }
-      // Upsert by groupId — a resume (resume_agent) or a cross-run re-emit of a
-      // still-running background job MERGES into the existing block (rows flip
+      // Upsert by groupId — a resume (old resume_agent events) or a cross-run re-emit of a
+      // background job (old sessions) MERGES into the existing block (rows flip
       // back to running) instead of pushing a duplicate. `message_complete`
       // clears live blocks, so a later re-emit re-materializes the group here.
       const existing = blocks.findIndex((b) => b.type === 'agents' && b.group.groupId === d.groupId);

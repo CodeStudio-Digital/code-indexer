@@ -105,12 +105,6 @@ describe('continuing a conversation with historical uncertain effects', () => {
     expect(needsOutcomeRecoveryApproval(recovery, codeExec, {})).toBe(false);
   });
 
-  it('does not let a background gate authorize new effects through inherited grants', async () => {
-    const g = gate();
-    expect(await g.value.forBackground().check(request())).toMatchObject({ allowed: false });
-    expect(g.wait).not.toHaveBeenCalled();
-  });
-
   it('requires affirmative read metadata and does not trust names, throwing classifiers or external wrappers', () => {
     expect(needsOutcomeRecoveryApproval(recovery, read, {})).toBe(false);
     for (const tool of [

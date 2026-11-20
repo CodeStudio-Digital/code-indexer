@@ -8,7 +8,6 @@ import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { acceptLocalCoderCommand, bindLocalCommandBus, terminalizeLocalCoderCommand } from '../../../control-plane-shadow.js';
 import type { SessionNetwork } from '@mcp/code-agent/runtime/session-network.js';
 import { reserveNetworkWake } from '@mcp/code-agent/runtime/session-network-events.js';
-import { childSessionAgentsEnabled } from '@mcp/code-agent/tools/child-chat-surface.js';
 import type { ChatScheduler } from '@mcp/code-agent/runtime/chat-scheduler.js';
 
 /** Uses the same durable admission and exclusive session writer as human sends. */
@@ -50,11 +49,10 @@ export async function wakeCollaboratingChat(deps: ServerDeps, runtime: CoderRunt
       return false;
     }
     if (acceptance?.outcome !== 'accepted') return false;
-    // With child chats resume_chat is gone: an earlier in-process child can no longer be continued.
-    const childInstruction = !recipient.parentId ? ''
-      : childSessionAgentsEnabled()
-        ? `This message is for ${recipient.id}, an earlier subagent of yours that can no longer be resumed. Answer with send_chat_message if needed; delegate new work with create_chat. Do not repeat completed work.\n`
-        : `This message is for your retained child ${recipient.id}. Use resume_chat to continue that child with its saved context. Do not repeat completed work.\n`;
+    // resume_chat is gone outside Company: an earlier in-process child can no longer be continued.
+    const childInstruction = recipient.parentId
+      ? `This message is for ${recipient.id}, an earlier subagent of yours that can no longer be resumed. Answer with send_chat_message if needed; delegate new work with create_chat. Do not repeat completed work.\n`
+      : '';
     let spawnedBus: ReturnType<typeof pool.getBus> | undefined;
     try {
       if (!await mailbox.currentGeneration(message) || (scheduler && !await scheduler.canWake(message.id, message.references))) {
