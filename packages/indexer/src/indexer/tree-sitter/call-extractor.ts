@@ -15,6 +15,7 @@
  */
 import type Parser from 'web-tree-sitter';
 import type { LLMReference, SymbolKind } from '@mcp/shared/types.js';
+import { isTypeScriptOrJavaScript } from './languages.js';
 
 /** Call/instantiation node types per language family. */
 const CALL_NODES: Record<string, string[]> = {
@@ -83,32 +84,41 @@ export function extractCalls(
   knownNames: Set<string>,
   maxCalls: number = DEFAULT_MAX_CALLS,
 ): LLMReference[] {
-  const callTypes = new Set(CALL_NODES[language] ?? []);
-  if (callTypes.size === 0 || knownNames.size === 0) return [];
+  const callTypes = callNodeTypesFor(language);
+  if (callTypes.length === 0 || knownNames.size === 0 || maxCalls <= 0) return [];
 
   const refs: LLMReference[] = [];
   const seen = new Set<string>();
 
+  const recordCall = (node: Parser.SyntaxNode): void => {
+    const name = getCalleeName(node);
+    if (!name || !knownNames.has(name)) return;
+    const line = node.startPosition.row + 1;
+    const key = `${name}:${line}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    refs.push({
+      symbol_name: name,
+      kind: 'function' as SymbolKind,
+      reference_kind: 'call',
+      line,
+      col: node.startPosition.column + 1,
+      snippet: node.text.split('\n')[0]?.trim().slice(0, 120),
+    });
+  };
+
+  if (isTypeScriptOrJavaScript(language)) {
+    for (const node of rootNode.descendantsOfType(callTypes)) {
+      if (refs.length >= maxCalls) break;
+      recordCall(node);
+    }
+    return refs;
+  }
+
+  const callTypeSet = new Set(callTypes);
   const walk = (node: Parser.SyntaxNode): void => {
     if (refs.length >= maxCalls) return;
-    if (callTypes.has(node.type)) {
-      const name = getCalleeName(node);
-      if (name && knownNames.has(name)) {
-        const line = node.startPosition.row + 1;
-        const key = `${name}:${line}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          refs.push({
-            symbol_name: name,
-            kind: 'function' as SymbolKind,
-            reference_kind: 'call',
-            line,
-            col: node.startPosition.column + 1,
-            snippet: node.text.split('\n')[0]?.trim().slice(0, 120),
-          });
-        }
-      }
-    }
+    if (callTypeSet.has(node.type)) recordCall(node);
     for (const child of node.namedChildren) {
       if (refs.length >= maxCalls) break;
       walk(child);

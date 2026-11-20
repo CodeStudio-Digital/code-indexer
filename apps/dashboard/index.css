@@ -255,25 +255,21 @@ html[data-app-runtime='electron'] :where(
 .chat-turn-frame:is([data-live], [data-turn-frame]) {
   margin-inline-start: 4px;
   padding-inline: 15px 8px;
-  border-inline: 1px solid transparent;
+  border-inline-start: 1px solid transparent;
 }
 .chat-turn-frame[data-turn-frame] {
-  --turn-outline: color-mix(in srgb, var(--primary) 32%, transparent);
-  border-inline-color: var(--turn-outline);
   border-inline-start-color: color-mix(in srgb, var(--primary) 62%, transparent);
 }
 .chat-turn-frame[data-turn-start] {
   min-height: 24px;
   margin-top: 3px;
   padding-top: 1px;
-  border-top: 1px solid var(--turn-outline);
   border-start-start-radius: 5px;
   border-start-end-radius: 5px;
 }
 .chat-turn-frame[data-turn-end] {
   margin-bottom: 3px;
   padding-bottom: 1px;
-  border-bottom: 1px solid var(--turn-outline);
   border-end-start-radius: 5px;
   border-end-end-radius: 5px;
 }

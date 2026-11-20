@@ -4,7 +4,9 @@
  * regardless of the native ABI the desktop build is on.
  */
 import { describe, it, expect, afterAll } from 'vitest';
+import { extractCalls } from '../call-extractor.js';
 import { TreeSitterExtractor } from '../extractor.js';
+import { createParser } from '../languages.js';
 
 const extractor = new TreeSitterExtractor();
 afterAll(() => extractor.dispose());
@@ -47,6 +49,23 @@ describe('call-graph extraction', () => {
     const callRefs = (res.analysis.references ?? []).filter((r) => r.symbol_name === 'insert');
     expect(callRefs.length).toBeGreaterThan(0);
     expect(callRefs.some((r) => typeof r.line === 'number' && (r.line as number) > 0)).toBe(true);
+  });
+
+  it('keeps nested call order, line deduplication, and the cap on native captures', async () => {
+    const parser = await createParser('tree-sitter-typescript.wasm');
+    const tree = parser.parse('outer(inner(), inner());\ninner();\n');
+    try {
+      const names = new Set(['outer', 'inner']);
+      const positions = (cap: number) => extractCalls(tree.rootNode, 'typescript', names, cap)
+        .map(({ symbol_name, line, col }) => [symbol_name, line, col]);
+
+      expect(positions(3)).toEqual([['outer', 1, 1], ['inner', 1, 7], ['inner', 2, 1]]);
+      expect(positions(2)).toEqual([['outer', 1, 1], ['inner', 1, 7]]);
+      expect(positions(0)).toEqual([]);
+    } finally {
+      tree.delete();
+      parser.delete();
+    }
   });
 
   it('captures calls across a non-TS language (Python) and skips builtins', async () => {

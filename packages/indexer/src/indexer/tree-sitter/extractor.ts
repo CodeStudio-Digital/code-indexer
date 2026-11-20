@@ -14,6 +14,7 @@ import type { LLMSymbol, LLMReference, StructuralFileAnalysis, SymbolKind } from
 import {
   getGrammarForExtension,
   isExtractable,
+  isTypeScriptOrJavaScript,
   createParser,
   initTreeSitter,
 } from '@mcp/indexer/indexer/tree-sitter/languages.js';
@@ -266,7 +267,7 @@ export class TreeSitterExtractor {
       const ns = extractNamespace(tree.rootNode, language, filePath);
       if (ns) for (const s of symbols) s.namespace = ns;
       const { internalDeps, externalDeps, allDeps, references } =
-        this.extractImportsAndRefs(tree.rootNode, language, content, filePath);
+        this.extractImportsAndRefs(tree.rootNode, language);
 
       // Call-graph: capture call sites whose callee is a name we know in this
       // file (locally defined or imported). Merged into the import references
@@ -898,8 +899,6 @@ export class TreeSitterExtractor {
   private extractImportsAndRefs(
     rootNode: Parser.SyntaxNode,
     language: string,
-    content: string,
-    filePath: string
   ): {
     internalDeps: string[];
     externalDeps: string[];
@@ -913,39 +912,40 @@ export class TreeSitterExtractor {
     const references: LLMReference[] = [];
     const seen = new Set<string>();
 
-    const walk = (node: Parser.SyntaxNode) => {
-      if (importNodeTypes.includes(node.type)) {
-        const importInfo = this.parseImportNode(node, language);
-        if (importInfo && !seen.has(importInfo.modulePath)) {
-          seen.add(importInfo.modulePath);
-          allDeps.push(importInfo.modulePath);
-
-          if (importInfo.isInternal) {
-            internalDeps.push(importInfo.modulePath);
-          } else {
-            externalDeps.push(importInfo.modulePath);
-          }
-
-          // Build references for named imports
-          for (const name of importInfo.importedNames) {
-            references.push({
-              symbol_name: name,
-              kind: 'other' as SymbolKind,
-              reference_kind: 'import',
-              line: node.startPosition.row + 1,
-              col: node.startPosition.column + 1,
-              snippet: node.text.split('\n')[0]?.trim().slice(0, 120),
-            });
-          }
-        }
+    const recordImport = (node: Parser.SyntaxNode) => {
+      const importInfo = this.parseImportNode(node, language);
+      if (!importInfo || seen.has(importInfo.modulePath)) return;
+      seen.add(importInfo.modulePath);
+      allDeps.push(importInfo.modulePath);
+      if (importInfo.isInternal) {
+        internalDeps.push(importInfo.modulePath);
+      } else {
+        externalDeps.push(importInfo.modulePath);
       }
 
+      for (const name of importInfo.importedNames) {
+        references.push({
+          symbol_name: name,
+          kind: 'other' as SymbolKind,
+          reference_kind: 'import',
+          line: node.startPosition.row + 1,
+          col: node.startPosition.column + 1,
+          snippet: node.text.split('\n')[0]?.trim().slice(0, 120),
+        });
+      }
+    };
+    const walk = (node: Parser.SyntaxNode) => {
+      if (importNodeTypes.includes(node.type)) recordImport(node);
       for (const child of node.namedChildren) {
         walk(child);
       }
     };
 
-    walk(rootNode);
+    if (isTypeScriptOrJavaScript(language)) {
+      for (const node of rootNode.descendantsOfType(importNodeTypes)) recordImport(node);
+    } else if (importNodeTypes.length > 0) {
+      walk(rootNode);
+    }
     return { internalDeps, externalDeps, allDeps, references };
   }
 

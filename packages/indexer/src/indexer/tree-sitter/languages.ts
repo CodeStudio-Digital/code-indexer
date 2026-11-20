@@ -154,6 +154,10 @@ export function isExtractable(language: string): boolean {
   return EXTRACTABLE_LANGUAGES.has(language);
 }
 
+export function isTypeScriptOrJavaScript(language: string): boolean {
+  return language === 'typescript' || language === 'tsx' || language === 'javascript';
+}
+
 /** Load (and cache) a tree-sitter Language from a WASM file name. */
 export async function loadLanguage(wasmFile: string): Promise<Parser.Language> {
   const cached = languageCache.get(wasmFile);
