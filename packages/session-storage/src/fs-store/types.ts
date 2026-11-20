@@ -3,6 +3,7 @@ import type { PromptContextMeasurement } from '@mcp/provider-sdk/prompt-cache-me
 import type {
   ArtifactInput,
   ArtifactRef,
+  ChildAgentRelation,
   JsonValue,
   ProjectId,
   SessionId,
@@ -106,6 +107,49 @@ export interface FsCoderSession {
   state: SessionState;
 }
 
+/** What the wait and cascade steps need about a child agent session. */
+export interface FsChildAgentSession {
+  id: SessionId;
+  parent_session_id: SessionId;
+  depth: number;
+  status: FsCoderSessionStatus;
+  is_archived: boolean;
+  updated_at: string;
+  /** Null only for a relation written without a child-agent state seed. */
+  profile: string | null;
+  read_only: boolean;
+  /** Identifies the creation request, so a retried creation is idempotent. */
+  creation_fingerprint: string | null;
+  created_at: string;
+  /** How its latest run ended; null until a run finished. */
+  conclusion: FsChildAgentConclusion | null;
+}
+
+/**
+ * The durable result of a child-agent run, written by the run itself when it
+ * ends: a parent waiting again after a restart reads this instead of re-running.
+ */
+export interface FsChildAgentConclusion {
+  run_id: string;
+  state: 'completed' | 'failed' | 'cut_off' | 'aborted';
+  reason: string;
+  finished_at: string;
+  /** The final answer (the salvage summary when cut off), bounded. */
+  final_text: string | null;
+  changed_files: string[];
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+}
+
+/** What a child agent inherits and records at creation. */
+export interface FsChildAgentStateSeed {
+  profile: string;
+  read_only: boolean;
+  creation_fingerprint: string;
+  permission_mode: 'ask' | 'auto' | 'unrestricted' | null;
+  permission_grants: readonly string[];
+  disabled_tools: readonly string[];
+}
+
 export interface FsGlobalCoderSession extends FsCoderSession {
   project_name: string;
   linked_count: number;
@@ -123,6 +167,10 @@ export interface FsCreateSessionInput {
   worktree_path?: string | null;
   id?: SessionId;
   parent_session_id?: SessionId | null;
+  /** Set only by the child-agent creation path. */
+  agent_relation?: ChildAgentRelation;
+  /** Child-agent creation only: state published together with the bundle. */
+  child_agent_state?: FsChildAgentStateSeed;
   project_id: ProjectId;
   title: string;
   provider: string;
@@ -226,6 +274,8 @@ export interface FsPersistAssistantTurnInput {
   tool_calls: readonly FsToolCallInput[];
   nested_tool_calls?: readonly FsToolCallInput[];
   subagent_usage?: FsAppendMessageUsage;
+  /** The child-agent run keys `subagent_usage` covers: the durable "already counted" mark. */
+  subagent_runs?: readonly string[];
   existing_message_seq?: number;
   operation_id?: string;
 }

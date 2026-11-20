@@ -128,6 +128,11 @@ export interface ToolResult {
    */
   subUsage?: import('@mcp/provider-sdk').ChatUsage;
   /**
+   * The accounting keys `subUsage` covers (one per child-agent run), persisted
+   * with the turn so the same run never counts twice in the session.
+   */
+  subUsageRuns?: readonly string[];
+  /**
    * Optional user-message content blocks the runner should append AFTER the
    * tool result. Used by tools like `view_image` that need to inject content
    * (an image, a document) the model can actually perceive on its next turn.

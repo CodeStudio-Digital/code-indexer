@@ -256,6 +256,18 @@ export interface EffectiveContextWindow {
  * the prompt. Claude Code calls this "MAX_OUTPUT_TOKENS_FOR_SUMMARY"; we
  * use the same idea but expose the components for telemetry.
  */
+/**
+ * Models already reported without a known window. The window is resolved several
+ * times per turn, so an unknown model is logged once per process (telemetry
+ * still records every lookup).
+ */
+const warnedContextWindowModels = new Set<string>();
+function warnContextWindowOnce(model: string, message: string): void {
+  if (warnedContextWindowModels.has(model)) return;
+  warnedContextWindowModels.add(model);
+  console.warn(message);
+}
+
 export function getEffectiveContextWindow(model: string): EffectiveContextWindow {
   let window = getModelContextWindow(model);
   let isFallback = false;
@@ -270,7 +282,8 @@ export function getEffectiveContextWindow(model: string): EffectiveContextWindow
       source = 'inferred';
       via = inferred.via;
       recordCapabilityFallback({ model, source: 'inferred', via: inferred.via, window });
-      console.warn(
+      warnContextWindowOnce(
+        model,
         `[coder] inferred context window for "${model}" → ${window} via ${inferred.via} (no registry entry; admin can override in /admin/providers)`,
       );
     } else {
@@ -279,7 +292,8 @@ export function getEffectiveContextWindow(model: string): EffectiveContextWindow
       source = 'fallback';
       via = 'hardcoded:128k';
       recordCapabilityFallback({ model, source: 'fallback', via, window });
-      console.warn(
+      warnContextWindowOnce(
+        model,
         `[coder] no context window known for "${model}", no family-heuristic match — using hardcoded ${FALLBACK_CONTEXT_WINDOW}`,
       );
     }

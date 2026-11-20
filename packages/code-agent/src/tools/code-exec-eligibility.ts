@@ -3,7 +3,7 @@ import { resolveToolMetadata } from '../core/policy.js';
 
 /** Shared by discovery and dispatch: control boundaries need a top-level call. */
 export function canInvokeInsideCodeExec(tool: CoderTool): boolean {
-  if (resolveToolMetadata(tool).interactive) return false;
+  if (resolveToolMetadata(tool).interactive || tool.topLevelOnly === true) return false;
   return !(
     tool.name.startsWith('spawn_') || tool.name === 'resume_agent'
     || tool.name === 'code_exec' || tool.name === 'execute_task'

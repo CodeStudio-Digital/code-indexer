@@ -32,6 +32,8 @@ export interface CodeExecHintContext {
   exposedNames: ReadonlyArray<string>;
   /** Every registered tool name, including sandbox-excluded control tools. */
   allToolNames: ReadonlySet<string>;
+  /** Names this run replaced (the registry's own map). */
+  replacedInRun?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -93,7 +95,7 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
   const refMatch = /(?:^|ReferenceError:\s*)([A-Za-z_$][\w$]*) is not defined/.exec(msg);
   if (!refMatch) return '';
   const name = refMatch[1];
-  const replaced = ctx.allToolNames.has(name) ? null : toolReplacement(name);
+  const replaced = ctx.allToolNames.has(name) ? null : toolReplacement(name, ctx.replacedInRun);
   if (replaced) return `\n\nHint: ${replaced.text}`;
 
   if (ctx.exposedNames.includes(name)) {
@@ -108,7 +110,7 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
     // steer them to a direct top-level call.
     return (
       `\n\nHint: \`${name}\` is a registered tool but is NOT exposed inside code_exec ` +
-      `— it's a control/lifecycle tool (e.g. task_complete, spawn_agent or ask_user) ` +
+      `— it's a control/lifecycle tool (e.g. ${ctx.replacedInRun && Object.hasOwn(ctx.replacedInRun, 'spawn_agent') ? 'task_complete, create_chat or ask_user' : 'task_complete, spawn_agent or ask_user'}) ` +
       `that needs the runner's own turn cycle. End this code_exec and call \`${name}\` directly as a top-level tool call.`
     );
   }
@@ -146,6 +148,7 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
 export function wrapToolsBinding<T extends object>(
   target: T,
   exposedNames: ReadonlyArray<string>,
+  replacedInRun?: Readonly<Record<string, string>>,
 ): T {
   const PASSTHROUGH = new Set(['then', 'catch', 'finally', 'toJSON']);
   const aliases = new Map<string, string | null>();
@@ -161,7 +164,7 @@ export function wrapToolsBinding<T extends object>(
       }
       const canonical = aliases.get(prop);
       if (canonical) return Reflect.get(t, canonical, receiver);
-      const replaced = toolReplacement(prop);
+      const replaced = toolReplacement(prop, replacedInRun);
       if (replaced) throw new Error(`tools.${prop}: ${replaced.text}`);
       const close = suggestToolName(prop, exposedNames as string[]);
       throw new Error(

@@ -60,6 +60,9 @@ export function buildUserDeniedText(toolName: string, note?: string): string {
  */
 const NEVER_GATE: ReadonlySet<string> = new Set([
   'code_exec', 'spawn_agent', 'spawn_agents', 'execute_tasks', 'get_tool_output',
+  // A task to a child chat delegates like spawn_agent: the child's own calls are
+  // gated with the permissions it inherited.
+  'send_chat_message',
   // workflow — DAG orchestrator; its steps' INNER tool calls are gated
   // individually inside each subagent (same rationale as execute_tasks).
   'workflow',

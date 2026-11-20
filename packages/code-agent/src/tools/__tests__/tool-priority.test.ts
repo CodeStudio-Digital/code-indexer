@@ -45,12 +45,14 @@ const PREVIEW_SET = ['preview_open', 'preview_click'];
 const CUSTOM_SET = ['cf__deploy_worker'];
 
 const externalToolTiers = new Map<string, ToolTier>([['cf__deploy_worker', 'cloudflare']]);
+/** A registry without catalog stand-ins (they exist only with child chats). */
+const NO_STAND_INS = () => ({ tools: [], replacing: new Set<string>() });
 const tierOf = (n: string): ToolTier => getToolTier(n, externalToolTiers);
 
 function makeArgs(model: string) {
   const all = [...BOOTSTRAP_SET, ...NAVIGATE_SET, ...ADMIN_SET, ...PREVIEW_SET, ...CUSTOM_SET].map(named);
   return {
-    registry: { list: () => all } as unknown as ToolRegistry,
+    registry: { list: () => all, catalogStandIns: NO_STAND_INS } as unknown as ToolRegistry,
     activeTiers: new Set<ToolTier>(['bootstrap', 'navigate', 'admin', 'preview', 'cloudflare']),
     externalToolTiers,
     toolContext: {
@@ -115,7 +117,7 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     const pluginNoise = Array.from({ length: 80 }, (_, index) => named(`plugin_noise_${index}`));
     const result = buildTools({
       ...args,
-      registry: { list: () => [...baseTools, ...pluginNoise] } as unknown as ToolRegistry,
+      registry: { list: () => [...baseTools, ...pluginNoise], catalogStandIns: NO_STAND_INS } as unknown as ToolRegistry,
       activeTiers: new Set<ToolTier>(['bootstrap', 'navigate']),
     });
     const names = result.tools.map((tool) => tool.name);
@@ -147,7 +149,7 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     ]);
     const catalog = [...BOOTSTRAP_SET, ...ROLE_CAPABILITY_FLOOR].map(named);
     const result = buildTools({
-      registry: { list: () => catalog } as unknown as ToolRegistry,
+      registry: { list: () => catalog, catalogStandIns: NO_STAND_INS } as unknown as ToolRegistry,
       activeTiers,
       toolContext: { cwd: tmpdir(), projectName: 'specialist-test' } as unknown as ToolContext,
       provider: { name: 'zai', model: 'glm-4.5-flash' } as unknown as ChatProvider,
@@ -164,7 +166,7 @@ describe('buildTools — priority trim at a weak-model cap', () => {
 describe('buildTools — plugin runtime tiers', () => {
   it('keeps plugin tools out of bootstrap until their own tier is active', () => {
     const pluginTool = named('plugin__cloudflare__cf_deploy');
-    const registry = { list: () => [named('mcp__read_file'), pluginTool] } as unknown as ToolRegistry;
+    const registry = { list: () => [named('mcp__read_file'), pluginTool], catalogStandIns: NO_STAND_INS } as unknown as ToolRegistry;
     const tierMap = new Map<string, ToolTier>([
       [pluginTool.name, 'plugin:cloudflare'],
     ]);

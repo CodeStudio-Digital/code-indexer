@@ -200,6 +200,31 @@ function isAllowed(allowlist: SubagentAllowlist, tool: CoderTool): boolean {
   return allowlist.has(tool.name);
 }
 
+/**
+ * Whether a child agent receives `tool` under its profile `allowlist`: never an
+ * excluded or interactive tool; the chat tools always (a child answers its
+ * parent); everything else per the allowlist. Shared by in-process children
+ * and child-agent sessions so both get the same surface.
+ */
+export function isChildToolAdmitted(tool: CoderTool, allowlist: SubagentAllowlist): boolean {
+  if (CHILD_EXCLUDED_TOOLS.has(tool.name) || resolveToolMetadata(tool).interactive) return false;
+  return CHAT_TOOL_NAMES.has(tool.name) || isAllowed(allowlist, tool);
+}
+
+/**
+ * Tools a child never receives, whatever its allowlist (a `full` child has
+ * none): delegation and chat-creation controls (no recursion), the nested
+ * reviewer, `task_complete` (it closes the PARENT's inline scope; a child
+ * runner never has one open), and the discovery tool rebuilt over the child
+ * registry below.
+ * Interactive tools are excluded separately: children never pause for the user.
+ */
+export const CHILD_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
+  'spawn_agent', 'workflow', 'execute_tasks', 'resume_agent', 'resume_chat', 'find_tools',
+  'create_chat', 'create_chat_trigger', 'prepare_chat_schedule', 'propose_task', 'request_review',
+  'task_complete',
+]);
+
 const DEFAULT_SUBAGENT_LIMITS: Required<SubagentLimits> = {
   maxToolCalls: 0,
   timeoutMs: 0,
@@ -532,8 +557,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
   // (so we mirror the successful tool_result regardless of scope).
   const subRegistry = new ToolRegistry();
   for (const tool of parent.tools) {
-    if (['spawn_agent', 'workflow', 'execute_tasks', 'resume_agent', 'resume_chat', 'find_tools', 'create_chat', 'create_chat_trigger', 'prepare_chat_schedule', 'propose_task'].includes(tool.name)) continue;
-    if (!CHAT_TOOL_NAMES.has(tool.name) && !isAllowed(spec.allowlist, tool)) continue;
+    if (!isChildToolAdmitted(tool, spec.allowlist)) continue;
     let wrapped = spec.pathScope
       ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations, spec.pathScopeMode)
       : tool;

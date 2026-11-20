@@ -8,9 +8,10 @@ import { reconcileUltraBudget } from './runtime/ultra-budget-recovery.js';
 import { chatChangesTools } from './tools/chat-changes.js';
 import { buildResumeChatTool } from './tools/chat-resume.js';
 import { resolveUltraPreset } from './sessions/ultra-policy.js';
-import { chatCollaborationTools } from './tools/chat-collaboration.js';
-import { sessionNetworkTools } from './tools/session-network.js';
-import { ultraFollowupTools } from './tools/ultra-followups.js';
+import { CHILD_CHAT_TOOL_NAMES, chatToolsForRun, withTalkDeferred } from './tools/chat-tool-set.js';
+import { childSessionAgentsEnabled, REPLACED_BY_CHILD_CHATS } from './tools/child-chat-surface.js';
+import { withChildChatTexts } from './tools/child-chat-texts.js';
+import { childChatPort } from './ports/child-chat-port.js';
 import { SessionNetwork } from './runtime/session-network.js';
 import { createRootCollaboration, attachChatMailbox } from './runtime/chat-collaboration.js';
 import { resolve as resolvePath, join as joinPath, relative as relativePath, isAbsolute as isAbsolutePath } from 'node:path';
@@ -160,7 +161,7 @@ import {
   interleaveLabeled,
   mapProjectsConcurrent,
 } from '@mcp/code-agent/core/runner/assembly/union-memory.js';
-import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
+import { AGENTS, isAgentId, isReadOnlyAgent, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { decisionGuidanceForTask, decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { toolOutputTools } from '@mcp/code-agent/tools/tool-output.js';
@@ -222,6 +223,11 @@ import {
   type FsCoderSession,
 } from '@mcp/session-storage/fs-store/index.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
+import { loadChildAgentRun } from '@mcp/code-agent/runtime/child-agent-run.js';
+import { profileLimitsFromProviderStore, startChildAgentRunGuards, type ChildAgentRunGuards } from '@mcp/code-agent/runtime/child-agent-session-run.js';
+import { ChildAgentUsageLedger } from '@mcp/code-agent/runtime/child-agent-usage.js';
+import { failureReason } from '@mcp/code-agent/runtime/child-agent-runs.js';
+import { createChildAgentAccounting } from '@mcp/code-agent/runtime/child-agent-freshness.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
@@ -478,7 +484,10 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // request body doesn't re-send it.
   let session: FsCoderSession;
   if ('id' in opts.session) {
-    const found = await store.getSession(opts.session.id);
+    // A session another store instance created after this process's store
+    // scanned (the app creates child agents) is found by a targeted rescan.
+    const found = (await store.getSession(opts.session.id))
+      ?? (await store.discoverNewSessions(), await store.getSession(opts.session.id));
     if (!found) throw new Error(`Session ${opts.session.id} not found`);
     session = found;
   } else {
@@ -665,9 +674,17 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Tool registry: native tools + index tools (mcp__*)
   const registry = new ToolRegistry();
-  registry.registerAll(chatCollaborationTools);
-  if (!opts.companyContext) registry.registerAll(sessionNetworkTools);
-  if (!opts.companyContext) registry.registerAll(ultraFollowupTools);
+  // CODER_CHILD_SESSION_AGENTS (on by default; never in Company): child chats replace
+  // spawn_agent and the old chat tools. Off, the registrations are exactly today's.
+  const childChats = !opts.companyContext && childSessionAgentsEnabled();
+  // Where create_chat would always be refused: sub-agents disabled, a read-only root agent.
+  const cannotDelegate = (opts.runtimePolicy ? !opts.runtimePolicy.subagents.enabled : false) || isReadOnlyAgent(effectiveAgentId);
+  registry.registerAll(chatToolsForRun({ childChats, company: !!opts.companyContext, cannotDelegate }));
+  if (childChats) {
+    registry.setReplacedTools(REPLACED_BY_CHILD_CHATS);
+    // The switch-off chat tools only stand in for the catalog budget (never registered).
+    registry.addCatalogStandIns(chatToolsForRun({ childChats: false, company: false }), CHILD_CHAT_TOOL_NAMES);
+  }
   registry.registerAll(chatChangesTools);
   // Mutable by design: code_exec/find_tools capture this map before external
   // MCP and plugin tools are registered, then observe the completed catalog
@@ -1002,6 +1019,14 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ]);
   }
 
+  // A child-agent session runs with its profile (surface, prompt, budget,
+  // fence); every other session gets null and runs unchanged. The admin
+  // per-profile limits are keyed by the creator's provider, as in-process.
+  const childAgentRun = await loadChildAgentRun(store, session.id, async (profileId, creatorId) => {
+    const creatorProvider = (await store.getSession(creatorId))?.provider ?? session.provider;
+    return profileLimitsFromProviderStore(config.dbPath, creatorProvider)?.(profileId);
+  }, { childChats });
+
   // Custom agents can opt into an exact tool surface. Apply this after every
   // native/MCP/plugin tool has registered and before subagent snapshots are
   // captured, so the allowlist is an execution boundary rather than a UI-only
@@ -1040,6 +1065,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   pruneRedundantPrimaryTwins(registry, {
     has: (name) => !!globalDisabledTools?.has(name) || sessionDisabledTools.has(name),
   }, getGlobalDocSearch());
+  // With child chats, shared tools carry the texts of that surface (no spawn_agent).
+  if (childChats) registry.reviseInPlace(withChildChatTexts);
   // What every child agent (subagents, the request_review reviewer) may draw
   // from: the final registry minus the disabled tools.
   const childDisabled = new Set([...(globalDisabledTools ?? []), ...sessionDisabledTools]);
@@ -1065,7 +1092,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     readOnly: agentDef?.readOnly === true || effectiveAgentId === 'plan',
   });
   let subagentDeps: SubagentDeps | null = null;
-  if (shouldEnableEphemeralSubagents(
+  // Child-agent sessions never delegate in this stage (child-agent-run.ts).
+  if (!childAgentRun && shouldEnableEphemeralSubagents(
     opts.companyContext,
     opts.runtimePolicy ? !opts.runtimePolicy.subagents.enabled : false,
   )) {
@@ -1178,6 +1206,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // spawn_subagent/spawn_agents pair. Schema accepts an `agents` array
   // (1 item → sequential, N → parallel, up to 8). Persistent kind delegates
   // to spawn_subordinate_agent when in a Company master session.
+  // With child chats these are built only as catalog stand-ins, never registered.
   if (subagentDeps || registry.get('spawn_subordinate_agent')) {
     // Either subagent deps exist (ephemeral path) OR master has the
     // subordinate path; in the latter we still register so the model has
@@ -1185,24 +1214,31 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const fallbackDeps: SubagentDeps =
       subagentDeps
       ?? { provider, parentTools: [], sessionStore: store };
-    registry.register(buildSpawnAgentTool(fallbackDeps, registry));
+    const spawnAgent = buildSpawnAgentTool(fallbackDeps, registry);
+    if (childChats) registry.addCatalogStandIns([spawnAgent]);
+    else registry.register(spawnAgent);
   }
 
   // resume_agent + collect_agents — the async companions of spawn_agent
   // (relaunch failed ephemeral subagents; wait on/fetch background jobs).
   // Ephemeral capability only (company masters have resume_subordinate).
+  // Child chats (send_chat_message, wait_chats, read_chat) replace all four.
   if (subagentDeps) {
     const [{ buildResumeAgentTool }, { buildCollectAgentsTool }, { buildReadAgentTranscriptTool }] = await Promise.all([
       import('@mcp/code-agent/tools/resume-agent.js'),
       import('@mcp/code-agent/tools/collect-agents.js'),
       import('@mcp/code-agent/tools/read-agent-transcript.js'),
     ]);
-    registry.register(buildResumeAgentTool(subagentDeps));
-    registry.register(buildResumeChatTool(subagentDeps));
-    registry.register(buildCollectAgentsTool(subagentDeps));
-    // P1 (ultra-agent parity): read-only audit of a finished subagent's
-    // retained transcript — the observability half of spawn_agent.
-    registry.register(buildReadAgentTranscriptTool(store));
+    const companions = [
+      buildResumeAgentTool(subagentDeps),
+      buildResumeChatTool(subagentDeps),
+      buildCollectAgentsTool(subagentDeps),
+      // P1 (ultra-agent parity): read-only audit of a finished subagent's
+      // retained transcript — the observability half of spawn_agent.
+      buildReadAgentTranscriptTool(store),
+    ];
+    if (childChats) registry.addCatalogStandIns(companions);
+    else registry.registerAll(companions);
   }
 
   // workflow — Ultra's standing declarative DAG orchestrator (P0 of the
@@ -1440,6 +1476,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     fileKnowledge: sessionFileKnowledge(String(session.id)),
     agenticChat: budgetNetwork?.enabled === true && budgetRoot?.enabled === true,
     collaboration,
+    ...(childChats && childChatPort() ? { childChats: childChatPort()! } : {}),
+    ...(childAgentRun ? { childAgentSelf: { depth: childAgentRun.depth, readOnly: childAgentRun.readOnly } } : {}),
     ultraPolicy: ultraPreset,
     ultraBudget: sharedBudget ? new UltraAgentBudget(ultraPreset.effective.parallelism.maxAgents, 24, sharedBudget) : undefined,
     worktreeWorkspace: session.metadata?.worktree_workspace === true && !!session.worktree_path,
@@ -1916,6 +1954,11 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.register(
     buildCreateSkillTool({ dbPath: config.dbPath, registry, projectId: project.id }),
   );
+  // Last registration above: the child-agent profile surface filters all of it.
+  if (childChats) registry.reviseInPlace(withChildChatTexts); // workflow and later registrations
+  // No one could answer a message here (no children possible, not a child, no Agêntico network).
+  if (childChats && cannotDelegate && !childAgentRun && !toolContext.agenticChat) registry.reviseInPlace(withTalkDeferred);
+  if (childAgentRun) registry.filterInPlace((tool) => childAgentRun.allowsTool(tool), (tool) => childAgentRun.allowsRetiredTool(tool));
   const catalogOnlyCapabilities = resolvedSkills.map(skillAsCatalogCapability);
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
@@ -2098,7 +2141,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     agentsMd,
     // Codex-faithful mode switch: Ultra permits useful, bounded proactive
     // research; an explicit non-Ultra selection revokes that permission.
-    // The prompt builder fails closed when spawn_agent is unavailable.
+    // The prompt builder fails closed when the delegation tool (spawn_agent,
+    // or create_chat with child chats) is unavailable.
     multiAgentMode: ultraExecutionEnabled
       ? 'proactive'
       : sessionExecutionMode != null
@@ -2106,13 +2150,15 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         : undefined,
     ultraPolicy: ultraPreset,
     availableTools,
+    childChats,
   };
 
   const fixedSections = [
     opts.customAgentPrompt?.trim() ? `# Custom agent instructions\n${opts.customAgentPrompt.trim()}` : '',
     opts.companyPromptBlock ?? '',
+    childAgentRun?.promptSection ?? '',
   ];
-  let sessionSuffix = sessionNetwork ? '\n\n' + await sessionNetwork.context(session.id) : '';
+  let sessionSuffix = sessionNetwork ? '\n\n' + await sessionNetwork.context(session.id, { childChats }) : '';
 
   // Append skill awareness block. Mode resolution priority:
   //   1. Explicit env CODER_SKILLS_PROMPT_MODE = lazy | compact | matched | full
@@ -2726,6 +2772,42 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     },
     agentLoopV2,
   });
+  const childAgentGuards: ChildAgentRunGuards | null = childAgentRun
+    ? await startChildAgentRunGuards({
+        run: childAgentRun, store, sessionId: session.id, runner, toolContext, provider,
+        effort: effectiveReasoningEffort ?? null, capabilities: registry.list().map((tool) => tool.name),
+        systemPrompt: () => systemPrompt, signal: opts.signal,
+      })
+    : null;
+
+  // Child-agent results count once in this session and refresh the files the
+  // child changed: a tool claims what it received (turn usage); the sweep at
+  // run start and at each turn boundary records the rest (standalone usage).
+  const childAgentAccounting = opts.companyContext ? null : createChildAgentAccounting({
+    toolContext,
+    ledger: new ChildAgentUsageLedger(session.id, {
+      // With child chats, the app creates children after this store scanned.
+      sessions: childChats ? {
+        getChildAgentSession: (id) => store.getChildAgentSession(id), listChildAgentSessions: (id) => store.listChildAgentSessions(id),
+        listSubagentRuns: (id, offset, limit) => store.listSubagentRuns(id, offset, limit), refreshSession: (id) => store.refreshSession(id),
+        discoverNewSessions: () => store.discoverNewSessions(),
+      } : store,
+      accounted: () => store.listAccountedSubagentKeys(session.id),
+      recordStandalone: (usage, key) => store.bumpSessionUsage(session.id, usage, key),
+    }),
+    // A child chat's received conclusion is an investigation, as spawn_agent's results were.
+    ...(childChats ? { investigations: { parentId: session.id, sessions: store } } : {}),
+    reindex: sandboxBinding ? undefined : async (projectId, relPath, absPath) => {
+      const indexFileNow = await loadIncrementalIndexer();
+      await indexFileNow(db, projectId, relPath, await (toolContext.ports?.fs ?? defaultLocalFilesystemPort()).readFile(absPath));
+    },
+  });
+  if (childAgentAccounting) {
+    toolContext.childAgentAccounting = childAgentAccounting;
+    runner.on('turn_start', () => {
+      void childAgentAccounting.sweep().catch((error) => console.warn('[child-agent] usage sweep failed:', error));
+    });
+  }
 
   // A runCoder invocation owns one CoderRunner, but that runner can execute
   // many internal model turns. If the three-minute first-turn gate timed out,
@@ -2989,6 +3071,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       cache_read_input_tokens: number;
       cache_creation_input_tokens: number;
     };
+    /** Child-agent run keys `subagentUsage` covers, persisted with the turn metric. */
+    subagentRuns: string[];
     /**
      * In-flight checkpoint (set by `awaiting_input` when the turn parks on
      * waitForUserInput). `promise` resolves when the assistant message has been
@@ -3038,6 +3122,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       tool_calls: turn.toolCalls,
       nested_tool_calls: turn.nestedToolCalls.length > 0 ? turn.nestedToolCalls : undefined,
       subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
+      subagent_runs: turn.subagentRuns.length > 0 ? turn.subagentRuns : undefined,
       // Reuse the checkpointed assistant row (if the write succeeded) so the
       // tool rows + paired tool message attach to it rather than a duplicate.
       existing_message_seq: turn.checkpoint?.messageId ?? undefined,
@@ -3153,6 +3238,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
       },
+      subagentRuns: [],
     };
   });
 
@@ -3286,6 +3372,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       pendingTurn.subagentUsage.cache_read_input_tokens += result.subUsage.cache_read_input_tokens ?? 0;
       pendingTurn.subagentUsage.cache_creation_input_tokens += result.subUsage.cache_creation_input_tokens ?? 0;
     }
+    if (result.subUsageRuns) pendingTurn.subagentRuns.push(...result.subUsageRuns);
     pendingToolCalls.delete(id);
   });
 
@@ -3520,6 +3607,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         };
       }
       opts.signal?.throwIfAborted();
+      // Results that arrived while this session was idle or before a restart.
+      await childAgentAccounting?.sweep().catch((error) => console.warn('[child-agent] usage sweep failed:', error));
       if (opts.companyContext && !opts.companyContext.isMaster && sharedBudget) {
         const id = `company:${runner.runId}`;
         await sharedBudget.reserve(id, session.id);
@@ -3549,6 +3638,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       if (criticalTranscriptPersistenceError) {
         throw criticalTranscriptPersistenceError;
       }
+      // A cut-off child run ends with its salvage summary as the final answer.
+      const childSalvage = await childAgentGuards?.finish({ reason: res.reason, usage: res.totalUsage });
+      if (childSalvage) completionFinalText = childSalvage;
       store.updateSessionStatus(session.id, res.reason === 'error' ? 'error' : 'idle');
       const outcome: RunOutcome = {
         reason: res.reason,
@@ -3582,6 +3674,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       } catch (persistError) {
         terminalError = persistError;
       }
+      // Close the child run record too; never let that mask the run error.
+      // Without a run total, the guards count the usage of the committed messages.
+      await childAgentGuards?.finish({ reason: opts.signal?.aborted ? 'aborted' : failureReason('error', terminalError) }).catch(() => null);
       try {
         await store.updateSessionStatus(session.id, 'error');
         if (collaboration) await collaboration.store.recordCompletion({
@@ -3598,6 +3693,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       throw terminalError;
     })
     .finally(async () => {
+      childAgentGuards?.dispose();
       await closeChatMailbox?.();
       await toolOutputStore.drain();
       await mcpServerManager.closeAll();

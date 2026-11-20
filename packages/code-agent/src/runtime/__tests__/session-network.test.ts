@@ -44,6 +44,11 @@ describe('ordinary session networks', () => {
     const second = await network.create(parentId, { title: 'Designer', role: 'Debate alternatives' }, 'b');
     expect(await mailbox.connected(first.id, second.id)).toBe(true);
     expect((await network.context(parentId))).toContain('Investigate risks');
+    // Child chats: the guidance names create_chat and send_chat_message, none of the replaced tools.
+    expect(await network.context(parentId)).toContain('Use spawn_agent for temporary subagents.');
+    const childChats = await network.context(parentId, { childChats: true });
+    expect(childChats).toContain('Delegate a task with create_chat: the child chat runs it and reports back.');
+    expect(childChats).not.toMatch(/spawn_agent|list_project_chats|reply_chat_message|resume_chat/);
     expect((await network.discover(parentId, 'Reviewer'))[0]?.id).toBe(first.id);
     expect((await network.session(first.id)).metadata?.network_root_id).toBe(parentId);
   });

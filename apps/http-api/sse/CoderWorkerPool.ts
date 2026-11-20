@@ -83,6 +83,8 @@ import {
   type ControlPlaneRunContext,
 } from '@mcp/store/control-plane/index.js';
 import type { ControlPlaneAuthority } from '../file-control-plane-store.js';
+import type { ChildChatPort } from '@mcp/code-agent/ports/child-chat-port.js';
+import { installChildChatBridge } from './child-chat-bridge.js';
 import {
   markLocalCoderRunStarted,
   mirrorLocalCoderLifecycleEvent,
@@ -317,6 +319,8 @@ interface CoderWorkerPoolOpts {
     context: SessionRuntimeContext,
   ) => Promise<void>;
   importPublishedChat?: (parentId: SessionId, childId: SessionId) => Promise<SessionId> | undefined;
+  /** The app's child-chat port, served to each worker as its own session (child-chat-bridge.ts). */
+  childChats?: () => ChildChatPort | null;
   /** Idle TTL before eviction. Default 5 min — only used between runs. */
   ttlMs?: number;
   /**
@@ -1655,6 +1659,7 @@ export class CoderWorkerPool {
     const bridge = host.requireBridge();
     // ─── Wire RPC bridges from worker → main ─────────────────────────
     const offAttemptAdmission = bridge.handle('attempt.admit', (payload) => this.admitRuntimeAttempt(sessionId, payload));
+    const offChildChats = installChildChatBridge(bridge, sessionId, () => this.opts.childChats?.() ?? null);
     const offChatCreated = bridge.handle('chat.created', async (payload) => {
       const { childId, runId } = (payload ?? {}) as { childId?: unknown; runId?: number };
       const caller = this.entries.get(sessionId);
@@ -1912,6 +1917,7 @@ export class CoderWorkerPool {
       controlPlaneLeaseRenewTimer: null,
       detachBusMirror: () => {
         try { offAttemptAdmission(); } catch { /* best-effort */ }
+        try { offChildChats(); } catch { /* best-effort */ }
         try { offChatCreated(); } catch { /* best-effort */ }
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }

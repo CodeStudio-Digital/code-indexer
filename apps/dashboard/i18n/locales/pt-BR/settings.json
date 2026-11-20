@@ -51,6 +51,8 @@
   "item.CODER_COMPANY_ORCHESTRATOR_TTL_MS.label": "TTL do orquestrador (ms)",
   "item.CODER_DISABLED_MCP_TOOLS.description": "Nomes de tools `mcp__*` separados por vírgula para ocultar do registro. Útil para testar A/B uma tool.",
   "item.CODER_DISABLED_MCP_TOOLS.label": "Tools MCP desabilitadas",
+  "item.CODER_CHILD_SESSION_AGENTS.description": "Os agentes delegam com create_chat e send_chat_message (sessões filhas de verdade) em vez de spawn_agent. Ligado por padrão; desligue para voltar ao spawn_agent. Não afeta o Company.",
+  "item.CODER_CHILD_SESSION_AGENTS.label": "Delegar por chats filhos",
   "item.CODER_DISABLE_SUBAGENTS.description": "Força `spawn_subagent` / `spawn_agents` a recusar com um erro explicativo.",
   "item.CODER_DISABLE_SUBAGENTS.label": "Desabilitar subagentes por completo",
   "item.CODER_PARALLEL_AGENT_MAX.description": "Quantos workers `spawn_agents` podem rodar simultaneamente.",

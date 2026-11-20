@@ -1274,6 +1274,8 @@ export class ExecutingNode implements BehaviorNode {
           structuredDataOmitted: r.structuredDataOmitted,
           isError: r.isError,
           effectOutcome: r.effectOutcome,
+          ...(r.subUsage ? { subUsage: r.subUsage } : {}),
+          ...(r.subUsageRuns ? { subUsageRuns: r.subUsageRuns } : {}),
           rawChars: r.rawChars,
           contentFormat: r.contentFormat,
           structuredOutputChars: r.structuredOutputChars,

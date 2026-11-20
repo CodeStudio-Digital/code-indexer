@@ -51,6 +51,8 @@
   "item.CODER_COMPANY_ORCHESTRATOR_TTL_MS.label": "Orchestrator TTL (ms)",
   "item.CODER_DISABLED_MCP_TOOLS.description": "Comma-separated `mcp__*` tool names to hide from the registry. Useful to A/B a tool.",
   "item.CODER_DISABLED_MCP_TOOLS.label": "Disabled MCP tools",
+  "item.CODER_CHILD_SESSION_AGENTS.description": "Agents delegate with create_chat and send_chat_message (real child sessions) instead of spawn_agent. On by default; turn it off to go back to spawn_agent. Company is unaffected.",
+  "item.CODER_CHILD_SESSION_AGENTS.label": "Delegate through child chats",
   "item.CODER_DISABLE_SUBAGENTS.description": "Forces sub-agent tools to refuse with an explanatory error.",
   "item.CODER_DISABLE_SUBAGENTS.label": "Disable sub-agents entirely",
   "item.CODER_PARALLEL_AGENT_MAX.description": "How many sub-agent workers can run concurrently.",

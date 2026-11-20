@@ -87,10 +87,14 @@ export class ChatCollaborationStore {
     if (!peer) throw new Error(`Unknown chat '${id}'. Use list_chats to discover connected chats.`);
     return peer;
   }
-  async send(input: SendChatMessage): Promise<ChatMessage> {
+  /**
+   * `fromStopped`: the app's own end notice of a stopped chat (a child agent
+   * whose chat the user stopped) may leave it; agents of a stopped chat never send.
+   */
+  async send(input: SendChatMessage, options: { fromStopped?: boolean } = {}): Promise<ChatMessage> {
     const from = await this.requireParticipant(input.from);
     const to = await this.requireParticipant(input.to);
-    if (from.state === 'stopped' || to.state === 'stopped') throw new Error('target_generation_changed: stopped participants cannot receive new work');
+    if ((from.state === 'stopped' && !options.fromStopped) || to.state === 'stopped') throw new Error('target_generation_changed: stopped participants cannot receive new work');
     if (from.id === to.id) throw new Error('Cannot message yourself');
     if (!await this.connected(from.sessionId, to.sessionId)) throw new Error('Chats are not linked to collaborate');
     if (!input.idempotencyKey || !input.body.trim() || input.body.length > 32_000) throw new Error('A message needs an idempotency key and 1–32000 characters');

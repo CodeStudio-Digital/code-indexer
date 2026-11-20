@@ -34,9 +34,6 @@
  *   - 'explore'  (default) — read-only allowlist + non-mutating MCP externos
  *   - 'implement'          — read+write+shell + ALL MCP externos
  *   - 'full'               — no filter (parent registry as-is)
- *
- * Cache: identical (task,type,files) cached for ephemeral single-agent
- * paths only — parallel calls and persistent spawns bypass.
  */
 import { randomUUID } from 'node:crypto';
 import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/tool.js';
@@ -87,11 +84,6 @@ import {
 // Re-exported for callers/tests that import it from spawn-agent.js (moved to
 // spawn-agent-core.js to break the spawn ↔ background import cycle).
 export { buildSubagentWorkspaceBriefing };
-import {
-  isGlobalSubAgentCacheEnabled,
-  tryGlobalSubAgentRead,
-  writeGlobalSubAgentResult,
-} from '@mcp/services/sub-agent-cache/index.js';
 import { registerActiveAgent } from '@mcp/code-agent/tools/active-agent-registry.js';
 import { emitSubagentEvent } from './subagent-events.js';
 
@@ -368,42 +360,6 @@ async function runSingleEphemeral(
     softTimeTargetMs: agent.researchPolicy?.softTimeTargetMs,
   });
 
-  const cacheKeyInput = {
-    prompt: agent.task,
-    agentType: agent.type === 'explore' ? 'Explore' as const : 'general-purpose' as const,
-    recentMutations: [
-      ...(agent.files ?? []),
-      `profile:${agent.profile.id}`,
-      researchPolicyCacheKey(agent.researchPolicy),
-    ],
-  };
-  if (isGlobalSubAgentCacheEnabled()) {
-    const hit = tryGlobalSubAgentRead<{
-      header: string;
-      body: string;
-      usage: import('@mcp/code-agent/core/messages.js').ChatUsage;
-    }>(cacheKeyInput);
-    if (hit) {
-      console.log(
-        `[coder s=${parentSessionId ?? '?'}] spawn_agent: CACHE HIT type=${agent.type} ` +
-        `ageMs=${hit.ageMs} hitCount=${hit.hitCount}`,
-      );
-      emitProgress({
-        event: 'completed',
-        status: 'completed',
-        toolCallCount: 0,
-        usage: hit.result.usage,
-        summary: hit.result.body,
-        note: 'cache hit',
-      });
-      emitEnd(hit.result.usage, 'completed');
-      return {
-        ...ok(`[cache-hit ageMs=${hit.ageMs} hits=${hit.hitCount}]\n\n` + hit.result.header + hit.result.body),
-        subUsage: hit.result.usage,
-      };
-    }
-  }
-
   if (deps.sessionStore && parentSessionId != null) {
     try {
       await deps.sessionStore.recordSessionInput({
@@ -517,16 +473,6 @@ async function runSingleEphemeral(
   // it. Empty when the sub didn't emit anything → no-op concat.
   const trail = renderTrail(result.collected);
 
-  // Only COMPLETED runs are cacheable: watchdog failures produce a non-empty
-  // salvage summary, and caching that would replay the failure to every
-  // later identical spawn.
-  if (isGlobalSubAgentCacheEnabled() && result.finalText && result.reason === 'completed') {
-    writeGlobalSubAgentResult(cacheKeyInput, {
-      header,
-      body,
-      usage: result.usage,
-    });
-  }
   // Persist a durable digest into the investigation ledger (non-company).
   await captureInvestigation(deps, ctx, agent, result.finalText ?? '', trail, result.usage.input_tokens + result.usage.output_tokens);
   void extractLastAssistantText; // keep helper referenced for re-exports
@@ -659,6 +605,7 @@ async function runParallelEphemeral(
         sessionStore: deps.sessionStore,
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         externalToolTiers: deps.externalToolTiers,
+        maxParallel: deps.maxParallel,
       },
       specs,
       MICRO_AGENT_PROFILES.explore.systemPrompt,
@@ -741,26 +688,21 @@ async function runPersistent(
   agent: NormalizedAgent,
   ctx: ToolContext,
 ): Promise<ToolResult> {
-  // In a Company master session, persistent → spawn_subordinate_agent.
-  const masterSpawn = registry.get('spawn_subordinate_agent');
-  if (masterSpawn) {
-    const role = typeof args.role === 'string' ? args.role.trim() : '';
-    if (!role) return err('spawn_agent: in a Company master session, kind="persistent" requires `role`.');
-    return await registry.invoke('spawn_subordinate_agent', {
-      role,
-      task: agent.task,
-      project_id: args.project_id,
-      provider: args.provider,
-      model: args.model,
-      tier: args.tier,
-      skills: args.skills,
-      kanban_card_id: args.kanban_card_id,
-      wait: args.wait,
-      forward_user_attachments: args.forward_user_attachments,
-    }, ctx);
-  }
-  // Outside Company: fall through to a single inline implement agent.
-  return runSingleEphemeral({ provider: ctx.runner?.provider as never, parentTools: [] } as never, agent, ctx);
+  // Only reached in a Company master session (spawn_subordinate_agent exists).
+  const role = typeof args.role === 'string' ? args.role.trim() : '';
+  if (!role) return err('spawn_agent: in a Company master session, kind="persistent" requires `role`.');
+  return await registry.invoke('spawn_subordinate_agent', {
+    role,
+    task: agent.task,
+    project_id: args.project_id,
+    provider: args.provider,
+    model: args.model,
+    tier: args.tier,
+    skills: args.skills,
+    kanban_card_id: args.kanban_card_id,
+    wait: args.wait,
+    forward_user_attachments: args.forward_user_attachments,
+  }, ctx);
 }
 
 export function buildSpawnAgentTool(registry: ToolRegistry): CoderTool;
@@ -832,14 +774,14 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
         },
         parallel: { type: 'boolean', description: 'Force parallel/sequential. Default: parallel when agents.length > 1.' },
         background: { type: 'boolean', description: 'Fire-and-forget: return immediately with a job id and keep working; fetch results later with collect_agents. Use for long, independent work. Default false (blocks until done).' },
-        kind: { type: 'string', enum: ['ephemeral', 'persistent'], description: 'Default "ephemeral". "persistent" needs Company master (uses spawn_subordinate_agent under the hood).' },
-        // Persistent-only Company fields — surfaced only in a master session
-        // (see includePersistent). Unreachable/ignored elsewhere. The handler
+        // Persistent-only Company fields, kind included — surfaced only in a
+        // master session (see includePersistent). Unreachable/ignored elsewhere. The handler
         // still reads the legacy single-agent shortcut (task/type/max_turns/
         // files) via normalizeAgents, so old callers keep working; they're just
         // no longer advertised — `agents:[{...}]` is the one documented shape.
         ...(includePersistent
           ? {
+              kind: { type: 'string', enum: ['ephemeral', 'persistent'], description: 'Default "ephemeral". "persistent" needs Company master (uses spawn_subordinate_agent under the hood).' },
               role: { type: 'string', description: 'Persistent only — required inside Company master.' },
               project_id: { type: 'number', description: 'Persistent only.' },
               provider: { type: 'string', description: 'Persistent only.' },
@@ -866,7 +808,9 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
       }
 
 
-      if (kind === 'persistent') {
+      // Outside a Company master the field is not advertised; a persisted
+      // call that still carries it runs as an ordinary ephemeral agent.
+      if (kind === 'persistent' && registry.get('spawn_subordinate_agent')) {
         if (agents.length > 1) {
           return err('spawn_agent: kind="persistent" supports only ONE agent (parallel persistent is undefined — each subordinate has its own session).');
         }

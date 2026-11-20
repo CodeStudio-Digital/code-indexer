@@ -50,6 +50,7 @@ const sessionWriterHandoffBox: {
   release: ((context: SessionRuntimeContext) => Promise<void>) | null;
 } = { release: null };
 let importPublishedChat: ((parentId: SessionId, childId: SessionId) => Promise<SessionId>) | null = null;
+let childChats: import('@mcp/code-agent/ports/child-chat-port.js').ChildChatPort | null = null;
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'coder-worker');
@@ -117,6 +118,7 @@ export function getCoderWorkerPool(): CoderWorkerPool {
       await release(context);
     },
     importPublishedChat: (parentId, childId) => importPublishedChat?.(parentId, childId),
+    childChats: () => childChats,
     workerMaxOldGenerationSizeMb: initialRuntimePolicy.host.workerHeapMb,
     ttlMs: initialRuntimePolicy.host.workerIdleTtlMs,
     postRunLingerMs: initialRuntimePolicy.host.workerPostRunLingerMs,
@@ -231,6 +233,11 @@ export function setCoderWorkerSessionWriterHandoff(
 
 export function setCoderWorkerPublishedChatImporter(importer: typeof importPublishedChat): void {
   importPublishedChat = importer;
+}
+
+/** The child-chat port the coder workers reach over their bridge (set by the collaboration routes). */
+export function setCoderWorkerChildChats(port: typeof childChats): void {
+  childChats = port;
 }
 
 function getCoderWorkerControlPlaneStore(): ControlPlaneAuthority | null {

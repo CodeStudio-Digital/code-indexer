@@ -84,6 +84,8 @@ import {
   type IVisionDescriber,
   type VisionDescribeRequest,
 } from '../../../packages/code-agent/src/core/vision-describer.js';
+import { setChildChatPort } from '@mcp/code-agent/ports/child-chat-port.js';
+import { createChildChatBridgeClient } from '@mcp/code-agent/ports/child-chat-bridge-client.js';
 import {
   setGlobalDocsResearcher,
   installDocsDeepResearch,
@@ -327,6 +329,11 @@ const visionShim: IVisionDescriber = {
     bridge.request<string>('visionDescribe', req, { timeoutMs: 60_000 }),
 };
 setGlobalVisionDescriber(visionShim);
+
+// ─── Child chats: create/wait/stop/message/list run in the main process's
+// child-agent host, always as this worker's own session (child-chat-bridge.ts).
+// runCoder uses the port only when CODER_CHILD_SESSION_AGENTS is on.
+setChildChatPort(createChildChatBridgeClient(bridge));
 
 // ─── Project-memory shim: route to the main process via RPC ──────────
 // The canonical MemoryRetriever + RunEndMemory (embeddings, hybrid dedup,

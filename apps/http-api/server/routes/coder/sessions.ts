@@ -48,6 +48,7 @@ import {
 } from '../../../custom-agents.js';
 import { withSessionLock } from './sessionLock.js';
 import { deleteCoderSession, SessionDeletionCleanupError } from './delete-session.js';
+import { stopChildAgentsOf } from './child-agent-cascade.js';
 import {
   DEFAULT_SESSION_MAX_AUTO_CONTINUES,
   MAX_SESSION_AUTO_CONTINUES,
@@ -552,6 +553,8 @@ export function mountCoderSessionsRoutes(
     if (typeof body.archived !== 'boolean') {
       return c.json({ error: 'archived:boolean required' }, 400);
     }
+    // An archived session's child agents stop; unarchiving starts none of them again.
+    if (body.archived) await stopChildAgentsOf(id, 'session_archived');
     await sessionStore.setSessionArchived(id, body.archived);
     const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);

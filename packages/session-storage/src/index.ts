@@ -1,6 +1,7 @@
 export * from './artifact-store.js';
 export * from './artifact-recovery.js';
 export * from './atomic-file.js';
+export * from './child-agent-relation.js';
 export * from './file-session-repository.js';
 export * from './metrics-summary.js';
 export * from './path-safety.js';

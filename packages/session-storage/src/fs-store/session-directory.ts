@@ -23,6 +23,7 @@ import {
   type FsProjectInfoResolver,
 } from './session-projection.js';
 import { toJsonValue } from './conversation-codec.js';
+import { childAgentInitialState, summarizeChildAgent, withChildAgentConclusion } from './child-agent-state.js';
 import { hasStorageTrace, recordStorageElapsed, traceStorageOperation } from '../storage-timing.js';
 import {
   normalizeSessionMaxAutoContinues,
@@ -30,6 +31,8 @@ import {
 } from '../run-limits.js';
 import type {
   FsAppendMessageUsage,
+  FsChildAgentConclusion,
+  FsChildAgentSession,
   FsCoderSession,
   FsCreateGlobalSessionInput,
   FsCreateSessionInput,
@@ -108,6 +111,11 @@ export class FsSessionDirectory {
     await this.catalog.refresh();
   }
 
+  /** Adds sessions another store instance created since the scan (cheap; see SessionCatalog.discoverNew). */
+  discoverNew(): Promise<number> {
+    return this.catalog.discoverNew();
+  }
+
   async entry(id: SessionId | string): Promise<CatalogEntry | null> {
     if (!isUuid(id)) return null;
     await this.ensureCatalog();
@@ -169,7 +177,13 @@ export class FsSessionDirectory {
 
   async createSession(input: FsCreateSessionInput): Promise<FsCoderSession> {
     await this.ensureCatalog();
-    const state = initialRuntimeState(input);
+    if (input.child_agent_state && input.agent_relation === undefined) {
+      throw new Error('child_agent_state requires agent_relation');
+    }
+    const runtimeState = initialRuntimeState(input);
+    const state = input.child_agent_state
+      ? childAgentInitialState(runtimeState, input.child_agent_state)
+      : runtimeState;
     const entry = await this.repository.createSession({
       ...(input.id ? { id: input.id } : {}),
       kind: 'coder',
@@ -177,6 +191,7 @@ export class FsSessionDirectory {
       owner_project_id: input.project_id,
       linked_projects: [{ project_id: input.project_id }],
       parent_session_id: input.parent_session_id ?? null,
+      ...(input.agent_relation !== undefined ? { agent_relation: input.agent_relation } : {}),
       provider: input.provider,
       model: input.model,
       title: input.title,
@@ -328,6 +343,40 @@ export class FsSessionDirectory {
             session.group_id === options.groupId,
         ),
     );
+  }
+
+  /**
+   * Child agents of a session, read from the shared in-memory catalog (the
+   * one the session list uses): no bundle scan and no metrics reads. Only
+   * sessions with an explicit child-agent relation count; a parent_session_id
+   * alone (forks, sub-tabs, Company) never does.
+   */
+  async listChildAgentSessions(parentId: SessionId | string): Promise<FsChildAgentSession[]> {
+    if (!isUuid(parentId)) return [];
+    await this.ensureCatalog();
+    const parentKey = String(parentId).toLowerCase();
+    const children: FsChildAgentSession[] = [];
+    for (const entry of this.catalog.entriesSnapshot()) {
+      const parent = entry.session.parent_session_id;
+      if (parent == null || String(parent).toLowerCase() !== parentKey) continue;
+      const child = summarizeChildAgent(entry, (found) => this.repository.readStateSync(found.location));
+      if (child) children.push(child);
+    }
+    return children.sort((a, b) => a.updated_at.localeCompare(b.updated_at) || String(a.id).localeCompare(String(b.id)));
+  }
+
+  /** Records how a child-agent run ended (written by that run). */
+  recordChildAgentConclusion(id: SessionId | string, conclusion: FsChildAgentConclusion): Promise<void> {
+    return this.runMutation(id, async () => {
+      const entry = await this.requireEntry(id);
+      await this.repository.updateState(entry.location, (state) => withChildAgentConclusion(state, conclusion));
+    });
+  }
+
+  /** The child-agent view of one session, or null when it is not a child agent. */
+  async getChildAgentSession(id: SessionId | string): Promise<FsChildAgentSession | null> {
+    const found = await this.entry(id);
+    return found ? summarizeChildAgent(found, (entry) => this.repository.readStateSync(entry.location)) : null;
   }
 
   async listGlobalSessions(

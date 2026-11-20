@@ -108,6 +108,15 @@ export interface ToolContextServices {
    * overwrite rule of write_file / apply_patch Add File. One per CoderRunner.
    */
   fileKnowledge?: import('../tools/file-knowledge.js').SessionFileKnowledge;
+  /**
+   * Counts child-agent results once and refreshes the files they changed; the
+   * E6 chat tools claim through it. Set by runCoder for root and child sessions.
+   */
+  childAgentAccounting?: import('../runtime/child-agent-freshness.js').ChildAgentAccounting;
+  /** The app's child chats, as this session (CODER_CHILD_SESSION_AGENTS on, outside Company). */
+  childChats?: import('../ports/child-chat-port.js').ChildChatPort;
+  /** Set when this session is itself a child agent: its depth and whether it is read-only. */
+  childAgentSelf?: { depth: number; readOnly: boolean };
   /** Host-derived unresolved history. Inherited by nested calls; never cleared by model text. */
   outcomeRecovery?: import('./outcome-recovery-state.js').OutcomeRecoveryState;
   /**

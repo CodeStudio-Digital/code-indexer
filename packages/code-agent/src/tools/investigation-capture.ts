@@ -10,12 +10,13 @@
  * summary.
  */
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
+import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { MicroAgentCapability } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { getInvestigationSemanticIndex } from '@mcp/code-agent/tools/investigation-embedder.js';
 
 export async function captureInvestigation(
-  deps: SubagentDeps,
+  // SubagentDeps, or a child chat's parent store (runtime/child-agent-investigations.ts).
+  deps: { sessionStore?: Pick<FsSessionStore, 'recordInvestigation'> },
   ctx: ToolContext,
   agent: { task: string; label: string; type: MicroAgentCapability },
   finalText: string,

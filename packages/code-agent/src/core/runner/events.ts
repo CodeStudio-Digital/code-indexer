@@ -52,6 +52,8 @@ export interface RunnerEvents {
     isError?: boolean;
     effectOutcome?: 'unknown';
     subUsage?: ChatUsage;
+    /** The child-agent run keys `subUsage` covers. */
+    subUsageRuns?: readonly string[];
     rawChars?: number;
     contentFormat?: 'text' | 'markdown' | 'json';
     structuredOutputChars?: number | null;
