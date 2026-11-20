@@ -8,8 +8,7 @@
  * fresh runner. On a miss, runs the subagent and stores the result
  * via `writeGlobalSubAgentResult`.
  *
- * Mirror of `setGlobalToolSelectionFilter` and
- * the other process-wide pipeline holders. Same singleton-holder
+ * Same singleton-holder
  * approach the codebase uses for cross-cutting concerns.
  */
 import type {

@@ -214,11 +214,7 @@ describe('FsSessionStore operational state', () => {
       store.setSessionToolPermissionMode(session.id, 'ask'),
       store.addToolPermissionGrant(session.id, 'read_file'),
       store.setSessionToolProfile(session.id, 'full'),
-      store.mergeSessionToolsetState(session.id, {
-        addExtraTiers: ['company'],
-        addPins: ['read_file'],
-        visibleCap: 33,
-      }),
+      store.mergeSessionToolsetState(session.id, { visibleCap: 33 }),
       store.bulkSetSessionToolsDisabled(
         session.id,
         ['delete_file', 'run_command'],
@@ -227,14 +223,13 @@ describe('FsSessionStore operational state', () => {
       store.setSessionActiveSkills(session.id, ['skill-b', 'skill-a', 'skill-a']),
     ]);
 
-    await store.mergeSessionToolsetState(session.id, {
-      pins: ['look_at', 'save_scene'],
-      visibleCap: 64,
-    });
+    // Tiers/pins are no longer written (expand_toolset and runtime pins were
+    // retired); a merge patches visibleCap and preserves whatever was stored.
+    await store.mergeSessionToolsetState(session.id, { visibleCap: 64 });
     expect((await store.getSession(session.id))?.state.tools.toolset).toEqual({
       v: 1,
-      extraTiers: ['company'],
-      pins: ['look_at', 'save_scene'],
+      extraTiers: [],
+      pins: [],
       visibleCap: 64,
     });
 

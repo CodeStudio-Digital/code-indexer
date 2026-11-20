@@ -44,8 +44,8 @@ export interface IMcpServerManager {
   listAllTools(): Promise<{ tools: CoderTool[]; tierMap: Map<string, ToolTier> }>;
 
   /**
-   * Aggregate non-core tiers contributed by external servers — used to
-   * populate `expand_toolset`'s dynamic enum + the system-prompt hint.
+   * Aggregate non-core tiers contributed by external servers — used for the
+   * system prompt's external tool groups listing.
    */
   getCustomTierSummary(): Map<string, { displayName: string; toolCount: number }>;
 

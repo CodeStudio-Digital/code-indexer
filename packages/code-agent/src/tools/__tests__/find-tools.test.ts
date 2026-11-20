@@ -190,7 +190,7 @@ describe('find_tools — ranking quality', () => {
   });
 });
 
-describe('find_tools — discovery affordances (param summary + pin awareness)', () => {
+describe('find_tools — discovery affordances (param summary + invocation route)', () => {
   function schemaRegistry(): ToolRegistry {
     const r = new ToolRegistry();
     r.register(tool('edit_file', 'Edit a file in place — apply a search/replace patch.', {
@@ -230,45 +230,6 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
     expect(output.indexOf('old_string:string')).toBeLessThan(output.indexOf('dry_run?:boolean'));
   });
 
-  it('auto-promotes a strong top hidden match for the next provider turn', async () => {
-    // edit_file is navigate-tier in the real tier map; runner only has bootstrap.
-    const promoted: string[] = [];
-    const output = await findWithRunner(schemaRegistry(), 'edit file', {
-      activeTiers: new Set(['bootstrap']),
-      promoteTool: (name: string) => {
-        promoted.push(name);
-        return [];
-      },
-    });
-    expect(promoted).toEqual(['edit_file']);
-    expect(output).toContain('Requested activation of edit_file');
-    expect(output).toContain('expand_toolset({ tier: "navigate" })');
-  });
-
-  it('a pinned tool is reported visible even when its tier is inactive', async () => {
-    const output = await findWithRunner(schemaRegistry(), 'edit file', {
-      activeTiers: new Set(['bootstrap']),
-      pinnedTools: new Set(['edit_file']),
-    });
-    expect(output).not.toContain('[hidden');
-  });
-
-  it('uses the exact last catalog when a historical pin was cap-cut', async () => {
-    const promoted: string[] = [];
-    const output = await findWithRunner(schemaRegistry(), 'edit file', {
-      activeTiers: new Set(['bootstrap']),
-      pinnedTools: new Set(['edit_file']),
-      visibleToolNames: new Set(['find_tools']),
-      promoteTool: (name: string) => {
-        promoted.push(name);
-        return ['old_tool'];
-      },
-    });
-    expect(promoted).toEqual(['edit_file']);
-    expect(output).toContain('Requested activation of edit_file');
-    expect(output).toContain('replaced least-recently-used: old_tool');
-  });
-
   it('reports a plugin tool in its own opt-in tier', async () => {
     const registry = new ToolRegistry();
     registry.register(tool('plugin__cloudflare__deploy_worker', 'Deploy a Cloudflare Worker.', {
@@ -289,7 +250,9 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
     const output = typeof result.content === 'string' ? result.content : '';
 
     expect(output).toContain('tier=plugin:cloudflare');
-    expect(output).toContain("expand_toolset('plugin:cloudflare')");
+    // A hidden tool's route is code_exec; there is no tier to expand.
+    expect(output).toContain('[invoke inside code_exec]');
+    expect(output).not.toContain('expand_toolset');
   });
 
   it('empty query errors out cleanly', async () => {

@@ -63,8 +63,6 @@ export interface SubagentDeps {
   resolveLimitsForProfile?: (
     profileId?: string,
   ) => import('@mcp/code-agent/tools/subagent-provider.js').ProfileLimitOverride | undefined;
-  /** Per-turn smart reducer inherited by ephemeral child runners. */
-  toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
   /** Runtime/plugin tier placement inherited by ephemeral child runners. */
   externalToolTiers?: import('@mcp/code-agent/core/runner.js').RunnerOptions['externalToolTiers'];
   /** Host-resolved concurrency ceiling for this attempt. */

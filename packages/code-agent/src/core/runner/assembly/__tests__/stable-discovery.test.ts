@@ -14,17 +14,19 @@ function fixture() {
   registry.registerAll(['read_file', 'code_exec', 'find_tools', 'get_tool_output', 'exec_command', 'write_stdin', 'list_sessions',
     'apply_patch', 'edit_file', 'view_image', 'ask_user', 'ext_service_lookup', ...Array.from({length: 40}, (_, i) => `cold_${i}`)].map(tool));
   registry.seal();
-  return { registry, stableCatalog: true, activeTiers: new Set(['bootstrap']),
+  return { registry, activeTiers: new Set(['bootstrap']),
     externalToolTiers: new Map([['ext_service_lookup', 'external']]),
     sessionToolCap: 12,
     toolContext: { cwd: tmpdir(), projectName: 'stable-catalog' } as ToolContext,
     provider: { name: 'mock', model: 'mock-model' } as Parameters<typeof buildTools>[0]['provider'] };
 }
 
-it('keeps the public contract stable across discoveries, with persistent execution and recovery available', () => {
+it('keeps the public contract stable across discoveries, with persistent execution and recovery available', async () => {
   const args = fixture();
   const first = buildTools(args);
-  const later = buildTools({ ...args, pinnedTools: new Set(['ext_service_lookup', 'cold_39', 'edit_file']) });
+  // A discovery is a find_tools call; it publishes nothing new (no runtime pins).
+  await buildFindToolsTool(args.registry, args.externalToolTiers).handler({ query: 'ext_service_lookup' }, args.toolContext);
+  const later = buildTools(args);
   expect(fingerprintTools(first.tools)).toBe(fingerprintTools(later.tools));
   expect(first.tools.map(t => t.name)).toEqual(expect.arrayContaining(['apply_patch','exec_command','write_stdin','get_tool_output','view_image','ask_user']));
   expect(first.tools.some(t => t.name === 'list_sessions')).toBe(false);

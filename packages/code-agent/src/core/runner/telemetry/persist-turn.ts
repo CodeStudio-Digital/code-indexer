@@ -9,7 +9,7 @@
  *   - Call `store.recordTurnTelemetry(...)` and return the inserted id.
  *
  * Out of scope (stays in `CoderRunner` because it needs class state):
- *   - Tool-selection feedback observer (needs `this.messages`).
+ *   - Storing the inserted id on the runner.
  *
  * The runner exposes the FULL flow via `BridgeCallbacks.persistTurnTelemetry`,
  * which wraps THIS function and runs the class-bound side effects after.

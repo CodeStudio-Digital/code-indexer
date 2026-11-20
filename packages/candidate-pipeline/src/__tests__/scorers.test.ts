@@ -7,7 +7,6 @@ import { rrfMerge } from '../scorers/rrf.js';
 import { weightedSum } from '../scorers/weighted-sum.js';
 import { cosineSimilarity, cosineSimilarities, l2Normalize, dot } from '../scorers/two-tower.js';
 import { recencyDecay } from '../scorers/recency-decay.js';
-import { batchFrequencyBoost } from '../scorers/frequency-boost.js';
 
 describe('rrfMerge', () => {
   it('combines two ranked lists with the K=60 default', () => {
@@ -105,34 +104,5 @@ describe('recencyDecay', () => {
   it('returns 0.25 at 2×half-life', () => {
     const now = Date.now();
     expect(recencyDecay(now - 2000, { halfLifeMs: 1000, now })).toBeCloseTo(0.25, 5);
-  });
-});
-
-describe('frequencyBoost', () => {
-  it('saturates after N occurrences', () => {
-    const now = Date.now();
-    const events = Array.from({ length: 10 }, (_, i) => ({
-      candidateId: 'tool_a',
-      timestampMs: now - 100,
-    }));
-    const [boost] = batchFrequencyBoost(['tool_a'], events, {
-      windowMs: 1000,
-      now,
-      maxBoost: 1,
-      saturationCount: 5,
-    });
-    expect(boost).toBeCloseTo(1, 5);
-  });
-
-  it('returns 0 for items outside the window', () => {
-    const now = Date.now();
-    const events = [
-      { candidateId: 'tool_a', timestampMs: now - 5000 }, // outside window
-    ];
-    const [boost] = batchFrequencyBoost(['tool_a'], events, {
-      windowMs: 1000,
-      now,
-    });
-    expect(boost).toBeCloseTo(0, 5);
   });
 });

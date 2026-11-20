@@ -65,7 +65,7 @@ function registry(): ToolRegistry {
   return r;
 }
 function args(agentId: string, overrides: Partial<BuildToolsArgs> = {}): BuildToolsArgs {
-  return { registry: registry(), stableCatalog: true, activeTiers: new Set(['bootstrap']),
+  return { registry: registry(), activeTiers: new Set(['bootstrap']),
     provider: { name: 'openai-chatgpt', model: 'gpt-6.1-sol' } as ChatProvider,
     toolContext: { cwd: tmpdir(), projectName: 'read-only', agenticChat: true,
       runner: { agentId, planMode: agentId === 'plan' } as ToolContext['runner'] }, ...overrides };

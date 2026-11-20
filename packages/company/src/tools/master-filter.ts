@@ -24,7 +24,6 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'execute_tasks',
   'task_complete',
   'update_task',
-  'expand_toolset',
   'get_tool_output',
   'recall_conversation',
   'invoke_skill',

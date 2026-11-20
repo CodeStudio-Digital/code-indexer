@@ -695,7 +695,6 @@ async function runGroupParallel(
         ctx,
         sessionId: ctx.sessionId ?? ctx.runner?.sessionId,
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-        toolSelectionFilter: deps.toolSelectionFilter,
         externalToolTiers: deps.externalToolTiers,
         maxParallel: deps.maxParallel,
       },
@@ -873,7 +872,6 @@ async function runOneTask(
           sessionId: ctx.sessionId ?? ctx.runner?.sessionId,
           sessionStore: deps.sessionStore,
           agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-          toolSelectionFilter: deps.toolSelectionFilter,
           externalToolTiers: deps.externalToolTiers,
         },
         {

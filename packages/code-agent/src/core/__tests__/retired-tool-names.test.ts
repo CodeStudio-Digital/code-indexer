@@ -40,12 +40,14 @@ const EXPECTED: Record<string, RegExp> = {
   update_todo: /task_list.*`updates`/,
   submit_tasks: /task_list.*gate:'approve'/,
   poll_session: /write_stdin .*empty/,
+  expand_toolset: /find_tools.*code_exec/,
+  capability_catalog: /find_tools.*get_skills_list and get_skill_content/,
 };
 
 describe('retired tool map', () => {
-  it('names exactly the six retired tools and their replacements', () => {
+  it('names exactly the eight retired tools and their replacements', () => {
     expect(Object.keys(RETIRED_TOOL_REPLACEMENTS).sort())
-      .toEqual(['create_file', 'multi_edit', 'poll_session', 'submit_tasks', 'todo_write', 'update_todo']);
+      .toEqual(['capability_catalog', 'create_file', 'expand_toolset', 'multi_edit', 'poll_session', 'submit_tasks', 'todo_write', 'update_todo']);
     expect(retiredToolInstruction('edit_file')).toBeNull();
     for (const [name, pattern] of Object.entries(EXPECTED)) {
       expect(retiredToolInstruction(name)).toMatch(new RegExp(`^${name} was retired\\.`));

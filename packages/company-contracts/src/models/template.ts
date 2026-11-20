@@ -106,8 +106,8 @@ export interface CompanyRoleConfig {
    */
   skills?: RoleSkills;
   /** Tool names pinned into the role's visible catalog from turn one.
-   * This is a starting preset, not an allowlist: find_tools/direct calls and
-   * expand_toolset remain available for capabilities outside this list. */
+   * This is a starting preset, not an allowlist: find_tools and direct calls
+   * remain available for capabilities outside this list. */
   initialTools?: string[];
   /**
    * Concrete project ids this role is bound to in THIS session. When set,

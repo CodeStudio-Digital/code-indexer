@@ -27,7 +27,6 @@ import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/cor
 import {
   TASK_COMPLETE_DESC,
   TASK_LIST_DESC,
-  maybeTerse,
 } from '@mcp/code-agent/tools/descriptions.js';
 import { todoWrite, updateTodo } from '@mcp/code-agent/tools/todo.js';
 
@@ -732,7 +731,7 @@ const taskCompleteSchema: JsonSchema = {
 
 export const taskComplete: CoderTool = {
   name: 'task_complete',
-  description: maybeTerse(TASK_COMPLETE_DESC),
+  description: TASK_COMPLETE_DESC,
   source: 'native',
   mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   // Only execute_tasks opens the inline scope this closes (execute-tasks.ts).
@@ -1039,7 +1038,7 @@ const taskListSchema: JsonSchema = {
 
 export const taskList: CoderTool = {
   name: 'task_list',
-  description: maybeTerse(TASK_LIST_DESC),
+  description: TASK_LIST_DESC,
   source: 'native',
   interactive: true,
   mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',

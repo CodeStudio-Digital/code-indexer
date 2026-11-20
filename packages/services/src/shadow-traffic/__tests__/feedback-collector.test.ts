@@ -1,6 +1,6 @@
 /**
  * FeedbackCollector tests — proves the observe → match → backfill flow
- * with the three pre-built matchers.
+ * with the pre-built matchers and a local query-hash matcher.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -12,8 +12,24 @@ import {
   FeedbackCollector,
   KanbanPriorityOutcomeMatcher,
   RolePipelineOutcomeMatcher,
-  ToolSelectionOutcomeMatcher,
+  type OutcomeMatcher,
 } from '../index.js';
+import type { CounterfactualLogRow } from '@mcp/store/counterfactual-log-store.js';
+
+/**
+ * Query-hash matcher used to exercise the generic collector (the shape of the
+ * retired tool-selection matcher, kept local to this test).
+ */
+class QueryHashMatcher implements OutcomeMatcher<{ queryHash: string; toolsCalled: string[]; agentDecision?: unknown }> {
+  readonly pipelineName = 'tool_selection';
+  constructor(readonly maxAgeMs = 30 * 60 * 1000) {}
+  match(observed: { queryHash: string; toolsCalled: string[]; agentDecision?: unknown }, pending: CounterfactualLogRow[]) {
+    return pending.filter(row => row.query_hash === observed.queryHash).map(row => ({ id: row.id,
+      true_outcome: observed.agentDecision === undefined
+        ? { toolsCalled: observed.toolsCalled }
+        : { toolsCalled: observed.toolsCalled, agentDecision: observed.agentDecision } }));
+  }
+}
 
 interface H { db: CodeIndexDB; store: CounterfactualLogStore; dir: string }
 
@@ -43,7 +59,7 @@ describe('FeedbackCollector', () => {
     });
     const collector = new FeedbackCollector({
       store: h.store,
-      matchers: [new ToolSelectionOutcomeMatcher()],
+      matchers: [new QueryHashMatcher()],
     });
     const n = collector.observe('tool_selection', {
       queryHash: 'q1',
@@ -65,7 +81,7 @@ describe('FeedbackCollector', () => {
     });
     const collector = new FeedbackCollector({
       store: h.store,
-      matchers: [new ToolSelectionOutcomeMatcher()],
+      matchers: [new QueryHashMatcher()],
     });
     const n = collector.observe('tool_selection', {
       queryHash: 'q1',
@@ -85,7 +101,7 @@ describe('FeedbackCollector', () => {
     // Pretend the matcher's maxAge is 1ms and the row is way older.
     const collector = new FeedbackCollector({
       store: h.store,
-      matchers: [new ToolSelectionOutcomeMatcher(1)],
+      matchers: [new QueryHashMatcher(1)],
       now: () => Date.now() + 1_000_000,
     });
     const n = collector.observe('tool_selection', {
@@ -102,7 +118,7 @@ describe('FeedbackCollector', () => {
     });
     const collector = new FeedbackCollector({
       store: h.store,
-      matchers: [new ToolSelectionOutcomeMatcher()],
+      matchers: [new QueryHashMatcher()],
     });
     const n = collector.observe('kanban_priority', { queryHash: 'q1' });
     expect(n).toBe(0);
@@ -165,7 +181,7 @@ describe('FeedbackCollector', () => {
     const collector = new FeedbackCollector({
       store: h.store,
       matchers: [
-        new ToolSelectionOutcomeMatcher(),
+        new QueryHashMatcher(),
         new RolePipelineOutcomeMatcher(),
       ],
     });

@@ -32,7 +32,6 @@ import {
   EDIT_FILE_DESC,
   READ_FILE_NATIVE_DESC,
   LIST_DIRECTORY_NATIVE_DESC,
-  maybeTerse,
 } from '@mcp/code-agent/tools/descriptions.js';
 import {
   extractSymbolBodyFromContent,
@@ -148,7 +147,7 @@ function markOverlay(ctx: ToolContext, projectId: number | undefined, path: stri
 const writeFile: CoderTool = {
   name: 'write_file',
   effectBoundary: 'filesystem',
-  description: maybeTerse(WRITE_FILE_DESC),
+  description: WRITE_FILE_DESC,
   source: 'native',
   // Phase 2 hardening: explicit metadata co-located with the tool. The
   // policy module (core/policy.ts) reads these to gate the invocation —
@@ -301,7 +300,7 @@ async function editSourceStillCurrent(fs: IFilesystemPort, path: string, expecte
 const editFile: CoderTool = {
   name: 'edit_file',
   effectBoundary: 'filesystem',
-  description: maybeTerse(EDIT_FILE_DESC),
+  description: EDIT_FILE_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -397,7 +396,7 @@ function applyHits(content: string, hits: ReplacerHit[], newStr: string, replace
 
 const readFile: CoderTool = {
   name: 'read_file',
-  description: maybeTerse(READ_FILE_NATIVE_DESC),
+  description: READ_FILE_NATIVE_DESC,
   source: 'native',
   outputPolicy: { mode: 'line_range', reducer: 'none', recovery: 'cursor' },
   parameters: {
@@ -533,7 +532,7 @@ const readFile: CoderTool = {
 
 const listDirectory: CoderTool = {
   name: 'list_directory',
-  description: maybeTerse(LIST_DIRECTORY_NATIVE_DESC),
+  description: LIST_DIRECTORY_NATIVE_DESC,
   source: 'native',
   parameters: {
     type: 'object',

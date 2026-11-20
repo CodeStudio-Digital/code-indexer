@@ -40,7 +40,7 @@ function tool(name: string): CoderTool {
 function args(overrides: Partial<BuildToolsArgs> = {}): BuildToolsArgs {
   const registry = new ToolRegistry();
   registry.registerAll([...WORKFLOW, ...PREVIEW, 'preview_navigate', ...Array.from({ length: 40 }, (_, i) => `cold_${i}`)].map(tool));
-  return { registry, stableCatalog: true, activeTiers: new Set(['bootstrap', 'navigate']),
+  return { registry, activeTiers: new Set(['bootstrap', 'navigate']),
     provider: { name: 'openai-chatgpt', model: 'gpt-6.1-sol' } as ChatProvider,
     toolContext: { cwd: tmpdir(), projectName: 'floors',
       runner: { agentId: 'build', planMode: false } as ToolContext['runner'] }, ...overrides };

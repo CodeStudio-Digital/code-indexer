@@ -231,14 +231,14 @@ export interface RunCoderOptions {
    * - 'navigate' (~33 tools): adds write/edit/git-read/deep nav.
    * - 'full' (all 57): legacy. Default for resumed sessions.
    * - 'auto': inferred from the first user message via a regex classifier.
-   * The agent can unlock higher tiers mid-session via `expand_toolset`.
+   * Tools outside the published catalog are reached through find_tools.
    */
   profile?: CoderProfile | 'auto';
   /**
    * Explicit tools pinned into the visible catalog at run start. Intended for
    * durable role presets. Pins bypass tier/cap visibility but remain subject
    * to registry, global/session disable, policy and runtime hook boundaries.
-   * This is not an allowlist; find_tools and expand_toolset remain available.
+   * This is not an allowlist; find_tools remains available.
    */
   initialPinnedTools?: string[];
   /**
@@ -439,12 +439,6 @@ export interface RunCoderOptions {
     db: import('@mcp/store/db.js').CodeIndexDB,
     projectId: number,
   ) => { pathPrepend: string[]; extraEnv: Record<string, string> };
-  /**
-   * Optional per-turn tool-list filter (ToolSelectionPipeline runtime hook).
-   * Built by `deps.buildToolSelectionFilter()` in the host. Forwarded
-   * verbatim to `RunnerOptions.toolSelectionFilter`.
-   */
-  toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
   /** Default-off: record compact Agent Decision Engine recommendation/outcome telemetry. */
   agentDecisionTelemetryEnabled?: boolean;
   /** Default-off: render Agent Decision Engine guidance into the preflight/tail reminder. */

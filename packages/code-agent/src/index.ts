@@ -64,7 +64,6 @@ import { durableCompactionEnabled } from '@mcp/code-agent/core/runner/compaction
 import {
   summaryV3ToV2,
 } from '@mcp/code-agent/core/summarizer.js';
-import { getGlobalToolSelectionFilter } from '@mcp/code-agent/tool-selection/global-filter.js';
 import {
   appendStaticPromptSection,
   buildSystemPrompt,
@@ -110,7 +109,6 @@ import {
   updateTask,
 } from '@mcp/code-agent/tools/tasks.js';
 import { interactionTools } from '@mcp/code-agent/tools/interaction.js';
-import { buildExpandTools } from '@mcp/code-agent/tools/expand.js';
 import { buildFindToolsTool } from '@mcp/code-agent/tools/find-tools.js';
 import { buildRequestReviewTool } from '@mcp/code-agent/tools/request-review.js';
 import { buildSelfReviewTool } from '@mcp/code-agent/tools/self-review.js';
@@ -214,7 +212,6 @@ import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills
 import { resolveActiveWorkspaceSkills } from '@mcp/code-agent/skills/workspace-skills.js';
 import { buildInvokeSkillTool, buildSkillDiscoveryTools } from '@mcp/code-agent/skills/skill-tool-builder.js';
 import { buildCreateSkillTool } from '@mcp/code-agent/tools/create-skill.js';
-import { buildCapabilityCatalogTool } from '@mcp/code-agent/tools/capability-catalog-tool.js';
 import { listInstalledNamespaces } from '@mcp/code-agent/skills/agent-skills-installer.js';
 import {
   buildLazySkillsSection,
@@ -918,9 +915,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const mcpServerManager: import('@mcp/code-agent/tools/mcp-server-manager-interface.js').IMcpServerManager =
     opts.externalMcpManager ?? new McpServerManager(opts.mcpBearerResolver ?? null);
   // Subordinate-only override: turns each connected MCP server into its own
-  // expandable custom tier (named by server id) so the agent sees the pack
-  // in the system prompt and unlocks it on demand via expand_toolset, instead
-  // of the admin's `default_tier` deciding visibility per-server.
+  // custom tier (named by server id) so the agent sees the pack in the
+  // system prompt and reaches it through find_tools + code_exec, instead of
+  // the admin's `default_tier` deciding visibility per-server.
   let subordinateTierSummary: Map<string, { displayName: string; toolCount: number }> | undefined;
   const isSubordinate = !!opts.companyContext && !opts.companyContext.isMaster;
   const exactAllowedToolNames = opts.allowedToolNames === undefined
@@ -980,7 +977,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (isSubordinate && subordinateTierSummary && subordinateTierSummary.size > 0) {
       console.log(
         `[coder] subordinate ${opts.companyContext!.agentRole}: external MCPs as opt-in tiers ` +
-          `[${[...subordinateTierSummary.keys()].join(', ')}] — call expand_toolset to unlock`,
+          `[${[...subordinateTierSummary.keys()].join(', ')}] — reachable through find_tools`,
       );
     }
   } catch (e) {
@@ -1000,25 +997,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     pluginTierSummary = pluginTiers.summary;
   }
 
-  // expand_toolset — registered AFTER external servers and plugins so its tier
-  // enum includes every custom runtime group.
-  // For subordinates, every enabled MCP server is exposed as its own opt-in tier
-  // (regardless of admin's `default_tier`) so the master/session-free behavior
-  // (which respects the configured tier) is preserved.
+  // Opt-in tool groups listed in the system prompt (find_tools reaches them).
+  // For subordinates, every enabled MCP server is its own group (regardless of
+  // the admin's `default_tier`) so the master/session-free behavior is preserved.
   const customTierSummary = mergeRuntimeTierSummaries(
     subordinateTierSummary ?? mcpServerManager.getCustomTierSummary(),
     pluginTierSummary,
   );
-  registry.registerAll(buildExpandTools(
-    customTierSummary.size > 0 ? customTierSummary : undefined,
-    {
-      toolNamesForTier: tier => registry.list().filter(tool => getToolTier(tool.name, runtimeToolTiers) === tier).map(tool => tool.name),
-      isTierAvailable: (tier) => registry.list().some(
-        (tool) => runtimeToolTiers.get(tool.name) === tier,
-      ),
-    },
-  ));
-
   // find_tools — Camada 3 lazy discovery. Always registered (cheap, read-only,
   // no tier promotion). Belongs in bootstrap so it's visible before the agent
   // has unlocked anything else. Implementation lives in find-tools.ts.
@@ -1027,16 +1012,17 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     runtimeToolTiers,
   )]);
 
-  // request_review — Camada 4 reviewer subagent. Registered with a placeholder
-  // tool snapshot; the runner snapshots the registry AFTER all tools are
-  // registered so the reviewer's REVIEW_ALLOWLIST resolves correctly. The
-  // reviewerProvider falls back to the parent provider when subagentTarget
-  // hasn't been configured (legacy single-family behaviour).
+  // request_review — Camada 4 reviewer subagent. It reads the same child tool
+  // snapshot the subagents get (taken below, after the custom allowlist, the
+  // research preset, the disabled lists and the twin pass), resolved at review
+  // time. The reviewerProvider falls back to the parent provider when
+  // subagentTarget hasn't been configured (legacy single-family behaviour).
+  let childToolSnapshot: CoderTool[] = [];
   if (!isAppStudioCompany) {
     registry.registerAll([
       buildRequestReviewTool({
         provider,
-        parentTools: registry.list(),
+        parentTools: () => childToolSnapshot,
         sessionId: session.id,
         sessionStore: store,
         resolveReviewerProvider: async () => subagentDeps ? providerForProfile(subagentDeps, 'review') : undefined,
@@ -1082,6 +1068,12 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   pruneRedundantPrimaryTwins(registry, {
     has: (name) => !!globalDisabledTools?.has(name) || sessionDisabledTools.has(name),
   }, getGlobalDocSearch());
+  // What every child agent (subagents, the request_review reviewer) may draw
+  // from: the final registry minus the disabled tools.
+  const childDisabled = new Set([...(globalDisabledTools ?? []), ...sessionDisabledTools]);
+  childToolSnapshot = childDisabled.size > 0
+    ? registry.list().filter((t) => !childDisabled.has(t.name))
+    : registry.list();
 
   // Subagent deps — built AFTER MCP tools so it captures the full tool list
   // for filtering. Disabled via CODER_DISABLE_SUBAGENTS=1. Also DISABLED for
@@ -1105,10 +1097,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     opts.companyContext,
     opts.runtimePolicy ? !opts.runtimePolicy.subagents.enabled : false,
   )) {
-    const allDisabled = new Set([...(globalDisabledTools ?? []), ...sessionDisabledTools]);
-    const parentTools = allDisabled.size > 0
-      ? registry.list().filter((t) => !allDisabled.has(t.name))
-      : registry.list();
+    const parentTools = childToolSnapshot;
     let resolveProviderForProfile:
       | ((id?: string) => Promise<ChatProvider | undefined>)
       | undefined;
@@ -1157,7 +1146,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       resolveProviderForProfile,
       resolveEffortForProfile,
       resolveLimitsForProfile,
-      toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
       externalToolTiers: runtimeToolTiers,
       maxParallel: ultraPreset.effective.parallelism.maxAgents,
     };
@@ -1860,7 +1848,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ? parseToolsetState(session.tool_profile, session.tool_state_json)
     : null;
   // Seeded sessions cap the visible tool list at min(model cap, this) —
-  // real reduction even on large-catalog models. NEVER_TRIM + pins survive.
+  // real reduction even on large-catalog models. Required pins survive.
   // The cap is persisted (widen-only state) so resumes rebuild the SAME
   // visible membership instead of dropping the cut and re-flipping the array.
   const seededToolCap = preflightSeed
@@ -1966,13 +1954,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     buildCreateSkillTool({ dbPath: config.dbPath, registry, projectId: project.id }),
   );
   const catalogOnlyCapabilities = resolvedSkills.map(skillAsCatalogCapability);
-  registry.register(buildCapabilityCatalogTool({
-    registry,
-    skills: resolvedSkills,
-    skillTemplateContext: skillTemplateCtx,
-    sessionStore: store,
-    sessionId: session.id,
-  }));
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
   const projectStats = db.getStats(project.id);
@@ -2141,14 +2122,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // "Images & vision" section is only rendered when the model can't see
     // images natively (or the composer forces the describe-images path).
     modelCanSeeImages: opts.describeImages ? false : opts.modelSupportsVision,
-    // Tool-visibility hint for small-catalog models (GLM flash class).
-    // Registry is fully populated by now (native + company + MCP); the
-    // count is a session-start approximation, which is all the hint needs.
-    toolCap: {
-      maxTools: Math.min(getModelMaxTools(session.model), provider.toolLimits?.maxCount ?? Infinity,
-        sessionToolCap && sessionToolCap > 0 ? sessionToolCap : 28),
-      approxCatalog: availableTools.size,
-    },
     // Effective permission/sandbox policy surfaced to the model: the real
     // writable root (sandbox workdir or project root) + the approval mode.
     // Cache-stable axis above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
@@ -2282,52 +2255,21 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   for (const tier of opts.initialToolTiers ?? []) {
     if (typeof tier === 'string' && tier.trim()) activeTiers.add(tier.trim() as ToolTier);
   }
-  // Sticky extra tiers (mig 142): master/preview/custom tiers this session
-  // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that
-  // no longer exists simply never matches in `filterByTiers` — harmless.
+  // Sticky extra tiers (mig 142): contextual tiers an OLDER run unlocked via
+  // the retired expand_toolset. Still read so those sessions keep their
+  // workflow floors and diagram guidance; nothing writes new ones. A tier
+  // name that no longer exists matches no tool — harmless.
   if (persistedToolset) {
     for (const t of persistedToolset.extraTiers) activeTiers.add(t as ToolTier);
   }
-  // Pin re-derivation (resume): tools the conversation ALREADY used whose
-  // tier is not active now — master/preview/custom-tier calls that
-  // inferProfileFromHistory cannot cover (it only widens across the 3 core
-  // profiles). Without this a resumed session would hide tools it
-  // demonstrably used. Unioned with the pins persisted on the session row
-  // (mig 142) so a pin earned in a prior run survives even after the message
-  // that used it was compacted out of the loaded tail — pinned membership
-  // must stay byte-stable across runs for the provider prompt-cache prefix.
-  const configuredInitialPins = new Set(opts.initialPinnedTools ?? []);
-  const initialPinnedTools = [
-    ...new Set([
-      ...(persistedToolset?.pins ?? []),
-      ...historyToolNames.filter((n) => !activeTiers.has(getToolTier(n, runtimeToolTiers))),
-      // Preflight pins — already validated against the catalog by the host
-      // service; pins traverse the tier filter and survive the tool cap.
-      ...(preflightSeed?.pinTools ?? []),
-      // Durable role presets (Company/App Studio). Like preflight pins these
-      // seed visibility, not authority: registry/disabled/policy boundaries
-      // still apply and find_tools/expand_toolset can grow the surface.
-      ...(opts.initialPinnedTools ?? []),
-      ...(effectiveAgentId === 'research' ? ['web_search', 'web_fetch'] : []),
-      // P4 — native read_file is navigate-tier (mcp__read_file owns the
-      // bootstrap read surface). Without the bridge there is NO read tool on
-      // turn 1, so seed the disk fallback as a pin. Constant-per-session
-      // (bridge availability is known at setup) → cache-prefix safe.
-      ...(!mcpBridgeOk ? ['read_file'] : []),
-    ]),
-  ];
-  if (stickyToolset && initialPinnedTools.length > 0) {
-    const known = new Set(persistedToolset?.pins ?? []);
-    // Role-configured pins are supplied again on every run. Keeping them out
-    // of sticky state means removing one in the role editor takes effect on
-    // the next cycle instead of widening that session forever.
-    const freshPins = initialPinnedTools.filter((p) => (
-      !known.has(p) && !configuredInitialPins.has(p)
-    ));
-    if (freshPins.length > 0) {
-      try { await store.mergeSessionToolsetState(session.id, { addPins: freshPins }); } catch { /* best-effort */ }
-    }
-  }
+  // Required pins: durable role/custom-agent presets plus the research
+  // agent's two defining tools. The stable catalog always publishes them;
+  // runtime discovery goes through find_tools + code_exec and never pins.
+  // Persisted pins from older runs (mig 142) are read tolerantly and ignored.
+  const configuredInitialPins = new Set([
+    ...(opts.initialPinnedTools ?? []),
+    ...(effectiveAgentId === 'research' ? ['web_search', 'web_fetch'] : []),
+  ]);
   // ─── Runtime hooks ─────────────────────────────────────────────
   const hookRegistry = new RuntimeHookRegistry();
   const toolResultObservers: Array<(event: ToolSettledEvent) => void> = [];
@@ -2788,30 +2730,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     modelSupportsVision: opts.modelSupportsVision,
     describeImages: opts.describeImages,
     activeTiers,
-    initialPinnedTools: initialPinnedTools.length > 0 ? initialPinnedTools : undefined,
     requiredPinnedTools: configuredInitialPins.size > 0
       ? configuredInitialPins
-      : undefined,
-    // Sticky toolset (mig 142): persist mid-run tier promotions so the next
-    // resume rebuilds the SAME tool array (prompt-cache prefix stability).
-    // navigate/admin widen the core profile; master/preview/custom land in
-    // extraTiers. Persistence must never break the run.
-    onTierPromoted: stickyToolset
-      ? (tier) => {
-          try {
-            if (tier === 'navigate') store.setSessionToolProfile(session.id, 'navigate');
-            else if (tier === 'admin') store.setSessionToolProfile(session.id, 'full');
-            else store.mergeSessionToolsetState(session.id, { addExtraTiers: [tier] });
-          } catch { /* best-effort */ }
-        }
-      : undefined,
-    onPinnedToolsChanged: stickyToolset
-      ? (pins) => {
-          const dynamicPins = pins.filter((name) => !configuredInitialPins.has(name));
-          void store.mergeSessionToolsetState(session.id, { pins: dynamicPins }).catch(() => {
-            /* best-effort; run-final persistence retries the exact set */
-          });
-        }
       : undefined,
     preflightHint: preflightHintSeed
       ? renderPreflightHint(preflightHintSeed, { bugWorkflow: false })
@@ -2881,11 +2801,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
     },
     agentLoopV2,
-    // ToolSelectionPipeline filter — per-call override wins, otherwise
-    // we fall back to the module-level global installed by the boot
-    // path (see `setGlobalToolSelectionFilter`). When neither is set,
-    // the field is undefined and the runner skips the hook entirely.
-    toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
   });
 
   // A runCoder invocation owns one CoderRunner, but that runner can execute
@@ -3764,18 +3679,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       await mcpServerManager.closeAll();
       await bridge.close();
       for (const b of extraBridges) await b.close();
-      // Persist the exact bounded dynamic working set. Configured agent pins
-      // are supplied on every run and stay out of session state; stale LRU
-      // entries must be removed here or every resume would re-inflate them.
-      if (stickyToolset) {
-        const dynamicPins = [...runner.pinnedTools]
-          .filter((name) => !configuredInitialPins.has(name));
-        try {
-          await store.mergeSessionToolsetState(session.id, {
-            pins: dynamicPins,
-          });
-        } catch { /* best-effort */ }
-      }
       // Phase 2: `store`, `db` and `skillStore` all share ONE process-wide
       // central connection now (getSharedCentral). They are NOT closed per-run —
       // a concurrent subordinate run shares the same handle. closeSharedCentral()

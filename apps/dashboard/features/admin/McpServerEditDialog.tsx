@@ -344,7 +344,7 @@ export function McpServerEditDialog({ initial, isExisting, onClose, onSave, onCo
                   placeholder={form.id ?? 'cloudflare'}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  Agent unlocks with <code>expand_toolset('{`{tier: "${form.default_tier || form.id || 'name'}"}`}')</code>
+                  {t('admin:mcpServer.tierHint', { tier: form.default_tier || form.id || 'name' })}
                 </p>
               </div>
             )}

@@ -93,10 +93,6 @@ import {
 } from './executing-decisions.js';
 import { withAbort, isAbortError } from './executing-abort.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
-import {
-  promoteDynamicToolPin,
-  touchDynamicToolPin,
-} from '@mcp/code-agent/tools/tool-pin-window.js';
 
 const DEBUG = process.env.CODER_BT_DEBUG === '1';
 function dbg(...args: unknown[]): void {
@@ -542,19 +538,11 @@ export class ExecutingNode implements BehaviorNode {
       ctx.injectionState.recentCompactionAt = null;
     }
 
-    // P5a — lock the description format on the run's FIRST build so a later
-    // tier promotion never rewrites existing descriptions (cache contract:
-    // tool shaping must be static or constant-per-run, never per-turn).
-    ctx.terseDescriptionsLock ??= (
-      ctx.activeTiers !== null &&
-      !ctx.activeTiers.has('navigate') &&
-      !ctx.activeTiers.has('admin')
-    );
     // Perf W1 — memoized catalog build. `buildTools` is a pure function of
     // the key below, which is constant for long stretches of a run, yet the
-    // full pipeline (registry scan, tool-filter hook fs read, sort, terse
-    // mapping and the eligible-catalog stringify) ran EVERY turn. A key
-    // change (new pin, tier promotion, cap change) rebuilds; note the
+    // full pipeline (registry scan, tool-filter hook fs read, sort and the
+    // eligible-catalog stringify) ran EVERY turn. A key change (mode, cap,
+    // disabled lists) rebuilds; note the
     // tool-filter hook is therefore only re-read on rebuilds — mid-run hook
     // edits land on the next membership change, which matches the prompt-
     // cache contract of a stable catalog anyway.
@@ -569,7 +557,6 @@ export class ExecutingNode implements BehaviorNode {
         requiredPinnedTools: requiredPinnedToolsForBuild,
       }) +
       `|cap=${ctx.opts.sessionToolCap ?? ''}` +
-      `|terse=${String(ctx.terseDescriptionsLock)}` +
       `|mode=${Boolean(ctx.opts.toolContext.runner?.planMode)}:${Boolean(ctx.opts.toolContext.runner?.specMode)}` +
       `|readOnly=${readOnlySession}` +
       `|planRevision=${!!approvedPlanForRevision(ctx.opts.toolContext)}` +
@@ -581,16 +568,13 @@ export class ExecutingNode implements BehaviorNode {
       toolsBuilt = ctx.toolsMemo.built;
     } else {
       toolsBuilt = buildTools({
-        stableCatalog: true,
         registry: ctx.opts.registry,
         globalDisabledTools: ctx.opts.globalDisabledTools,
         sessionDisabledTools: ctx.opts.sessionDisabledTools,
         externalToolTiers: ctx.opts.externalToolTiers,
         activeTiers: ctx.activeTiers,
-        pinnedTools: ctx.pinnedTools,
         requiredPinnedTools: requiredPinnedToolsForBuild,
         sessionToolCap: ctx.opts.sessionToolCap,
-        terseDescriptionsLock: ctx.terseDescriptionsLock,
         toolContext: ctx.opts.toolContext,
         provider: ctx.opts.provider,
         catalogOnlyCapabilities: ctx.opts.catalogOnlyCapabilities,
@@ -614,55 +598,6 @@ export class ExecutingNode implements BehaviorNode {
     }
     const availableTools = toolsVariant.tools;
     let toolsForModel = availableTools;
-    // A relevance selection is made once per authorized catalog, not once per
-    // turn. New discoveries cannot evict a previously cached tool schema.
-    if (ctx.opts.toolSelectionFilter && !toolsVariant.selectionApplied) {
-      try {
-        const recentUserTexts: string[] = [];
-        for (let i = messagesForChat.length - 1; i >= 0; i--) {
-          const message = messagesForChat[i];
-          if (message.role !== 'user') continue;
-          const text = message.content
-            .map((block) => block.type === 'text' ? block.text : '')
-            .filter(Boolean)
-            .join(' ');
-          if (text) recentUserTexts.unshift(text);
-          if (recentUserTexts.length >= 3) break;
-        }
-        const taskText = recentUserTexts.join('\n').slice(-4_000);
-        const selected = await ctx.opts.toolSelectionFilter(availableTools, {
-          taskText,
-          recentToolCalls: (ctx.opts.toolContext.toolCallLedger?.snapshot() ?? [])
-            .slice(-50)
-            .map((entry) => ({
-              name: entry.name,
-              timestampMs: entry.timestampMs,
-              ok: !entry.isError,
-            })),
-          ...(ctx.opts.sessionId == null
-            ? {}
-            : { sessionId: ctx.opts.sessionId }),
-          protectedToolNames: new Set([
-            ...toolsBuilt.protectedToolNames,
-            ...ctx.pinnedTools,
-          ]),
-        });
-        if (selected.length > 0) {
-          // Selection is relevance-ranked internally, but provider tool order
-          // is not a recommendation channel. Keep a stable catalog order so
-          // identical memberships retain the same prompt-cache prefix.
-          const selectedNames = new Set(selected.map(tool => tool.name));
-          // A relevance filter may choose optional tools, never remove a
-          // workflow dependency or inject a definition outside this projection.
-          toolsForModel = availableTools.filter(tool => selectedNames.has(tool.name)
-            || toolsBuilt.protectedToolNames.has(tool.name));
-        }
-      } catch (e) {
-        console.warn(`[coder] tool-selection failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      toolsVariant.tools = toolsForModel;
-      toolsVariant.selectionApplied = true;
-    }
     const rejectedSchemas = rejectedProviderTools(ctx);
     if (rejectedSchemas.size) toolsForModel = toolsForModel.filter(tool => !rejectedSchemas.has(tool.name));
     let capabilitySetDigest: string | null = null;
@@ -699,8 +634,6 @@ export class ExecutingNode implements BehaviorNode {
       | {
           visibleToolNames?: ReadonlySet<string> | null;
           authorizedToolNames?: ReadonlySet<string> | null;
-          promoteTool?: (name: string) => string[];
-          requestedToolNames?: ReadonlySet<string>;
           projectionReceipt?: import('../../tool-projection.js').ToolProjectionReceipt | null;
         }
       | undefined;
@@ -935,7 +868,7 @@ export class ExecutingNode implements BehaviorNode {
       if (verifiedLimits?.maxNameChars !== undefined && toolsForModel.some(tool => tool.name.length > verifiedLimits.maxNameChars!)) throw new Error('Final tool projection exceeds the verified provider function name limit');
       if (runnerToolState) {
         runnerToolState.visibleToolNames = effectiveToolNames;
-        runnerToolState.projectionReceipt = toolProjectionReceipt(runnerToolState.requestedToolNames ?? [], effectiveToolNames,
+        runnerToolState.projectionReceipt = toolProjectionReceipt([], effectiveToolNames,
           new Set(toolsBuilt.authorizedTools.map(t => t.name)), projectionDigest, capabilitySetDigest, rejectedSchemas);
       }
       ctx.lastProviderToolNames = effectiveToolNames;
@@ -1148,8 +1081,7 @@ export class ExecutingNode implements BehaviorNode {
     // Telemetry persistence helper — invoked from BOTH the text-only path
     // (no tool_uses) and the tool-dispatch path. The pure function lives
     // in `core/runner/telemetry/persist-turn.ts`; the bridge wrapper in
-    // `runner.ts` adds the tool-selection feedback observer and updates
-    // `runner.lastTurnTelemetryId` so the host's `flushPendingTurn` can
+    // `runner.ts` updates `runner.lastTurnTelemetryId` so the host's `flushPendingTurn` can
     // stamp pending tool calls.
     //
     // `summarizerRan` is always false at this point — Compacting is the
@@ -1325,15 +1257,6 @@ export class ExecutingNode implements BehaviorNode {
       return events.cleanFinish();
     }
 
-    const requiredPinnedTools = ctx.opts.requiredPinnedTools
-      ? new Set(ctx.opts.requiredPinnedTools)
-      : undefined;
-    // A call to an already-promoted tool is a recency signal. Reordering the
-    // Set does not change the memo key; it affects only which old pin leaves
-    // when a genuinely new capability is promoted later.
-    for (const toolUse of result.toolUses) {
-      touchDynamicToolPin(ctx.pinnedTools, requiredPinnedTools, toolUse.name);
-    }
     // Refused calls never fired tool_call_start, so the telemetry listener in
     // index.ts has no pending entry to read args from — carry the original
     // input on the result event itself (along with the refusal kind).
@@ -1394,26 +1317,9 @@ export class ExecutingNode implements BehaviorNode {
       turn: ctx.turn,
       dupCalls: ctx.dupCalls,
       noProgressTracker: ctx.noProgressTracker,
-      // Pin mechanism — hidden registered tools execute and join the
-      // visible list next turn; disabled tools hard-block at dispatch.
+      // Hidden registered tools execute when authorized; disabled tools
+      // hard-block at dispatch. Visibility never changes mid-run.
       visibleToolNames: effectiveToolNames,
-      pinnedTools: ctx.pinnedTools,
-      onToolPinned: (name) => {
-        if (runnerToolState?.promoteTool) {
-          runnerToolState.promoteTool(name);
-          return;
-        }
-        const evicted = promoteDynamicToolPin(
-          ctx.pinnedTools,
-          requiredPinnedTools,
-          name,
-        );
-        if (evicted.length > 0) {
-          console.log(
-            `[coder] dynamic tool window: promoted ${name}; evicted LRU ${evicted.join(', ')}`,
-          );
-        }
-      },
       isToolBlocked: (name) => {
         if (!authorizedToolNames.has(name)) {
           // This gate runs before the policy gate (top level and code_exec

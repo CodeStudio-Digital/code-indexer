@@ -16,7 +16,6 @@ import {
   decisionGuidanceForTask,
   decisionTelemetryForTask,
   intentProfile,
-  toolPolicyForTask,
 } from '../decision-engine.js';
 
 describe('classifyIntent', () => {
@@ -217,31 +216,3 @@ describe('decision telemetry bridge', () => {
   });
 });
 
-describe('toolPolicyForTask (tool-selection bridge)', () => {
-  it('returns preferred/discouraged hints for a confidently classified edit task', () => {
-    const p = toolPolicyForTask('implement the new endpoint handler');
-    expect(p).toBeDefined();
-    expect(p!.preferred.length).toBeGreaterThan(0);
-    expect(p!.discouraged).toContain('git_commit');
-  });
-
-  it('produces git tool hints for an explicit git/admin task', () => {
-    const p = toolPolicyForTask('commit and push the changes');
-    expect(p).toBeDefined();
-    expect(p!.preferred).toContain('git_commit');
-  });
-
-  it('returns undefined for an unrecognized/low-confidence message (no nudge)', () => {
-    expect(toolPolicyForTask('zzzphlnt qwwx')).toBeUndefined();
-  });
-
-  it('returns undefined for empty input', () => {
-    expect(toolPolicyForTask('   ')).toBeUndefined();
-  });
-
-  it('is deterministic', () => {
-    expect(toolPolicyForTask('refactor the scorer')).toEqual(
-      toolPolicyForTask('refactor the scorer'),
-    );
-  });
-});

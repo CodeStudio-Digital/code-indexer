@@ -1,7 +1,7 @@
 /**
  * Global "files touched" sink (TODO-I2 wiring — Sprint 1 closeout).
  *
- * Mirrors the pattern in `tool-selection/global-filter.ts`: a process-
+ * A process-
  * wide hook the host sets once at boot, and that fs tools call after a
  * successful read/edit/write. Keeps the @mcp/code-agent package free
  * of any @mcp/indexer import — the host wires the actual

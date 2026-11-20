@@ -1,8 +1,8 @@
 /**
  * Process-wide AgentSupervisor handle (Sprint 4 Phase 1.5).
  *
- * Mirrors the singleton pattern from `global-recent-files.ts` and
- * `global-filter.ts` (tool-selection). Hosts set the singleton at boot
+ * Mirrors the singleton pattern from `global-recent-files.ts`. Hosts set
+ * the singleton at boot
  * via `setGlobalAgentSupervisor(...)`. Subordinate/master lifecycle
  * modules read it via `getGlobalAgentSupervisor()` and call
  * `registerSubordinate(...)` / `registerMaster(...)` at spawn time

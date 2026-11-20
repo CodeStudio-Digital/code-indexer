@@ -52,7 +52,7 @@ export async function recommendRolesForSession(
   const {
     companyStore,
     sessionStore,
-    toolSelectionEmbed,
+    recommendationEmbed,
     roleEmbeddingStore,
     pipelineTelemetrySink,
   } = deps;
@@ -95,7 +95,7 @@ export async function recommendRolesForSession(
   }
 
   const pipeline = createRolePipeline({
-    embed: toolSelectionEmbed,
+    embed: recommendationEmbed,
     roleEmbeddingStore,
     telemetry: pipelineTelemetrySink,
   });

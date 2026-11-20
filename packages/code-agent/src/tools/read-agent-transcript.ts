@@ -11,7 +11,6 @@
 import type { CoderTool, ToolContext, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
   getReadableGroup,
   listReadableGroups,
@@ -93,7 +92,7 @@ export function buildReadAgentTranscriptTool(
 ): CoderTool {
   return {
     name: 'read_agent_transcript',
-    description: maybeTerse(READ_AGENT_TRANSCRIPT_DESC),
+    description: READ_AGENT_TRANSCRIPT_DESC,
     parameters: schema,
     source: 'native',
     mutates: false,

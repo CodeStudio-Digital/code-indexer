@@ -192,28 +192,11 @@ export interface RunnerOptions {
    * resume AND unioned with the session-persisted pins, mig 142). Pinned
    * tools bypass the tier filter and enter the bounded dynamic working set.
    */
-  initialPinnedTools?: Iterable<string>;
   /**
-   * Host/configured pins that define the agent's permanent capability floor.
-   * Runtime-discovered pins are managed as a bounded LRU working set and may
-   * be replaced; required pins never leave the visible catalog because of
-   * that replacement policy.
+   * Host/configured pins that define the agent's permanent capability floor:
+   * always published by the stable catalog.
    */
   requiredPinnedTools?: Iterable<string>;
-  /**
-   * Fired when `expand_toolset` promotes a tier mid-run. The host persists
-   * the widen (mig 142) so the next resume rebuilds the SAME tool array —
-   * membership must stay byte-stable across runs or the provider
-   * prompt-cache prefix busts on the next round's first turn.
-   */
-  onTierPromoted?: (tier: ToolTier) => void;
-  /**
-   * Fired whenever bounded runtime-pin membership changes. Receives the
-   * runner's exact current set (required pins included); the host persists
-   * only the dynamic subset as an exact replacement, so LRU evictions survive
-   * crashes and resumes instead of being resurrected by append-only state.
-   */
-  onPinnedToolsChanged?: (pins: readonly string[]) => void;
   /**
    * Task-preflight seed (fresh sessions only). `preflightHint` is the
    * rendered `<preflight>` block injected on turn 1 and re-injected after
@@ -242,26 +225,6 @@ export interface RunnerOptions {
   globalDisabledTools?: ReadonlySet<string>;
   /** Tools disabled for this specific session. Applied before tier filtering. */
   sessionDisabledTools?: ReadonlySet<string>;
-  /**
-   * Optional opt-in filter for the per-turn tool list (ToolSelectionPipeline).
-   *
-   * Contract:
-   *   - Called AFTER tier/disabled filtering, BEFORE serializing tools.
-   *   - Receives the SERIALIZED tool shape (name/description/parameters).
-   *   - Must return a non-empty subset of the input.
-   *   - Must never throw — failures default to the unfiltered list.
-   */
-  toolSelectionFilter?: (
-    tools: Array<{ name: string; description: string; parameters: import('../tool.js').JsonSchema }>,
-    ctx: {
-      taskText: string;
-      recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
-      /** Pins must survive relevance selection just like the model/tool cap. */
-      protectedToolNames?: ReadonlySet<string>;
-      /** Filesystem owner for session-scoped shadow telemetry. */
-      sessionId?: SessionId;
-    },
-  ) => Promise<Array<{ name: string; description: string; parameters: import('../tool.js').JsonSchema }>>;
   /**
    * Runtime tier overrides for external MCP tools. Maps tool name (e.g.
    * `ext_github__create_issue`) to its tier.

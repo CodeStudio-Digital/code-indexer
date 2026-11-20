@@ -32,7 +32,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { parseAgentPathTarget } from '@mcp/company/tools/path-resolution.js';
 
 const SEND_INPUT_DESC =
@@ -45,7 +44,7 @@ const SEND_INPUT_DESC =
 
 export const sendInput: CoderTool = {
   name: 'send_input',
-  description: maybeTerse(SEND_INPUT_DESC),
+  description: SEND_INPUT_DESC,
   source: 'native',
   mutates: false,
   parallelSafe: false,

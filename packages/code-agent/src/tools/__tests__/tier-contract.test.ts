@@ -35,6 +35,11 @@ import {
 
 // ── Static tool arrays (code-agent) ───────────────────────────────────────
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
+import { chatCollaborationTools } from '@mcp/code-agent/tools/chat-collaboration.js';
+import { sessionNetworkTools } from '@mcp/code-agent/tools/session-network.js';
+import { ultraFollowupTools } from '@mcp/code-agent/tools/ultra-followups.js';
+import { chatChangesTools } from '@mcp/code-agent/tools/chat-changes.js';
+import { recordMemoTool } from '@mcp/code-agent/tools/record-memo.js';
 import { applyPatchTool } from '@mcp/code-agent/tools/apply-patch.js';
 import { shellTools } from '@mcp/code-agent/tools/shell.js';
 import { gitTools } from '@mcp/code-agent/tools/git.js';
@@ -80,6 +85,8 @@ const STATIC_TOOLS: NamedTool[] = [
   ...waitAgentsTools, ...sendMessageTools, ...sendInputTools, ...followupTaskTools,
   ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools,
   ...apiClientTools, ...dbTools,
+  // Collaboration/control tools that previously escaped this contract.
+  ...chatCollaborationTools, ...sessionNetworkTools, ...ultraFollowupTools, ...chatChangesTools, recordMemoTool,
 ].flatMap(arr);
 
 /**
@@ -89,7 +96,7 @@ const STATIC_TOOLS: NamedTool[] = [
  * always-on factory tool is added.
  */
 const FACTORY_ALWAYS_ON = [
-  'code_exec', 'expand_toolset', 'find_tools', 'spawn_agent', 'request_review', 'self_review',
+  'code_exec', 'find_tools', 'spawn_agent', 'request_review', 'self_review',
   'invoke_skill', 'get_skills_list', 'get_skill_content', 'list_skill_namespaces', 'create_skill',
   'read_plan', 'save_note', 'list_notes', 'recall_investigations',
   // Agent Memory (migration 181): durable write + read on the turn-1 surface.
@@ -172,9 +179,10 @@ describe('tier contract — Phase A/B placements are locked', () => {
 
   it('drops the retired duplicate tools (strict mode throws)', () => {
     // task_list aliases; multi_edit (edit_file with edits); create_file (write_file);
-    // poll_session (write_stdin with empty chars).
+    // poll_session (write_stdin with empty chars); expand_toolset and
+    // capability_catalog (find_tools).
     const catalog = new Set(getAllKnownToolsMeta().map(tool => tool.name));
-    for (const n of ['todo_write', 'update_todo', 'submit_tasks', 'multi_edit', 'create_file', 'poll_session']) {
+    for (const n of ['todo_write', 'update_todo', 'submit_tasks', 'multi_edit', 'create_file', 'poll_session', 'expand_toolset', 'capability_catalog']) {
       expect(() => getToolTier(n, undefined, { strict: true }), n).toThrow();
       expect(catalog.has(n), n).toBe(false);
     }

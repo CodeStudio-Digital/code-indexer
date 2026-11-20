@@ -20,7 +20,6 @@ import { formatAskUserResult } from '@mcp/code-agent/tools/interaction.js';
 import { formatPlanResult } from '@mcp/code-agent/tools/plan.js';
 import { validateTasksInput } from '@mcp/code-agent/tools/tasks.js';
 import type { CoderTask, TaskExecutionMode, TasksState } from '@mcp/session-storage/session-state-types.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { isUuid } from '@mcp/session-storage';
 import { submitSpecificationToMaster } from './subordinate/submit-specification.js';
 import { awaitMasterDecision } from './subordinate/await-master.js';
@@ -37,7 +36,7 @@ const ASK_MASTER_DESC =
 
 export const askMaster: CoderTool = {
   name: 'ask_master',
-  description: maybeTerse(ASK_MASTER_DESC),
+  description: ASK_MASTER_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -113,7 +112,7 @@ const SUBMIT_PLAN_TO_MASTER_DESC =
 
 export const submitPlanToMaster: CoderTool = {
   name: 'submit_plan_to_master',
-  description: maybeTerse(SUBMIT_PLAN_TO_MASTER_DESC),
+  description: SUBMIT_PLAN_TO_MASTER_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -253,7 +252,7 @@ const submitTasksToMasterSchema: JsonSchema = {
 
 export const submitTasksToMaster: CoderTool = {
   name: 'submit_tasks_to_master',
-  description: maybeTerse(SUBMIT_TASKS_TO_MASTER_DESC),
+  description: SUBMIT_TASKS_TO_MASTER_DESC,
   source: 'native',
   parameters: submitTasksToMasterSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
@@ -340,7 +339,7 @@ const SEND_TO_AGENT_DESC =
 
 export const sendToAgent: CoderTool = {
   name: 'send_to_agent',
-  description: maybeTerse(SEND_TO_AGENT_DESC),
+  description: SEND_TO_AGENT_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -447,7 +446,7 @@ const SEND_TO_MASTER_DESC =
 
 export const sendToMaster: CoderTool = {
   name: 'send_to_master',
-  description: maybeTerse(SEND_TO_MASTER_DESC),
+  description: SEND_TO_MASTER_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -618,7 +617,7 @@ const CHECK_INBOX_ANSWER_DESC =
 
 export const checkInboxAnswer: CoderTool = {
   name: 'check_inbox_answer',
-  description: maybeTerse(CHECK_INBOX_ANSWER_DESC),
+  description: CHECK_INBOX_ANSWER_DESC,
   source: 'native',
   parameters: {
     type: 'object',

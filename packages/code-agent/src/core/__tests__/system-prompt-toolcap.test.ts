@@ -1,13 +1,10 @@
 /**
- * The "Tool visibility" block — rendered for models whose catalog cap is
- * smaller than the registry (GLM flash class). Contract:
- *   - renders BELOW SYSTEM_PROMPT_DYNAMIC_BOUNDARY (model-dependent text
- *     must not pollute the shared static prefix)
- *   - absent when the cap covers the catalog
- *   - the static prefix is byte-identical with and without toolCap
+ * The old "Tool visibility" block repeated what "# Tool discovery" already
+ * says (use find_tools for a missing schema) on every capped session. It was
+ * removed; the discovery guidance lives once, in "# Tool discovery".
  */
 import { describe, it, expect } from 'vitest';
-import { buildSystemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY, type PromptContext } from '../system-prompt.js';
+import { buildSystemPrompt, type PromptContext } from '../system-prompt.js';
 
 function baseCtx(overrides?: Partial<PromptContext>): PromptContext {
   return {
@@ -16,32 +13,18 @@ function baseCtx(overrides?: Partial<PromptContext>): PromptContext {
     os: 'win32',
     providerFamily: 'zai',
     profile: 'bootstrap',
+    availableTools: new Set(['find_tools', 'code_exec', 'read_file']),
     ...overrides,
   };
 }
 
-describe('system prompt — tool visibility (cap) block', () => {
-  it('renders below the dynamic boundary when the cap is smaller than the catalog', () => {
-    const prompt = buildSystemPrompt(baseCtx({ toolCap: { maxTools: 32, approxCatalog: 90 } }));
-    const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
-    expect(suffix).toContain('# Tool visibility');
-    expect(suffix).toContain('32 of ~90 registered tools');
-    expect(suffix).toContain('Required controls can exceed this target');
-    expect(suffix).toContain('find_tools');
-    expect(prefix).toContain('Use visible tools directly');
-    expect(prefix).toContain('tools["exact-name"](args)');
-    expect(prefix).not.toContain('# Tool visibility');
-  });
-
-  it('is absent when the cap covers the catalog', () => {
-    const prompt = buildSystemPrompt(baseCtx({ toolCap: { maxTools: 200, approxCatalog: 90 } }));
+describe('system prompt — discovery guidance appears once', () => {
+  it('renders "# Tool discovery" and no "# Tool visibility" block', () => {
+    // The host used to pass a direct-tool budget on every capped session; an
+    // extra field like that must not bring the duplicate block back.
+    const prompt = buildSystemPrompt({ ...baseCtx(), toolCap: { maxTools: 28, approxCatalog: 89 } } as PromptContext);
+    expect(prompt).toContain('# Tool discovery');
     expect(prompt).not.toContain('# Tool visibility');
-  });
-
-  it('does not change the static prefix (prompt-cache safety)', () => {
-    const withCap = buildSystemPrompt(baseCtx({ toolCap: { maxTools: 32, approxCatalog: 90 } }));
-    const without = buildSystemPrompt(baseCtx());
-    const prefixOf = (p: string) => p.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)[0];
-    expect(prefixOf(withCap)).toBe(prefixOf(without));
+    expect(prompt).not.toContain('Direct-tool budget');
   });
 });

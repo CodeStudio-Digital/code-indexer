@@ -5,7 +5,7 @@ import { BROWSER_TOOL_NAMES } from './tools.js';
 export const RESEARCH_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...BROWSER_TOOL_NAMES,
   'web_search', 'web_fetch', 'view_image', 'get_tool_output',
-  'ask_user', 'find_tools', 'expand_toolset',
+  'ask_user', 'find_tools',
   'rag_search_docs', 'rag_read_doc', 'rag_doc_outline',
   'recall_memory', 'recall_conversation', 'recall_investigations',
   'read_file', 'list_directory', 'glob',

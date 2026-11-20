@@ -109,4 +109,6 @@
 // 2026-11-19.1 bump — scope Git checks to the request and reuse fresh results.
 // 2026-11-19.2 bump — reopen approval for revisions to an approved plan.
 // 2026-11-19.3 — align mode transitions, discovery, roles and review contracts.
-export const SYSTEM_PROMPT_VERSION = '20261119.3';
+// 2026-11-19.4 bump — the dynamic "# Tool visibility" block (a duplicate of
+// "# Tool discovery") was removed with the non-stable catalog projection.
+export const SYSTEM_PROMPT_VERSION = '20261119.4';

@@ -38,7 +38,7 @@ export const enterWorktree: CoderTool = {
     "USE: parallel branches when you want to build on a feature branch without leaving the user's current branch.\n" +
     "DON'T: enter a worktree for a trivial edit — it's heavy and requires explicit exit_worktree later.\n" +
     "DON'T: enter nested worktrees — exit the current one first.\n" +
-    'Admin tier. Requires expand_toolset("admin") first. The session remembers the worktree across restarts via the `worktree_path` column.',
+    'The session remembers the worktree across restarts via the `worktree_path` column.',
   source: 'native',
   parameters: {
     type: 'object',

@@ -34,29 +34,9 @@ describe('createRunContext — shared mutable tool-surface state', () => {
       emit: noopEmit,
       initialTiers: hostTiers,
     });
-    // Simulates CoderRunner.promoteTier('navigate') mid-run.
+    // The context aliases the host runner's Set (no copy).
     hostTiers.add('navigate');
     expect(ctx.activeTiers?.has('navigate')).toBe(true);
   });
 
-  it('mid-run pins on the host Set are visible to the context (and vice versa)', () => {
-    const hostPins = new Set<string>();
-    const ctx = createRunContext({
-      opts: opts(),
-      emit: noopEmit,
-      initialTiers: new Set<ToolTier>(['bootstrap']),
-      initialPins: hostPins,
-    });
-    ctx.pinnedTools.add('write_file'); // dispatch-time pin
-    expect(hostPins.has('write_file')).toBe(true);
-  });
-
-  it('defaults to an empty pin set when none is provided', () => {
-    const ctx = createRunContext({
-      opts: opts(),
-      emit: noopEmit,
-      initialTiers: null,
-    });
-    expect(ctx.pinnedTools.size).toBe(0);
-  });
 });

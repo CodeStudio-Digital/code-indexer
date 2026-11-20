@@ -70,7 +70,7 @@ it.each(['valid', 'sse-rejection', 'http-rejection'])('runs discovery through re
     // discovery stays stable; explicitly configured top-level tools still
     // exercise both rejection transports and the authorized generic fallback.
     if (mode !== 'valid') ctx.opts.requiredPinnedTools = [name];
-    const result = await runBehaviorTree({ opts: ctx.opts, emit: ctx.emit, initialTiers: new Set(['bootstrap']), initialPins: pins });
+    const result = await runBehaviorTree({ opts: ctx.opts, emit: ctx.emit, initialTiers: new Set(['bootstrap']) });
     expect(result.reason).toBe('completed');
     expect(bodies).toHaveLength(mode === 'valid' ? 3 : 5);
     expect(bodies[0].tools.some(t => t.name === name)).toBe(mode !== 'valid');

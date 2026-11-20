@@ -182,7 +182,6 @@ async function relaunchResumedAgentsOwned(
       sessionId,
       sessionStore: deps.sessionStore,
       agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-      toolSelectionFilter: deps.toolSelectionFilter,
       externalToolTiers: deps.externalToolTiers,
       maxParallel: deps.maxParallel,
     },

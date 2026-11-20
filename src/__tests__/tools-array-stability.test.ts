@@ -1,12 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { tmpdir } from 'node:os';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import { buildTools } from '@mcp/code-agent/core/runner/assembly/tools.js';
-import { terseDescription, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
-import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
 /**
- * The runner's `buildTools` closure (runner.ts) ships an alphabetically
+ * The catalog assembly (`buildTools`, core/runner/assembly/tools.ts) ships an alphabetically
  * sorted tools array to the provider every turn. Server-side prompt caches
  * (Anthropic ephemeral, OpenAI/ZAI auto-cache) are byte-prefix sensitive,
  * so any reorder between turns invalidates the cache. These tests pin the
@@ -24,7 +21,7 @@ function makeTool(name: string, description = `desc for ${name}`): CoderTool {
 }
 
 function buildSortedNames(reg: ToolRegistry): string[] {
-  // Mirrors the sort in runner.ts buildTools().
+  // Mirrors the sort in assembly/tools.ts buildTools().
   return reg.list().slice().sort((a, b) => a.name.localeCompare(b.name)).map((t) => t.name);
 }
 
@@ -53,7 +50,7 @@ describe('tools array — bit-stable ordering', () => {
     reg.registerAll([makeTool('alpha'), makeTool('mu'), makeTool('zeta')]);
     const before = buildSortedNames(reg);
 
-    // Simulate `expand_toolset` adding a new tool. New name lands in alpha
+    // Simulate a newly registered tool. New name lands in alpha
     // position, but the relative order of already-present names is preserved.
     reg.register(makeTool('beta'));
     const after = buildSortedNames(reg);
@@ -62,63 +59,5 @@ describe('tools array — bit-stable ordering', () => {
     // Every name from `before` keeps its relative order in `after`.
     const filtered = after.filter((n) => before.includes(n));
     expect(filtered).toEqual(before);
-  });
-});
-
-describe('terseDescription — pure transform for bootstrap profile', () => {
-  it('passes through short descriptions unchanged', () => {
-    const short = 'Read a file from disk.';
-    expect(terseDescription(short)).toBe(short);
-  });
-
-  it('trims to the first sentence when the description is long', () => {
-    const long =
-      'Read a file from disk directly. ' +
-      "USE: file you just created or modified that the indexer has not picked up yet, OR a config file the indexer skipped.\n" +
-      "DON'T: paginate more than twice on the same file — switch tactics (skeleton, symbol, grep, force).\n" +
-      "DON'T: edit without reading first.";
-    expect(long.length).toBeGreaterThan(150);
-    const result = terseDescription(long);
-    expect(result.length).toBeLessThan(long.length);
-    expect(result).toBe('Read a file from disk directly.');
-  });
-
-  it('falls back to a hard cut at 150 chars when no early period is present', () => {
-    const noPeriod = 'a'.repeat(300);
-    const result = terseDescription(noPeriod);
-    expect(result.length).toBeLessThanOrEqual(151); // 150 + ellipsis
-    expect(result.endsWith('…')).toBe(true);
-  });
-
-  it('is deterministic — same input always produces same output (cache safety)', () => {
-    const desc =
-      'Run a shell command. USE: tests, builds, lint. DONT: long-running servers.';
-    expect(terseDescription(desc)).toBe(terseDescription(desc));
-  });
-});
-
-describe('maybeTerse — stable full descriptions', () => {
-  it('returns desc unchanged when CODER_TERSE_TOOLS is unset', () => {
-    const prev = process.env.CODER_TERSE_TOOLS;
-    delete process.env.CODER_TERSE_TOOLS;
-    try {
-      const long = 'Read a file. ' + 'x'.repeat(300);
-      expect(maybeTerse(long)).toBe(long);
-    } finally {
-      if (prev !== undefined) process.env.CODER_TERSE_TOOLS = prev;
-    }
-  });
-
-  it('ignores the retired CODER_TERSE_TOOLS override', () => {
-    const prev = process.env.CODER_TERSE_TOOLS;
-    process.env.CODER_TERSE_TOOLS = '1';
-    try {
-      const long = 'Short first. ' + 'x'.repeat(500);
-      const out = maybeTerse(long);
-      expect(out).toBe(long);
-    } finally {
-      if (prev === undefined) delete process.env.CODER_TERSE_TOOLS;
-      else process.env.CODER_TERSE_TOOLS = prev;
-    }
   });
 });

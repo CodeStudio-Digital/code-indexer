@@ -79,8 +79,6 @@
     "apps/dashboard/features/admin/McpHttpStatusPanel.tsx|jsxText|rag_search_docs": 1,
     "apps/dashboard/features/admin/McpOAuthConnectDialog.tsx|attr:placeholder|abc123…": 1,
     "apps/dashboard/features/admin/McpOAuthConnectDialog.tsx|attr:placeholder|mcp:connect": 1,
-    "apps/dashboard/features/admin/McpServerEditDialog.tsx|jsxText|Agent unlocks with": 1,
-    "apps/dashboard/features/admin/McpServerEditDialog.tsx|jsxText|expand_toolset('": 1,
     "apps/dashboard/features/admin/OAuthClientsPanel.tsx|jsxText|redirect URI(s)": 1,
     "apps/dashboard/features/admin/ProviderCard.tsx|attr:aria-label|Default subagent model": 1,
     "apps/dashboard/features/admin/ProviderCard.tsx|attr:aria-label|Default subagent provider": 1,

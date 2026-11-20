@@ -205,9 +205,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // Company collaboration, QA, sandbox and other
   // product capabilities live in dedicated contextual tiers. runCoder
   // auto-activates those tiers only when the matching runtime is present.
-  'expand_toolset',
   'find_tools',
-  'capability_catalog',
   // spawn_agent is orchestration — same tier as expand_toolset/find_tools.
   // Lives in BOOTSTRAP (not NAVIGATE) so any session can delegate without
   // needing to unlock a tier first.
@@ -219,6 +217,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'list_project_chats', 'read_chat', 'create_chat', 'create_chat_trigger',
   'list_chats', 'send_chat_message', 'reply_chat_message',
   'read_chat_messages', 'wait_chat_response', 'cancel_chat_request', 'resume_chat',
+  // Collaboration follow-ups/waits (ultra-followups.ts) and the subagent-only
+  // memo channel: explicit here, the same tier the fallback gave them.
+  'wait_chats', 'propose_task', 'prepare_chat_schedule', 'record_memo',
   'collect_agents',
   'resume_agent',
   // read_agent_transcript — observability companion (audit a finished
@@ -241,8 +242,8 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // (Phase B) — 0 calls in 12k turns.
   // (Session-scoped notes — distinct from project-wide mcp__save_memory.)
   // WS12: minimal turn-1 memory surface = the durable write+read pair
-  // (`remember` + `recall_memory` + `recall_conversation`) live in NEVER_TRIM
-  // so the catalog cap keeps recovery available on weak models. save_note
+  // (`remember` + `recall_memory` + `recall_conversation`) is part of the
+  // stable workflow catalog, so recovery stays available on weak models. save_note
   // (session scratchpad) + forget_memory live in
   // navigate — weak models aren't forced to disambiguate ephemeral vs durable
   // (memory also works passively via proactive injection + the run-end distiller).
@@ -491,8 +492,7 @@ export interface GetToolTierOpts {
  * Unlisted tools default to `bootstrap` so a newly added internal tool is
  * never accidentally hidden — BUT this fallback is no longer load-bearing:
  * `tier-contract.test.ts` runs in `strict` mode and fails if any registered
- * tool reaches it, and `CODER_STRICT_TIERS=1` demotes unlisted tools to
- * `navigate` (off the turn-1 surface) in production as a belt-and-suspenders.
+ * tool reaches it. Production has no strict switch; the fallback applies.
  */
 export function getToolTier(
   name: string,
@@ -597,23 +597,6 @@ export function contextualTiersForRuntime(
 }
 
 /**
- * Filter a list of tools to only those in the active tier set. Preserves
- * the input order so alphabetical sorting done upstream (mcp-bridge) is
- * retained — important for prefix-cache stability.
- *
- * `tierOverrides` is an optional runtime map for tools whose tier is resolved
- * dynamically (external MCP servers and installed plugins), rather than from
- * the static Sets above.
- */
-export function filterByTiers<T extends { name: string }>(
-  tools: readonly T[],
-  activeTiers: ReadonlySet<ToolTier>,
-  tierOverrides?: ReadonlyMap<string, ToolTier>,
-): T[] {
-  return tools.filter((t) => activeTiers.has(getToolTier(t.name, tierOverrides)));
-}
-
-/**
  * Inspect the tool calls actually made in a resumed session's history and
  * pick the smallest profile that covers them. Used to avoid promoting every
  * resumed session to 'full' when the conversation only used bootstrap tools.
@@ -679,9 +662,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   cancel_tasks: 'Cancel current tasks without deleting the audit trail',
   delete_tasks: 'Delete tasks from the current task list',
   archive_task_list: 'Clear the current task list',
-  expand_toolset: 'Unlock higher-tier tools (navigate/admin)',
   find_tools: 'Search the tool catalog by name, description, and argument names',
-  capability_catalog: 'Search, inspect, and activate tools, MCP, plugins, and skills',
   request_review: 'Spawn a reviewer subagent to second-opinion the diff',
   read_plan: 'Re-read your submitted plan and its approval status',
   save_note: 'Jot a scratchpad note for THIS session (ephemeral — use remember for durable memory)',

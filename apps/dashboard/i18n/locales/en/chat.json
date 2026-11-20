@@ -296,7 +296,7 @@
   "metrics.payload.system": "System prompt",
   "metrics.payload.tools": "Tools array ({{count}})",
   "metrics.payload.other": "Other (history + user msg)",
-  "metrics.payload.heavyHint": "Heavy turn-1 footprint. The system prompt + tools array account for >4k tokens before any history. Trim descriptions or move tools to higher tiers via expand_toolset.",
+  "metrics.payload.heavyHint": "Heavy turn-1 footprint. The system prompt + tools array account for >4k tokens before any history. Trim descriptions or keep rarely used tools out of the direct catalog (find_tools still reaches them).",
   "metrics.payload.skillsMode": "Skills mode",
   "metrics.payload.skillsAvailable": "skill(s) available",
   "metrics.timeline.title": "Per-round timeline ({{rounds}} round{{roundsPlural}} · {{count}} turn{{turnsPlural}})",

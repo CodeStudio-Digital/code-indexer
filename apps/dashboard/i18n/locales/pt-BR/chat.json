@@ -295,7 +295,7 @@
   "metrics.payload.system": "System prompt",
   "metrics.payload.tools": "Lista de ferramentas ({{count}})",
   "metrics.payload.other": "Outros (histórico + msg do usuário)",
-  "metrics.payload.heavyHint": "Footprint pesado no turn 1. System prompt + tools array somam >4k tokens antes de qualquer histórico. Reduza descriptions ou mova tools para tiers superiores via expand_toolset.",
+  "metrics.payload.heavyHint": "Footprint pesado no turn 1. System prompt + tools array somam >4k tokens antes de qualquer histórico. Reduza descriptions ou deixe tools pouco usadas fora do catálogo direto (find_tools ainda as alcança).",
   "metrics.payload.skillsMode": "Modo de skills",
   "metrics.payload.skillsAvailable": "skill(s) disponíveis",
   "metrics.timeline.title": "Linha do tempo por rodada ({{rounds}} rodada{{roundsPlural}} · {{count}} turn{{turnsPlural}})",

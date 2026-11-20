@@ -1,12 +1,10 @@
 /**
- * Description style contract — terse-safety.
+ * Description style contract — first-sentence safety.
  *
- * Two terse transforms shorten tool descriptions to their first sentence:
- *  - `terseDescription` (code-agent descriptions.ts) — applied by the runner
- *    assembly to EVERY tool on bootstrap-only profiles and compact models.
- *  - the MCP bridge's transform (mcp-bridge.ts) — applied to server-provided
- *    descriptions when CODER_TERSE_TOOLS=1.
- * Both cut at the first '.' or '\n' within 150 chars, else hard-cut at 150.
+ * Discovery shows only a description's first sentence (find_tools' short
+ * description). The terse transforms that used to cut catalogs to the first
+ * sentence were removed with the non-stable projection; this contract keeps
+ * the same cut (first '.' or '\n' within 150 chars, else 150) as a local rule.
  *
  * Contract enforced here (audit 2026-07-01, docs/audit/TOOL_AUDIT.md): every
  * description longer than 150 chars must have a first sentence that
@@ -19,7 +17,6 @@
  * they cannot be instantiated here without a live orchestrator.
  */
 import { describe, expect, it } from 'vitest';
-import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
 
 // ── Static tool arrays (code-agent) — same set as tier-contract.test.ts ────
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
@@ -71,8 +68,8 @@ const CODE_AGENT_TOOLS: NamedTool[] = [
   ...sandboxTools, ...companyDocsTools, ...envTools,
 ].flatMap(arr);
 
-/** Replica of the MCP bridge transform (mcp-bridge.ts) — keep in sync. */
-function bridgeTerse(desc: string): string {
+/** The first-sentence cut the contract is checked against. */
+function firstSentence(desc: string): string {
   if (desc.length <= 150) return desc;
   const firstStop = desc.search(/[.\n]/);
   if (firstStop > 0 && firstStop <= 150) return desc.slice(0, firstStop + 1).trim();
@@ -106,21 +103,14 @@ describe('description style — terse-safety contract', () => {
     expect(mcpServerTools.length).toBeGreaterThanOrEqual(25);
   });
 
-  it('code-agent + company static tools survive the runner terse transform', () => {
-    const bad = violations(CODE_AGENT_TOOLS, terseDescription);
+  it('code-agent + company static tools have a self-contained first sentence', () => {
+    const bad = violations(CODE_AGENT_TOOLS, firstSentence);
     expect(bad, `terse-unsafe descriptions (fix the first sentence):\n${bad.join('\n')}`).toEqual([]);
   });
 
-  it('MCP server tools survive the bridge terse transform', () => {
-    const bad = violations(mcpServerTools as NamedTool[], bridgeTerse);
+  it('MCP server tools have a self-contained first sentence', () => {
+    const bad = violations(mcpServerTools as NamedTool[], firstSentence);
     expect(bad, `terse-unsafe descriptions (fix the first sentence):\n${bad.join('\n')}`).toEqual([]);
   });
 
-  it('the two transforms agree on where the first sentence ends', () => {
-    for (const t of CODE_AGENT_TOOLS) {
-      const desc = t.description ?? '';
-      if (desc.length <= 150) continue;
-      expect(terseDescription(desc), t.name).toBe(bridgeTerse(desc));
-    }
-  });
 });

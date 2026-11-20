@@ -27,7 +27,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { parseAgentPathTarget } from '@mcp/company/tools/path-resolution.js';
 
 const SEND_MESSAGE_DESC =
@@ -38,7 +37,7 @@ const SEND_MESSAGE_DESC =
 
 export const sendMessage: CoderTool = {
   name: 'send_message',
-  description: maybeTerse(SEND_MESSAGE_DESC),
+  description: SEND_MESSAGE_DESC,
   source: 'native',
   mutates: false,
   parallelSafe: false,

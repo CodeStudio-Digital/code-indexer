@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { SUBMIT_PLAN_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { SUBMIT_PLAN_DESC } from '@mcp/code-agent/tools/descriptions.js';
 import { formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
 import { toolInteractions } from '../core/tool-interactions.js';
 import type { InteractiveToolPort } from '../ports/interactive-tool-port.js';
@@ -83,7 +83,7 @@ export async function applyPlanApproval(
  */
 export const submitPlan: CoderTool = {
   name: 'submit_plan',
-  description: maybeTerse(SUBMIT_PLAN_DESC),
+  description: SUBMIT_PLAN_DESC,
   source: 'native',
   mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true, effectBoundary: 'control',
   parameters: {

@@ -133,12 +133,13 @@ describe('find_tools — relaxed pass (closest candidates)', () => {
     expect(output).toContain('[matched: name]');
   });
 
-  it('weak candidates stay hidden until the query identifies one strong match', async () => {
+  it('weak hidden candidates carry their invocation route and nothing is activated', async () => {
     // Empty active set: everything is hidden regardless of the real tier map.
     const output = await findTools('approval', { activeTiers: new Set<string>() });
     expect(output).toContain('No strong matches');
-    expect(output).toContain('[hidden — refine search to activate');
-    expect(output).toContain('Hint: refine the query to auto-activate one strong match.');
+    expect(output).toMatch(/[(invoke inside code_exec|not exposed in this session; cannot invoke through code_exec)]/);
+    expect(output).not.toContain('auto-activate');
+    expect(output).not.toContain('expand_toolset');
     expect(output).not.toContain('Activated app_propose_spec_revision');
   });
 });

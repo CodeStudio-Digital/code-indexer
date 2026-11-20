@@ -216,9 +216,6 @@ export class FsOperationalSessionStore {
       self,
       id: SessionId | string,
       patch: {
-        addExtraTiers?: readonly string[];
-        addPins?: readonly string[];
-        pins?: readonly string[];
         visibleCap?: number | null;
       },
     ) => self.advanced.mergeToolsetState(id, patch),

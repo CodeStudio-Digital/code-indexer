@@ -12,8 +12,9 @@ import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
  * showed the cross-run version: re-inferring the profile from whatever tail
  * was loaded flipped the tool array between rounds (118 ↔ ~60), busting the
  * provider prompt-cache prefix at every round's turn 1. With the persisted
- * profile + pins, two resumes with DIFFERENT loaded tails must serialize a
- * byte-identical tools array.
+ * profile, two resumes with DIFFERENT loaded tails must serialize a
+ * byte-identical tools array (runtime pins were removed with the non-stable
+ * projection).
  */
 
 function makeTool(name: string, description = `desc for ${name}`): CoderTool {
@@ -42,7 +43,6 @@ function buildForResume(tail: string[], persisted: PersistedToolsetState): strin
   const built = buildTools({
     registry,
     activeTiers: profileToTiers(resolved.profile),
-    pinnedTools: new Set(persisted.pins),
     toolContext: { cwd: tmpdir(), projectName: 'test' } as unknown as ToolContext,
     provider: { name: 'chatgpt', model: 'gpt-5.5' } as unknown as Parameters<typeof buildTools>[0]['provider'],
   });
@@ -69,18 +69,5 @@ describe('sticky toolset — byte-identical array across resumes with different 
     }).profile;
     expect(resolve(['mcp__read_file'])).toBe('bootstrap');
     expect(resolve(['read_file', 'git_commit'])).toBe('full');
-  });
-
-  it('persisted pins keep a hidden tool in the array even when the tail forgot it', () => {
-    const registry = new ToolRegistry();
-    registry.registerAll([...CATALOG, 'mcp__search'].map((n) => makeTool(n)));
-    const built = buildTools({
-      registry,
-      activeTiers: profileToTiers('bootstrap'),
-      pinnedTools: new Set(['mcp__search']), // navigate-tier tool pinned in a prior run
-      toolContext: { cwd: tmpdir(), projectName: 'test' } as unknown as ToolContext,
-      provider: { name: 'chatgpt', model: 'gpt-5.5' } as unknown as Parameters<typeof buildTools>[0]['provider'],
-    });
-    expect(built.tools.map((t) => t.name)).toContain('mcp__search');
   });
 });

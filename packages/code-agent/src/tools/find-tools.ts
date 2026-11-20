@@ -19,23 +19,12 @@ import {
 /**
  * find_tools — lazy tool discovery (Camada 3, "Tool Search Tool" pattern).
  *
- * Why this exists: the bootstrap tier ships ~30 tools as JSON schema on every
- * provider call (~5K tokens). Anything in `navigate` / `admin` / a custom MCP
- * tier is invisible until the agent calls `expand_toolset`, but to call it the
- * agent has to know the tier exists AND know which tier hides which tool. That
- * is exactly the kind of meta-knowledge a fresh model lacks.
- *
- * `find_tools(query)` lets the agent ask: "what tool do I need for X?" and
- * receive a small list of candidates with their tier, source, and full
- * description. A strong top hidden match is promoted automatically so its
- * full provider schema is available on the NEXT turn. The model can instead
- * call `expand_toolset(<tier>)` when it needs a whole family of tools.
- *
- * Discovery does NOT promote a whole tier. It promotes at most one strong
- * hidden result into a bounded LRU working set: a new capability replaces the
- * least-recently-used dynamic pin when the window is full, while configured
- * agent pins remain permanent. Dispatch can still execute and pin an explicit
- * hidden call for providers that permit undeclared tool names.
+ * Why this exists: the stable catalog publishes a small workflow surface; every
+ * other authorized tool stays registered but deferred. `find_tools(query)`
+ * lets the agent ask "what tool do I need for X?" and receive a small list of
+ * candidates with their tier, source, short description and full input
+ * schema, plus the route to call each one (directly when visible, otherwise
+ * inside code_exec). Discovery never changes the published catalog.
  *
  * Implementation notes:
  *  - Cheap lexical match over three fields — name parts, TOP-LEVEL parameter
@@ -108,22 +97,18 @@ export function buildFindToolsTool(
       }
       const limit = (args.limit as number | undefined) ?? 5;
 
-      // Pull active tiers + pins from the runner via ctx if available.
+      // Pull active tiers and the visible catalog from the runner if available.
       // Subagents and tests may not have a runner — in that case treat all
       // tiers as visible (no "hidden" tag) so the result is still useful.
       const runner = ctx.runner as
         | {
           activeTiers?: ReadonlySet<ToolTier> | null;
-          stableToolCatalog?: boolean;
-          pinnedTools?: ReadonlySet<string>;
           visibleToolNames?: ReadonlySet<string> | null;
-          promoteTool?: (name: string) => string[];
           projectionReceipt?: import('../core/tool-projection.js').ToolProjectionReceipt;
           discoveryState?: (name: string) => { authorization: string; visible: boolean; reason?: string };
           }
         | undefined;
       const active = runner?.activeTiers ?? null;
-      const pinned = runner?.pinnedTools;
       const visibleToolNames = runner?.visibleToolNames;
 
       const tokens = tokenizeQuery(query);
@@ -182,7 +167,7 @@ export function buildFindToolsTool(
           visible: visibleToolNames
             ? visibleToolNames.has(t.name)
             : active
-              ? active.has(tier) || !!pinned?.has(t.name)
+              ? active.has(tier)
               : true,
         });
       }
@@ -206,21 +191,11 @@ export function buildFindToolsTool(
       // alphabetical name for determinism.
       const top = pool.slice(0, limit);
 
-      // A provider can only emit tool calls whose schemas it received. The
-      // old "call a hidden tool directly" hint therefore created a catch-22
-      // on strict providers: discovery named the tool, but never put its
-      // schema into the next request. Promote only the strong top result —
-      // never weak/ambiguous matches — keeping discovery precise and bounded.
+      // The unambiguous top result gets a follow-up instruction (call it
+      // directly, via code_exec, or report the limitation).
       const unambiguous = !!top[0] && (pool.length === 1
         || top[0].name.toLowerCase() === query.toLowerCase().trim()
         || top[0].score.total >= pool[1].score.total + Math.max(2, pool[1].score.total * 0.25));
-      const autoPromoted = !runner?.stableToolCatalog && !weak && unambiguous && !top[0]?.blocked && !top[0]?.schemaRejected && top[0]?.score.nameHit
-        && top[0].score.hitCount === tokens.length && !top[0].visible && runner?.promoteTool
-        ? top[0]
-        : null;
-      const evicted = autoPromoted && runner?.promoteTool
-        ? runner.promoteTool(autoPromoted.name)
-        : [];
 
       // Compact rendering — one line per candidate. The agent reads this in
       // its tool result; verbose multi-paragraph output here would defeat the
@@ -231,11 +206,7 @@ export function buildFindToolsTool(
           : r.schemaRejected ? ' [schema rejected by current provider; use another tool or the code_exec bridge]'
           : r.visible
           ? ''
-          : runner?.stableToolCatalog
-            ? r.callableInsideCodeExec ? ' [invoke inside code_exec]' : ' [not exposed in this session; cannot invoke through code_exec]'
-          : autoPromoted?.name === r.name
-            ? ' [activation requested; pending projection]'
-            : ` [hidden — refine search to activate or expand_toolset('${r.tier}')]`;
+          : r.callableInsideCodeExec ? ' [invoke inside code_exec]' : ' [not exposed in this session; cannot invoke through code_exec]';
         // Trim description to one sentence-ish for compactness.
         const shortDesc = r.description.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '';
         const argsTag = r.params ? ` (args: ${r.params})` : '';
@@ -258,7 +229,7 @@ export function buildFindToolsTool(
       ];
       for (const r of top) lines.push(renderCandidate(r));
       // Steer the follow-up when the top candidate is hidden.
-      if (runner?.stableToolCatalog) {
+      {
         for (const candidate of top.filter(r => !r.blocked)) {
           lines.push(`\n${candidate.name} input schema: ${JSON.stringify(candidate.schema)}`);
         }
@@ -272,23 +243,6 @@ export function buildFindToolsTool(
         } else {
           lines.push('\nThe public tool catalog stays fixed. Inside code_exec, call hidden non-interactive tools with return await tools["exact-name"](args). Preserve punctuation in the name. Dispatch still validates permissions, scope and arguments.');
         }
-      } else if (autoPromoted) {
-        lines.push('');
-        lines.push(
-          `Requested activation of ${autoPromoted.name}` +
-            (evicted.length > 0 ? ` (replaced least-recently-used: ${evicted.join(', ')})` : '') +
-            `. Availability is confirmed by the schemas in the next turn. Use \`expand_toolset({ tier: "${autoPromoted.tier}" })\` ` +
-            `instead if you need several ${autoPromoted.tier}-tier tools.`,
-        );
-      } else {
-        const firstHidden = top.find((r) => !r.visible && !r.blocked && !r.schemaRejected);
-        if (firstHidden) {
-          lines.push('');
-          lines.push(firstHidden.tier === 'bootstrap'
-            ? 'Hint: refine the query to auto-activate one strong match.'
-            : `Hint: use \`expand_toolset({ tier: "${firstHidden.tier}" })\` if you need several ` +
-              `${firstHidden.tier}-tier tools. Refine the query to auto-activate one strong match.`);
-        }
       }
       if (weak) {
         lines.push('');
@@ -299,11 +253,11 @@ export function buildFindToolsTool(
       }
       return { ...ok(lines.join('\n')), structuredData: {
         discovery: { schemaVersion: 1, revision: JSON.stringify(runner?.projectionReceipt ?? null),
-          tools: top.map(r => ({ name: r.name, state: r.blocked ? 'denied' : r.visible ? 'callable' : autoPromoted?.name === r.name ? 'activated' : 'deferred',
+          tools: top.map(r => ({ name: r.name, state: r.blocked ? 'denied' : r.visible ? 'callable' : 'deferred',
             ...(r.schemaRejected && !r.blocked ? { reason: 'provider_schema_rejected' } : {}) })) },
         candidates: top.map((r) => ({ name: r.name, score: r.score.total, visible: !r.blocked && r.visible, authorization: r.blocked ? 'blocked' : 'requires_dispatch_validation', availability: 'attempt_snapshot',
-          ...(runner?.stableToolCatalog && !r.blocked ? { inputSchema: r.schema, invokeAs: r.callableInsideCodeExec && !r.visible ? 'code_exec' : 'top_level' } : {}) })),
-        activation: autoPromoted ? { requested: [autoPromoted.name], state: 'pending_projection', evicted } : null,
+          ...(!r.blocked ? { inputSchema: r.schema, invokeAs: r.callableInsideCodeExec && !r.visible ? 'code_exec' : 'top_level' } : {}) })),
+        activation: null,
         ambiguous: !unambiguous,
         projection: runner?.projectionReceipt ?? null,
       } };

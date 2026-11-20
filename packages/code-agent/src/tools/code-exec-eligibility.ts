@@ -7,7 +7,7 @@ export function canInvokeInsideCodeExec(tool: CoderTool): boolean {
   return !(
     tool.name.startsWith('spawn_') || tool.name === 'resume_agent'
     || tool.name === 'code_exec' || tool.name === 'execute_task'
-    || tool.name === 'task_complete' || tool.name === 'expand_toolset'
+    || tool.name === 'task_complete'
     || tool.name === 'view_image' || tool.name === 'view_video'
   );
 }

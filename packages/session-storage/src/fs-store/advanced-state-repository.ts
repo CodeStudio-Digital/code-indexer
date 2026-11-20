@@ -426,10 +426,6 @@ export class FsAdvancedStateRepository {
   mergeToolsetState(
     id: SessionId | string,
     patch: {
-      addExtraTiers?: readonly string[];
-      addPins?: readonly string[];
-      /** Exact bounded runtime-pin working set. Takes precedence over addPins. */
-      pins?: readonly string[];
       visibleCap?: number | null;
     },
   ): Promise<void> {
@@ -439,12 +435,9 @@ export class FsAdvancedStateRepository {
         const current = toolsetFromState(state);
         const next: FsToolsetState = {
           v: 1,
-          extraTiers: [
-            ...new Set([...current.extraTiers, ...(patch.addExtraTiers ?? [])]),
-          ],
-          pins: patch.pins
-            ? [...new Set(patch.pins)]
-            : [...new Set([...current.pins, ...(patch.addPins ?? [])])],
+          // Written by older runs (expand_toolset / runtime pins); preserved as is.
+          extraTiers: current.extraTiers,
+          pins: current.pins,
           visibleCap:
             Object.prototype.hasOwnProperty.call(patch, 'visibleCap')
               ? patch.visibleCap ?? null

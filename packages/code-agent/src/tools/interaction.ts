@@ -1,6 +1,6 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { ASK_USER_DESC, DECISION_GATE_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { ASK_USER_DESC, DECISION_GATE_DESC } from '@mcp/code-agent/tools/descriptions.js';
 import { toolInteractions } from '../core/tool-interactions.js';
 
 /**
@@ -51,7 +51,7 @@ export function formatInterruptedResult(
  */
 export const askUser: CoderTool = {
   name: 'ask_user',
-  description: maybeTerse(ASK_USER_DESC),
+  description: ASK_USER_DESC,
   source: 'native',
   mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true, effectBoundary: 'control',
   parameters: {
@@ -264,7 +264,7 @@ export function formatDecisionGateResult(
  */
 export const decisionGate: CoderTool = {
   name: 'decision_gate',
-  description: maybeTerse(DECISION_GATE_DESC),
+  description: DECISION_GATE_DESC,
   source: 'native',
   mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true, effectBoundary: 'control',
   parameters: {

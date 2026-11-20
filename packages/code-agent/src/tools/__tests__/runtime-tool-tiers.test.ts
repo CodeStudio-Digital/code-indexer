@@ -4,7 +4,6 @@ import {
   collectRuntimeToolTiers,
   mergeRuntimeTierSummaries,
 } from '../runtime-tool-tiers.js';
-import { buildExpandTools } from '../expand.js';
 
 function tool(name: string, tier?: string): CoderTool {
   return {
@@ -44,50 +43,4 @@ describe('runtime tool tiers', () => {
     expect([...merged.keys()]).toEqual(['cloudflare', 'plugin:cloudflare']);
   });
 
-  it('makes a plugin tier promotable through expand_toolset', async () => {
-    const summary = new Map([
-      ['plugin:cloudflare', { displayName: 'plugin cloudflare', toolCount: 2 }],
-    ]);
-    const expand = buildExpandTools(summary)[0];
-    const activeTiers = new Set<string>(['bootstrap']);
-    const runner = {
-      activeTiers,
-      promoteTier: (tier: string) => activeTiers.add(tier),
-    };
-
-    expect(expand.parameters.properties?.tier).toMatchObject({
-      enum: expect.arrayContaining(['plugin:cloudflare']),
-    });
-    const result = await expand.handler(
-      { tier: 'plugin:cloudflare' },
-      { runner } as never,
-    );
-    expect(result.isError).toBeFalsy();
-    expect(activeTiers.has('plugin:cloudflare')).toBe(true);
-    expect(result.content).toContain('2 tools from plugin cloudflare');
-  });
-
-  it('reconciles a late Unity tier before rejecting an initially unknown tier', async () => {
-    let unityAvailable = false;
-    const beforeExpand = vi.fn(async () => { unityAvailable = true; });
-    const expand = buildExpandTools(undefined, {
-      beforeExpand,
-      isTierAvailable: (tier) => tier === 'unity' && unityAvailable,
-    })[0];
-    const activeTiers = new Set<string>(['bootstrap']);
-
-    const result = await expand.handler(
-      { tier: 'unity' },
-      {
-        runner: {
-          activeTiers,
-          promoteTier: (tier: string) => activeTiers.add(tier),
-        },
-      } as never,
-    );
-
-    expect(beforeExpand).toHaveBeenCalledWith('unity');
-    expect(result.isError).toBeFalsy();
-    expect(activeTiers.has('unity')).toBe(true);
-  });
 });

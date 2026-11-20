@@ -24,7 +24,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { parseAgentPath } from '@mcp/company/tools/path-resolution.js';
 import { runAgentWaitLoop } from '@mcp/company/tools/agent-wait-loop.js';
 
@@ -99,7 +98,7 @@ function normalizeTargets(args: Record<string, unknown>, cc: CompanyContext): { 
 
 export const waitAgents: CoderTool = {
   name: 'wait_agents',
-  description: maybeTerse(WAIT_AGENTS_DESC),
+  description: WAIT_AGENTS_DESC,
   source: 'native',
   mutates: false,
   // Blocks the runner waiting for events; never run two of these in parallel.

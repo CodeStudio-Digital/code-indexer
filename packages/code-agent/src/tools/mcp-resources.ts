@@ -15,7 +15,6 @@
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 const LIST_RESOURCES_DESC =
   'List static resources and URI templates exposed by the MCP bridge. ' +
@@ -32,7 +31,7 @@ const READ_RESOURCE_DESC =
 export function buildMcpResourceTools(bridge: McpToolBridge): CoderTool[] {
   const listResources: CoderTool = {
     name: 'mcp_list_resources',
-    description: maybeTerse(LIST_RESOURCES_DESC),
+    description: LIST_RESOURCES_DESC,
     source: 'native',
     mutates: false,
     parallelSafe: true,
@@ -82,7 +81,7 @@ export function buildMcpResourceTools(bridge: McpToolBridge): CoderTool[] {
 
   const readResource: CoderTool = {
     name: 'mcp_read_resource',
-    description: maybeTerse(READ_RESOURCE_DESC),
+    description: READ_RESOURCE_DESC,
     source: 'native',
     mutates: false,
     parallelSafe: true,

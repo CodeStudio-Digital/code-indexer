@@ -287,7 +287,7 @@
   "role.tierFull": "Full",
   "role.skills": "Habilidades",
   "role.availableMcps": "Pacotes MCP disponíveis",
-  "role.availableMcpsHint": "Subordinados destravam cada pacote sob demanda via expand_toolset(tier: \"<id>\"). Configure os servidores em Admin → MCP Servers.",
+  "role.availableMcpsHint": "Subordinados alcançam cada pacote sob demanda com find_tools. Configure os servidores em Admin → MCP Servers.",
   "role.systemPrompt": "Instruções do papel",
   "role.systemPromptHint": "(preset editável — markdown suportado)",
   "role.systemPromptPlaceholder": "Instruções para este papel. Use ${{PROJECT_NAME}}, ${{SESSION_ID}}, ${{USER_INPUT}}, ${{OS}}, ${{TIMESTAMP}} como variáveis de template.",
