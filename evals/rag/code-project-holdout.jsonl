@@ -1,0 +1,8 @@
+{"path":"packages/indexer/src/search/free-model-rate-limit.ts","query":"Onde a espera de uma chamada gratuita usa o horário de liberação informado pelo provedor?","evidence":"X-RateLimit-Reset"}
+{"path":"packages/indexer/src/search/semantic-fingerprint.ts","query":"Which code gives a vector space a new identity when the provider's credentials change?","evidence":"semanticTargetContextFingerprint"}
+{"path":"packages/indexer/src/search/content-grep.ts","query":"Where are the words for a regular-expression search extracted before scanning the remaining files?","evidence":"extractFtsTokens"}
+{"path":"packages/indexer/src/search/lsh-index.ts","query":"Como o índice grava assinaturas em baldes para aproximar vizinhos de um vetor?","evidence":"LSHIndex"}
+{"path":"packages/services/src/services/docs/sitemap.ts","query":"Where does the crawler distinguish a sitemap index from a list of pages?","evidence":"<sitemapindex"}
+{"path":"packages/services/src/services/docs/attachment-validation.ts","query":"Onde é verificado o tamanho total dos anexos acumulados em uma mensagem?","evidence":"MAX_ATTACHMENTS_TOTAL_BYTES"}
+{"path":"packages/services/src/services/docs/link-extractor.ts","query":"How are suggested navigation links checked against addresses present in the original HTML?","evidence":"baseUrl"}
+{"path":"packages/services/src/services/docs/progress-tracker.ts","query":"Qual componente acompanha o avanço da ingestão de documentação?","evidence":"Progress"}

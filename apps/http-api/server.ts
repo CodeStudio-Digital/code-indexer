@@ -6,6 +6,7 @@ import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
+import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 import { createDeps } from './server/deps.js';
 import { createOwnedAgentReads } from './server/owned-agent-reads.js';
 import { createOwnedProjectIndex } from './server/owned-project-index.js';
@@ -888,6 +889,14 @@ export function createApp(desktopBrowser?: import('@mcp/services/research-browse
   });
   app.route('/api/admin', createAdminRouter(deps.providerStore, {
     store: deps.semanticStore,
+    setProjectTargets: (projectId, targets) => {
+      const project = deps.db.getProjectCatalogEntry(projectId);
+      if (!project) throw new Error('Unknown project');
+      const folders = projectSemanticFolders(project);
+      if (!folders.length) throw new Error('Choose semantic folders before setting project models');
+      deps.semanticCoordinator.setCodeProjectFolders(projectId, folders, targets);
+      deps.hybridSearch?.invalidateCache();
+    },
     reindex: (purpose) => deps.semanticCoordinator.reindex(purpose, true),
     cleanupUnusedVectors: () => deps.semanticCoordinator.cleanupUnusedVectors(),
     namespaceStatus: (namespace) => deps.localVectorRouter.getNamespaceStatus(namespace),

@@ -116,7 +116,9 @@ export function normalizeEmbeddingTarget(value: unknown): EmbeddingTarget {
     const protocol = target.protocol === 'cloudflare' || target.protocol === 'bedrock'
       ? target.protocol
       : 'openai-embeddings';
-    return { kind: 'provider', providerId, model, protocol };
+    const queryPassage = protocol === 'openai-embeddings'
+      && (target.inputFormat === 'query-passage' || /^nvidia\/nemotron-3-embed-1b(?::free)?$/i.test(model));
+    return { kind: 'provider', providerId, model, protocol, ...(queryPassage ? { inputFormat: 'query-passage' as const } : {}) };
   }
   throw new Error('invalid embedding target kind');
 }

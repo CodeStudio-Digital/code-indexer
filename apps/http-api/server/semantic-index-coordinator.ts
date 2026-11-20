@@ -93,8 +93,8 @@ export class SemanticIndexCoordinator {
   reindexCodeProject(projectId: number, force?: boolean, preserveGeneration?: boolean): Promise<ReindexResult> {
     return this.#implementation.reindexCodeProject(projectId, force, preserveGeneration);
   }
-  setCodeProjectFolders(projectId: number, folders: readonly string[]): void {
-    this.#context.setCodeProjectFolders(projectId, folders);
+  setCodeProjectFolders(...args: Parameters<SemanticCoordinatorContext['setCodeProjectFolders']>): void {
+    this.#context.setCodeProjectFolders(...args);
   }
   enqueueCodeProjectReindex(...args: Parameters<SemanticCoordinatorContext['enqueueCodeProjectReindex']>): SemanticJobRow { return this.#implementation.enqueueCodeProjectReindex(...args); }
   private dispatchCodeProjectReindex(projectId: number, jobId: number): void { return this.#context.dispatchCodeProjectReindex(projectId, jobId); }

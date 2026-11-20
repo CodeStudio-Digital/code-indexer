@@ -18,6 +18,28 @@ export class SemanticProfiles {
     return row ? hydrateProfile(row) : null;
   }
 
+  getProjectTargets(projectId: number): Pick<SemanticProfileRow, 'embedding_target' | 'reranker_target'> | null {
+    try {
+      const row = this.db.prepare('SELECT embedding_target, reranker_target FROM project_semantic_targets WHERE project_id = ?')
+        .get(projectId) as Pick<JsonProfileRow, 'embedding_target' | 'reranker_target'> | undefined;
+      return row ? { embedding_target: JSON.parse(row.embedding_target), reranker_target: JSON.parse(row.reranker_target) } : null;
+    } catch (error) {
+      // Read-only CLI clients can open a catalog before the desktop migrates it.
+      if (error instanceof Error && error.message === 'no such table: project_semantic_targets') return null;
+      throw error;
+    }
+  }
+
+  setProjectTargets(projectId: number, targets: Pick<SemanticProfileRow, 'embedding_target' | 'reranker_target'> | null): void {
+    if (!targets) {
+      this.db.prepare('DELETE FROM project_semantic_targets WHERE project_id = ?').run(projectId);
+      return;
+    }
+    this.db.prepare(`INSERT INTO project_semantic_targets (project_id, embedding_target, reranker_target) VALUES (?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET embedding_target=excluded.embedding_target, reranker_target=excluded.reranker_target`)
+      .run(projectId, JSON.stringify(targets.embedding_target), JSON.stringify(targets.reranker_target));
+  }
+
   upsertProfile(input: {
     purpose: SemanticPurpose;
     embedding_target: EmbeddingTarget;

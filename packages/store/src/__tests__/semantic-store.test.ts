@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type DatabaseConstructor from 'better-sqlite3';
 import { semanticIndexing227 } from '../migrations/227_semantic_indexing.js';
 import { semanticRecovery277 } from '../migrations/277_semantic_recovery.js';
+import { projectSemanticTargets283 } from '../migrations/283_project_semantic_targets.js';
 import { pruneDuplicateSemanticBuilds } from '../semantic-build-retention.js';
 import { SemanticStore, type EmbeddingTarget } from '../semantic-store.js';
 
@@ -20,6 +21,25 @@ function harness() {
 }
 
 describe('SemanticStore', () => {
+  it('keeps code targets scoped across migration, reset and project deletion', () => {
+    const { db, store } = harness();
+    try {
+      expect(store.getProjectTargets(1)).toBeNull();
+      db.exec('CREATE TABLE projects (id INTEGER PRIMARY KEY); INSERT INTO projects VALUES (1),(2)');
+      projectSemanticTargets283.up(db);
+      const global = store.getProfile('code');
+      const targets = { embedding_target: { kind: 'disabled' }, reranker_target: { kind: 'disabled' } } as const;
+      store.setProjectTargets(1, targets);
+      expect(store.getProjectTargets(1)).toEqual(targets);
+      expect(store.getProjectTargets(2)).toBeNull();
+      expect(store.getProfile('code')).toEqual(global);
+      store.setProjectTargets(1, null);
+      expect(store.getProjectTargets(1)).toBeNull();
+      store.setProjectTargets(1, targets);
+      db.exec('DELETE FROM projects WHERE id=1');
+      expect(store.getProjectTargets(1)).toBeNull();
+    } finally { db.close(); }
+  });
   it('deletes redundant legacy attempts and atomically admits only one new build', async () => {
     const { db, store } = harness();
     try {

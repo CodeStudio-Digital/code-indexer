@@ -49,6 +49,8 @@ export interface RerankerRuntimeDiagnostics {
 
 export interface RerankerService {
   readonly name: string;
+  /** Select a project's configured reranker for a single-project query. */
+  forProject?(projectId: number): RerankerService;
   /** Deterministic capability gate; does not load weights or perform I/O. */
   queryBlockReason?(query: string): string | null;
   /**

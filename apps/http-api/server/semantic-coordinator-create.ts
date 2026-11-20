@@ -18,6 +18,12 @@ import { operations as operations5 } from './semantic-coordinator-project-remova
 import { operations as operations1 } from './semantic-coordinator-unused-vector-cleanup.js';
 
 function initialize(this: SemanticCoordinatorContext, deps: CoordinatorDeps): void {
+    // A completed removal stays fenced until the project row is deleted.
+    for (const projectId of deps.semanticStore.listProjectRemovalIds()) this.projectTombstones.add(projectId);
+    if (deps.maintenanceOwner === false) {
+      this.mutationFenceRecovery = Promise.resolve();
+      return;
+    }
 
     if (deps.recoverMutationFences) {
       // Fence resolution can scan source rows and acquire IMMEDIATE. Keep it
@@ -32,9 +38,6 @@ function initialize(this: SemanticCoordinatorContext, deps: CoordinatorDeps): vo
       this.recoverMutationFencesLocallyFailFast();
       this.mutationFenceRecovery = Promise.resolve();
     }
-    // Keep completed removal markers fenced until the caller deletes the
-    // project row. This survives a crash in the gap after vectors.db is gone.
-    for (const projectId of deps.semanticStore.listProjectRemovalIds()) this.projectTombstones.add(projectId);
     // External clients can publish a marker without sharing this process's
     // in-memory Set. Polling is a recovery path for a failed/missed localhost
     // wake-up and also closes the crash gap after physical cleanup.

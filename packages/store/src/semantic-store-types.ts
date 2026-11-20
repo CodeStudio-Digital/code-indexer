@@ -41,6 +41,8 @@ export type EmbeddingTarget =
       providerId: string;
       model: string;
       protocol: 'openai-embeddings' | 'cloudflare' | 'bedrock';
+      /** Persisted with the generation so older unprefixed vectors stay queryable. */
+      inputFormat?: 'query-passage';
     }
   | { kind: 'disabled' };
 

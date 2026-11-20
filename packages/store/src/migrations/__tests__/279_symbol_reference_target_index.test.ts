@@ -34,9 +34,10 @@ describe('migration 279 - symbol reference target index', () => {
         recordVersion.run(migration.version, migration.name);
       }
 
-      expect(runMigrations(db, { scope }).applied).toEqual([279, 280, 281, 282]);
+      expect(runMigrations(db, { scope }).applied).toEqual(MIGRATIONS.filter(entry => entry.version >= 279).map(entry => entry.version));
       expect(runMigrations(db, { scope }).applied).toEqual([]);
       if (scope === 'central') {
+        expect(db.prepare('SELECT DISTINCT semantic_vector_weight AS weight FROM projects').all()).toEqual([{ weight: 1 }]);
         expect(db.prepare('SELECT semantic_index_folders AS folders FROM projects ORDER BY id').all())
           .toEqual([{ folders: '["."]' }, { folders: '["."]' }, { folders: '[]' }]);
       }

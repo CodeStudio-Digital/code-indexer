@@ -46,6 +46,28 @@ export function semanticRouter(
   const app = new Hono();
   const reindexDispatcher = new SemanticReindexDispatcher(runtime);
 
+  app.put('/semantic/projects/:id/targets', async (c) => {
+    const projectId = Number(c.req.param('id'));
+    if (!Number.isSafeInteger(projectId) || projectId < 1) return c.json({ error: 'Invalid project id' }, 400);
+    if (!runtime.setProjectTargets) return c.json({ error: 'Project semantic configuration unavailable' }, 503);
+    try {
+      const body = await c.req.json<{ inherit?: boolean; embedding_target?: unknown; reranker_target?: unknown; confirm_fp32?: boolean }>();
+      let targets: Parameters<typeof runtime.store.setProjectTargets>[1] = null;
+      if (body.inherit !== true) {
+        const embedding = normalizeEmbeddingTarget(body.embedding_target);
+        const reranker = normalizeRerankerTarget(body.reranker_target);
+        assertHeavyFp32Confirmed(body.confirm_fp32, embedding, reranker);
+        requireSuccessfulProbe(runtime.store, providers, 'embedding', embedding);
+        requireSuccessfulProbe(runtime.store, providers, 'rerank', reranker);
+        targets = { embedding_target: embedding, reranker_target: reranker };
+      }
+      runtime.setProjectTargets(projectId, targets);
+      return c.json({ project_id: projectId, targets }, 202);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+
   app.get('/semantic/profiles', (c) => c.json({ profiles: runtime.store.listProfiles() }));
 
   app.get('/semantic/profiles/:purpose', (c) => {

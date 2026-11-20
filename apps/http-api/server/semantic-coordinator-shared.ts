@@ -27,6 +27,8 @@ type VectorStore
 } from '@mcp/store/vectors.js';
 
 export interface CoordinatorDeps {
+  /** The desktop owns cross-project recovery. A one-shot code worker only builds its selected project. */
+  maintenanceOwner?: boolean;
   db: CodeIndexDB;
   semanticStore: SemanticStore;
   listJobsOffThread?(filter: Parameters<SemanticStore['listJobs']>[0]): Promise<SemanticJobRow[]>;
@@ -49,6 +51,7 @@ export interface CoordinatorDeps {
     ): Promise<number>;
   };
   codeEmbedding: EmbeddingService;
+  codeEmbeddingForProject?(projectId: number): EmbeddingService;
   docsEmbedding: EmbeddingService;
   memoryEmbedding: EmbeddingService;
   costTracker: CostTracker;
@@ -76,6 +79,8 @@ export type ReindexResult = {
   failed_namespaces: Array<{ namespace: string; error: string }>;
   skipped?: 'disabled';
 };
+
+export type ProjectSemanticTargets = Parameters<SemanticStore['setProjectTargets']>[1];
 
 export interface SemanticUnusedVectorCleanupResult {
   tables_removed: number;

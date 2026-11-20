@@ -428,10 +428,9 @@ export class BedrockTitanEmbeddingService implements EmbeddingService {
  * API key (OpenRouter, OpenAI, …) so one key serves chat, rerank, and
  * embeddings — no duplicated credential.
  *
- * Unlike the local e5 model it adds NO `query:`/`passage:` prefixes: those are
- * e5-specific and would poison text-embedding-3 / Qwen3 vectors. `dimensions`
- * is forwarded when set (text-embedding-3 supports shortening) and is part of
- * the fingerprint because it changes the vector space → forces a re-embed.
+ * Generations record the input format and optional dimension as part of the
+ * vector space. Most providers accept raw text. Nemotron 3 Embed expects a
+ * different role prefix for queries and passages on the OpenAI-compatible API.
  */
 export class OpenAICompatEmbeddingService implements EmbeddingService {
   private baseURL: string;
@@ -439,6 +438,7 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
   private model: string;
   private dimensions?: number;
   private providerId: string;
+  private readonly inputFormat?: 'query-passage';
   private fetchFn: typeof fetch;
   private requestTimeoutMs: number;
   // OpenAI accepts up to 2048 inputs/request, but token limits bite first on
@@ -451,6 +451,7 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
     model: string;
     dimensions?: number;
     providerId?: string;
+    inputFormat?: 'query-passage';
     fetchFn?: typeof fetch;
     requestTimeoutMs?: number;
   }) {
@@ -459,6 +460,7 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
     this.model = opts.model;
     this.dimensions = opts.dimensions;
     this.providerId = opts.providerId ?? '';
+    this.inputFormat = opts.inputFormat;
     this.fetchFn = opts.fetchFn ?? fetch;
     const envTimeout = Number(process.env.MCP_EMBED_TIMEOUT_MS);
     this.requestTimeoutMs = opts.requestTimeoutMs
@@ -517,11 +519,15 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
   }
 
   async embed(texts: string[]): Promise<{ vectors: number[][]; tokens: number }> {
-    if (texts.length === 0) return { vectors: [], tokens: 0 };
+    return this.encode(texts, 'passage');
+  }
+
+  private async encode(texts: string[], role: 'query' | 'passage'): Promise<{ vectors: number[][]; tokens: number }> {
     const vectors: number[][] = [];
     let tokens = 0;
     for (let i = 0; i < texts.length; i += this.batchSize) {
-      const batch = texts.slice(i, i + this.batchSize);
+      const inputs = texts.slice(i, i + this.batchSize);
+      const batch = this.inputFormat ? inputs.map(text => role + ': ' + text) : inputs;
       vectors.push(...(await this.embedBatch(batch)));
       tokens += batch.reduce((s, t) => s + Math.ceil(t.length / 4), 0);
     }
@@ -529,12 +535,13 @@ export class OpenAICompatEmbeddingService implements EmbeddingService {
   }
 
   async embedQuery(text: string): Promise<{ vector: number[]; tokens: number }> {
-    const r = await this.embed([text]);
+    const r = await this.encode([text], 'query');
     return { vector: r.vectors[0] ?? [], tokens: r.tokens };
   }
 
   fingerprint(): string {
-    return `provider:${this.providerId}:${this.model}${this.dimensions ? `:${this.dimensions}` : ''}`;
+    const format = this.inputFormat ? ':' + this.inputFormat : '';
+    return `provider:${this.providerId}:${this.model}${this.dimensions ? `:${this.dimensions}` : ''}${format}`;
   }
 
   maxConcurrency(): number {

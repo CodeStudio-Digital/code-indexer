@@ -1470,6 +1470,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     router: localVectorRouter,
     vectorStore: vectorOverride,
     codeEmbedding: codeEmbeddingService,
+    codeEmbeddingForProject: projectId => semanticProfileRuntime.embedding('code', projectId),
     docsEmbedding: docsEmbeddingService,
     memoryEmbedding: memoryEmbeddingService,
     costTracker,

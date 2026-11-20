@@ -22,8 +22,9 @@ embeddingForPurpose(this: SemanticCoordinatorContext, purpose: SemanticPurpose):
     return this.deps.memoryEmbedding;
   },
 
-embeddingDisabled(this: SemanticCoordinatorContext, purpose: SemanticPurpose): boolean {
+embeddingDisabled(this: SemanticCoordinatorContext, purpose: SemanticPurpose, projectId?: number): boolean {
     const profile = this.deps.semanticStore.getProfile(purpose);
+    if (purpose === 'code' && projectId !== undefined && this.deps.semanticStore.getProjectTargets?.(projectId)?.embedding_target.kind === 'disabled') return true;
     if (profile) return profile.embedding_target.kind === 'disabled';
     const embedding = this.embeddingForPurpose(purpose);
     if (embedding instanceof NullEmbeddingService) return true;

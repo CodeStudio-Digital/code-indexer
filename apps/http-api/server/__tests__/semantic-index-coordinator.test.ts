@@ -647,6 +647,25 @@ beforeEach(() => {
 });
 
 describe('SemanticIndexCoordinator code generations', () => {
+  it('builds a project override without retiring a sibling project under construction', async () => {
+    const sibling: Generation = {
+      id: 7, purpose: 'code', fingerprint: 'other-embedding', embedding_target: { kind: 'onnx', model: 'other' },
+      dimension: 2, status: 'building', expected_items: 0, indexed_items: 0, failed_items: 0, error: null,
+    };
+    const h = makeHarness({ projects: [1, 2], fileCounts: { 1: 0, 2: 0 }, existingGeneration: sibling });
+    h.namespaces.set('code:p2', { namespace: 'code:p2', purpose: 'code', active_generation_id: null, building_generation_id: 7,
+      expected_items: 0, indexed_items: 0, failed_items: 0, delta_items: 0, last_error: null });
+    const target = { kind: 'provider', providerId: 'openrouter', model: 'project-encoder', protocol: 'openai-embeddings' };
+    Object.assign(h.store, { getProjectTargets: (id: number) => id === 1 ? { embedding_target: target } : null });
+    Object.assign(h.deps, { codeEmbeddingForProject: () => ({ ...h.embedding, fingerprint: () => 'project-space' }) });
+    try {
+      const result = await h.coordinator.reindexCodeProject(1, false);
+      expect(result.completed_namespaces).toEqual(['code:p1']);
+      expect(h.generations.find(g => g.id === result.generation_id)?.embedding_target).toEqual(target);
+      expect(h.namespaces.get('code:p2')?.building_generation_id).toBe(7);
+      expect(h.generations.find(g => g.id === 7)?.status).toBe('building');
+    } finally { await h.coordinator.dispose(); }
+  });
   it('keeps docs backfill scans on the worker and coalesces callers until its query finishes', async () => {
     const h = makeHarness({ docChunks: [] });
     let release!: () => void;

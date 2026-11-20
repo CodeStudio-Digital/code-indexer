@@ -33,6 +33,7 @@ export interface LocalVectorRouterOptions {
       | 'deleteNamespace'
       | 'getGeneration'
       | 'getProfile'
+      | 'getProjectTargets'
       | 'listItems'
       | 'upsertItem'
       | 'deleteItemsByVectorIds'

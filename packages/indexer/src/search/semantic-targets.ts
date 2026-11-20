@@ -195,6 +195,7 @@ export function createEmbeddingServiceForTarget(
         apiKey: provider.api_key,
         model: target.model,
         providerId: id,
+        inputFormat: target.inputFormat,
       });
     }
   }

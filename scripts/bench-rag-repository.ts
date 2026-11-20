@@ -11,6 +11,9 @@ import { LocalEmbeddingService } from '@mcp/indexer/search/local-embeddings.js';
 import { LocalReranker } from '@mcp/indexer/search/local-reranker.js';
 import { expandGraph } from '@mcp/indexer/search/graph-expansion-source.js';
 import type { HybridSearchResult } from '@mcp/shared/types.js';
+import { openNemotronBenchmark, embedModel, rerankModel, verifyNemotronRanking } from './bench-rag-openrouter.js';
+import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 
 type Hit = { path: string; score: number };
 function files(items: HybridSearchResult[]): Hit[] {
@@ -49,8 +52,11 @@ const { env } = await import('@huggingface/transformers');
 env.allowRemoteModels = false;
 const cacheDir = join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.mcp', 'models');
 env.localModelPath = cacheDir + '/';
-const embedding = new LocalEmbeddingService({ cacheDir });
-const reranker = new LocalReranker({ cacheDir, dtype: 'fp32', strict: true, localFilesOnly: true });
+const remote = process.argv.includes('--openrouter-free')
+  ? openNemotronBenchmark(resolve('.tmp/agent-ide-reliability/nemotron-responses.db')) : undefined;
+const local = remote ? undefined : new LocalEmbeddingService({ cacheDir });
+const embedding: EmbeddingService = remote?.embedding ?? local!;
+const reranker: RerankerService = remote?.reranker ?? new LocalReranker({ cacheDir, dtype: 'fp32', strict: true, localFilesOnly: true });
 const db = new CodeIndexDB(join(output, 'index.db'));
 const manifest = { head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), roots,
   goldSHA: createHash('sha256').update(JSON.stringify(gold)).digest('hex'), projects: [] as object[] };
@@ -58,7 +64,7 @@ const rows: Array<{ project: string; kind: string; query: string; variant: strin
 try {
   for (const [name, dir] of Object.entries(roots)) {
     const project = db.createProject(name, resolve(dir));
-    db.updateProject(project.id, { semantic_index_folders: JSON.stringify(['.']) });
+    db.updateProject(project.id, { semantic_index_folders: JSON.stringify(['.']), semantic_vector_weight: remote ? 1.5 : 1 });
     const start = performance.now();
     const structure = await runStructuralIndex(db, project.id);
     if (structure.errorCount || structure.unavailableRoots?.length) throw new Error('Incomplete structural index: ' + name);
@@ -72,12 +78,17 @@ try {
       const ranked = new HybridSearch(db, scratch.store, embedding, null, reranker);
       for (const q of gold.filter(row => row.project === name)) {
         const latency: Record<string, number> = {};
-        const run = async (mode: 'hybrid' | 'vector' | 'fts', graph: boolean, rerank = false) => {
+        const outcomes: Record<string, string> = {};
+        const run = async (mode: 'hybrid' | 'vector' | 'fts', graph: boolean, rerank = false, limit = 50) => {
           process.env.MCP_PIPELINES_GRAPH_EXPANSION = graph ? '1' : '0';
           const started = performance.now();
-          const result = await (rerank ? ranked : engine).searchWithDiag(project.id, name, q.query, { mode, limit: 50, bypassCache: true });
-          latency[rerank ? 'reranked' : graph ? 'hybrid-lexical-graph' : mode] = performance.now() - started;
-          if (mode !== 'fts') verifySemanticRetrieval(result.diagnostics, true);
+          const key = limit === 10 ? (rerank ? 'reranked-public-10' : 'hybrid-public-10')
+            : rerank ? 'reranked' : graph ? 'hybrid-lexical-graph' : mode;
+          const screened = rerank && remote?.wasScreened(q.query);
+          const result = await (rerank && !screened ? ranked : engine).searchWithDiag(project.id, name, q.query, { mode, limit, bypassCache: true });
+          latency[key] = performance.now() - started;
+          if (remote && rerank) outcomes[key] = verifyNemotronRanking(result.diagnostics, !!screened);
+          else if (mode !== 'fts') verifySemanticRetrieval(result.diagnostics, true);
           return result.results;
         };
         const fts = files(await run('fts', false)), vec = files(await run('vector', false));
@@ -106,10 +117,14 @@ try {
           'rrf-file': merge('rrf-file', latency.fts! + latency.vector!, [fts, vec]),
           'normalized-file': merge('normalized-file', latency.fts! + latency.vector!, [fts, vec], true),
           reranked: files(await run('hybrid', true, true)),
+          ...(remote ? {
+            'hybrid-public-10': files(await run('hybrid', true, false, 10)),
+            'reranked-public-10': files(await run('hybrid', true, true, 10)),
+          } : {}),
         };
         for (const [variant, hits] of Object.entries(variants)) {
           const result = { project: name, kind: q.kind, query: q.query, variant,
-            rank: hits.findIndex(h => h.path === q.path) + 1, candidateCount: hits.length, ms: latency[variant] };
+            rank: hits.findIndex(h => h.path === q.path) + 1, candidateCount: hits.length, ms: latency[variant], outcome: outcomes[variant] };
           rows.push(result);
           appendFileSync(join(output, 'metrics.jsonl'), JSON.stringify(result) + '\n');
         }
@@ -123,6 +138,8 @@ try {
     return [v, { total: group.length, hits10: group.filter(r => r.rank > 0 && r.rank <= 10).length,
       ndcg10: group.reduce((sum, r) => sum + (r.rank > 0 && r.rank <= 10 ? 1 / Math.log2(1 + r.rank) : 0), 0) / group.length }];
   }));
-  writeFileSync(join(output, 'summary.json'), JSON.stringify({ embedding: embedding.diagnostics(), summary }, null, 2));
+  writeFileSync(join(output, 'summary.json'), JSON.stringify({
+    embedding: remote ? embedModel : local?.diagnostics(), ...(remote ? { reranker: rerankModel, usage: remote.usage } : {}), summary,
+  }, null, 2));
   console.log(output);
-} finally { await embedding.dispose(); await reranker.dispose(); db.close(); }
+} finally { await embedding.dispose?.(); await reranker.dispose?.(); remote?.close(); db.close(); }

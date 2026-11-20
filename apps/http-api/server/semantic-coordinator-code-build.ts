@@ -330,7 +330,7 @@ runCodeEmbedding(this: SemanticCoordinatorContext,
   ) {
     return retryEmbeddings({
       db: this.deps.db,
-      embeddingService: this.deps.codeEmbedding,
+      embeddingService: this.deps.codeEmbeddingForProject?.(projectId) ?? this.deps.codeEmbedding,
       vectorStore: this.deps.vectorStore,
       costTracker: this.deps.costTracker,
       lshSink: this.deps.lshSink,

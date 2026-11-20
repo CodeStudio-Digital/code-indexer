@@ -58,5 +58,12 @@ describe('HybridSearch global owner path', () => {
     expect(results[0].result.score).toBe(0.99);
     expect(results.every((result, index) =>
       index === 0 || results[index - 1].result.score >= result.result.score)).toBe(true);
+
+    rerank.mockClear();
+    reranker.forProject = id => ({ name: 'project-' + id, cacheRevision: () => String(id), rerank });
+    const mixed = await search.searchGlobal([{ id: 1, name: 'one' }, { id: 2, name: 'two' }], 'where is the cache implemented',
+      { mode: 'hybrid', type: 'files', limit: 2 });
+    expect(mixed).toHaveLength(2);
+    expect(rerank).not.toHaveBeenCalled();
   });
 });

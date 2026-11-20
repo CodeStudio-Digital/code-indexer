@@ -9,22 +9,23 @@ import {
 type SemanticGenerationRow,
 type SemanticJobRow
 } from '@mcp/store';
-import { CodeScopeChangedError,errorMessage,readCodeDeltaCursor,type ReindexResult } from './semantic-coordinator-shared.js';
+import { CodeScopeChangedError,errorMessage,readCodeDeltaCursor,type ProjectSemanticTargets,type ReindexResult } from './semantic-coordinator-shared.js';
 
 import type { SemanticCoordinatorContext } from './semantic-coordinator-context.js';
 
 export const operations = {
 ensureCodeProject(this: SemanticCoordinatorContext, projectId: number): Promise<void> {
+    if (this.embeddingDisabled('code', projectId)) return Promise.resolve();
     if (!projectSemanticFolders(this.deps.db.getProjectCatalogEntry(projectId)).length) return Promise.resolve();
     return this.coalesceCodeCatchup(projectId, async () => {
-      const generation = await this.ensureGeneration('code', false);
+      const generation = await this.ensureGeneration('code', false, projectId);
       await this.runCodeProjectBuild(projectId, generation, false);
     });
   },
 
 catchUpCodeProject(this: SemanticCoordinatorContext, projectId: number): Promise<void> {
     if (this.disposed) return Promise.resolve();
-    if (this.embeddingDisabled('code')) return Promise.resolve();
+    if (this.embeddingDisabled('code', projectId)) return Promise.resolve();
     if (!projectSemanticFolders(this.deps.db.getProjectCatalogEntry(projectId)).length) return Promise.resolve();
     const namespace = codeNamespace(projectId);
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
@@ -62,7 +63,7 @@ reindexCodeProject(this: SemanticCoordinatorContext, projectId: number, force = 
     if (!projectSemanticFolders(project).length) {
       return Promise.reject(new Error('Choose semantic folders before indexing this project'));
     }
-    if (this.embeddingDisabled('code')) return Promise.resolve(this.disabledResult('code'));
+    if (this.embeddingDisabled('code', projectId)) return Promise.resolve(this.disabledResult('code'));
     const running = this.projectReindexRuns.get(projectId);
     if (running) return running;
     const run = (async (): Promise<ReindexResult> => {
@@ -71,7 +72,7 @@ reindexCodeProject(this: SemanticCoordinatorContext, projectId: number, force = 
         : undefined;
       const existingId = state?.building_generation_id ?? state?.active_generation_id;
       const existing = existingId ? this.deps.semanticStore.getGeneration(existingId) : null;
-      const generation = existing ?? await this.ensureGeneration('code', force);
+      const generation = existing ?? await this.ensureGeneration('code', force, projectId);
       try {
         await this.coalesceCodeCatchup(projectId, () =>
           this.runCodeProjectBuild(projectId, generation, false));
@@ -98,21 +99,33 @@ reindexCodeProject(this: SemanticCoordinatorContext, projectId: number, force = 
     return tracked;
   },
 
-setCodeProjectFolders(this: SemanticCoordinatorContext, projectId: number, folders: readonly string[]): void {
+setCodeProjectFolders(this: SemanticCoordinatorContext, projectId: number, folders: readonly string[], targets?: ProjectSemanticTargets): void {
     const project = this.deps.db.getProjectCatalogEntry(projectId);
     if (!project || project.is_synthetic || project.worktree_parent_id) throw new Error('Project cannot set semantic folders');
     const serialized = JSON.stringify(folders);
-    if (serialized === project.semantic_index_folders) return;
-    const expectedFiles = this.deps.db.countFilesInFolders(projectId, folders);
     const store = this.deps.semanticStore;
+    const expectedFiles = this.deps.db.countFilesInFolders(projectId, folders);
     // The coordinator uses its own connection. Keep the project setting and
     // its queued work on that one connection so both commit or both roll back.
     store.withBusyTimeout(50, () => store.db.transaction(() => {
+      const previous = targets === undefined ? undefined : store.getProjectTargets(projectId);
+      const targetsChanged = targets !== undefined && JSON.stringify(previous) !== JSON.stringify(targets);
+      const foldersChanged = serialized !== this.deps.db.getProjectCatalogEntry(projectId)?.semantic_index_folders;
+      if (!foldersChanged && !targetsChanged) return;
+      if (targetsChanged) {
+        const busy = store.listJobs({ namespace: 'semantic:reindex:code:p' + projectId, kinds: ['build'], statuses: ['running'] });
+        if (busy.length || this.projectReindexRuns.has(projectId) || this.projectReindexDispatches.has(projectId)) {
+          throw new Error('A semantic build is running for this project');
+        }
+        store.setProjectTargets(projectId, targets!);
+        if (!foldersChanged && JSON.stringify(previous?.embedding_target) === JSON.stringify(targets?.embedding_target)) return;
+      }
       store.db.prepare(`UPDATE projects SET semantic_index_folders = ?, updated_at = datetime('now') WHERE id = ?`)
         .run(serialized, projectId);
       const state = store.listNamespaceGenerations({ namespace: codeNamespace(projectId) })[0];
       if (state?.active_generation_id || state?.building_generation_id) this.persistCodeDelta(projectId, [], []);
-      if (!this.embeddingDisabled('code')) this.enqueueCodeProjectReindex(projectId, false, 'explicit-project-scope', expectedFiles);
+      if (!this.embeddingDisabled('code', projectId)) this.enqueueCodeProjectReindex(projectId, false,
+        targetsChanged ? 'explicit-project-targets' : 'explicit-project-scope', expectedFiles);
     }).immediate());
     this.codePauseRequested.delete(projectId);
   },
@@ -148,7 +161,7 @@ enqueueCodeProjectReindex(this: SemanticCoordinatorContext,
           project_id: projectId,
           force: effectiveForce,
           pause_requested: false,
-          ...(reconcileScope || force ? { reconcile_scope: reconcileScope } : {}),
+          ...(reconcileScope || force || reason === 'explicit-project-targets' ? { reconcile_scope: reconcileScope } : {}),
         },
         expected_items: expected,
         ...(existing.status === 'running' ? {} : { processed_items: 0, failed_items: 0, error: null }),

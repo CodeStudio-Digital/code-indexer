@@ -151,7 +151,10 @@ export class LocalVectorRouteResolver {
         `semantic profile ${route.purpose} is disabled`,
       );
     }
-    if (!embeddingTargetsEqual(generation.embedding_target, profile.embedding_target)) {
+    const desired = route.purpose === 'code' && route.projectId !== null
+      ? semantic.getProjectTargets?.(route.projectId)?.embedding_target ?? profile.embedding_target
+      : profile.embedding_target;
+    if (!embeddingTargetsEqual(generation.embedding_target, desired)) {
       throw new SemanticEmbeddingTargetMismatchError(
         route.namespace,
         route.generationId,

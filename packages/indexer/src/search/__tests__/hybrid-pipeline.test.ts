@@ -75,6 +75,14 @@ describe('RrfFusionScorer', () => {
   const scorer = new RrfFusionScorer();
   const RRF_K = 60;
 
+  it('uses the project vector weight for prose and preserves lexical and identifier scores', async () => {
+    const candidates = [makeCandidate(1, { vector: 1 }), makeCandidate(2, { fts: 1 })];
+    const weighted = await scorer.score({ ...emptyQuery, query: 'How are requests cached?', vectorWeight: 1.5 }, candidates);
+    expect(weighted.map(row => row.candidate.score)).toEqual([1.5 / 61, 1 / 61]);
+    const literal = await scorer.score({ ...emptyQuery, query: 'resolveCache', vectorWeight: 1.5 }, candidates);
+    expect(literal.map(row => row.candidate.score)).toEqual([1 / 61, 1 / 61]);
+  });
+
   it('single source: score = 1/(K + rank)', async () => {
     const candidates = [makeCandidate(1, { fts: 1 }), makeCandidate(2, { fts: 2 })];
     const out = await scorer.score(emptyQuery, candidates);

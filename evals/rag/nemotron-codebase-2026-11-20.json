@@ -1,0 +1,729 @@
+{
+  "schema": 1,
+  "metric": "One labeled file per query. A zero rank means absent from the returned window.",
+  "project": {
+    "project": "CodeStudio/MCP-CodeBase",
+    "namespace": "code:p1",
+    "generation": 9,
+    "status": "ready",
+    "embedding": "nvidia/nemotron-3-embed-1b:free",
+    "reranker": "nvidia/nemotron-3.5-rerank-8b:free",
+    "dimension": 2048,
+    "selectedFolders": [
+      "packages/indexer/src/search",
+      "packages/services/src/services/docs"
+    ],
+    "structurallyIndexedFiles": 6645,
+    "selectedIndexedFiles": 130,
+    "logicalItems": 1667,
+    "physicalVectors": 1667,
+    "failed": 0,
+    "activationUsage": {
+      "embedRequests": 35,
+      "rerankRequests": 0,
+      "promptTokens": 682775,
+      "costUSD": 0,
+      "costReports": 35,
+      "rejected": 0
+    }
+  },
+  "rrf": {
+    "k": 60,
+    "conceptualVectorWeight": 1.5,
+    "defaultVectorWeight": 1,
+    "otherProjectsWithActiveGeneration": 4,
+    "otherProjectsWithBuildingGeneration": 1
+  },
+  "installed": {
+    "baseline": {
+      "original": {
+        "hit10": 14,
+        "total": 18,
+        "ndcg10": 0.55368,
+        "reranked": 4,
+        "screened": 14
+      },
+      "holdout": {
+        "hit10": 8,
+        "total": 8,
+        "ndcg10": 0.632701,
+        "reranked": 6,
+        "screened": 2
+      },
+      "usage": {
+        "embedRequests": 26,
+        "rerankRequests": 12,
+        "promptTokens": 60597,
+        "costUSD": 0,
+        "costReports": 36,
+        "rejected": 2
+      }
+    },
+    "adjusted": {
+      "original": {
+        "hit10": 18,
+        "total": 18,
+        "ndcg10": 0.7682,
+        "reranked": 4,
+        "screened": 14
+      },
+      "holdout": {
+        "hit10": 8,
+        "total": 8,
+        "ndcg10": 0.953866,
+        "reranked": 5,
+        "screened": 3
+      },
+      "usage": {
+        "embedRequests": 26,
+        "rerankRequests": 10,
+        "promptTokens": 66032,
+        "costUSD": 0,
+        "costReports": 35,
+        "rejected": 1
+      }
+    },
+    "ablation": [
+      {
+        "w": 1,
+        "k": 60,
+        "hits": 14,
+        "ranks": [
+          2,
+          2,
+          3,
+          3,
+          3,
+          4,
+          0,
+          1,
+          2,
+          2,
+          1,
+          0,
+          1,
+          2,
+          5,
+          0,
+          0,
+          5
+        ]
+      },
+      {
+        "w": 1.5,
+        "k": 60,
+        "hits": 18,
+        "ranks": [
+          2,
+          2,
+          1,
+          1,
+          1,
+          2,
+          4,
+          1,
+          2,
+          2,
+          1,
+          6,
+          1,
+          1,
+          5,
+          3,
+          4,
+          5
+        ]
+      },
+      {
+        "w": 2,
+        "k": 60,
+        "hits": 18,
+        "ranks": [
+          2,
+          2,
+          1,
+          1,
+          1,
+          2,
+          4,
+          1,
+          2,
+          2,
+          1,
+          5,
+          1,
+          1,
+          5,
+          3,
+          4,
+          5
+        ]
+      },
+      {
+        "w": 1,
+        "k": 10,
+        "hits": 14,
+        "ranks": [
+          2,
+          2,
+          3,
+          3,
+          3,
+          4,
+          0,
+          1,
+          2,
+          2,
+          1,
+          0,
+          1,
+          4,
+          5,
+          0,
+          0,
+          5
+        ]
+      },
+      {
+        "w": 1.5,
+        "k": 10,
+        "hits": 16,
+        "ranks": [
+          2,
+          2,
+          1,
+          1,
+          1,
+          2,
+          0,
+          1,
+          2,
+          2,
+          1,
+          0,
+          1,
+          2,
+          5,
+          3,
+          3,
+          5
+        ]
+      },
+      {
+        "w": 2,
+        "k": 10,
+        "hits": 18,
+        "ranks": [
+          2,
+          2,
+          1,
+          1,
+          1,
+          2,
+          4,
+          2,
+          2,
+          2,
+          1,
+          5,
+          1,
+          1,
+          6,
+          3,
+          3,
+          5
+        ]
+      }
+    ],
+    "queries": [
+      {
+        "split": "original",
+        "query": "resolveBundledEmbeddingPath",
+        "path": "packages/indexer/src/search/bundled-model-path.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "reranked"
+      },
+      {
+        "split": "original",
+        "query": "SemanticInferenceScheduler",
+        "path": "packages/indexer/src/search/semantic-inference-scheduler.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "reranked"
+      },
+      {
+        "split": "original",
+        "query": "O que acontece quando a placa de vídeo falha durante o cálculo das representações de texto?",
+        "path": "packages/indexer/src/search/local-embeddings.ts",
+        "before": 3,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "How do simultaneous requests for the same text avoid encoding it repeatedly across collections?",
+        "path": "packages/indexer/src/search/semantic-profile-runtime.ts",
+        "before": 3,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Como impedir que um arquivo com muitos chamadores domine os vizinhos de uma busca?",
+        "path": "packages/indexer/src/search/graph-expansion-source.ts",
+        "before": 3,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Where is the choice between a literal lookup and a natural language search made?",
+        "path": "packages/indexer/src/search/planner.ts",
+        "before": 4,
+        "after": 2,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Which caller uses expandGraph to add neighboring files to search results?",
+        "path": "packages/indexer/src/search/hybrid-pipeline.ts",
+        "before": 0,
+        "after": 4,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Quem usa a função preferredOnnxEmbeddingDevice ao carregar o modelo de embeddings?",
+        "path": "packages/indexer/src/search/local-embeddings.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "MCP_HYBRID_HYDE_SKIP_FTS",
+        "path": "packages/indexer/src/search/hybrid-pipeline.ts",
+        "before": 2,
+        "after": 2,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "runIncrementalFolderIngest",
+        "path": "packages/services/src/services/docs/index-doc-use-case/incremental-folder.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "reranked"
+      },
+      {
+        "split": "original",
+        "query": "CrossEncoderReranker",
+        "path": "packages/services/src/services/docs/cross-encoder-reranker.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Como impedir que um comentário de shell vire uma seção nova dentro de um bloco de exemplo?",
+        "path": "packages/services/src/services/docs/section-chunker.ts",
+        "before": 0,
+        "after": 4,
+        "outcome": "reranked"
+      },
+      {
+        "split": "original",
+        "query": "What distinguishes a trustworthy relevance score from an uncalibrated retrieval score?",
+        "path": "packages/services/src/services/docs/relevance-policy.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Onde a extração de páginas de um PDF guarda o número da página para a citação?",
+        "path": "packages/services/src/services/docs/pdf-parser.ts",
+        "before": 2,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "How does an incremental refresh retain the identity of a cited section?",
+        "path": "packages/services/src/services/docs/incremental-metadata.ts",
+        "before": 5,
+        "after": 5,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Which consumer uses buildEmbeddingText to send a documentation passage to the vector store?",
+        "path": "packages/services/src/services/docs/index-doc-use-case/embed-upsert.ts",
+        "before": 0,
+        "after": 3,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "Onde a atualização de uma pasta usa buildItemChunks depois de verificar as páginas?",
+        "path": "packages/services/src/services/docs/index-doc-use-case/incremental-folder.ts",
+        "before": 0,
+        "after": 4,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "original",
+        "query": "no_extractable_text",
+        "path": "packages/services/src/services/docs/pdf-parser.ts",
+        "before": 5,
+        "after": 5,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "holdout",
+        "query": "Onde a espera de uma chamada gratuita usa o horário de liberação informado pelo provedor?",
+        "path": "packages/indexer/src/search/free-model-rate-limit.ts",
+        "before": 3,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "holdout",
+        "query": "Which code gives a vector space a new identity when the provider's credentials change?",
+        "path": "packages/indexer/src/search/semantic-fingerprint.ts",
+        "before": 3,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "holdout",
+        "query": "Where are the words for a regular-expression search extracted before scanning the remaining files?",
+        "path": "packages/indexer/src/search/content-grep.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "provider-screened-rrf"
+      },
+      {
+        "split": "holdout",
+        "query": "Como o índice grava assinaturas em baldes para aproximar vizinhos de um vetor?",
+        "path": "packages/indexer/src/search/lsh-index.ts",
+        "before": 4,
+        "after": 2,
+        "outcome": "reranked"
+      },
+      {
+        "split": "holdout",
+        "query": "Where does the crawler distinguish a sitemap index from a list of pages?",
+        "path": "packages/services/src/services/docs/sitemap.ts",
+        "before": 1,
+        "after": 1,
+        "outcome": "reranked"
+      },
+      {
+        "split": "holdout",
+        "query": "Onde é verificado o tamanho total dos anexos acumulados em uma mensagem?",
+        "path": "packages/services/src/services/docs/attachment-validation.ts",
+        "before": 2,
+        "after": 1,
+        "outcome": "reranked"
+      },
+      {
+        "split": "holdout",
+        "query": "How are suggested navigation links checked against addresses present in the original HTML?",
+        "path": "packages/services/src/services/docs/link-extractor.ts",
+        "before": 3,
+        "after": 1,
+        "outcome": "reranked"
+      },
+      {
+        "split": "holdout",
+        "query": "Qual componente acompanha o avanço da ingestão de documentação?",
+        "path": "packages/services/src/services/docs/progress-tracker.ts",
+        "before": 3,
+        "after": 1,
+        "outcome": "reranked"
+      }
+    ]
+  },
+  "subtrees": {
+    "roots": {
+      "indexer": "packages/indexer/src/search",
+      "docs": "packages/services/src/services/docs"
+    },
+    "granite": {
+      "corpus": [
+        {
+          "name": "indexer",
+          "files": 54,
+          "vectors": 799,
+          "corpusSHA256": "ec5093c07c5a2056d77f1e79ea1163111d70820cb4da57c0fd6bbc00542318c1"
+        },
+        {
+          "name": "docs",
+          "files": 78,
+          "vectors": 909,
+          "corpusSHA256": "e853d9e18b1b9b8b319e6ec5e0cf6c50f8c6825e989442c9034b04a5fc27ad06"
+        }
+      ],
+      "summary": {
+        "grep": {
+          "total": 18,
+          "hits10": 6,
+          "ndcg10": 0.2850516529761921
+        },
+        "fts": {
+          "total": 18,
+          "hits10": 13,
+          "ndcg10": 0.5560000523334465
+        },
+        "vector": {
+          "total": 18,
+          "hits10": 16,
+          "ndcg10": 0.5595048030100456
+        },
+        "hybrid": {
+          "total": 18,
+          "hits10": 15,
+          "ndcg10": 0.6283955220852886
+        },
+        "hybrid-lexical-graph": {
+          "total": 18,
+          "hits10": 15,
+          "ndcg10": 0.5668838143471983
+        },
+        "hybrid-seed-1-hop": {
+          "total": 18,
+          "hits10": 12,
+          "ndcg10": 0.36175491222785294
+        },
+        "hybrid-seed-2-hop": {
+          "total": 18,
+          "hits10": 14,
+          "ndcg10": 0.42087648777867176
+        },
+        "rrf-file": {
+          "total": 18,
+          "hits10": 15,
+          "ndcg10": 0.6286787453349764
+        },
+        "normalized-file": {
+          "total": 18,
+          "hits10": 14,
+          "ndcg10": 0.5739203556338732
+        },
+        "reranked": {
+          "total": 18,
+          "hits10": 17,
+          "ndcg10": 0.682368382622121
+        }
+      }
+    },
+    "nemotronWeight1": {
+      "corpus": [
+        {
+          "name": "indexer",
+          "files": 54,
+          "vectors": 809,
+          "corpusSHA256": "1a70b87d92c7e0119a45f511758fb3817ea2acce61ca1c5770577cf99f6b95c4"
+        },
+        {
+          "name": "docs",
+          "files": 78,
+          "vectors": 909,
+          "corpusSHA256": "e853d9e18b1b9b8b319e6ec5e0cf6c50f8c6825e989442c9034b04a5fc27ad06"
+        }
+      ],
+      "embedding": "nvidia/nemotron-3-embed-1b:free",
+      "reranker": "nvidia/nemotron-3.5-rerank-8b:free",
+      "usage": {
+        "requests": 57,
+        "cacheHits": 9,
+        "tokensReported": 806007,
+        "costReportedUSD": 0,
+        "costReports": 45
+      },
+      "summary": {
+        "grep": {
+          "total": 18,
+          "hits10": 6,
+          "ndcg10": 0.2850516529761921
+        },
+        "fts": {
+          "total": 18,
+          "hits10": 13,
+          "ndcg10": 0.5560000523334465
+        },
+        "vector": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.7864840697988609
+        },
+        "hybrid": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.671717182534464
+        },
+        "hybrid-lexical-graph": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6102054747963735
+        },
+        "hybrid-seed-1-hop": {
+          "total": 18,
+          "hits10": 16,
+          "ndcg10": 0.5268078368071494
+        },
+        "hybrid-seed-2-hop": {
+          "total": 18,
+          "hits10": 17,
+          "ndcg10": 0.5300913808333573
+        },
+        "rrf-file": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6971719659574239
+        },
+        "normalized-file": {
+          "total": 18,
+          "hits10": 15,
+          "ndcg10": 0.6702478513671181
+        },
+        "reranked": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6819691338241457
+        },
+        "hybrid-public-10": {
+          "total": 18,
+          "hits10": 17,
+          "ndcg10": 0.5904517847097323
+        },
+        "reranked-public-10": {
+          "total": 18,
+          "hits10": 17,
+          "ndcg10": 0.6622154437375044
+        }
+      }
+    },
+    "nemotronWeight1_5": {
+      "corpus": [
+        {
+          "name": "indexer",
+          "files": 54,
+          "vectors": 813,
+          "corpusSHA256": "675318b01aa4b94876b21b8eb29f8bbac823a9721f2abbbebee67d6c95d311ce"
+        },
+        {
+          "name": "docs",
+          "files": 78,
+          "vectors": 909,
+          "corpusSHA256": "e853d9e18b1b9b8b319e6ec5e0cf6c50f8c6825e989442c9034b04a5fc27ad06"
+        }
+      ],
+      "embedding": "nvidia/nemotron-3-embed-1b:free",
+      "reranker": "nvidia/nemotron-3.5-rerank-8b:free",
+      "usage": {
+        "requests": 17,
+        "cacheHits": 37,
+        "tokensReported": 465469,
+        "costReportedUSD": 0,
+        "costReports": 17
+      },
+      "summary": {
+        "grep": {
+          "total": 18,
+          "hits10": 6,
+          "ndcg10": 0.2850516529761921
+        },
+        "fts": {
+          "total": 18,
+          "hits10": 13,
+          "ndcg10": 0.5560000523334465
+        },
+        "vector": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.7864840697988609
+        },
+        "hybrid": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6853126109725416
+        },
+        "hybrid-lexical-graph": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6238009032344513
+        },
+        "hybrid-seed-1-hop": {
+          "total": 18,
+          "hits10": 16,
+          "ndcg10": 0.5191990329494983
+        },
+        "hybrid-seed-2-hop": {
+          "total": 18,
+          "hits10": 17,
+          "ndcg10": 0.5156535522576732
+        },
+        "rrf-file": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6971719659574239
+        },
+        "normalized-file": {
+          "total": 18,
+          "hits10": 15,
+          "ndcg10": 0.6702478513671181
+        },
+        "reranked": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6933011005776515
+        },
+        "hybrid-public-10": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.6593959794775299
+        },
+        "reranked-public-10": {
+          "total": 18,
+          "hits10": 18,
+          "ndcg10": 0.727193642369257
+        }
+      }
+    }
+  },
+  "previousMisses": [
+    {
+      "query": "How do simultaneous requests for the same text avoid encoding it repeatedly across collections?",
+      "file": "semantic-profile-runtime.ts",
+      "oldFts": 16,
+      "oldVector": 0,
+      "oldHybrid": 12,
+      "newVector": 1,
+      "newHybrid": 6,
+      "installedPublic10": 1
+    },
+    {
+      "query": "How does an incremental refresh retain the identity of a cited section?",
+      "file": "incremental-metadata.ts",
+      "oldFts": 3,
+      "oldVector": 0,
+      "oldHybrid": 11,
+      "newVector": 8,
+      "newHybrid": 7,
+      "installedPublic10": 5
+    },
+    {
+      "query": "Which consumer uses buildEmbeddingText to send a documentation passage to the vector store?",
+      "file": "index-doc-use-case/embed-upsert.ts",
+      "oldFts": 0,
+      "oldVector": 3,
+      "oldHybrid": 12,
+      "newVector": 2,
+      "newHybrid": 7,
+      "installedPublic10": 3
+    }
+  ]
+}

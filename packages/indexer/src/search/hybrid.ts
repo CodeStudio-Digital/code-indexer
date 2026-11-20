@@ -200,6 +200,10 @@ export class HybridSearch {
     this.searchTelemetry = searchTelemetry ?? null;
   }
 
+  private projectReranker(projectId: number): RerankerService {
+    return this.reranker.forProject?.(projectId) ?? this.reranker;
+  }
+
   /** Single production path for hybrid retrieval. */
   private async searchViaPipeline(
     projectId: number,
@@ -238,6 +242,8 @@ export class HybridSearch {
       projectName,
       query,
       type,
+      reranker: includeReranker ? this.projectReranker(projectId) : undefined,
+      vectorWeight: this.db.getProjectCatalogEntry?.(projectId)?.semantic_vector_weight,
       overFetch,
       limit,
       supersessionKey: requestOptions.supersessionKey,
@@ -296,7 +302,11 @@ export class HybridSearch {
       : requestedMode;
     // Keep the global cross-encoder batch bounded. This is also the high-tier
     // adaptive policy ceiling; smaller worker policies may further reduce it.
-    const requestedRerankDepth = this.reranker.candidatePoolSize?.(limit) ?? limit * 2;
+    const reranker = mode === 'hybrid' ? this.projectReranker(projects[0].id) : this.reranker;
+    const revision = (service: RerankerService) => service.cacheRevision?.() ?? service.name;
+    const sameTarget = mode === 'hybrid' && (!this.reranker.forProject
+      || projects.every(project => revision(this.projectReranker(project.id)) === revision(reranker)));
+    const requestedRerankDepth = reranker.candidatePoolSize?.(limit) ?? limit * 2;
     const rerankDepth = Math.max(limit, requestedRerankDepth);
     const gathered: GlobalHybridSearchResult[] = [];
     let cursor = 0;
@@ -346,7 +356,7 @@ export class HybridSearch {
 
     const candidates = gathered.slice(0, Math.min(gathered.length, rerankDepth));
     let finalCandidates = candidates;
-    if (mode === 'hybrid' && candidates.length > 0 && this.reranker.name !== 'null' && !this.reranker.queryBlockReason?.(query)) {
+    if (sameTarget && candidates.length > 0 && reranker.name !== 'null' && !reranker.queryBlockReason?.(query)) {
       const foldersByProject = new Map(projects.map((project) => [project.id, codeSearchFolders(this.db, project.id)]));
       const eligible = (candidate: typeof candidates[number]) =>
         codeResultInScope(foldersByProject.get(candidate.projectId) ?? [], candidate.result);
@@ -359,7 +369,7 @@ export class HybridSearch {
       }));
       try {
         const expected = Math.min(limit, rerankInput.length);
-        const reranked = await this.reranker.rerank(query, rerankInput, expected, {
+        const reranked = await reranker.rerank(query, rerankInput, expected, {
           supersessionKey: options?.supersessionKey,
           signal: options?.signal,
         });
@@ -370,7 +380,7 @@ export class HybridSearch {
           received.add(row.id);
           return false;
         })) {
-          throw new Error(`${this.reranker.name} returned an incomplete or invalid global result set`);
+          throw new Error(`${reranker.name} returned an incomplete or invalid global result set`);
         }
         const byId = new Map(scoped.map((candidate) => [
           `${candidate.projectId}:${candidate.result.type}:${candidate.result.id}`,
@@ -391,7 +401,7 @@ export class HybridSearch {
             ...ranked, result: { ...ranked.result, score: original.result.score },
           }));
       } catch (error) {
-        console.warn(`[hybrid-search] ${this.reranker.name} global rerank unavailable; preserving RRF order: ${
+        console.warn(`[hybrid-search] ${reranker.name} global rerank unavailable; preserving RRF order: ${
           error instanceof Error ? error.message : String(error)
         }`);
       }
@@ -448,7 +458,7 @@ export class HybridSearch {
         ? 'not-used'
         : this.embeddingService.cacheRevisionForNamespace?.(codeNamespace(projectId)) ?? 'legacy';
       const rerankerRevision = mode === 'hybrid'
-        ? this.reranker.cacheRevision?.() ?? 'legacy'
+        ? this.projectReranker(projectId).cacheRevision?.() ?? 'legacy'
         : 'not-used';
       return JSON.stringify([
         projectId,
@@ -458,6 +468,7 @@ export class HybridSearch {
         type,
         limit,
         mode === 'fts' ? null : codeSearchFolders(this.db, projectId),
+        mode === 'hybrid' ? this.db.getProjectCatalogEntry?.(projectId)?.semantic_vector_weight ?? 1 : null,
         embeddingRevision,
         rerankerRevision,
       ]);
@@ -583,7 +594,7 @@ export class HybridSearch {
             ?? 'unknown' }
         : {}),
       ...(mode === 'hybrid'
-        ? { reranker: this.reranker.cacheRevision?.() ?? this.reranker.name }
+        ? { reranker: this.projectReranker(projectId).cacheRevision?.() ?? this.projectReranker(projectId).name }
         : {}),
       ...(plannerReason ? { plannerMode: mode, plannerReason } : {}),
     };

@@ -69,6 +69,8 @@ export interface Project {
   index_ignore_patterns?: string | null;
   /** JSON array of project-relative roots for code embeddings. "." includes the whole project. */
   semantic_index_folders?: string;
+  /** Relative dense contribution in RRF for natural-language code queries. */
+  semantic_vector_weight?: number;
   embeddings_enabled: number;
   search_mode: SearchMode;
   /** Per-project agent-memory toggle (migration 115; default 1 = on). */

@@ -288,8 +288,10 @@ function createHarness() {
     last_latency_ms: 18 as number | null,
     enabled: true,
   }));
+  const setProjectTargets = vi.fn();
   const app = semanticRouter(providers, {
     store: store as unknown as SemanticStore,
+    setProjectTargets,
     reindex,
     cleanupUnusedVectors,
     namespaceStatus,
@@ -301,6 +303,7 @@ function createHarness() {
     app,
     store,
     providers,
+    setProjectTargets,
     reindex,
     cleanupUnusedVectors,
     namespaceStatus,
@@ -309,6 +312,20 @@ function createHarness() {
 }
 
 describe('semantic admin profiles', () => {
+  it('resets a scoped profile without writing the global profile and rejects unprobed models', async () => {
+    const h = createHarness();
+    const profile = h.store.getProfile('code');
+    const reset = await h.app.request('/semantic/projects/8/targets', json('PUT', { inherit: true }));
+    expect(reset.status).toBe(202);
+    expect(h.setProjectTargets).toHaveBeenCalledWith(8, null);
+    const unprobed = await h.app.request('/semantic/projects/8/targets', json('PUT', {
+      embedding_target: { kind: 'provider', providerId: 'openrouter', model: 'nvidia/nemotron-3-embed-1b:free' },
+      reranker_target: { kind: 'disabled' },
+    }));
+    expect(unprobed.status).toBe(400);
+    expect(h.setProjectTargets).toHaveBeenCalledTimes(1);
+    expect(h.store.getProfile('code')).toEqual(profile);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     probeMocks.embedding.mockResolvedValue({

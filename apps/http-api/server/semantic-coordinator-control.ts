@@ -90,7 +90,8 @@ activateCodeProject(this: SemanticCoordinatorContext, projectId: number, leaseId
     this.codeProjectLeases.set(projectId, leases);
     this.codePauseRequested.delete(projectId);
     if (!projectSemanticFolders(project).length) return null;
-    const target = this.deps.semanticStore.getProfile('code')?.embedding_target;
+    const target = this.deps.semanticStore.getProjectTargets?.(projectId)?.embedding_target
+      ?? this.deps.semanticStore.getProfile('code')?.embedding_target;
     if (target?.kind !== 'onnx' && target?.kind !== 'local_http') return null;
     const namespace = codeNamespace(projectId);
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];

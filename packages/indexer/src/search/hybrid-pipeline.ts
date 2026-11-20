@@ -98,6 +98,8 @@ export interface HybridSearchPipelineQuery extends PipelineQuery {
   overFetch: number;
   /** Final result count to return after selection + reranking. */
   limit: number;
+  reranker?: RerankerService;
+  vectorWeight?: number;
   /** Stable latest-wins key for interactive callers such as Search Everywhere. */
   supersessionKey?: string;
   /** Request-lifecycle cancellation. Sources may finish, but reranking is skipped. */
@@ -539,9 +541,11 @@ export class RrfFusionScorer
   }
 
   async score(
-    _q: HybridSearchPipelineQuery,
+    q: HybridSearchPipelineQuery,
     candidates: readonly HybridSearchPipelineCandidate[],
   ): Promise<Array<{ ok: true; candidate: HybridSearchPipelineCandidate }>> {
+    const vectorWeight = q.vectorWeight && Number.isFinite(q.vectorWeight) && q.vectorWeight > 0 && planQuery(q.query).mode === 'hybrid'
+      ? q.vectorWeight : 1;
     // Sources fan-out in parallel, so the same candidateId may appear
     // multiple times in `candidates`. Group by candidateId, sum the RRF
     // contributions from each source, preserve best per-source metadata.
@@ -581,7 +585,7 @@ export class RrfFusionScorer
     for (const acc of byKey.values()) {
       let s = 0;
       if (acc.ranks.fts !== undefined) s += 1 / (RRF_K + acc.ranks.fts);
-      if (acc.ranks.vector !== undefined) s += 1 / (RRF_K + acc.ranks.vector);
+      if (acc.ranks.vector !== undefined) s += vectorWeight / (RRF_K + acc.ranks.vector);
       if (acc.ranks.recent !== undefined) s += 1 / (RRF_K + acc.ranks.recent);
       if (acc.ranks.content !== undefined) s += 1 / (RRF_K + acc.ranks.content);
       if (acc.ranks.graph !== undefined) s += 1 / (RRF_K + acc.ranks.graph);
@@ -730,9 +734,10 @@ export class RerankerHydrator
   constructor(private reranker: RerankerService, private db?: CodeIndexDB) {}
 
   enable(query: HybridSearchPipelineQuery): boolean {
-    const reason = this.reranker.queryBlockReason?.(query.query);
+    const reranker = query.reranker ?? this.reranker;
+    const reason = reranker.queryBlockReason?.(query.query);
     if (reason) { query.diag.rerankerApplied = false; query.diag.rerankerSkippedReason = reason; }
-    return !(this.reranker instanceof NullReranker) && !reason;
+    return !(reranker instanceof NullReranker) && !reason;
   }
 
   async hydrate(
@@ -740,6 +745,7 @@ export class RerankerHydrator
     candidates: readonly HybridSearchPipelineCandidate[],
   ): Promise<Array<{ ok: true; candidate: HybridSearchPipelineCandidate }>> {
     const folders = codeSearchFolders(this.db, q.projectId);
+    const reranker = q.reranker ?? this.reranker;
     const eligible = (candidate: HybridSearchPipelineCandidate) => codeResultInScope(folders, candidate.result);
     const scoped = candidates.filter(eligible);
     q.diag.rerankerCandidates = scoped.length;
@@ -781,18 +787,18 @@ export class RerankerHydrator
         originalScore: candidate.score,
       }));
       const expected = Math.min(q.limit, scoped.length);
-      const reranked = await this.reranker.rerank(q.query, rerankInput, expected, {
+      const reranked = await reranker.rerank(q.query, rerankInput, expected, {
         supersessionKey: q.supersessionKey,
         signal: q.signal,
       });
       const allowed = new Set(rerankInput.map((candidate) => candidate.id));
       const ids = new Set<string>();
       if (reranked.length !== expected) {
-        throw new Error(`${this.reranker.name} returned ${reranked.length}/${expected} results`);
+        throw new Error(`${reranker.name} returned ${reranked.length}/${expected} results`);
       }
       for (const result of reranked) {
         if (!allowed.has(result.id) || ids.has(result.id) || !Number.isFinite(result.score)) {
-          throw new Error(`${this.reranker.name} returned an invalid result set`);
+          throw new Error(`${reranker.name} returned an invalid result set`);
         }
         ids.add(result.id);
       }
@@ -804,7 +810,7 @@ export class RerankerHydrator
     } catch (error) {
       // RRF is a complete and deterministic ordering. A reranker outage must
       // never fail the query or erase candidates.
-      console.warn(`[hybrid-search] ${this.reranker.name} unavailable; preserving RRF order: ${
+      console.warn(`[hybrid-search] ${reranker.name} unavailable; preserving RRF order: ${
         error instanceof Error ? error.message : String(error)
       }`);
       q.diag.rerankerError = error instanceof Error ? error.message : String(error);
@@ -935,7 +941,10 @@ export function createHybridSearchPipeline(
       selector: new SearchCandidateSelector('rerank_depth',
         // Bound cross-encoder cost without applying the public top-K before
         // reranking. With no reranker this is already the final result depth.
-        (query) => rerankerEnabled && !opts.reranker.queryBlockReason?.(query.query) ? rerankDepth(query, opts.reranker) : query.limit,
+        (query) => {
+          const reranker = query.reranker ?? opts.reranker;
+          return rerankerEnabled && !reranker.queryBlockReason?.(query.query) ? rerankDepth(query, reranker) : query.limit;
+        },
       ),
       postSelectionHydrators:
         rerankerEnabled ? [new RerankerHydrator(opts.reranker, opts.db)] : undefined,

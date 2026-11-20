@@ -24,7 +24,8 @@ export const operations = {
 async runPurpose(this: SemanticCoordinatorContext, purpose: SemanticPurpose, force: boolean): Promise<ReindexResult> {
     if (this.embeddingDisabled(purpose)) return this.disabledResult(purpose);
     const codeProjects = purpose === 'code'
-      ? this.deps.db.listProjects().filter((project) => !project.is_synthetic && projectSemanticFolders(project).length)
+      ? this.deps.db.listProjects().filter((project) => !project.is_synthetic && projectSemanticFolders(project).length
+        && !this.deps.semanticStore.getProjectTargets?.(project.id))
       : [];
     if (purpose === 'code' && !codeProjects.length) return this.disabledResult(purpose);
     const generation = await this.ensureGeneration(purpose, force);
@@ -71,10 +72,10 @@ async runPurpose(this: SemanticCoordinatorContext, purpose: SemanticPurpose, for
     };
   },
 
-ensureGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpose, force: boolean): Promise<SemanticGenerationRow> {
+ensureGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpose, force: boolean, projectId?: number): Promise<SemanticGenerationRow> {
     const previous = this.generationRuns.get(purpose);
     const current = (previous ? previous.catch(() => undefined) : Promise.resolve())
-      .then(() => this.resolveGeneration(purpose, force));
+      .then(() => this.resolveGeneration(purpose, force, projectId));
     const tracked = current.finally(() => {
       if (this.generationRuns.get(purpose) === tracked) this.generationRuns.delete(purpose);
     });
@@ -82,8 +83,10 @@ ensureGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpose, for
     return tracked;
   },
 
-async resolveGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpose, force: boolean): Promise<SemanticGenerationRow> {
-    const embedding = this.embeddingForPurpose(purpose);
+async resolveGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpose, force: boolean, projectId?: number): Promise<SemanticGenerationRow> {
+    const namespace = projectId === undefined ? undefined : codeNamespace(projectId);
+    const embedding = projectId === undefined ? this.embeddingForPurpose(purpose)
+      : this.deps.codeEmbeddingForProject?.(projectId) ?? this.deps.codeEmbedding;
     if (embedding instanceof NullEmbeddingService || embedding.fingerprint?.() === 'null') {
       throw new Error(`${purpose} embedding profile is disabled`);
     }
@@ -96,7 +99,9 @@ async resolveGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpo
       throw new SemanticVectorWorkerUnavailableError('generation build');
     }
     const baseFingerprint = embedding.fingerprint?.() ?? `semantic:${purpose}:unknown`;
-    const currentTarget = this.deps.semanticStore.getProfile(purpose)?.embedding_target;
+    const desiredTarget = () => (projectId === undefined ? undefined : this.deps.semanticStore.getProjectTargets?.(projectId)?.embedding_target)
+      ?? this.deps.semanticStore.getProfile(purpose)?.embedding_target;
+    const currentTarget = desiredTarget();
     if (!currentTarget) throw new Error(`Missing semantic profile: ${purpose}`);
     const compatible = this.deps.semanticStore.listGenerations({ purpose })
       .filter((generation) => generation.status === 'building' || generation.status === 'ready')
@@ -116,12 +121,12 @@ async resolveGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpo
     // A previous construction table or failed cleanup must be resolved before
     // probing/creating a new generation. A failed DROP deliberately leaves its
     // control-plane pointer/job in place, so retries cannot accumulate tables.
-    await this.recoverPendingCleanupJobs(purpose);
-    await this.recoverAbandonedBuildingGenerations(purpose);
+    await this.recoverPendingCleanupJobs(purpose, namespace);
+    await this.recoverAbandonedBuildingGenerations(purpose, namespace);
     this.assertSingleActiveGenerationPerFile(purpose);
     const { vector } = await embedding.embedQuery('semantic generation dimension probe');
     const fingerprintAfterProbe = embedding.fingerprint?.() ?? `semantic:${purpose}:unknown`;
-    const targetAfterProbe = this.deps.semanticStore.getProfile(purpose)?.embedding_target;
+    const targetAfterProbe = desiredTarget();
     if (fingerprintAfterProbe !== baseFingerprint
       || JSON.stringify(targetAfterProbe) !== JSON.stringify(currentTarget)) {
       throw new Error(`${purpose} embedding profile changed during generation probe`);
@@ -209,10 +214,11 @@ workerRemoveProject(this: SemanticCoordinatorContext, projectId: number): Promis
     return remove.call(this.deps.vectorStore, projectId);
   },
 
-async recoverPendingCleanupJobs(this: SemanticCoordinatorContext, purpose: SemanticPurpose): Promise<void> {
+async recoverPendingCleanupJobs(this: SemanticCoordinatorContext, purpose: SemanticPurpose, namespace?: string): Promise<void> {
     const jobs = (await this.listJobsOffThread({
       statuses: ['pending', 'paused', 'running'],
       kinds: ['cleanup'],
+      ...(namespace ? { namespace } : {}),
     }))
       .filter((job) => job.kind === 'cleanup'
         && (job.status === 'pending' || job.status === 'paused' || job.status === 'running')
@@ -221,7 +227,7 @@ async recoverPendingCleanupJobs(this: SemanticCoordinatorContext, purpose: Seman
     for (const job of jobs) await this.performCleanupJob(job);
   },
 
-async recoverAbandonedBuildingGenerations(this: SemanticCoordinatorContext, purpose: SemanticPurpose): Promise<void> {
+async recoverAbandonedBuildingGenerations(this: SemanticCoordinatorContext, purpose: SemanticPurpose, namespace?: string): Promise<void> {
     const states = this.deps.semanticStore.listNamespaceGenerations({ purpose });
     const groups = new Map<string, {
       namespace: string;
@@ -232,6 +238,9 @@ async recoverAbandonedBuildingGenerations(this: SemanticCoordinatorContext, purp
     }>();
     for (const state of states) {
       if (!state.building_generation_id) continue;
+      if (namespace && state.namespace !== namespace) continue;
+      const codeProjectId = purpose === 'code' ? projectIdFromSemanticNamespace(state.namespace) : null;
+      if (!namespace && codeProjectId !== null && this.deps.semanticStore.getProjectTargets?.(codeProjectId)) continue;
       const route = this.deps.router.resolve(state.namespace, state.building_generation_id);
       const key = `${route.dbPath.toLowerCase()}\0${route.tableName}`;
       const group = groups.get(key) ?? {

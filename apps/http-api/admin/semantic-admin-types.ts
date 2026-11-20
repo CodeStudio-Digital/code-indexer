@@ -4,6 +4,7 @@ import type { probeEmbeddingTarget, probeRerankerTarget } from '@mcp/indexer/sea
 
 export interface SemanticAdminRuntime {
   store: SemanticStore;
+  setProjectTargets?(projectId: number, targets: Parameters<SemanticStore['setProjectTargets']>[1]): void;
   reindex(purpose: SemanticPurpose): Promise<unknown>;
   cleanupUnusedVectors(): Promise<unknown>;
   namespaceStatus(namespace: string): LocalVectorNamespaceStatus;

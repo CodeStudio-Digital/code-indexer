@@ -255,6 +255,23 @@ describe('OpenAICompatEmbeddingService — provider-backed embeddings', () => {
     expect(svc.fingerprint()).toBe('provider:or:m');
   });
 
+  it('uses the immutable input format for each role, including older raw generations of the same model', async () => {
+    const inputs: string[][] = [];
+    const fetchFn: typeof fetch = async (_url, init) => {
+      const { input } = JSON.parse(String(init?.body)) as { input: string[] };
+      inputs.push(input);
+      return Response.json({ data: input.map((_text, index) => ({ index, embedding: [1] })) });
+    };
+    const options = { baseURL: 'https://example.test/v1', model: 'nvidia/nemotron-3-embed-1b:free', fetchFn };
+    const oldSpace = new OpenAICompatEmbeddingService(options);
+    const newSpace = new OpenAICompatEmbeddingService({ ...options, inputFormat: 'query-passage' });
+    await oldSpace.embedQuery('same');
+    await newSpace.embed(['same', 'another']);
+    await newSpace.embedQuery('same');
+    expect(inputs).toEqual([['same'], ['passage: same', 'passage: another'], ['query: same']]);
+    expect(newSpace.fingerprint()).not.toBe(oldSpace.fingerprint());
+  });
+
   it('sorts returned rows by index so vectors align with their input text', async () => {
     const fetchFn = (async () =>
       new Response(

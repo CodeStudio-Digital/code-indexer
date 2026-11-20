@@ -16,6 +16,8 @@ export class SemanticStore extends SemanticConnection {
   private readonly profiles = new SemanticProfiles(this.db);
   listProfiles = this.profiles.listProfiles.bind(this.profiles);
   getProfile = this.profiles.getProfile.bind(this.profiles);
+  getProjectTargets = this.profiles.getProjectTargets.bind(this.profiles);
+  setProjectTargets = this.profiles.setProjectTargets.bind(this.profiles);
   upsertProfile = this.profiles.upsertProfile.bind(this.profiles);
   listModels = this.profiles.listModels.bind(this.profiles);
   upsertModel = this.profiles.upsertModel.bind(this.profiles);

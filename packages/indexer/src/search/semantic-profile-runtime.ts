@@ -53,13 +53,18 @@ function key(target: EmbeddingTarget | RerankerTarget, providers: ProviderStore)
   return semanticTargetContextFingerprint(target, providers);
 }
 
+function codeProjectId(purpose: SemanticPurpose, namespace: string): number | undefined {
+  const id = purpose === 'code' && /^code:p(\d+)$/.exec(namespace);
+  return id ? Number(id[1]) : undefined;
+}
+
 /** Live semantic runtime. Desired-profile edits affect new builds without a
  * restart, while query proxies stay pinned to each namespace's active
  * generation. Equal targets share the same cached ONNX session/worker. */
 export class SemanticProfileRuntime {
   private readonly embeddings = new Map<string, EmbeddingService>();
   private readonly rerankers = new Map<string, RerankerService>();
-  private readonly embeddingProxies = new Map<SemanticPurpose, EmbeddingService>();
+  private readonly embeddingProxies = new Map<string, EmbeddingService>();
   private readonly queryEmbeddingProxies = new Map<SemanticPurpose, EmbeddingService>();
   private readonly rerankerProxies = new Map<string, RerankerService>();
   private readonly queryVectors = new Map<string, { vector: number[]; expiresAt: number }>();
@@ -67,29 +72,30 @@ export class SemanticProfileRuntime {
 
   constructor(
     private readonly semanticStore: Pick<SemanticStore, 'getProfile' | 'getActiveGeneration'>
-      & Partial<Pick<SemanticStore, 'getWriteGeneration' | 'requiresExplicitNamespaceReindex' | 'listNamespaceGenerations'>>,
+      & Partial<Pick<SemanticStore, 'getWriteGeneration' | 'requiresExplicitNamespaceReindex' | 'listNamespaceGenerations' | 'getProjectTargets'>>,
     private readonly providerStore: ProviderStore,
     private readonly decorateEmbedding?: EmbeddingDecorator,
     private readonly decorateReranker?: RerankerDecorator,
   ) {}
 
-  embedding(purpose: SemanticPurpose): EmbeddingService {
-    const cached = this.embeddingProxies.get(purpose);
+  embedding(purpose: SemanticPurpose, projectId?: number): EmbeddingService {
+    const proxyKey = projectId === undefined ? purpose : purpose + ':' + projectId;
+    const cached = this.embeddingProxies.get(proxyKey);
     if (cached) return cached;
-    const resolve = (): EmbeddingService => this.resolveEmbedding(purpose);
+    const resolve = (): EmbeddingService => this.resolveEmbeddingTarget(this.currentEmbeddingTarget(purpose, projectId));
     const proxy: EmbeddingService & { diagnostics?: () => unknown } = {
       embed: (texts) => resolve().embed(texts),
       embedDocumentsForNamespace: (namespace, texts) =>
         this.embedWriteDocuments(purpose, namespace, texts),
       embedQuery: (text, options) => resolve().embedQuery(text, options),
-      fingerprint: () => this.desiredEmbeddingFingerprint(purpose),
+      fingerprint: () => this.desiredEmbeddingFingerprint(purpose, projectId),
       maxConcurrency: () => resolve().maxConcurrency?.() ?? 1,
       diagnostics: () => {
         const service = resolve() as { diagnostics?: () => unknown };
         return service.diagnostics?.() ?? null;
       },
     };
-    this.embeddingProxies.set(purpose, proxy);
+    this.embeddingProxies.set(proxyKey, proxy);
     return proxy;
   }
 
@@ -121,14 +127,15 @@ export class SemanticProfileRuntime {
     return proxy;
   }
 
-  reranker(purpose: SemanticPurpose, options: SemanticRerankerOptions = {}): RerankerService {
+  reranker(purpose: SemanticPurpose, options: SemanticRerankerOptions = {}, projectId?: number): RerankerService {
     const strict = options.strict === true;
-    const proxyKey = `${purpose}:${strict ? 'strict' : 'fail-open'}`;
+    const proxyKey = `${purpose}:${strict ? 'strict' : 'fail-open'}:${projectId ?? 'default'}`;
     const cached = this.rerankerProxies.get(proxyKey);
     if (cached) return cached;
-    const resolve = (): RerankerService => this.resolveReranker(purpose);
+    const resolve = (): RerankerService => this.resolveRerankerTarget(this.currentRerankerTarget(purpose, projectId));
     const queryBlockReason = (query: string): string | null => {
-      const target = this.currentRerankerTarget(purpose);
+      const target = this.currentRerankerTarget(purpose, projectId);
+      if (target.kind === 'disabled') return 'semantic_reranker_disabled';
       // The code retrieval ablation did not justify automatic local reranking:
       // it reduced conceptual recall and exceeded the interactive time budget.
       // Explicit model selections and other semantic purposes remain eligible.
@@ -139,8 +146,9 @@ export class SemanticProfileRuntime {
     };
     const proxy: RerankerService = {
       get name() { return resolve().name; },
+      ...(purpose === 'code' && projectId === undefined ? { forProject: (id: number) => this.reranker(purpose, options, id) } : {}),
       cacheRevision: () => {
-        const target = this.currentRerankerTarget(purpose);
+        const target = this.currentRerankerTarget(purpose, projectId);
         // Strictness changes failure handling, not successful ranking
         // semantics. Keep the revision identical for the same target so
         // result caches are invalidated only by model/provider changes.
@@ -182,15 +190,21 @@ export class SemanticProfileRuntime {
     return proxy;
   }
 
-  currentEmbeddingTarget(purpose: SemanticPurpose): EmbeddingTarget {
+  currentEmbeddingTarget(purpose: SemanticPurpose, projectId?: number): EmbeddingTarget {
     const profile = this.semanticStore.getProfile(purpose);
     if (!profile) throw new Error(`Missing semantic profile: ${purpose}`);
+    if (purpose === 'code' && projectId !== undefined && profile.embedding_target.kind !== 'disabled') {
+      return this.semanticStore.getProjectTargets?.(projectId)?.embedding_target ?? profile.embedding_target;
+    }
     return profile.embedding_target;
   }
 
-  currentRerankerTarget(purpose: SemanticPurpose): RerankerTarget {
+  currentRerankerTarget(purpose: SemanticPurpose, projectId?: number): RerankerTarget {
     const profile = this.semanticStore.getProfile(purpose);
     if (!profile) throw new Error(`Missing semantic profile: ${purpose}`);
+    if (purpose === 'code' && projectId !== undefined && profile.reranker_target.kind !== 'disabled') {
+      return this.semanticStore.getProjectTargets?.(projectId)?.reranker_target ?? profile.reranker_target;
+    }
     return profile.reranker_target;
   }
 
@@ -268,13 +282,8 @@ export class SemanticProfileRuntime {
     this.queryInflight.clear();
   }
 
-  private resolveEmbedding(purpose: SemanticPurpose): EmbeddingService {
-    const target = this.currentEmbeddingTarget(purpose);
-    return this.resolveEmbeddingTarget(target);
-  }
-
-  private desiredEmbeddingFingerprint(purpose: SemanticPurpose): string {
-    const target = this.currentEmbeddingTarget(purpose);
+  private desiredEmbeddingFingerprint(purpose: SemanticPurpose, projectId?: number): string {
+    const target = this.currentEmbeddingTarget(purpose, projectId);
     if (target.kind === 'disabled') return 'null';
     return this.resolveEmbeddingSnapshot(target, purpose).fingerprint;
   }
@@ -375,6 +384,10 @@ export class SemanticProfileRuntime {
     namespace: string,
     texts: string[],
   ): Promise<{ vectors: number[][]; tokens: number; writeTarget: VectorWriteTarget }> {
+    const id = codeProjectId(purpose, namespace);
+    if (id !== undefined && this.semanticStore.getProjectTargets?.(id)?.embedding_target.kind === 'disabled') {
+      throw new Error(`Semantic embedding is disabled for ${namespace}`);
+    }
     const generation = this.semanticStore.getWriteGeneration?.(namespace);
     if (!generation) throw new Error(`No writable semantic generation for ${namespace}`);
     if (generation.purpose !== purpose) {
@@ -454,6 +467,10 @@ export class SemanticProfileRuntime {
     if (!desiredProfile) return `Missing semantic profile: ${purpose}`;
     if (desiredProfile.embedding_target.kind === 'disabled') {
       return `${purpose} semantic profile is disabled`;
+    }
+    const id = codeProjectId(purpose, namespace);
+    if (id !== undefined && this.semanticStore.getProjectTargets?.(id)?.embedding_target.kind === 'disabled') {
+      return `Semantic embedding is disabled for ${namespace}`;
     }
     const generation = this.semanticStore.getActiveGeneration(namespace);
     if (!generation) return `No active semantic generation for ${namespace}`;

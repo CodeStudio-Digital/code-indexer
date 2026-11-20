@@ -37,3 +37,5 @@ Os guias descrevem o CodeStudio 3.16.55 com as alterações de RAG na branch `co
 O plano de aprimoramento reúne as falhas reproduzidas, as remoções propostas e os experimentos para decidir mudanças no indexador, na busca e no agente. [Plano de aprimoramento do RAG](plano-de-aprimoramento.md)
 
 O relatório registra as correções implementadas, a medição do Granite na GPU e na CPU, os resultados por conjunto e os critérios de liberação ainda abertos. [Resultados da implementação](resultados-da-implementacao.md)
+
+A geração piloto do CodeStudio usa os dois modelos Nemotron gratuitos. O estudo registra o motivo das três perdas, os pesos testados e as posições por pergunta no índice instalado. [Nemotron no CodeStudio](nemotron-no-codestudio.md)

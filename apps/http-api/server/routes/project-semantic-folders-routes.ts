@@ -43,7 +43,8 @@ export function mountProjectSemanticFoldersRoutes(app: Hono, deps: ServerDeps): 
       const state = deps.semanticStore.listNamespaceGenerations({ namespace: codeNamespace(projectId) })[0];
       const generationId = state?.building_generation_id ?? state?.active_generation_id;
       const profile = deps.semanticStore.getProfile('code')?.embedding_target;
-      const target = generationId ? deps.semanticStore.getGeneration(generationId)?.embedding_target : profile;
+      const desired = deps.semanticStore.getProjectTargets?.(projectId)?.embedding_target ?? profile;
+      const target = generationId ? deps.semanticStore.getGeneration(generationId)?.embedding_target : desired;
       return c.json({
         folders: saved,
         files: deps.db.countFilesInFolders(projectId, preview),

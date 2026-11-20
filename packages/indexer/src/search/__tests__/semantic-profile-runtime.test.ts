@@ -37,6 +37,22 @@ function profile(
 afterEach(() => vi.unstubAllGlobals());
 
 describe('SemanticProfileRuntime session cache', () => {
+  it('resolves project-specific code models without changing siblings, documents or old query spaces', () => {
+    const local = { kind: 'local_http', baseUrl: 'http://localhost:8888', model: 'default', protocol: 'openai-embeddings' } as const;
+    const defaultRank = { kind: 'local_http', baseUrl: 'http://localhost:8888', model: 'default', protocol: 'openai-rerank' } as const;
+    const targets = { embedding_target: { ...local, model: 'project-embed' }, reranker_target: { ...defaultRank, model: 'project-rank' } };
+    const runtime = new SemanticProfileRuntime({
+      getProfile: purpose => profile(purpose, local, defaultRank),
+      getActiveGeneration: () => null,
+      getProjectTargets: id => id === 7 ? targets : null,
+    }, EMPTY_PROVIDERS);
+    expect(runtime.currentEmbeddingTarget('code', 7)).toEqual(targets.embedding_target);
+    expect(runtime.embedding('code', 7).fingerprint!()).not.toBe(runtime.embedding('code', 8).fingerprint!());
+    expect(runtime.currentEmbeddingTarget('docs', 7)).toEqual(local);
+    const rank = runtime.reranker('code');
+    expect(rank.forProject!(7).cacheRevision!()).not.toBe(rank.forProject!(8).cacheRevision!());
+    expect(rank.forProject!(8).cacheRevision!()).toBe(rank.cacheRevision!());
+  });
   it.each(['', ':unit-v1'])('opens both historical ONNX generation identities with adapter suffix "%s"', async suffix => {
     const target = BUNDLED_EMBEDDING_TARGET;
     const local = localEmbeddingFingerprint({ ...target, protocol: target });
