@@ -40,7 +40,7 @@ const BOOTSTRAP_SET = [
   'submit_spec', 'request_review', 'self_review', 'spawn_agent', 'execute_tasks', 'update_todo',
 ];
 const NAVIGATE_SET = [
-  'write_file', 'edit_file', 'multi_edit', 'create_file', 'run_command', 'get_diagnostics',
+  'write_file', 'edit_file', 'manage_path', 'run_command', 'get_diagnostics',
   'git_status', 'git_diff', 'git_log', 'web_fetch', 'web_search', 'task_complete',
   'decision_gate', 'list_tasks', 'read_plan', 'list_notes', 'mcp__find_references', 'mcp__save_memory',
   'mcp__get_file_skeleton',
@@ -448,7 +448,7 @@ describe('buildTools — session tool cap (task preflight)', () => {
 
   it('12 preflight pins all survive a 32-tool model cap', () => {
     const pins = [
-      'write_file', 'edit_file', 'multi_edit', 'create_file', 'run_command', 'get_diagnostics',
+      'write_file', 'edit_file', 'manage_path', 'run_command', 'get_diagnostics',
       'git_status', 'git_diff', 'git_log', 'web_fetch', 'mcp__find_references', 'git_commit',
     ];
     const names = buildTools({

@@ -14,6 +14,8 @@
  * polling-stuck owns them. Volatile calls remain under these backstops.
  */
 import { checkDominance, resetDominanceState, type DominanceState } from '../guards/dominance.js';
+import { resolveToolInvocationMetadata } from '../../tool-classification.js';
+import type { CoderTool } from '../../tool.js';
 import { dominanceWindow, dominanceRatio } from '../constants.js';
 
 export interface PerTurnLoopVerdict {
@@ -37,8 +39,8 @@ export interface PerTurnLoopArgs {
   toolUses: ReadonlyArray<{ name: string; input: Record<string, unknown> }>;
   /** True when the assistant emitted any non-empty text this turn. */
   hadText: boolean;
-  /** Names resolved to repeatPolicy=pollable in the registry. */
-  repeatableNames: ReadonlySet<string>;
+  /** This call resolves to repeatPolicy=pollable (per invocation, see invocationIsPollable). */
+  isRepeatable: (toolUse: { name: string; input: Record<string, unknown> }) => boolean;
   dominance: DominanceState;
 }
 
@@ -47,9 +49,18 @@ export interface PerTurnLoopArgs {
  * fired, or null. The product guard is always enabled and uses one fixed,
  * telemetry-proven posture.
  */
+/** Per-invocation pollable check: an empty write_stdin is a poll, a write is not. */
+export function invocationIsPollable(
+  registry: { get(name: string): CoderTool | undefined | null },
+  toolUse: { name: string; input: unknown },
+): boolean {
+  const tool = registry.get(toolUse.name);
+  return !!tool && resolveToolInvocationMetadata(tool, toolUse.input).repeatPolicy === 'pollable';
+}
+
 export function evaluatePerTurnLoops(args: PerTurnLoopArgs): PerTurnLoopVerdict | null {
   const blocks = args.toolUses.filter(
-    (t) => !args.repeatableNames.has(t.name),
+    (t) => !args.isRepeatable(t),
   );
 
   const window = dominanceWindow();

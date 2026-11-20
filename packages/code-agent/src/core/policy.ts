@@ -58,6 +58,8 @@ export interface PolicyContext {
   adminOverride?: boolean;
   /** Whether a sandbox runtime is bound to the session. */
   sandboxBound?: boolean;
+  /** The active agent runs a read-only session (`AgentDefinition.readOnly`). */
+  readOnly?: boolean;
 }
 
 /**
@@ -69,7 +71,8 @@ export type PolicyReason =
   | 'spec_mode'
   | 'task_scope'
   | 'sandbox_required'
-  | 'admin_required';
+  | 'admin_required'
+  | 'read_only';
 
 export type PolicyDecision =
   | { allowed: true; metadata: ResolvedToolMetadata }
@@ -227,7 +230,7 @@ export function findScopeViolations(
  * plan mode, despite carrying `mutates: true`. The handler itself runs the
  * human-gated transition (present the plan, wait for approval, switch to
  * build) instead of editing the workspace directly — mirroring how
- * `submit_plan` / `submit_tasks` are allowed because they pause for approval
+ * `submit_plan` / `task_list` approval are allowed because they pause for approval
  * rather than mutating.
  *
  * Scope is deliberately narrow: only the "I'm done planning, execute" verb,
@@ -266,13 +269,66 @@ export function specModeInteractionBlockDetail(
     return "Tool 'submit_plan' is unavailable in spec mode. Submit the specification with 'submit_spec'; approving a regular plan does not release the spec gate.";
   }
   if (specApproved) return null;
-  if (name === 'submit_tasks') {
-    return "Tool 'submit_tasks' is blocked until the specification is approved. Call 'submit_spec' first and wait for human approval.";
-  }
   if (name === 'task_list' && args.gate === 'approve') {
     return "task_list gate:'approve' is blocked until the specification is approved. Call 'submit_spec' first; gate:'track' remains available for a non-blocking checklist.";
   }
   return null;
+}
+
+// Their writes land in agent memory / session notes, never in the workspace.
+const READ_ONLY_SESSION_ALLOWED: ReadonlySet<string> = new Set(['remember', 'save_note']);
+// Declared non-mutating themselves, but they start, resume or steer another
+// agent that can write — an indirect write path out of a read-only session.
+const READ_ONLY_SESSION_DELEGATION: ReadonlySet<string> = new Set([
+  'create_chat', 'create_chat_trigger', 'resume_chat', 'send_chat_message',
+  'send_message', 'send_input', 'followup_task',
+]);
+
+/**
+ * The single read-only session predicate: read/search, user interaction,
+ * discovery and agent memory stay; anything that mutates the workspace, runs a
+ * process (`riskLevel` execute) or escalates (admin, including subagent spawn)
+ * does not. An input-sensitive tool (`riskOf`, e.g. `db_query`) stays in the
+ * session authority; each concrete call is classified by
+ * `isReadOnlySessionInvocation`. Consumed by the catalog assembly (authority)
+ * and by `evaluateToolInvocation` (dispatch, top level and inside code_exec).
+ */
+export function isReadOnlySessionTool(tool: CoderTool): boolean {
+  if (READ_ONLY_SESSION_ALLOWED.has(tool.name)) return true;
+  if (READ_ONLY_SESSION_DELEGATION.has(tool.name)) return false;
+  if (typeof tool.riskOf === 'function') return true;
+  const metadata = resolveToolMetadata(tool);
+  return !metadata.mutates && metadata.riskLevel === 'read';
+}
+
+/**
+ * Invocation form of the same predicate. An input-sensitive tool passes only
+ * when its classifier rates THIS call as read; a classifier that throws or
+ * returns an unknown level fails closed (`resolveToolInvocationMetadata`).
+ */
+export function isReadOnlySessionInvocation(tool: CoderTool, args: unknown): boolean {
+  if (!isReadOnlySessionTool(tool)) return false;
+  if (typeof tool.riskOf !== 'function') return true;
+  const metadata = resolveToolInvocationMetadata(tool, args);
+  return !metadata.mutates && metadata.riskLevel === 'read';
+}
+
+/**
+ * Authority of a read-only session over a candidate set: the predicate, then
+ * continuation controls (`CoderTool.continues`) none of whose openers survived
+ * — an end without a start is neither published nor authorized.
+ */
+export function readOnlySessionAuthority(tools: readonly CoderTool[]): CoderTool[] {
+  const allowed = tools.filter(isReadOnlySessionTool);
+  const names = new Set(allowed.map(tool => tool.name));
+  return allowed.filter(tool => !tool.continues?.length || tool.continues.some(name => names.has(name)));
+}
+
+export function readOnlySessionRefusalDetail(name: string, callRisk?: string): string {
+  if (callRisk) {
+    return `Tool '${name}' refused in this read-only session: this call is classified as ${callRisk}; only read calls of it are allowed. Continue with read-only calls, or ask the user to switch to an agent that can edit.`;
+  }
+  return `Tool '${name}' is unavailable in this read-only session: it can modify the workspace, run a process or delegate work. Continue with read and search tools, or ask the user to switch to an agent that can edit.`;
 }
 
 /**
@@ -298,6 +354,17 @@ export function evaluateToolInvocation(
       allowed: false,
       reason: 'sandbox_required',
       detail: `Tool '${tool.name}' requires a sandbox runtime but none is bound to this session.`,
+      metadata,
+    };
+  }
+
+  // 1a. Read-only session — no approval, task scope or plan state unlocks it.
+  if (ctx.readOnly && !isReadOnlySessionInvocation(tool, args)) {
+    return {
+      allowed: false,
+      reason: 'read_only',
+      detail: readOnlySessionRefusalDetail(tool.name,
+        isReadOnlySessionTool(tool) ? metadata.riskLevel : undefined),
       metadata,
     };
   }

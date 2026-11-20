@@ -3,20 +3,20 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { type TodoItem, generateTodoId, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 
 /**
- * todo_write / update_todo — the `track` (lightweight checklist) gate of the
- * unified `task_list` tool. Kept as registered back-compat aliases after the
- * todos/tasks merge; `task_list({gate:'track', ...})` is the canonical name.
+ * Checklist handlers — the `track` (lightweight checklist) gate of the unified
+ * `task_list` tool. They are internal: the former `todo_write`/`update_todo`
+ * tools are no longer registered (history renderers still read those names).
  *
  *   - track (these) does NOT pause. It broadcasts "here's what I'm doing" — the
  *     dashboard renders it as a live sidebar checklist.
- *   - approve (`submit_tasks` / `task_list({gate:'approve'})`) PAUSES for user
+ *   - approve (`task_list({gate:'approve'})`) PAUSES for user
  *     approval and is the only thing that arms `execute_tasks`.
  *
  * Both gates write the same session-local task record,
  * so a checklist and an approve list can never coexist as parallel lists.
  *
- * Each TodoItem carries a stable `id` (8-char hex). The id lets `update_todo`
- * patch a single item without re-sending the full list.
+ * Each TodoItem carries a stable `id` (8-char hex). The id lets a
+ * `task_list({updates})` patch a single item without re-sending the full list.
  */
 
 // Re-exported so existing importers (active-context, dashboard typing) keep
@@ -78,8 +78,8 @@ function validateTodos(raw: unknown): { ok: true; todos: TodoItem[] } | { ok: fa
     seenContent.add(content);
 
     // Honor caller-supplied id when valid and unique within this list;
-    // otherwise mint a fresh one. Keeps update_todo cycles stable across
-    // todo_write re-submissions when the agent passes ids back through.
+    // otherwise mint a fresh one. Keeps checklist patch cycles stable across
+    // full-list re-submissions when the agent passes ids back through.
     const rawId = typeof obj.id === 'string' ? obj.id.trim().toLowerCase() : '';
     let id: string;
     if (rawId && ID_RE.test(rawId) && !seenIds.has(rawId)) {
@@ -96,11 +96,11 @@ function validateTodos(raw: unknown): { ok: true; todos: TodoItem[] } | { ok: fa
   return { ok: true, todos: out };
 }
 
-// ─── Burst guard for todo_write ────────────────────────────────────────
+// ─── Burst guard for checklist rewrites ────────────────────────────────────────
 //
 // Avoid repeated checklist writes. When the agent reissues
-// `todo_write` with the same logical list 3+ times inside 90s without any
-// real change in between, we hard-refuse and point them at update_todo.
+// a full checklist write with the same logical list 3+ times inside 90s without any
+// real change in between, we hard-refuse and point them at task_list({updates}).
 // Detecting "same logical list" by signature on `content` keeps refining
 // (item add/remove/rewrite) legitimate — only true reruns trip the guard.
 
@@ -143,7 +143,7 @@ export function _resetWriteBurstForKey(key: object): void {
   WRITE_BURST_BY_RUNNER.delete(key);
 }
 
-// ─── todo_write ────────────────────────────────────────────────────────
+// ─── checklist write (task_list track) ────────────────────────────────────────────────────────
 
 function formatTodoLine(t: TodoItem): string {
   const marker = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]';
@@ -158,57 +158,11 @@ function formatSummary(todos: TodoItem[]): string {
   return `${todos.length} todo${todos.length === 1 ? '' : 's'}: ${completed} completed, ${inProgress} in_progress, ${pending} pending`;
 }
 
-export const todoWrite: CoderTool = {
-  name: 'todo_write',
-  description:
-    'Replace the active todo list. Lightweight, user-visible checklist that NEVER pauses (distinct from submit_tasks, which gates on approval).\n' +
-    'Pass the FULL list each call — it replaces the previous list, it does not merge.\n' +
-    '\n' +
-    'PREFER `update_todo` for status changes on existing items. Only call `todo_write` when adding/removing items or starting a fresh list.\n' +
-    '\n' +
-    'Each item is assigned a stable `id` (8-char hex). Pass the same id back on re-submit to preserve identity; omit `id` for new items and the server mints one.\n' +
-    '\n' +
-    'RULES:\n' +
-    '1. Do not call this tool repeatedly without making real progress on at least one task between calls. Progress means a tool result, file change, or verified observation. Re-writing the same list is counterproductive — use update_todo instead.\n' +
-    '2. Update statuses progressively as work happens — flip items to in_progress BEFORE starting, to completed IMMEDIATELY after finishing. Do not batch completions at the end. Completing the current item and starting the next is ONE update_todo call (`updates: [...]`), not two.\n' +
-    '3. Do not jump an item from pending directly to completed: always set it to in_progress first.\n' +
-    '4. Exactly ONE item in_progress at a time.\n' +
-    '5. Bookkeeping rides along: emit todo_write/update_todo in the SAME assistant turn as your next work tool call (parallel tool calls are supported) — never spend a turn on checklist updates alone.\n' +
-    '6. Reconcile the list before stopping the session: every item must end as completed or be removed. Never end a session with pending/in_progress items unless you state in your final message exactly why they are non-applicable.\n' +
-    '\n' +
-    'WHEN TO USE: multi-step work (3+ distinct steps), tasks with logical phases or dependencies, or when the user gave a list of things to do.\n' +
-    "WHEN NOT TO USE: single-step work, simple questions, conversational replies, or when the user gave very specific one-shot instructions — just do the work.\n" +
-    'If you find yourself unable to advance any task with your available tools, inform the user about what is blocking you instead of replanning.',
-  source: 'native',
-  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
-  parameters: {
-    type: 'object',
-    properties: {
-      todos: {
-        type: 'array',
-        description:
-          'The complete, updated checklist. Each item has content (imperative, what you will do), activeForm (present continuous, what shows while running), status (pending|in_progress|completed), and an optional id (preserved across re-submits when supplied).',
-        items: {
-          type: 'object',
-          properties: {
-            id: {
-              type: 'string',
-              description: 'Optional stable id (8-char hex). Pass back the id from a previous call to preserve identity; omit for new items.',
-            },
-            content: { type: 'string', description: 'Imperative form. Example: "Run tests"' },
-            activeForm: { type: 'string', description: 'Present continuous. Example: "Running tests"' },
-            status: {
-              type: 'string',
-              enum: ['pending', 'in_progress', 'completed'],
-            },
-          },
-          required: ['content', 'activeForm', 'status'],
-        },
-      },
-    },
-    required: ['todos'],
-    additionalProperties: false,
-  },
+/**
+ * Internal handler of `task_list({gate:'track', items})`. Not registered as a
+ * tool: `task_list` is the only task/checklist tool the model sees.
+ */
+export const todoWrite: Pick<CoderTool, 'handler'> = {
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     ctx.signal?.throwIfAborted();
     const guard = guardTrackWriteOverApprove(ctx);
@@ -221,7 +175,7 @@ export const todoWrite: CoderTool = {
       | { setTodos?: (t: TodoItem[]) => void | Promise<void>; currentTodos?: TodoItem[] }
       | undefined;
     if (!runner || typeof runner.setTodos !== 'function') {
-      return err('todo_write requires a runner that supports todo tracking.');
+      return err('task_list requires a runner that supports checklist tracking.');
     }
 
     // Burst guard: refuse repeated rewrites of the same logical list.
@@ -232,9 +186,9 @@ export const todoWrite: CoderTool = {
       if (burst.count > WRITE_BURST_THRESHOLD) {
         const ids = todos.map((t) => t.id).join(', ');
         return err(
-          `Refused: todo_write called ${burst.count} times in the last ${Math.round(WRITE_BURST_WINDOW_MS / 1000)}s ` +
-            `with the same list and no intervening progress. ` +
-            `Use update_todo — single {id, status} or batch updates: [{id, status}, …] — instead of re-sending the whole list. ` +
+          `Refused: task_list called ${burst.count} times in the last ${Math.round(WRITE_BURST_WINDOW_MS / 1000)}s ` +
+            `with the same checklist and no intervening progress. ` +
+            `Patch items with task_list({updates: [{id, status}, …]}) instead of re-sending the whole list. ` +
             `Current ids: ${ids}.`,
         );
       }
@@ -263,7 +217,7 @@ export const todoWrite: CoderTool = {
   },
 };
 
-// ─── update_todo ───────────────────────────────────────────────────────
+// ─── checklist patch (task_list updates) ───────────────────────────────────────────────────────
 
 interface TodoPatch {
   id: string;
@@ -280,23 +234,23 @@ const MAX_PATCHES_PER_CALL = 10;
  */
 function parsePatch(raw: Record<string, unknown>, label: string): { ok: true; patch: TodoPatch } | { ok: false; error: string } {
   const id = typeof raw.id === 'string' ? raw.id.trim().toLowerCase() : '';
-  if (!id) return { ok: false, error: `update_todo: ${label}.id is required` };
+  if (!id) return { ok: false, error: `task_list: ${label}.id is required` };
 
   const status = raw.status;
   const content = typeof raw.content === 'string' ? raw.content.trim() : undefined;
   const activeForm = typeof raw.activeForm === 'string' ? raw.activeForm.trim() : undefined;
   if (content && content.length > 8192 || activeForm && activeForm.length > 8192) {
-    return { ok: false, error: `update_todo: ${label} text exceeds 8192 characters` };
+    return { ok: false, error: `task_list: ${label} text exceeds 8192 characters` };
   }
   const hasStatus = status === 'pending' || status === 'in_progress' || status === 'completed';
   // Validate status first — reject an explicitly bad value before falling
   // through to the "no fields provided" check, otherwise the caller gets a
   // misleading "at least one of …" error when they really passed a bad status.
   if (status !== undefined && !hasStatus) {
-    return { ok: false, error: `update_todo: ${label}.status must be pending|in_progress|completed, got '${String(status)}'` };
+    return { ok: false, error: `task_list: ${label}.status must be pending|in_progress|completed, got '${String(status)}'` };
   }
   if (!hasStatus && !content && !activeForm) {
-    return { ok: false, error: `update_todo: ${label} needs at least one of {status, content, activeForm}` };
+    return { ok: false, error: `task_list: ${label} needs at least one of {status, content, activeForm}` };
   }
   return {
     ok: true,
@@ -309,54 +263,8 @@ function parsePatch(raw: Record<string, unknown>, label: string): { ok: true; pa
   };
 }
 
-export const updateTodo: CoderTool = {
-  name: 'update_todo',
-  description:
-    'Patch one or more todos by id in a SINGLE call, without re-sending the whole list.\n' +
-    'Flips status (pending → in_progress → completed) or renames content/activeForm. ' +
-    'Get ids from the most recent todo_write result or from the <active-context> block.\n' +
-    '\n' +
-    'Single patch: pass {id, status?, content?, activeForm?} at the top level.\n' +
-    'Several patches: pass `updates: [{id, status?, ...}, ...]` (max ' + MAX_PATCHES_PER_CALL + ') — validated and applied ATOMICALLY: one bad id rejects the whole call and nothing changes.\n' +
-    '\n' +
-    'Finishing one item and starting the next is ONE call, not two:\n' +
-    '  updates: [{id: "a1b2c3d4", status: "completed"}, {id: "e5f6a7b8", status: "in_progress"}]\n' +
-    '\n' +
-    'Do not spend a turn on bookkeeping alone — emit update_todo in the SAME assistant turn as your next work tool call (parallel tool calls are supported).\n' +
-    'At least one of {status, content, activeForm} is required per patch. Items not referenced are left untouched.',
-  source: 'native',
-  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
-  parameters: {
-    type: 'object',
-    properties: {
-      id: { type: 'string', description: 'Id of the todo to patch (single form). For 2+ changes use `updates` instead.' },
-      status: {
-        type: 'string',
-        enum: ['pending', 'in_progress', 'completed'],
-        description: 'New status for this item.',
-      },
-      content: { type: 'string', description: 'Replacement imperative-form text (rare; prefer rewriting the whole list via todo_write).' },
-      activeForm: { type: 'string', description: 'Replacement present-continuous text.' },
-      updates: {
-        type: 'array',
-        description:
-          'Batch form: several patches applied atomically in one call. Each entry: {id (required), status?, content?, activeForm?}. ' +
-          'Use for the complete-current + start-next transition instead of two calls.',
-        items: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', description: 'Id of the todo to patch.' },
-            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
-            content: { type: 'string' },
-            activeForm: { type: 'string' },
-          },
-          required: ['id'],
-        },
-      },
-    },
-    required: [],
-    additionalProperties: false,
-  },
+/** Internal handler of `task_list({updates})`. Not registered as a tool. */
+export const updateTodo: Pick<CoderTool, 'handler'> = {
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     ctx.signal?.throwIfAborted();
     const guard = guardTrackWriteOverApprove(ctx);
@@ -366,34 +274,34 @@ export const updateTodo: CoderTool = {
     const hasSingle =
       args.id !== undefined || args.status !== undefined || args.content !== undefined || args.activeForm !== undefined;
     if (hasBatch && hasSingle) {
-      return err('update_todo: pass EITHER the single top-level {id, ...} form OR `updates: [...]` — not both.');
+      return err('task_list: pass EITHER the single top-level {id, ...} form OR `updates: [...]` — not both.');
     }
 
     let patches: TodoPatch[];
     if (hasBatch) {
       if (!Array.isArray(args.updates) || args.updates.length === 0) {
-        return err('update_todo: `updates` must be a non-empty array of {id, status?, content?, activeForm?}');
+        return err('task_list: `updates` must be a non-empty array of {id, status?, content?, activeForm?}');
       }
       if (args.updates.length > MAX_PATCHES_PER_CALL) {
-        return err(`update_todo: too many patches (${args.updates.length}, max ${MAX_PATCHES_PER_CALL}).`);
+        return err(`task_list: too many patches (${args.updates.length}, max ${MAX_PATCHES_PER_CALL}).`);
       }
       patches = [];
       const seen = new Set<string>();
       for (let i = 0; i < args.updates.length; i++) {
         const raw = args.updates[i];
         if (typeof raw !== 'object' || raw === null) {
-          return err(`update_todo: updates[${i}] must be an object with {id, status?, content?, activeForm?}`);
+          return err(`task_list: updates[${i}] must be an object with {id, status?, content?, activeForm?}`);
         }
         const parsed = parsePatch(raw as Record<string, unknown>, `updates[${i}]`);
         if (!parsed.ok) return err(parsed.error);
         if (seen.has(parsed.patch.id)) {
-          return err(`update_todo: updates[${i}] repeats id '${parsed.patch.id}' — merge the patches for one item.`);
+          return err(`task_list: updates[${i}] repeats id '${parsed.patch.id}' — merge the patches for one item.`);
         }
         seen.add(parsed.patch.id);
         patches.push(parsed.patch);
       }
     } else {
-      if (typeof args.id !== 'string' || !args.id.trim()) return err('update_todo: id is required');
+      if (typeof args.id !== 'string' || !args.id.trim()) return err('task_list: id is required');
       const parsed = parsePatch(args as Record<string, unknown>, 'call');
       if (!parsed.ok) return err(parsed.error);
       patches = [parsed.patch];
@@ -403,12 +311,12 @@ export const updateTodo: CoderTool = {
       | { setTodos?: (t: TodoItem[]) => void | Promise<void>; currentTodos?: TodoItem[] }
       | undefined;
     if (!runner || typeof runner.setTodos !== 'function') {
-      return err('update_todo requires a runner that supports todo tracking.');
+      return err('task_list requires a runner that supports checklist tracking.');
     }
 
     const current = Array.isArray(runner.currentTodos) ? runner.currentTodos : [];
     if (current.length === 0) {
-      return err('update_todo: no active todo list — call todo_write first to create one.');
+      return err("task_list: no active checklist — create one with task_list({gate:'track', items: [...]}) first.");
     }
 
     // Resolve ALL ids before applying anything — a batch is atomic: one
@@ -418,8 +326,8 @@ export const updateTodo: CoderTool = {
       if (!indexById.has(p.id)) {
         const knownIds = current.map((t) => t.id).join(', ');
         return err(
-          `update_todo: id '${p.id}' not found — nothing was applied. Known ids: ${knownIds}. ` +
-            `Pass exact ids from the most recent todo_write result.`,
+          `task_list: id '${p.id}' not found — nothing was applied. Known ids: ${knownIds}. ` +
+            `Pass exact ids from the most recent task_list result.`,
         );
       }
     }
@@ -450,4 +358,3 @@ export const updateTodo: CoderTool = {
   },
 };
 
-export const todoTools: CoderTool[] = [todoWrite, updateTodo];

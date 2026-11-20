@@ -43,7 +43,7 @@ export function buildExpandTools(
   let description =
     'Discover a family of tools; use find_tools for input schemas and code_exec for hidden non-interactive calls.\n\n' +
     'Tiers:\n' +
-    '- "navigate": write_file, edit_file, create_file, manage_path, run_command, git_status/diff/log, ' +
+    '- "navigate": write_file, edit_file, manage_path, run_command, git_status/diff/log, ' +
     'task_complete (inline-mode closer), and deeper MCP navigation (find_references, trace_usage, ' +
     'get_dependencies, prepare_edit, get_symbol_body, etc.).\n' +
     '- "admin": git_add/commit/branch, mcp__index_project, mcp__get_costs, ' +

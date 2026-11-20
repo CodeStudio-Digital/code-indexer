@@ -847,6 +847,12 @@ export const listSessions: CoderTool = {
   },
 };
 
+/** The handler treats a missing or non-string `chars` as an empty poll. */
+function isEmptyPoll(input: unknown): boolean {
+  const chars = (input as { chars?: unknown } | null | undefined)?.chars;
+  return typeof chars !== 'string' || chars === '';
+}
+
 export const writeStdin: CoderTool = {
   name: 'write_stdin',
   effectBoundary: 'control',
@@ -855,6 +861,12 @@ export const writeStdin: CoderTool = {
   mutates: true,
   parallelSafe: false,
   riskLevel: 'execute',
+  // An empty poll only collects output: read risk, pollable repetition (the
+  // retired poll_session's classification). Writing stdin stays execute.
+  riskOf: (input) => (isEmptyPoll(input) ? 'read' : 'execute'),
+  repeatPolicyOf: (input) => (isEmptyPoll(input) ? 'pollable' : 'mutating'),
+  // Continues an exec_command session: without it there is nothing to poll.
+  continues: ['exec_command'],
   parameters: {
     type: 'object',
     properties: {
@@ -1034,12 +1046,6 @@ export const __testing = {
   },
 };
 
-export const pollSession: CoderTool = {
-  name: 'poll_session', source: 'native', mutates: false, parallelSafe: false, repeatPolicy: 'pollable', riskLevel: 'read',
-  description: 'Collect new output from an owned command session without writing stdin.',
-  parameters: { type: 'object', properties: { session_id: { type: 'string' }, yield_time_ms: { type: 'integer', minimum: 0, maximum: MAX_YIELD_MS } }, required: ['session_id'], additionalProperties: false },
-  handler: (args, ctx) => writeStdin.handler({ ...args, chars: '' }, ctx),
-};
 export const stopSession: CoderTool = {
   name: 'stop_session', source: 'native', effectBoundary: 'control', mutates: true, parallelSafe: false, riskLevel: 'execute',
   description: 'Stop one owned command process tree and collect its final output. A stopping receipt means physical cleanup is still pending.',
@@ -1072,4 +1078,4 @@ export const readSessionOutput: CoderTool = {
     } catch (error) { return err(error instanceof Error ? error.message : String(error)); }
   },
 };
-export const execCommandTools: CoderTool[] = [execCommand, writeStdin, listSessions, pollSession, stopSession, readSessionOutput];
+export const execCommandTools: CoderTool[] = [execCommand, writeStdin, listSessions, stopSession, readSessionOutput];

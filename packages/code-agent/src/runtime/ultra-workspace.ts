@@ -102,7 +102,7 @@ export function isolatedChildTool(tool: CoderTool): boolean {
   if (tool.source !== 'native' || tool.name === 'code_exec') return false;
   if (['run_command', 'exec_command', 'enter_worktree', 'exit_worktree'].includes(tool.name)) return false;
   if (tool.mutates || (tool.riskLevel && tool.riskLevel !== 'read')) {
-    return ['write_file', 'edit_file', 'multi_edit', 'create_file', 'manage_path', 'apply_patch'].includes(tool.name);
+    return ['write_file', 'edit_file', 'manage_path', 'apply_patch'].includes(tool.name);
   }
   return true;
 }

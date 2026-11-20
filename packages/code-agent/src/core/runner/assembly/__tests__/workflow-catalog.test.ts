@@ -12,9 +12,9 @@ import { isEssentialCompanyTool } from '../../company-essentials.js';
 const NAMES = [
   'code_exec', 'find_tools', 'capability_catalog', 'expand_toolset',
   'read_file', 'mcp__read_file', 'glob', 'mcp__grep_code', 'mcp__search',
-  'list_directory', 'mcp__list_directory', 'apply_patch', 'edit_file', 'write_file', 'create_file',
+  'list_directory', 'mcp__list_directory', 'apply_patch', 'edit_file', 'write_file',
   'run_command', 'exec_command', 'write_stdin', 'list_sessions', 'get_tool_output',
-  'ask_user', 'decision_gate', 'task_list', 'submit_tasks', 'submit_plan', 'submit_spec',
+  'ask_user', 'decision_gate', 'task_list', 'submit_plan', 'submit_spec',
   'remember', 'recall_memory', 'recall_conversation', 'spawn_agent', 'resume_agent', 'collect_agents',
   'task_complete', 'execute_tasks', 'view_image', 'view_video',
   'mcp__get_file_skeleton', 'mcp__get_symbol_body', 'mcp__prepare_edit', 'git_status', 'git_diff',
@@ -76,13 +76,11 @@ describe('workflow catalog', () => {
   it('keeps lifecycle pairs and only the gates of the active mode', () => {
     const build = buildTools(args());
     expect(names(build)).toEqual(expect.arrayContaining(['spawn_agent', 'resume_agent', 'collect_agents', 'execute_tasks', 'task_complete']));
-    for (const name of ['submit_tasks', 'submit_spec', 'submit_plan', 'decision_gate', 'expand_toolset']) {
+    for (const name of ['submit_spec', 'submit_plan', 'decision_gate', 'expand_toolset']) {
       expect(names(build)).not.toContain(name);
     }
-    expect(build.authorizedTools.map(t => t.name)).not.toContain('submit_tasks');
     const plan = buildTools(args({ toolContext: { cwd: tmpdir(), runner: { planMode: true } } as ToolContext }));
     expect(names(plan)).toEqual(expect.arrayContaining(['submit_plan', 'decision_gate', 'task_list']));
-    expect(names(plan)).not.toContain('submit_tasks');
     expect(plan.tools.find(t => t.name === 'task_list')?.parameters).not.toEqual(build.tools.find(t => t.name === 'task_list')?.parameters);
     const spec = buildTools(args({ toolContext: { cwd: tmpdir(), runner: { planMode: true, specMode: true } } as ToolContext }));
     expect(names(spec)).toContain('submit_spec');
@@ -105,7 +103,8 @@ describe('workflow catalog', () => {
   it('applies revocation before selecting canonical alternatives and ignores pins for disabled tools', () => {
     const result = buildTools(args({ sessionDisabledTools: new Set(['read_file', 'exec_command', 'apply_patch']),
       requiredPinnedTools: new Set(['read_file', 'exec_command', 'apply_patch']) }));
-    expect(names(result)).toEqual(expect.arrayContaining(['mcp__read_file', 'run_command', 'write_stdin', 'create_file', 'write_file']));
+    expect(names(result)).toEqual(expect.arrayContaining(['mcp__read_file', 'run_command', 'write_stdin', 'write_file']));
+    expect(names(result)).not.toContain('create_file');
     for (const name of ['read_file', 'exec_command', 'apply_patch']) {
       expect(names(result)).not.toContain(name);
       expect(result.authorizedTools.some(t => t.name === name)).toBe(false);

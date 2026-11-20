@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { DeferredMcpValidator } from './deferred-mcp-validator.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { resolve, dirname } from 'node:path';
+import { withMcpReadKnowledge } from './mcp-read-knowledge.js';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
@@ -222,7 +223,8 @@ export class McpToolBridge {
           providerId: 'code-indexer',
           provenanceRef: 'mcp-internal:code-indexer',
         },
-        handler: async (args: Record<string, unknown>, toolCtx: ToolContext): Promise<ToolResult> => {
+        handler: withMcpReadKnowledge(t.name, (toolCtx) => ctx.projectRoot ?? toolCtx.cwd,
+          async (args: Record<string, unknown>, toolCtx: ToolContext): Promise<ToolResult> => {
           if (this.closed) return err('MCP bridge is closed', { code: 'MCP_CLOSED', kind: 'cancelled', retryable: false });
           const signal = asAbortSignal(toolCtx.signal);
           if (signal?.aborted) return err('MCP call cancelled before dispatch.', {
@@ -359,7 +361,7 @@ export class McpToolBridge {
           return guardMcpToolResult({ ...ok(clampNote + mcpText),
             ...(mcpAttachments?.length ? { extraUserBlocks: mcpAttachments } : {}),
             ...(mcpStructuredData !== undefined ? { structuredData: mcpStructuredData } : {}) }, toolCtx, mcpSourceTruncations);
-        },
+        }),
       };
     });
   }

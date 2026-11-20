@@ -6,17 +6,18 @@ import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 /**
- * multi_edit integration: verifies atomic behaviour and sequential application.
+ * edit_file({ edits }) integration (formerly multi_edit): verifies atomic
+ * behaviour and sequential application.
  * Uses the real fs handler against a temp directory.
  */
 
-const multiEdit = fsTools.find((t) => t.name === 'multi_edit')!;
+const editFile = fsTools.find((t) => t.name === 'edit_file')!;
 
 function buildCtx(cwd: string): ToolContext {
   return { cwd, projectName: 'test' };
 }
 
-describe('multi_edit', () => {
+describe('edit_file edits', () => {
   let dir: string;
   let file: string;
   const ORIGINAL =
@@ -41,7 +42,7 @@ describe('multi_edit', () => {
   });
 
   it('applies multiple sequential edits atomically on success', async () => {
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [
@@ -60,7 +61,7 @@ describe('multi_edit', () => {
   });
 
   it('rolls back atomically when a later edit fails', async () => {
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [
@@ -72,21 +73,21 @@ describe('multi_edit', () => {
       buildCtx(dir),
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('multi_edit aborted: 1 of 3 edits failed');
+    expect(result.content).toContain('edit_file aborted: 1 of 3 edits failed');
     expect(result.content).toContain('#2');
     // File must be untouched.
     expect(readFileSync(file, 'utf-8')).toBe(ORIGINAL);
   });
 
   it('rejects empty edits array', async () => {
-    const result = await multiEdit.handler({ path: 'a.ts', edits: [] }, buildCtx(dir));
+    const result = await editFile.handler({ path: 'a.ts', edits: [] }, buildCtx(dir));
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('cannot be empty');
+    expect(result.content).toContain('edits must be a non-empty array');
   });
 
   it('rejects ambiguous old_string without replace_all', async () => {
     writeFileSync(file, 'x\nx\nx\n', 'utf-8');
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       { path: 'a.ts', edits: [{ old_string: 'x', new_string: 'y' }] },
       buildCtx(dir),
     );
@@ -97,7 +98,7 @@ describe('multi_edit', () => {
 
   it('honors replace_all per edit', async () => {
     writeFileSync(file, 'a a a\nb b b\n', 'utf-8');
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [
@@ -112,7 +113,7 @@ describe('multi_edit', () => {
   });
 
   it('sees the rolling in-memory result — edit #2 can match on edit #1 output', async () => {
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [
@@ -130,7 +131,7 @@ describe('multi_edit', () => {
   it('matches curly quotes when old_string uses straight quotes', async () => {
     // File contains curly (smart) quotes
     writeFileSync(file, 'const msg = \u201Chello world\u201D;\n', 'utf-8');
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [
@@ -145,7 +146,7 @@ describe('multi_edit', () => {
 
   it('matches straight quotes when old_string uses curly quotes', async () => {
     writeFileSync(file, 'const msg = "hello world";\n', 'utf-8');
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [
@@ -159,7 +160,7 @@ describe('multi_edit', () => {
   });
 
   it('provides actionable fuzzy hint when old_string not found', async () => {
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [
@@ -175,7 +176,7 @@ describe('multi_edit', () => {
 
   it('handles CRLF line endings transparently', async () => {
     writeFileSync(file, 'line1\r\nline2\r\nline3\r\n', 'utf-8');
-    const result = await multiEdit.handler(
+    const result = await editFile.handler(
       {
         path: 'a.ts',
         edits: [

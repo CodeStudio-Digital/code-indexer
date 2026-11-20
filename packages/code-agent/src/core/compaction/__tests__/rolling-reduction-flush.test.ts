@@ -91,6 +91,15 @@ describe('applyRollingReduction — tranche flush', () => {
     expect(resultOf(r.messages, 'A2')).toBe(KB(1000)); // deferred — verbatim
   });
 
+  it('tells the model the truth about re-reads: later reads are reusable, a re-read is allowed', () => {
+    const r = applyRollingReduction(pad(dupes(3)), { flushThresholdChars: 2500 });
+    const marker = resultOf(r.messages, 'A0');
+    expect(marker.startsWith('[duplicate-read elided] You already have the latest content of src/f0.ts')).toBe(true);
+    expect(marker).not.toContain('refused');
+    expect(marker).toContain('later read');
+    expect(marker).toContain('read it again only if');
+  });
+
   it('is MONOTONIC as the conversation grows: applied set never shrinks, stays stable between tranches', () => {
     const at3 = applyRollingReduction(pad(dupes(3)), { flushThresholdChars: 2500 });
     const at4 = applyRollingReduction(pad(dupes(4)), { flushThresholdChars: 2500 }); // total 4k → completed 2.5k→ still 2 applied

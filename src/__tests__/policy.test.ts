@@ -70,7 +70,7 @@ describe('resolveToolMetadata', () => {
   it('classifier marks ask_user / submit_plan as interactive', () => {
     expect(resolveToolMetadata(makeTool({ name: 'ask_user' })).interactive).toBe(true);
     expect(resolveToolMetadata(makeTool({ name: 'submit_plan' })).interactive).toBe(true);
-    expect(resolveToolMetadata(makeTool({ name: 'submit_tasks' })).interactive).toBe(true);
+    expect(resolveToolMetadata(makeTool({ name: 'task_list' })).interactive).toBe(true);
   });
 
   it('explicit fields take precedence over the classifier', () => {

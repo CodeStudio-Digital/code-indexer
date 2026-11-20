@@ -21,11 +21,13 @@ describe('tool tiers', () => {
 
   it('navigate tier contains the expected tools', () => {
     // get_goal was retired; all shell continuation/observation tools stay here.
-    expect(TIER_COUNTS.navigate).toBe(59);
+    expect(TIER_COUNTS.navigate).toBe(53);
     expect(NAVIGATE_TOOLS.has('get_goal')).toBe(false);
-    for (const name of ['exec_command', 'write_stdin', 'poll_session', 'stop_session', 'read_process_output']) {
+    for (const name of ['exec_command', 'write_stdin', 'stop_session', 'read_process_output']) {
       expect(NAVIGATE_TOOLS.has(name)).toBe(true);
     }
+    // poll_session was retired: an empty write_stdin is the poll.
+    expect(NAVIGATE_TOOLS.has('poll_session')).toBe(false);
   });
 
   it('admin tier contains the expected tools', () => {
@@ -39,15 +41,13 @@ describe('tool tiers', () => {
     expect(getToolTier('expand_toolset')).toBe('bootstrap');
     expect(getToolTier('submit_plan')).toBe('bootstrap');
     expect(getToolTier('glob')).toBe('bootstrap');
-    // NOTE: `todo_write` is a NAVIGATE-tier back-compat alias (the bootstrap
-    // task tool is `task_list`), so it is intentionally not asserted here.
+    // The bootstrap task tool is `task_list`; its former aliases are retired.
   });
 
   it('classifies navigate tools correctly', () => {
     expect(getToolTier('read_file')).toBe('navigate');
     expect(getToolTier('write_file')).toBe('navigate');
     expect(getToolTier('edit_file')).toBe('navigate');
-    expect(getToolTier('multi_edit')).toBe('navigate');
     expect(getToolTier('run_command')).toBe('navigate');
     expect(getToolTier('git_status')).toBe('navigate');
     expect(getToolTier('mcp__find_references')).toBe('navigate');

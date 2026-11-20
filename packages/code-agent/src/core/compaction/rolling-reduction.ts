@@ -129,11 +129,11 @@ function isAlreadyElided(content: string): boolean {
  * only when a new tranche completes, and durable compaction rewrites the
  * raw array anyway (cold prefix → candidates reset for free).
  *
- * The deferred `[duplicate-read elided]` marker is NOT the anti-re-read
- * brake: `enforcePreReadForBridge` (pre-read dedup refusal/downgrade) and
- * the dispatch tuple-hash dedup hold that line — with verbatim priors the
- * pre-read guard refuses instead of allowing the re-read, so deferral makes
- * the brake stricter, not weaker.
+ * The deferred `[duplicate-read elided]` marker is not a re-read brake, and
+ * nothing behind it refuses a re-read: `enforcePreReadForBridge` runs in
+ * shadow (it records `pre-read-shadow-allowed` and lets the call through) and
+ * the dispatch tuple-hash dedup never refuses stable reads across turns.
+ * Deferral only keeps a verbatim prior visible until its tranche completes.
  */
 export function applyRollingReduction(
   messages: AgentMessage[],
@@ -280,7 +280,7 @@ export function applyRollingReduction(
       touched = true;
       return {
         ...b,
-        content: `[duplicate-read elided] You already have the latest content of ${retiredIds.get(tid)} (original ${original.length} chars). Look at later reads in this conversation, or call a different tool — repeating this exact call will be refused.`,
+        content: `[duplicate-read elided] You already have the latest content of ${retiredIds.get(tid)} (original ${original.length} chars). Use the later read of it in this conversation; read it again only if the content you need is no longer visible.`,
         truncated: true,
         originalSize: (b as { originalSize?: number }).originalSize ?? original.length,
       };

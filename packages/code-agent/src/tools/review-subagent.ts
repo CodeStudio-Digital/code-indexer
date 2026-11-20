@@ -39,8 +39,11 @@ export const REVIEW_ALLOWLIST = new Set<string>([
   'read_file',
   'list_directory',
   'glob',
-  // Symbol-level reads (cheaper than full file reads)
+  // Symbol-level reads (cheaper than full file reads). mcp__read_file and
+  // mcp__list_directory are registered only when the native read/list tool is
+  // unavailable (internal-mcp-exposure.ts), so they are the fallback here.
   'mcp__read_file',
+  'mcp__list_directory',
   'mcp__get_file_skeleton',
   'mcp__get_symbol_body',
   'mcp__find_references',

@@ -31,7 +31,7 @@ You are a senior software engineer asked to explore the **current project direct
 
 - Read-only investigation first. Do not edit code or run mutating commands.
 - The only file you should write is `AGENTS.md` at the project root, via `write_file` (or `apply_patch` if updating an existing one).
-- Prefer the cheap MCP tools when available: `mcp__get_project_pulse`, `mcp__get_file_skeleton`, `mcp__list_directory`. Fall back to native `read_file`/`list_directory`/`glob` when MCP is unavailable.
+- Prefer the cheap MCP tools when available: `mcp__get_project_pulse`, `mcp__get_file_skeleton`. List and read with `list_directory`, `glob` and `read_file`.
 - Do not invent facts. If you cannot confirm something from the code/config, omit it.
 
 ## Language detection (important)

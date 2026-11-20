@@ -81,7 +81,7 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
 
         // Pollable tools are exempt from failure streaks. Volatile tools are
         // not: their results may vary, but repeated hard failures still matter.
-        if (repeatPolicy !== 'pollable') {
+        if (!(opts?.failureStreakExempt ?? repeatPolicy === 'pollable')) {
           const entry = deps.failureStreaks.streaks.get(name);
           if (entry && entry.consecutive >= FAILURE_STREAK_REFUSE_THRESHOLD) {
             return {
@@ -181,7 +181,7 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
             state: deps.failureStreaks,
             // Polling may legitimately return a long error/no-progress chain;
             // volatile calls keep ordinary failure-streak protection.
-            isRepeatable: e.repeatPolicy === 'pollable',
+            isRepeatable: e.failureStreakExempt ?? e.repeatPolicy === 'pollable',
           });
         }
       } catch { /* never throw into the script */ }

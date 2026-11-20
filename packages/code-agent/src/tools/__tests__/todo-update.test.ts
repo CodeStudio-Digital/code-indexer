@@ -178,6 +178,6 @@ describe('update_todo — shared guards', () => {
     const { ctx } = makeCtx([]);
     const res = await updateTodo.handler({ updates: [{ id: 'aaaa1111', status: 'completed' }] }, ctx);
     expect(res.isError).toBe(true);
-    expect(res.content).toContain('no active todo list');
+    expect(res.content).toContain('no active checklist');
   });
 });

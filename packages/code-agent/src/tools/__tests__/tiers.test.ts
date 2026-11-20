@@ -15,7 +15,6 @@ import {
   BOOTSTRAP_TOOLS,
   contextualTiersForRuntime,
 } from '@mcp/code-agent/tools/tiers.js';
-import { todoTools } from '@mcp/code-agent/tools/todo.js';
 
 describe('tool tiers — persistent-shell session trio', () => {
   it('places exec_command / write_stdin / list_sessions in navigate, not bootstrap', () => {
@@ -50,14 +49,12 @@ describe('tool tiers — persistent-shell session trio', () => {
 });
 
 describe('tier contract — always-on state tools are explicitly tiered', () => {
-  // todoTools register UNCONDITIONALLY for every session
-  // (index.ts). A member missing from every explicit tier set would
-  // ship on turn 1 ONLY via getToolTier's bootstrap fallback — the silent
-  // gotcha that hid update_todo for
-  // months. This locks them in so a future addition can't quietly
-  // ride the fallback.
+  // The session state tool (task_list) must be explicitly tiered. A tool
+  // missing from every explicit tier set would ship on turn 1 ONLY via
+  // getToolTier's bootstrap fallback — the silent gotcha that once hid the
+  // checklist patch tool for months.
   const explicit = new Set(getAllKnownToolsMeta().map((t) => t.name));
-  const alwaysOnStateTools = [...todoTools].map((t) => t.name);
+  const alwaysOnStateTools = ['task_list'];
 
   it.each(alwaysOnStateTools)('%s is in an explicit tier set (no silent fallback)', (name) => {
     expect(explicit.has(name)).toBe(true);
@@ -72,14 +69,12 @@ describe('tier contract — always-on state tools are explicitly tiered', () => 
     }
   });
 
-  it('task_list is the one bootstrap task tool; todo_write/update_todo/submit_tasks are navigate aliases', () => {
-    // Merge of todos+tasks: only task_list rides the turn-1 surface. The legacy
-    // names stay registered (back-compat aliases) but demoted to navigate so the
-    // model sees ONE task tool — killing the two-tool selection fork.
+  it('task_list is the one task tool; the retired todo_write/update_todo/submit_tasks are untiered', () => {
+    // Merge of todos+tasks: task_list is the only registered task tool. The
+    // former aliases are retired (history renderers still read their names).
     expect(BOOTSTRAP_TOOLS.has('task_list')).toBe(true);
     for (const name of ['todo_write', 'update_todo', 'submit_tasks']) {
-      expect(BOOTSTRAP_TOOLS.has(name)).toBe(false);
-      expect(getToolTier(name)).toBe('navigate');
+      expect(explicit.has(name), name).toBe(false);
     }
   });
 });

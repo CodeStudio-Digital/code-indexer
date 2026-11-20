@@ -104,18 +104,19 @@ describe('policy — spec mode gate', () => {
     expect(track.allowed).toBe(true);
   });
 
-  it('allows submit_tasks after the specification is approved', () => {
-    const tool = makeTool({ name: 'submit_tasks', mutates: false });
+  it("allows task_list gate:'approve' after the specification is approved", () => {
+    // The former submit_tasks alias is retired; task_list is the only route.
+    const tool = makeTool({ name: 'task_list', mutates: false });
     const before = evaluateToolInvocation(
       tool,
-      { summary: 'tasks', tasks: [] },
+      { gate: 'approve', summary: 'tasks', items: [] },
       makeCtx({ specMode: true, specApproved: false }),
     );
     expect(before.allowed).toBe(false);
 
     const after = evaluateToolInvocation(
       tool,
-      { summary: 'tasks', tasks: [] },
+      { gate: 'approve', summary: 'tasks', items: [] },
       makeCtx({ specMode: true, specApproved: true }),
     );
     expect(after.allowed).toBe(true);

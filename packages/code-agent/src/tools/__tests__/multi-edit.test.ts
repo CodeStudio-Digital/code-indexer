@@ -1,5 +1,6 @@
 /**
- * multi_edit DX tests — atomic full-validation behaviour.
+ * edit_file({ edits }) DX tests — atomic full-validation behaviour (the
+ * engine of the retired multi_edit tool).
  *
  * Contract (post PR after session 798's write_stdin loop diagnosis):
  *   - All-or-nothing on disk (atomic).
@@ -15,8 +16,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { multiEdit } from '@mcp/code-agent/tools/fs.js';
+import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+
+const editFile = fsTools.find((t) => t.name === 'edit_file')!;
 
 let dir: string;
 function ctx(): ToolContext {
@@ -37,10 +40,10 @@ function seed(name: string, content: string): string {
   return name;
 }
 
-describe('multi_edit — happy path', () => {
+describe('edit_file edits — happy path', () => {
   it('applies a sequence of independent edits and writes once', async () => {
     const file = seed('a.txt', 'alpha\nbeta\ngamma\n');
-    const r = await multiEdit.handler({
+    const r = await editFile.handler({
       path: file,
       edits: [
         { old_string: 'alpha', new_string: 'ALPHA' },
@@ -53,7 +56,7 @@ describe('multi_edit — happy path', () => {
 
   it('applies dependent edits in order (rolling buffer)', async () => {
     const file = seed('b.txt', 'X');
-    const r = await multiEdit.handler({
+    const r = await editFile.handler({
       path: file,
       edits: [
         { old_string: 'X', new_string: 'Y' },
@@ -65,14 +68,14 @@ describe('multi_edit — happy path', () => {
   });
 });
 
-describe('multi_edit — full-validation failure path', () => {
+describe('edit_file edits — full-validation failure path', () => {
   it('reports EVERY independent failure in a single response', async () => {
     const file = seed('c.txt', 'dup\nother\ndup\nfoo\n');
     // edit #1: not unique — should fail with the new warning.
     // edit #2: independent, valid (would succeed against the unchanged
     //   rolling buffer since #1 didn't advance it).
     // edit #3: independent, NOT FOUND — should also fail.
-    const r = await multiEdit.handler({
+    const r = await editFile.handler({
       path: file,
       edits: [
         { old_string: 'dup', new_string: 'DUP' },
@@ -104,7 +107,7 @@ describe('multi_edit — full-validation failure path', () => {
     // becomes 2). #3 sees buffer = 'B\n' and would succeed (B → C).
     // To force a dependent verdict we need edit #2 to be downstream of
     // #1 and fail. Restructure: #1 succeed, #2 fail, #3 depends.
-    const r = await multiEdit.handler({
+    const r = await editFile.handler({
       path: file,
       edits: [
         { old_string: 'A', new_string: 'B' },
@@ -121,7 +124,7 @@ describe('multi_edit — full-validation failure path', () => {
 
   it('uses the new "replace_all" warning that flags the silent-mass-edit risk', async () => {
     const file = seed('e.txt', 'dup\ndup\ndup\n');
-    const r = await multiEdit.handler({
+    const r = await editFile.handler({
       path: file,
       edits: [{ old_string: 'dup', new_string: 'X' }],
     }, ctx());
@@ -133,11 +136,11 @@ describe('multi_edit — full-validation failure path', () => {
   });
 });
 
-describe('multi_edit — atomicity', () => {
+describe('edit_file edits — atomicity', () => {
   it('never partially writes when any edit fails', async () => {
     const original = 'hello\nworld\n';
     const file = seed('f.txt', original);
-    const r = await multiEdit.handler({
+    const r = await editFile.handler({
       path: file,
       edits: [
         { old_string: 'hello', new_string: 'HELLO' }, // would succeed

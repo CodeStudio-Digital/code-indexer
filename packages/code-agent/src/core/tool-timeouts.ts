@@ -22,7 +22,7 @@
  *     nested calls; `run_command` declares a request-aware timeout plus
  *     cleanup grace — neither relies on this tier in production.)
  *   - INFINITY        — interactive tools (`submit_plan`, `ask_user`,
- *     `submit_tasks`) and tools that explicitly declare `timeoutMs: Infinity`.
+ *     `task_list`) and tools that explicitly declare `timeoutMs: Infinity`.
  *     Repeat policy never implies an unbounded invocation.
  *
  * A valid per-invocation `tool.resolveTimeoutMs(args)` wins first, followed by

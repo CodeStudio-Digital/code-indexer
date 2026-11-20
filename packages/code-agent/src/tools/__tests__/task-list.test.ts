@@ -135,9 +135,9 @@ describe('task_list — gate inference + approve path', () => {
     // approve shape: needs 2+ / submit_plan), NOT todoWrite's "content cannot be empty".
     const res = await taskList.handler({ items: [{ title: 'Do the thing' }] }, h.ctx);
     expect(res.isError).toBe(true);
-    // Hit the approve validator (submit_tasks), NOT todoWrite's content error.
+    // Hit the approve validator, NOT the checklist's content error.
     expect(String(res.content)).not.toMatch(/content cannot be empty/i);
-    expect(String(res.content)).toMatch(/submit_tasks validation|submit_plan|2\+/i);
+    expect(String(res.content)).toMatch(/task_list validation|submit_plan|2\+/i);
   });
 
   it('infers approve gate for structured items and pauses → approves', async () => {

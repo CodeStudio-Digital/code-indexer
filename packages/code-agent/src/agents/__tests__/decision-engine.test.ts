@@ -142,7 +142,7 @@ describe('decision guidance bridge', () => {
       'mcp__get_symbol_body',
       'mcp__prepare_edit',
       'edit_file',
-      'multi_edit',
+      'get_diagnostics',
     ]);
     expect(g.discouragedTools).toEqual(['git_commit', 'git_push', 'mcp__index_project']);
     expect(g.reminder).toContain('agent_decision: intent=edit');

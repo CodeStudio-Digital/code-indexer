@@ -51,7 +51,6 @@ import { httpTools } from '@mcp/code-agent/tools/http.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
-import { todoTools } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { browserTools } from '@mcp/code-agent/tools/browser/index.js';
@@ -77,7 +76,7 @@ const STATIC_TOOLS: NamedTool[] = [
   ...tasksTools, ...interactionTools, ...toolOutputTools, ...diagnosticsTools, ...lspTools,
   ...execCommandTools, ...webTools, ...httpTools, ...globTools, ...ragSearchDocsTools,
   ...ragReadDocTools,
-  ...todoTools, ...viewImageTools, ...previewTools, ...browserTools, ...listAgentsTools,
+  ...viewImageTools, ...previewTools, ...browserTools, ...listAgentsTools,
   ...waitAgentsTools, ...sendMessageTools, ...sendInputTools, ...followupTaskTools,
   ...worktreeTools, ...sandboxTools, ...docsTools, ...envTools,
   ...apiClientTools, ...dbTools,
@@ -168,6 +167,16 @@ describe('tier contract — Phase A/B placements are locked', () => {
       'mcp__get_class_members', 'mcp__get_symbol_details', 'mcp__get_architecture',
     ]) {
       expect(() => getToolTier(n, undefined, { strict: true }), n).toThrow();
+    }
+  });
+
+  it('drops the retired duplicate tools (strict mode throws)', () => {
+    // task_list aliases; multi_edit (edit_file with edits); create_file (write_file);
+    // poll_session (write_stdin with empty chars).
+    const catalog = new Set(getAllKnownToolsMeta().map(tool => tool.name));
+    for (const n of ['todo_write', 'update_todo', 'submit_tasks', 'multi_edit', 'create_file', 'poll_session']) {
+      expect(() => getToolTier(n, undefined, { strict: true }), n).toThrow();
+      expect(catalog.has(n), n).toBe(false);
     }
   });
 

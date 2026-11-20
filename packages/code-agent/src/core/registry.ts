@@ -2,7 +2,7 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import { unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import { isUncertainToolOutcomeError, needsOutcomeRecoveryApproval } from './uncertain-tool-outcome.js';
 import { aliasNormalizationEnabled, normalizeToolArgs } from '@mcp/code-agent/core/tool-arg-aliases.js';
-import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
+import { suggestToolName, toolReplacement } from '@mcp/code-agent/core/tool-name-suggest.js';
 import { resolveToolMetadata, resolveToolInvocationMetadata } from '@mcp/code-agent/core/policy.js';
 import {
   combinedMutationSignal,
@@ -127,6 +127,14 @@ export class ToolRegistry {
     if (asAbortSignal(ctx.signal)?.aborted) return cancelledBeforeDispatch(name);
     const tool = this.tools.get(name);
     if (!tool) {
+      const replacement = toolReplacement(name);
+      if (replacement) {
+        return {
+          content: replacement.text,
+          isError: true,
+          error: { code: replacement.code, kind: 'invalid_input', retryable: false, suggestedAction: replacement.text },
+        };
+      }
       // Deterministic recovery breadcrumbs: a close-name suggestion (telemetry
       // caught `grep_code` for `mcp__grep_code`) and the discovery tool when
       // this session actually has it registered.
@@ -148,7 +156,7 @@ export class ToolRegistry {
     }
     // Tag the recording filesystem port with the current tool name so its
     // audit log shows the actual mutating tool (apply_patch / edit_file /
-    // multi_edit / etc.) instead of a generic "write_file" default.
+    // write_file / etc.) instead of a generic "write_file" default.
     const fsPort = ctx.ports?.fs as { setCurrentTool?: (n: string) => void } | undefined;
     if (fsPort && typeof fsPort.setCurrentTool === 'function') {
       try { fsPort.setCurrentTool(name); } catch { /* never let telemetry break tool dispatch */ }

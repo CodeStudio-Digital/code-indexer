@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { LocalFilesystemAdapter } from '@mcp/code-agent/ports/filesystem-port.js';
-import { fsTools, multiEdit } from '../fs.js';
+import { fsTools } from '../fs.js';
 
 const editFile = fsTools.find((t) => t.name === 'edit_file')!;
 
@@ -143,11 +143,12 @@ describe('edit_file — current TypeScript context', () => {
     expect(readBack('worker.ts')).toBe(concurrent);
   });
 
-  it('shares recovery with multi_edit and commits only when the whole batch matches', async () => {
+  it('shares recovery with edit_file edits and commits only when the whole batch matches', async () => {
     const original = `${actualBlock}\n}\n`;
     write('worker.ts', original);
     const recovered = { old_string: oldBlock, new_string: newBlock };
-    const failed = await multiEdit.handler({
+    const editFile = fsTools.find((t) => t.name === 'edit_file')!;
+    const failed = await editFile.handler({
       path: 'worker.ts',
       edits: [recovered, { old_string: 'not present', new_string: 'unused' }],
     }, ctx);
@@ -155,7 +156,7 @@ describe('edit_file — current TypeScript context', () => {
     expect(failed.content).toContain('#1: would succeed [preserved TypeScript property type');
     expect(readBack('worker.ts')).toBe(original);
 
-    const result = await multiEdit.handler({
+    const result = await editFile.handler({
       path: 'worker.ts',
       edits: [recovered, { old_string: 'return started - row.created_at;', new_string: 'return row.created_at;' }],
     }, ctx);

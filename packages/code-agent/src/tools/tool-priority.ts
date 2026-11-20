@@ -33,11 +33,9 @@ import {
  * core session controls.
  *
  * `task_list` is the ONE always-on task/checklist tool (the todos+tasks
- * merge — see BOOTSTRAP_TOOLS in tiers.ts). The pre-merge solo aliases
- * `submit_tasks`/`todo_write` are now navigate-tier back-compat shims, so
- * they are NOT floored here: a direct caller is covered by pinning, and the
- * merge means the live task tool the cap must keep is `task_list`. The
- * subordinate `*_to_master` variants below are distinct live tools and stay.
+ * merge — see BOOTSTRAP_TOOLS in tiers.ts); the pre-merge aliases are no
+ * longer registered. The subordinate `*_to_master` variants below are
+ * distinct live tools and stay.
  *
  * Company orchestration essentials are protected separately via
  * `isEssentialCompanyTool` (company-essentials.ts) — this set is the
@@ -139,11 +137,8 @@ const HOT_RANK: readonly string[] = [
   'glob',
   'git_status',
   'git_diff',
-  'multi_edit',
-  'create_file',
   'get_diagnostics',
   'mcp__get_project_pulse',
-  'todo_write',
   'lsp_diagnostics',
   'git_log',
   'mcp__find_references',

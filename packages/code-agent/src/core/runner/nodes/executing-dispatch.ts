@@ -41,6 +41,7 @@ import {
 import type { DupCallEntry } from '../guards/dup-call-entry.js';
 import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-abort.js';
 import { resolveToolInvocationMetadata } from '../../policy.js';
+import { declaresPolling } from '../../tool-classification.js';
 import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';
 import { normalizeSourceTruncations } from '../tool-output-telemetry.js';
 import { asAbortSignal } from '../../abort-signal.js';
@@ -77,7 +78,8 @@ export type RefusalKind =
   | 'failure-streak'
   | 'polling-stuck'
   | 'timeout'
-  | 'abort';
+  | 'abort'
+  | 'overwrite-guard'; // write_file / apply_patch Add File over an unknown existing file
 
 export interface DispatchedToolResult {
   evidence?: ToolResult['evidence'];
@@ -299,16 +301,14 @@ export interface DispatchArgs {
   /**
    * Names visible to the model THIS turn (from buildTools). When provided,
    * a call to a registered-but-hidden name (tier-hidden or cap-cut)
-   * executes anyway and is pinned via `onToolPinned`; the result carries a
-   * deterministic `[toolset]` suffix telling the model the tool is now in
-   * its list. Omit to disable hidden-call handling (tests / subagents).
+   * executes anyway and is reported via `onToolPinned`; its result text is
+   * not annotated. Omit to disable hidden-call handling (tests / subagents).
    * Kill switch: CODER_TOOL_PIN_DISABLE=1.
    */
   visibleToolNames?: ReadonlySet<string>;
   /**
    * Already-pinned names (LIVE reference to the run's pin set). Consulted
-   * so a tool pinned earlier in the same batch doesn't get a duplicate
-   * suffix.
+   * so a tool pinned earlier in the same batch isn't reported twice.
    */
   pinnedTools?: ReadonlySet<string>;
   /** Fired when a hidden registered tool executed — pin it for next turn. */
@@ -380,7 +380,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   // A tool may have been pinned in an earlier turn but later evicted from the
   // bounded visible working set. Visibility, not historical pin membership,
   // decides whether it needs re-promotion. This batch-local set still avoids
-  // duplicate suffixes when the same hidden tool is called twice together.
+  // reporting the same hidden tool twice when it is called twice together.
   const activatedHiddenThisBatch = new Set<string>();
 
   const dispatchOne = async (requestedToolUse: DispatchArgs['toolUses'][number]): Promise<void> => {
@@ -401,7 +401,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       : false;
     // Interactivity comes from the policy classification, NOT the raw tool
     // object: the built-in interactive tools (submit_plan, ask_user,
-    // submit_tasks, submit_spec, master variants) declare `interactive` in
+    // task_list, submit_spec, master variants) declare `interactive` in
     // `policy.ts`'s BUILTIN_CLASSIFICATION, not on their CoderTool.
     const interactive = resolvedMetadata?.interactive ?? false;
     const hookBase = {
@@ -1007,7 +1007,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         errorContent: shapedContent,
         turn: args.turn,
         state: args.failureStreakState,
-        isRepeatable,
+        // Only a declared polling tool is exempt; an empty write_stdin poll
+        // still builds a streak (session 798 rotated ids through failing calls).
+        isRepeatable: tool ? declaresPolling(tool) : false,
         // C2-b — opt-in error-signal classification (reset the streak when the
         // failure category changes). Off by default → identical legacy behavior.
         classifyErrors: true,
@@ -1029,7 +1031,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let finalTruncated: boolean | undefined;
     let finalOriginalSize: number | undefined;
     let finalOutputId: string | undefined;
-    let finalInlineCap: number | undefined;
     if (args.finalizeToolResult) {
       const fin = args.finalizeToolResult({
         toolName: tu.name,
@@ -1043,23 +1044,15 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       finalTruncated = fin.truncated;
       finalOriginalSize = fin.originalSize;
       finalOutputId = fin.outputId;
-      finalInlineCap = fin.inlineCap;
       reductionReport = fin.reductionReport ?? reductionReport;
     }
 
-    // Pin AFTER finalizeToolResult so the fail-safe cap can't truncate the
-    // suffix away. Pins even on isError — the model's intent to use the
-    // tool is what matters, and pinning stops repeated suffixes (the live
-    // `pinnedTools` reference makes a second call in this batch non-hidden).
+    // Record the hidden call. Pins even on isError — the model's intent to use
+    // the tool is what matters (the live `pinnedTools` reference makes a second
+    // call in this batch non-hidden). The result text stays untouched: the
+    // stable catalog never changes mid-run, so no pin or future visibility
+    // may be claimed to the model.
     if (hiddenFromModel) {
-      const suffix =
-        `\n\n[toolset] '${tu.name}' was not in your visible tool list; it executed anyway and is now pinned — it will appear in your tools from the next turn.`;
-      const compactSuffix = `\n[toolset pinned: ${tu.name}]`;
-      if (finalInlineCap == null || finalShaped.length + suffix.length <= finalInlineCap) {
-        finalShaped += suffix;
-      } else if (finalShaped.length + compactSuffix.length <= finalInlineCap) {
-        finalShaped += compactSuffix;
-      }
       args.onToolPinned?.(tu.name);
       activatedHiddenThisBatch.add(tu.name);
     }

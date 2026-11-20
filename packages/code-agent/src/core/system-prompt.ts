@@ -365,7 +365,7 @@ function anyToolAvailable(available: ReadonlySet<string> | undefined, names: rea
 }
 
 function nativeToolsSection(available?: ReadonlySet<string>): string {
-  const writes = ['write_file', 'edit_file', 'multi_edit', 'create_file', 'apply_patch']
+  const writes = ['write_file', 'edit_file', 'apply_patch']
     .filter((name) => toolAvailable(available, name));
   const reads = ['read_file', 'list_directory', 'glob']
     .filter((name) => toolAvailable(available, name));
@@ -393,7 +393,7 @@ Use each visible tool according to its schema.${readBeforeWrite}${batching}${che
 }
 
 function overlaySection(available?: ReadonlySet<string>): string {
-  const canWrite = anyToolAvailable(available, ['write_file', 'edit_file', 'multi_edit', 'create_file', 'apply_patch']);
+  const canWrite = anyToolAvailable(available, ['write_file', 'edit_file', 'apply_patch']);
   const canReadOverlay = anyToolAvailable(available, [
     'mcp__read_file',
     'mcp__get_file_skeleton',
@@ -796,7 +796,6 @@ export function planSubmissionGuidance(available?: ReadonlySet<string>): string 
   if (toolAvailable(available, 'submit_plan')) routes.push('`submit_plan` for a written plan');
   else if (available?.has('submit_plan_to_master')) routes.push('`submit_plan_to_master` for a written plan');
   if (toolAvailable(available, 'task_list')) routes.push("`task_list` with `gate:'approve'` for independent tasks");
-  else if (available?.has('submit_tasks')) routes.push('`submit_tasks` for independent tasks');
   else if (available?.has('submit_tasks_to_master')) routes.push('`submit_tasks_to_master` for independent tasks');
   return routes.length ? `Call ${routes.join(' or ')} directly and wait for review.` : undefined;
 }

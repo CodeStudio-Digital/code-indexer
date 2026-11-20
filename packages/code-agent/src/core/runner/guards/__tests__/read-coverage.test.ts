@@ -117,7 +117,13 @@ describe('buildCoveragePointer', () => {
     expect(txt).toContain('lines 120-135');
     expect(txt).toContain('turn 3');
     expect(txt).toContain('turn 7');
-    expect(txt).toContain('force_reread');
+    // The bypass named is a parameter of the receiving tool: the native
+    // read_file has no force_reread, its `force` is the fresh-read argument.
+    expect(txt).toContain('`force: true`');
+    expect(txt).not.toContain('force_reread');
+    expect(buildCoveragePointer({
+      toolName: 'mcp__read_file', path: 'a.php', start: 120, end: 135, segments: [seg(1, 130, 3)],
+    })).toContain('`force_reread: true`');
   });
 });
 

@@ -10,7 +10,7 @@ export function legacyWorktreeDelta(body) {
   const stage = JSON.stringify(body.messages[start].content).includes('FOLLOWUP') ? 'FOLLOWUP' : 'READY';
   const results = body.messages.slice(start + 1).filter(message => message.role === 'tool');
   if (!results.length) return { role: 'assistant', tool_calls: [{ index: 0, id: `legacy-worktree-${stage}`,
-    type: 'function', function: { name: stage === 'READY' ? 'create_file' : 'read_file',
+    type: 'function', function: { name: stage === 'READY' ? 'write_file' : 'read_file',
       arguments: JSON.stringify(stage === 'READY' ? { path: 'worktree-only.txt', content: 'isolated-marker' } : { path: 'worktree-only.txt' }) } }] };
   assert.equal(results.length, 1);
   if (stage === 'FOLLOWUP') assert.match(results[0].content, /isolated-marker/);

@@ -10,7 +10,7 @@
  * All hints are deterministic over their inputs (no timestamps/ids) — they
  * land in the transcript and must not destabilize the provider prefix cache.
  */
-import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
+import { suggestToolName, toolReplacement } from '@mcp/code-agent/core/tool-name-suggest.js';
 
 export function codeExecToolAccessor(name: string): string {
   return /^[A-Za-z_$][\w$]*$/.test(name) ? 'tools.' + name : 'tools[' + JSON.stringify(name) + ']';
@@ -85,7 +85,7 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
     return (
       '\n\nHint: a nested tool call failed and aborted the WHOLE script — work after that ' +
       'point could not run. If one specific call may legitimately fail (for example a probe ' +
-      'read or create_file on a path that may already exist), wrap THAT promise with ' +
+      'read of a path that may not exist yet), wrap THAT promise with ' +
       'attempt(...) or catch only that call; do not make required calls best-effort.'
     );
   }
@@ -93,6 +93,8 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
   const refMatch = /(?:^|ReferenceError:\s*)([A-Za-z_$][\w$]*) is not defined/.exec(msg);
   if (!refMatch) return '';
   const name = refMatch[1];
+  const replaced = ctx.allToolNames.has(name) ? null : toolReplacement(name);
+  if (replaced) return `\n\nHint: ${replaced.text}`;
 
   if (ctx.exposedNames.includes(name)) {
     return (
@@ -116,7 +118,7 @@ export function buildCodeExecFailureHint(msg: string, ctx: CodeExecHintContext):
       `\n\nHint: \`${name}\` and other Node builtins (require/import/fs/path/process) ` +
       `are not available — code_exec runs in a node:vm sandbox that only exposes the ` +
       `\`tools\` proxy plus JSON/Math/etc., not a Node runtime. To write a file, call the ` +
-      `registered tool: \`await write_file({ path, content })\` (or \`create_file\`). ` +
+      `registered tool: \`await write_file({ path, content })\` (it also creates new files). ` +
       `To run a shell command, use \`exec_command\`. code_exec only orchestrates tool calls.`
     );
   }
@@ -159,6 +161,8 @@ export function wrapToolsBinding<T extends object>(
       }
       const canonical = aliases.get(prop);
       if (canonical) return Reflect.get(t, canonical, receiver);
+      const replaced = toolReplacement(prop);
+      if (replaced) throw new Error(`tools.${prop}: ${replaced.text}`);
       const close = suggestToolName(prop, exposedNames as string[]);
       throw new Error(
         `tools.${prop} is not an available tool in this code_exec` +

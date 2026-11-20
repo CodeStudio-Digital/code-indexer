@@ -8,7 +8,7 @@
  * snapshots automatically, and persists the findings into the Snapshots panel.
  * It is cheap (no subagent) and meant to be called near the end of a task so
  * the agent validates its own work before claiming done. The agent then decides
- * which findings to accept and applies the fixes with edit_file/multi_edit.
+ * which findings to accept and applies the fixes with edit_file.
  *
  * Always registered (bootstrap tier). A settings toggle (CODER_SELF_REVIEW)
  * only controls the proactive reminder, not availability.
@@ -72,7 +72,7 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       '(snapshot_review/reviewer). Reads the active snapshots of this session (the files you ' +
       'edited), runs the same review the dashboard "Revisão automática" uses, and returns ' +
       'findings with severity + a concrete suggestedFix. You then decide which to accept and ' +
-      'apply the fixes with edit_file/multi_edit. Findings are also saved to the Snapshots panel.\n\n' +
+      'apply the fixes with edit_file (pass edits for several changes in one file). Findings are also saved to the Snapshots panel.\n\n' +
       'WHEN TO USE: right before you tell the user a non-trivial change is done; after a ' +
       'multi-file edit; after a security-sensitive fix.\n' +
       'Optionally pass `focus` — a short note on what you changed and where to look — ' +

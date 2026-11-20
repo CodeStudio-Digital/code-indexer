@@ -2,28 +2,30 @@
 
 Inventário de nomes conferido no checkpoint anterior à remoção do runtime, em 23/10/2026. A execução atual é TypeScript; as contagens foram ajustadas em 27/10/2026 para a remoção da funcionalidade Meta. Escopo: definições do produto; não consulta credenciais nem presume quais agentes personalizados, plugins ou servidores externos estão habilitados no perfil do usuário.
 
-O catálogo principal possui **244 nomes** em **245 definições**. Nomes de compatibilidade e superfícies diferentes são contados separadamente. A definição de `respond_to_inbox` aparece em dois papéis Company, mas conta como um nome.
+O catálogo principal possui **239 nomes** em **240 definições** (244/245 no inventário de 23/10/2026, menos cinco nomes do Coder aposentados em nov/2026: `create_file`, `multi_edit`, `todo_write`, `update_todo`, `submit_tasks`). Nomes de compatibilidade e superfícies diferentes são contados separadamente. A definição de `respond_to_inbox` aparece em dois papéis Company, mas conta como um nome.
 
 ## Separação por superfície
 
 | Superfície | Nomes |
 | --- | ---: |
-| Coder | 124 |
+| Coder | 119 |
 | Company e App Studio | 77 |
 | DocsAgent | 6 |
 | MCP interno/público | 33 |
 | Skills | 4 |
-| **Total** | **244** |
+| **Total** | **239** |
 
-A composição efetivamente disponível depende do preset, perfil de ferramentas, permissões, capacidades registradas e contexto da sessão. Não se fornecem automaticamente as 244 ferramentas a todos os agentes.
+A composição efetivamente disponível depende do preset, perfil de ferramentas, permissões, capacidades registradas e contexto da sessão. Não se fornecem automaticamente as 239 ferramentas a todos os agentes.
 
 ## Todas as ferramentas do catálogo principal, por função
 
 ### Coder
 
-**Arquivos e imagens (10).** Ler, localizar, criar, editar, mover e excluir caminhos; inspecionar imagens.
+**Arquivos e imagens (8).** Ler, localizar, criar, editar, mover e excluir caminhos; inspecionar imagens.
 
-`read_file`, `list_directory`, `glob`, `view_image`, `create_file`, `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `manage_path`.
+`read_file`, `list_directory`, `glob`, `view_image`, `write_file`, `edit_file`, `apply_patch`, `manage_path`.
+
+`write_file` cria um arquivo novo (de forma exclusiva quando a porta oferece criação exclusiva) ou substitui um existente. Substituir, assim como o `*** Add File:` do `apply_patch` sobre um caminho existente, exige que a sessão tenha lido ou escrito aquele conteúdo e que ele não tenha mudado; senão a chamada é recusada e nada é escrito. `edit_file` aceita uma troca (`old_string`/`new_string`) ou `edits`, um lote aplicado atomicamente no mesmo arquivo.
 
 **Comandos e execução programática (5).** Comandos, sessões persistentes, stdin e chamadas programáticas de ferramentas.
 
@@ -69,9 +71,9 @@ A composição efetivamente disponível depende do preset, perfil de ferramentas
 
 `ask_user`, `decision_gate`, `submit_plan`, `submit_spec`, `read_plan`.
 
-**Tarefas (10).** Listas e itens de trabalho, atualização, cancelamento, arquivo e conclusão.
+**Tarefas (7).** Listas e itens de trabalho, atualização, cancelamento, arquivo e conclusão. `task_list` é a única lista: `gate:'track'` (checklist) ou `gate:'approve'` (lista aprovada que arma `execute_tasks`).
 
-`todo_write`, `update_todo`, `task_list`, `submit_tasks`, `list_tasks`, `update_task`, `cancel_tasks`, `delete_tasks`, `archive_task_list`, `task_complete`.
+`task_list`, `list_tasks`, `update_task`, `cancel_tasks`, `delete_tasks`, `archive_task_list`, `task_complete`.
 
 **Subagentes e coordenação (12).** Criar, acompanhar, retomar, conversar com filhos e executar tarefas/workflows.
 
@@ -171,6 +173,8 @@ A composição efetivamente disponível depende do preset, perfil de ferramentas
 
 `mcp__list_agents`, `mcp__start_agent_run`, `mcp__list_agent_runs`, `mcp__get_agent_run`, `mcp__get_agent_result`, `mcp__cancel_agent_run`.
 
+Os agentes internos recebem só as quatro de leitura: nenhuma bridge interna (projeto primário, prefixadas do master e dos projetos secundários de sessão global) registra `mcp__start_agent_run` nem `mcp__cancel_agent_run`. Clientes MCP externos continuam vendo as seis.
+
 **Modelos e custos (2).** Consultar modelos e métricas de custo.
 
 `mcp__list_models`, `mcp__get_costs`.
@@ -186,6 +190,7 @@ A composição efetivamente disponível depende do preset, perfil de ferramentas
 - `preview_*`: janela Electron do aplicativo local, com inspeção por CDP. `browser_*`: navegador de pesquisa para páginas públicas. `web_search`/`web_fetch`: pesquisa e extração sem o mesmo fluxo de interação visual.
 - O prefixo `mcp__` é o nome dentro do Coder; no servidor MCP público, a declaração normalmente usa o nome sem esse prefixo. `list_agents` da árvore do Coder e `mcp__list_agents` do catálogo público têm finalidades diferentes.
 - `docs_*` da Company gerencia documentos de equipe; as seis `docs_*` do DocsAgent controlam seu ciclo de pesquisa; `rag_*` consulta documentação indexada. São superfícies distintas.
+- Nomes aposentados não são aliases: `multi_edit`, `create_file`, `todo_write`, `update_todo`, `submit_tasks` e `poll_session` falham com a instrução da substituta (`edit_file` com `edits`, `write_file`, `task_list`, `write_stdin` com `chars` vazio), no nível principal e dentro do `code_exec`. Um `write_stdin` com `chars` vazio é uma leitura (poll), não uma escrita.
 
 ## Tipos de agentes, modos e extensões
 
@@ -195,7 +200,7 @@ São configurações do Coder, com prompt, catálogo inicial e regras próprias.
 
 | ID | Nome exibido | Função | Perfil inicial / regra |
 | --- | --- | --- | --- |
-| `explore` | Explore | Investigação e navegação de código | `bootstrap` |
+| `explore` | Explore | Investigação e navegação de código | `bootstrap`; somente leitura: não publica nem autoriza ferramentas que alteram o workspace, executam processos ou delegam |
 | `research` | Research | Pesquisa em documentos, web e navegador público | `bootstrap` + filtro de ferramentas de pesquisa |
 | `plan` | Plan | Planejamento antes da implementação | `navigate`; plano aprovado antes de mutações |
 | `build` | Code | Programação, edição, comandos e verificação | `navigate`; sem gate inicial de plano |
@@ -299,7 +304,7 @@ Fonte: [catálogo de pipelines](../../packages/services/src/pipelines/catalog.ts
 
 ## Catálogos dinâmicos e extensões do checkout
 
-MCPs externos, plugins e agentes personalizados variam conforme configuração e permissões. Seus catálogos efetivos não podem ser deduzidos apenas do inventário fixo de 244 nomes. Recursos e prompts MCP também não são contados como tools.
+MCPs externos, plugins e agentes personalizados variam conforme configuração e permissões. Seus catálogos efetivos não podem ser deduzidos apenas do inventário fixo de 239 nomes. Recursos e prompts MCP também não são contados como tools.
 
 <!-- EXTENSION_CATALOG -->
 
@@ -310,4 +315,4 @@ MCPs externos, plugins e agentes personalizados variam conforme configuração e
 - [Definições MCP](../../apps/mcp-server/tools/).
 
 
-A classificação funcional foi conferida por igualdade de conjuntos: os 244 nomes aparecem exatamente uma vez na seção principal e pertencem à superfície declarada. Nenhum aplicativo ou provider foi iniciado para este levantamento.
+A classificação funcional foi conferida por igualdade de conjuntos: os 244 nomes do inventário de 23/10/2026 apareciam exatamente uma vez na seção principal e pertenciam à superfície declarada; a atualização de nov/2026 só retirou os cinco nomes aposentados. Nenhum aplicativo ou provider foi iniciado para este levantamento.

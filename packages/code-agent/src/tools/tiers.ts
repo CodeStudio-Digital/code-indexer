@@ -194,11 +194,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'list_directory',
   'ask_user',
   'submit_plan',
-  // task_list — the ONE always-on task/checklist tool (merge of todo_write +
-  // submit_tasks). gate:'track' = no-pause checklist; gate:'approve' = gated +
-  // arms execute_tasks. The legacy names (submit_tasks/todo_write/update_todo)
-  // are demoted to NAVIGATE as back-compat aliases so only task_list is on the
-  // turn-1 surface — kills the two-tool selection fork.
+  // task_list — the ONE task/checklist tool (merge of the retired todo_write,
+  // update_todo and submit_tasks). gate:'track' = no-pause checklist;
+  // gate:'approve' = gated + arms execute_tasks.
   'task_list',
   // list/cancel/delete/archive_tasks demoted to navigate (Phase B) — ~1 call
   // each across 12k turns. Subordinates run profile 'navigate'+ and masters
@@ -254,9 +252,6 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'recall_investigations',
   'get_tool_output',
   'glob',
-  // todo_write / update_todo demoted to NAVIGATE (merge): they are now
-  // back-compat aliases of task_list({gate:'track', ...}); only task_list is on
-  // the bootstrap surface so the model sees ONE task tool.
   'invoke_skill',
   // RAG over the user-managed documentation corpus (Documentação sidebar).
   // Read-only, parallel-safe; always available so any agent mode can fall
@@ -306,8 +301,6 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'read_file',
   'write_file',
   'edit_file',
-  'multi_edit',
-  'create_file',
   'manage_path',
   // Codex-only freeform editor (gated to the chatgpt provider in index.ts).
   'apply_patch',
@@ -335,7 +328,6 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'exec_command',
   'write_stdin',
   'list_sessions',
-  'poll_session',
   'stop_session',
   'read_process_output',
   'get_diagnostics',
@@ -398,11 +390,6 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'delete_tasks',
   'archive_task_list',
   'update_task',
-  // Back-compat aliases of task_list (merge of todos+tasks). Kept reachable for
-  // resumed sessions / direct callers; only task_list is bootstrap-visible.
-  'submit_tasks',
-  'todo_write',
-  'update_todo',
   'read_plan',
   'list_notes',
   'forget_memory',
@@ -688,7 +675,6 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   decision_gate: 'Present alternative approaches (with tradeoffs) for the user to choose before the plan',
   submit_plan: 'Submit an implementation plan for user approval',
   task_list: 'The one task tool: gate:track = no-pause checklist; gate:approve = gated list that arms execute_tasks',
-  submit_tasks: 'Alias of task_list({gate:"approve"}) — submit a gated task list for approval',
   list_tasks: 'List current task ids and statuses',
   cancel_tasks: 'Cancel current tasks without deleting the audit trail',
   delete_tasks: 'Delete tasks from the current task list',
@@ -707,8 +693,6 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   recall_investigations: 'Find a past sub-agent exploration before re-running it',
   get_tool_output: 'Retrieve truncated output from a prior tool call',
   glob: 'Find files matching a glob pattern',
-  todo_write: 'Update the lightweight todo list sidebar',
-  update_todo: 'Patch a single todo by id (status/content) — companion to todo_write',
   invoke_skill: 'Invoke a reusable skill by ID',
   rag_search_docs: 'Search the indexed documentation corpus (Documentação)',
   rag_read_doc: 'Read one doc section in full by chunk_id (+ neighbors)',
@@ -734,8 +718,6 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   // ─── Navigate native ──────────────────────────────────────────
   write_file: 'Overwrite an existing file entirely',
   edit_file: 'Apply a targeted search-and-replace edit',
-  multi_edit: 'Apply multiple edits to one file atomically',
-  create_file: 'Create a new file (fails if it exists)',
   manage_path: 'Create directories, move/rename paths, or safely delete',
   web_fetch: 'Fetch a URL and extract content',
   web_search: 'Search the web for information',
@@ -765,7 +747,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   spawn_agent: 'Spawn 1 (or N parallel, up to 8) agent(s) with read/implement/full toolset',
   // Frente D — `execute_task` is gone; orchestration goes through `execute_tasks` (BOOTSTRAP).
   task_complete: 'Close the current inline task scope and mark it done (inline-mode tail of execute_tasks).',
-  update_task: 'Skip / retry / rename / rescope a task without re-running submit_tasks.',
+  update_task: 'Skip / retry / rename / rescope a task without resubmitting the task list.',
   // ─── Navigate MCP ─────────────────────────────────────────────
   mcp__find_references: 'Find all references to a symbol',
   mcp__trace_usage: 'Recursive usage tree (depth 3)',

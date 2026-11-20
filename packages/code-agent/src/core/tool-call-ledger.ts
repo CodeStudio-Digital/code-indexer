@@ -229,7 +229,8 @@ export class ToolCallLedger {
         : input.refusalKind
           ? 'refusal'
           : input.isError ? 'tool_error' : 'success';
-    let validationSignal = extractValidationSignal(input.name, argRecord);
+    let validationSignal = extractValidationSignal(input.name, argRecord)
+      ?? diagnosticsValidationSignal(input.name, input.structuredData);
     let verificationObservation = isVerificationObservation(input.name, argRecord);
     let validationStartedSeq = this.seq + 1;
     let validationOutcome: ToolCallLedgerEntry['validationOutcome'];
@@ -421,6 +422,15 @@ function extractRecoveryOperationId(
   }
 
   return undefined;
+}
+
+/** get_diagnostics reports the checker it ran; the shell extractor labels it. */
+function diagnosticsValidationSignal(name: string, data: unknown): string | undefined {
+  if (name !== 'get_diagnostics' || !data || typeof data !== 'object') return undefined;
+  const { kind, command } = data as { kind?: unknown; command?: unknown };
+  return kind === 'diagnostics_result' && typeof command === 'string'
+    ? extractValidationSignal('run_command', { command })
+    : undefined;
 }
 
 /** Direct checks and success-only chains; output redirection preserves exit status.

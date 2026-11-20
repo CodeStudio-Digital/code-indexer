@@ -47,7 +47,7 @@ export function formatFindingsForAgent(findings: SnapshotReviewFinding[]): strin
   lines.push('');
   lines.push(
     'Decide which are worth it. For each one you accept, apply the fix with ' +
-      'edit_file/multi_edit; skip the ones that do not make sense — you do not have to accept all.',
+      'edit_file (pass edits for several changes in one file); skip the ones that do not make sense — you do not have to accept all.',
   );
   return lines.join('\n');
 }

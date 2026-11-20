@@ -35,7 +35,9 @@ describe('global workspace context', () => {
     expect(buildSubagentWorkspaceBriefing(toolContext)).toBe(shared);
     expect(shared).toContain('poa-intranet-angular/ -> poa-intranet-angular');
     expect(shared).toContain('There is no virtual union directory');
-    expect(shared).toContain('run_command({cwd:"<project-slug>"');
+    // Shell tools accept the slug as their working directory (run_command
+    // `cwd`; exec_command `workdir`, aliased from `cwd`).
+    expect(shared).toContain('For shell commands, set cwd to the project slug.');
   });
 
   it('injects the workspace map only into global system prompts', () => {

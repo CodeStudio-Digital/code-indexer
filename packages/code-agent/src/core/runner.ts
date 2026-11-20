@@ -47,11 +47,14 @@ import {
   readCoverageEnabled,
   parseServedRange,
   buildCoveragePointer,
+  requestsFreshRead,
+  rereadAfterEditHeader,
   visibleSpanOf,
 } from '@mcp/code-agent/core/runner/guards/read-coverage.js';
 import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.js';
 import { repairToolPairing } from '@mcp/code-agent/core/transcript-repair.js';
-import { AGENTS } from '@mcp/code-agent/agents/index.js';
+import { AGENTS, isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
+import { SessionFileKnowledge } from '@mcp/code-agent/tools/file-knowledge.js';
 import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from '@mcp/code-agent/core/summarizer.js';
 import { computeSnapshot, type TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
 import { filterByTiers, profileToTiers, PREVIEW_TOOLS, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
@@ -436,7 +439,7 @@ export class CoderRunner extends EventEmitter {
    * Keyed semantics:
    *   - Callers omit `askId` to use the historic single-slot key
    *     (`__default__`) — backward compatible with `ask_user`,
-   *     `submit_plan`, `submit_tasks`, `subordinate.ask_master`, etc.
+   *     `submit_plan`, `task_list`, `subordinate.ask_master`, etc.
    *   - Callers pass an `askId` (e.g. `budget_<runId>_<turn>`) when they
    *     need an independent slot.
    *   - `provideUserInput(value, askId?)` resolves the matching slot only.
@@ -479,7 +482,7 @@ export class CoderRunner extends EventEmitter {
    * because a fresh runner is instantiated per user message.
    */
   /**
-   * Set to true once the user approves a submit_tasks list. Counts as a
+   * Set to true once the user approves a task_list({gate:'approve'}) list. Counts as a
    * satisfied plan-mode nudge (no separate nudge for tasks). Mutating tools
    * still need an active currentTaskScope to actually run, though.
    */
@@ -765,6 +768,9 @@ export class CoderRunner extends EventEmitter {
     this.opts.toolContext.runner = this;
     this.opts.toolContext.toolOutputInlineCap = this.resolveToolOutputCap('get_tool_output').cap;
     this.opts.toolContext.toolCallLedger ??= new ToolCallLedger();
+    // What this runner read/wrote whole — the overwrite rule's source of truth.
+    // Subagent contexts are built field by field, so a child never shares it.
+    this.opts.toolContext.fileKnowledge ??= new SessionFileKnowledge();
     this.opts.toolContext.planMode = opts.planMode;
     // Tier filtering: prefer explicit activeTiers, fall back to profile,
     // else null = no filtering.
@@ -848,7 +854,7 @@ export class CoderRunner extends EventEmitter {
   /**
    * Replace the session's lightweight todo list and emit `todos_updated`
    * so listeners (dashboard SSE, persistence) can react. Called by
-   * `todo_write`; can also be called by host code on session resume to
+   * `task_list` (track); can also be called by host code on session resume to
    * rehydrate from the database.
    */
   setTodos(todos: TodoItem[]): void {
@@ -1598,6 +1604,7 @@ export class CoderRunner extends EventEmitter {
             specApproved: this.specApproved,
             taskScope: this.currentTaskScope,
             sandboxBound: !!this.opts.toolContext.ports?.fs || !!this.opts.toolContext.ports?.shell,
+            readOnly: isReadOnlyAgent(this.opts.agentId),
           };
           const decision = evaluateToolInvocation(tool, args, policyContext);
           let refusal = decision.allowed ? null : { reason: decision.reason, detail: decision.detail };
@@ -1644,7 +1651,7 @@ export class CoderRunner extends EventEmitter {
         postProcessToolResult: (result) => this.postProcessToolResultForBridge(result),
         enforceTaskMode: (toolName, toolMutates) => {
           // Pure guard — reads the persisted tasks state and decides. Same
-          // family as enforcePreRead but specific to the `submit_tasks` →
+          // family as enforcePreRead but specific to the task-list approval →
           // `execute_task` workflow.
           const tasksState = this.opts.toolContext.getTasksState?.() ?? null;
           if (!tasksState) return null;
@@ -1896,7 +1903,7 @@ export class CoderRunner extends EventEmitter {
     const inp = input as Record<string, unknown> | undefined;
     const path = getStringField(inp, 'path', 'file_path');
     if (!path) return null;
-    if (inp?.force_reread === true) {
+    if (requestsFreshRead(toolName, inp)) {
       this.setTransition('pre-read-force-reread');
       return null;
     }
@@ -2174,10 +2181,7 @@ export class CoderRunner extends EventEmitter {
         const priorResult = findToolResultByUseId(pending.priorUseId, this.messages);
         if (priorResult && !priorResult.isElided) {
           const diff = buildSimpleLineDiff(priorResult.content, args.rawContent, 3);
-          nextContent =
-            `[reread-after-edit] \`${pending.path}\` was mutated since your prior read at turn ${pending.priorTurn}. ` +
-            `Returning unified diff against that read (pass force_reread=true to bypass diff and get full content).\n\n` +
-            diff;
+          nextContent = `${rereadAfterEditHeader(args.name, pending.path, pending.priorTurn)}\n\n${diff}`;
         } else {
           nextContent =
             `[reread-after-edit] \`${pending.path}\` was mutated since your prior read at turn ${pending.priorTurn}, ` +

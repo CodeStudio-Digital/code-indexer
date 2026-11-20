@@ -2,7 +2,7 @@
  * Task-mode gate — enforces the user's `execution_mode` choice on the
  * approved task list.
  *
- * Problem solved: when the user approves `submit_tasks` with
+ * Problem solved: when the user approves a task list with
  * `execution_mode = 'all-subagent'`, the intent is clear — every mutating
  * change should be carried out by an isolated implement subagent (via
  * `execute_task({task_id})`). But the LLM often ignores the post-approval
@@ -51,7 +51,7 @@ const WORKFLOW_TOOLS: ReadonlySet<string> = new Set([
   'delete_tasks',
   'archive_task_list',
   'update_task',
-  'submit_tasks',
+  'task_list',
   // Investigation / orchestration tools — fine to call between tasks.
   'spawn_agent',
   'workflow',

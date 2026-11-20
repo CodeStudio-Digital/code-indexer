@@ -226,7 +226,7 @@ describe('todo_write', () => {
       ctx(), // no runner
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('runner that supports todo tracking');
+    expect(result.content).toContain('runner that supports checklist tracking');
   });
 
   it('replaces the entire list on each call (no merge)', async () => {

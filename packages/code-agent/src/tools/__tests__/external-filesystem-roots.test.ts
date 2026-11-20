@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { fsTools } from '../fs.js';
+import { SessionFileKnowledge } from '../file-knowledge.js';
 import { globTool } from '../glob.js';
 import { shellTools } from '../shell.js';
 
@@ -25,6 +26,7 @@ function ctx(access: 'read' | 'write'): ToolContext {
   return {
     cwd: projectRoot,
     projectName: 'external-root-test',
+    fileKnowledge: new SessionFileKnowledge(),
     externalRoots: [{
       id: '70000000-0000-4000-8000-000000000001',
       rootPath: externalRoot,
@@ -61,7 +63,10 @@ describe('authorized external filesystem roots', () => {
   it('enforces read-only and permits writes only after an explicit write grant', async () => {
     const target = join(externalRoot, 'source.ts');
     const denied = await writeFile.handler({ path: target, content: 'denied' }, ctx('read'));
-    const allowed = await writeFile.handler({ path: target, content: 'allowed' }, ctx('write'));
+    // A write grant still follows the overwrite rule: the session reads first.
+    const writer = ctx('write');
+    await readFile.handler({ path: target }, writer);
+    const allowed = await writeFile.handler({ path: target, content: 'allowed' }, writer);
 
     expect(denied.isError).toBe(true);
     expect(denied.content).toContain('read-only authorized root');

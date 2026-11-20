@@ -25,8 +25,6 @@ export const BUILTIN_CLASSIFICATION: Record<
   // ─── Filesystem writes (path-scoped) ──────────────────────────
   write_file:       { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
   edit_file:        { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
-  multi_edit:       { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
-  create_file:      { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
   manage_path:      { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
   apply_patch:      { mutates: true, parallelSafe: false, riskLevel: 'write', scopeAware: true },
 
@@ -78,7 +76,6 @@ export const BUILTIN_CLASSIFICATION: Record<
   // out of the NORMAL tool timeout). gate:'track' returns immediately, for which
   // the interactive flag is a harmless no-op.
   task_list:        { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
-  submit_tasks:     { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   submit_spec:      { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
   list_tasks:        { mutates: false, parallelSafe: true,  riskLevel: 'read' },
   cancel_tasks:      { mutates: false, parallelSafe: false, riskLevel: 'read' },
@@ -88,7 +85,6 @@ export const BUILTIN_CLASSIFICATION: Record<
   // (plural) and `task_complete` (inline-scope closer) remain.
   task_complete:    { mutates: false, parallelSafe: false, riskLevel: 'read' },
   update_task:      { mutates: false, parallelSafe: false, riskLevel: 'read' },
-  todo_write:       { mutates: false, parallelSafe: false, riskLevel: 'read' },
 
   // ─── Subordinate company variants (master-directed) ───────────
   ask_master:               { mutates: false, parallelSafe: false, riskLevel: 'read', interactive: true },
@@ -188,12 +184,40 @@ export function isExplicitlyParallelSafeRead(tool: CoderTool): boolean {
 /**
  * Resolve metadata for one concrete invocation. `riskOf` is authoritative for
  * input-sensitive tools (for example db_query SELECT vs INSERT) and fails
- * closed as a write when it throws or returns an invalid value.
+ * closed as a write when it throws or returns an invalid value; `repeatPolicyOf`
+ * does the same for repetition and keeps the derived policy on a bad answer.
  */
 export function resolveToolInvocationMetadata(
   tool: CoderTool,
   input: unknown,
 ): ResolvedToolMetadata {
+  const resolved = resolveInvocationRisk(tool, input);
+  const repeatPolicy = invocationRepeatPolicy(tool, input);
+  return repeatPolicy ? { ...resolved, repeatPolicy } : resolved;
+}
+
+const REPEAT_POLICIES: ReadonlySet<string> = new Set(['stable', 'volatile', 'pollable', 'mutating']);
+
+function invocationRepeatPolicy(tool: CoderTool, input: unknown): ToolRepeatPolicy | null {
+  if (typeof tool.repeatPolicyOf !== 'function') return null;
+  try {
+    const policy = tool.repeatPolicyOf(input);
+    return REPEAT_POLICIES.has(policy) ? policy : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The tool itself declares a polling primitive (static `repeatPolicy`
+ * pollable). Failures of such tools are exempt from the failure-streak guard;
+ * an input-derived pollable call (an empty write_stdin) is not.
+ */
+export function declaresPolling(tool: CoderTool): boolean {
+  return resolveToolMetadata(tool).repeatPolicy === 'pollable';
+}
+
+function resolveInvocationRisk(tool: CoderTool, input: unknown): ResolvedToolMetadata {
   const metadata = resolveToolMetadata(tool);
   if (typeof tool.riskOf !== 'function') return metadata;
 

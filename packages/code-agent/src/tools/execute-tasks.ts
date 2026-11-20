@@ -239,7 +239,7 @@ const executeTasksSchema: JsonSchema = {
  *
  * Two cases:
  *  - An approved task list already exists → the user approved it via
- *    submit_tasks, which IS the human gate. Don't re-prompt: apply the
+ *    task_list({gate:'approve'}), which IS the human gate. Don't re-prompt: apply the
  *    plan→build transition and return null so the caller runs the waves.
  *  - No approved list (the model used execute_tasks as a "plan is ready, go"
  *    signal without submitting one) → present for approval, reusing the
@@ -257,7 +257,7 @@ async function handleExecuteTasksInPlanMode(
   if (!runner) return err('execute_tasks requires an owned plan review port.');
   const hasApprovedTasks = !!state?.approved && state.tasks.length > 0;
   if (hasApprovedTasks) {
-    // submit_tasks already collected the user's approval — unlock + switch to
+    // task_list approval already collected the user's consent — unlock + switch to
     // build, then let the waves run. Fixes the pre-existing dead-end where
     // markTasksApproved() left planApproved=false and execute_tasks got gated.
     await applyPlanApproval(runner!, ctx);
@@ -295,7 +295,7 @@ async function handleExecuteTasksInPlanMode(
     await ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
     return ok(
       `Plan rejected by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
-        `Refine the approach and call submit_plan (or submit_tasks) again before executing.`,
+        `Refine the approach and call submit_plan (or task_list with gate:'approve') again before executing.`,
     );
   }
 
@@ -305,7 +305,7 @@ async function handleExecuteTasksInPlanMode(
     content:
       `Plan approved by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
       `Switched to build mode. No approved task list to dispatch — proceed with direct edits ` +
-      `per build-mode instructions, or call submit_tasks to decompose the work into parallel waves.`,
+      `per build-mode instructions.`,
     ...extras,
   };
 }
