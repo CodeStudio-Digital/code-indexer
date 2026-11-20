@@ -353,7 +353,7 @@ const REPLAY_STATE_KINDS = new Set<string>([
   'tasks_posted', 'task_started', 'task_finished', 'task_updated',
   'task_run_started', 'task_run_task_started', 'task_run_task_progress',
   'task_run_task_finished', 'task_run_finished',
-  // Spawned-agent groups (background jobs) span turns.
+  // Agent groups (workflow, execute_tasks); background jobs of old sessions spanned turns.
   'agents_group_start', 'agent_progress', 'agents_group_end',
   // Latest-wins session state the client has no other live source for.
   'todos_updated', 'session_agent_changed', 'session_drive_changed',

@@ -101,13 +101,6 @@
     "branchHint": "Uma branch nova parte do HEAD atual. Se ela já existir, o worktree abre essa branch. Você poderá criar várias sessões no mesmo worktree."
   },
   "interaction.responseFailed": "Não foi possível enviar a resposta. Tente novamente.",
-  "notifications.background.collectWith": "Colete com",
-  "notifications.background.resumeWith": "Retome {{count}} com",
-  "notifications.background.statusDone": "concluído",
-  "notifications.background.statusFailed": "{{count}} com falha",
-  "notifications.background.statusPartial": "{{count}} parciais",
-  "notifications.background.summary": "{{completed}} concluídos, {{partial}} parciais, {{failed}} com falha.",
-  "notifications.background.title": "Subagentes em segundo plano concluídos",
   "notifications.childAgent.approvalBody": "{{title}} está aguardando uma aprovação.",
   "notifications.childAgent.approvalTitle": "Agente filho precisa de aprovação",
   "notifications.childAgent.reasonArchived": "O chat foi arquivado, então os chats filhos dele pararam.",

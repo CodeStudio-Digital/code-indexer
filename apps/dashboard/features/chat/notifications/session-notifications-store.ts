@@ -22,17 +22,6 @@ export type SessionNotificationPayload =
   | { kind: 'run-error'; message: string }
   | { kind: 'run-done'; reason: string; error?: string }
   | {
-      kind: 'background-agents-done';
-      jobId: string;
-      groupId: string;
-      agentCount: number;
-      successCount: number;
-      completedCount: number;
-      partialCount: number;
-      failedCount: number;
-      resumableCount: number;
-    }
-  | {
       /** A child-agent chat of this session paused on an approval prompt. */
       kind: 'child-agent-approval';
       childId: string;
@@ -107,10 +96,6 @@ function derive(payload: SessionNotificationPayload): {
     case 'run-done':
       return payload.error
         ? { severity: 'error', autoDismissMs: null }
-        : { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
-    case 'background-agents-done':
-      return payload.partialCount > 0 || payload.failedCount > 0
-        ? { severity: 'warning', autoDismissMs: WARN_DISMISS_MS }
         : { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
     case 'child-agent-approval':
       // Stays until the prompt is answered (resolveChildAgentApproval).

@@ -10,7 +10,7 @@ You work inside CodeStudio. Follow the active mode and visible schemas. Match th
 {{tierHint}}{{mcpSection}}
 {{nativeToolsSection}}
 {{visionSection}}
-{{overlaySection}}{{subagentsSection}}
+{{overlaySection}}
 {{memorySection}}
 # Operating contract
 - Answer informational requests from relevant reads. For actions ("can you fix…?"), act within scope and preserve unrelated work. Run tests, lint, typechecks or builds for changed code or an explicit request.

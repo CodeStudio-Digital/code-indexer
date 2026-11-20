@@ -42,9 +42,6 @@ const CODER_EVENTS = new Set([
   'done',
   'error',
   'tool_loop_intervention',
-  'agents_group_start',
-  'agent_progress',
-  'agents_group_end',
   // A child-agent session's approval prompt, shown in its parent's chat.
   'child_agent_attention',
   // How many child chats a stop covered, shown in the chat the stop came from.
@@ -128,11 +125,6 @@ function hasNotifiablePayload(event: string, value: unknown): boolean {
   const data = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-  if (event === 'agent_progress') {
-    return data.event === 'error' || data.event === 'timed_out';
-  }
-  if (event === 'agents_group_start') return data.background === true;
-  if (event === 'agents_group_end') return typeof data.jobId === 'string';
   if (event === 'tool_loop_intervention') {
     return !(data.kind === 'dup-result-marker' && data.severity === 'informational');
   }

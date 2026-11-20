@@ -4,7 +4,7 @@
  * the wait budget, clamped to the call's own deadline so a wait inside
  * code_exec returns a timeout before the script's limit instead of being cut
  * off by it; and what a tool returns for results it received: each long
- * answer spilled to the tool output store (as spawn_agent does), and the
+ * answer spilled to the tool output store (as spawn_agent did), and the
  * usage of the runs it received claimed once for this turn (E4b ledger),
  * which also refreshes the files the children changed.
  */

@@ -54,7 +54,7 @@ export interface ChildAgentWaitDeps {
   /** Whether the child's live run is paused on an approval prompt (the host pool). */
   awaitingApproval?(childId: string): boolean;
   /**
-   * Spills a long answer the way spawn_agent does (the parent's tool output
+   * Spills a long answer the way spawn_agent did (the parent's tool output
    * store, readable with get_tool_output). Given only on the parent worker's
    * side; without it the full recorded answer is returned.
    */

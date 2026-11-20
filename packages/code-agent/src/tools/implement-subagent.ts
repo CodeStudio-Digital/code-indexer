@@ -100,8 +100,6 @@ export interface SubagentSpec {
   /** Explicit salvage-summary timeout; primarily useful for bounded hosts/tests. */
   salvageTimeoutMs?: number;
   signal?: AbortSignal;
-  /** Caller wait behaviour; execution semantics stay identical. */
-  waitMode?: 'foreground' | 'background';
   /** When set, fs/shell tools record paths outside this list for scope telemetry. */
   pathScope?: string[];
   /**
@@ -220,7 +218,7 @@ export function isChildToolAdmitted(tool: CoderTool, allowlist: SubagentAllowlis
  * Interactive tools are excluded separately: children never pause for the user.
  */
 export const CHILD_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
-  'spawn_agent', 'workflow', 'execute_tasks', 'resume_agent', 'resume_chat', 'find_tools',
+  'workflow', 'execute_tasks', 'find_tools',
   'create_chat', 'create_chat_trigger', 'prepare_chat_schedule', 'propose_task', 'request_review',
   'task_complete',
 ]);
@@ -333,8 +331,8 @@ export interface SubagentRunResult {
   sandboxViolations: string[];
   /**
    * Frente C (PR 3 da reavaliação) — structured trail the sub emitted via
-   * `record_memo` / `mcp__add_snapshot` / `post_to_board`. The parent
-   * `spawn_agent` handler appends a compact rendering of this to the
+   * `record_memo` / `mcp__add_snapshot` / `post_to_board`. The retired
+   * `spawn_agent` handler appended a compact rendering of this to the
    * tool_result text so the master sees what the sub found beyond the
    * one final assistant message.
    *
@@ -345,9 +343,8 @@ export interface SubagentRunResult {
   collected?: SubagentCollected;
   /**
    * Snapshot of the child's full message history at terminal time (both
-   * success and failure). Retention policy is the CALLER's — spawn_agent
-   * keeps failed transcripts in the resume registry so `resume_agent` can
-   * relaunch the child from where it stopped.
+   * success and failure). Retention policy is the CALLER's — workflow keeps
+   * transcripts in the resume registry for the Transcript tab.
    */
   transcript?: AgentMessage[];
   /** A missing effect ACK forbids automatic fresh retries, even with a summary. */
@@ -630,7 +627,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
     onToolOutcomeTerminal: childOutcomeRecovery.onTerminal,
     commitToolOutcomeRecovery: () => childOutcomeRecovery.drain(),
     toolOutcomeScope: parent.ctx.toolOutcomeScope,
-    // Anchor approvals to the chat-visible spawning tool_use (spawn_agent /
+    // Anchor approvals to the chat-visible spawning tool_use (workflow /
     // execute_tasks block) — subagent tool calls have no blocks of their own.
     approvalAnchorId: parent.ctx.approvalAnchorId ?? parent.ctx.currentToolUseId,
     // Intentionally NO `runner` — interactive tools fail inside the subagent.
@@ -766,7 +763,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
           }
         : null,
     }),
-    background: spec.waitMode === 'background',
+    background: false,
     sessionId: parent.sessionId!,
     getAgentRunId: () => subRunnerRef
       ? subRunnerRef.runId
@@ -830,7 +827,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
 
   // Propagate selected sub-runner events to the PARENT so the dashboard's
   // StuckBanner doesn't trip and the user sees progress for what would
-  // otherwise be a black-box `spawn_agent` invocation. Mirrors the same
+  // otherwise be a black-box subagent invocation. Mirrors the same
   // pattern `runParallelAgents` uses (tool_call_result → onProgress).
   //   - tool_progress: heartbeat from Camada 1/3/4 of the SUB's BT.
   //   - tool_call_result: per-call activity ping with a [subagent] prefix
@@ -1122,7 +1119,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
           ?? (typeof parent.ctx.runner?.getReasoningEffort === 'function'
             ? parent.ctx.runner.getReasoningEffort()
             : null),
-        wait_mode: spec.waitMode ?? 'foreground',
+        wait_mode: 'foreground',
         effective_provider: subProvider.name,
         effective_model: subProvider.model,
         effective_reasoning_effort: spec.reasoningEffort
@@ -1136,11 +1133,9 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
           roots: parent.ctx.roots?.map((root) => root.rootPath) ?? [],
           externalRoots: parent.ctx.externalRoots?.map((root) => root.rootPath) ?? [],
         })).digest('hex'),
-        policy_mode: spec.waitMode === 'background'
-          ? 'background_noninteractive'
-          : parent.ctx.permissionGate
-            ? 'inherited_permission_gate'
-            : 'no_permission_gate',
+        policy_mode: parent.ctx.permissionGate
+          ? 'inherited_permission_gate'
+          : 'no_permission_gate',
         task_preview: taskPreview,
         max_turns: spec.maxTurns,
         max_tool_calls: limits.maxToolCalls ?? null,
@@ -1342,7 +1337,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
 
 /**
  * Read-only allowlist for the explore subagent (legacy `spawn_subagent`)
- * and for parallel agents spawned via `spawn_agents`. Includes MCP indexer
+ * and for parallel workflow/execute_tasks agents. Includes MCP indexer
  * tools plus native read-only filesystem, web, and diagnostics tools.
  * Explicitly excludes mutating tools (write/edit/shell/git admin).
  */
@@ -1826,14 +1821,6 @@ export interface ParallelAgentSpec {
   sameOperationMax?: number;
   salvageTimeoutMs?: number;
   signal?: AbortSignal;
-  waitMode?: 'foreground' | 'background';
-  /**
-   * Resume path — full seed history for the child runner. When set it
-   * REPLACES the single synthesized `task` user message (resume_agent passes
-   * the captured transcript + a continuation nudge). `task` is still used
-   * for logs/ledger topics.
-   */
-  initialMessages?: AgentMessage[];
 }
 
 export interface ParallelAgentProgress {
@@ -1889,7 +1876,7 @@ export function countSubagentOutcomes(
   };
 }
 
-export function classifySubagentTerminal(
+function classifySubagentTerminal(
   reason: SubagentRunResult['reason'],
   text: string,
 ): {
@@ -1949,7 +1936,7 @@ export async function runParallelAgents(
         systemPrompt: spec.systemPrompt ?? systemPrompt,
         label: spec.label,
         allowlist: spec.allowlist ?? allowlist,
-        initialMessages: spec.initialMessages ?? [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
+        initialMessages: [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
         maxTurns: spec.maxTurns,
         profile: spec.profile,
         provider: spec.provider,
@@ -1964,7 +1951,6 @@ export async function runParallelAgents(
         sameOperationMax: spec.sameOperationMax,
         salvageTimeoutMs: spec.salvageTimeoutMs,
         signal: spec.signal,
-        waitMode: spec.waitMode,
         onProgress: (progress) => {
           toolCallCount = progress.toolCallCount;
           onProgress({

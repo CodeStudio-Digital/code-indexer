@@ -35,15 +35,11 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'wait_agents',
   'send_message',
   'send_input',
-  'spawn_agent',
   // Session-level objective + visual context. Useful for orchestration
   // (set goal once, re-read after compaction; load a screenshot the user
   // attached). Both are read-only and don't touch code.
   'goal',
   'view_image',
-  // MCP resource discovery — read-only static content, doesn't expose code.
-  'mcp_list_resources',
-  'mcp_read_resource',
   'docs_deep_research',
   'docs_list', 'docs_read', 'docs_search', 'docs_write', 'docs_index_update', 'docs_delete',
   'rag_search_docs',

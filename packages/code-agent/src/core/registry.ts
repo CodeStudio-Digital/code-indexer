@@ -32,8 +32,6 @@ export class ToolRegistry {
   private tools = new Map<string, CoderTool>();
   private sealed = false;
   private replaced: Readonly<Record<string, string>> = {};
-  private standIns: CoderTool[] = [];
-  private standInsReplace = new Set<string>();
 
   /**
    * Tool names this run does not register because others replace them, each
@@ -46,23 +44,6 @@ export class ToolRegistry {
 
   replacedTools(): Readonly<Record<string, string>> {
     return this.replaced;
-  }
-
-  /**
-   * With a replaced surface (child chats): the tools that surface would have
-   * registered in this run. Never published nor invoked: the workflow catalog
-   * budgets its optional groups on them, so the swap moves no other tool.
-   * `replacing`: the registered tools they stand against (left out of that
-   * budget). filterInPlace filters them like registered tools.
-   */
-  addCatalogStandIns(tools: readonly CoderTool[], replacing: Iterable<string> = []): void {
-    if (this.sealed) throw new Error('ToolRegistry attempt snapshot is sealed; stand-ins are fixed at launch');
-    this.standIns.push(...tools);
-    for (const name of replacing) this.standInsReplace.add(name);
-  }
-
-  catalogStandIns(): { tools: readonly CoderTool[]; replacing: ReadonlySet<string> } {
-    return { tools: this.standIns, replacing: this.standInsReplace };
   }
 
   register(tool: CoderTool): void {
@@ -109,9 +90,8 @@ export class ToolRegistry {
   /**
    * Remove all tools that do not satisfy the predicate.
    * Used by the Master agent filter to strip code-level tools.
-   * Catalog stand-ins are filtered by `standInPredicate` (default: the same).
    */
-  filterInPlace(predicate: (tool: CoderTool) => boolean, standInPredicate = predicate): void {
+  filterInPlace(predicate: (tool: CoderTool) => boolean): void {
     if (this.sealed) {
       throw new Error('ToolRegistry attempt snapshot is sealed; filtering must happen before launch');
     }
@@ -120,7 +100,6 @@ export class ToolRegistry {
         this.tools.delete(name);
       }
     }
-    this.standIns = this.standIns.filter(standInPredicate);
   }
 
   /**

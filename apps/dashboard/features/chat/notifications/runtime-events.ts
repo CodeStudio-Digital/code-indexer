@@ -14,41 +14,6 @@ export function recordCoderRuntimeNotification(source: RuntimeEvent): void {
   const data = asRecord(source.data);
   const options = { sourceKey: `runtime:${source.ts}:${source.id}`, receivedAt: source.ts };
 
-  if (source.event === 'agents_group_start') {
-    return;
-  }
-
-  if (source.event === 'agent_progress') {
-    // Background agents can emit a terminal progress event before their
-    // transcripts are retained. Notify only on agents_group_end, after the
-    // group is collectable/resumable, to avoid premature retry guidance and
-    // one warning per child.
-    return;
-  }
-
-  if (source.event === 'agents_group_end') {
-    const groupId = readString(data, 'groupId');
-    const jobId = readString(data, 'jobId');
-    if (!jobId || !groupId) return;
-    const agentCount = readNumber(data, 'agentCount') ?? 0;
-    const completedCount = readNumber(data, 'completedCount') ?? readNumber(data, 'successCount') ?? 0;
-    const partialCount = readNumber(data, 'partialCount') ?? 0;
-    const failedCount = readNumber(data, 'failedCount')
-      ?? Math.max(0, agentCount - completedCount - partialCount);
-    pushNotification(source.sessionId, {
-      kind: 'background-agents-done',
-      jobId,
-      groupId,
-      agentCount,
-      successCount: completedCount,
-      completedCount,
-      partialCount,
-      failedCount,
-      resumableCount: readNumber(data, 'resumableCount') ?? 0,
-    }, options);
-    return;
-  }
-
   if (source.event === 'child_agent_attention') {
     const childId = readString(data, 'childId');
     if (!childId) return;

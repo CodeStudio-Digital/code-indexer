@@ -249,7 +249,7 @@ export interface DispatchArgs {
   /**
    * Telemetry hook — fired periodically (default every 10s) while a tool
    * invocation is in flight. Drives the dashboard's StuckBanner reset
-   * during long-running tools (web_fetch, run_command, spawn_agent
+   * during long-running tools (web_fetch, run_command, workflow
    * parallel batches). Skipped when the tool is `interactive: true` or
    * `timeoutMs: Infinity` — the runner is correctly idle there.
    */
@@ -642,7 +642,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let refusalKind: RefusalKind | undefined;
 
     // Periodic heartbeat — keeps the dashboard StuckBanner alive during
-    // long-running invocations (web_fetch, run_command, spawn_agent
+    // long-running invocations (web_fetch, run_command, workflow
     // parallel batches). Suppressed only for interactive waits or when no
     // progress sink is installed; explicitly unbounded work still heartbeats.
     const heartbeatSuppressed = interactive || !args.onToolProgress;
@@ -804,7 +804,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         }
       }
       invocationExtraBlocks = result.extraUserBlocks;
-      // Sub-runner usage (spawn_agent, child agents) rides to the turn's subagent usage.
+      // Sub-runner usage (workflow and execute_tasks agents) rides to the turn's subagent usage.
       invocationSubUsage = {
         ...(result.subUsage ? { subUsage: result.subUsage } : {}),
         ...(result.subUsageRuns?.length ? { subUsageRuns: result.subUsageRuns } : {}),

@@ -2,9 +2,9 @@
  * subagent-transcript-spill — off-heap storage for TERMINAL (completed,
  * non-resumable) subagent transcripts.
  *
- * The resume registry keeps FAILED/ABORTED transcripts in RAM so `resume_agent`
- * can relaunch from where they stopped, but a COMPLETED agent's transcript is
- * only needed for observability (`read_agent_transcript`). Spilling it to a
+ * The resume registry keeps FAILED/ABORTED transcripts in RAM (they were kept
+ * for the retired `resume_agent`), but a COMPLETED agent's transcript is
+ * only needed for observability (the dashboard Transcript tab). Spilling it to a
  * per-session entity frees the tens of MB of worker RAM that all-completed
  * spawn groups otherwise pin for the full 45-min retention window, while the
  * transcript stays readable on demand.
@@ -14,7 +14,6 @@
  * without loss because the caller only drops the in-RAM copy once the file
  * exists.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { SessionId } from '@mcp/session-storage';
@@ -52,28 +51,6 @@ export async function spillTranscriptToDisk(
       agentIndex,
       transcript,
     );
-  } catch {
-    return null;
-  }
-}
-
-/** Read a bundle transcript entity back. */
-export function readSpilledTranscript(spillPath: string): AgentMessage[] | null {
-  try {
-    if (!existsSync(spillPath)) return null;
-    const envelope = JSON.parse(readFileSync(spillPath, 'utf8')) as {
-      kind?: string;
-      data?: { messages?: AgentMessage[] };
-    };
-    if (
-      envelope.kind !== 'subagent_transcript' ||
-      !Array.isArray(envelope.data?.messages)
-    ) {
-      return null;
-    }
-    return envelope.data.messages.length > 0
-      ? envelope.data.messages
-      : null;
   } catch {
     return null;
   }
@@ -120,6 +97,3 @@ export function removeSpillFile(_spillPath: string): void {
   // Intentionally retained until session deletion.
 }
 
-export function removeSessionSpill(_sessionId: SessionId): void {
-  // Intentionally retained until session deletion.
-}

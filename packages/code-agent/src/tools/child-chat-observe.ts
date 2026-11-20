@@ -1,5 +1,5 @@
 /**
- * The four deferred child-chat tools (CODER_CHILD_SESSION_AGENTS on), reached
+ * The four deferred child-chat tools (outside Company), reached
  * through find_tools and called inside code_exec: read_chat, wait_chats,
  * stop_chat and list_chats. wait_chats is the long child wait (E4); inside
  * code_exec it is clamped to the script's own deadline and then returns a

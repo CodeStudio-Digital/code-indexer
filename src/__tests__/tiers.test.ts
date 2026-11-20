@@ -16,8 +16,10 @@ const inTiers = <T extends { name: string }>(tools: readonly T[], tiers: Readonl
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {
     // Goal telemetry was retired; task_list remains the active task surface.
-    // +4 explicit placements (wait_chats, propose_task, prepare_chat_schedule, record_memo).
-    expect(TIER_COUNTS.bootstrap).toBe(51);
+    // +4 explicit placements (wait_chats, propose_task, prepare_chat_schedule, record_memo);
+    // -5 retired with spawn_agent (spawn_agent, resume_agent, collect_agents, resume_chat, read_agent_transcript);
+    // -1 list_project_chats (child chats replaced it; no mode registers it).
+    expect(TIER_COUNTS.bootstrap).toBe(45);
     expect(BOOTSTRAP_TOOLS.has('create_goal')).toBe(false);
     expect(BOOTSTRAP_TOOLS.has('update_goal')).toBe(false);
     expect(BOOTSTRAP_TOOLS.has('task_list')).toBe(true);
@@ -25,7 +27,8 @@ describe('tool tiers', () => {
 
   it('navigate tier contains the expected tools', () => {
     // get_goal was retired; all shell continuation/observation tools stay here.
-    expect(TIER_COUNTS.navigate).toBe(53);
+    // -2: mcp_list_resources / mcp_read_resource (no mode registers them; the retired-name hint stays).
+    expect(TIER_COUNTS.navigate).toBe(51);
     expect(NAVIGATE_TOOLS.has('get_goal')).toBe(false);
     for (const name of ['exec_command', 'write_stdin', 'stop_session', 'read_process_output']) {
       expect(NAVIGATE_TOOLS.has(name)).toBe(true);

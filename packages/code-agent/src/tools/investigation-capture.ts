@@ -4,8 +4,7 @@
  * `recall_investigations` it instead of re-running the same explore, and so
  * the `record_memo` trail gets a durable home.
  *
- * Extracted from spawn-agent.ts so the resume path can reuse it without
- * importing the whole spawn module. Best-effort; never throws. Skipped in
+ * Extracted from the retired spawn-agent.ts; workflow and child chats use it now. Best-effort; never throws. Skipped in
  * company sessions (they have the shared drive) and when the sub produced no
  * summary.
  */

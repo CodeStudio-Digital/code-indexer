@@ -1,9 +1,9 @@
 /**
  * Timeout/interactive classification (anti-trava parte 2).
  *
- *   - `resolveToolTimeoutMs` must put the orchestration tools (`spawn_agent`,
- *     `execute_tasks`) in the SLOW (30 min) tier instead of the 5-min NORMAL
- *     default that was killing them.
+ *   - `resolveToolTimeoutMs` must put the orchestration tool `execute_tasks`
+ *     in the SLOW (30 min) tier instead of the 5-min NORMAL default that was
+ *     killing it.
  *   - `resolveToolMetadata` (policy) is the source of truth for which tools
  *     are interactive — including `submit_spec`, which was missing from the
  *     classification entirely.
@@ -25,8 +25,7 @@ const t = (partial: Partial<CoderTool>): CoderTool =>
   }) as CoderTool;
 
 describe('resolveToolTimeoutMs — orchestrators in the SLOW tier', () => {
-  it('gives spawn_agent and execute_tasks the SLOW (30 min) timeout', () => {
-    expect(resolveToolTimeoutMs(t({ name: 'spawn_agent' }))).toBe(SLOW_TIMEOUT_MS);
+  it('gives execute_tasks the SLOW (30 min) timeout', () => {
     expect(resolveToolTimeoutMs(t({ name: 'execute_tasks' }))).toBe(SLOW_TIMEOUT_MS);
   });
 

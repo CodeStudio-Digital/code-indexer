@@ -15,7 +15,7 @@ export interface EphemeralSubagentCompanyContext {
 }
 
 /**
- * Solo coder sessions and generic Company specialists retain spawn_agent.
+ * Solo coder sessions and generic Company specialists retain in-process subagents (workflow, execute_tasks).
  * Company Masters delegate through their persistent lifecycle, while App
  * specialists must never escape into the global ephemeral/subagent model
  * override. The runtime-kind fallback keeps old/incomplete App contexts

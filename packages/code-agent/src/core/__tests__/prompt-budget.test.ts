@@ -82,7 +82,6 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Tool contract': 400, // code_exec batching + exit-code evidence (2026-11-11); measured 353
   '# Images & vision': 330, // attachment recovery, one-inference pixels, crop/video and fallback; compressed from 500
   '# Session overlay (automatic freshness)': 150,
-  '# Subagents (isolated delegation)': 320,
   '# Memory': 420,
   '# Operating contract': 600,
   // Session-fixed directives (only rendered when configured): language (G1),

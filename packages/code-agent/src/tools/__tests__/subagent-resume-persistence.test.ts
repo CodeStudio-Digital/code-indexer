@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsSessionStore } from '../../sessions/fs-store/fs-session-store.js';
 import type { SessionId } from '@mcp/session-storage';
 import {
-  clearSession,
+  forgetResumeSessionForTests,
   getGroup,
   retainGroup,
   type ResumableGroup,
@@ -47,7 +47,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await clearSession(sessionId);
+  forgetResumeSessionForTests(sessionId);
   await store.close();
   await rm(temporaryRoot, { recursive: true, force: true });
 });
@@ -108,7 +108,7 @@ describe('subagent resume filesystem checkpoint', () => {
       'Qm9ndXNPcGFxdWVTZWNyZXQxMjM0NTY3ODkw',
     );
 
-    await clearSession(sessionId);
+    forgetResumeSessionForTests(sessionId);
     await store.close();
     store = openStore();
     const restored = await getGroup(

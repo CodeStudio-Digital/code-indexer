@@ -1,6 +1,6 @@
 /**
  * active-agent-registry — process-level index of RUNNING ephemeral subagents
- * (spawn_agent single/parallel, execute_tasks waves, workflow steps) so a
+ * (execute_tasks waves, workflow steps) so a
  * specific agent can be aborted individually — from the dashboard (HTTP
  * route) or a future tool — without killing the whole run.
  *

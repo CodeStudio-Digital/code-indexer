@@ -7,7 +7,7 @@
  * when it asked one, then its final answer. A wait result is bounded by the
  * subagent tool result cap: waitForChildAgents, given the parent's spill,
  * keeps the head of a longer answer and stores the whole one, and the text
- * points at it (get_tool_output), as spawn_agent does. A notice is bounded to
+ * points at it (get_tool_output), as spawn_agent did. A notice is bounded to
  * CHILD_AGENT_NOTICE_TEXT_MAX, since a mailbox message is capped, and points
  * at read_chat for the rest.
  */

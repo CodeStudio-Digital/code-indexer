@@ -13,7 +13,7 @@ import { SUBAGENT_TOOL_RESULT_CAP } from '../../core/runner.js';
 import type { ChildChatPort } from '../../ports/child-chat-port.js';
 import { chatToolsForRun } from '../chat-tool-set.js';
 
-const tools = new Map(chatToolsForRun({ childChats: true, company: false }).map((tool) => [tool.name, tool]));
+const tools = new Map(chatToolsForRun({ company: false }).map((tool) => [tool.name, tool]));
 const run = (name: string, args: Record<string, unknown>, ctx: ToolContext) => tools.get(name)!.handler(args, ctx);
 const done = (chatId: string, finalText = 'Child answer.') => ({ outcome: 'ready' as const,
   items: [{ chatId, status: 'completed' as const, reason: 'completed', finalText, changedFiles: ['src/a.ts'] }] });

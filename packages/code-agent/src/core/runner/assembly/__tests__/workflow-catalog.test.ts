@@ -15,7 +15,7 @@ const NAMES = [
   'list_directory', 'mcp__list_directory', 'apply_patch', 'edit_file', 'write_file',
   'run_command', 'exec_command', 'write_stdin', 'list_sessions', 'get_tool_output',
   'ask_user', 'decision_gate', 'task_list', 'submit_plan', 'submit_spec',
-  'remember', 'recall_memory', 'recall_conversation', 'spawn_agent', 'resume_agent', 'collect_agents',
+  'remember', 'recall_memory', 'recall_conversation',
   'task_complete', 'execute_tasks', 'view_image', 'view_video',
   'mcp__get_file_skeleton', 'mcp__get_symbol_body', 'mcp__prepare_edit', 'git_status', 'git_diff',
 ];
@@ -60,22 +60,9 @@ describe('workflow catalog', () => {
     expect(fingerprintTools(after.tools)).toBe(fingerprintTools(before.tools));
   });
 
-  it('keeps ordinary chat creation and peer messaging directly visible in Agêntico mode', () => {
-    const input = args();
-    const collaboration = ['create_chat', 'send_chat_message', 'reply_chat_message'];
-    input.registry.registerAll(collaboration.map(name => tool(name)));
-    const standard = buildTools(input);
-    expect(names(standard)).not.toContain('create_chat');
-    expect(standard.tools.find(tool => tool.name === 'spawn_agent')?.description).toContain('temporary subagents');
-    const agentic = { ...input, toolContext: { ...input.toolContext, agenticChat: true } };
-    const result = buildTools(agentic);
-    for (const name of collaboration) expect(result.protectedToolNames.has(name)).toBe(true);
-    expect(names(buildTools({ ...agentic, sessionDisabledTools: new Set(['create_chat']) }))).not.toContain('create_chat');
-  });
-
   it('keeps lifecycle pairs and only the gates of the active mode', () => {
     const build = buildTools(args());
-    expect(names(build)).toEqual(expect.arrayContaining(['spawn_agent', 'resume_agent', 'collect_agents', 'execute_tasks', 'task_complete']));
+    expect(names(build)).toEqual(expect.arrayContaining(['execute_tasks', 'task_complete']));
     for (const name of ['submit_spec', 'submit_plan', 'decision_gate', 'expand_toolset']) {
       expect(names(build)).not.toContain(name);
     }

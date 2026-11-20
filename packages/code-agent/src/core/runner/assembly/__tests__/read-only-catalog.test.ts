@@ -23,6 +23,7 @@ import { buildSessionDriveTools } from '../../../../tools/session-drive-tools.js
 import { buildConversationChapterTools } from '../../../../tools/conversation-chapters.js';
 import { chatCollaborationTools } from '../../../../tools/chat-collaboration.js';
 import { sessionNetworkTools } from '../../../../tools/session-network.js';
+import { childChatDirectTools } from '../../../../tools/child-chat-tools.js';
 import { chatChangesTools } from '../../../../tools/chat-changes.js';
 import { followupTaskTools } from '../../../../tools/followup-task.js';
 import { sendMessageTools } from '../../../../tools/send-message.js';
@@ -32,12 +33,11 @@ import { buildCodeExecTool } from '../../../../tools/code-exec.js';
 import { buildFindToolsTool } from '../../../../tools/find-tools.js';
 import { internalMcpContract } from '../../../../tools/internal-mcp-contract.js';
 import { taskComplete } from '../../../../tools/tasks.js';
-import { buildCollectAgentsTool } from '../../../../tools/collect-agents.js';
 
 const WRITE_OR_PROCESS = ['apply_patch', 'edit_file', 'write_file', 'manage_path',
   'exec_command', 'run_command', 'write_stdin', 'git_commit'];
-const DELEGATION = ['spawn_agent', 'resume_agent', 'execute_tasks', 'workflow', 'integrate_chat_changes',
-  'create_chat', 'create_chat_trigger', 'resume_chat', 'send_chat_message', 'followup_task', 'send_message', 'send_input'];
+const DELEGATION = ['execute_tasks', 'workflow', 'integrate_chat_changes',
+  'create_chat', 'create_chat_trigger', 'send_chat_message', 'followup_task', 'send_message', 'send_input'];
 const READ_SURFACE = ['read_file', 'list_directory', 'glob', 'mcp__grep_code', 'mcp__search', 'code_exec', 'find_tools',
   'get_tool_output', 'ask_user', 'task_list', 'remember', 'recall_memory', 'recall_conversation',
   'mcp__get_file_skeleton', 'mcp__get_symbol_body', 'mcp__prepare_edit'];
@@ -51,17 +51,18 @@ function registry(): ToolRegistry {
   r.registerAll([...fsTools, ...shellTools, applyPatchTool, ...execCommandTools, ...gitTools, ...globTools,
     ...previewTools, ...buildProjectMemoryTools(), ...buildSessionDriveTools(), ...buildConversationChapterTools(),
     ...chatCollaborationTools, ...sessionNetworkTools, ...chatChangesTools, ...followupTaskTools,
+    // create_chat is the child-chat tool now (the old network create_chat is gone); send_chat_message stays the mailbox one.
+    ...childChatDirectTools.filter((tool) => tool.name === 'create_chat'),
     ...sendMessageTools, ...sendInputTools, ...toolOutputTools]);
   for (const name of ['search', 'grep_code', 'get_file_skeleton', 'get_symbol_body', 'prepare_edit', 'save_memory']) {
     // As the index tools are registered: native, with the code-indexer identity.
     r.register(generic(`mcp__${name}`, { source: 'native', ...internalMcpContract(name),
       capabilityProvenance: { kind: 'native', providerId: 'code-indexer' } }));
   }
-  r.registerAll(['ask_user', 'task_list', 'spawn_agent', 'resume_agent', 'invoke_skill', 'view_image'].map(name => generic(name)));
-  r.registerAll([taskComplete, buildCollectAgentsTool({} as never)]);
+  r.registerAll(['ask_user', 'task_list', 'invoke_skill', 'view_image'].map(name => generic(name)));
+  r.register(taskComplete);
   r.register(generic('execute_tasks', { mutates: true, riskLevel: 'write' }));
   r.register(generic('workflow', { mutates: true }));
-  r.register(generic('resume_chat', { mutates: false, riskLevel: 'read', effectBoundary: 'control' }));
   r.register(buildFindToolsTool(r));
   r.register(buildCodeExecTool(r));
   return r;
@@ -95,12 +96,10 @@ describe('read-only Explore session authority', () => {
 
   it('drops continuation controls whose opener is outside the read-only authority', () => {
     const explore = buildTools(args('explore'));
-    for (const name of ['task_complete', 'collect_agents']) {
-      expect(names(explore), name).not.toContain(name);
-      expect(authorized(explore).has(name), name).toBe(false);
-    }
+    expect(names(explore)).not.toContain('task_complete');
+    expect(authorized(explore).has('task_complete')).toBe(false);
     const build = buildTools(args('build', { activeTiers: new Set(['bootstrap', 'navigate']) }));
-    expect(names(build)).toEqual(expect.arrayContaining(['task_complete', 'execute_tasks', 'collect_agents']));
+    expect(names(build)).toEqual(expect.arrayContaining(['task_complete', 'execute_tasks']));
   });
 
   it.each([[{ mutates: false, riskLevel: 'read' }, true], [{ mutates: true, riskLevel: 'write' }, false]] as const)(
@@ -118,7 +117,7 @@ describe('read-only Explore session authority', () => {
   it('leaves Build and Plan authority unchanged', () => {
     for (const agentId of ['build', 'plan']) {
       const result = buildTools(args(agentId, { activeTiers: new Set(['bootstrap', 'navigate']) }));
-      for (const name of [...WRITE_OR_PROCESS, 'spawn_agent', 'execute_tasks', 'create_chat']) {
+      for (const name of [...WRITE_OR_PROCESS, 'execute_tasks', 'create_chat']) {
         expect(authorized(result).has(name), `${agentId}:${name}`).toBe(true);
       }
       expect(names(result)).toEqual(expect.arrayContaining(['apply_patch', 'edit_file', 'exec_command', 'write_stdin']));

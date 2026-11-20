@@ -33,6 +33,13 @@ describe('notification-event-bus', () => {
     expect(publishNotificationRuntimeEvent({
       kind: 'coder', sessionId: CODER_SESSION_ID, event: 'agent_progress', data: { event: 'heartbeat' },
     })).toBeNull();
+    // Agent groups notified only background spawn_agent jobs, which are gone.
+    expect(publishNotificationRuntimeEvent({
+      kind: 'coder', sessionId: CODER_SESSION_ID, event: 'agent_progress', data: { event: 'error' },
+    })).toBeNull();
+    expect(publishNotificationRuntimeEvent({
+      kind: 'coder', sessionId: CODER_SESSION_ID, event: 'agents_group_end', data: { groupId: 'g', jobId: 'job-1' },
+    })).toBeNull();
     const done = publishNotificationRuntimeEvent({
       kind: 'coder', sessionId: CODER_SESSION_ID, event: 'done', data: { reason: 'completed' },
     });

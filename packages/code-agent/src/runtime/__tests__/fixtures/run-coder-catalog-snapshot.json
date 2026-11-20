@@ -1,0 +1,3037 @@
+{
+  "company-master": {
+    "tools": [
+      {
+        "name": "abort_subordinate_agent",
+        "sha256": "79507fc13a38bf17a82cc4c851ee04cffcbebf01ed23f3f908dbe13dc3831bc7"
+      },
+      {
+        "name": "answer_subordinate_question",
+        "sha256": "53f84582a0ee7ab0dba30ee5f128b9f287eeaabbcb0ac30aacd46242dde8b88e"
+      },
+      {
+        "name": "append_shared_file",
+        "sha256": "5354f8db9a9755c6f7b6667d6a55a9097bd0a49712b6ed4cd6d5f0c14e2dd21a"
+      },
+      {
+        "name": "approve_subordinate_plan",
+        "sha256": "830a4a345326e5d4abd6871b63025a8cb2837bf096fcf2bb6a3bcfa46e064c03"
+      },
+      {
+        "name": "approve_subordinate_plans",
+        "sha256": "01e9573551f494fce2ed466c55f97824569ba200215be9fef65a7d3fa0fd0448"
+      },
+      {
+        "name": "approve_subordinate_tasks",
+        "sha256": "694dc51696f2ba384994e9c6ba268329aeb83701817c151eb829cc289a1c89ff"
+      },
+      {
+        "name": "archive_task_list",
+        "sha256": "61c4792b59feee37dd943672398cdc6a6666bf659b7e9634e7073defdac98e8d"
+      },
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "broadcast_to_roles",
+        "sha256": "c82dc290cfa01c232c7570dabc1417614dbeda98934d5029d11c89a0760c0ee0"
+      },
+      {
+        "name": "cancel_tasks",
+        "sha256": "f92ab18efe7253021fb82796e2b78434d72cfa021bf5f6420612a4873a036586"
+      },
+      {
+        "name": "create_skill",
+        "sha256": "3d639674da2fbb9d0a2fbfcf792642087c5e33fb36f56696492b0c7fbbf27d85"
+      },
+      {
+        "name": "delete_shared_file",
+        "sha256": "6407acbc4174eb7d0cd3c23526e19df428b7033d1d69b66b25543af2e8154e3f"
+      },
+      {
+        "name": "delete_tasks",
+        "sha256": "ea52a7dab26bf12db6e0793d75175de94d99d38963ec12e4933da5d45fb30a89"
+      },
+      {
+        "name": "docs_delete",
+        "sha256": "8f5398228286d4da7d081df245f15778e466aea201f27675de0744230490694c"
+      },
+      {
+        "name": "docs_index_update",
+        "sha256": "55be6ed8b13ba07c51740768969b86c0a21189baaf32533d9d1fb5c2976995da"
+      },
+      {
+        "name": "docs_list",
+        "sha256": "63360e727bd1dd79297e59798685a109c6bfb0ce463c9ea074b36056667179b5"
+      },
+      {
+        "name": "docs_read",
+        "sha256": "f4370534680d86e50502d02273f400beaa5ed09e932109bfe3d3f36afb38f0d6"
+      },
+      {
+        "name": "docs_search",
+        "sha256": "15f7d6ce33177ae9170f1d1f2f9fb405192d6d1a090adb42593ee21cd0f16ec7"
+      },
+      {
+        "name": "docs_write",
+        "sha256": "44592df138d903f209b1e6b30e3a56e16f7664a42783584b098ecbad1c15e633"
+      },
+      {
+        "name": "env_list",
+        "sha256": "2de3921328444edcbaceacd262f693928170f293120900d60c54f50cc8b1edea"
+      },
+      {
+        "name": "env_read",
+        "sha256": "a4731d8e7c3e6d763af01c7d923ff72433556e585be783fddd3fc070656f10ca"
+      },
+      {
+        "name": "env_validate",
+        "sha256": "a06f4ef0a495a87f5b10bdc69f424d7247a5b4af473c7b4098cd40204518c8cd"
+      },
+      {
+        "name": "finalize_subordinates",
+        "sha256": "a721a0ee69433a16534ac68f65c8a88f10ddafa6e637c9bd7fda5d213e7a591b"
+      },
+      {
+        "name": "forward_to_agent",
+        "sha256": "8293469554426b18bc20a418f7f47f50ce70c21d07a83699b2fc65762701fc98"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "kanban_add_dependency",
+        "sha256": "22a76c79e34839d44097a2fc06c9c7d07b62a4b135d152add644a27752508fb5"
+      },
+      {
+        "name": "kanban_assign_agent",
+        "sha256": "d3198cef66cb3afc4d68e6feadf9ba7bda43deb9ad794441de100f6783a2cbf0"
+      },
+      {
+        "name": "kanban_create_card",
+        "sha256": "8c11ad09da373ed9e8cfc2adc9e51b76b5081c2cf5d6e56ca59f1f7c0df37fd2"
+      },
+      {
+        "name": "kanban_get_card",
+        "sha256": "fb5db8eeb004c4a64c57f321efb701fd543e2066ba448f272af708dbe268d08d"
+      },
+      {
+        "name": "kanban_list_cards",
+        "sha256": "4a02c8939b7161b362c4828d6d4aac0b3837c26c432ead228e778f8e755a849c"
+      },
+      {
+        "name": "kanban_move_card",
+        "sha256": "7d15aa3c67fae2df14c7cab5e38f459e59b02879204de5ecb6491c446ff9dc56"
+      },
+      {
+        "name": "kanban_plan_graph",
+        "sha256": "6703330326c651dc02a03cfd850e8c46efa78abf0c4b1c1a704633f22574bd3a"
+      },
+      {
+        "name": "kanban_post_comment",
+        "sha256": "92a1d64e56dcb0dba10e47baf5d33021d5fb10c39be5f3c13cb8ac3b77d28ddf"
+      },
+      {
+        "name": "kanban_read_my_card",
+        "sha256": "b02287284cb24da6ec5d1247958ef9cd69c32f48783c5f7f150f5137dcabf130"
+      },
+      {
+        "name": "kanban_remove_dependency",
+        "sha256": "17f82a70dd2d6f2357f8edec51c72a37cfa681caa43d78beff1032dc1803c9bb"
+      },
+      {
+        "name": "kanban_update_meta",
+        "sha256": "d1e4a58fde90dc1624e6954cf4a7ee6255d21521ce48836e311c20ec805df020"
+      },
+      {
+        "name": "kanban_update_objectives",
+        "sha256": "427efe3e587ede70fd90627906dcc246dc9be355ae5164eef7c2b7c186bed1f4"
+      },
+      {
+        "name": "list_agents",
+        "sha256": "e75d16ffb69379b514edfb47c25ce45c752031d58f9bf318c465d635fe5a7c3d"
+      },
+      {
+        "name": "list_company_projects",
+        "sha256": "063fe39aa6047a01d3bba30ac64a9e8a8a9021bce046a7124020c1a87d4c750b"
+      },
+      {
+        "name": "list_containers",
+        "sha256": "322de30db09695127faaab59a4cd900105c51b56f71631c994e35a8ef7d12bf0"
+      },
+      {
+        "name": "list_shared_files",
+        "sha256": "07b1a43b1bb0982b3e3d71f9ab4d27183a2d4c8feef0d811240fb1d4298cdac0"
+      },
+      {
+        "name": "list_subordinates",
+        "sha256": "4c14bd542c91260698b5b3ce6e36514f2da04371f2a255cf5efc98d3a7cb53b9"
+      },
+      {
+        "name": "list_tasks",
+        "sha256": "b68b64d1089a8459cf2a7c15b01e1be5c09881db1510faa0aefb020a726b49a0"
+      },
+      {
+        "name": "mcp__fixture__get_project_overview",
+        "sha256": "649fca2212bb11ea72799dea96fb78742e69b5e80729e37e93dc39813e241b2d"
+      },
+      {
+        "name": "mcp__fixture__get_project_pulse",
+        "sha256": "10461ffc6624be7931f0d0463c28408c3ab5a8b48fc55a5ec4a4a8f78bb0ea4e"
+      },
+      {
+        "name": "mcp__fixture__get_recently_modified_files",
+        "sha256": "112439aaac63a43738c73a08e55e5c5b809b31d345ae6e5c456d8a0fbce01783"
+      },
+      {
+        "name": "mcp__fixture__list_directory",
+        "sha256": "e21e98dfaaa226b9f2d1ebf0ec071e143810b6926c40c5b095c3921dae714d11"
+      },
+      {
+        "name": "mcp__fixture__search",
+        "sha256": "a2fc86e9568090a6c5ea6fa6d7a9cb4d0d0293e0bd5ddfd138f14db03e7c0c6e"
+      },
+      {
+        "name": "mcp__fixture__search_memory",
+        "sha256": "dd5b76f1b45d1ffc40a859fa8df158fe09f3040780f2bfe1b68f300e80753dc8"
+      },
+      {
+        "name": "post_to_board",
+        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+      },
+      {
+        "name": "rag_search_docs",
+        "sha256": "3df76536c56fd273c87a1a9de094e3e968d290b45ecf675084937638353a168b"
+      },
+      {
+        "name": "read_board",
+        "sha256": "0812f640f0f569345bd9ca1e80dd7ba49228b1df5c9a91008ad443e3802ac7f7"
+      },
+      {
+        "name": "read_container_logs",
+        "sha256": "4d434dc796fd9779e3617ebe9d884639c30b3e85bdce60112d1d5483815c6230"
+      },
+      {
+        "name": "read_shared_file",
+        "sha256": "a5bf7ae346ee31802cc8b6fc3a615ddc63a9984a4829c01cce5ed49a42000340"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "recommend_role",
+        "sha256": "a6440705aaeeca571df7aba6b53a7a3164720a418fffb8bbd0863df9ccfe8e0a"
+      },
+      {
+        "name": "respond_to_inbox",
+        "sha256": "1b3136fca17a2bdd8824557b5c2a1bd8b74f1f558f3a747f0848569b855a5ffc"
+      },
+      {
+        "name": "resume_subordinate",
+        "sha256": "2dd63953a69545238a440a3868ec4c6942d5a7a0f4462acfa8ffca49c107d463"
+      },
+      {
+        "name": "review_subordinate_work",
+        "sha256": "f2cc1da83d5075bff949004b02a38ab6f9b7b21c5848833ee568ff1c2a6fc459"
+      },
+      {
+        "name": "self_review",
+        "sha256": "5cc07122794a9b02693f7c5bd254d755ce1246f36b8184303a5692db094d78cc"
+      },
+      {
+        "name": "send_input",
+        "sha256": "c9962502896353764d917ce49c85b698ab34ed711d103d3cac4ac0ce0a517156"
+      },
+      {
+        "name": "send_message",
+        "sha256": "0a226aa1ac7b54aba27231e6097e9fd4169682a800eab58c049a354b115b7760"
+      },
+      {
+        "name": "set_agent_status",
+        "sha256": "4e7555beca0d5c97a1ae52e3a3b018dc34a9a65a3e0f6b038ee85eb580b60661"
+      },
+      {
+        "name": "spawn_subordinate_agent",
+        "sha256": "2e82611fd9843e801aef06fce5a156ee33abd6fa59d0199ba6e147eea6b396f5"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "task_list",
+        "sha256": "77f5b0821aa76c7d589c13cefdd2287171aff283c68d170634cf61c82bafdac2"
+      },
+      {
+        "name": "update_task",
+        "sha256": "08706b5dfdabfd691b32ec2b9eaf4f3f635080e5c793de219dd0d20e2085a918"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "wait_agents",
+        "sha256": "238475b286485bc05f3b1eff5fa1dee9109b9ae6c5d0e8393aa2d7d8a61db2a0"
+      },
+      {
+        "name": "wait_for_subordinates",
+        "sha256": "fc56c5043eb2e81d0012f6a6bed1c112db5e0e04b24537da18e56a44b4ee8e2c"
+      },
+      {
+        "name": "write_shared_file",
+        "sha256": "7adfc22a1ad3ca05b56ac9aae04c6c9ded72910de4483c89e716a7e74c0c6337"
+      }
+    ],
+    "system": {
+      "length": 5543,
+      "sha256": "9585ba83a4ec799a8f05123c9f90f829358aa84b1f7f8f05ea359880635237be",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Code retrieval",
+        "# Tool contract",
+        "# Images & vision",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "db_list",
+      "db_query",
+      "db_schema",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "submit_plan"
+    ]
+  },
+  "company-master-ultra": {
+    "tools": [
+      {
+        "name": "abort_subordinate_agent",
+        "sha256": "79507fc13a38bf17a82cc4c851ee04cffcbebf01ed23f3f908dbe13dc3831bc7"
+      },
+      {
+        "name": "answer_subordinate_question",
+        "sha256": "53f84582a0ee7ab0dba30ee5f128b9f287eeaabbcb0ac30aacd46242dde8b88e"
+      },
+      {
+        "name": "append_shared_file",
+        "sha256": "5354f8db9a9755c6f7b6667d6a55a9097bd0a49712b6ed4cd6d5f0c14e2dd21a"
+      },
+      {
+        "name": "approve_subordinate_plan",
+        "sha256": "830a4a345326e5d4abd6871b63025a8cb2837bf096fcf2bb6a3bcfa46e064c03"
+      },
+      {
+        "name": "approve_subordinate_plans",
+        "sha256": "01e9573551f494fce2ed466c55f97824569ba200215be9fef65a7d3fa0fd0448"
+      },
+      {
+        "name": "approve_subordinate_tasks",
+        "sha256": "694dc51696f2ba384994e9c6ba268329aeb83701817c151eb829cc289a1c89ff"
+      },
+      {
+        "name": "archive_task_list",
+        "sha256": "61c4792b59feee37dd943672398cdc6a6666bf659b7e9634e7073defdac98e8d"
+      },
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "broadcast_to_roles",
+        "sha256": "c82dc290cfa01c232c7570dabc1417614dbeda98934d5029d11c89a0760c0ee0"
+      },
+      {
+        "name": "cancel_tasks",
+        "sha256": "f92ab18efe7253021fb82796e2b78434d72cfa021bf5f6420612a4873a036586"
+      },
+      {
+        "name": "create_skill",
+        "sha256": "3d639674da2fbb9d0a2fbfcf792642087c5e33fb36f56696492b0c7fbbf27d85"
+      },
+      {
+        "name": "delete_shared_file",
+        "sha256": "6407acbc4174eb7d0cd3c23526e19df428b7033d1d69b66b25543af2e8154e3f"
+      },
+      {
+        "name": "delete_tasks",
+        "sha256": "ea52a7dab26bf12db6e0793d75175de94d99d38963ec12e4933da5d45fb30a89"
+      },
+      {
+        "name": "docs_delete",
+        "sha256": "8f5398228286d4da7d081df245f15778e466aea201f27675de0744230490694c"
+      },
+      {
+        "name": "docs_index_update",
+        "sha256": "55be6ed8b13ba07c51740768969b86c0a21189baaf32533d9d1fb5c2976995da"
+      },
+      {
+        "name": "docs_list",
+        "sha256": "63360e727bd1dd79297e59798685a109c6bfb0ce463c9ea074b36056667179b5"
+      },
+      {
+        "name": "docs_read",
+        "sha256": "f4370534680d86e50502d02273f400beaa5ed09e932109bfe3d3f36afb38f0d6"
+      },
+      {
+        "name": "docs_search",
+        "sha256": "15f7d6ce33177ae9170f1d1f2f9fb405192d6d1a090adb42593ee21cd0f16ec7"
+      },
+      {
+        "name": "docs_write",
+        "sha256": "44592df138d903f209b1e6b30e3a56e16f7664a42783584b098ecbad1c15e633"
+      },
+      {
+        "name": "env_list",
+        "sha256": "2de3921328444edcbaceacd262f693928170f293120900d60c54f50cc8b1edea"
+      },
+      {
+        "name": "env_read",
+        "sha256": "a4731d8e7c3e6d763af01c7d923ff72433556e585be783fddd3fc070656f10ca"
+      },
+      {
+        "name": "env_validate",
+        "sha256": "a06f4ef0a495a87f5b10bdc69f424d7247a5b4af473c7b4098cd40204518c8cd"
+      },
+      {
+        "name": "finalize_subordinates",
+        "sha256": "a721a0ee69433a16534ac68f65c8a88f10ddafa6e637c9bd7fda5d213e7a591b"
+      },
+      {
+        "name": "forward_to_agent",
+        "sha256": "8293469554426b18bc20a418f7f47f50ce70c21d07a83699b2fc65762701fc98"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "kanban_add_dependency",
+        "sha256": "22a76c79e34839d44097a2fc06c9c7d07b62a4b135d152add644a27752508fb5"
+      },
+      {
+        "name": "kanban_assign_agent",
+        "sha256": "d3198cef66cb3afc4d68e6feadf9ba7bda43deb9ad794441de100f6783a2cbf0"
+      },
+      {
+        "name": "kanban_create_card",
+        "sha256": "8c11ad09da373ed9e8cfc2adc9e51b76b5081c2cf5d6e56ca59f1f7c0df37fd2"
+      },
+      {
+        "name": "kanban_get_card",
+        "sha256": "fb5db8eeb004c4a64c57f321efb701fd543e2066ba448f272af708dbe268d08d"
+      },
+      {
+        "name": "kanban_list_cards",
+        "sha256": "4a02c8939b7161b362c4828d6d4aac0b3837c26c432ead228e778f8e755a849c"
+      },
+      {
+        "name": "kanban_move_card",
+        "sha256": "7d15aa3c67fae2df14c7cab5e38f459e59b02879204de5ecb6491c446ff9dc56"
+      },
+      {
+        "name": "kanban_plan_graph",
+        "sha256": "6703330326c651dc02a03cfd850e8c46efa78abf0c4b1c1a704633f22574bd3a"
+      },
+      {
+        "name": "kanban_post_comment",
+        "sha256": "92a1d64e56dcb0dba10e47baf5d33021d5fb10c39be5f3c13cb8ac3b77d28ddf"
+      },
+      {
+        "name": "kanban_read_my_card",
+        "sha256": "b02287284cb24da6ec5d1247958ef9cd69c32f48783c5f7f150f5137dcabf130"
+      },
+      {
+        "name": "kanban_remove_dependency",
+        "sha256": "17f82a70dd2d6f2357f8edec51c72a37cfa681caa43d78beff1032dc1803c9bb"
+      },
+      {
+        "name": "kanban_update_meta",
+        "sha256": "d1e4a58fde90dc1624e6954cf4a7ee6255d21521ce48836e311c20ec805df020"
+      },
+      {
+        "name": "kanban_update_objectives",
+        "sha256": "427efe3e587ede70fd90627906dcc246dc9be355ae5164eef7c2b7c186bed1f4"
+      },
+      {
+        "name": "list_agents",
+        "sha256": "e75d16ffb69379b514edfb47c25ce45c752031d58f9bf318c465d635fe5a7c3d"
+      },
+      {
+        "name": "list_company_projects",
+        "sha256": "063fe39aa6047a01d3bba30ac64a9e8a8a9021bce046a7124020c1a87d4c750b"
+      },
+      {
+        "name": "list_containers",
+        "sha256": "322de30db09695127faaab59a4cd900105c51b56f71631c994e35a8ef7d12bf0"
+      },
+      {
+        "name": "list_shared_files",
+        "sha256": "07b1a43b1bb0982b3e3d71f9ab4d27183a2d4c8feef0d811240fb1d4298cdac0"
+      },
+      {
+        "name": "list_subordinates",
+        "sha256": "4c14bd542c91260698b5b3ce6e36514f2da04371f2a255cf5efc98d3a7cb53b9"
+      },
+      {
+        "name": "list_tasks",
+        "sha256": "b68b64d1089a8459cf2a7c15b01e1be5c09881db1510faa0aefb020a726b49a0"
+      },
+      {
+        "name": "mcp__fixture__get_project_overview",
+        "sha256": "649fca2212bb11ea72799dea96fb78742e69b5e80729e37e93dc39813e241b2d"
+      },
+      {
+        "name": "mcp__fixture__get_project_pulse",
+        "sha256": "10461ffc6624be7931f0d0463c28408c3ab5a8b48fc55a5ec4a4a8f78bb0ea4e"
+      },
+      {
+        "name": "mcp__fixture__get_recently_modified_files",
+        "sha256": "112439aaac63a43738c73a08e55e5c5b809b31d345ae6e5c456d8a0fbce01783"
+      },
+      {
+        "name": "mcp__fixture__list_directory",
+        "sha256": "e21e98dfaaa226b9f2d1ebf0ec071e143810b6926c40c5b095c3921dae714d11"
+      },
+      {
+        "name": "mcp__fixture__search",
+        "sha256": "a2fc86e9568090a6c5ea6fa6d7a9cb4d0d0293e0bd5ddfd138f14db03e7c0c6e"
+      },
+      {
+        "name": "mcp__fixture__search_memory",
+        "sha256": "dd5b76f1b45d1ffc40a859fa8df158fe09f3040780f2bfe1b68f300e80753dc8"
+      },
+      {
+        "name": "post_to_board",
+        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+      },
+      {
+        "name": "rag_search_docs",
+        "sha256": "3df76536c56fd273c87a1a9de094e3e968d290b45ecf675084937638353a168b"
+      },
+      {
+        "name": "read_board",
+        "sha256": "0812f640f0f569345bd9ca1e80dd7ba49228b1df5c9a91008ad443e3802ac7f7"
+      },
+      {
+        "name": "read_container_logs",
+        "sha256": "4d434dc796fd9779e3617ebe9d884639c30b3e85bdce60112d1d5483815c6230"
+      },
+      {
+        "name": "read_shared_file",
+        "sha256": "a5bf7ae346ee31802cc8b6fc3a615ddc63a9984a4829c01cce5ed49a42000340"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "recommend_role",
+        "sha256": "a6440705aaeeca571df7aba6b53a7a3164720a418fffb8bbd0863df9ccfe8e0a"
+      },
+      {
+        "name": "respond_to_inbox",
+        "sha256": "1b3136fca17a2bdd8824557b5c2a1bd8b74f1f558f3a747f0848569b855a5ffc"
+      },
+      {
+        "name": "resume_subordinate",
+        "sha256": "2dd63953a69545238a440a3868ec4c6942d5a7a0f4462acfa8ffca49c107d463"
+      },
+      {
+        "name": "review_subordinate_work",
+        "sha256": "f2cc1da83d5075bff949004b02a38ab6f9b7b21c5848833ee568ff1c2a6fc459"
+      },
+      {
+        "name": "self_review",
+        "sha256": "5cc07122794a9b02693f7c5bd254d755ce1246f36b8184303a5692db094d78cc"
+      },
+      {
+        "name": "send_input",
+        "sha256": "c9962502896353764d917ce49c85b698ab34ed711d103d3cac4ac0ce0a517156"
+      },
+      {
+        "name": "send_message",
+        "sha256": "0a226aa1ac7b54aba27231e6097e9fd4169682a800eab58c049a354b115b7760"
+      },
+      {
+        "name": "set_agent_status",
+        "sha256": "4e7555beca0d5c97a1ae52e3a3b018dc34a9a65a3e0f6b038ee85eb580b60661"
+      },
+      {
+        "name": "spawn_subordinate_agent",
+        "sha256": "2e82611fd9843e801aef06fce5a156ee33abd6fa59d0199ba6e147eea6b396f5"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "task_list",
+        "sha256": "77f5b0821aa76c7d589c13cefdd2287171aff283c68d170634cf61c82bafdac2"
+      },
+      {
+        "name": "update_task",
+        "sha256": "08706b5dfdabfd691b32ec2b9eaf4f3f635080e5c793de219dd0d20e2085a918"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "wait_agents",
+        "sha256": "238475b286485bc05f3b1eff5fa1dee9109b9ae6c5d0e8393aa2d7d8a61db2a0"
+      },
+      {
+        "name": "wait_for_subordinates",
+        "sha256": "fc56c5043eb2e81d0012f6a6bed1c112db5e0e04b24537da18e56a44b4ee8e2c"
+      },
+      {
+        "name": "write_shared_file",
+        "sha256": "7adfc22a1ad3ca05b56ac9aae04c6c9ded72910de4483c89e716a7e74c0c6337"
+      }
+    ],
+    "system": {
+      "length": 6506,
+      "sha256": "f530c9b50339031ec05deea8272346f87c572cce95afd31664116063792f96c3",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Code retrieval",
+        "# Tool contract",
+        "# Images & vision",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Ultra collaboration"
+      ]
+    },
+    "deferred": [
+      "db_list",
+      "db_query",
+      "db_schema",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "submit_plan"
+    ]
+  },
+  "company-subordinate": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_master",
+        "sha256": "040ab53160f2012fe021907276b40e8569bca070ff45dc3f27eae7d4e3939401"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "90863d611a67bd2f510dfd3cbd7799da6fd5ba6b01367ee5ce42a7ed25c82933"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "list_shared_files",
+        "sha256": "07b1a43b1bb0982b3e3d71f9ab4d27183a2d4c8feef0d811240fb1d4298cdac0"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "post_to_board",
+        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+      },
+      {
+        "name": "rag_read_doc",
+        "sha256": "62ecf63dcc0ad670691f8b57631e5219191fc8e0dc9bba867582d1bc2fc49218"
+      },
+      {
+        "name": "rag_search_docs",
+        "sha256": "3df76536c56fd273c87a1a9de094e3e968d290b45ecf675084937638353a168b"
+      },
+      {
+        "name": "read_board",
+        "sha256": "0812f640f0f569345bd9ca1e80dd7ba49228b1df5c9a91008ad443e3802ac7f7"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "read_shared_file",
+        "sha256": "a5bf7ae346ee31802cc8b6fc3a615ddc63a9984a4829c01cce5ed49a42000340"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_to_agent",
+        "sha256": "2520e896032a8813694532c0eca5da86f145be54866c3bf5ae738658339e5539"
+      },
+      {
+        "name": "send_to_master",
+        "sha256": "447908183a6605346e97d7bbeff1779bb2979b5e6e1f2b5bb982ccdfba84551f"
+      },
+      {
+        "name": "set_agent_status",
+        "sha256": "4e7555beca0d5c97a1ae52e3a3b018dc34a9a65a3e0f6b038ee85eb580b60661"
+      },
+      {
+        "name": "submit_plan_to_master",
+        "sha256": "02ee31f4cc90ea4d5728a89892d96c8ef19a4844c16b958fd521da88d716b852"
+      },
+      {
+        "name": "submit_tasks_to_master",
+        "sha256": "e213a1b2333b13aab35fdc96a3d75caac14312be35d6703a479777bb3c4659a2"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "write_shared_file",
+        "sha256": "7adfc22a1ad3ca05b56ac9aae04c6c9ded72910de4483c89e716a7e74c0c6337"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 6480,
+      "sha256": "ce54df3538bf614aef2587db7e1a28aba2451a50e293ff9b71e64ea1b5bb406f",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "append_shared_file",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_chat_request",
+      "cancel_tasks",
+      "check_inbox_answer",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "delete_shared_file",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "docs_delete",
+      "docs_index_update",
+      "docs_list",
+      "docs_read",
+      "docs_search",
+      "docs_write",
+      "enter_worktree",
+      "env_delete",
+      "env_list",
+      "env_read",
+      "env_set",
+      "env_validate",
+      "exit_worktree",
+      "followup_task",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "kanban_move_to_review",
+      "kanban_post_comment",
+      "kanban_read_my_card",
+      "kanban_update_objectives",
+      "list_agents",
+      "list_chats",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "rag_doc_outline",
+      "read_chat_changes",
+      "read_chat_messages",
+      "read_my_inbox",
+      "read_process_output",
+      "reply_chat_message",
+      "request_review",
+      "respond_to_inbox",
+      "run_command",
+      "self_review",
+      "send_chat_message",
+      "send_input",
+      "send_message",
+      "stop_session",
+      "submit_specification_to_master",
+      "update_task",
+      "wait_agents",
+      "wait_chat_response",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "company-subordinate-app-studio": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_master",
+        "sha256": "040ab53160f2012fe021907276b40e8569bca070ff45dc3f27eae7d4e3939401"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "90863d611a67bd2f510dfd3cbd7799da6fd5ba6b01367ee5ce42a7ed25c82933"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "list_shared_files",
+        "sha256": "07b1a43b1bb0982b3e3d71f9ab4d27183a2d4c8feef0d811240fb1d4298cdac0"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "post_to_board",
+        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+      },
+      {
+        "name": "rag_read_doc",
+        "sha256": "62ecf63dcc0ad670691f8b57631e5219191fc8e0dc9bba867582d1bc2fc49218"
+      },
+      {
+        "name": "rag_search_docs",
+        "sha256": "3df76536c56fd273c87a1a9de094e3e968d290b45ecf675084937638353a168b"
+      },
+      {
+        "name": "read_board",
+        "sha256": "0812f640f0f569345bd9ca1e80dd7ba49228b1df5c9a91008ad443e3802ac7f7"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "read_shared_file",
+        "sha256": "a5bf7ae346ee31802cc8b6fc3a615ddc63a9984a4829c01cce5ed49a42000340"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_to_agent",
+        "sha256": "2520e896032a8813694532c0eca5da86f145be54866c3bf5ae738658339e5539"
+      },
+      {
+        "name": "send_to_master",
+        "sha256": "447908183a6605346e97d7bbeff1779bb2979b5e6e1f2b5bb982ccdfba84551f"
+      },
+      {
+        "name": "set_agent_status",
+        "sha256": "4e7555beca0d5c97a1ae52e3a3b018dc34a9a65a3e0f6b038ee85eb580b60661"
+      },
+      {
+        "name": "submit_plan_to_master",
+        "sha256": "02ee31f4cc90ea4d5728a89892d96c8ef19a4844c16b958fd521da88d716b852"
+      },
+      {
+        "name": "submit_tasks_to_master",
+        "sha256": "e213a1b2333b13aab35fdc96a3d75caac14312be35d6703a479777bb3c4659a2"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "write_shared_file",
+        "sha256": "7adfc22a1ad3ca05b56ac9aae04c6c9ded72910de4483c89e716a7e74c0c6337"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 6480,
+      "sha256": "ce54df3538bf614aef2587db7e1a28aba2451a50e293ff9b71e64ea1b5bb406f",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "append_shared_file",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_chat_request",
+      "cancel_tasks",
+      "check_inbox_answer",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "delete_shared_file",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "docs_delete",
+      "docs_index_update",
+      "docs_list",
+      "docs_read",
+      "docs_search",
+      "docs_write",
+      "enter_worktree",
+      "env_delete",
+      "env_list",
+      "env_read",
+      "env_set",
+      "env_validate",
+      "exit_worktree",
+      "followup_task",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "list_agents",
+      "list_chats",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "rag_doc_outline",
+      "read_chat_changes",
+      "read_chat_messages",
+      "read_my_inbox",
+      "read_process_output",
+      "reply_chat_message",
+      "respond_to_inbox",
+      "run_command",
+      "self_review",
+      "send_chat_message",
+      "send_input",
+      "send_message",
+      "stop_session",
+      "submit_specification_to_master",
+      "update_task",
+      "wait_agents",
+      "wait_chat_response",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "company-subordinate-ultra": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_master",
+        "sha256": "040ab53160f2012fe021907276b40e8569bca070ff45dc3f27eae7d4e3939401"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "90863d611a67bd2f510dfd3cbd7799da6fd5ba6b01367ee5ce42a7ed25c82933"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "list_shared_files",
+        "sha256": "07b1a43b1bb0982b3e3d71f9ab4d27183a2d4c8feef0d811240fb1d4298cdac0"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "post_to_board",
+        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+      },
+      {
+        "name": "read_board",
+        "sha256": "0812f640f0f569345bd9ca1e80dd7ba49228b1df5c9a91008ad443e3802ac7f7"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "read_shared_file",
+        "sha256": "a5bf7ae346ee31802cc8b6fc3a615ddc63a9984a4829c01cce5ed49a42000340"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_to_agent",
+        "sha256": "2520e896032a8813694532c0eca5da86f145be54866c3bf5ae738658339e5539"
+      },
+      {
+        "name": "send_to_master",
+        "sha256": "447908183a6605346e97d7bbeff1779bb2979b5e6e1f2b5bb982ccdfba84551f"
+      },
+      {
+        "name": "set_agent_status",
+        "sha256": "4e7555beca0d5c97a1ae52e3a3b018dc34a9a65a3e0f6b038ee85eb580b60661"
+      },
+      {
+        "name": "submit_plan_to_master",
+        "sha256": "02ee31f4cc90ea4d5728a89892d96c8ef19a4844c16b958fd521da88d716b852"
+      },
+      {
+        "name": "submit_tasks_to_master",
+        "sha256": "e213a1b2333b13aab35fdc96a3d75caac14312be35d6703a479777bb3c4659a2"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "workflow",
+        "sha256": "59628ea4f687e4c0e55cb0ebc076bd900ff41082875a58e18d1d7f437a01372c"
+      },
+      {
+        "name": "write_shared_file",
+        "sha256": "7adfc22a1ad3ca05b56ac9aae04c6c9ded72910de4483c89e716a7e74c0c6337"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 7597,
+      "sha256": "e6f68ff17564e4c45c7dc8e7a3ec8d089efaf065fef432af8c8c2d6694d6dde2",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Ultra collaboration"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "append_shared_file",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_chat_request",
+      "cancel_tasks",
+      "check_inbox_answer",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "delete_shared_file",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "docs_delete",
+      "docs_index_update",
+      "docs_list",
+      "docs_read",
+      "docs_search",
+      "docs_write",
+      "enter_worktree",
+      "env_delete",
+      "env_list",
+      "env_read",
+      "env_set",
+      "env_validate",
+      "exit_worktree",
+      "followup_task",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "kanban_move_to_review",
+      "kanban_post_comment",
+      "kanban_read_my_card",
+      "kanban_update_objectives",
+      "list_agents",
+      "list_chats",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "rag_doc_outline",
+      "rag_read_doc",
+      "rag_search_docs",
+      "read_chat_changes",
+      "read_chat_messages",
+      "read_my_inbox",
+      "read_process_output",
+      "reply_chat_message",
+      "request_review",
+      "respond_to_inbox",
+      "run_command",
+      "self_review",
+      "send_chat_message",
+      "send_input",
+      "send_message",
+      "stop_session",
+      "submit_specification_to_master",
+      "update_task",
+      "wait_agents",
+      "wait_chat_response",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "root-agentic-preview": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "4af88056f2a8f32996a66115b6d7e5a05ce97fd8f5657220a2a2d4f7f89188b3"
+      },
+      {
+        "name": "create_chat",
+        "sha256": "932fd7ec80304468e85fbdc2ad962b7c480362fba7299ff5e4f0ac3da002dc7f"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "execute_tasks",
+        "sha256": "104937003aa0aca2bfcfe8f0d8b78f502dbc496ff75623cae81e4871dbe643d1"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "preview_click",
+        "sha256": "dc972cfe5be77a2cb9475277ca35bfbe0fa8a91eb3cbb1c995e0c10db4c7284a"
+      },
+      {
+        "name": "preview_console",
+        "sha256": "e2dbd2ceba92390fbbe439338084be8998b479a640f412e86858cef0c0b04ddd"
+      },
+      {
+        "name": "preview_fill",
+        "sha256": "ed11c5b8a4a62c2b5d6d241777efbfecaf1ef415021d6d6d0ab3af8b55641525"
+      },
+      {
+        "name": "preview_open",
+        "sha256": "052b5478f58eacc7e5374a5fbe5644921c8464f5b4667b4a220e9159c99414e4"
+      },
+      {
+        "name": "preview_screenshot",
+        "sha256": "01fca251968a0ad0c72ca69502dc0787420514af80cae3af593df6ac91eaef70"
+      },
+      {
+        "name": "preview_snapshot",
+        "sha256": "df3bcf5d3b3846543972b177e067a50d09e7f139a8f1c9c6b8c2438badd304c4"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_chat_message",
+        "sha256": "d69cb997d0fb2cfe646e27c3feda0c0d7e0035516aa1a163627528eb6aad43f3"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "task_list",
+        "sha256": "77f5b0821aa76c7d589c13cefdd2287171aff283c68d170634cf61c82bafdac2"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 7458,
+      "sha256": "4ba56eac9c8fb56c8e7faba3c065fd23a5bcaf82045520e1962e5ab2271ddd52",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_tasks",
+      "create_chat_trigger",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "decision_gate",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "enter_worktree",
+      "exit_worktree",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "list_chats",
+      "list_notes",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "prepare_chat_schedule",
+      "preview_close",
+      "preview_double_click",
+      "preview_eval",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_scroll",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "propose_task",
+      "rag_doc_outline",
+      "rag_read_doc",
+      "rag_search_docs",
+      "read_chat",
+      "read_chat_changes",
+      "read_plan",
+      "read_process_output",
+      "recall_investigations",
+      "request_review",
+      "run_command",
+      "save_note",
+      "self_review",
+      "stop_chat",
+      "stop_session",
+      "submit_plan",
+      "submit_spec",
+      "update_task",
+      "wait_chats",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "root-build": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "4af88056f2a8f32996a66115b6d7e5a05ce97fd8f5657220a2a2d4f7f89188b3"
+      },
+      {
+        "name": "create_chat",
+        "sha256": "932fd7ec80304468e85fbdc2ad962b7c480362fba7299ff5e4f0ac3da002dc7f"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "execute_tasks",
+        "sha256": "104937003aa0aca2bfcfe8f0d8b78f502dbc496ff75623cae81e4871dbe643d1"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_chat_message",
+        "sha256": "d69cb997d0fb2cfe646e27c3feda0c0d7e0035516aa1a163627528eb6aad43f3"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "task_list",
+        "sha256": "77f5b0821aa76c7d589c13cefdd2287171aff283c68d170634cf61c82bafdac2"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 6894,
+      "sha256": "851ac946122061f846038776dcd7022678ba375b1744bf3d69ecdffa19f1e41c",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_tasks",
+      "create_chat_trigger",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "decision_gate",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "enter_worktree",
+      "exit_worktree",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "list_chats",
+      "list_notes",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "prepare_chat_schedule",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "propose_task",
+      "rag_doc_outline",
+      "rag_read_doc",
+      "rag_search_docs",
+      "read_chat",
+      "read_chat_changes",
+      "read_plan",
+      "read_process_output",
+      "recall_investigations",
+      "request_review",
+      "run_command",
+      "save_note",
+      "self_review",
+      "stop_chat",
+      "stop_session",
+      "submit_plan",
+      "submit_spec",
+      "update_task",
+      "wait_chats",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "root-explore": {
+    "tools": [
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "4af88056f2a8f32996a66115b6d7e5a05ce97fd8f5657220a2a2d4f7f89188b3"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "rag_read_doc",
+        "sha256": "62ecf63dcc0ad670691f8b57631e5219191fc8e0dc9bba867582d1bc2fc49218"
+      },
+      {
+        "name": "rag_search_docs",
+        "sha256": "3df76536c56fd273c87a1a9de094e3e968d290b45ecf675084937638353a168b"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "task_list",
+        "sha256": "77f5b0821aa76c7d589c13cefdd2287171aff283c68d170634cf61c82bafdac2"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      }
+    ],
+    "system": {
+      "length": 6759,
+      "sha256": "9a7f128d77a9f767b793ea4cc88a7373bf26f8364505d1d8b7fd8340881ccf30",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Explore mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "apply_patch",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_tasks",
+      "create_chat_trigger",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "decision_gate",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "edit_file",
+      "enter_worktree",
+      "exec_command",
+      "execute_tasks",
+      "exit_worktree",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "list_chats",
+      "list_notes",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "prepare_chat_schedule",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "propose_task",
+      "rag_doc_outline",
+      "read_chat",
+      "read_chat_changes",
+      "read_plan",
+      "read_process_output",
+      "recall_investigations",
+      "request_review",
+      "run_command",
+      "save_note",
+      "self_review",
+      "send_chat_message",
+      "stop_session",
+      "submit_plan",
+      "submit_spec",
+      "task_complete",
+      "update_task",
+      "wait_chats",
+      "web_fetch",
+      "web_search",
+      "write_file",
+      "write_stdin"
+    ]
+  },
+  "root-plan": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "4af88056f2a8f32996a66115b6d7e5a05ce97fd8f5657220a2a2d4f7f89188b3"
+      },
+      {
+        "name": "create_chat",
+        "sha256": "932fd7ec80304468e85fbdc2ad962b7c480362fba7299ff5e4f0ac3da002dc7f"
+      },
+      {
+        "name": "decision_gate",
+        "sha256": "618c996eaf5ed1937d086716d241d37b568f9df8ebe1d2bf62d4e754c39d3938"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "execute_tasks",
+        "sha256": "104937003aa0aca2bfcfe8f0d8b78f502dbc496ff75623cae81e4871dbe643d1"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_chat_message",
+        "sha256": "d69cb997d0fb2cfe646e27c3feda0c0d7e0035516aa1a163627528eb6aad43f3"
+      },
+      {
+        "name": "submit_plan",
+        "sha256": "cd292ac04173ea90ce7a4680348a421e34b927363699306032f36cb3712c4fd3"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "task_list",
+        "sha256": "6facffbef1b798fd6c1a80f92dcd791dab883b5c0c283df032da6601cfcaa4f4"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 7810,
+      "sha256": "0893217c48601bc0152d06605f1165561bd0e57d6d27ef5a985cd4c5e8716cbf",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Plan mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_tasks",
+      "create_chat_trigger",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "enter_worktree",
+      "exit_worktree",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_diff",
+      "git_log",
+      "git_status",
+      "http_request",
+      "integrate_chat_changes",
+      "list_chats",
+      "list_notes",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "prepare_chat_schedule",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "propose_task",
+      "rag_doc_outline",
+      "rag_read_doc",
+      "rag_search_docs",
+      "read_chat",
+      "read_chat_changes",
+      "read_plan",
+      "read_process_output",
+      "recall_investigations",
+      "request_review",
+      "run_command",
+      "save_note",
+      "self_review",
+      "stop_chat",
+      "stop_session",
+      "submit_spec",
+      "update_task",
+      "wait_chats",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "root-preview": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "4af88056f2a8f32996a66115b6d7e5a05ce97fd8f5657220a2a2d4f7f89188b3"
+      },
+      {
+        "name": "create_chat",
+        "sha256": "932fd7ec80304468e85fbdc2ad962b7c480362fba7299ff5e4f0ac3da002dc7f"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "execute_tasks",
+        "sha256": "104937003aa0aca2bfcfe8f0d8b78f502dbc496ff75623cae81e4871dbe643d1"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "preview_click",
+        "sha256": "dc972cfe5be77a2cb9475277ca35bfbe0fa8a91eb3cbb1c995e0c10db4c7284a"
+      },
+      {
+        "name": "preview_console",
+        "sha256": "e2dbd2ceba92390fbbe439338084be8998b479a640f412e86858cef0c0b04ddd"
+      },
+      {
+        "name": "preview_fill",
+        "sha256": "ed11c5b8a4a62c2b5d6d241777efbfecaf1ef415021d6d6d0ab3af8b55641525"
+      },
+      {
+        "name": "preview_open",
+        "sha256": "052b5478f58eacc7e5374a5fbe5644921c8464f5b4667b4a220e9159c99414e4"
+      },
+      {
+        "name": "preview_screenshot",
+        "sha256": "01fca251968a0ad0c72ca69502dc0787420514af80cae3af593df6ac91eaef70"
+      },
+      {
+        "name": "preview_snapshot",
+        "sha256": "df3bcf5d3b3846543972b177e067a50d09e7f139a8f1c9c6b8c2438badd304c4"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_chat_message",
+        "sha256": "d69cb997d0fb2cfe646e27c3feda0c0d7e0035516aa1a163627528eb6aad43f3"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "task_list",
+        "sha256": "77f5b0821aa76c7d589c13cefdd2287171aff283c68d170634cf61c82bafdac2"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 6894,
+      "sha256": "851ac946122061f846038776dcd7022678ba375b1744bf3d69ecdffa19f1e41c",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Multi-agent mode (explicit request only)"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_tasks",
+      "create_chat_trigger",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "decision_gate",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "enter_worktree",
+      "exit_worktree",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "list_chats",
+      "list_notes",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "prepare_chat_schedule",
+      "preview_close",
+      "preview_double_click",
+      "preview_eval",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_scroll",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "propose_task",
+      "rag_doc_outline",
+      "rag_read_doc",
+      "rag_search_docs",
+      "read_chat",
+      "read_chat_changes",
+      "read_plan",
+      "read_process_output",
+      "recall_investigations",
+      "request_review",
+      "run_command",
+      "save_note",
+      "self_review",
+      "stop_chat",
+      "stop_session",
+      "submit_plan",
+      "submit_spec",
+      "update_task",
+      "wait_chats",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  },
+  "root-ultra": {
+    "tools": [
+      {
+        "name": "apply_patch",
+        "sha256": "a4d5b601e81eeded988f36940cbb22b332d46ad41628c87296db871d7b5d4820"
+      },
+      {
+        "name": "ask_user",
+        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+      },
+      {
+        "name": "code_exec",
+        "sha256": "4af88056f2a8f32996a66115b6d7e5a05ce97fd8f5657220a2a2d4f7f89188b3"
+      },
+      {
+        "name": "create_chat",
+        "sha256": "932fd7ec80304468e85fbdc2ad962b7c480362fba7299ff5e4f0ac3da002dc7f"
+      },
+      {
+        "name": "edit_file",
+        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+      },
+      {
+        "name": "exec_command",
+        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+      },
+      {
+        "name": "execute_tasks",
+        "sha256": "104937003aa0aca2bfcfe8f0d8b78f502dbc496ff75623cae81e4871dbe643d1"
+      },
+      {
+        "name": "find_tools",
+        "sha256": "3c56983d31e45048e2bc40788280e398b5c0fa4c148bd9e8a7a62dd1fffee58f"
+      },
+      {
+        "name": "get_tool_output",
+        "sha256": "abac3b64d283fb43837c188cbe5256e5548fd2284bd9311a6398f93a472f801a"
+      },
+      {
+        "name": "git_diff",
+        "sha256": "fba1c04db0e8059bfe0ff19388a7aafcb9ed1a9876b53cad8752da5db54ec33b"
+      },
+      {
+        "name": "git_status",
+        "sha256": "8919e3b0f29f808d64e49e69383f03cee9957d520c18faa4f89b6e06884eb9a6"
+      },
+      {
+        "name": "glob",
+        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+      },
+      {
+        "name": "list_directory",
+        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+      },
+      {
+        "name": "mcp__get_file_skeleton",
+        "sha256": "09104680a0fcf3ff651f67f86a360238fa5bbfb1f4f2a0d1965be8133c7c9c07"
+      },
+      {
+        "name": "mcp__get_symbol_body",
+        "sha256": "9ebb7c2934b3fd7907d61dd398c2f4f4fd9cd659f1d390651eb4b6f8e1748727"
+      },
+      {
+        "name": "mcp__grep_code",
+        "sha256": "731afe8766e377b7b1576a6358e9412963b827df0a4844f60e86d64255ba4d64"
+      },
+      {
+        "name": "mcp__prepare_edit",
+        "sha256": "e389bb88142257f781edb0db564110b24af7301b377eec3fe1103bdc2ce1fd05"
+      },
+      {
+        "name": "mcp__search",
+        "sha256": "cd7d905264fd22c8b69a2c7b8bf4cd98a924c647d793f9303d006a94086ce50a"
+      },
+      {
+        "name": "read_file",
+        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+      },
+      {
+        "name": "recall_conversation",
+        "sha256": "c6b57bc49504c1169c64bf61b7a7828b75f39c141154b4608a365a0d879be70e"
+      },
+      {
+        "name": "send_chat_message",
+        "sha256": "d69cb997d0fb2cfe646e27c3feda0c0d7e0035516aa1a163627528eb6aad43f3"
+      },
+      {
+        "name": "task_complete",
+        "sha256": "54db78141cf8bb4138e0a3e1c7ecebc453d0a1a20e2a6b169f689d5caa38479f"
+      },
+      {
+        "name": "task_list",
+        "sha256": "77f5b0821aa76c7d589c13cefdd2287171aff283c68d170634cf61c82bafdac2"
+      },
+      {
+        "name": "view_image",
+        "sha256": "2740c9c028b4952108acf170489a9ab2822663d0f9d54ce08cdfd5c9a5c85e6d"
+      },
+      {
+        "name": "view_video",
+        "sha256": "2f3c98351a1f26b13efaf1f0dfddb45d42f51cab84720191d3c5bb255558a207"
+      },
+      {
+        "name": "workflow",
+        "sha256": "53776f16d8bc47b39d0b02143bb654675b03b4030d124aa1609807364847c36f"
+      },
+      {
+        "name": "write_stdin",
+        "sha256": "73964be014bd1c7d51ab6fe13afa299ea4efe49e7d9f5796d2f33fe8302b1c3c"
+      }
+    ],
+    "system": {
+      "length": 8026,
+      "sha256": "66e79eb1a7cf8e503d2082c4a77cd11afa515fc11bea7f97f9d30192fcea89e1",
+      "sections": [
+        "# Role",
+        "# Formatting",
+        "# Workspace\r",
+        "# Tool discovery",
+        "# Tool strategy — index starting",
+        "# Tool contract",
+        "# Images & vision",
+        "# Session overlay (automatic freshness)",
+        "# Memory",
+        "# Operating contract\r",
+        "# Build mode is ACTIVE\r",
+        "# Permissions & execution boundary",
+        "# Interactive tools",
+        "# Execution contract",
+        "# Active context",
+        "# Code comments",
+        "# Ultra collaboration"
+      ]
+    },
+    "deferred": [
+      "api_get_request",
+      "api_import_openapi",
+      "api_list_requests",
+      "api_mark_verified",
+      "api_run_collection",
+      "api_run_request",
+      "api_update_request",
+      "archive_task_list",
+      "browser_click",
+      "browser_close",
+      "browser_extract",
+      "browser_fill",
+      "browser_open",
+      "browser_press",
+      "browser_screenshot",
+      "browser_snapshot",
+      "cancel_tasks",
+      "create_chat_trigger",
+      "create_skill",
+      "db_command",
+      "db_list",
+      "db_query",
+      "db_schema",
+      "decision_gate",
+      "delete_tasks",
+      "diagram_create",
+      "diagram_export",
+      "diagram_list",
+      "diagram_read",
+      "diagram_update",
+      "enter_worktree",
+      "exit_worktree",
+      "get_diagnostics",
+      "git_add",
+      "git_branch",
+      "git_commit",
+      "git_log",
+      "http_request",
+      "integrate_chat_changes",
+      "list_chats",
+      "list_notes",
+      "list_sessions",
+      "list_tasks",
+      "lsp_definition",
+      "lsp_diagnostics",
+      "lsp_hover",
+      "lsp_references",
+      "manage_path",
+      "mcp__find_implementations",
+      "mcp__find_references",
+      "mcp__get_costs",
+      "mcp__get_dependencies",
+      "mcp__get_dependents",
+      "mcp__get_hierarchy",
+      "mcp__get_project_overview",
+      "mcp__get_project_pulse",
+      "mcp__get_recently_modified_files",
+      "mcp__get_repo_map",
+      "mcp__list_models",
+      "mcp__rag_doc_outline",
+      "mcp__rag_read_doc",
+      "mcp__rag_search_docs",
+      "mcp__save_memory",
+      "mcp__search_memory",
+      "mcp__semantic_neighbors",
+      "mcp__trace_usage",
+      "prepare_chat_schedule",
+      "preview_click",
+      "preview_close",
+      "preview_console",
+      "preview_double_click",
+      "preview_eval",
+      "preview_fill",
+      "preview_hover",
+      "preview_inspect_css",
+      "preview_memory",
+      "preview_navigate",
+      "preview_network",
+      "preview_open",
+      "preview_performance",
+      "preview_press",
+      "preview_right_click",
+      "preview_screenshot",
+      "preview_scroll",
+      "preview_snapshot",
+      "preview_storage",
+      "preview_type",
+      "preview_viewport",
+      "preview_wait_for",
+      "propose_task",
+      "rag_doc_outline",
+      "rag_read_doc",
+      "rag_search_docs",
+      "read_chat",
+      "read_chat_changes",
+      "read_plan",
+      "read_process_output",
+      "recall_investigations",
+      "request_review",
+      "run_command",
+      "save_note",
+      "self_review",
+      "stop_chat",
+      "stop_session",
+      "submit_plan",
+      "submit_spec",
+      "update_task",
+      "wait_chats",
+      "web_fetch",
+      "web_search",
+      "write_file"
+    ]
+  }
+}

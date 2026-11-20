@@ -13,7 +13,8 @@ function baseCtx(overrides?: Partial<PromptContext>): PromptContext {
     os: 'win32',
     providerFamily: 'openai',
     profile: 'full',
-    availableTools: new Set(['spawn_agent', 'task_list', 'execute_tasks', 'reply_chat_message']),
+    // A Company subordinate under Ultra: it delegates with workflow (spawn_agent is gone).
+    availableTools: new Set(['workflow', 'task_list', 'execute_tasks', 'reply_chat_message']),
     ...overrides,
   };
 }
@@ -31,7 +32,7 @@ describe('system prompt — multi-agent execution mode', () => {
   });
 
   it('names only the peer tools present in the session', () => {
-    const prompt = buildSystemPrompt(baseCtx({ multiAgentMode: 'proactive', availableTools: new Set(['spawn_agent', 'send_chat_message']) }));
+    const prompt = buildSystemPrompt(baseCtx({ multiAgentMode: 'proactive', availableTools: new Set(['workflow', 'send_chat_message']) }));
     expect(prompt).toContain('send_chat_message');
     expect(prompt).not.toMatch(/list_chats|reply_chat_message|resume_chat/);
   });
@@ -45,7 +46,14 @@ describe('system prompt — multi-agent execution mode', () => {
     expect(prompt).not.toContain('# Multi-agent mode (Ultra)');
   });
 
-  it('fails closed when proactive mode is requested without spawn_agent', () => {
+  it('keeps Ultra for a Company master through spawn_subordinate_agent, and no longer for spawn_agent', () => {
+    expect(buildSystemPrompt(baseCtx({ multiAgentMode: 'proactive', availableTools: new Set(['spawn_subordinate_agent']) })))
+      .toContain('# Ultra collaboration');
+    expect(buildSystemPrompt(baseCtx({ multiAgentMode: 'proactive', availableTools: new Set(['spawn_agent']) })))
+      .toContain('# Multi-agent mode (explicit request only)');
+  });
+
+  it('fails closed when proactive mode is requested without a tool that delegates', () => {
     const prompt = buildSystemPrompt(baseCtx({
       multiAgentMode: 'proactive',
       availableTools: new Set(['task_list', 'execute_tasks']),

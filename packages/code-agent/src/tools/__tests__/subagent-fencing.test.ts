@@ -224,7 +224,7 @@ describe('subagent execution fencing', () => {
     expect(stages).toEqual(['agent_spawned', 'agent_terminal']);
   });
 
-  it('composes foreground and background children with child-local policy before mutation', async () => {
+  it('composes a child with child-local policy before mutation', async () => {
     const sessionId = newSessionId();
     const scoped: Array<{
       background: boolean;
@@ -267,7 +267,7 @@ describe('subagent execution fencing', () => {
       },
     } as unknown as CoderRunner;
 
-    for (const waitMode of ['foreground', 'background'] as const) {
+    for (const waitMode of ['foreground'] as const) {
       let calls = 0;
       const provider: ChatProvider = {
         name: 'fake',
@@ -304,7 +304,6 @@ describe('subagent execution fencing', () => {
         allowlist: null,
         initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'run' }] }],
         maxTurns: 3,
-        waitMode,
         spawnId: `spawn-${waitMode}`,
         pathScope: ['child.ts'],
       });
@@ -316,10 +315,6 @@ describe('subagent execution fencing', () => {
       {
         background: false,
         taskScope: { id: 'spawn-foreground', files: ['child.ts'] },
-      },
-      {
-        background: true,
-        taskScope: { id: 'spawn-background', files: ['child.ts'] },
       },
     ]);
     expect(

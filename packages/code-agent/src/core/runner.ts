@@ -47,8 +47,6 @@ import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.j
 import { isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
 import { SessionFileKnowledge } from '@mcp/code-agent/tools/file-knowledge.js';
 import { profileToTiers, PREVIEW_TOOLS, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
-import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
-import { parkForBackgroundWork } from '@mcp/code-agent/tools/subagent-jobs-lifecycle.js';
 import { approvedPlanForRevision } from '@mcp/code-agent/tools/plan.js';
 import { applySmartReducerDetailed, type ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
 import {
@@ -401,9 +399,6 @@ export class CoderRunner extends EventEmitter {
   public roundMessageId: number | null = null;
   /** Coalesced lifecycle milestone awaiting a safe compaction boundary. */
   private pendingMilestoneCompaction: string | null = null;
-  /** Resolvers woken when a user message is queued — lets the background-job
-   *  parking gate wake the instant the user speaks (not just on job settle). */
-  private pendingMessageWaiters: Array<() => void> = [];
   private agentDecisionSwitchAsked = false;
   private planApproved = false;
   /** Set by `approveSpec()` after the user accepts a `submit_spec` submission. */
@@ -1160,34 +1155,6 @@ export class CoderRunner extends EventEmitter {
       selectedSkillIds: extras?.selectedSkillIds,
       roundMessageId: extras?.roundMessageId,
     });
-    this.wakePendingMessageWaiters();
-  }
-
-  private wakePendingMessageWaiters(): void {
-    const waiters = this.pendingMessageWaiters;
-    this.pendingMessageWaiters = [];
-    for (const w of waiters) { try { w(); } catch { /* ignore */ } }
-  }
-
-  /**
-   * Resolve when a user message is queued (immediately if one already is), or
-   * when `signal` aborts. Used by the background-job parking gate so a message
-   * sent while the run is parked wakes it at once. Never rejects.
-   */
-  waitForPendingMessage(signal?: AbortSignal): Promise<void> {
-    if (this.pendingUserMessages.length > 0 || signal?.aborted) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      const done = () => {
-        // Splice self out so an abort-resolved waiter doesn't linger in the
-        // array until the next pushUserMessage (which would double-invoke it).
-        const i = this.pendingMessageWaiters.indexOf(done);
-        if (i >= 0) this.pendingMessageWaiters.splice(i, 1);
-        signal?.removeEventListener('abort', done);
-        resolve();
-      };
-      this.pendingMessageWaiters.push(done);
-      signal?.addEventListener('abort', done, { once: true });
-    });
   }
 
   /**
@@ -1543,37 +1510,6 @@ export class CoderRunner extends EventEmitter {
         // /inject (or another producer) still has a message buffered for the
         // next Executing boundary.
         hasPendingMessages: () => this.hasPendingUserMessages(),
-        // Background (fire-and-forget) subagent liveness. Main runner only —
-        // subagents/company masters never create ephemeral background jobs, so
-        // `hasActive()` is false there and the orchestrator never parks.
-        backgroundJobs: this.isSubagent || this.sessionId == null ? undefined : {
-          hasActive: () => getSubagentJobManager().hasActiveJobs(this.sessionId!),
-          park: (signal: AbortSignal) => parkForBackgroundWork({
-            manager: getSubagentJobManager(),
-            sessionId: this.sessionId!,
-            signal,
-            capMs: 30 * 60_000,
-            waitForMessage: (s) => this.waitForPendingMessage(s),
-            hasPendingMessage: () => this.hasPendingUserMessages(),
-            pushNotice: (text) => this.pushUserMessage(text),
-            persistNotice: (text) => {
-              if (this.opts.sessionStore && this.sessionId != null) {
-                void this.opts.sessionStore
-                  .appendMessage({
-                    session_id: this.sessionId,
-                    message: {
-                      role: 'user',
-                      content: [{ type: 'text', text }],
-                      isMeta: true,
-                    },
-                  })
-                  .catch(() => {
-                    /* best-effort */
-                  });
-              }
-            },
-          }),
-        },
         // Per-turn telemetry persistence. The pure insert lives in
         // `core/runner/telemetry/persist-turn.ts`. The wrapper mirrors
         // the inserted id into `this.lastTurnTelemetryId` so the host's

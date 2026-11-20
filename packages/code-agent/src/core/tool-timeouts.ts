@@ -46,7 +46,6 @@ const SLOW_NATIVE_NAMES = new Set<string>([
   // Orchestrators: spawn parallel/child agents that have their own internal
   // per-agent caps (10–20 min). A 30-min tool-level backstop sits above
   // those caps instead of the 5-min NORMAL default that was killing them.
-  'spawn_agent',
   'execute_tasks',
   'workflow',
   // Fallback for synthetic/test definitions that omit code_exec's explicit

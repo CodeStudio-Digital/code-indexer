@@ -5,7 +5,7 @@ import { resolveToolMetadata } from '../core/policy.js';
 export function canInvokeInsideCodeExec(tool: CoderTool): boolean {
   if (resolveToolMetadata(tool).interactive || tool.topLevelOnly === true) return false;
   return !(
-    tool.name.startsWith('spawn_') || tool.name === 'resume_agent'
+    tool.name.startsWith('spawn_')
     || tool.name === 'code_exec' || tool.name === 'execute_task'
     || tool.name === 'task_complete'
     || tool.name === 'view_image' || tool.name === 'view_video'

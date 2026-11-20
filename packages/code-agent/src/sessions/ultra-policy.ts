@@ -40,7 +40,6 @@ export function ultraCoordinationPrompt(maxAgents: number, available?: ReadonlyS
     ['list_chats', 'discovers peers'],
     ['send_chat_message', 'sends questions or follow-ups'],
     ['reply_chat_message', 'answers the original request'],
-    ['resume_chat', 'continues an existing child'],
   ]).filter(([name]) => has(name)).map(([name, purpose]) => name + ' ' + purpose);
   const peers = peerTools.length ? '\n- ' + peerTools.join('. ') + '. Share paths and findings.' : '';
   return `

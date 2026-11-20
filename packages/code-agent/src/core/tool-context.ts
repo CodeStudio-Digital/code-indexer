@@ -113,7 +113,7 @@ export interface ToolContextServices {
    * E6 chat tools claim through it. Set by runCoder for root and child sessions.
    */
   childAgentAccounting?: import('../runtime/child-agent-freshness.js').ChildAgentAccounting;
-  /** The app's child chats, as this session (CODER_CHILD_SESSION_AGENTS on, outside Company). */
+  /** The app's child chats, as this session (outside Company). */
   childChats?: import('../ports/child-chat-port.js').ChildChatPort;
   /** Set when this session is itself a child agent: its depth and whether it is read-only. */
   childAgentSelf?: { depth: number; readOnly: boolean };

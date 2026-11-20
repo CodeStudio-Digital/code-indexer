@@ -1,5 +1,5 @@
 /**
- * Investigations tab — durable digests of sub-agent (spawn_agent)
+ * Investigations tab — durable digests of sub-agent (child chat; spawn_agent in old sessions)
  * explorations, auto-captured on completion, scoped to the open session.
  * Compact list; a click opens the full digest in a modal rendered as markdown.
  */

@@ -3,21 +3,9 @@ import { err } from '../core/tool.js';
 import { okStructured } from '../core/model-output.js';
 import { CollaborationFollowups } from '@mcp/session-storage/collaboration/followups.js';
 import { ChatScheduler, type ScheduleInput } from '../runtime/chat-scheduler.js';
-import { waitChats } from '../runtime/chat-wait.js';
 
 /** Proposals and schedule drafts are inert until a human accepts them in the UI. */
 export const ultraFollowupTools: CoderTool[] = [
-  {
-    name: 'wait_chats', source: 'native', mutates: false, effectBoundary: 'control', executionClass: 'control', parallelSafe: false, repeatPolicy: 'pollable', timeoutMs: Infinity,
-    description: 'Wait for any/all linked chats to finish or all to become idle, without model polling. Return cursor suppresses already consumed completions. Timeout or cancellation stops this waiter only.',
-    parameters: { type: 'object', properties: { session_ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 }, mode: { type: 'string', enum: ['any', 'all', 'idle'] }, cursor: { type: 'string' }, timeout_s: { type: 'number', minimum: 0, maximum: 60 } }, required: ['session_ids'], additionalProperties: false },
-    handler: async (args, ctx) => {
-      if (!ctx.collaboration || !ctx.sessionId) return err('No ordinary session collaboration');
-      try { return okStructured(await waitChats(ctx.collaboration.store, ctx.sessionId, args.session_ids as string[],
-        (args.mode ?? 'all') as 'any' | 'all' | 'idle', Number(args.timeout_s ?? 60) * 1000, args.cursor as string | undefined, ctx.signal)); }
-      catch (error) { return err(String(error)); }
-    },
-  },
   {
     name: 'propose_task', source: 'native', mutates: false, effectBoundary: 'control', executionClass: 'control', parallelSafe: false,
     description: 'Offer a useful optional next task after the requested deliverable is ready. Persists a proposal card; never starts work. Avoid generic suggestions, duplicates and required work that belongs to the current request.',

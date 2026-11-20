@@ -25,25 +25,25 @@ const OPTIONAL_GROUPS: readonly (readonly string[])[] = [
   ['invoke_skill'],
 ];
 
+/**
+ * spawn_agent, resume_agent and collect_agents took 3 slots; child chats keep them, so the swap moves no other tool.
+ * A session that can delegate (create_chat authorized, root or child) counts its child-chat tools as these 3
+ * slots in the optional-group budget; one that cannot counts the tools it has. Company never has create_chat.
+ */
+export const DELEGATION_RESERVE_SLOTS = 3;
+/** The child-chat tools (CHILD_CHAT_TOOL_NAMES, listed here to keep this module free of the chat tools). */
+export const DELEGATION_FAMILY: ReadonlySet<string> = new Set(['create_chat', 'send_chat_message', 'read_chat', 'wait_chats', 'stop_chat', 'list_chats']);
+
 export interface WorkflowCatalogOptions {
   activeTiers: ReadonlySet<ToolTier> | null;
   externalToolTiers?: ReadonlyMap<string, ToolTier>;
   requiredPinnedTools?: ReadonlySet<string>;
   company?: { isMaster: boolean };
-  agenticChat?: boolean;
   /** Budget of the workflow surface (base selection + optional groups). */
   cap: number;
   /** Ceiling on the final catalog: model tool limit and verified provider limit. */
   maxTotal?: number;
   hardLimit?: number;
-  /**
-   * The surface optional groups are budgeted on, when it is not `authorized`:
-   * with child chats, the switch-off surface (child-chat tools out, the tools
-   * they replace in). Which groups fit is then decided as with the switch
-   * off, so swapping the delegation tools moves no other tool; a freed slot
-   * stays empty.
-   */
-  budgetSurface?: readonly CoderTool[];
 }
 
 /**
@@ -92,17 +92,8 @@ function selectRequired(
     const directControl = !canInvokeInsideCodeExec(tool) && tool.name !== 'expand_toolset';
     if (directControl || (withContextFloors && isContextFloor(tool, options))) add(tool.name);
   }
-  // Paired orchestration is part of the contract, not a hotness heuristic.
-  if (selected.has('spawn_agent') || selected.has('resume_agent')) {
-    add('spawn_agent'); add('resume_agent'); add('collect_agents');
-  }
   if (selected.has('task_complete')) add('execute_tasks');
   if (byName.has('workflow')) add('workflow'); // registered only for Ultra
-  if (options.agenticChat) {
-    add('create_chat');
-    add('send_chat_message');
-    add('reply_chat_message');
-  }
 
   // Reduced/custom runners can disable the scripting bridge. In that case an
   // active tool cannot be deferred to a route that does not exist.
@@ -126,36 +117,22 @@ export function selectWorkflowCatalog(
   }
   // Optional groups are budgeted against the workflow alone (what would be
   // selected without contextual floors); the total ceiling still binds.
-  const budgetTools = options.budgetSurface ?? authorized;
-  const budgetByName = options.budgetSurface ? new Map(budgetTools.map(tool => [tool.name, tool])) : byName;
-  const budgetSelected = options.budgetSurface ? selectRequired(budgetTools, budgetByName, options, true) : selected;
-  const base = selectRequired(budgetTools, budgetByName, options, false);
+  const base = selectRequired(authorized, byName, options, false);
   const maxTotal = options.maxTotal ?? Infinity;
+  const reserved = byName.has('create_chat');
+  const counted = (set: ReadonlyMap<string, CoderTool>) => !reserved ? set.size
+    : set.size - [...set.keys()].filter(name => DELEGATION_FAMILY.has(name)).length + DELEGATION_RESERVE_SLOTS;
   for (const group of OPTIONAL_GROUPS) {
-    const present = group.filter(name => budgetByName.has(name));
+    const present = group.filter(name => byName.has(name));
     const baseAdditions = present.filter(name => !base.has(name)).length;
-    const additions = present.filter(name => !budgetSelected.has(name)).length;
-    if (base.size + baseAdditions > options.cap || budgetSelected.size + additions > maxTotal) continue;
+    const additions = present.filter(name => !selected.has(name)).length;
+    if (counted(base) + baseAdditions > options.cap || counted(selected) + additions > maxTotal) continue;
     for (const name of present) {
-      base.set(name, budgetByName.get(name)!);
-      budgetSelected.set(name, budgetByName.get(name)!);
-      const tool = byName.get(name);
-      if (tool) selected.set(name, tool);
+      base.set(name, byName.get(name)!);
+      selected.set(name, byName.get(name)!);
     }
   }
   // Deliberately do not fill spare slots with arbitrary registry/plugin tools.
   return { tools: [...selected.values()], protectedNames };
 }
 
-/**
- * The surface to budget optional groups on, with catalog stand-ins (child
- * chats): the authorized tools without the ones the stand-ins replace, plus
- * the stand-ins this session's disabled lists keep. The caller applies the
- * read-only authority to the result, as to `authorized`.
- */
-export function catalogBudgetSurface(authorized: readonly CoderTool[],
-  standIns: { tools: readonly CoderTool[]; replacing: ReadonlySet<string> }, disabled: (name: string) => boolean): CoderTool[] {
-  const byName = new Map(authorized.filter(tool => !standIns.replacing.has(tool.name)).map(tool => [tool.name, tool]));
-  for (const tool of standIns.tools) if (!byName.has(tool.name) && !disabled(tool.name)) byName.set(tool.name, tool);
-  return [...byName.values()];
-}

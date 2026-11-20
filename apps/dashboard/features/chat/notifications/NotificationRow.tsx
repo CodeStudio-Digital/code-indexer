@@ -43,8 +43,6 @@ function iconFor(n: SessionNotification): LucideIcon {
       return n.severity === 'error' ? AlertTriangle : CheckCircle2;
     case 'run-error':
       return AlertTriangle;
-    case 'background-agents-done':
-      return n.severity === 'warning' ? AlertTriangle : Bot;
     case 'child-agent-approval':
       return n.payload.resolved ? CheckCircle2 : AlertTriangle;
     case 'child-agents-stopped':
@@ -130,35 +128,6 @@ function NotificationBody({ notification }: { notification: SessionNotification 
               {p.error}
             </p>
           )}
-        </>
-      );
-    case 'background-agents-done':
-      return (
-        <>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold">{t('notifications.background.title')}</span>
-            <span className="ml-auto text-[10px] uppercase opacity-70">
-              {p.failedCount > 0
-                ? t('notifications.background.statusFailed', { count: p.failedCount })
-                : p.partialCount > 0
-                  ? t('notifications.background.statusPartial', { count: p.partialCount })
-                  : t('notifications.background.statusDone')}
-            </span>
-          </div>
-          <p className="mt-0.5 leading-snug">
-            <span className="font-mono">{p.jobId}</span> — {t('notifications.background.summary', {
-              completed: p.completedCount,
-              partial: p.partialCount,
-              failed: p.failedCount,
-            })}{' '}
-            {t('notifications.background.collectWith')}{' '}
-            <span className="font-mono">{`collect_agents({job_id:"${p.jobId}"})`}</span>.
-            {p.resumableCount > 0 && (
-              <> {t('notifications.background.resumeWith', { count: p.resumableCount })}{' '}
-                <span className="font-mono">{`resume_agent({spawn_id:"${p.groupId}"})`}</span>.
-              </>
-            )}
-          </p>
         </>
       );
     case 'child-agent-approval':

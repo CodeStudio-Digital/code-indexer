@@ -176,7 +176,7 @@ export type CoderProfile = 'bootstrap' | 'navigate' | 'full';
 
 /**
  * Tier 0 — bootstrap. Always visible: the minimal read/interaction core plus
- * orchestration discovery (expand_toolset/find_tools/spawn_agent). Company,
+ * orchestration discovery (find_tools, child chats). Company,
  * QA and sandbox tools have contextual tiers. Cold tools
  * (≤12 calls in 12k turns) were demoted to navigate — see "Phase B" markers.
  *
@@ -206,28 +206,15 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // product capabilities live in dedicated contextual tiers. runCoder
   // auto-activates those tiers only when the matching runtime is present.
   'find_tools',
-  // spawn_agent is orchestration — same tier as expand_toolset/find_tools.
-  // Lives in BOOTSTRAP (not NAVIGATE) so any session can delegate without
-  // needing to unlock a tier first.
-  'spawn_agent',
-  // collect_agents / resume_agent — the async companions of spawn_agent
-  // (background job wait + failed-agent relaunch). Same tier so the model
-  // can always await/retry a delegation it started.
   'read_chat_changes', 'integrate_chat_changes',
-  'list_project_chats', 'read_chat', 'create_chat', 'create_chat_trigger',
+  'read_chat', 'create_chat', 'create_chat_trigger',
   'list_chats', 'send_chat_message', 'reply_chat_message',
-  'read_chat_messages', 'wait_chat_response', 'cancel_chat_request', 'resume_chat',
+  'read_chat_messages', 'wait_chat_response', 'cancel_chat_request',
   // Collaboration follow-ups/waits (ultra-followups.ts) and the subagent-only
   // memo channel: explicit here, the same tier the fallback gave them.
   'wait_chats', 'propose_task', 'prepare_chat_schedule', 'record_memo',
-  'collect_agents',
-  'resume_agent',
-  // read_agent_transcript — observability companion (audit a finished
-  // agent's retained transcript). Read-only; same tier so audits never
-  // require a tier unlock.
-  'read_agent_transcript',
-  // execute_tasks — wave-based orchestrator (PR 3). Same rationale as
-  // spawn_agent: orchestration that any session must be able to call.
+  // execute_tasks — wave-based orchestrator (PR 3): orchestration that any
+  // session must be able to call.
   'execute_tasks',
   // workflow — Ultra's declarative DAG orchestrator. Registered only under
   // the Ultra posture (index.ts); bootstrap tier so it is visible whenever
@@ -349,7 +336,7 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   // runs profile 'navigate' so it sees this, while solo bootstrap sessions keep
   // it off their turn-1 surface (prefix-cache head stays put).
   'decision_gate',
-  // spawn_agent moved to BOOTSTRAP_TOOLS — orchestration tools live there
+  // Orchestration tools (find_tools, child chats) live in BOOTSTRAP_TOOLS
   // alongside expand_toolset/find_tools so any session can delegate.
   // execute_tasks (plural) is the new wave-based orchestrator (PR 3) —
   // also BOOTSTRAP so the master can dispatch the whole approved list
@@ -396,10 +383,6 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'forget_memory',
   'save_note',
   'mcp__search_memory',
-  // MCP resource discovery (registered for non-master sessions). Read-only,
-  // cold (≤1 call in 12k turns) — was an untiered bootstrap fallback.
-  'mcp_list_resources',
-  'mcp_read_resource',
 ]);
 
 /**
@@ -725,7 +708,6 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   git_status: 'Show working tree status',
   git_diff: 'Show staged/unstaged changes',
   git_log: 'Show recent commit history',
-  spawn_agent: 'Spawn 1 (or N parallel, up to 8) agent(s) with read/implement/full toolset',
   // Frente D — `execute_task` is gone; orchestration goes through `execute_tasks` (BOOTSTRAP).
   task_complete: 'Close the current inline task scope and mark it done (inline-mode tail of execute_tasks).',
   update_task: 'Skip / retry / rename / rescope a task without resubmitting the task list.',

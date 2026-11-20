@@ -29,7 +29,7 @@ const groups = [
   'packages/code-agent/src/runtime/__tests__/run-coder-child-agent.test.ts',
   'packages/code-agent/src/runtime/__tests__/child-agent-limits-resolver.test.ts',
   'packages/code-agent/src/runtime/__tests__/run-coder-create-chat.test.ts',
-  'packages/code-agent/src/runtime/__tests__/run-coder-catalog-swap.test.ts',
+  'packages/code-agent/src/runtime/__tests__/run-coder-catalog-snapshot.test.ts',
   'packages/store/src/db/__tests__/schema-bootstrap.test.ts',
   'apps/http-api/server/__tests__/owned-project-index.test.ts',
   'packages/indexer/src/agent-tools/__tests__/tool-result.test.ts',

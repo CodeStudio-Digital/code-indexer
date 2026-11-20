@@ -53,7 +53,6 @@ const WORKFLOW_TOOLS: ReadonlySet<string> = new Set([
   'update_task',
   'task_list',
   // Investigation / orchestration tools — fine to call between tasks.
-  'spawn_agent',
   'workflow',
   'ask_user',
   'submit_plan',

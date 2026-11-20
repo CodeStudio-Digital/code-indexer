@@ -30,17 +30,6 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     advanced: true,
   },
   {
-    key: 'CODER_CHILD_SESSION_AGENTS',
-    label: 'Delegate through child chats',
-    description: 'Agents delegate with create_chat and send_chat_message (real child sessions) instead of spawn_agent. On by default; turn it off to go back to spawn_agent. Company is unaffected.',
-    type: 'bool',
-    category: 'agent',
-    default: '1',
-    advanced: true,
-    // Each session worker reads it when it starts.
-    restartNeeded: true,
-  },
-  {
     key: 'MCP_MEMORY_SWEEPER',
     label: 'Idle memory sweeper',
     description: 'Distills durable project memory from sessions that went idle. Default on.',

@@ -6,7 +6,7 @@
  * counts for the first time (a tool's claim or the sweep), so it is captured
  * once. Only the parent's own children: a grandchild's conclusion is captured
  * by the child that received it. Recorded states: completed, and cut_off
- * (its salvage summary, like spawn_agent's watchdog stop); a failed or
+ * (its salvage summary, like the retired spawn_agent's watchdog stop); a failed or
  * aborted run is not an investigation result.
  */
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';

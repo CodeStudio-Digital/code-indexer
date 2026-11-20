@@ -35,7 +35,7 @@ export interface ToolCallLedgerEntry {
   validationStartedSeq?: number;
   /**
    * Hashed, allowlisted recovery identity for resumable orchestration.
-   * This lets `resume_agent` / resumed `workflow` success resolve the exact
+   * This lets a resumed `workflow` (or old `resume_agent` history) resolve the exact
    * earlier partial operation without retaining raw prompts or tool input.
    */
   recoveryOperationId?: string;

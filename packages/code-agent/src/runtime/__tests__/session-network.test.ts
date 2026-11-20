@@ -44,11 +44,10 @@ describe('ordinary session networks', () => {
     const second = await network.create(parentId, { title: 'Designer', role: 'Debate alternatives' }, 'b');
     expect(await mailbox.connected(first.id, second.id)).toBe(true);
     expect((await network.context(parentId))).toContain('Investigate risks');
-    // Child chats: the guidance names create_chat and send_chat_message, none of the replaced tools.
-    expect(await network.context(parentId)).toContain('Use spawn_agent for temporary subagents.');
-    const childChats = await network.context(parentId, { childChats: true });
-    expect(childChats).toContain('Delegate a task with create_chat: the child chat runs it and reports back.');
-    expect(childChats).not.toMatch(/spawn_agent|list_project_chats|reply_chat_message|resume_chat/);
+    // The guidance names create_chat and send_chat_message, none of the replaced tools.
+    const guidance = await network.context(parentId);
+    expect(guidance).toContain('Delegate a task with create_chat: the child chat runs it and reports back.');
+    expect(guidance).not.toMatch(/spawn_agent|list_project_chats|reply_chat_message|resume_chat/);
     expect((await network.discover(parentId, 'Reviewer'))[0]?.id).toBe(first.id);
     expect((await network.session(first.id)).metadata?.network_root_id).toBe(parentId);
   });
@@ -145,22 +144,16 @@ describe('ordinary session networks', () => {
     expect(await network.discover(parentId, '', false, 2)).toEqual([expect.objectContaining({ id: foreign.id })]);
   });
 
-  it('executes the public tools with durable IDs and rejects Company contexts', async () => {
-    const ctx = { sessionNetwork: network, sessionId: parentId, currentToolUseId: 'create-tool' } as never;
-    const call = (name: string, args: Record<string, unknown>, context = ctx) => sessionNetworkTools.find(tool => tool.name === name)!.handler(args, context);
+  it('executes create_chat_trigger, its one public tool, with durable IDs and rejects Company contexts', async () => {
+    expect(sessionNetworkTools.map(tool => tool.name)).toEqual(['create_chat_trigger']);
+    const ctx = { sessionNetwork: network, sessionId: parentId, currentToolUseId: 'trigger-tool' } as never;
+    const call = (args: Record<string, unknown>, context = ctx) => sessionNetworkTools[0]!.handler(args, context);
     await network.settings(parentId, { enabled: true });
-    const creation = await call('create_chat', { title: 'Reviewer', role: 'Review', provider: 'p2', model: 'm2' });
-    expect(creation.isError).not.toBe(true);
-    const child = creation.structuredData as { id: string; chatId: string };
+    const child = await network.create(parentId, { title: 'Reviewer', role: 'Review', provider: 'p2', model: 'm2' }, 'create');
     expect(child.chatId).toBe(rootChatId(child.id));
-    const discovery = await call('list_project_chats', { query: 'Reviewer' });
-    expect((discovery.structuredData as unknown[])[0]).toMatchObject({ chatId: child.chatId, provider: 'p2' });
-    const read = await call('read_chat', { session_id: child.chatId });
-    expect(read.structuredData).toMatchObject({ id: child.id, final: null });
-    const trigger = await call('create_chat_trigger', { sourceSessionId: child.id, targetSessionId: parentId, event: 'completed', prompt: 'Synthesize', includeFinal: true });
-    expect(trigger.structuredData).toMatchObject({ status: 'waiting' });
-    const blocked = await call('create_chat', { title: 'Forbidden', role: 'Review' }, { sessionNetwork: network, sessionId: parentId, companyContext: {} } as never);
-    expect(blocked.isError).toBe(true);
+    const input = { sourceSessionId: child.id, targetSessionId: parentId, event: 'completed', prompt: 'Synthesize', includeFinal: true };
+    expect((await call(input)).structuredData).toMatchObject({ status: 'waiting' });
+    expect((await call(input, { sessionNetwork: network, sessionId: parentId, companyContext: {} } as never)).isError).toBe(true);
     expect(await sessions.listSessions(1)).toHaveLength(2);
   });
 

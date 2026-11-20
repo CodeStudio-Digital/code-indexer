@@ -22,7 +22,8 @@ const WORKFLOW = [
   'list_directory', 'mcp__list_directory', 'apply_patch', 'edit_file', 'write_file',
   'manage_path', 'run_command', 'exec_command', 'write_stdin', 'list_sessions', 'get_tool_output',
   'ask_user', 'decision_gate', 'task_list', 'submit_plan', 'submit_spec',
-  'remember', 'recall_memory', 'recall_conversation', 'spawn_agent', 'resume_agent', 'collect_agents',
+  'remember', 'recall_memory', 'recall_conversation',
+  'create_chat', 'send_chat_message', 'read_chat', 'wait_chats', 'stop_chat', 'list_chats',
   'task_complete', 'execute_tasks', 'view_image', 'view_video', 'git_log', 'git_commit', 'web_fetch',
   'mcp__get_file_skeleton', 'mcp__get_symbol_body', 'mcp__prepare_edit', 'git_status', 'git_diff',
   'rag_search_docs', 'rag_read_doc', 'invoke_skill',
@@ -31,7 +32,10 @@ const OPTIONAL = ['mcp__prepare_edit', 'mcp__get_file_skeleton', 'mcp__get_symbo
 const PREVIEW = [...PREVIEW_WORKFLOW_FLOOR];
 // Captured from the projection at 8734e2b9, before floors stopped consuming
 // the optional-group budget. A change here is a prompt-cache contract change.
-const BUILD_FINGERPRINT = 'c69d09f3685a38875e7d7b595a1752f05027b7fe';
+// E7c-2: spawn_agent/resume_agent/collect_agents can no longer be registered, so the
+// registry carries the child-chat family. This projection plus those three tools
+// reproduces 8734e2b9's c69d09f3685a38875e7d7b595a1752f05027b7fe: no other tool moved.
+const BUILD_FINGERPRINT = '15f1b0af2fd75fde8cbdcb32f996c212200aebf8';
 
 function tool(name: string): CoderTool {
   return { name, source: 'native', description: `${name} full description.`, catalogDescription: `${name} contract.`,

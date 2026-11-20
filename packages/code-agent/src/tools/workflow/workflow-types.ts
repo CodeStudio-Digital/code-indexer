@@ -5,7 +5,7 @@
  * A workflow is a model-authored DAG of typed subagent steps:
  *   { id, title?, prompt, profile?, depends_on?, files? }
  * Steps whose dependencies are all satisfied run together as one parallel
- * wave (same engine as execute_tasks/spawn_agent). Kept pure so wave
+ * wave (same engine as execute_tasks). Kept pure so wave
  * planning and validation are unit-testable without a runner.
  */
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
