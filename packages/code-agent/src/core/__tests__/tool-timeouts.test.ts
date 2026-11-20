@@ -56,10 +56,10 @@ describe('resolveToolTimeoutMs — orchestrators in the SLOW tier', () => {
 });
 
 describe('resolveToolMetadata — interactive classification (policy)', () => {
-  it('classifies submit_spec, submit_plan, submit_tasks and ask_user as interactive', () => {
+  it('classifies submit_spec, submit_plan, task_list and ask_user as interactive', () => {
     expect(resolveToolMetadata(t({ name: 'submit_spec' })).interactive).toBe(true);
     expect(resolveToolMetadata(t({ name: 'submit_plan' })).interactive).toBe(true);
-    expect(resolveToolMetadata(t({ name: 'submit_tasks' })).interactive).toBe(true);
+    expect(resolveToolMetadata(t({ name: 'task_list' })).interactive).toBe(true);
     expect(resolveToolMetadata(t({ name: 'ask_user' })).interactive).toBe(true);
   });
 

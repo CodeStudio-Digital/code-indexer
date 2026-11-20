@@ -27,6 +27,8 @@ import { isEssentialCompanyTool } from '../company-essentials.js';
 import { selectWorkflowCatalog } from '../../../tools/workflow-catalog.js';
 import { WORKFLOW_CATALOG_CONTRACTS } from '../../../tools/catalog-contracts.js';
 import { approvedPlanForRevision } from '../../../tools/plan.js';
+import { readOnlySessionAuthority } from '../../policy.js';
+import { isReadOnlyAgent } from '../../../agents/index.js';
 
 export interface SerializedTool {
   name: string;
@@ -333,10 +335,8 @@ function buildWorkflowTools(
 ): BuildToolsResult {
   // Keep historical handlers registered for replay, but stop advertising obsolete
   // aliases or gates for a different mode. Discovery reports these as unavailable.
-  const hasTaskList = permitted.some(tool => tool.name === 'task_list');
   let authorized = permitted.filter(tool => {
     if (tool.name === 'submit_spec') return specMode;
-    if (tool.name === 'submit_tasks') return planMode && (!hasTaskList || !!args.requiredPinnedTools?.has(tool.name));
     if (tool.name === 'decision_gate') return planMode || !!args.requiredPinnedTools?.has(tool.name);
     if (tool.name === 'expand_toolset') return !!args.requiredPinnedTools?.has(tool.name);
     return true;
@@ -348,16 +348,20 @@ function buildWorkflowTools(
       profile: args.activeTiers ? [...args.activeTiers].sort().join(',') : undefined,
     });
   if (hookAllow) authorized = authorized.filter(tool => hookAllow.has(tool.name));
+  // A read-only agent loses write/process/delegation authority, not just
+  // visibility: the dispatcher and discovery both derive from `authorized`.
+  // Applied last so a continuation sees which openers survived every filter.
+  if (isReadOnlyAgent(args.toolContext.runner?.agentId)) authorized = readOnlySessionAuthority(authorized);
   const hardLimit = args.provider.toolLimits?.maxCount;
   if (hardLimit !== undefined && (!Number.isSafeInteger(hardLimit) || hardLimit < 1)) {
     throw new Error('Invalid verified provider tool limit');
   }
-  const cap = Math.min(getModelMaxTools(args.provider.model ?? ''), hardLimit ?? Infinity,
-    args.sessionToolCap && args.sessionToolCap > 0 ? args.sessionToolCap : 28);
+  const maxTotal = Math.min(getModelMaxTools(args.provider.model ?? ''), hardLimit ?? Infinity);
+  const cap = Math.min(maxTotal, args.sessionToolCap && args.sessionToolCap > 0 ? args.sessionToolCap : 28);
   const selection = selectWorkflowCatalog(authorized, {
     activeTiers: args.activeTiers, externalToolTiers: args.externalToolTiers,
     requiredPinnedTools: args.requiredPinnedTools,
-    company: args.toolContext.companyContext, cap, hardLimit,
+    company: args.toolContext.companyContext, cap, maxTotal, hardLimit,
     agenticChat: args.toolContext.agenticChat,
   });
   const serialize = (tool: CoderTool): SerializedTool => ({

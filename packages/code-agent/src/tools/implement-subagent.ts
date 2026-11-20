@@ -20,7 +20,7 @@ export type { SubagentCollected } from './subagent-collected.js';
  * path scope for filesystem/shell tools.
  *
  * The implement-subagent variant additionally:
- *   - whitelists write_file/edit_file/create_file/run_command;
+ *   - whitelists write_file/edit_file/run_command;
  *   - wraps fs/shell tools with a path-scope sandbox that LOGS (warning mode)
  *     reads/writes outside the declared task files but DOES NOT block them;
  *   - parses a structured `<result>{...}</result>` block from the subagent's
@@ -1466,8 +1466,6 @@ export const IMPLEMENT_ALLOWLIST = new Set<string>([
   // Mutating filesystem tools — the whole point of an implement subagent
   'write_file',
   'edit_file',
-  'multi_edit',
-  'create_file',
   'manage_path',
   // Shell — needed for tests/builds. Path-scope records suspicious paths but
   // intentionally remains warning-only until shell write detection is hardened;
@@ -1500,7 +1498,7 @@ function formatReference(r: TaskReference): string {
       base = `**Symbol**: \`${r.value}\``;
       break;
     case 'file':
-      base = `**File reference**: \`${r.value}\` (read it via mcp__read_file or get_file_skeleton)`;
+      base = `**File reference**: \`${r.value}\` (read it via read_file or get_file_skeleton)`;
       break;
     case 'snippet':
       base = `**Snippet**:\n\n\`\`\`\n${r.value}\n\`\`\``;
@@ -1731,8 +1729,6 @@ export function checkPathScopeForTool(
   const directWriteTools = new Set([
     'write_file',
     'edit_file',
-    'multi_edit',
-    'create_file',
     'manage_path',
     'apply_patch',
   ]);
@@ -1776,8 +1772,6 @@ export function wrapToolForPathScope(
   const fsOrShellTools = new Set([
     'write_file',
     'edit_file',
-    'multi_edit',
-    'create_file',
     'manage_path',
     'apply_patch',
     'read_file',

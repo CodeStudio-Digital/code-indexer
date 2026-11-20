@@ -27,4 +27,6 @@ export interface CodeExecBootstrap {
   changes: string[];
   stash: Array<[string, unknown]>;
   stashMaxBytes?: number;
+  /** Retired tool name → its replacement instruction (only names not registered). */
+  retired?: Record<string, string>;
 }

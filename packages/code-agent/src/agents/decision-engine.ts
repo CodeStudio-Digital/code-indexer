@@ -64,9 +64,9 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
         'mcp__get_project_pulse',
         'mcp__search',
         'mcp__grep_code',
-        'mcp__read_file',
+        'read_file',
       ],
-      discouraged: ['write_file', 'edit_file', 'multi_edit', 'run_command', 'git_commit'],
+      discouraged: ['write_file', 'edit_file', 'run_command', 'git_commit'],
     },
   },
   locate: {
@@ -76,8 +76,8 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
     cost: 'low',
     requiresExplicitUserIntent: false,
     toolPolicy: {
-      preferred: ['mcp__search', 'mcp__grep_code', 'mcp__read_file', 'glob', 'mcp__find_references'],
-      discouraged: ['write_file', 'edit_file', 'multi_edit', 'run_command'],
+      preferred: ['mcp__search', 'mcp__grep_code', 'read_file', 'glob', 'mcp__find_references'],
+      discouraged: ['write_file', 'edit_file', 'run_command'],
     },
   },
   plan: {
@@ -97,7 +97,7 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
         'mcp__find_references',
         'submit_plan',
       ],
-      discouraged: ['write_file', 'edit_file', 'multi_edit', 'git_commit'],
+      discouraged: ['write_file', 'edit_file', 'git_commit'],
     },
   },
   edit: {
@@ -107,7 +107,7 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
     cost: 'medium',
     requiresExplicitUserIntent: false,
     toolPolicy: {
-      preferred: ['mcp__get_symbol_body', 'mcp__prepare_edit', 'edit_file', 'multi_edit', 'get_diagnostics'],
+      preferred: ['mcp__get_symbol_body', 'mcp__prepare_edit', 'edit_file', 'get_diagnostics'],
       discouraged: ['git_commit', 'git_push', 'mcp__index_project'],
     },
   },
@@ -143,7 +143,7 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
     requiresExplicitUserIntent: false,
     toolPolicy: {
       preferred: ['rag_search_docs', 'rag_read_doc', 'web_search', 'web_fetch'],
-      discouraged: ['write_file', 'edit_file', 'multi_edit', 'git_commit'],
+      discouraged: ['write_file', 'edit_file', 'git_commit'],
     },
   },
   preview: {
@@ -155,7 +155,7 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
     cost: 'medium',
     requiresExplicitUserIntent: false,
     toolPolicy: {
-      preferred: ['edit_file', 'multi_edit', 'get_diagnostics'],
+      preferred: ['edit_file', 'get_diagnostics'],
       discouraged: ['git_commit', 'mcp__index_project'],
     },
   },

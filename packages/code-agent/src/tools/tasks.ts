@@ -1,11 +1,11 @@
 import { taskNeedsReconciliation } from './task-list-shared.js';
 import { parseTasksState } from '@mcp/session-storage/task-state-validation.js';
 /**
- * Structured task list tools — submit_tasks / task_complete / list_tasks.
+ * Structured task list tools — task_list / task_complete / list_tasks.
  *
  * The orchestrator (parent coder agent) explores the codebase, decomposes the
  * work into a curated task list with files + references per task, and submits
- * it via submit_tasks. The user reviews and approves in the dashboard. Then
+ * it via task_list({gate:'approve'}). The user reviews and approves in the dashboard. Then
  * the wave-based `execute_tasks` (plural, in execute-tasks.ts) dispatches the
  * approved list in dependency order; each task runs either inline (current
  * parent context) or in an isolated subagent.
@@ -25,17 +25,16 @@ import type {
 } from '@mcp/session-storage/session-state-types.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import {
-  SUBMIT_TASKS_DESC,
   TASK_COMPLETE_DESC,
   TASK_LIST_DESC,
   maybeTerse,
 } from '@mcp/code-agent/tools/descriptions.js';
 import { todoWrite, updateTodo } from '@mcp/code-agent/tools/todo.js';
 
-// ─── Burst guard for submit_tasks ───────────────────────────────
+// ─── Burst guard for task_list approval ───────────────────────────────
 //
-// Mirrors the todo_write burst guard. When the agent
-// reissues `submit_tasks` with the same logical task list 3+ times in 90s
+// Mirrors the checklist-write burst guard. When the agent
+// reissues an approval submission with the same logical task list 3+ times in 90s
 // without anything changing in between, refuse hard and point at
 // update_task. The signature includes the summary plus sorted title/body
 // pairs so backend-generated ids don't make each duplicate look new.
@@ -67,7 +66,7 @@ function bumpSubmitBurst(ctx: Pick<ToolContext, 'runner'>, sig: string): { count
   return { count: next.count };
 }
 
-/** Test-only: clear submit_tasks burst tracker for a runner key. */
+/** Test-only: clear the approval burst tracker for a runner key. */
 export function _resetSubmitBurstForKey(key: object): void {
   SUBMIT_BURST_BY_RUNNER.delete(key);
 }
@@ -182,7 +181,7 @@ function validateTaskInput(raw: unknown, idx: number): CoderTask | string {
   if (!raw || typeof raw !== 'object') return `tasks[${idx}] must be an object`;
   const o = raw as Record<string, unknown>;
   // `id` is now only an optional client alias used to resolve depends_on
-  // inside this submit_tasks call. The backend replaces it with a unique
+  // inside this approval submission. The backend replaces it with a unique
   // generated `tsk_...` id before persistence so new rounds never inherit
   // lifecycle state from previous "task_1" style ids.
   const rawId = typeof o.id === 'string' ? o.id.trim() : '';
@@ -291,7 +290,7 @@ export function validateTasksInput(raw: unknown): { summary: string; tasks: Code
 
 // ─── Format helpers (cache-stable) ──────────────────────────────
 
-/** Byte-stable text emitted as the tool_result of submit_tasks. Mirroring
+/** Byte-stable text emitted as the tool_result of an approved task_list. Mirroring
  *  formatPlanResult from plan.ts so cache prefixes don't churn on resume. */
 export function formatTasksApprovedResult(state: TasksState, feedback?: string): string {
   const lines: string[] = [];
@@ -334,84 +333,19 @@ export function formatTaskCompletedResult(taskId: string, summary: string, nextT
 
 // ─── Tools ──────────────────────────────────────────────────────
 
-const submitTasksSchema: JsonSchema = {
-  type: 'object',
-  properties: {
-    summary: { type: 'string', description: '1-2 line statement of the overall objective' },
-    tasks: {
-      type: 'array',
-      description: 'List of curated task units. Order them so depends_on is respected.',
-      items: {
-        type: 'object',
-        properties: {
-          id: {
-            type: 'string',
-            description:
-              'Optional client alias used only within this submit_tasks call for depends_on references. The backend replaces it with a generated tsk_... id before execution.',
-          },
-          title: { type: 'string', description: '1-line label shown to the user.' },
-          description: { type: 'string', description: '3-10 lines: what to do + the success criterion.' },
-          files: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Project-relative paths the task may read AND write. Required for subagent mode.',
-          },
-          references: {
-            type: 'array',
-            items: { type: 'object' },
-            description: "Curated context pre-extracted by you. Each entry: {type: 'symbol'|'snippet'|'file'|'doc', value: string, file?: string, lines?: string, note?: string}.",
-          },
-          depends_on: {
-            type: 'array',
-            items: { type: 'string' },
-            description:
-              'Optional client aliases from this submit_tasks call that must finish before this task starts. The backend rewrites them to generated tsk_... ids.',
-          },
-          suggested_mode: {
-            type: 'string',
-            enum: ['inline', 'subagent'],
-            description: "'inline' = execute in the parent context (good for tasks needing prior history). 'subagent' = isolated subagent with only this task's files+references (token-cheap).",
-          },
-          estimated_complexity: { type: 'string', enum: ['small', 'medium', 'large'] },
-          kind: {
-            type: 'string',
-            enum: ['investigate', 'implement', 'verify'],
-            description:
-              "What KIND of work this task is — drives toolset selection in execute_tasks:\n" +
-              "  'investigate' → read-only exploration (cheaper, no write access).\n" +
-              "  'implement'   → read + write + shell, scoped to `files` (default).\n" +
-              "  'verify'      → run_command + read + lsp_diagnostics only (tests, linters).\n" +
-              "Defaults to 'implement' when omitted.",
-          },
-          parallel_group: {
-            type: 'string',
-            description:
-              "Optional label for parallel batching. Tasks sharing the same `parallel_group` " +
-              "AND with no unfinished dependency on each other run CONCURRENTLY in the same wave. " +
-              "Omit (or empty) to keep the task strictly sequential.",
-          },
-        },
-        required: ['title', 'description', 'files', 'suggested_mode', 'estimated_complexity'],
-      },
-    },
-  },
-  required: ['summary', 'tasks'],
-} as unknown as JsonSchema;
-
-export const submitTasks: CoderTool = {
-  name: 'submit_tasks',
-  description: maybeTerse(SUBMIT_TASKS_DESC),
-  source: 'native',
-  interactive: true,
-  mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
-  parameters: submitTasksSchema,
+/**
+ * Internal handler of `task_list({gate:'approve'})`. Not registered as a tool:
+ * the approval pause, events and persisted interaction are owned by the
+ * `task_list` call that delegates here.
+ */
+export const submitTasks: Pick<CoderTool, 'handler'> = {
   handler: async (args, ctx): Promise<ToolResult> => {
     ctx.signal?.throwIfAborted();
     const validated = validateTasksInput(args);
-    if (typeof validated === 'string') return err(`submit_tasks validation failed: ${validated}`);
+    if (typeof validated === 'string') return err(`task_list validation failed: ${validated}`);
 
     const runner = ctx.runner;
-    if (!runner) return err('submit_tasks requires runner context');
+    if (!runner) return err('task_list approval requires runner context');
 
     // Burst guard: refuse repeated re-submissions of the same logical list.
     const sig = tasksSignature(validated.summary, validated.tasks);
@@ -419,7 +353,7 @@ export const submitTasks: CoderTool = {
     if (burst.count > SUBMIT_BURST_THRESHOLD) {
       const ids = validated.tasks.map((t) => t.id).join(', ');
       return err(
-        `Refused: submit_tasks called ${burst.count} times in the last ${Math.round(SUBMIT_BURST_WINDOW_MS / 1000)}s ` +
+        `Refused: task_list({gate:'approve'}) called ${burst.count} times in the last ${Math.round(SUBMIT_BURST_WINDOW_MS / 1000)}s ` +
           `with the same logical task list. Use update_task({task_id: "...", status: "..."}) to mutate ` +
           `existing tasks (status, files, title) instead of resubmitting the whole list. ` +
           `Current ids: ${ids}.`,
@@ -478,7 +412,7 @@ export const submitTasks: CoderTool = {
         tasks: parsed.tasks ?? initialState.tasks }); }
       catch { return err('Invalid task review edits; no approval was applied.'); }
       console.log(
-        `[coder/tasks] submit_tasks approved — execution_mode=${resolvedMode} ` +
+        `[coder/tasks] task_list approval granted — execution_mode=${resolvedMode} ` +
         `(received=${parsed.execution_mode ?? 'undefined'}) tasks=${parsed.tasks?.length ?? '?'}`,
       );
       await ctx.resolveTasks?.({
@@ -748,7 +682,7 @@ const archiveTaskListSchema: JsonSchema = {
 export const archiveTaskList: CoderTool = {
   name: 'archive_task_list',
   description:
-    'Clear the current task list for this session so the next submit_tasks starts from a clean UI/state surface. Use when abandoning an old round.',
+    'Clear the current task list for this session so the next task_list starts from a clean UI/state surface. Use when abandoning an old round.',
   source: 'native',
   mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
   parameters: archiveTaskListSchema,
@@ -801,6 +735,8 @@ export const taskComplete: CoderTool = {
   description: maybeTerse(TASK_COMPLETE_DESC),
   source: 'native',
   mutates: false, parallelSafe: false, riskLevel: 'read', effectBoundary: 'control', executionClass: 'control',
+  // Only execute_tasks opens the inline scope this closes (execute-tasks.ts).
+  continues: ['execute_tasks'],
   parameters: taskCompleteSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
     ctx.signal?.throwIfAborted();
@@ -1041,9 +977,9 @@ void extractPathsFromToolArgs;
 //
 // ONE always-on tool that replaces the todos/tasks selection fork. A single
 // `gate` field picks intensity; the handler dispatches to the existing,
-// well-tested track (todo_write/update_todo) and approve (submit_tasks)
-// handlers, which all write the same session-local task record. The legacy
-// names stay registered as back-compat aliases (demoted out of bootstrap).
+// well-tested internal track (checklist write/patch) and approve handlers,
+// which all write the same session-local task record. The former
+// todo_write/update_todo/submit_tasks tools are no longer registered.
 
 /**
  * Infer the gate when the model omits it: approve-shaped items carry
@@ -1110,7 +1046,7 @@ export const taskList: CoderTool = {
   parameters: taskListSchema,
   handler: async (args, ctx): Promise<ToolResult> => {
     ctx.signal?.throwIfAborted();
-    // Patch path → track checklist patch (the update_todo flow).
+    // Patch path → track checklist patch.
     if (args.updates !== undefined) {
       return updateTodo.handler({ updates: args.updates }, ctx);
     }
@@ -1133,7 +1069,7 @@ export const taskList: CoderTool = {
       }
       return submitTasks.handler({ summary: args.summary, tasks: args.items }, ctx);
     }
-    // track → the todo_write flow (no pause).
+    // track → full checklist write (no pause).
     return todoWrite.handler({ todos: args.items }, ctx);
   },
 };
@@ -1143,7 +1079,6 @@ export const taskList: CoderTool = {
 // dispatch path the model needs.
 export const tasksTools: CoderTool[] = [
   taskList,
-  submitTasks,
   listTasks,
   cancelTasks,
   deleteTasks,

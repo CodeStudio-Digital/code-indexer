@@ -180,10 +180,12 @@ import { apiClientTools } from '@mcp/code-agent/tools/api-client/index.js';
 import { dbTools } from '@mcp/code-agent/tools/db/index.js';
 import { diagramTools } from '@mcp/code-agent/tools/diagram/index.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
-import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { getGlobalDocSearch, ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
+import { prefixedBridgeTools, primaryBridgeTools, pruneRedundantPrimaryTwins } from '@mcp/code-agent/tools/internal-mcp-exposure.js';
+import { sessionFileKnowledge } from '@mcp/code-agent/tools/file-knowledge.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
 import { ragDocOutlineTools } from '@mcp/code-agent/tools/rag-doc-outline.js';
-import { todoTools, generateTodoId } from '@mcp/code-agent/tools/todo.js';
+import { generateTodoId } from '@mcp/code-agent/tools/todo.js';
 import { type TodoItem, buildTrackState } from '@mcp/code-agent/tools/task-list-shared.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
@@ -716,11 +718,11 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // tool with a single `patch: string` param — the model emits JSON-
   // escaped patch text and the handler parses it. Costs ~600 extra chars
   // in the system prompt vs gating, but pays off on multi-file edits where
-  // a single deterministic patch beats N rounds of edit_file/multi_edit.
+  // a single deterministic patch beats N rounds of edit_file.
   registry.register(applyPatchTool);
 
   // Company subordinates get master-directed communication tools instead of
-  // the human-facing ask_user / submit_plan / submit_tasks. The replacement
+  // the human-facing ask_user / submit_plan / task_list approval. The replacement
   // tools emit the same runner events so orchestrator interception is unchanged.
   if (opts.companyContext && !opts.companyContext.isMaster) {
     registerCompanyTools(buildSubordinateTools());
@@ -790,7 +792,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(ragSearchDocsTools);
   registry.registerAll(ragReadDocTools);
   registry.registerAll(ragDocOutlineTools);
-  registry.registerAll(todoTools);
   registry.registerAll(viewImageTools);
   registry.registerAll(previewTools);
   registry.registerAll(browserTools);
@@ -847,11 +848,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           projectRoot: proj.rootPath,
           overlay: projOverlay,
         });
-        // Rename: mcp__read_file → mcp__{slug}__read_file
-        const prefixed = mcpTools.map((t) => ({
-          ...t,
-          name: `mcp__${slug}__${t.name.replace(/^mcp__/, '')}`,
-        }));
+        // Rename mcp__read_file → mcp__{slug}__read_file, without agent-run control.
+        const prefixed = prefixedBridgeTools(mcpTools, slug);
         registry.registerAll(prefixed);
         extraBridges.push(projBridge);
         console.log(`[coder] Master: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
@@ -869,7 +867,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         projectRoot: project.root_path,
         overlay,
       });
-      registry.registerAll(mcpTools);
+      // Agent-run control never reaches the agent (internal-mcp-exposure.ts).
+      // Twins of native tools (read/list/doc) are pruned after the filters below.
+      registry.registerAll(primaryBridgeTools(mcpTools));
       // Resource discovery/read tools — companion to the bridged tools.
       // Cheap to expose: handlers no-op when the server publishes nothing.
       registry.registerAll(buildMcpResourceTools(bridge));
@@ -897,10 +897,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         projectRoot: proj.rootPath,
         overlay: projOverlay,
       });
-      const prefixed = mcpTools.map((t) => ({
-        ...t,
-        name: `mcp__${slug}__${t.name.replace(/^mcp__/, '')}`,
-      }));
+      // Prefixed: no agent-run control (internal-mcp-exposure.ts).
+      const prefixed = prefixedBridgeTools(mcpTools, slug);
       registry.registerAll(prefixed);
       extraBridges.push(projBridge);
       console.log(`[coder] Global session: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
@@ -1076,6 +1074,15 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // retrying recall_memory when the project toggle was off.
   if (!opts.projectMemory) sessionDisabledTools.add('recall_memory');
 
+  // One read, list and doc-read name on the primary project: drop each MCP
+  // twin (mcp__read_file, mcp__list_directory, mcp__rag_*) only while its
+  // native tool survived the custom-agent allowlist and research filter above
+  // and is not disabled globally or for this session; otherwise the twin is
+  // the working route and stays. Before the subagent snapshot below.
+  pruneRedundantPrimaryTwins(registry, {
+    has: (name) => !!globalDisabledTools?.has(name) || sessionDisabledTools.has(name),
+  }, getGlobalDocSearch());
+
   // Subagent deps — built AFTER MCP tools so it captures the full tool list
   // for filtering. Disabled via CODER_DISABLE_SUBAGENTS=1. Also DISABLED for
   // company Master (it must use spawn_subordinate_agent instead — ephemeral
@@ -1089,7 +1096,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       : provider.reasoningCapabilities?.supportedLevels ?? undefined,
     canDelegate: opts.runtimePolicy?.subagents.enabled,
     maxParallel: Math.min(opts.runtimePolicy?.subagents.maxParallel ?? Infinity, savedUltraSettings?.value.maxParallel ?? (ultraExecutionEnabled ? 3 : 4)),
-    readOnly: effectiveAgentId === 'explore' || effectiveAgentId === 'plan',
+    // Read-only agents (AgentDefinition.readOnly) plus Plan, whose plan gate
+    // keeps it read-only until approval; neither may get writing children.
+    readOnly: agentDef?.readOnly === true || effectiveAgentId === 'plan',
   });
   let subagentDeps: SubagentDeps | null = null;
   if (shouldEnableEphemeralSubagents(
@@ -1248,8 +1257,10 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // execute_tasks — wave-based orchestrator (PR 3). Needs subagentDeps to
   // exist; only registers when the session has the subagent capability
-  // (i.e. NOT a Company master, NOT CODER_DISABLE_SUBAGENTS=1).
-  if (subagentDeps && registry.get('submit_tasks')) {
+  // (i.e. NOT a Company master, NOT CODER_DISABLE_SUBAGENTS=1), and only
+  // where a human can approve a task list: task_list({gate:'approve'}) is
+  // registered (Company subordinates use submit_tasks_to_master instead).
+  if (subagentDeps && registry.get('task_list')) {
     const { buildExecuteTasksTool } = await import('@mcp/code-agent/tools/execute-tasks.js');
     registry.register(buildExecuteTasksTool(subagentDeps));
   }
@@ -1465,6 +1476,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   const toolContext: ToolContext = {
     sessionNetwork,
+    // What this session read/wrote whole survives across its runs (overwrite rule).
+    fileKnowledge: sessionFileKnowledge(String(session.id)),
     agenticChat: budgetNetwork?.enabled === true && budgetRoot?.enabled === true,
     collaboration,
     ultraPolicy: ultraPreset,

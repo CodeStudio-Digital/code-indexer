@@ -83,7 +83,7 @@ describe('runner mode transition — auto plan → build after approval', () => 
       .join('');
     expect(text).toMatch(/<system-reminder>/);
     expect(text).toMatch(/Mode transition: Plan → Build/);
-    expect(text).toMatch(/plan was approved/);
+    expect(text).toMatch(/Implement the approved plan/);
   });
 
   it('does NOT transition when the active agent is "build" (approving a stray plan)', async () => {

@@ -104,6 +104,8 @@ export function buildCollectAgentsTool(_deps: SubagentDeps): CoderTool {
     source: 'native',
     mutates: false,
     riskLevel: 'read',
+    // Collects only background jobs started by these.
+    continues: ['spawn_agent', 'resume_agent'],
     parallelSafe: false,
     // Exempt from the dup-call cap AND the dispatch timeout — it enforces its
     // own deadline via `timeout_s`.

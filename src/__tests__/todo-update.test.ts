@@ -87,7 +87,7 @@ describe('todo_write — burst guard', () => {
     const fourth = await todoWrite.handler({ todos: list }, { ...ctx(), runner } as unknown as ToolContext);
     expect(fourth.isError).toBe(true);
     expect(fourth.content).toContain('Refused');
-    expect(fourth.content).toContain('update_todo');
+    expect(fourth.content).toContain('task_list({updates');
   });
 
   it('resets the counter when the list signature changes', async () => {
@@ -168,7 +168,7 @@ describe('update_todo', () => {
       { ...ctx(), runner } as unknown as ToolContext,
     );
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('todo_write first');
+    expect(r.content).toContain("task_list({gate:'track'");
   });
 
   it('requires at least one of {status, content, activeForm}', async () => {

@@ -3,6 +3,8 @@ import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import { evaluateVerificationReadinessAtFinish, maybeVerificationNudge } from '../executing-verification-gate.js';
+import { resolveToolInvocationMetadata } from '@mcp/code-agent/core/policy.js';
+import { writeStdin } from '@mcp/code-agent/tools/exec-command.js';
 import { makeTestContext } from './test-helpers.js';
 
 function registerTool(
@@ -36,7 +38,6 @@ function harness(changedFiles: string[] = ['src/a.ts']) {
   for (const name of ['exec_command', 'write_stdin']) {
     registerTool(registry, name, { mutates: true, riskLevel: 'execute', executionClass: 'execute' });
   }
-  registerTool(registry, 'poll_session', { mutates: false, riskLevel: 'read', executionClass: 'read' });
   const { ctx } = makeTestContext({
     registry,
     toolContext: {
@@ -163,10 +164,15 @@ describe('evaluateVerificationReadinessAtFinish', () => {
   function terminal(ledger: ToolCallLedger, name: string, state: string, exitCode: number | null,
     extras: { sessionId?: string; chars?: string; isError?: boolean; refusalKind?: string } = {}) {
     const sessionId = extras.sessionId ?? 'terminal-a';
-    ledger.record({ name,
-      args: name === 'exec_command' ? { cmd: 'pnpm test' } : { session_id: sessionId, chars: extras.chars ?? '' },
+    const args = name === 'exec_command' ? { cmd: 'pnpm test' } : { session_id: sessionId, chars: extras.chars ?? '' };
+    // Recorded as dispatch records it: write_stdin is classified by its input
+    // (an empty poll is a read, as the retired poll_session was).
+    const { executionClass, mutates } = name === 'write_stdin'
+      ? resolveToolInvocationMetadata(writeStdin, args)
+      : { executionClass: 'execute', mutates: true };
+    ledger.record({ name, args,
       content: `status=${state}`, isError: extras.isError ?? false, refusalKind: extras.refusalKind,
-      executionClass: 'execute', mutates: true,
+      executionClass, mutates,
       structuredData: { sessionId, state, exitCode },
     });
   }
@@ -176,7 +182,7 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     write(ledger);
     terminal(ledger, 'exec_command', 'running', null);
     expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
-    terminal(ledger, 'poll_session', 'exited', 0, { sessionId: 'unrelated' });
+    terminal(ledger, 'write_stdin', 'exited', 0, { sessionId: 'unrelated' }); // empty poll (formerly poll_session)
     expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
     terminal(ledger, 'write_stdin', 'exited', 0);
     expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
@@ -200,8 +206,23 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     const { ctx, ledger } = harness();
     terminal(ledger, 'exec_command', 'running', null);
     write(ledger);
-    terminal(ledger, 'poll_session', 'exited', 0);
+    terminal(ledger, 'write_stdin', 'exited', 0); // empty poll (formerly poll_session)
     expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+  });
+
+  it('does not count an empty write_stdin poll, recorded with its invocation metadata, as a later write', async () => {
+    const poll = (ledger: ToolCallLedger, meta: { mutates: boolean; executionClass: string }) => ledger.record({
+      name: 'write_stdin', args: { session_id: 'idle' }, content: 'status=running', isError: false, ...meta });
+    const before = harness();
+    write(before.ledger);
+    validate(before.ledger);
+    poll(before.ledger, { mutates: true, executionClass: 'execute' }); // the old static classification
+    expect((await evaluateVerificationReadinessAtFinish(before.ctx)).status).toBe('stale');
+    const after = harness();
+    write(after.ledger);
+    validate(after.ledger);
+    poll(after.ledger, resolveToolInvocationMetadata(writeStdin, { session_id: 'idle' }));
+    expect((await evaluateVerificationReadinessAtFinish(after.ctx)).status).toBe('fresh');
   });
 
   it('invalidates correlation when interactive stdin can change the command', async () => {

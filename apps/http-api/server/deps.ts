@@ -827,8 +827,8 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
   registerShutdownTask('semantic-vector-worker', () =>
     semanticVectorWorker ? semanticVectorWorker.dispose() : localVectorRouter.drainAndClose());
 
-  // The fs tools (read_file/edit_file/write_file/
-  // create_file/multi_edit) call `emitRecentFileTouched({ absolutePath, kind })`
+  // The fs tools (read_file/edit_file/write_file) call
+  // `emitRecentFileTouched({ absolutePath, kind })`
   // after a successful op. We resolve the abs path to (projectId, fileId)
   // by matching the longest project root prefix, then query the files
   // table. Sub-ms; failures are swallowed (touch is best-effort). Without

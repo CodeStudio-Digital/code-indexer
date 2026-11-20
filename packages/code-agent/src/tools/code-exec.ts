@@ -7,7 +7,7 @@
  *
  * Scope:
  *  - Read/search AND mutating/shell tools are exposed (write_file, edit_file,
- *    multi_edit, manage_path, run_command, exec_command, git_*); each nested
+ *    manage_path, run_command, exec_command, git_*); each nested
  *    call goes through the SAME plan-mode / task-scope policy as a direct call.
  *    Only interactive/orchestration tools are withheld (see `isSafeTool`).
  *  - Sandbox is `node:vm` (NOT a security boundary; the agent is trusted —
@@ -31,6 +31,7 @@ import type { CoderTool, GuardVerdict, ToolContext, ToolErrorInfo, ToolResult } 
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
+import { declaresPolling } from '@mcp/code-agent/core/tool-classification.js';
 import {
   evaluateToolInvocation,
   findScopeViolations,
@@ -39,6 +40,7 @@ import {
   isExplicitlyParallelSafeRead,
   type PolicyContext,
 } from '@mcp/code-agent/core/policy.js';
+import { isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
@@ -50,7 +52,7 @@ import { buildChangeSandboxApi } from '@mcp/code-agent/tools/code-exec-change.js
 import { completedReadResults } from './code-exec-partial-results.js';
 import { getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { paramSummary } from '@mcp/code-agent/tools/find-tools.js';
-import { suggestToolName } from '@mcp/code-agent/core/tool-name-suggest.js';
+import { REPLACED_TOOL_NAMES, suggestToolName, toolReplacement } from '@mcp/code-agent/core/tool-name-suggest.js';
 import { stableArgsKey } from '@mcp/code-agent/core/runner/dup-utils.js';
 import { normalizeGuardInput } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
 import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
@@ -117,7 +119,7 @@ const CODE_EXEC_DESC =
   'Example — required reads plus one optional symbol probe:\n' +
   '```\n' +
   'const [file, symbol] = await Promise.all([\n' +
-  '  mcp__read_file({file_path:"src/core.ts"}),\n' +
+  '  read_file({path:"src/core.ts"}),\n' +
   '  attempt(mcp__get_symbol_body({symbol_name:"maybeMissing", file_path:"src/core.ts"}))\n' +
   ']);\n' +
   'return {file, symbol};\n' +
@@ -484,6 +486,7 @@ export function buildCodeExecTool(
         strict: false,
         adminOverride: true,
         sandboxBound: !!ctx.ports?.fs || !!ctx.ports?.shell,
+        readOnly: isReadOnlyAgent(runner?.agentId),
       });
 
       // JS-time budget controller. The timeout bounds the script's OWN JS work,
@@ -626,6 +629,7 @@ export function buildCodeExecTool(
               stateEpoch: callEpoch,
               repeatPolicy: metadata.repeatPolicy,
               executionClass: metadata.executionClass,
+              failureStreakExempt: declaresPolling(t),
             });
             nestedOutcomes.push({
               name: t.name,
@@ -834,6 +838,7 @@ export function buildCodeExecTool(
             const observedGuardVerdict = observer?.beforeNestedCall(t.name, argObj, {
               repeatable,
               repeatPolicy: metadata.repeatPolicy,
+              failureStreakExempt: declaresPolling(t),
               executionClass: metadata.executionClass,
               stateEpoch: callEpoch,
               forceReread,
@@ -1022,6 +1027,9 @@ export function buildCodeExecTool(
                   ...(result.isError
                     ? { error: result.error ?? inferToolErrorInfo(t.name, result.content) }
                     : {}),
+                  // A handler-level block (e.g. the overwrite rule) is a refusal, not a failure.
+                  ...(result.guardVerdict?.action === 'block' && result.guardVerdict.refusalKind
+                    ? { refusalKind: result.guardVerdict.refusalKind } : {}),
                   guardVerdict: guardVerdict ?? undefined,
                 });
                 outcomeRecorded = true;
@@ -1160,6 +1168,18 @@ export function buildCodeExecTool(
         }
         blockedToolGlobals[name] = () => observeCodeExecPromise(
           Promise.reject(new ReferenceError(`${name} is not defined`)),
+        );
+      }
+      // Retired names (multi_edit, create_file, …) and unregistered primary
+      // twins (mcp__read_file when read_file serves) reject with the
+      // replacement instruction instead of a bare ReferenceError; they are not
+      // aliases. The evaluator also answers tool_schema(<name>) with it.
+      const retiredInstructions: Record<string, string> = {};
+      for (const name of REPLACED_TOOL_NAMES) {
+        if (exposedNameSet.has(name) || allToolsByName.has(name) || RESERVED_GLOBALS.has(name)) continue;
+        retiredInstructions[name] = toolReplacement(name)!.text;
+        blockedToolGlobals[name] = () => observeCodeExecPromise(
+          Promise.reject(new Error(`${name}: ${retiredInstructions[name]}`)),
         );
       }
 
@@ -1449,7 +1469,7 @@ export function buildCodeExecTool(
           evaluator = superviseCodeExec({
             code: wrapped, timeoutMs: timeout, maxOutputBytes: effectiveMaxOutput,
             priorityErrorBytes: MAX_PRIORITY_ERROR_LOG_BYTES,
-            tools: exposedNames, blocked: Object.keys(blockedToolGlobals),
+            tools: exposedNames, blocked: Object.keys(blockedToolGlobals), retired: retiredInstructions,
             schemas: allNames.map(toolSchema), listing: listTools(),
             changes: Object.keys(sandbox.change ?? {}),
             stash: (stashApi.keys as () => string[])().map(key => [key, (stashApi.get as (k: string) => unknown)(key)]),

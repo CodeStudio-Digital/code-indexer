@@ -178,7 +178,7 @@ describe('task list tools', () => {
     const persisted = stateRef.state;
     const blocked = await submitTasks.handler(proposal, ctx);
     expect(blocked.isError).toBe(true);
-    expect(blocked.content).toContain('submit_tasks called 4 times');
+    expect(blocked.content).toContain("task_list({gate:'approve'}) called 4 times");
     expect(posted).toBe(3);
     expect(stateRef.state).toBe(persisted);
 

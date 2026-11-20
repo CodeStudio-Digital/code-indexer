@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { submitPlan } from '@mcp/code-agent/tools/plan.js';
-import { tasksTools } from '@mcp/code-agent/tools/tasks.js';
+import { submitTasks } from '@mcp/code-agent/tools/tasks.js';
 import { askUser, formatInterruptedResult } from '@mcp/code-agent/tools/interaction.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
-const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks')!;
 const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000007';
 const OTHER_AGENT_RUN_ID = '00000000-0000-4000-8000-000000000001';
 

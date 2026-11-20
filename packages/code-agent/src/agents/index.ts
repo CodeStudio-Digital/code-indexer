@@ -66,6 +66,13 @@ export interface AgentDefinition {
    * mode the user explicitly enters for irreversible work.
    */
   confirmBeforeIrreversible?: boolean;
+  /**
+   * Read-only session. Tools that mutate the workspace, run a process or
+   * delegate work to another agent leave the session authority: they are not
+   * projected, not authorized, and refused at dispatch (top level and inside
+   * code_exec). Only `explore` sets it; `plan` is contained by its plan gate.
+   */
+  readOnly?: boolean;
 }
 
 export const AGENTS: Record<AgentId, AgentDefinition> = {
@@ -76,6 +83,7 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Read-only investigation with the compact core catalog. Context-specific capabilities are injected only when this agent runs inside that surface.',
     profile: 'bootstrap',
     planMode: false,
+    readOnly: true,
     defaultTemperature: 0.2,
   },
   plan: {
@@ -173,6 +181,11 @@ export function isAgentId(v: string): v is AgentId {
 
 export function getAgent(id: AgentId): AgentDefinition {
   return AGENTS[id];
+}
+
+/** Whether the active agent runs a read-only session (see `AgentDefinition.readOnly`). */
+export function isReadOnlyAgent(id: string | null | undefined): boolean {
+  return !!id && isAgentId(id) && AGENTS[id].readOnly === true;
 }
 
 /** Return a short one-line summary of all agents — used by `--help` and the dashboard picker. */

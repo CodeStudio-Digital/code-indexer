@@ -4,9 +4,10 @@
  * A registered tool can be absent from the model's visible list (tier-hidden
  * or cap-cut) yet called by name — find_tools tells the model to do exactly
  * that. Contract:
- *   - hidden + registered → executes, result gains the deterministic
- *     `[toolset]` suffix, `onToolPinned` fires (once per batch — the live
- *     pin set makes the second call non-hidden)
+ *   - hidden + registered → executes, `onToolPinned` fires (once per batch —
+ *     the live pin set makes the second call non-hidden). The result text
+ *     never claims a pin or a future catalog change: the stable catalog
+ *     does not change mid-run.
  *   - admin/session-disabled → hard refusal (`gate`), handler NEVER runs,
  *     never pinned (closes the historical disabled-tools-execute hole)
  *   - visible tool → untouched
@@ -46,29 +47,32 @@ function pinArgs(registry: ToolRegistry, overrides?: Partial<DispatchArgs>): Dis
 }
 
 describe('dispatchTools — hidden-call pin', () => {
-  it('hidden registered tool executes, gains the [toolset] suffix, and pins', async () => {
+  it('hidden registered tool executes and pins without claiming a catalog change', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('hidden_tool'));
     const args = pinArgs(registry);
     const r = await dispatchTools(args);
     expect(r.results[0].isError).toBe(false);
-    expect(r.results[0].content).toContain('ok');
-    expect(r.results[0].content).toContain("[toolset] 'hidden_tool'");
+    expect(r.results[0].content).toBe('ok');
+    expect(r.results[0].content).not.toContain('[toolset');
+    expect(r.results[0].content).not.toContain('pinned');
     expect(args._pins.has('hidden_tool')).toBe(true);
   });
 
-  it('second call in the same batch gets no duplicate suffix (live pin set)', async () => {
+  it('second call in the same batch is not re-pinned (live pin set)', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('hidden_tool'));
+    const promoted: string[] = [];
     const args = pinArgs(registry, {
       toolUses: [
         { id: 't1', name: 'hidden_tool', input: { a: 1 } },
         { id: 't2', name: 'hidden_tool', input: { a: 2 } },
       ],
+      onToolPinned: (name) => promoted.push(name),
     });
     const r = await dispatchTools(args);
-    expect(r.results[0].content).toContain('[toolset]');
-    expect(r.results[1].content).not.toContain('[toolset]');
+    expect(r.results.map((result) => result.content)).toEqual(['ok', 'ok']);
+    expect(promoted).toEqual(['hidden_tool']);
   });
 
   it('re-promotes a historical pin that is no longer visible after LRU eviction', async () => {
@@ -81,18 +85,18 @@ describe('dispatchTools — hidden-call pin', () => {
       onToolPinned: (name) => promoted.push(name),
     });
     const result = await dispatchTools(args);
-    expect(result.results[0].content).toContain('[toolset]');
+    expect(result.results[0].content).toBe('ok');
     expect(promoted).toEqual(['hidden_tool']);
   });
 
-  it('never lets the pin suffix exceed the finalizer inline cap', async () => {
+  it('leaves the finalized content of a hidden call unchanged', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('hidden_tool', { handler: async () => ({ content: 'x'.repeat(100) }) }));
     const args = pinArgs(registry, {
-      finalizeToolResult: () => ({ content: 'x'.repeat(20), inlineCap: 20 }),
+      finalizeToolResult: () => ({ content: 'x'.repeat(20), inlineCap: 60 }),
     });
     const r = await dispatchTools(args);
-    expect(r.results[0].content).toHaveLength(20);
+    expect(r.results[0].content).toBe('x'.repeat(20));
     expect(args._pins.has('hidden_tool')).toBe(true);
   });
 
@@ -122,7 +126,7 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(args._pins.size).toBe(0);
   });
 
-  it('pins even when the tool errors (intent is clear; stops repeat suffixes)', async () => {
+  it('pins even when the tool errors (intent is clear)', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('hidden_tool', {
       handler: async () => ({ content: 'boom', isError: true }),
@@ -130,7 +134,7 @@ describe('dispatchTools — hidden-call pin', () => {
     const args = pinArgs(registry);
     const r = await dispatchTools(args);
     expect(r.results[0].isError).toBe(true);
-    expect(r.results[0].content).toContain('[toolset]');
+    expect(r.results[0].content).toBe('boom');
     expect(args._pins.has('hidden_tool')).toBe(true);
   });
 

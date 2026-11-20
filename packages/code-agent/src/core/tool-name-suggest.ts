@@ -17,6 +17,65 @@
  * deterministic (markers/refusals must stay prefix-cache stable).
  */
 
+/**
+ * Retired tool names and what replaces each. A call to one of these fails
+ * with the instruction below; it is never silently rerouted, because the
+ * replacement takes different arguments. Consulted only when the name is not
+ * registered (top-level dispatch, code_exec's `tools.<name>` and bare globals).
+ */
+export const RETIRED_TOOL_REPLACEMENTS: Readonly<Record<string, string>> = {
+  multi_edit: 'Use edit_file with `edits: [{ old_string, new_string, replace_all? }]` — all edits to one file apply atomically.',
+  create_file: 'Use write_file — it creates a new file, and refuses to replace an existing one this session has not read.',
+  todo_write: 'Use task_list with `items` (the full checklist).',
+  update_todo: 'Use task_list with `updates` ({ id, status }) to flip checklist items.',
+  submit_tasks: "Use task_list with `items` and gate:'approve' (Plan mode only).",
+  poll_session: 'Use write_stdin with the session_id and empty (or omitted) `chars` — an empty write is the poll.',
+};
+
+/** The error text for a retired tool name, or null when the name was never retired. */
+export function retiredToolInstruction(name: string): string | null {
+  const replacement = Object.hasOwn(RETIRED_TOOL_REPLACEMENTS, name) ? RETIRED_TOOL_REPLACEMENTS[name] : undefined;
+  return replacement ? `${name} was retired. ${replacement}` : null;
+}
+
+/**
+ * Primary-bridge MCP twins of native tools. The twin is registered only when
+ * its native tool is unavailable (internal-mcp-exposure.ts); a habitual or
+ * historical call to an unregistered twin names the native tool instead.
+ */
+export const NATIVE_TWIN_OF: Readonly<Record<string, string>> = {
+  mcp__read_file: 'read_file',
+  mcp__list_directory: 'list_directory',
+  mcp__rag_search_docs: 'rag_search_docs',
+  mcp__rag_read_doc: 'rag_read_doc',
+  mcp__rag_doc_outline: 'rag_doc_outline',
+};
+
+const NATIVE_TWIN_USAGE: Readonly<Record<string, string>> = {
+  read_file: ' (`path`; `start_line`/`end_line` or `symbol` for part of a file)',
+  list_directory: ' (`path`)',
+};
+
+/**
+ * What to tell the model about an unregistered name that has a known
+ * replacement: a retired tool, or a primary twin whose native tool serves.
+ * Never an alias — the call fails with this text.
+ */
+export function toolReplacement(name: string): { code: 'RETIRED_TOOL' | 'USE_NATIVE_TOOL'; text: string } | null {
+  const retired = retiredToolInstruction(name);
+  if (retired) return { code: 'RETIRED_TOOL', text: retired };
+  const native = Object.hasOwn(NATIVE_TWIN_OF, name) ? NATIVE_TWIN_OF[name] : undefined;
+  return native
+    ? { code: 'USE_NATIVE_TOOL', text: `${name} is not available in this session. Use ${native}${NATIVE_TWIN_USAGE[native] ?? ''}.` }
+    : null;
+}
+
+/** Every name `toolReplacement` answers for. */
+export const REPLACED_TOOL_NAMES: readonly string[] = [
+  ...Object.keys(RETIRED_TOOL_REPLACEMENTS),
+  ...Object.keys(NATIVE_TWIN_OF),
+];
+
 /** Last `__`-separated segment, lowercased — the namespace-blind "bare" name. */
 function bareName(name: string): string {
   const segments = name.toLowerCase().split('__');

@@ -42,7 +42,11 @@ import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
 import { buildTools, buildToolsCacheKey, fingerprintToolsJson, type BuildToolsResult } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
-import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import {
+  isReadOnlySessionTool,
+  readOnlySessionRefusalDetail,
+} from '@mcp/code-agent/core/policy.js';
+import { isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
 import { approvedPlanForRevision } from '@mcp/code-agent/tools/plan.js';
 import { resolveProviderCapabilityProjection } from '@mcp/code-agent/core/capability-catalog.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
@@ -80,7 +84,7 @@ import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage, type DispatchedToolResult } from './executing-dispatch.js';
 import { drainBackgroundNotices } from '../../background-notices.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
-import { evaluatePerTurnLoops } from './executing-loop-guards.js';
+import { evaluatePerTurnLoops, invocationIsPollable } from './executing-loop-guards.js';
 import { applyVisionFallback } from '../vision-fallback.js';
 import { getGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
 import {
@@ -557,6 +561,8 @@ export class ExecutingNode implements BehaviorNode {
     const requiredPinnedToolsForBuild = ctx.opts.requiredPinnedTools
       ? new Set(ctx.opts.requiredPinnedTools)
       : undefined;
+    // Same source as buildTools; a live agent switch re-derives the authority.
+    const readOnlySession = isReadOnlyAgent(ctx.opts.toolContext.runner?.agentId);
     const toolsMemoKey =
       buildToolsCacheKey({
         activeTiers: ctx.activeTiers,
@@ -565,6 +571,7 @@ export class ExecutingNode implements BehaviorNode {
       `|cap=${ctx.opts.sessionToolCap ?? ''}` +
       `|terse=${String(ctx.terseDescriptionsLock)}` +
       `|mode=${Boolean(ctx.opts.toolContext.runner?.planMode)}:${Boolean(ctx.opts.toolContext.runner?.specMode)}` +
+      `|readOnly=${readOnlySession}` +
       `|planRevision=${!!approvedPlanForRevision(ctx.opts.toolContext)}` +
       `|hardLimit=${ctx.opts.provider.toolLimits?.maxCount ?? ''}` +
       `|model=${ctx.opts.provider.model ?? ''}` +
@@ -1278,7 +1285,7 @@ export class ExecutingNode implements BehaviorNode {
 
     if (result.toolUses.length === 0) {
       // Mandatory-plan gate: in plan mode the deliverable IS a plan. If the
-      // model tries to end with bare text (no submit_plan/submit_tasks, no
+      // model tries to end with bare text (no submit_plan/task_list, no
       // approval), inject a ONE-SHOT reminder as the next user message and
       // re-enter the turn instead of finishing. Bounded at one nudge so a
       // genuinely conversational reply still terminates. See executing-plan-gate.
@@ -1409,6 +1416,12 @@ export class ExecutingNode implements BehaviorNode {
       },
       isToolBlocked: (name) => {
         if (!authorizedToolNames.has(name)) {
+          // This gate runs before the policy gate (top level and code_exec
+          // preflight), so it must name the read-only reason itself.
+          const registered = readOnlySession ? ctx.opts.registry.get(name) : undefined;
+          if (registered && !isReadOnlySessionTool(registered)) {
+            return `[read-only: ${readOnlySessionRefusalDetail(name)}]`;
+          }
           return `[tool-disabled] '${name}' is outside the authorized attempt catalog.`;
         }
         if (ctx.opts.globalDisabledTools?.has(name)) {
@@ -1584,14 +1597,7 @@ export class ExecutingNode implements BehaviorNode {
       const perTurnLoop = evaluatePerTurnLoops({
         toolUses: result.toolUses,
         hadText,
-        repeatableNames: new Set(
-          ctx.opts.registry.list()
-            .filter((t) => {
-              const repeatPolicy = resolveToolMetadata(t).repeatPolicy;
-              return repeatPolicy === 'pollable';
-            })
-            .map((t) => t.name),
-        ),
+        isRepeatable: (toolUse) => invocationIsPollable(ctx.opts.registry, toolUse),
         dominance: ctx.dominance,
       });
       if (perTurnLoop) {

@@ -39,7 +39,6 @@ import { httpTools } from '@mcp/code-agent/tools/http.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
-import { todoTools } from '@mcp/code-agent/tools/todo.js';
 import { viewImageTools } from '@mcp/code-agent/tools/view-image.js';
 import { previewTools } from '@mcp/code-agent/tools/preview/index.js';
 import { listAgentsTools } from '@mcp/code-agent/tools/list-agents.js';
@@ -66,7 +65,7 @@ const CODE_AGENT_TOOLS: NamedTool[] = [
   ...fsTools, applyPatchTool, ...shellTools, ...gitTools, ...planTools, ...specTools,
   ...tasksTools, ...interactionTools, ...toolOutputTools, ...diagnosticsTools, ...lspTools,
   ...execCommandTools, ...webTools, ...httpTools, ...globTools, ...ragSearchDocsTools,
-  ...ragReadDocTools, ...todoTools, ...viewImageTools, ...previewTools,
+  ...ragReadDocTools, ...viewImageTools, ...previewTools,
   ...listAgentsTools, ...waitAgentsTools, ...sendMessageTools, ...sendInputTools,
   ...followupTaskTools, ...worktreeTools, ...apiClientTools,
   ...sandboxTools, ...companyDocsTools, ...envTools,

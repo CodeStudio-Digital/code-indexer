@@ -22,7 +22,12 @@ async function localCompiler(root: string, fs: IFilesystemPort, signal?: AbortSi
 
 const missingExecutable = (message: string) => /\bENOENT\b/.test(message);
 
-function render(result: ShellExecResult, label: string): ToolResult {
+/**
+ * `command` is the checker invocation without paths (e.g. `php -l`). The
+ * ledger labels it with the same extractor it applies to shell commands, so a
+ * diagnostics run is the same validation evidence as that shell check.
+ */
+function render(result: ShellExecResult, label: string, command: string): ToolResult {
   const body = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
   const content = result.timedOut ? `${label} timed out.\n${body}`
     : result.exitCode === null ? `${label} did not finish successfully.\n${body}`
@@ -30,6 +35,7 @@ function render(result: ShellExecResult, label: string): ToolResult {
     : body || `OK: ${label} passed.`;
   const truncated = [result.stdoutTruncation, result.stderrTruncation].filter(item => item != null);
   return { content, isError: result.timedOut || result.exitCode !== 0,
+    structuredData: { kind: 'diagnostics_result', command, exitCode: result.exitCode },
     ...(truncated.length ? { sourceTruncations: [{ technique: 'diagnostics-stream-bound', unit: 'bytes' as const,
       inputSize: truncated.reduce((sum, t) => sum + t.inputBytes, 0), outputSize: truncated.reduce((sum, t) => sum + t.outputBytes, 0),
       recoverable: false }] } : {}) };
@@ -68,19 +74,19 @@ export const getDiagnostics: CoderTool = {
       if (lang === 'ts') {
         const compiler = await localCompiler(resolved.rootPath, fs, ctx.signal);
         if (!compiler) return err('No project TypeScript compiler found. Install the project dependencies before requesting diagnostics.');
-        return render(await run('node', [compiler, '--noEmit', '--pretty', 'false'], 60_000), 'TypeScript project check');
+        return render(await run('node', [compiler, '--noEmit', '--pretty', 'false'], 60_000), 'TypeScript project check', 'tsc --noEmit --pretty false');
       }
       if (lang === 'py') {
         let result: ShellExecResult | undefined;
         try { result = await run('ruff', ['check', '--no-cache', '--', resolved.abs], 30_000); }
         catch (cause) { if (!missingExecutable(String(cause))) throw cause; }
-        if (result && !(result.exitCode === null && missingExecutable(result.stderr))) return render(result, 'ruff check');
+        if (result && !(result.exitCode === null && missingExecutable(result.stderr))) return render(result, 'ruff check', 'ruff check --no-cache');
         ctx.signal?.throwIfAborted();
-        return render(await run('python', ['-I', '-B', '-c', PYTHON_SYNTAX_CHECK, resolved.abs], 30_000), 'Python syntax check');
+        return render(await run('python', ['-I', '-B', '-c', PYTHON_SYNTAX_CHECK, resolved.abs], 30_000), 'Python syntax check', 'python -I -B -c');
       }
-      if (lang === 'go') return render(await run('go', ['vet', './...'], 60_000), 'go vet');
-      if (lang === 'rs') return render(await run('cargo', ['check', '--message-format=short'], 180_000), 'cargo check');
-      return render(await run('php', ['-l', resolved.abs], 30_000), 'php -l');
+      if (lang === 'go') return render(await run('go', ['vet', './...'], 60_000), 'go vet', 'go vet ./...');
+      if (lang === 'rs') return render(await run('cargo', ['check', '--message-format=short'], 180_000), 'cargo check', 'cargo check --message-format=short');
+      return render(await run('php', ['-l', resolved.abs], 30_000), 'php -l', 'php -l');
     } catch (cause) { return err(`Diagnostics failed: ${cause instanceof Error ? cause.message : String(cause)}`); }
   },
 };

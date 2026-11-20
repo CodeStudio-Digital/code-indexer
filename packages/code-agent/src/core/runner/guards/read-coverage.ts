@@ -200,6 +200,28 @@ export function buildCoveragePointer(args: {
   return (
     `[already-read] \`${args.path}\` lines ${args.start}-${args.end} are already in your context ` +
     `(served as: ${segTxt}) and the file has not changed since. Quote what you have instead of ` +
-    `re-reading. Pass \`force_reread: true\` only if you believe your copy is stale.`
+    `re-reading. Pass \`${freshReadParam(args.toolName)}: true\` only if you believe your copy is stale.`
   );
+}
+
+/**
+ * The argument that asks for fresh content past the already-read pointer and
+ * the diff-after-edit reread. The native read_file keeps its slim schema (no
+ * force_reread); its `force` ("the full, current content") carries that
+ * intent. The MCP reads declare `force_reread`.
+ */
+export function freshReadParam(toolName: string): 'force' | 'force_reread' {
+  return toolName === 'read_file' ? 'force' : 'force_reread';
+}
+
+/** This read carries its tool's fresh-read argument (or the historical force_reread). */
+export function requestsFreshRead(toolName: string, input: unknown): boolean {
+  const inp = input as Record<string, unknown> | null | undefined;
+  return inp?.force_reread === true || inp?.[freshReadParam(toolName)] === true;
+}
+
+/** Header of a reread served as a diff because the file changed since the prior read. */
+export function rereadAfterEditHeader(toolName: string, path: string, priorTurn: number): string {
+  return `[reread-after-edit] \`${path}\` was mutated since your prior read at turn ${priorTurn}. ` +
+    `Returning unified diff against that read (pass \`${freshReadParam(toolName)}: true\` to bypass diff and get full content).`;
 }

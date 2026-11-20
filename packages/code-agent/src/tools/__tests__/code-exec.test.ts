@@ -1159,12 +1159,12 @@ describe('code_exec metadata safety and scheduling', () => {
 
   it('withholds policy-interactive tools even when the raw tool flag is absent', () => {
     const registry = new ToolRegistry();
-    for (const name of ['ask_user', 'decision_gate', 'submit_plan', 'submit_tasks', 'task_list']) {
+    for (const name of ['ask_user', 'decision_gate', 'submit_plan', 'task_list']) {
       registry.register(noopTool(name));
     }
     registry.register(noopTool('read_file'));
     expect(_exposedToolNames(registry)).toContain('read_file');
-    for (const name of ['ask_user', 'decision_gate', 'submit_plan', 'submit_tasks', 'task_list']) {
+    for (const name of ['ask_user', 'decision_gate', 'submit_plan', 'task_list']) {
       expect(_exposedToolNames(registry)).not.toContain(name);
     }
   });
@@ -1355,8 +1355,8 @@ describe('code_exec metadata safety and scheduling', () => {
   });
 });
 
-describe('code_exec nested-failure try/catch hint (telemetry: create_file killed the script)', () => {
-  /** A tool that always reports isError, like create_file on an existing path. */
+describe('code_exec nested-failure try/catch hint (telemetry: a refused file write killed the script)', () => {
+  /** A tool that always reports isError, like write_file refusing an unread existing path. */
   function errTool(name: string, message: string): CoderTool {
     return {
       name,
@@ -1370,23 +1370,23 @@ describe('code_exec nested-failure try/catch hint (telemetry: create_file killed
 
   it('appends the try/catch hint when a nested tool failure aborts the script', async () => {
     const registry = new ToolRegistry();
-    registry.register(errTool('create_file', 'File a.md already exists. Use write_file or edit_file.'));
+    registry.register(errTool('write_file', 'write_file refused: a.md already exists. Nothing was written.'));
     const codeExec = buildCodeExecTool(registry);
 
     const res = await codeExec.handler(
-      { code: `await tools.create_file({}); return 'unreachable';` },
+      { code: `await tools.write_file({}); return 'unreachable';` },
       makeCtx(),
     );
 
     expect(res.isError).toBe(true);
-    expect(res.content).toContain('tool create_file: File a.md already exists');
+    expect(res.content).toContain('tool write_file: write_file refused: a.md already exists');
     expect(res.content).toContain('aborted the WHOLE script');
     expect(res.content).toContain('attempt(...)');
   });
 
   it('a script that already uses try/catch survives and finishes', async () => {
     const registry = new ToolRegistry();
-    registry.register(errTool('create_file', 'File a.md already exists.'));
+    registry.register(errTool('write_file', 'write_file refused: a.md already exists.'));
     registry.register(noopTool('read_file'));
     const codeExec = buildCodeExecTool(registry);
 
@@ -1394,7 +1394,7 @@ describe('code_exec nested-failure try/catch hint (telemetry: create_file killed
       {
         code: `
           let existed = false;
-          try { await tools.create_file({}); } catch (e) { existed = String(e).includes('already exists'); }
+          try { await tools.write_file({}); } catch (e) { existed = String(e).includes('already exists'); }
           const r = await tools.read_file({});
           return JSON.stringify({ existed, r });
         `,

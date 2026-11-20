@@ -21,8 +21,8 @@ const OVERLAPPING_CODE_READ_TOOLS = new Set([
   'mcp__get_file_skeleton',
 ]);
 const CODE_READ_TOOL_PREFERENCE = [
-  'mcp__read_file',
   'read_file',
+  'mcp__read_file',
   'mcp__get_symbol_body',
   'mcp__get_file_skeleton',
 ] as const;

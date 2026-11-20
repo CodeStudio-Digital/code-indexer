@@ -163,10 +163,16 @@ export interface CoderTool {
   scopeAware?: boolean;
   /**
    * Tool pauses the runner waiting for human input (`submit_plan`,
-   * `ask_user`, `submit_tasks`, …). Interactive tools are never run in
+   * `ask_user`, `task_list`, …). Interactive tools are never run in
    * parallel, even if `parallelSafe` is otherwise `true`.
    */
   interactive?: boolean;
+  /**
+   * Continuation control: names of the tools that open the work this one
+   * finishes (`task_complete` closes the scope `execute_tasks` opens). A
+   * read-only session does not authorize it when none of them is authorized.
+   */
+  continues?: readonly string[];
   /**
    * Tool legitimately produces different results when called repeatedly
    * with identical args because it polls / awaits external state changes.
@@ -189,6 +195,14 @@ export interface CoderTool {
    * timeout remains active; only `pollable` opts into unbounded waiting.
    */
   repeatPolicy?: ToolRepeatPolicy;
+  /**
+   * Input-sensitive repetition semantics — the `repeatPolicy` counterpart of
+   * `riskOf` (write_stdin: an empty poll is pollable, a write is mutating).
+   * Consulted by `resolveToolInvocationMetadata`; must be pure. A throw or an
+   * unknown value keeps the static policy. Only a statically declared
+   * pollable policy exempts failures from the failure-streak guard.
+   */
+  repeatPolicyOf?(input: unknown): ToolRepeatPolicy;
   /**
    * Promote the cross-turn unchanged-result detector from telemetry-only to
    * an active loop break for this tool. Use sparingly for control-plane
@@ -262,6 +276,8 @@ export interface NestedToolCallRecord {
   stateEpoch?: number;
   repeatPolicy?: ToolRepeatPolicy;
   executionClass?: ToolExecutionClass;
+  /** The tool itself declares polling (`declaresPolling`); failures then do not build a streak. */
+  failureStreakExempt?: boolean;
 }
 
 /** Resolve the durable identity for one nested audit row. */
@@ -292,6 +308,8 @@ export interface NestedToolObserver {
       executionClass?: ToolExecutionClass;
       stateEpoch?: number;
       forceReread?: boolean;
+      /** See `NestedToolCallRecord.failureStreakExempt`; defaults to repeatPolicy === pollable. */
+      failureStreakExempt?: boolean;
       /** Parent-scoped physical attempt id supplied by code_exec. */
       originToolUseId?: string;
     },

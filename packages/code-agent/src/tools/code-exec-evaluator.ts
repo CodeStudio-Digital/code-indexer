@@ -66,6 +66,8 @@ async function evaluate(b) {
   const toolSchema = name => {
     const found=schemas.get(String(name));
     if (!found) {
+      const retired=b.retired?.[String(name)];
+      if (retired) throw new Error('tool_schema: '+retired);
       const close=[...schemas.keys()].find(key=>key.startsWith(String(name)) || String(name).startsWith(key));
       throw new Error('tool_schema: unknown tool "'+name+'"'+(close?' — did you mean "'+close+'"?':'')+'. Use list_tools({query,limit,cursor}) or find_tools.');
     }
@@ -103,7 +105,8 @@ async function evaluate(b) {
   const reserved = new Set(['tools','list_tools','tool_schema','attempt','stash','change','log','console','invoke','JSON','Math','String','Number','Boolean','Array','Object','Promise','Set','Map','Date','RegExp','Error']);
   for (const name of b.tools) if (!reserved.has(name) && /^[A-Za-z_$][\w$]*$/.test(name)) bare[name]=toolFns[name];
   for (const name of b.blocked ?? []) if (!reserved.has(name)) bare[name]=() => {
-    const p=Promise.reject(new ReferenceError(name+' is not defined'));p.catch(()=>{});return p;
+    const retired=b.retired?.[name];
+    const p=Promise.reject(retired ? new Error(name+': '+retired) : new ReferenceError(name+' is not defined'));p.catch(()=>{});return p;
   };
   const sandbox={...bare,tools,list_tools:listTools,tool_schema:toolSchema,attempt,stash:localStash,
     log:(...parts)=>log('log',parts),console:{log:(...p)=>log('log',p),warn:(...p)=>log('warn',p),error:(...p)=>log('error',p)},

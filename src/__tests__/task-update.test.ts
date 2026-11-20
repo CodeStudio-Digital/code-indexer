@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { tasksTools, _resetSubmitBurstForKey } from '@mcp/code-agent/tools/tasks.js';
+import { tasksTools, submitTasks, _resetSubmitBurstForKey } from '@mcp/code-agent/tools/tasks.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/session-storage/session-state-types.js';
 
 const updateTask = tasksTools.find((t) => t.name === 'update_task') as CoderTool;
-const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks') as CoderTool;
+// The retired submit_tasks tool's logic lives on as task_list's internal approve handler.
 
 function task(partial: Partial<CoderTask> & { id: string; title: string }): CoderTask {
   return {

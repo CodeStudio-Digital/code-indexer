@@ -17,6 +17,7 @@ import { managePathTool } from '@mcp/code-agent/tools/manage-path.js';
 import { describeClosestRegion } from './apply-patch-match.js';
 import { recoverOmittedTypeProperty } from './edit-typescript-property.js';
 import { missingFileHint } from './missing-file-hint.js';
+import { overwriteRefusal, overwriteVerdict } from './file-knowledge.js';
 
 /**
  * Resolve the filesystem port for a tool invocation. Falls back to the
@@ -28,9 +29,7 @@ function fsPort(ctx: ToolContext): IFilesystemPort {
 }
 import {
   WRITE_FILE_DESC,
-  CREATE_FILE_DESC,
   EDIT_FILE_DESC,
-  MULTI_EDIT_DESC,
   READ_FILE_NATIVE_DESC,
   LIST_DIRECTORY_NATIVE_DESC,
   maybeTerse,
@@ -133,6 +132,15 @@ function overlayFor(ctx: ToolContext, projectId: number | undefined): ToolContex
   return ctx.overlay;
 }
 
+async function pathExists(fs: IFilesystemPort, abs: string): Promise<boolean> {
+  try {
+    await fs.access(abs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function markOverlay(ctx: ToolContext, projectId: number | undefined, path: string, external: boolean): void {
   if (!external) overlayFor(ctx, projectId)?.mark(path);
 }
@@ -168,49 +176,31 @@ const writeFile: CoderTool = {
     const { resolved } = target;
     const abs = resolved.abs;
     const fs = fsPort(ctx);
+    ctx.signal?.throwIfAborted();
+    const verdict = await overwriteVerdict(ctx, fs, abs);
+    if (!verdict.allow) return overwriteRefusal('write_file', path, verdict.reason);
     await fs.mkdir(pathFor(resolved.rootPath).dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content);
+    ctx.signal?.throwIfAborted();
+    if (verdict.creating && fs.createFile) {
+      // A new path is created exclusively. If another writer created it after
+      // the check, refuse exactly like an unknown existing file: nothing is
+      // replaced. (The sandbox adapter reports this without an EEXIST code.)
+      try {
+        await fs.createFile(abs, content);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST' || await pathExists(fs, abs)) {
+          return overwriteRefusal('write_file', path, 'unknown');
+        }
+        throw error;
+      }
+    } else {
+      await fs.writeFile(abs, content);
+    }
+    ctx.fileKnowledge?.recordContent(abs, content);
     markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
     emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     const lines = content.split('\n').length;
-    return ok(`Wrote ${path} (${lines} lines, ${content.length} bytes)`);
-  },
-};
-
-const createFile: CoderTool = {
-  name: 'create_file',
-  effectBoundary: 'filesystem',
-  description: maybeTerse(CREATE_FILE_DESC),
-  source: 'native',
-  parameters: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths require an authorized writable external root.' },
-      content: { type: 'string', description: 'Initial content' },
-    },
-    required: ['path', 'content'],
-    additionalProperties: false,
-  },
-  handler: async (args, ctx): Promise<ToolResult> => {
-    const path = String(args.path ?? '');
-    const content = String(args.content ?? '');
-    const target = resolveFsTarget(args, ctx, path, 'write');
-    if ('error' in target) return target.error;
-    const { resolved } = target;
-    const abs = resolved.abs;
-    const fs = fsPort(ctx);
-    ctx.signal?.throwIfAborted();
-    if (!fs.createFile) return err('Filesystem adapter does not support exclusive file creation.');
-    await fs.mkdir(pathFor(resolved.rootPath).dirname(abs), { recursive: true });
-    ctx.signal?.throwIfAborted();
-    try { await fs.createFile(abs, content); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return err(`File ${path} already exists. Use write_file or edit_file to modify it.`);
-      throw error;
-    }
-    markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
-    emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
-    return ok(`Created ${path} (${Buffer.byteLength(content, 'utf8')} bytes)`);
+    return ok(`Wrote ${path} (${lines} lines, ${Buffer.byteLength(content, 'utf8')} bytes)`);
   },
 };
 
@@ -320,16 +310,44 @@ const editFile: CoderTool = {
       old_string: { type: 'string', description: 'Text to find. Should match file content closely — minor whitespace differences are tolerated automatically.' },
       new_string: { type: 'string', description: 'Replacement text' },
       replace_all: { type: 'boolean', description: 'Replace all occurrences (default false)' },
+      edits: {
+        type: 'array',
+        description: 'Several changes in this file instead of old_string/new_string: applied in order, all or nothing. Pass one form only.',
+        items: {
+          type: 'object',
+          properties: {
+            old_string: { type: 'string' },
+            new_string: { type: 'string' },
+            replace_all: { type: 'boolean', description: 'Default false. When true, every match of old_string is replaced.' },
+          },
+          required: ['old_string', 'new_string'],
+        },
+      },
     },
-    required: ['path', 'old_string', 'new_string'],
+    required: ['path'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
+    if (args.edits !== undefined) {
+      if (args.old_string !== undefined || args.new_string !== undefined || args.replace_all !== undefined) {
+        return err('edit_file: pass either old_string/new_string (one change) or edits (several changes), not both.');
+      }
+      const batchPath = String(args.path ?? '');
+      if (!batchPath) return err('path is required and cannot be empty');
+      if (!Array.isArray(args.edits) || args.edits.length === 0) {
+        return err('edit_file: edits must be a non-empty array of {old_string, new_string, replace_all?}.');
+      }
+      if (args.edits.length > 50) return err(`edits array has ${args.edits.length} items, max 50 per call. Split into multiple calls.`);
+      return applyEditBatch(args, ctx, batchPath, args.edits);
+    }
     const path = String(args.path ?? '');
     const oldStr = String(args.old_string ?? '');
     const newStr = String(args.new_string ?? '');
     const replaceAll = Boolean(args.replace_all);
     if (!path) return err('path is required and cannot be empty');
+    if (args.old_string === undefined && args.new_string === undefined) {
+      return err('edit_file: pass old_string/new_string for one change or edits for several changes.');
+    }
     if (!oldStr) return err('old_string cannot be empty');
 
     const target = resolveFsTarget(args, ctx, path, 'write');
@@ -351,6 +369,7 @@ const editFile: CoderTool = {
       return err(`${path} changed while the edit was being prepared. Inspect the affected lines and retry.`);
     }
     await fs.writeFile(abs, result.content);
+    ctx.fileKnowledge?.refreshIfKnown(abs, result.content);
     markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
     emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
     const suffix = result.strategy === 'exact' ? '' : ` [matched via: ${result.strategy}]`;
@@ -441,6 +460,8 @@ const readFile: CoderTool = {
       const header = `${path} — symbol body (lines ${body.start_line}-${body.end_line} of ${total})\n`;
       return ok(header + body.body);
     }
+    // A whole-file or line-range read: the session now knows this content.
+    ctx.fileKnowledge?.recordContent(abs, content);
 
     const startLineArg = typeof args.start_line === 'number' ? args.start_line : undefined;
     const endLineArg = typeof args.end_line === 'number' ? args.end_line : undefined;
@@ -650,142 +671,118 @@ async function performSingleEdit(
   };
 }
 
-export const multiEdit: CoderTool = {
-  name: 'multi_edit',
-  effectBoundary: 'filesystem',
-  description: maybeTerse(MULTI_EDIT_DESC),
-  source: 'native',
-  parameters: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths require an authorized writable external root.' },
-      edits: {
-        type: 'array',
-        description: 'Ordered list of find/replace operations to apply sequentially. All must succeed, otherwise the file is left untouched (atomic).',
-        items: {
-          type: 'object',
-          properties: {
-            old_string: { type: 'string' },
-            new_string: { type: 'string' },
-            replace_all: { type: 'boolean', description: 'Default false. When true, every match of old_string is replaced.' },
-          },
-          required: ['old_string', 'new_string'],
-        },
-      },
-    },
-    required: ['path', 'edits'],
-    additionalProperties: false,
-  },
-  handler: async (args, ctx): Promise<ToolResult> => {
-    const path = String(args.path ?? '');
-    const edits = Array.isArray(args.edits) ? args.edits : [];
-    if (!path) return err('path is required and cannot be empty');
-    if (edits.length === 0) return err('edits array cannot be empty — use write_file to replace the whole file or edit_file for a single change.');
-    if (edits.length > 50) return err(`edits array has ${edits.length} items, max 50 per call. Split into multiple calls.`);
+/**
+ * Atomic batch engine behind edit_file({ edits }) (formerly the multi_edit tool): every
+ * edit runs on a rolling buffer, all are validated, every failure is
+ * reported, and the file is written once only when all of them matched.
+ */
+async function applyEditBatch(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  path: string,
+  edits: unknown[],
+): Promise<ToolResult> {
+  const target = resolveFsTarget(args, ctx, path, 'write');
+  if ('error' in target) return target.error;
+  const { resolved } = target;
+  const abs = resolved.abs;
+  const fs = fsPort(ctx);
 
-    const target = resolveFsTarget(args, ctx, path, 'write');
-    if ('error' in target) return target.error;
-    const { resolved } = target;
-    const abs = resolved.abs;
-    const fs = fsPort(ctx);
+  let content: string;
+  try {
+    content = await fs.readFile(abs);
+  } catch {
+    return err(`File ${path} not found`);
+  }
 
-    let content: string;
-    try {
-      content = await fs.readFile(abs);
-    } catch {
-      return err(`File ${path} not found`);
+  // Full-validation pass: try every edit on the rolling buffer, but
+  // do NOT abort on the first failure. The agent gets a complete
+  // report so it can fix everything in a single re-submit instead of
+  // discovering one error per round-trip (the pattern that caused
+  // the write_stdin loop in session 798).
+  //
+  // Atomicity is preserved — disk is only written when EVERY edit
+  // succeeds. When an edit fails the rolling buffer DOES NOT advance
+  // (so subsequent edits see the same content as if the failing one
+  // had been a no-op), which means:
+  //   - Independent edits that target untouched regions get
+  //     accurate verdicts (still succeed / still fail).
+  //   - Edits that DEPEND on the failed edit's output will report
+  //     "not found" or "still not unique" against the unchanged
+  //     content — flagged with a hint so the agent recognises it.
+  type EditOutcome =
+    | { index: number; ok: true; strategy: string; occurrences: number }
+    | { index: number; ok: false; error: string; dependsOnPrior: boolean };
+
+  const outcomes: EditOutcome[] = [];
+  let current = content;
+  let recovered = false;
+  let firstFailIdx = -1;
+  for (let i = 0; i < edits.length; i++) {
+    const raw = edits[i] as Record<string, unknown>;
+    const oldStr = String(raw.old_string ?? '');
+    const newStr = String(raw.new_string ?? '');
+    const replaceAll = Boolean(raw.replace_all);
+    const r = await performSingleEdit(path, current, oldStr, newStr, replaceAll);
+    if (r.ok) {
+      outcomes.push({ index: i, ok: true, strategy: r.strategy, occurrences: r.occurrences });
+      // Rolling buffer only advances on success. Failures leave it
+      // alone so the next edit's verdict mirrors what would happen
+      // after the agent fixed the prior issue (best-effort).
+      current = r.content;
+      recovered ||= r.recovered === true;
+      continue;
     }
+    // Mark dependents: when an EARLIER edit failed, the rolling
+    // buffer is "behind". This edit's verdict may be a false
+    // positive — the agent should re-validate after fixing the
+    // earlier failure. Flag explicitly.
+    const dependsOnPrior = firstFailIdx >= 0;
+    outcomes.push({ index: i, ok: false, error: r.error, dependsOnPrior });
+    if (firstFailIdx < 0) firstFailIdx = i;
+  }
 
-    // Full-validation pass: try every edit on the rolling buffer, but
-    // do NOT abort on the first failure. The agent gets a complete
-    // report so it can fix everything in a single re-submit instead of
-    // discovering one error per round-trip (the pattern that caused
-    // the write_stdin loop in session 798).
-    //
-    // Atomicity is preserved — disk is only written when EVERY edit
-    // succeeds. When an edit fails the rolling buffer DOES NOT advance
-    // (so subsequent edits see the same content as if the failing one
-    // had been a no-op), which means:
-    //   - Independent edits that target untouched regions get
-    //     accurate verdicts (still succeed / still fail).
-    //   - Edits that DEPEND on the failed edit's output will report
-    //     "not found" or "still not unique" against the unchanged
-    //     content — flagged with a hint so the agent recognises it.
-    type EditOutcome =
-      | { index: number; ok: true; strategy: string; occurrences: number }
-      | { index: number; ok: false; error: string; dependsOnPrior: boolean };
-
-    const outcomes: EditOutcome[] = [];
-    let current = content;
-    let recovered = false;
-    let firstFailIdx = -1;
-    for (let i = 0; i < edits.length; i++) {
-      const raw = edits[i] as Record<string, unknown>;
-      const oldStr = String(raw.old_string ?? '');
-      const newStr = String(raw.new_string ?? '');
-      const replaceAll = Boolean(raw.replace_all);
-      const r = await performSingleEdit(path, current, oldStr, newStr, replaceAll);
-      if (r.ok) {
-        outcomes.push({ index: i, ok: true, strategy: r.strategy, occurrences: r.occurrences });
-        // Rolling buffer only advances on success. Failures leave it
-        // alone so the next edit's verdict mirrors what would happen
-        // after the agent fixed the prior issue (best-effort).
-        current = r.content;
-        recovered ||= r.recovered === true;
-        continue;
-      }
-      // Mark dependents: when an EARLIER edit failed, the rolling
-      // buffer is "behind". This edit's verdict may be a false
-      // positive — the agent should re-validate after fixing the
-      // earlier failure. Flag explicitly.
-      const dependsOnPrior = firstFailIdx >= 0;
-      outcomes.push({ index: i, ok: false, error: r.error, dependsOnPrior });
-      if (firstFailIdx < 0) firstFailIdx = i;
+  const failed = outcomes.filter((o): o is Extract<EditOutcome, { ok: false }> => !o.ok);
+  if (failed.length === 0) {
+    if (recovered && !(await editSourceStillCurrent(fs, abs, content))) {
+      return err(`${path} changed while the edits were being prepared. Inspect the affected lines and retry the batch.`);
     }
+    await fs.writeFile(abs, current);
+    ctx.fileKnowledge?.refreshIfKnown(abs, current);
+    markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
+    emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
+    const summary = outcomes
+      .filter((o): o is Extract<EditOutcome, { ok: true }> => o.ok)
+      .map((a) => `  #${a.index + 1}: ${a.occurrences} replacement${a.occurrences === 1 ? '' : 's'} [${a.strategy}]`)
+      .join('\n');
+    return ok(`Edited ${path} — ${outcomes.length} edit${outcomes.length === 1 ? '' : 's'} applied atomically:\n${summary}`);
+  }
 
-    const failed = outcomes.filter((o): o is Extract<EditOutcome, { ok: false }> => !o.ok);
-    if (failed.length === 0) {
-      if (recovered && !(await editSourceStillCurrent(fs, abs, content))) {
-        return err(`${path} changed while the edits were being prepared. Inspect the affected lines and retry the batch.`);
-      }
-      await fs.writeFile(abs, current);
-      markOverlay(ctx, resolved.projectId, resolved.relativePath, resolved.external);
-      emitRecentFileTouched({ absolutePath: abs, kind: 'edit' });
-      const summary = outcomes
-        .filter((o): o is Extract<EditOutcome, { ok: true }> => o.ok)
-        .map((a) => `  #${a.index + 1}: ${a.occurrences} replacement${a.occurrences === 1 ? '' : 's'} [${a.strategy}]`)
-        .join('\n');
-      return ok(`Edited ${path} — ${outcomes.length} edit${outcomes.length === 1 ? '' : 's'} applied atomically:\n${summary}`);
+  // Atomic rollback path: write nothing, but surface EVERY problem
+  // at once.
+  const lines: string[] = [];
+  lines.push(
+    `edit_file aborted: ${failed.length} of ${edits.length} edit${edits.length === 1 ? '' : 's'} failed. ` +
+      'Nothing was written to disk. Fix every failing edit below and re-submit the whole list.',
+  );
+  lines.push('');
+  for (const o of outcomes) {
+    if (o.ok) {
+      lines.push(`  #${o.index + 1}: would succeed [${o.strategy}, ${o.occurrences} occurrence${o.occurrences === 1 ? '' : 's'}]`);
+    } else {
+      const dep = o.dependsOnPrior
+        ? ' (may also be a downstream effect of an earlier failed edit — re-validate after fixing the first one)'
+        : '';
+      const [summary, ...details] = o.error.split('\n');
+      lines.push(`  #${o.index + 1}: FAILED — ${summary}${dep}`, ...details);
     }
-
-    // Atomic rollback path: write nothing, but surface EVERY problem
-    // at once.
-    const lines: string[] = [];
-    lines.push(
-      `multi_edit aborted: ${failed.length} of ${edits.length} edit${edits.length === 1 ? '' : 's'} failed. ` +
-        'Nothing was written to disk. Fix every failing edit below and re-submit the whole list.',
-    );
-    lines.push('');
-    for (const o of outcomes) {
-      if (o.ok) {
-        lines.push(`  #${o.index + 1}: would succeed [${o.strategy}, ${o.occurrences} occurrence${o.occurrences === 1 ? '' : 's'}]`);
-      } else {
-        const dep = o.dependsOnPrior
-          ? ' (may also be a downstream effect of an earlier failed edit — re-validate after fixing the first one)'
-          : '';
-        const [summary, ...details] = o.error.split('\n');
-        lines.push(`  #${o.index + 1}: FAILED — ${summary}${dep}`, ...details);
-      }
-    }
-    return err(lines.join('\n'));
-  },
-};
+  }
+  return err(lines.join('\n'));
+}
 
 export const fsTools: CoderTool[] = [
   writeFile,
-  createFile,
   editFile,
-  multiEdit,
   managePathTool,
   readFile,
   listDirectory,

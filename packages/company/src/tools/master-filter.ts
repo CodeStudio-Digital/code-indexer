@@ -17,7 +17,6 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'ask_user',
   'submit_plan',
   'task_list',
-  'submit_tasks',
   'list_tasks',
   'cancel_tasks',
   'delete_tasks',
@@ -28,7 +27,6 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'expand_toolset',
   'get_tool_output',
   'recall_conversation',
-  'todo_write',
   'invoke_skill',
   // Minimal exploration (structure only, no code reading)
   'glob',

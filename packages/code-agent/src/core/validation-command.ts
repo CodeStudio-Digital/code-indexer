@@ -98,6 +98,8 @@ const STATUS_INSPECTION_FLAGS = new Set([
 /** Narrow inspection recognition for freshness accounting, NOT authorization,
  * retries or parallel dispatch. No test success is inferred from an inspection. */
 export function isVerificationObservation(name: string, args: Record<string, unknown>): boolean {
+  // Running a checker observes the code; it is never an edit, whatever it reports.
+  if (name === 'get_diagnostics') return true;
   if (!['exec_command', 'run_command', 'shell_command'].includes(name)) return false;
   // Log redirects can overwrite code, even when the underlying command reads.
   const command = args.command ?? args.cmd ?? args.script;

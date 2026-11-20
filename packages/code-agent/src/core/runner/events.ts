@@ -123,7 +123,7 @@ export interface RunnerEvents {
    */
   user_message_boundary: (payload: { roundMessageIds: number[] }) => void;
   /**
-   * Fired right before the runner parks on `waitForUserInput` (submit_tasks /
+   * Fired right before the runner parks on `waitForUserInput` (task_list approval /
    * submit_plan / ask_user / execute_tasks budget / PermissionGate approval).
    * The turn blocks indefinitely here WITHOUT a following `turn_start`, so the
    * host (`index.ts`) uses this to durably checkpoint the in-flight assistant
@@ -196,7 +196,7 @@ export interface RunnerEvents {
   }) => void;
   /** Emitted when provider/model is swapped mid-session. */
   provider_swapped: (provider: string, model: string) => void;
-  /** Emitted by submit_tasks; payload is the proposed task list waiting for /tasks-response. */
+  /** Emitted by task_list({gate:'approve'}); payload is the proposed task list waiting for /tasks-response. */
   tasks_posted: (payload: {
     tool_use_id: string;
     summary: string;
@@ -300,7 +300,7 @@ export interface RunnerEvents {
     total_usage: ChatUsage;
     finished_at: string;
   }) => void;
-  /** Emitted when `todo_write` replaces the session's lightweight checklist. */
+  /** Emitted when `task_list` (track) replaces the session's lightweight checklist. */
   todos_updated: (payload: {
     todos: import('@mcp/code-agent/tools/todo.js').TodoItem[];
   }) => void;
@@ -567,6 +567,7 @@ export interface RunnerEvents {
     | 'shell_allowlist'
     | 'sandbox_required'
     | 'admin_required'
+    | 'read_only'
     | 'policy_hard_block';
     detail?: string;
   }) => void;

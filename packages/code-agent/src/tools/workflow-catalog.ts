@@ -31,14 +31,30 @@ export interface WorkflowCatalogOptions {
   requiredPinnedTools?: ReadonlySet<string>;
   company?: { isMaster: boolean };
   agenticChat?: boolean;
+  /** Budget of the workflow surface (base selection + optional groups). */
   cap: number;
+  /** Ceiling on the final catalog: model tool limit and verified provider limit. */
+  maxTotal?: number;
   hardLimit?: number;
 }
 
-export function selectWorkflowCatalog(
-  authorized: readonly CoderTool[], options: WorkflowCatalogOptions,
-): { tools: CoderTool[]; protectedNames: ReadonlySet<string> } {
-  const byName = new Map(authorized.map(tool => [tool.name, tool]));
+/**
+ * Contextual floors depend on the surface the session runs in (preview, a
+ * specialist role, Company, host pins). They are added on top of the workflow
+ * and never consume the budget of its optional groups.
+ */
+function isContextFloor(tool: CoderTool, options: WorkflowCatalogOptions): boolean {
+  const active = options.activeTiers === null
+    || options.activeTiers.has(getToolTier(tool.name, options.externalToolTiers));
+  return (active && (PREVIEW_WORKFLOW_FLOOR.has(tool.name) || ROLE_CAPABILITY_FLOOR.has(tool.name)))
+    || (!!options.company && isEssentialCompanyTool(tool.name, options.company.isMaster))
+    || !!options.requiredPinnedTools?.has(tool.name);
+}
+
+function selectRequired(
+  authorized: readonly CoderTool[], byName: ReadonlyMap<string, CoderTool>,
+  options: WorkflowCatalogOptions, withContextFloors: boolean,
+): Map<string, CoderTool> {
   const selected = new Map<string, CoderTool>();
   const add = (name: string) => {
     const tool = byName.get(name);
@@ -60,21 +76,13 @@ export function selectWorkflowCatalog(
     add('run_command');
     add('write_stdin');
   }
-  if (!byName.has('apply_patch')) {
-    add('create_file');
-    add('write_file');
-  }
+  if (!byName.has('apply_patch')) add('write_file'); // creates and replaces
 
   for (const tool of authorized) {
-    const active = options.activeTiers === null
-      || options.activeTiers.has(getToolTier(tool.name, options.externalToolTiers));
     // expand_toolset only duplicates discovery in stable mode. Every other
     // top-level-only control needs a direct route, including plugin interactions.
     const directControl = !canInvokeInsideCodeExec(tool) && tool.name !== 'expand_toolset';
-    if (directControl
-      || (active && (PREVIEW_WORKFLOW_FLOOR.has(tool.name) || ROLE_CAPABILITY_FLOOR.has(tool.name)))
-      || (options.company && isEssentialCompanyTool(tool.name, options.company.isMaster))
-      || options.requiredPinnedTools?.has(tool.name)) add(tool.name);
+    if (directControl || (withContextFloors && isContextFloor(tool, options))) add(tool.name);
   }
   // Paired orchestration is part of the contract, not a hotness heuristic.
   if (selected.has('spawn_agent') || selected.has('resume_agent')) {
@@ -96,15 +104,31 @@ export function selectWorkflowCatalog(
         || options.activeTiers.has(getToolTier(tool.name, options.externalToolTiers))) add(tool.name);
     }
   }
+  return selected;
+}
 
+export function selectWorkflowCatalog(
+  authorized: readonly CoderTool[], options: WorkflowCatalogOptions,
+): { tools: CoderTool[]; protectedNames: ReadonlySet<string> } {
+  const byName = new Map(authorized.map(tool => [tool.name, tool]));
+  const selected = selectRequired(authorized, byName, options, true);
   const protectedNames = new Set(selected.keys());
   if (options.hardLimit !== undefined && selected.size > options.hardLimit) {
     throw new Error(`Tool projection cannot fit required capabilities: ${selected.size} required, verified provider limit ${options.hardLimit}. Adjust the model or required tool configuration.`);
   }
+  // Optional groups are budgeted against the workflow alone (what would be
+  // selected without contextual floors); the total ceiling still binds.
+  const base = selectRequired(authorized, byName, options, false);
+  const maxTotal = options.maxTotal ?? Infinity;
   for (const group of OPTIONAL_GROUPS) {
-    const additions = group.filter(name => byName.has(name) && !selected.has(name));
-    if (selected.size + additions.length > options.cap) continue;
-    for (const name of additions) add(name);
+    const present = group.filter(name => byName.has(name));
+    const baseAdditions = present.filter(name => !base.has(name)).length;
+    const additions = present.filter(name => !selected.has(name)).length;
+    if (base.size + baseAdditions > options.cap || selected.size + additions > maxTotal) continue;
+    for (const name of present) {
+      base.set(name, byName.get(name)!);
+      selected.set(name, byName.get(name)!);
+    }
   }
   // Deliberately do not fill spare slots with arbitrary registry/plugin tools.
   return { tools: [...selected.values()], protectedNames };

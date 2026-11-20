@@ -103,6 +103,11 @@ export interface ToolContextServices {
   toolOutputInlineCap?: number;
   /** Shared direct+nested accounting; it does not enforce budgets. */
   toolCallLedger?: import('./tool-call-ledger.js').ToolCallLedger;
+  /**
+   * Whole-file contents this runner knows (read or wrote). Consulted by the
+   * overwrite rule of write_file / apply_patch Add File. One per CoderRunner.
+   */
+  fileKnowledge?: import('../tools/file-knowledge.js').SessionFileKnowledge;
   /** Host-derived unresolved history. Inherited by nested calls; never cleared by model text. */
   outcomeRecovery?: import('./outcome-recovery-state.js').OutcomeRecoveryState;
   /**
@@ -219,7 +224,7 @@ export interface ToolContextServices {
     agent: import('@mcp/code-agent/agents/index.js').AgentId,
   ) => void | Promise<void>;
   /**
-   * Optional persistence sinks for the submit_tasks / execute_task /
+   * Optional persistence sinks for the task_list approval / execute_task /
    * task_complete tools. Wired by runCoder() so the dashboard's task list
    * UI can read/update state across SSE reconnects and resume after restart.
    * Tests can leave them undefined and the tools degrade to in-memory only.

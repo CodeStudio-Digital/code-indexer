@@ -27,6 +27,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { resolveWorkspacePath, pathFor } from '@mcp/code-agent/tools/paths.js';
+import { knowledgeKey, overwriteRefusal, overwriteVerdict, type OverwriteVerdict } from './file-knowledge.js';
 import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
@@ -386,6 +387,13 @@ function markOverlay(
   overlay?.mark(relativePath);
 }
 
+/** Phase-1 refusal of an Add File over an existing file the session does not know. */
+class OverwriteRefusalError extends Error {
+  constructor(readonly displayPath: string, readonly reason: Exclude<OverwriteVerdict, { allow: true }>['reason']) {
+    super(`apply_patch: overwrite refused for ${displayPath}`);
+  }
+}
+
 export async function applyParsedPatch(
   patch: ParsedPatch,
   ctx: ToolContext,
@@ -398,6 +406,9 @@ export async function applyParsedPatch(
   // updates the same file twice, or updates then moves it: phase 1 must
   // chain through in-memory results because nothing has been written yet.
   const inMemoryUpdates = new Map<string, string>();
+  // Paths an earlier action of this patch deletes or moves away: an Add File
+  // there recreates the file rather than overwriting unknown content.
+  const vacated = new Set<string>();
 
   // ─── Phase 1: plan ────────────────────────────────────────────
   // Validate every hunk, compute every final file content. No disk
@@ -406,6 +417,10 @@ export async function applyParsedPatch(
     if (action.kind === 'add') {
       const resolved = resolveWorkspacePath(action.path, ctx, 'write');
       if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
+      if (!vacated.has(knowledgeKey(resolved.abs))) {
+        const verdict = await overwriteVerdict(ctx, fs, resolved.abs);
+        if (!verdict.allow) throw new OverwriteRefusalError(action.path, verdict.reason);
+      }
       planned.push({
         kind: 'add',
         abs: resolved.abs,
@@ -422,6 +437,7 @@ export async function applyParsedPatch(
     if (action.kind === 'delete') {
       const resolved = resolveWorkspacePath(action.path, ctx, 'write');
       if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
+      vacated.add(knowledgeKey(resolved.abs));
       planned.push({
         kind: 'delete',
         abs: resolved.abs,
@@ -486,6 +502,7 @@ export async function applyParsedPatch(
     inMemoryUpdates.set(newAbs ?? abs, finalContent);
 
     if (newAbs) {
+      vacated.add(knowledgeKey(abs));
       planned.push({
         kind: 'move',
         oldAbs: abs,
@@ -527,14 +544,17 @@ export async function applyParsedPatch(
       if (op.kind === 'add') {
         await fs.mkdir(path.dirname(op.abs), { recursive: true });
         await fs.writeFile(op.abs, op.data);
+        ctx.fileKnowledge?.recordContent(op.abs, op.data);
         markOverlay(ctx, op.projectId, op.relPath, op.external);
         result.added.push(op.displayPath);
       } else if (op.kind === 'delete') {
         await fs.unlink(op.abs);
+        ctx.fileKnowledge?.forget(op.abs);
         markOverlay(ctx, op.projectId, op.relPath, op.external);
         result.deleted.push(op.displayPath);
       } else if (op.kind === 'write') {
         await fs.writeFile(op.abs, op.data);
+        ctx.fileKnowledge?.refreshIfKnown(op.abs, op.data);
         markOverlay(ctx, op.projectId, op.relPath, op.external);
         result.updated.push(op.displayPath);
       } else {
@@ -543,6 +563,7 @@ export async function applyParsedPatch(
         await fs.mkdir(path.dirname(op.newAbs), { recursive: true });
         await fs.writeFile(op.newAbs, op.data);
         await fs.unlink(op.oldAbs);
+        ctx.fileKnowledge?.moveIfKnown(op.oldAbs, op.newAbs, op.data);
         markOverlay(ctx, op.projectId, op.oldRel, op.external);
         markOverlay(ctx, op.projectId, op.newRel, op.external);
         result.moved.push({ from: op.oldDisplay, to: op.newDisplay });
@@ -630,6 +651,7 @@ export const applyPatchTool: CoderTool = {
     try {
       result = await applyParsedPatch(parsed, ctx);
     } catch (e) {
+      if (e instanceof OverwriteRefusalError) return overwriteRefusal('apply_patch', e.displayPath, e.reason);
       return err((e as Error).message);
     }
 

@@ -143,7 +143,7 @@ export interface RunContext {
   /**
    * Mandatory-plan nudges issued this run. In plan mode, a text-only turn that
    * ends without ever submitting a plan (and without approval) gets ONE
-   * `<system-reminder>` nudge to call `submit_plan`/`submit_tasks` before the
+   * `<system-reminder>` nudge to call `submit_plan`/`task_list` before the
    * Executing node lets the run finish. Bounded at 1 so a genuinely
    * conversational reply (greeting / trivial Q&A) still terminates after the
    * nudge instead of looping. Incremented by the Executing node's plan gate.
@@ -413,7 +413,7 @@ export interface BridgeCallbacks {
     toolUseId: string,
   ) => string | { content: string; isError?: boolean } | null;
   /**
-   * Task-mode gate — when the user approved `submit_tasks` with
+   * Task-mode gate — when the user approved a task list with
    * `execution_mode='all-subagent'`, refuse mutating tool calls that
    * would bypass `execute_task`. Returns refusal text or null.
    */

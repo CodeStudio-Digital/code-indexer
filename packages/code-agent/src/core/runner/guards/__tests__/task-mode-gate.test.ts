@@ -74,7 +74,7 @@ describe('checkTaskModeGate', () => {
       'delete_tasks',
       'archive_task_list',
       'update_task',
-      'submit_tasks',
+      'task_list',
       'spawn_agent',
     ]) {
       expect(checkTaskModeGate({

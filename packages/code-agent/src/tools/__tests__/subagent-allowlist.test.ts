@@ -24,7 +24,7 @@ const tool = (name: string, source: 'native' | 'mcp' | 'mcp_external' = 'native'
 describe('implement subagent — READ_WRITE_FILTER is lean', () => {
   it('admits the implement essentials (edit + verify + scoped reads)', () => {
     for (const n of [
-      'edit_file', 'multi_edit', 'write_file', 'create_file', 'run_command',
+      'edit_file', 'write_file', 'run_command',
       'read_file', 'glob', 'get_diagnostics', 'git_status', 'mcp__read_file',
     ]) {
       expect(READ_WRITE_FILTER(tool(n)), n).toBe(true);

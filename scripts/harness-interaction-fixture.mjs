@@ -21,8 +21,8 @@ export function interactionDelta(body, toolMessages) {
     : scenario === 'DECISION' ? ['decision_gate', { questions: [{ id: 'scope', question: 'Fixture decision scope?', options }] }]
       : ['ask_user', { question: `Fixture question ${scenario}?`, options }];
   const calls = plan ? [
-    ['create_file', { path: `review-${scenario}-before.txt`, content: 'forbidden' }], review,
-    ['create_file', { path: `review-${scenario}-after.txt`, content: 'approved' }],
+    ['write_file', { path: `review-${scenario}-before.txt`, content: 'forbidden' }], review,
+    ['write_file', { path: `review-${scenario}-after.txt`, content: 'approved' }],
   ] : [review];
   return { role: 'assistant', tool_calls: calls.map(([name, input], index) => ({ index,
     id: `harness-review-${scenario}-${index}`, type: 'function', function: { name, arguments: JSON.stringify(input) } })) };
