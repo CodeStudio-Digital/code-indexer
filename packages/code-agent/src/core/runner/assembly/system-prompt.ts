@@ -113,4 +113,7 @@
 // "# Tool discovery") was removed with the non-stable catalog projection.
 // 2026-11-19.5 bump — "# Session overlay" names what reflects session edits
 // (reads, grep, skeletons, listings) and that index results may lag.
-export const SYSTEM_PROMPT_VERSION = '20261119.5';
+// 2026-11-20.1 bump — child chats (on by default): the subagents section,
+// Ultra collaboration and session collaboration name create_chat and
+// send_chat_message; children learn to ask their parent.
+export const SYSTEM_PROMPT_VERSION = '20261120.1';

@@ -340,6 +340,7 @@ export class FsConversationWriter {
         toolCalls.length,
         input.usage,
         input.subagent_usage,
+        input.subagent_runs,
       );
       await this.directory.bumpUsage(
         entry.location,
@@ -358,6 +359,7 @@ export class FsConversationWriter {
     toolCalls: number,
     usage?: FsAppendMessageUsage | null,
     subagentUsage?: FsAppendMessageUsage | null,
+    subagentRuns?: readonly string[],
   ): Promise<void> {
     await this.directory.repository.writeEntity(
       location,
@@ -371,6 +373,8 @@ export class FsConversationWriter {
         tool_calls: toolCalls,
         usage: usageRecord(usage),
         subagent_usage: usageRecord(subagentUsage),
+        // Same atomic write as the usage it marks as counted.
+        ...(subagentRuns?.length ? { subagent_runs: [...subagentRuns] } : {}),
         recorded_at: new Date().toISOString(),
       }),
     );

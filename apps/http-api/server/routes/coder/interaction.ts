@@ -21,6 +21,7 @@ import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
 import { withSessionLock } from './sessionLock.js';
+import { stopChildAgentsOf } from './child-agent-cascade.js';
 import {
   authorizeQueuedAttachmentReferences,
   prepareQueuedAttachments,
@@ -102,6 +103,8 @@ export function mountCoderInteractionRoutes(
   app.post('/api/coder/sessions/:id/abort', async (c) => {
     const id = parseSessionIdParam(c);
     try {
+      // The user's Stop reaches every child agent below this session first, so none starts after it.
+      await stopChildAgentsOf(id, 'stopped_by_user');
       const mailbox = new ChatCollaborationStore(deps.sessionStore.locator.dataDir);
       await mailbox.init(); await mailbox.stopSession(id);
       await workerPool.abort(id);

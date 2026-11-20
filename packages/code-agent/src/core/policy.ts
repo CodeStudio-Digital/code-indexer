@@ -264,9 +264,10 @@ export function specModeInteractionBlockDetail(
 const READ_ONLY_SESSION_ALLOWED: ReadonlySet<string> = new Set(['remember', 'save_note']);
 // Declared non-mutating themselves, but they start, resume or steer another
 // agent that can write — an indirect write path out of a read-only session.
+// stop_chat only ends work, but a read-only session never delegates, so it has none to stop.
 const READ_ONLY_SESSION_DELEGATION: ReadonlySet<string> = new Set([
   'create_chat', 'create_chat_trigger', 'resume_chat', 'send_chat_message',
-  'send_message', 'send_input', 'followup_task',
+  'send_message', 'send_input', 'followup_task', 'stop_chat',
 ]);
 
 /**
@@ -280,7 +281,9 @@ const READ_ONLY_SESSION_DELEGATION: ReadonlySet<string> = new Set([
  */
 export function isReadOnlySessionTool(tool: CoderTool): boolean {
   if (READ_ONLY_SESSION_ALLOWED.has(tool.name)) return true;
-  if (READ_ONLY_SESSION_DELEGATION.has(tool.name)) return false;
+  // A delegation tool that rates each call (send_chat_message with child chats:
+  // asking and notifying read, a task delegates) is judged per call below.
+  if (READ_ONLY_SESSION_DELEGATION.has(tool.name) && typeof tool.riskOf !== 'function') return false;
   if (typeof tool.riskOf === 'function') return true;
   const metadata = resolveToolMetadata(tool);
   return !metadata.mutates && metadata.riskLevel === 'read';

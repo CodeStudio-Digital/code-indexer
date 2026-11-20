@@ -260,6 +260,13 @@ export interface PromptContext {
    * coding surface.
    */
   availableTools?: ReadonlySet<string>;
+  /**
+   * Delegation goes through child chats (create_chat, send_chat_message)
+   * instead of spawn_agent (CODER_CHILD_SESSION_AGENTS). Explicit rather than
+   * read from the tool names: a read-only agent loses create_chat but still
+   * runs with child chats.
+   */
+  childChats?: boolean;
 }
 
 /**
@@ -400,8 +407,19 @@ Reads, grep, skeletons and listings show this session's edits; index results (se
 `;
 }
 
-function subagentsSection(available?: ReadonlySet<string>, mode?: PromptContext['multiAgentMode']): string {
-  if (!toolAvailable(available, 'spawn_agent') || mode) return '';
+/** The tool that delegates in this run: create_chat with child chats, spawn_agent otherwise. */
+function delegationTool(childChats?: boolean): string {
+  return childChats ? 'create_chat' : 'spawn_agent';
+}
+
+function subagentsSection(available?: ReadonlySet<string>, mode?: PromptContext['multiAgentMode'], childChats?: boolean): string {
+  if (!toolAvailable(available, delegationTool(childChats)) || mode) return '';
+  if (childChats) {
+    return `# Child chats (delegation)
+Delegate only independent work that saves context or wall time; work locally for small or tightly coupled tasks. Give each child (create_chat) a self-contained prompt, the least capable profile that fits, a bounded scope and a completion criterion; synthesize its answer without repeating its investigation, and continue the same child with send_chat_message.
+
+`;
+  }
   return `# Subagents (isolated delegation)
 Delegate only independent work that saves context or wall time; work locally for small or tightly coupled tasks. Give each child a bounded scope and completion criterion, then synthesize its result without repeating the same investigation.
 
@@ -417,10 +435,11 @@ function multiAgentModeSection(
   mode: PromptContext['multiAgentMode'],
   available?: ReadonlySet<string>,
   policy?: PromptContext['ultraPolicy'],
+  childChats?: boolean,
 ): string {
   if (!mode) return '';
 
-  if (mode !== 'proactive' || !toolAvailable(available, 'spawn_agent')
+  if (mode !== 'proactive' || !toolAvailable(available, delegationTool(childChats))
     || policy?.effective.orchestration === 'off'
     || (policy?.effective.parallelism.maxAgents ?? 3) <= 0) {
     return `
@@ -429,7 +448,7 @@ function multiAgentModeSection(
 Any earlier instruction enabling proactive multi-agent delegation no longer applies. Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.`;
   }
 
-  return ultraCoordinationPrompt(policy?.effective.parallelism.maxAgents ?? 3, available);
+  return ultraCoordinationPrompt(policy?.effective.parallelism.maxAgents ?? 3, available, childChats);
 }
 
 /** Insert a session-fixed extension immediately before the cache boundary. */
@@ -520,7 +539,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     mcpSection: hasCodeNavigation ? mcpSection(ctx.mcpAvailable, ctx.isIndexed, ctx.sessionDrive, ctx.availableTools) : '',
     nativeToolsSection: nativeToolsSection(ctx.availableTools),
     overlaySection: overlaySection(ctx.availableTools),
-    subagentsSection: subagentsSection(ctx.availableTools, ctx.multiAgentMode),
+    subagentsSection: subagentsSection(ctx.availableTools, ctx.multiAgentMode, ctx.childChats),
     visionSection: toolAvailable(ctx.availableTools, 'view_image') ? visionSection(ctx.modelCanSeeImages, ctx.availableTools) : '',
     memorySection: hasMemory ? memorySection(ctx.sessionDrive) : '',
   });
@@ -607,7 +626,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   const outputStyleBlock = outputStyleSection(effectiveStyle);
   const codeCommentsBlock = codeCommentsSection(ctx.blockCodeComments);
   const autonomousBlock = autonomousSection(ctx.unsupervised);
-  const multiAgentModeBlock = multiAgentModeSection(ctx.multiAgentMode, ctx.availableTools, ctx.ultraPolicy);
+  const multiAgentModeBlock = multiAgentModeSection(ctx.multiAgentMode, ctx.availableTools, ctx.ultraPolicy, ctx.childChats);
   // Permissions/sandbox policy + AGENTS.md project instructions. Both
   // session-fixed → cache-stable, above the boundary. Collapse to '' when not
   // supplied so prompts that omit them stay byte-identical to before.

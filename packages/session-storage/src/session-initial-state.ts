@@ -1,3 +1,4 @@
+import { assertChildAgentRelationInput } from './child-agent-relation.js';
 import type {
   CreateSessionInput,
   SessionMetadata,
@@ -21,6 +22,10 @@ export function initialSessionMetadata(
       (input.scope.kind === 'project' ? input.scope.project_id : null),
     linked_projects: input.linked_projects ?? [],
     parent_session_id: input.parent_session_id ?? null,
+    // Only a child agent carries the key; every other bundle stays as before.
+    ...(input.agent_relation !== undefined
+      ? { agent_relation: assertChildAgentRelationInput(input.agent_relation, input.parent_session_id) }
+      : {}),
     provider: input.provider ?? null,
     model: input.model ?? null,
     title: input.title ?? null,

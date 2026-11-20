@@ -13,16 +13,31 @@ import { ChatScheduler } from '@mcp/code-agent/runtime/chat-scheduler.js';
 import { mountUltraFollowupRoutes } from './ultra-followups.js';
 import type { ChatNetworkSnapshot } from '@mcp/agent-runtime-contracts/chat-network.js';
 import { asSessionId } from '@mcp/session-storage';
-import { setCoderWorkerPublishedChatImporter } from '../../../sse/coderWorkerPoolSingleton.js';
+import { setCoderWorkerChildChats, setCoderWorkerPublishedChatImporter } from '../../../sse/coderWorkerPoolSingleton.js';
+import { createChildAgentHost } from './child-agent-host.js';
+import { setChildAgentCascade } from './child-agent-cascade.js';
+import { createChildChatPort } from './child-chat-caller.js';
 
 export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, runtime: CoderRuntime): void {
   const mailbox = new ChatCollaborationStore(deps.sessionStore.locator.dataDir);
   const ready = mailbox.init();
-  const network = new SessionNetwork({ sessions: deps.sessionStore, mailbox, project: id => deps.db.getProject(id),
-    validateModel: (provider, model) => {
-      if (!deps.providerStore.getProvider(provider)?.enabled || !deps.providerStore.listModels(provider, true)
-        .some(row => `${row.model_id}${row.mode ? `::${row.mode}` : ''}` === model)) throw new Error('Unknown or disabled provider/model');
-    } });
+  const validateModel = (provider: string, model: string) => {
+    if (!deps.providerStore.getProvider(provider)?.enabled || !deps.providerStore.listModels(provider, true)
+      .some(row => `${row.model_id}${row.mode ? `::${row.mode}` : ''}` === model)) throw new Error('Unknown or disabled provider/model');
+  };
+  const network = new SessionNetwork({ sessions: deps.sessionStore, mailbox, project: id => deps.db.getProject(id), validateModel });
+  // Child-agent sessions: started through the tree admission, waited for in
+  // the app. No tool creates them yet (E6); resuming at boot only picks up
+  // trees left with queued or admitted children.
+  const childAgents = createChildAgentHost({ deps, mailbox, project: id => deps.db.getProject(id), validateModel });
+  // Boot: stops the app had begun finish before any tree resumes, so nothing stopped restarts.
+  void ready.then(() => childAgents.resumeStops())
+    .then(() => childAgents.service.resume())
+    .then(() => childAgents.deliverCompletions())
+    .catch(error => console.error('[child-agent] boot resume failed:', error));
+  setChildAgentCascade((sessionId, reason) => ready.then(() => childAgents.stopSession(sessionId, reason)));
+  // The workers' child-chat tools (CODER_CHILD_SESSION_AGENTS) reach the host through this, as their own session.
+  void ready.then(() => setCoderWorkerChildChats(createChildChatPort(childAgents, { sessions: deps.sessionStore, mailbox })));
   mountSessionNetworkRoutes(app, deps, network, ready);
   setCoderWorkerPublishedChatImporter(async (parentId, childId) => {
     await ready;
@@ -32,14 +47,20 @@ export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, 
   });
   const scheduler = new ChatScheduler(mailbox);
   mountUltraFollowupRoutes(app, network, scheduler, ready);
-  const service = ready.then(() => startCollaborationWakeService(mailbox, message => wakeCollaboratingChat(deps, runtime, mailbox, message, network, scheduler), async () => {
+  // A child-agent recipient wakes through its tree admission; everyone else as before.
+  const wake = async (message: Parameters<typeof wakeCollaboratingChat>[3]) =>
+    (await childAgents.wake(message)) ?? wakeCollaboratingChat(deps, runtime, mailbox, message, network, scheduler);
+  const service = ready.then(() => startCollaborationWakeService(mailbox, wake, async () => {
     await network.synchronize();
     await deliverNetworkTriggers(network);
+    await childAgents.deliverCompletions();
     await scheduler.tick();
   }));
   void service.catch(error => console.error('[chat-collaboration] startup failed:', error));
   registerShutdownTask('chat-collaboration', async () => {
     setCoderWorkerPublishedChatImporter(null);
+    setCoderWorkerChildChats(null);
+    setChildAgentCascade(null);
     const stop = await service;
     await stop();
   });
@@ -92,6 +113,7 @@ export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, 
     await ready;
     const id = parseSessionIdParam(c);
     if (!await deps.sessionStore.getSession(id)) return notFound(c);
+    await childAgents.stopSession(id, 'stopped_by_user').catch(error => console.warn('[child-agent] stop cascade failed:', error));
     await network.settings(id, { enabled: false });
     await mailbox.stopSession(id);
     return c.json({ stopped: true });

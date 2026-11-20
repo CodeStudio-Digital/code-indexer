@@ -694,6 +694,7 @@ async function runGroupParallel(
         tools: deps.parentTools,
         ctx,
         sessionId: ctx.sessionId ?? ctx.runner?.sessionId,
+        sessionStore: deps.sessionStore,
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         externalToolTiers: deps.externalToolTiers,
         maxParallel: deps.maxParallel,

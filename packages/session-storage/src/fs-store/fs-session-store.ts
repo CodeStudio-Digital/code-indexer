@@ -22,6 +22,7 @@ import type { FsResolveToolOutcomeInput, FsResolveToolOutcomeResult, FsToolOutco
   FsRecordToolOutcomeIncidentInput, FsRecordToolOutcomeIncidentResult } from './tool-outcome-types.js';
 import { FsSessionEntityFiles } from './entity-files.js';
 import { recordStandaloneSubagentUsage } from './standalone-usage-metric.js';
+import { listAccountedSubagentKeys } from './subagent-usage-keys.js';
 import { installSessionOperationsApi, type FsSessionOperationsApi } from './session-operations-api.js';
 import { installSessionRollbackApi, type FsSessionRollbackApi } from './session-rollback-api.js';
 import {
@@ -44,6 +45,8 @@ import {
 import type {
   FsAppendMessageInput,
   FsAppendToolCallInput,
+  FsChildAgentConclusion,
+  FsChildAgentSession,
   FsCoderMessageRow,
   FsCoderSession,
   FsCoderSessionStatus,
@@ -121,6 +124,11 @@ export class FsSessionStore {
     return this.#toolOutcomes.resolveToolOutcome(input);
   }
   refresh(): Promise<void> { return this.#directory.refresh(); }
+  /**
+   * Picks up sessions another store instance created since this one scanned
+   * (the app creates child agents; a worker's store opened before them).
+   */
+  discoverNewSessions(): Promise<number> { return this.#directory.discoverNew(); }
 
   /** Lazily prime the in-memory catalog without forcing a rescan per caller. */
   ensureCatalog(): Promise<void> { return this.#directory.ensureCatalog(); }
@@ -178,6 +186,22 @@ export class FsSessionStore {
   ): Promise<FsGlobalCoderSession[]> {
     return this.#directory.listGlobalSessions(options);
   }
+
+  /** Child agent sessions of `parentId` (explicit relation only), oldest first. */
+  listChildAgentSessions(parentId: SessionId | string): Promise<FsChildAgentSession[]> {
+    return this.#directory.listChildAgentSessions(parentId);
+  }
+
+  /** The child-agent view of one session, or null when it is not a child agent. */
+  getChildAgentSession(id: SessionId | string): Promise<FsChildAgentSession | null> {
+    return this.#directory.getChildAgentSession(id);
+  }
+
+  /** Records how a child-agent run ended (written by that run). */
+  recordChildAgentConclusion(id: SessionId | string, conclusion: FsChildAgentConclusion): Promise<void> {
+    return this.#directory.recordChildAgentConclusion(id, conclusion);
+  }
+
 
   getSessionProjects(id: SessionId | string): Promise<FsLinkedProject[]> {
     return this.#directory.getSessionProjects(id);
@@ -374,6 +398,11 @@ export class FsSessionStore {
       usage,
       operationKey,
     );
+  }
+
+  /** Subagent usage keys this session already counted (turn and standalone metrics). */
+  listAccountedSubagentKeys(id: SessionId | string): Promise<Set<string>> {
+    return listAccountedSubagentKeys(this.#directory, id);
   }
 
   rebuildMetricsSummary(

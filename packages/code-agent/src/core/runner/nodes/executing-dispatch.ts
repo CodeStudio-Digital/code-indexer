@@ -96,6 +96,9 @@ export interface DispatchedToolResult {
    * right after the tool message — provider-agnostic vision.
    */
   extraUserBlocks?: ContentBlock[];
+  /** Sub-runner usage the tool reported, and the run keys it covers (see ToolResult). */
+  subUsage?: ToolResult['subUsage'];
+  subUsageRuns?: ToolResult['subUsageRuns'];
   /** Raw tool output size (chars) BEFORE any reduce/cap — for savings telemetry. */
   rawChars?: number;
   /** Declared model-facing representation and hidden structured payload size. */
@@ -633,6 +636,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     let invocationStructuredData: unknown;
     let invocationEvidence: ToolResult['evidence'];
     let invocationExtraBlocks: ContentBlock[] | undefined;
+    let invocationSubUsage: Pick<DispatchedToolResult, 'subUsage' | 'subUsageRuns'> = {};
     let invocationGuardVerdict: GuardVerdict | undefined;
     let invocationSourceTruncations: ToolSourceTruncation[] = [];
     let refusalKind: RefusalKind | undefined;
@@ -800,6 +804,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         }
       }
       invocationExtraBlocks = result.extraUserBlocks;
+      // Sub-runner usage (spawn_agent, child agents) rides to the turn's subagent usage.
+      invocationSubUsage = {
+        ...(result.subUsage ? { subUsage: result.subUsage } : {}),
+        ...(result.subUsageRuns?.length ? { subUsageRuns: result.subUsageRuns } : {}),
+      };
       invocationGuardVerdict = result.guardVerdict;
       invocationSourceTruncations = normalizeSourceTruncations(result.sourceTruncations);
       if (invocationGuardVerdict?.action === 'block') {
@@ -1045,6 +1054,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       durationMs,
       refusalKind,
       extraUserBlocks: invocationExtraBlocks,
+      ...invocationSubUsage,
       ...(finalTruncated ? { truncated: true, originalSize: finalOriginalSize } : {}),
       ...(reductionReport ? { reductionReport } : {}),
       ...(finalOutputId ? { outputId: finalOutputId } : {}),

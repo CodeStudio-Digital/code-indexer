@@ -31,6 +31,21 @@ export type SessionNotificationPayload =
       partialCount: number;
       failedCount: number;
       resumableCount: number;
+    }
+  | {
+      /** A child-agent chat of this session paused on an approval prompt. */
+      kind: 'child-agent-approval';
+      childId: string;
+      childTitle: string;
+      /** The child's project, for the link that opens it (null: a global session). */
+      projectId: number | null;
+      resolved: boolean;
+    }
+  | {
+      /** A stop from this chat covered `count` child chats (the user's Stop, a parent's stop, archive, delete). */
+      kind: 'child-agents-stopped';
+      count: number;
+      reason: string;
     };
 
 export type NotificationSeverity = 'info' | 'warning' | 'error';
@@ -97,6 +112,13 @@ function derive(payload: SessionNotificationPayload): {
       return payload.partialCount > 0 || payload.failedCount > 0
         ? { severity: 'warning', autoDismissMs: WARN_DISMISS_MS }
         : { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
+    case 'child-agent-approval':
+      // Stays until the prompt is answered (resolveChildAgentApproval).
+      return payload.resolved
+        ? { severity: 'info', autoDismissMs: INFO_DISMISS_MS }
+        : { severity: 'warning', autoDismissMs: null };
+    case 'child-agents-stopped':
+      return { severity: 'info', autoDismissMs: INFO_DISMISS_MS };
   }
 }
 
@@ -158,6 +180,23 @@ export function dismissNotification(sessionId: string, id: string): void {
       return { ...n, dismissed: true };
     }
     return n;
+  });
+  if (!changed) return;
+  byKey.set(key, next);
+  notify(key);
+}
+
+/** Marks a child agent's open approval notices answered and takes them off the banner. */
+export function resolveChildAgentApproval(sessionId: string, childId: string): void {
+  const key = keyFor(sessionId);
+  const cur = byKey.get(key);
+  if (!cur) return;
+  let changed = false;
+  const next = cur.map((n) => {
+    if (n.payload.kind !== 'child-agent-approval' || n.payload.childId !== childId || n.payload.resolved) return n;
+    changed = true;
+    const payload = { ...n.payload, resolved: true };
+    return { ...n, ...derive(payload), dismissed: true, payload };
   });
   if (!changed) return;
   byKey.set(key, next);

@@ -109,6 +109,35 @@ export class SessionCatalog {
     return result;
   }
 
+  /**
+   * Adds the bundles another store instance (another thread or process) created
+   * since this catalog was scanned, without rereading the known ones: a readdir
+   * per root and a read of each new bundle. Changes to known bundles, removals
+   * and conflicts stay the business of refresh(). Returns how many it added.
+   */
+  async discoverNew(): Promise<number> {
+    if (!this.#ready) {
+      const before = this.#entries.size;
+      await this.refresh();
+      return this.#entries.size - before;
+    }
+    if (this.#refreshing) await this.#refreshing.catch(() => undefined);
+    const found = new Map<string, CatalogEntry>();
+    const duplicates = new Set<string>();
+    const ignoredIssues: CatalogScanIssue[] = [];
+    const known = (key: string) => this.#entries.has(key) || this.#duplicateIds.has(key);
+    for (const root of this.#locator.allKnownSessionRoots()) {
+      await this.#scanRoot(root.scope, root.session_root, found, duplicates, ignoredIssues, known);
+    }
+    let added = 0;
+    for (const [key, entry] of found) {
+      if (known(key) || duplicates.has(key)) continue;
+      this.#entries.set(key, entry);
+      added++;
+    }
+    return added;
+  }
+
   async #scan(): Promise<CatalogScanResult> {
     const entries = new Map<string, CatalogEntry>();
     const duplicateIds = new Set<string>();
@@ -136,6 +165,8 @@ export class SessionCatalog {
     output: Map<string, CatalogEntry>,
     duplicateIds: Set<string>,
     issues: CatalogScanIssue[],
+    /** Bundles to leave unread (discoverNew: the ones already in the catalog). */
+    skip?: (key: string) => boolean,
   ): Promise<void> {
     let children;
     try {
@@ -158,6 +189,7 @@ export class SessionCatalog {
         continue;
       }
       const id = asSessionId(child.name);
+      if (skip?.(keyFor(id))) continue;
       const location: SessionLocation = {
         session_id: id,
         scope,

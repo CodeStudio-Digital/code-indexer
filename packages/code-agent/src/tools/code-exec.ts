@@ -1171,9 +1171,10 @@ export function buildCodeExecTool(
       // replacement instruction instead of a bare ReferenceError; they are not
       // aliases. The evaluator also answers tool_schema(<name>) with it.
       const retiredInstructions: Record<string, string> = {};
-      for (const name of REPLACED_TOOL_NAMES) {
+      const replacedInRun = registry.replacedTools();
+      for (const name of [...REPLACED_TOOL_NAMES, ...Object.keys(replacedInRun)]) {
         if (exposedNameSet.has(name) || allToolsByName.has(name) || RESERVED_GLOBALS.has(name)) continue;
-        retiredInstructions[name] = toolReplacement(name)!.text;
+        retiredInstructions[name] = toolReplacement(name, replacedInRun)!.text;
         blockedToolGlobals[name] = () => observeCodeExecPromise(
           Promise.reject(new Error(`${name}: ${retiredInstructions[name]}`)),
         );
@@ -1267,7 +1268,7 @@ export function buildCodeExecTool(
         ...bareGlobals,
         // Unknown `tools.<name>` access throws a suggestion-bearing error
         // instead of yielding undefined → "is not a function" (telemetry).
-        tools: wrapToolsBinding(toolsProxy, exposedNames),
+        tools: wrapToolsBinding(toolsProxy, exposedNames, replacedInRun),
         list_tools: listTools,
         tool_schema: toolSchema,
         attempt,
@@ -1510,7 +1511,7 @@ export function buildCodeExecTool(
         const msg = e instanceof Error ? e.message : String(e);
         // Parse-time failures get hints too — `import x from 'y'` dies here
         // ("Cannot use import statement"), never reaching the async catch.
-        const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
+        const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames, replacedInRun });
         return withLogTruncation(err(`code_exec parse/sync error: ${msg}${hint}`, {
           code: 'CODE_EXEC_PARSE_ERROR',
           kind: 'invalid_input',
@@ -1551,7 +1552,7 @@ export function buildCodeExecTool(
         // builtin, import, nested-failure try/catch) — see code-exec-hints.ts.
         // Matching is on message text, never instanceof: errors thrown inside
         // node:vm carry the sandbox realm's constructors.
-        const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames });
+        const hint = buildCodeExecFailureHint(msg, { exposedNames, allToolNames, replacedInRun });
         const capturedLogs = renderCapturedLogs();
         const stderr = capturedLogs ? `\n[output before failure]\n${capturedLogs}` : '';
         const batch = buildNestedBatchReport();

@@ -45,6 +45,10 @@ function iconFor(n: SessionNotification): LucideIcon {
       return AlertTriangle;
     case 'background-agents-done':
       return n.severity === 'warning' ? AlertTriangle : Bot;
+    case 'child-agent-approval':
+      return n.payload.resolved ? CheckCircle2 : AlertTriangle;
+    case 'child-agents-stopped':
+      return Bot;
     default: // tool-loop
       return n.severity === 'info' ? RotateCcw : AlertTriangle;
   }
@@ -157,5 +161,44 @@ function NotificationBody({ notification }: { notification: SessionNotification 
           </p>
         </>
       );
+    case 'child-agent-approval':
+      return (
+        <>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-semibold">{t('notifications.childAgent.approvalTitle')}</span>
+            <span className="ml-auto text-[10px] uppercase opacity-70">
+              {p.resolved ? t('notifications.childAgent.resolved') : t('notifications.childAgent.waiting')}
+            </span>
+          </div>
+          <p className="mt-0.5 leading-snug">
+            {t('notifications.childAgent.approvalBody', { title: p.childTitle })}{' '}
+            <a className="underline hover:opacity-80" href={childAgentChatHref(p.childId, p.projectId)}>
+              {t('notifications.childAgent.open')}
+            </a>
+          </p>
+        </>
+      );
+    case 'child-agents-stopped':
+      return (
+        <>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-semibold">{t('notifications.childAgent.stoppedTitle', { count: p.count })}</span>
+          </div>
+          <p className="mt-0.5 leading-snug">{t(STOP_REASON_KEYS[p.reason] ?? 'notifications.childAgent.reasonUser')}</p>
+        </>
+      );
   }
+}
+
+const STOP_REASON_KEYS: Record<string, string> = {
+  stopped_by_user: 'notifications.childAgent.reasonUser',
+  stopped_by_parent: 'notifications.childAgent.reasonParent',
+  session_archived: 'notifications.childAgent.reasonArchived',
+  session_deleted: 'notifications.childAgent.reasonDeleted',
+};
+
+/** The same chat route the session network uses to open another chat. */
+function childAgentChatHref(childId: string, projectId: number | null): string {
+  const route = projectId == null ? '/global' : `/projects/${projectId}`;
+  return `#${route}?session=${encodeURIComponent(childId)}`;
 }

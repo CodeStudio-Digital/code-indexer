@@ -168,6 +168,12 @@ export interface CoderTool {
    */
   interactive?: boolean;
   /**
+   * A control boundary called only as a top-level tool call, never inside
+   * code_exec (create_chat: it delegates and waits for the whole result).
+   * Such a tool is therefore part of the direct catalog.
+   */
+  topLevelOnly?: boolean;
+  /**
    * Continuation control: names of the tools that open the work this one
    * finishes (`task_complete` closes the scope `execute_tasks` opens). A
    * read-only session does not authorize it when none of them is authorized.

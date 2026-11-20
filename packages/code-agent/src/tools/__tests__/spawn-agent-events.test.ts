@@ -9,24 +9,11 @@ vi.mock('@mcp/code-agent/tools/implement-subagent.js', async (importOriginal) =>
   return { ...actual, runSubagent: vi.fn(), runParallelAgents: vi.fn() };
 });
 
-vi.mock('@mcp/services/sub-agent-cache/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@mcp/services/sub-agent-cache/index.js')>();
-  return {
-    ...actual,
-    isGlobalSubAgentCacheEnabled: vi.fn(() => false),
-    tryGlobalSubAgentRead: vi.fn(() => null),
-    writeGlobalSubAgentResult: vi.fn(),
-  };
-});
-
 const { buildSpawnAgentTool } = await import('@mcp/code-agent/tools/spawn-agent.js');
 const { runSubagent, runParallelAgents } = await import('@mcp/code-agent/tools/implement-subagent.js');
-const { isGlobalSubAgentCacheEnabled, tryGlobalSubAgentRead } = await import('@mcp/services/sub-agent-cache/index.js');
 
 const runSingle = runSubagent as unknown as ReturnType<typeof vi.fn>;
 const runParallel = runParallelAgents as unknown as ReturnType<typeof vi.fn>;
-const cacheEnabled = isGlobalSubAgentCacheEnabled as unknown as ReturnType<typeof vi.fn>;
-const cacheRead = tryGlobalSubAgentRead as unknown as ReturnType<typeof vi.fn>;
 
 function setup() {
   const emit = vi.fn();
@@ -50,10 +37,6 @@ function payloadFor(emit: ReturnType<typeof vi.fn>, event: string): Record<strin
 beforeEach(() => {
   runSingle.mockReset();
   runParallel.mockReset();
-  cacheEnabled.mockReset();
-  cacheEnabled.mockReturnValue(false);
-  cacheRead.mockReset();
-  cacheRead.mockReturnValue(null);
 });
 
 describe('spawn_agent single-agent live events', () => {
@@ -299,37 +282,4 @@ describe('spawn_agent single-agent live events', () => {
     expect(String(result.content)).toContain('First child completed.');
     expect(String(result.content)).toContain('Second child failed.');
   });
-
-  it('materializes and completes a live row for cache hits without spawning a child', async () => {
-    const report = `Cached report:\n${'full cached evidence '.repeat(35)}`;
-    cacheEnabled.mockReturnValue(true);
-    cacheRead.mockReturnValue({
-      cached: true,
-      ageMs: 120,
-      hitCount: 3,
-      result: {
-        header: '[cached]\n\n',
-        body: report,
-        usage: { input_tokens: 8, output_tokens: 2 },
-      },
-    });
-    const { emit, ctx, tool } = setup();
-
-    const result = await tool.handler({ agents: [{ task: 'Use cached work', label: 'cache scout' }] }, ctx);
-
-    expect(runSingle).not.toHaveBeenCalled();
-    expect(String(result.content)).toContain('cache-hit');
-    expect(emit.mock.calls.map(([name]) => name)).toEqual([
-      'agents_group_start',
-      'agent_progress',
-      'agent_progress',
-      'agents_group_end',
-    ]);
-    const progress = emit.mock.calls
-      .filter(([name]) => name === 'agent_progress')
-      .map(([, payload]) => payload as { event: string; note?: string; summary?: string });
-    expect(progress.at(-1)).toMatchObject({ event: 'completed', note: 'cache hit', summary: report });
-    expect(payloadFor(emit, 'agents_group_end')).toMatchObject({ completedCount: 1, failedCount: 0 });
-  });
-
 });

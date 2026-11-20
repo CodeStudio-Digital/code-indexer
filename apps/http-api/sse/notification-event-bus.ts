@@ -45,6 +45,10 @@ const CODER_EVENTS = new Set([
   'agents_group_start',
   'agent_progress',
   'agents_group_end',
+  // A child-agent session's approval prompt, shown in its parent's chat.
+  'child_agent_attention',
+  // How many child chats a stop covered, shown in the chat the stop came from.
+  'child_agents_stopped',
 ]);
 
 const COMPANY_EVENTS = new Set([

@@ -13,7 +13,7 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
-import { selectWorkflowCatalog } from '../../../tools/workflow-catalog.js';
+import { catalogBudgetSurface, selectWorkflowCatalog } from '../../../tools/workflow-catalog.js';
 import { WORKFLOW_CATALOG_CONTRACTS } from '../../../tools/catalog-contracts.js';
 import { approvedPlanForRevision } from '../../../tools/plan.js';
 import { readOnlySessionAuthority } from '../../policy.js';
@@ -131,7 +131,12 @@ function buildWorkflowTools(
   // A read-only agent loses write/process/delegation authority, not just
   // visibility: the dispatcher and discovery both derive from `authorized`.
   // Applied last so a continuation sees which openers survived every filter.
-  if (isReadOnlyAgent(args.toolContext.runner?.agentId)) authorized = readOnlySessionAuthority(authorized);
+  const readOnly = isReadOnlyAgent(args.toolContext.runner?.agentId);
+  if (readOnly) authorized = readOnlySessionAuthority(authorized);
+  // Child chats: optional groups are budgeted on the switch-off surface (stand-ins), under the same authority.
+  const standIns = args.registry.catalogStandIns();
+  const budgetSurface = standIns.tools.length === 0 ? undefined : catalogBudgetSurface(authorized, standIns,
+    (name) => !!args.globalDisabledTools?.has(name) || !!args.sessionDisabledTools?.has(name));
   const hardLimit = args.provider.toolLimits?.maxCount;
   if (hardLimit !== undefined && (!Number.isSafeInteger(hardLimit) || hardLimit < 1)) {
     throw new Error('Invalid verified provider tool limit');
@@ -143,6 +148,7 @@ function buildWorkflowTools(
     requiredPinnedTools: args.requiredPinnedTools,
     company: args.toolContext.companyContext, cap, maxTotal, hardLimit,
     agenticChat: args.toolContext.agenticChat,
+    ...(budgetSurface ? { budgetSurface: readOnly ? readOnlySessionAuthority(budgetSurface) : budgetSurface } : {}),
   });
   const serialize = (tool: CoderTool): SerializedTool => ({
     name: tool.name,

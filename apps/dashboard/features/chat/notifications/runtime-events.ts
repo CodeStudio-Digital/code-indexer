@@ -1,5 +1,5 @@
 import type { ToolLoopIntervention } from '../../../hooks/agent-stream/types.js';
-import { pushNotification } from './session-notifications-store.js';
+import { pushNotification, resolveChildAgentApproval } from './session-notifications-store.js';
 
 interface RuntimeEvent {
   id: number;
@@ -46,6 +46,29 @@ export function recordCoderRuntimeNotification(source: RuntimeEvent): void {
       failedCount,
       resumableCount: readNumber(data, 'resumableCount') ?? 0,
     }, options);
+    return;
+  }
+
+  if (source.event === 'child_agent_attention') {
+    const childId = readString(data, 'childId');
+    if (!childId) return;
+    if (readString(data, 'state') === 'resolved') {
+      resolveChildAgentApproval(source.sessionId, childId);
+      return;
+    }
+    pushNotification(source.sessionId, {
+      kind: 'child-agent-approval',
+      childId,
+      childTitle: readString(data, 'childTitle') ?? childId,
+      projectId: readNumber(data, 'projectId') ?? null,
+      resolved: false,
+    }, options);
+    return;
+  }
+
+  if (source.event === 'child_agents_stopped') {
+    const count = readNumber(data, 'count') ?? 0;
+    if (count > 0) pushNotification(source.sessionId, { kind: 'child-agents-stopped', count, reason: readString(data, 'reason') ?? 'stopped_by_user' }, options);
     return;
   }
 

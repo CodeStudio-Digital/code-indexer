@@ -6,6 +6,7 @@ import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderWorkerPool } from '../../../sse/CoderWorkerPool.js';
 import { withSessionLock } from './sessionLock.js';
+import { stopChildAgentsOf } from './child-agent-cascade.js';
 
 export class SessionDeletionCleanupError extends Error {
   constructor(readonly deleted: { session_id: SessionId; permanent: false; trash_name: string; scope: import('@mcp/session-storage').SessionStorageScope }, cause: unknown) {
@@ -27,6 +28,8 @@ export async function deleteCoderSession(
   store: ServerDeps['sessionStore'],
   workers: Pick<CoderWorkerPool, 'abort' | 'evict'>,
 ) {
+  // Its child agents stop first, outside this session's lock (the cascade takes each child's).
+  await stopChildAgentsOf(sessionId, 'session_deleted');
   return withSessionLock(sessionId, async () => {
     // Project and global workers both hold a filesystem writer lease. Abort
     // alone is cooperative; eviction acknowledges release and isolate exit.

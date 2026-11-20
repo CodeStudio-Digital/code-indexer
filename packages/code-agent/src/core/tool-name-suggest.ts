@@ -89,7 +89,14 @@ const NATIVE_TWIN_USAGE: Readonly<Record<string, string>> = {
  * replacement: a retired tool, or a primary twin whose native tool serves.
  * Never an alias — the call fails with this text.
  */
-export function toolReplacement(name: string): { code: 'RETIRED_TOOL' | 'USE_NATIVE_TOOL'; text: string } | null {
+export function toolReplacement(
+  name: string,
+  /** Names a run replaced (the registry's own map, e.g. child chats), before the global table. */
+  replacedInRun?: Readonly<Record<string, string>>,
+): { code: 'RETIRED_TOOL' | 'USE_NATIVE_TOOL'; text: string } | null {
+  if (replacedInRun && Object.hasOwn(replacedInRun, name)) {
+    return { code: 'RETIRED_TOOL', text: `${name} was retired. ${replacedInRun[name]}` };
+  }
   const retired = retiredToolInstruction(name);
   if (retired) return { code: 'RETIRED_TOOL', text: retired };
   const native = Object.hasOwn(NATIVE_TWIN_OF, name) ? NATIVE_TWIN_OF[name] : undefined;

@@ -87,6 +87,13 @@ export interface SessionProjectLink {
   readonly root_path?: string;
 }
 
+/** See child-agent-relation.ts. Absent on every session that is not a child agent. */
+export interface ChildAgentRelation {
+  readonly kind: 'child_agent';
+  /** 1 for a child of a root session. */
+  readonly depth: number;
+}
+
 export interface SessionMetadata {
   readonly schema_version: 1;
   readonly id: SessionId;
@@ -97,6 +104,8 @@ export interface SessionMetadata {
   readonly owner_project_id: ProjectId | null;
   readonly linked_projects: readonly SessionProjectLink[];
   readonly parent_session_id: SessionId | null;
+  /** Optional and additive: older bundles never carry it. */
+  readonly agent_relation?: ChildAgentRelation;
   provider: string | null;
   model: string | null;
   title: string | null;
@@ -159,6 +168,8 @@ export interface CreateSessionInput {
   readonly owner_project_id?: ProjectId | null;
   readonly linked_projects?: readonly SessionProjectLink[];
   readonly parent_session_id?: SessionId | null;
+  /** Written only by the child-agent creation path; requires parent_session_id. */
+  readonly agent_relation?: ChildAgentRelation;
   readonly provider?: string | null;
   readonly model?: string | null;
   readonly title?: string | null;

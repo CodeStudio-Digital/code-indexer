@@ -16,9 +16,8 @@
  * `BOOTSTRAP_TOOLS` (visible to all agent modes from turn 1).
  *
  * Backed by `DocHybridSearch` in `@mcp/services`. Wiring is via a process
- * singleton (`setGlobalDocSearch`) — same pattern as `setGlobalSubAgentCache`,
- * other process-wide pipeline holders — to avoid threading another
- * dep through `ToolContext`.
+ * singleton (`setGlobalDocSearch`), like other process-wide pipeline
+ * holders, to avoid threading another dep through `ToolContext`.
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
