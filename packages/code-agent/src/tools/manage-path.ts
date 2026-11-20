@@ -5,7 +5,7 @@ import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
 } from '@mcp/code-agent/ports/filesystem-port.js';
-import { MANAGE_PATH_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { MANAGE_PATH_DESC } from '@mcp/code-agent/tools/descriptions.js';
 import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files.js';
 import { pathFor, resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 
@@ -201,7 +201,7 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext, befor
 export const managePathTool: CoderTool = {
   name: 'manage_path',
   effectBoundary: 'filesystem',
-  description: maybeTerse(MANAGE_PATH_DESC),
+  description: MANAGE_PATH_DESC,
   source: 'native',
   mutates: true,
   parallelSafe: false,

@@ -35,15 +35,8 @@ export interface OrchestratorArgs {
    * Tier filter for `buildTools`. Pass null to disable filtering (the
    * agent sees every registered tool — used by subagents and tests where
    * the parent has already pre-filtered the registry).
-   * Passed BY REFERENCE — the host's `promoteTier` mutates it mid-run.
    */
   initialTiers: Set<ToolTier> | null;
-  /**
-   * Pinned tools (hidden tools the model called by name). Passed BY
-   * REFERENCE from the host runner; dispatch adds names mid-run and the
-   * next turn's `buildTools` unions them in.
-   */
-  initialPins?: Set<string>;
   /**
    * Live message array shared with the host (`CoderRunner.this.messages`).
    * Passed BY REFERENCE so external mutators (`pushUserContent`,
@@ -89,7 +82,6 @@ export async function runBehaviorTree(
     runId: args.runId,
     emit: args.emit,
     initialTiers: args.initialTiers,
-    initialPins: args.initialPins,
     initialMessages: args.initialMessages,
     bridge: args.bridge,
   });

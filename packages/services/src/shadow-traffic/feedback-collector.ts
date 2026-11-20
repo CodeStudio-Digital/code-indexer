@@ -24,7 +24,7 @@ import type { CounterfactualLogRow, CounterfactualLogStore } from '@mcp/store/co
  * observation; come back when we see the next event".
  */
 export interface OutcomeMatcher<O> {
-  /** Pipeline name this matcher handles, e.g. 'tool_selection'. */
+  /** Pipeline name this matcher handles, e.g. 'role_pipeline'. */
   readonly pipelineName: string;
   /**
    * Maximum age of pending rows to consider, in ms. Rows older than this
@@ -123,46 +123,9 @@ export class FeedbackCollector {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Concrete matchers — pre-built for the three pipelines that currently
+// Concrete matchers — pre-built for the pipelines that currently
 // emit shadow predictions. New pipelines register their own matcher.
 // ─────────────────────────────────────────────────────────────────────────
-
-/**
- * ToolSelectionOutcomeMatcher — observed event = "the agent invoked tool X
- * in the next N turns after the selection was made". Matches by session +
- * recent query_hash.
- */
-export interface ToolSelectionObservedEvent {
-  /** Same query hash that was used when the shadow row was written. */
-  queryHash: string;
-  /** Tool names the agent ACTUALLY called after the selection. */
-  toolsCalled: string[];
-  /**
-   * Optional compact Agent Decision Engine metadata. Kept as unknown here to
-   * avoid coupling the generic shadow-traffic service to code-agent types;
-   * callers pass the JSON-safe AgentDecisionTelemetry shape.
-   */
-  agentDecision?: unknown;
-}
-
-export class ToolSelectionOutcomeMatcher implements OutcomeMatcher<ToolSelectionObservedEvent> {
-  readonly pipelineName = 'tool_selection';
-  readonly maxAgeMs: number;
-  constructor(maxAgeMs = 30 * 60 * 1000) { this.maxAgeMs = maxAgeMs; }
-  match(observed: ToolSelectionObservedEvent, pending: CounterfactualLogRow[]) {
-    const matched: Array<{ id: number; true_outcome: unknown }> = [];
-    for (const row of pending) {
-      if (row.query_hash !== observed.queryHash) continue;
-      matched.push({
-        id: row.id,
-        true_outcome: observed.agentDecision === undefined
-          ? { toolsCalled: observed.toolsCalled }
-          : { toolsCalled: observed.toolsCalled, agentDecision: observed.agentDecision },
-      });
-    }
-    return matched;
-  }
-}
 
 /**
  * RolePipelineOutcomeMatcher — observed event = "master spawned this role

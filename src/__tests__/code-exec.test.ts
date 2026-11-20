@@ -81,7 +81,7 @@ describe('code_exec — sandbox + tool proxy', () => {
       unsafeTool({ name: 'ask_user', mutates: false, interactive: true, riskLevel: 'read' }), // interactive — excluded
       unsafeTool({ name: 'spawn_subagent', mutates: false, riskLevel: 'read' }), // orchestration — excluded
       unsafeTool({ name: 'view_image', mutates: false, riskLevel: 'read' }), // excluded by name
-      unsafeTool({ name: 'expand_toolset', mutates: false, riskLevel: 'admin' }), // excluded by name
+      unsafeTool({ name: 'task_complete', mutates: false, riskLevel: 'read' }), // excluded by name
     ]);
     const exposed = _exposedToolNames(registry);
     expect(exposed).toEqual(['read_safe', 'write_thing']);

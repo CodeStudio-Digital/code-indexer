@@ -49,7 +49,7 @@ export interface IntentProfile {
 
 /**
  * Static intent → routing table. This is the single source of truth that the
- * prompt matrix, tests, and (later) tool-selection all reference, killing the
+ * prompt matrix and tests reference, killing the
  * documentation drift the investigation found.
  */
 const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
@@ -249,8 +249,8 @@ export function decide(message: string, ctx: DecisionContext = {}): AgentDecisio
 }
 
 /**
- * Expose the static routing table (read-only) so tests, the prompt builder, and
- * tool-selection can reference the SAME source of truth instead of re-deriving
+ * Expose the static routing table (read-only) so tests and the prompt builder
+ * can reference the SAME source of truth instead of re-deriving
  * the mapping (prevents drift).
  */
 export function intentProfile(intent: TaskIntent): Readonly<IntentProfile> {
@@ -351,30 +351,8 @@ export function decisionGuidanceForTask(
 }
 
 /**
- * Bridge to the tool-selection runtime: derive optional preferred/discouraged
- * tool hints from a task message, ready to pass to `applyToolSelection` /
- * `applyToolSelectionThin` (their `toolPolicy` field).
- *
- * Returns `undefined` when there is nothing actionable — the classifier was
- * not confident (an "unsure" triage, e.g. an unrecognized message) or both
- * hint lists are empty — so callers can forward the result with ZERO effect on
- * selection. This keeps the wiring conservative and shadow-mode friendly: tool
- * selection is only nudged when the intent was confidently recognized.
- */
-export function toolPolicyForTask(
-  message: string,
-  ctx: DecisionContext = {},
-): { preferred: readonly string[]; discouraged: readonly string[] } | undefined {
-  const decision = decide(message, ctx);
-  if (decision.confidence < MIN_POLICY_CONFIDENCE) return undefined;
-  const { preferred, discouraged } = decision.toolPolicy;
-  if (preferred.length === 0 && discouraged.length === 0) return undefined;
-  return { preferred, discouraged };
-}
-
-/**
- * Compact, JSON-safe telemetry summary for a task decision. Unlike
- * `toolPolicyForTask`, this returns a value even for low-confidence triage so
+ * Compact, JSON-safe telemetry summary for a task decision. It returns a
+ * value even for low-confidence triage so
  * shadow logs can measure "unknown/weak" classifications too. It intentionally
  * omits long tool arrays and rationale to keep counterfactual rows small.
  */

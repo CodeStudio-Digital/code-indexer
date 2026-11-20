@@ -37,16 +37,6 @@ const READ_FILE_HARD_MAX = 800;
  */
 const UNRESTRICTED_READ_FILE_HARD_MAX = 5_000;
 
-const TERSE_TOOLS = false;
-
-function terseDescription(desc: string): string {
-  if (!TERSE_TOOLS || desc.length <= 150) return desc;
-  // Keep the first sentence (or 150 chars).
-  const firstStop = desc.search(/[.\n]/);
-  if (firstStop > 0 && firstStop <= 150) return desc.slice(0, firstStop + 1).trim();
-  return desc.slice(0, 150).trim() + '…';
-}
-
 function schemaProperties(schema: JsonSchema): Record<string, unknown> | null {
   if (typeof schema !== 'object' || schema === null) return null;
   const props = (schema as { properties?: unknown }).properties;
@@ -214,7 +204,7 @@ export class McpToolBridge {
 
       return {
         name: `mcp__${t.name}`,
-        description: terseDescription(t.description ?? ''),
+        description: t.description ?? '',
         parameters: publicSchema,
         source: 'mcp',
         ...contract,

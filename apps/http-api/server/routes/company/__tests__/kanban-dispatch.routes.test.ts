@@ -117,7 +117,7 @@ async function harness() {
         ],
       }),
     },
-    toolSelectionEmbed: async (text: string) => {
+    recommendationEmbed: async (text: string) => {
       const vector = new Float32Array(4);
       for (let index = 0; index < vector.length; index += 1) {
         vector[index] = (text.charCodeAt(index) || 0) / 128;

@@ -65,7 +65,6 @@ export const BUILTIN_CLASSIFICATION: Record<
   // ─── Subagent / orchestration ─────────────────────────────────
   spawn_agent:      { mutates: false, parallelSafe: false, riskLevel: 'admin', executionClass: 'execute' },
   resume_agent:     { mutates: false, parallelSafe: false, riskLevel: 'admin', executionClass: 'execute' },
-  expand_toolset:   { mutates: false, parallelSafe: false, riskLevel: 'admin' },
   invoke_skill:     { mutates: false, parallelSafe: false, riskLevel: 'read' },
 
   // ─── Interactive (pause for human) ────────────────────────────

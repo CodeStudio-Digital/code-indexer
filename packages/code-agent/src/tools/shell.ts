@@ -1,6 +1,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
-import { RUN_COMMAND_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { RUN_COMMAND_DESC } from '@mcp/code-agent/tools/descriptions.js';
 import {
   boundUtf8OutputDetailed,
   defaultLocalShellPort,
@@ -146,7 +146,7 @@ function isReadOnlyCommand(cmd: string): { ok: true } | { ok: false; reason: str
 const runCommandTool: CoderTool = {
   name: 'run_command',
   effectBoundary: 'shell',
-  description: maybeTerse(RUN_COMMAND_DESC),
+  description: RUN_COMMAND_DESC,
   source: 'native',
   outputPolicy: { mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
   // `mutates: false` is INTENTIONAL even though run_command can mutate

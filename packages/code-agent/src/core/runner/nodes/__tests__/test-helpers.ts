@@ -89,8 +89,6 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
       cache_read_input_tokens: 0,
     },
     activeTiers: overrides.tiers ?? new Set<ToolTier>(['bootstrap']),
-    pinnedTools: new Set<string>(),
-    terseDescriptionsLock: null,
     recovery: new Map(),
     rejectedToolSchemas: new Map(),
     lastProviderToolNames: new Set(),

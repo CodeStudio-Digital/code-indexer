@@ -8,7 +8,6 @@ import {
   GIT_ADD_DESC,
   GIT_COMMIT_DESC,
   GIT_BRANCH_DESC,
-  maybeTerse,
 } from '@mcp/code-agent/tools/descriptions.js';
 
 async function git(args: string[], ctx: ToolContext): Promise<ToolResult> {
@@ -46,7 +45,7 @@ export function withManagedCommitAttribution(
 const gitStatus: CoderTool = {
   name: 'git_status',
   effectBoundary: 'shell',
-  description: maybeTerse(GIT_STATUS_DESC),
+  description: GIT_STATUS_DESC,
   source: 'native',
   repeatPolicy: 'volatile',
   parameters: { type: 'object', properties: {}, additionalProperties: false },
@@ -56,7 +55,7 @@ const gitStatus: CoderTool = {
 const gitDiff: CoderTool = {
   name: 'git_diff',
   effectBoundary: 'shell',
-  description: maybeTerse(GIT_DIFF_DESC),
+  description: GIT_DIFF_DESC,
   source: 'native',
   repeatPolicy: 'volatile',
   parameters: {
@@ -78,7 +77,7 @@ const gitDiff: CoderTool = {
 const gitLog: CoderTool = {
   name: 'git_log',
   effectBoundary: 'shell',
-  description: maybeTerse(GIT_LOG_DESC),
+  description: GIT_LOG_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -96,7 +95,7 @@ const gitLog: CoderTool = {
 const gitAdd: CoderTool = {
   name: 'git_add',
   effectBoundary: 'shell',
-  description: maybeTerse(GIT_ADD_DESC),
+  description: GIT_ADD_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -116,7 +115,7 @@ const gitAdd: CoderTool = {
 const gitCommit: CoderTool = {
   name: 'git_commit',
   effectBoundary: 'shell',
-  description: maybeTerse(GIT_COMMIT_DESC),
+  description: GIT_COMMIT_DESC,
   source: 'native',
   parameters: {
     type: 'object',
@@ -136,7 +135,7 @@ const gitCommit: CoderTool = {
 const gitBranch: CoderTool = {
   name: 'git_branch',
   effectBoundary: 'shell',
-  description: maybeTerse(GIT_BRANCH_DESC),
+  description: GIT_BRANCH_DESC,
   source: 'native',
   parameters: {
     type: 'object',

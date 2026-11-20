@@ -10,9 +10,9 @@
  * 100% of the cached prefix on turn 1 of every round.
  *
  * CONTRACT: the persisted profile only ever WIDENS (bootstrap < navigate <
- * full). Narrowing across runs is exactly the bug; anything that needs more
- * tools mid-run already has `expand_toolset` (which persists via
- * `onTierPromoted`) and pins. An explicit narrower override (env/opts) wins
+ * full). Narrowing across runs is exactly the bug; a tool outside the
+ * published catalog is reached through find_tools + code_exec, never by
+ * widening mid-run. An explicit narrower override (env/opts) wins
  * for THAT run — diagnostic use — but never clobbers the stored value.
  */
 import {

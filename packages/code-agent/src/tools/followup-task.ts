@@ -26,7 +26,6 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { err } from '@mcp/code-agent/core/tool.js';
 import { sendMessage } from '@mcp/code-agent/tools/send-message.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 const FOLLOWUP_TASK_DESC =
   'Assign new work to a live subordinate using its exact path from list_agents. ' +
@@ -35,7 +34,7 @@ const FOLLOWUP_TASK_DESC =
 
 export const followupTask: CoderTool = {
   name: 'followup_task',
-  description: maybeTerse(FOLLOWUP_TASK_DESC),
+  description: FOLLOWUP_TASK_DESC,
   source: 'native',
   mutates: false,
   parallelSafe: false,

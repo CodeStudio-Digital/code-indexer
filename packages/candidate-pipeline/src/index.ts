@@ -81,8 +81,6 @@ export {
 export { recencyDecay, batchRecencyDecay } from './scorers/recency-decay.js';
 export type { RecencyDecayOptions } from './scorers/recency-decay.js';
 
-export { frequencyBoost, batchFrequencyBoost } from './scorers/frequency-boost.js';
-export type { FrequencyBoostOptions } from './scorers/frequency-boost.js';
 
 export { withCandidateIsolationCache } from './scorers/candidate-isolation.js';
 export type { IsolatedScoreInput, IsolatedScoreCacheOptions } from './scorers/candidate-isolation.js';

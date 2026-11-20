@@ -431,7 +431,7 @@ export interface PipelineDeps {
    * `EmbeddingFn` interface the candidate-pipeline framework expects.
    * Returns a Float32Array of the embedding for a single text input.
    */
-  toolSelectionEmbed: EmbeddingFn;
+  recommendationEmbed: EmbeddingFn;
   /**
    * Shared embeddings of role descriptions, used by the RolePipeline's
    * two-tower scorer. Roles change with template revisions, so this stays
@@ -1299,7 +1299,7 @@ export function createDeps(browser: import('@mcp/services/research-browser/types
   // Shared embedding adapter used by Company role recommendation. The retired
   // code-run tool-selection/context-relevance experiments no longer allocate
   // their own process-wide embedding caches.
-  const toolSelectionEmbed: EmbeddingFn = Object.assign(
+  const recommendationEmbed: EmbeddingFn = Object.assign(
     async (text: string) => {
       // Internal selectors belong to the Memory profile. Cache consumers
       // pin the dynamic fingerprint below so a profile edit cannot mix spaces.
@@ -1494,10 +1494,9 @@ export function createDeps(browser: import('@mcp/services/research-browser/types
       new KanbanPriorityOutcomeMatcher(),
     ],
   });
-  // Observability-only Agent Decision Engine metadata in tool-selection shadow
-  // rows/outcomes. Default OFF and stored inside existing JSON columns (no DB
-  // migration). This lets us compare recommendation vs. actual tool use before
-  // enforcing routing/guardrails.
+  // Observability-only Agent Decision Engine metadata. Default OFF and stored
+  // inside existing JSON columns (no DB migration). This lets us compare
+  // recommendation vs. actual tool use before enforcing routing/guardrails.
   const agentDecisionTelemetryEnabled = process.env.MCP_AGENT_DECISION_TELEMETRY === '1';
   const agentDecisionGuidanceEnabled = process.env.MCP_AGENT_DECISION_GUIDANCE === '1';
   const agentDecisionSoftGuardrailEnabled = process.env.MCP_AGENT_DECISION_SOFT_GUARDRAIL === '1';
@@ -1630,7 +1629,7 @@ export function createDeps(browser: import('@mcp/services/research-browser/types
     pipelineProviderResolver,
     taskPreflight,
     pipelineTelemetrySink,
-    toolSelectionEmbed,
+    recommendationEmbed,
     roleEmbeddingStore,
     counterfactualLogStore,
     lshIndex,

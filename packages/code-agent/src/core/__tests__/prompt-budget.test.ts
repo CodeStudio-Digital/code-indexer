@@ -204,7 +204,6 @@ describe('prompt-budget — cache boundary guarantees', () => {
     const prefix = (ctx: PromptContext): string =>
       buildSystemPrompt(ctx).split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)[0]!;
     const bare = prefix(BASE_CTX);
-    expect(prefix({ ...BASE_CTX, toolCap: { maxTools: 32, approxCatalog: 137 } })).toBe(bare);
     expect(prefix({
       ...BASE_CTX,
       customTiers: [{ tier: 'cf', displayName: 'Cloudflare', toolCount: 9 }],
@@ -216,16 +215,14 @@ describe('prompt-budget — cache boundary guarantees', () => {
     })).toBe(bare);
   });
 
-  it('toolCap and customTiers render BELOW the boundary', () => {
+  it('customTiers render BELOW the boundary; the duplicate tool-visibility block is gone', () => {
     const prompt = buildSystemPrompt({
       ...BASE_CTX,
-      toolCap: { maxTools: 32, approxCatalog: 137 },
       customTiers: [{ tier: 'cf', displayName: 'Cloudflare', toolCount: 9 }],
     });
     const [staticPrefix, dynamicSuffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
-    expect(staticPrefix).not.toContain('# Tool visibility');
+    expect(prompt).not.toContain('# Tool visibility');
     expect(staticPrefix).not.toContain('# External tool groups');
-    expect(dynamicSuffix).toContain('# Tool visibility');
     expect(dynamicSuffix).toContain('# External tool groups (hidden, on-demand)');
   });
 });

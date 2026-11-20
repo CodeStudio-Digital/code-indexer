@@ -57,10 +57,9 @@ import { AGENTS, isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
 import { SessionFileKnowledge } from '@mcp/code-agent/tools/file-knowledge.js';
 import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from '@mcp/code-agent/core/summarizer.js';
 import { computeSnapshot, type TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
-import { filterByTiers, profileToTiers, PREVIEW_TOOLS, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
+import { profileToTiers, PREVIEW_TOOLS, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { parkForBackgroundWork } from '@mcp/code-agent/tools/subagent-jobs-lifecycle.js';
-import { terseDescription } from '@mcp/code-agent/tools/descriptions.js';
 import { approvedPlanForRevision } from '@mcp/code-agent/tools/plan.js';
 import { applySmartReducerDetailed, type ReductionReport } from '@mcp/code-agent/core/smart-reducers.js';
 import {
@@ -82,15 +81,6 @@ import {
 import { buildIndexedDocsBlock } from '@mcp/code-agent/core/docs-hint.js';
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
-import { getGlobalToolSelectionOutcomeObserver } from '@mcp/code-agent/tool-selection/global-filter.js';
-import {
-  normalizeDynamicToolPins,
-  promoteDynamicToolPin,
-} from '@mcp/code-agent/tools/tool-pin-window.js';
-import {
-  isGlobalContextRelevanceEnabled,
-  tryGlobalContextCompact,
-} from '@mcp/code-agent/context-relevance/index.js';
 
 // Public types extracted to './runner/types.ts' (W4.2 split — keep this
 // file under 250 LOC ceiling). Re-exported below so external consumers
@@ -179,8 +169,7 @@ import { assembleMessagesForChat as assembleMessagesForChatImpl } from './runner
 // builds the BridgeCallbacks and hands off to `runBehaviorTree`.
 import { runBehaviorTree } from './runner/orchestrator.js';
 // Pure per-turn telemetry insert. Wrapped by `persistTurnTelemetryWrapper`
-// below with the class-bound tool-selection observer and exposed to the BT via
-// `BridgeCallbacks`.
+// below and exposed to the BT via `BridgeCallbacks`.
 import { persistTurnTelemetry as persistTurnTelemetryPure } from './runner/telemetry/persist-turn.js';
 import { checkTaskModeGate } from './runner/guards/task-mode-gate.js';
 
@@ -616,26 +605,14 @@ export class CoderRunner extends EventEmitter {
    * (all registered tools visible to the provider — legacy behaviour used
    * by subagents and tests). When a Set, the runner filters registry.list()
    * each turn so only tools whose tier is in the set reach the LLM.
-   *
-   * Grows monotonically via `promoteTier()` — tiers never shrink mid-session
-   * so the prefix cache can re-stabilize after a single promotion event.
+   * Constant for the run: the stable catalog never promotes a tier mid-run.
    */
   public activeTiers: Set<ToolTier> | null = null;
-
-  /**
-   * Tools the model called by name while they were hidden (tier-hidden or
-   * cap-cut by the model's maxTools). Dispatch executes the call anyway and
-   * promotes the name into this bounded LRU window. New dynamic capabilities
-   * replace stale ones; configured required pins never leave. Shared BY
-   * REFERENCE with the BT's RunContext.
-   */
-  public pinnedTools: Set<string> = new Set();
 
   /** Exact catalog sent on the latest provider turn (after cap + relevance). */
   public visibleToolNames: ReadonlySet<string> | null = null;
   public authorizedToolNames: ReadonlySet<string> | null = null;
   public projectionReceipt: import('./tool-projection.js').ToolProjectionReceipt | null = null;
-  public requestedToolNames = new Set<string>();
   public readonly stableToolCatalog = true;
 
   /**
@@ -781,27 +758,8 @@ export class CoderRunner extends EventEmitter {
     } else {
       this.activeTiers = null;
     }
-    // Pins seeded by the host on resume — history tools outside the active
-    // tiers, unioned with the session-persisted pins (mig 142); see runCoder.
-    if (opts.initialPinnedTools) {
-      this.pinnedTools = new Set(opts.initialPinnedTools);
-    }
-    // Freeze required pins as a reusable Set (callers may pass a one-shot
-    // iterable), then bound old/session-restored dynamic pins immediately.
-    // The newest entries survive because persisted pin order is the LRU order.
-    const requiredPinnedTools = new Set(opts.requiredPinnedTools ?? []);
-    opts.requiredPinnedTools = requiredPinnedTools;
-    const evictedInitialPins = normalizeDynamicToolPins(
-      this.pinnedTools,
-      requiredPinnedTools,
-    );
-    if (evictedInitialPins.length > 0) {
-      console.log(
-        `[coder] dynamic tool window: trimmed ${evictedInitialPins.length} stale restored pin(s): ` +
-        evictedInitialPins.join(', '),
-      );
-      try { this.opts.onPinnedToolsChanged?.([...this.pinnedTools]); } catch { /* best-effort */ }
-    }
+    // Freeze required pins as a reusable Set (callers may pass a one-shot iterable).
+    opts.requiredPinnedTools = new Set(opts.requiredPinnedTools ?? []);
     // Seed from prior session state so the very first turn after resume can
     // already replay the previous response.
     this.previousResponseId = opts.previousResponseId ?? null;
@@ -815,11 +773,6 @@ export class CoderRunner extends EventEmitter {
     this.opts.onCompactionCheckpoint = handler;
   }
 
-  /** Selection policy inherited by isolated sub-runners. */
-  getToolSelectionFilter(): RunnerOptions['toolSelectionFilter'] {
-    return this.opts.toolSelectionFilter;
-  }
-
   /** Dynamic/plugin tier map inherited by isolated sub-runners. */
   getExternalToolTiers(): RunnerOptions['externalToolTiers'] {
     return this.opts.externalToolTiers;
@@ -828,27 +781,6 @@ export class CoderRunner extends EventEmitter {
   /** Queue a semantic milestone; repeated signals coalesce until consumed. */
   requestMilestoneCompaction(trigger: string): void {
     if (!this.pendingMilestoneCompaction) this.pendingMilestoneCompaction = trigger;
-  }
-
-  /**
-   * Unlock a higher tier of tools. Called by the `expand_toolset` tool
-   * handler. Monotonic: already-active tiers stay active, new tier is
-   * added. Takes effect on the NEXT turn because the tools array is
-   * rebuilt at the start of each turn from the registry + activeTiers.
-   */
-  promoteTier(tier: ToolTier): void {
-    // Discovery is not an authorization or schema mutation. The registered
-    // non-interactive catalog is already reachable through code_exec.
-    if (this.stableToolCatalog) return;
-    if (!this.activeTiers) return; // no filtering → nothing to promote
-    if (this.activeTiers.has(tier)) return;
-    this.activeTiers.add(tier);
-    // Sticky toolset (mig 142): let the host persist the widen so resumes
-    // rebuild the same tool array. Persistence never breaks the promotion.
-    try { this.opts.onTierPromoted?.(tier); } catch { /* best-effort */ }
-    console.log(
-      `[coder] tier promoted → ${tier}. Active tiers: ${Array.from(this.activeTiers).sort().join(',')}`,
-    );
   }
 
   /**
@@ -1289,27 +1221,6 @@ export class CoderRunner extends EventEmitter {
       ...(blocked ? { reason: 'disabled_or_mode_excluded' } : {}) };
   }
 
-  promoteTool(name: string): string[] {
-    if (this.discoveryState(name).authorization === 'blocked') return [];
-    this.requestedToolNames.add(name);
-    if (this.stableToolCatalog) return [];
-    const requiredPinnedTools = new Set(this.opts.requiredPinnedTools ?? []);
-    const alreadyPinned = this.pinnedTools.has(name);
-    const evicted = promoteDynamicToolPin(
-      this.pinnedTools,
-      requiredPinnedTools,
-      name,
-    );
-    if (!alreadyPinned || evicted.length > 0) {
-      console.log(
-        `[coder] dynamic tool window: promoted ${name}` +
-        (evicted.length > 0 ? `; evicted LRU ${evicted.join(', ')}` : ''),
-      );
-      try { this.opts.onPinnedToolsChanged?.([...this.pinnedTools]); } catch { /* best-effort */ }
-    }
-    return evicted;
-  }
-
   /** Queue a user message containing text plus image/document blocks. */
   pushPendingUserContent(
     content: ContentBlock[],
@@ -1530,8 +1441,7 @@ export class CoderRunner extends EventEmitter {
     );
     // Pass tiers through unchanged — null means "no filter" so MCP-external
     // tools and subagent registries don't get accidentally pruned. Both the
-    // tier Set and the pin Set are shared BY REFERENCE so `promoteTier()` /
-    // dispatch-time pins reach the next turn's buildTools.
+    // tier Set is shared BY REFERENCE with the BT context.
     const initialTiers = this.activeTiers ?? null;
     return runBehaviorTree({
       opts: this.opts,
@@ -1545,7 +1455,6 @@ export class CoderRunner extends EventEmitter {
         (this as unknown as { emit: (e: string, ...a: unknown[]) => boolean }).emit(event, ...args);
       }) as never,
       initialTiers,
-      initialPins: this.pinnedTools,
       // Share the live messages array so `pushUserContent` / system reminders
       // / BT pushes all see the same backing store.
       initialMessages: this.messages,
@@ -1744,10 +1653,7 @@ export class CoderRunner extends EventEmitter {
           }),
         },
         // Per-turn telemetry persistence. The pure insert lives in
-        // `core/runner/telemetry/persist-turn.ts`; the class-bound
-        // tool-selection observer stays here because it reads `this.messages`
-        // and run state.
-        // The wrapper also mirrors
+        // `core/runner/telemetry/persist-turn.ts`. The wrapper mirrors
         // the inserted id into `this.lastTurnTelemetryId` so the host's
         // `flushPendingTurn` in `index.ts` (which reads
         // `runner.lastTurnTelemetryId`) keeps working unchanged.
@@ -1784,15 +1690,10 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
-   * Class-bound wrapper around `persistTurnTelemetryPure`. Owns the
-   * two side-effects that need access to instance state:
-   *   1. Stores the inserted id on `this.lastTurnTelemetryId` so
-   *      `index.ts`'s `flushPendingTurn` can stamp the tool_call rows.
-   *   2. Feeds the global ToolSelection observer (FeedbackCollector
-   *      backfill).
-   * Errors are swallowed at every layer — telemetry never breaks a real
-   * turn. The pure helper already wraps its DB write in `try`; the
-   * observer has its own `try/catch`.
+   * Class-bound wrapper around `persistTurnTelemetryPure`: stores the
+   * inserted id on `this.lastTurnTelemetryId` so `index.ts`'s
+   * `flushPendingTurn` can stamp the tool_call rows. Telemetry never breaks
+   * a real turn; the pure helper already wraps its DB write in `try`.
    */
   private persistTurnTelemetryWrapper(input: {
     turn: number;
@@ -1856,31 +1757,6 @@ export class CoderRunner extends EventEmitter {
     } else {
       this.lastTurnTelemetryId = persisted;
       this.lastTurnTelemetryIdPromise = null;
-    }
-
-    // Tool-selection feedback observer — only needs the user's task
-    // text + tool names. No-op when no observer is installed.
-    let lastUserText = '';
-    try {
-      for (let i = this.messages.length - 1; i >= 0; i--) {
-        const m = this.messages[i];
-        if (m.role === 'user') {
-          lastUserText = typeof m.content === 'string'
-            ? m.content
-            : m.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ');
-          break;
-        }
-      }
-      const observer = getGlobalToolSelectionOutcomeObserver();
-      if (observer && input.toolUseBlocks.length > 0 && lastUserText) {
-        observer(
-          lastUserText,
-          input.toolUseBlocks.map((b) => b.name),
-          this.sessionId,
-        );
-      }
-    } catch {
-      // Observer failures must never break telemetry.
     }
 
     return persisted;

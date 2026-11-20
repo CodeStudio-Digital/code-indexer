@@ -335,28 +335,6 @@ describe('ExecutingNode', () => {
     expect(ctx.transientRetriesThisTurn).toBe(0);
   });
 
-  it('forwards the filesystem session UUID to tool-selection telemetry', async () => {
-    const sessionId = asSessionId('018f0f5e-7b2d-7a45-8c11-0123456789ab');
-    let observedSessionId: string | undefined;
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider([
-        { type: 'text_delta', text: 'done' },
-        { type: 'done', stop_reason: 'end_turn' },
-      ]),
-      registry: makeRegistry({ read_file: () => 'read' }),
-      toolContext: emptyToolContext(),
-    });
-    ctx.opts.sessionId = sessionId;
-    ctx.opts.toolSelectionFilter = async (tools, filterContext) => {
-      observedSessionId = filterContext.sessionId;
-      return tools;
-    };
-
-    expect((await new ExecutingNode().execute(ctx, null)).kind)
-      .toBe('CleanFinish');
-    expect(observedSessionId).toBe(sessionId);
-  });
-
   it('gives an unverified write one bounded chance to run validation', async () => {
     const registry = new ToolRegistry();
     registry.register({

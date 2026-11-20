@@ -8,7 +8,6 @@ import {
   mirrorSpecToCompanyDrive,
   writeSpecToRepo,
 } from '@mcp/code-agent/tools/spec/index.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 const SUBMIT_SPECIFICATION_TO_MASTER_DESC =
   'Submit a feature/epic specification to the Master orchestrator for human approval.\n' +
@@ -27,7 +26,7 @@ const SUBMIT_SPECIFICATION_TO_MASTER_DESC =
  */
 export const submitSpecificationToMaster: CoderTool = {
   name: 'submit_specification_to_master',
-  description: maybeTerse(SUBMIT_SPECIFICATION_TO_MASTER_DESC),
+  description: SUBMIT_SPECIFICATION_TO_MASTER_DESC,
   source: 'native',
   parameters: {
     type: 'object',

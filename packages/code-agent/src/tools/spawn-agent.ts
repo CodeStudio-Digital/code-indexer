@@ -43,7 +43,6 @@ import type { CoderTool, ToolResult, ToolContext } from '@mcp/code-agent/core/to
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
   runSubagent,
   runParallelAgents,
@@ -445,7 +444,6 @@ async function runSingleEphemeral(
         sessionId: parentSessionId,
         sessionStore: deps.sessionStore,
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-        toolSelectionFilter: deps.toolSelectionFilter,
         externalToolTiers: deps.externalToolTiers,
         maxParallel: deps.maxParallel,
       },
@@ -660,7 +658,6 @@ async function runParallelEphemeral(
         sessionId: parentSessionId,
         sessionStore: deps.sessionStore,
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
-        toolSelectionFilter: deps.toolSelectionFilter,
         externalToolTiers: deps.externalToolTiers,
       },
       specs,
@@ -783,7 +780,7 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
   return {
     name: 'spawn_agent',
     effectBoundary: 'nested',
-    description: maybeTerse(SPAWN_AGENT_DESC),
+    description: SPAWN_AGENT_DESC,
     source: 'native',
     parameters: {
       type: 'object',

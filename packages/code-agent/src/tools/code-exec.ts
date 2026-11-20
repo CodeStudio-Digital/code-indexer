@@ -43,7 +43,6 @@ import {
 import { isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
 import { extractPathsFromToolArgs, isPathInsideScope } from '@mcp/code-agent/core/runner.js';
 import { resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { buildCodeExecFailureHint, wrapToolsBinding } from '@mcp/code-agent/tools/code-exec-hints.js';
@@ -154,7 +153,7 @@ const CODE_EXEC_DESC =
  *  - Interactive prompts (submit_plan, ask_user, ...) — they need the
  *    runner's pause/resume cycle, which we can't drive from inside a
  *    sync script.
- *  - Orchestration / recursion (spawn_*, code_exec itself, expand_toolset)
+ *  - Orchestration / recursion (spawn_*, code_exec itself)
  *    — would let a script spin up nested coder runs unbounded.
  *  - view_image — relies on `extraUserBlocks` injection, which only fires
  *    on direct tool dispatch.
@@ -281,7 +280,7 @@ export function buildCodeExecTool(
   return {
     name: 'code_exec',
     effectBoundary: 'nested',
-    description: maybeTerse(CODE_EXEC_DESC),
+    description: CODE_EXEC_DESC,
     source: 'native',
     outputPolicy: { mode: 'logs', reducer: 'smart', recovery: 'output_store', preserveOnError: true },
     mutates: false,

@@ -120,14 +120,6 @@ export interface PromptContext {
    * agent knows which external tool groups are available for on-demand expansion.
    */
   customTiers?: Array<{ tier: string; displayName: string; toolCount: number }>;
-  /**
-   * Model catalog cap vs. full registry size, computed once at session
-   * start. When the cap is smaller than the catalog, a "Tool visibility"
-   * block renders BELOW the dynamic boundary (it varies by model and
-   * registry size, so it must not pollute the shared static prefix)
-   * directing the model to schema discovery. These are session-start estimates.
-   */
-  toolCap?: { maxTools: number; approxCatalog: number };
   /** Session ID for skill template variable interpolation. */
   sessionId?: string;
   /**
@@ -632,7 +624,6 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   const canDiscover = toolAvailable(ctx.availableTools, 'find_tools');
   const customTiersText = canDiscover ? customTiersBlock(ctx.customTiers) : '';
-  const toolCapText = canDiscover ? toolCapBlock(ctx.toolCap) : '';
 
   // Plugin hook — projects can drop `.mcp-indexer/hooks/system-prompt.js`
   // to append extra instructions without forking the coder. Runs in a vm
@@ -659,7 +650,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     ? `\n\n${ctx.verifyCommands}`
     : '';
 
-  const dynamicSuffix = `${toolCapText}${customTiersText}${extraBlock}${verifyBlock}${repoMapBlock}`;
+  const dynamicSuffix = `${customTiersText}${extraBlock}${verifyBlock}${repoMapBlock}`;
   // ALWAYS emit the boundary, even when the dynamic suffix is empty. The
   // marker itself costs ~50 chars but it gives consumers a byte-stable
   // hinge to split on — splitting tests, cache-instrumentation code, and
@@ -817,24 +808,6 @@ function tierHint(available?: ReadonlySet<string>): string {
   return `# Tool discovery
 Use visible tools directly. Use \`find_tools\` for a missing capability or schema and follow its invocation route.${nested} Interactive and lifecycle tools require a top-level call. Repeating discovery cannot enable a blocked tool.
 `;
-}
-
-/**
- * Render the "Tool visibility" block for models whose catalog cap is smaller
- * than the full registry (weak models — GLM flash class — get ~32 tools).
- * Without this the model has no idea tools were trimmed and never reaches
- * for find_tools. Lives BELOW the dynamic boundary: the text varies by
- * (model, registry size), so placing it in the static prefix would break
- * cross-session prefix sharing for the same (project, provider, profile)
- * tuple. Within a session it is byte-stable across turns.
- */
-function toolCapBlock(toolCap?: { maxTools: number; approxCatalog: number }): string {
-  if (!toolCap || toolCap.maxTools >= toolCap.approxCatalog) return '';
-  return (
-    '\n\n# Tool visibility\n' +
-    `Direct-tool budget: ${toolCap.maxTools} of ~${toolCap.approxCatalog} registered tools. Required controls can exceed this target. ` +
-    'Use `find_tools` for a missing schema.\n'
-  );
 }
 
 /**

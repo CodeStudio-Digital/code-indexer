@@ -1,17 +1,13 @@
 /**
- * Hidden-call pin mechanism (`dispatchTools`).
+ * Hidden authorized calls (`dispatchTools`).
  *
- * A registered tool can be absent from the model's visible list (tier-hidden
- * or cap-cut) yet called by name — find_tools tells the model to do exactly
- * that. Contract:
- *   - hidden + registered → executes, `onToolPinned` fires (once per batch —
- *     the live pin set makes the second call non-hidden). The result text
- *     never claims a pin or a future catalog change: the stable catalog
- *     does not change mid-run.
- *   - admin/session-disabled → hard refusal (`gate`), handler NEVER runs,
- *     never pinned (closes the historical disabled-tools-execute hole)
- *   - visible tool → untouched
- *   - pinning is mandatory; hard blocks always win before pinning
+ * A registered tool can be absent from the model's visible list yet called by
+ * name — find_tools tells the model to do exactly that. Contract (the runtime
+ * pin window was removed; the stable catalog never changes mid-run):
+ *   - hidden + registered → executes; the result text claims no catalog change
+ *   - admin/session-disabled → hard refusal (`gate`), handler NEVER runs
+ *     (closes the historical disabled-tools-execute hole)
+ *   - visible tool → untouched; hard blocks always win
  */
 import { describe, it, expect } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
@@ -30,8 +26,7 @@ function makeTool(name: string, opts?: Partial<CoderTool>): CoderTool {
   };
 }
 
-function pinArgs(registry: ToolRegistry, overrides?: Partial<DispatchArgs>): DispatchArgs & { _pins: Set<string> } {
-  const pins = new Set<string>();
+function pinArgs(registry: ToolRegistry, overrides?: Partial<DispatchArgs>): DispatchArgs {
   return {
     toolUses: [{ id: 'tu1', name: 'hidden_tool', input: { a: 1 } }],
     registry,
@@ -39,15 +34,12 @@ function pinArgs(registry: ToolRegistry, overrides?: Partial<DispatchArgs>): Dis
     turn: 1,
     dupCalls: new Map<string, DupCallEntry>(),
     visibleToolNames: new Set(['visible_tool']),
-    pinnedTools: pins,
-    onToolPinned: (n) => pins.add(n),
-    _pins: pins,
     ...overrides,
   };
 }
 
-describe('dispatchTools — hidden-call pin', () => {
-  it('hidden registered tool executes and pins without claiming a catalog change', async () => {
+describe('dispatchTools — hidden authorized calls', () => {
+  it('hidden registered tool executes without claiming a catalog change', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('hidden_tool'));
     const args = pinArgs(registry);
@@ -56,37 +48,6 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(r.results[0].content).toBe('ok');
     expect(r.results[0].content).not.toContain('[toolset');
     expect(r.results[0].content).not.toContain('pinned');
-    expect(args._pins.has('hidden_tool')).toBe(true);
-  });
-
-  it('second call in the same batch is not re-pinned (live pin set)', async () => {
-    const registry = new ToolRegistry();
-    registry.register(makeTool('hidden_tool'));
-    const promoted: string[] = [];
-    const args = pinArgs(registry, {
-      toolUses: [
-        { id: 't1', name: 'hidden_tool', input: { a: 1 } },
-        { id: 't2', name: 'hidden_tool', input: { a: 2 } },
-      ],
-      onToolPinned: (name) => promoted.push(name),
-    });
-    const r = await dispatchTools(args);
-    expect(r.results.map((result) => result.content)).toEqual(['ok', 'ok']);
-    expect(promoted).toEqual(['hidden_tool']);
-  });
-
-  it('re-promotes a historical pin that is no longer visible after LRU eviction', async () => {
-    const registry = new ToolRegistry();
-    registry.register(makeTool('hidden_tool'));
-    const pins = new Set(['hidden_tool']);
-    const promoted: string[] = [];
-    const args = pinArgs(registry, {
-      pinnedTools: pins,
-      onToolPinned: (name) => promoted.push(name),
-    });
-    const result = await dispatchTools(args);
-    expect(result.results[0].content).toBe('ok');
-    expect(promoted).toEqual(['hidden_tool']);
   });
 
   it('leaves the finalized content of a hidden call unchanged', async () => {
@@ -97,10 +58,9 @@ describe('dispatchTools — hidden-call pin', () => {
     });
     const r = await dispatchTools(args);
     expect(r.results[0].content).toBe('x'.repeat(20));
-    expect(args._pins.has('hidden_tool')).toBe(true);
   });
 
-  it('disabled tool is hard-blocked: handler never runs, not pinned, refusalKind gate', async () => {
+  it('disabled tool is hard-blocked: handler never runs, refusalKind gate', async () => {
     const registry = new ToolRegistry();
     let ran = false;
     registry.register(makeTool('hidden_tool', { handler: async () => { ran = true; return { content: 'ok' }; } }));
@@ -112,10 +72,9 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(r.results[0].isError).toBe(true);
     expect(r.results[0].refusalKind).toBe('gate');
     expect(r.results[0].content).toContain('[tool-disabled]');
-    expect(args._pins.size).toBe(0);
   });
 
-  it('visible tool result is untouched and never pinned', async () => {
+  it('visible tool result is untouched', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('visible_tool'));
     const args = pinArgs(registry, {
@@ -123,10 +82,9 @@ describe('dispatchTools — hidden-call pin', () => {
     });
     const r = await dispatchTools(args);
     expect(r.results[0].content).not.toContain('[toolset]');
-    expect(args._pins.size).toBe(0);
   });
 
-  it('pins even when the tool errors (intent is clear)', async () => {
+  it('returns a hidden tool error unchanged', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('hidden_tool', {
       handler: async () => ({ content: 'boom', isError: true }),
@@ -135,10 +93,9 @@ describe('dispatchTools — hidden-call pin', () => {
     const r = await dispatchTools(args);
     expect(r.results[0].isError).toBe(true);
     expect(r.results[0].content).toBe('boom');
-    expect(args._pins.has('hidden_tool')).toBe(true);
   });
 
-  it('preserves hard blocks before hidden-tool pinning', async () => {
+  it('preserves hard blocks for hidden tools', async () => {
     const registry = new ToolRegistry();
     let ran = false;
     registry.register(makeTool('hidden_tool', {
@@ -155,7 +112,6 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(r.results[0].content).toContain('[tool-disabled]');
     expect(r.results[0].content).not.toContain('[toolset]');
     expect(ran).toBe(false);
-    expect(args._pins.size).toBe(0);
   });
 
   it('preserves nested capability hard blocks', async () => {

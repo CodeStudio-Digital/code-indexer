@@ -20,8 +20,14 @@ import type { SessionId } from '@mcp/session-storage';
 
 export interface RequestReviewDeps {
   provider: ChatProvider;
-  /** Snapshot of parent's tool registry. Used as base for the review allowlist. */
-  parentTools: import('@mcp/code-agent/core/tool.js').CoderTool[];
+  /**
+   * Parent tools the review allowlist is applied to. A function is resolved at
+   * review time, so the host can hand over the same filtered snapshot its
+   * subagents get (custom allowlist, research preset, disabled lists).
+   */
+  parentTools:
+    | import('@mcp/code-agent/core/tool.js').CoderTool[]
+    | (() => readonly import('@mcp/code-agent/core/tool.js').CoderTool[]);
   sessionId?: SessionId;
   sessionStore?: FsSessionStore;
   /** Reviewer provider (different family). When unset, falls back to parent's. */
@@ -110,7 +116,7 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
         ctx.signal?.throwIfAborted();
         const parent: SubagentParent = {
           provider,
-          tools: deps.parentTools,
+          tools: typeof deps.parentTools === 'function' ? [...deps.parentTools()] : deps.parentTools,
           ctx,
           sessionId: deps.sessionId ?? ctx.sessionId,
           sessionStore: deps.sessionStore,

@@ -59,7 +59,7 @@ describe('primary bridge twins of the native read/list tools', () => {
     const disabled = new Set(['read_file', 'list_directory']);
     const registry = session(disabled);
     expect(has(registry, 'mcp__read_file') && has(registry, 'mcp__list_directory')).toBe(true);
-    const names = buildTools({ registry, stableCatalog: true, activeTiers: new Set(['bootstrap', 'navigate']),
+    const names = buildTools({ registry, activeTiers: new Set(['bootstrap', 'navigate']),
       provider: { name: 'openai-chatgpt', model: 'gpt-6.1-sol' } as ChatProvider,
       toolContext: { cwd: tmpdir(), projectName: 'p' }, [key]: disabled }).tools.map(t => t.name);
     expect(names).toEqual(expect.arrayContaining(['mcp__read_file', 'mcp__list_directory']));

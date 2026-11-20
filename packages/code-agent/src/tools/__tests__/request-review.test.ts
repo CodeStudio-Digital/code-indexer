@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatProvider } from '../../providers/adapter.js';
 import type { ToolContext } from '../../core/tool.js';
@@ -76,5 +78,26 @@ describe('request_review filesystem session integration', () => {
     releaseMarker();
     const result = await resultPromise;
     expect(result.content).toContain('Reviewer found no issues');
+  });
+
+  it('gives the reviewer the parent tool set resolved at review time, not at registration', async () => {
+    runReviewSubagent.mockResolvedValue({ findings: [], parsed: true, raw: '<review>{"findings":[]}</review>',
+      usage: { input_tokens: 1, output_tokens: 1 } });
+    const fixture = (name: string) => ({ name, description: name, source: 'native', parameters: { type: 'object', properties: {} },
+      handler: async () => ({ content: '' }) }) as never;
+    let snapshot: never[] = [fixture('read_file'), fixture('git_diff')];
+    const tool = buildRequestReviewTool({ provider: {} as ChatProvider, parentTools: () => snapshot });
+    // Filters applied after registration (allowlist, research preset, disabled lists).
+    snapshot = [fixture('read_file')];
+    await tool.handler({ spec: 'Review', diff: 'diff --git a/a b/a' }, {} as ToolContext);
+    expect((runReviewSubagent.mock.calls.at(-1)?.[0].tools as Array<{ name: string }>).map(t => t.name)).toEqual(['read_file']);
+  });
+
+  it('index.ts hands request_review the same tool snapshot the subagents get', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../index.ts', import.meta.url)), 'utf8');
+    expect(src).toContain('parentTools: () => childToolSnapshot,');
+    const assigned = src.indexOf('childToolSnapshot = ');
+    expect(assigned).toBeGreaterThan(src.indexOf('pruneRedundantPrimaryTwins(registry'));
+    expect(src.indexOf('const parentTools = childToolSnapshot;')).toBeGreaterThan(assigned);
   });
 });

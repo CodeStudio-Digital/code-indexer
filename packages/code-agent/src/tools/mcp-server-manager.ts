@@ -137,7 +137,8 @@ export class McpServerManager {
 
   /**
    * List tools from all connected servers, aggregated and prefixed.
-   * Returns both the CoderTool array and a tier map for filterByTiers.
+   * Returns both the CoderTool array and a tier map (runtime tool tiers:
+   * find_tools tier labels and contextual catalog floors).
    */
   async listAllTools(options: { serverId?: string } = {}): Promise<{ tools: CoderTool[]; tierMap: Map<string, ToolTier> }> {
     const allTools: CoderTool[] = [];
@@ -355,7 +356,7 @@ export class McpServerManager {
 
   /**
    * Build a summary of custom (non-core) tiers from connected servers.
-   * Used to populate expand_toolset's dynamic enum and the system prompt hint.
+   * Used for the system prompt's external tool groups listing.
    *
    * Returns a map from custom tier name to { displayName, toolCount }.
    * Multiple servers sharing the same custom tier are merged.

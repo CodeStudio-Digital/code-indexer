@@ -299,20 +299,10 @@ export interface DispatchArgs {
     parentToolName: string,
   ) => import('@mcp/code-agent/core/tool.js').NestedToolObserver | undefined;
   /**
-   * Names visible to the model THIS turn (from buildTools). When provided,
-   * a call to a registered-but-hidden name (tier-hidden or cap-cut)
-   * executes anyway and is reported via `onToolPinned`; its result text is
-   * not annotated. Omit to disable hidden-call handling (tests / subagents).
-   * Kill switch: CODER_TOOL_PIN_DISABLE=1.
+   * Names visible to the model THIS turn (from buildTools). A call to a
+   * registered-but-hidden authorized name executes like any other call.
    */
   visibleToolNames?: ReadonlySet<string>;
-  /**
-   * Already-pinned names (LIVE reference to the run's pin set). Consulted
-   * so a tool pinned earlier in the same batch isn't reported twice.
-   */
-  pinnedTools?: ReadonlySet<string>;
-  /** Fired when a hidden registered tool executed — pin it for next turn. */
-  onToolPinned?: (name: string) => void;
   /**
    * Hard block for admin/session-disabled tools. Before this existed a
    * disabled tool still EXECUTED when the model emitted its name — the
@@ -377,12 +367,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     result: DispatchedToolResult;
     count: number;
   }>();
-  // A tool may have been pinned in an earlier turn but later evicted from the
-  // bounded visible working set. Visibility, not historical pin membership,
-  // decides whether it needs re-promotion. This batch-local set still avoids
-  // reporting the same hidden tool twice when it is called twice together.
-  const activatedHiddenThisBatch = new Set<string>();
-
   const dispatchOne = async (requestedToolUse: DispatchArgs['toolUses'][number]): Promise<void> => {
     const retrievalDecision = retrievalPlan.get(requestedToolUse.id);
     const tu = {
@@ -484,12 +468,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         return;
       }
     }
-    const hiddenFromModel =
-      !!tool &&
-      !!args.visibleToolNames &&
-      !args.visibleToolNames.has(tu.name) &&
-      !activatedHiddenThisBatch.has(tu.name);
-
     // Pre-dispatch gate (plan/spec/policy refusal). Synthesises an error
     // tool_result without touching the dedup counter — the call never
     // happened from the agent's POV.
@@ -1045,16 +1023,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       finalOriginalSize = fin.originalSize;
       finalOutputId = fin.outputId;
       reductionReport = fin.reductionReport ?? reductionReport;
-    }
-
-    // Record the hidden call. Pins even on isError — the model's intent to use
-    // the tool is what matters (the live `pinnedTools` reference makes a second
-    // call in this batch non-hidden). The result text stays untouched: the
-    // stable catalog never changes mid-run, so no pin or future visibility
-    // may be claimed to the model.
-    if (hiddenFromModel) {
-      args.onToolPinned?.(tu.name);
-      activatedHiddenThisBatch.add(tu.name);
     }
 
     args.onToolCallFinalized?.(tu.id, finalShaped.length);

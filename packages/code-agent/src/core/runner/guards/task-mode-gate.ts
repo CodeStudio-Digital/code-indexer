@@ -58,7 +58,6 @@ const WORKFLOW_TOOLS: ReadonlySet<string> = new Set([
   'ask_user',
   'submit_plan',
   'find_tools',
-  'expand_toolset',
 ]);
 
 /**

@@ -29,20 +29,10 @@ export interface CreateRunContextArgs {
    * the registry has). Otherwise `ensureBootstrap` adds `'bootstrap'`
    * before storing on the context.
    *
-   * Passed BY REFERENCE (same contract as `initialMessages`): the host's
-   * `CoderRunner.promoteTier` (the `expand_toolset` handler) mutates this
-   * Set mid-run, and `buildTools` must observe the promotion on the next
-   * turn. Copying here silently froze every mid-run promotion.
+   * Passed BY REFERENCE (same contract as `initialMessages`): the context
+   * aliases the host runner's Set.
    */
   initialTiers: Set<ToolTier> | null;
-  /**
-   * Pinned tools — registered tools the model called while they were
-   * hidden (tier-hidden or cap-cut). Shared BY REFERENCE with the host
-   * runner so dispatch-time pins are visible to the next `buildTools`.
-   * The host bounds this Set as an LRU working set; configured pins are kept
-   * separately in RunnerOptions.requiredPinnedTools.
-   */
-  initialPins?: Set<string>;
   /**
    * Live messages reference shared with the host (e.g. `CoderRunner.this.messages`).
    * Passed BY REFERENCE — the BT pushes assistant/tool blocks onto this array
@@ -71,8 +61,6 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     turn: 0,
     totalUsage: zeroUsage(),
     activeTiers: ensureBootstrap(args.initialTiers),
-    pinnedTools: args.initialPins ?? new Set<string>(),
-    terseDescriptionsLock: null,
     recovery: new Map(),
     rejectedToolSchemas: new Map(),
     lastProviderToolNames: new Set(),
@@ -156,10 +144,8 @@ function zeroUsage(): ChatUsage {
  * disabled filtering entirely (subagents/tests) and bootstrap survives
  * trivially since every tool is exposed.
  *
- * Mutates and returns the GIVEN Set — the context must alias the host
- * runner's `activeTiers` so `promoteTier()` (expand_toolset) reaches the
- * next turn's `buildTools`. The historical copy here silently disconnected
- * every mid-run tier promotion from the BT.
+ * Mutates and returns the GIVEN Set — the context aliases the host
+ * runner's `activeTiers`.
  */
 export function ensureBootstrap(tiers: Set<ToolTier> | null): Set<ToolTier> | null {
   if (tiers === null) return null;

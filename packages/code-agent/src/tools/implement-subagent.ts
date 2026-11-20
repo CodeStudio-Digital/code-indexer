@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { workResult, requiredWorkResult, withEvidenceReference, WORK_RESULT_INSTRUCTION } from '../runtime/work-result.js';
 import { budgetedProvider } from '../runtime/ultra-provider.js';
 import { buildFindToolsTool } from './find-tools.js';
-import { buildExpandTools } from './expand.js';
 import { getToolTier, CORE_TIER_NAMES } from './tiers.js';
 const EXECUTOR_INSTANCE_ID = randomUUID();
 import { isAbsolute, relative } from 'node:path';
@@ -179,7 +178,6 @@ export function wrapToolForSubagentFence(
         try { dynamicRisk = tool.riskOf(args); } catch { dynamicRisk = 'write'; }
       }
       if (tool.name === 'record_memo'
-        || tool.name === 'expand_toolset'
         || metadata.mutates
         || metadata.executionClass !== 'read'
         || dynamicRisk !== 'read') {
@@ -361,7 +359,6 @@ export interface SubagentParent {
    */
   agentLoopV2?: boolean;
   /** Optional explicit overrides; normal child runs inherit these from ctx.runner. */
-  toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
   externalToolTiers?: import('@mcp/code-agent/core/runner.js').RunnerOptions['externalToolTiers'];
   maxParallel?: number;
 }
@@ -535,7 +532,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
   // (so we mirror the successful tool_result regardless of scope).
   const subRegistry = new ToolRegistry();
   for (const tool of parent.tools) {
-    if (['spawn_agent', 'workflow', 'execute_tasks', 'resume_agent', 'resume_chat', 'find_tools', 'expand_toolset', 'create_chat', 'create_chat_trigger', 'prepare_chat_schedule', 'propose_task'].includes(tool.name)) continue;
+    if (['spawn_agent', 'workflow', 'execute_tasks', 'resume_agent', 'resume_chat', 'find_tools', 'create_chat', 'create_chat_trigger', 'prepare_chat_schedule', 'propose_task'].includes(tool.name)) continue;
     if (!CHAT_TOOL_NAMES.has(tool.name) && !isAllowed(spec.allowlist, tool)) continue;
     let wrapped = spec.pathScope
       ? wrapToolForPathScope(tool, spec.pathScope, sandboxViolations, spec.pathScopeMode)
@@ -559,24 +556,15 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
   } catch (e) {
     console.warn(`[subagent] record_memo registration failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-  // Progressive discovery must survive every specialist allowlist. Without
-  // these two meta-tools, enabling tiers for a child would make plugin/custom
-  // groups unreachable rather than merely lazy.
-  for (const name of ['find_tools', 'expand_toolset']) {
-    const tool = parent.tools.find((candidate) => candidate.name === name);
-    if (tool && !subRegistry.has(name)) {
-      const tiers = new Map(parent.externalToolTiers ?? []);
-      const custom = new Map<string, { displayName: string; toolCount: number }>();
-      for (const candidate of subRegistry.list()) {
-        if (candidate.runtimeTier) tiers.set(candidate.name, candidate.runtimeTier.id);
-        const tier = getToolTier(candidate.name, tiers);
-        if (!CORE_TIER_NAMES.has(tier)) custom.set(tier, { displayName: tier, toolCount: (custom.get(tier)?.toolCount ?? 0) + 1 });
-      }
-      const namesForTier = (tier: string) => subRegistry.list().filter(candidate => getToolTier(candidate.name, tiers) === tier).map(candidate => candidate.name);
-      const local = name === 'find_tools' ? buildFindToolsTool(subRegistry, tiers)
-        : buildExpandTools(custom, { toolNamesForTier: namesForTier, isTierAvailable: tier => namesForTier(tier).length > 0 })[0];
-      subRegistry.register(wrapToolForSubagentFence(local, assertChildRunFence));
+  // Progressive discovery must survive every specialist allowlist: without
+  // find_tools, plugin/custom groups in a child would be unreachable rather
+  // than merely deferred.
+  if (parent.tools.some((candidate) => candidate.name === 'find_tools') && !subRegistry.has('find_tools')) {
+    const tiers = new Map(parent.externalToolTiers ?? []);
+    for (const candidate of subRegistry.list()) {
+      if (candidate.runtimeTier) tiers.set(candidate.name, candidate.runtimeTier.id);
     }
+    subRegistry.register(wrapToolForSubagentFence(buildFindToolsTool(subRegistry, tiers), assertChildRunFence));
   }
 
   const parentChat = parent.ctx.collaboration;
@@ -664,10 +652,6 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
     typeof parentRunner?.getPolicyShadowScopeFactory === 'function'
       ? parentRunner.getPolicyShadowScopeFactory()
       : undefined;
-  const inheritedToolSelection = parent.toolSelectionFilter
-    ?? (typeof parentRunner?.getToolSelectionFilter === 'function'
-      ? parentRunner.getToolSelectionFilter()
-      : undefined);
   const inheritedExternalTiers = parent.externalToolTiers
     ?? (typeof parentRunner?.getExternalToolTiers === 'function'
       ? parentRunner.getExternalToolTiers()
@@ -789,9 +773,6 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
     // specialist preserves its historical un-tiered surface.
     profile: spec.profile === 'full' ? undefined : 'navigate',
     externalToolTiers: subExternalTiers,
-    // `full` is the explicit exact-surface escape hatch. Other specialists
-    // inherit the smart selector and stay bounded to the configured top-K.
-    toolSelectionFilter: spec.profile === 'full' ? undefined : inheritedToolSelection,
     turnTelemetryStore:
       subagentTelemetryEnabled && parent.sessionStore
         ? new FsTurnTelemetryRepository(parent.sessionStore)

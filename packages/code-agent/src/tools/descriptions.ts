@@ -4,7 +4,7 @@
  * Keeping descriptions out of the handler files serves two goals:
  *   1. Tuning prompts is a single-file, single-diff change — no risk of
  *      touching tool logic by accident.
- *   2. Lets us apply terse-mode transforms (see CODER_TERSE_TOOLS) uniformly.
+ *   2. Descriptions stay byte-stable constants shared by every catalog path.
  *
  * To edit a description, modify the constant here. The handler imports it
  * by name. Do not add conditional logic or string concatenation that depends
@@ -163,29 +163,3 @@ export const TASK_COMPLETE_DESC =
   "DON'T: list files in `files_modified` that you didn't actually touch — the sandbox audits this.\n" +
   "DON'T: call this from inside code_exec — it isn't exposed in the sandbox; emit it as a direct top-level tool call.\n" +
   'After this call, run `execute_tasks` again to advance to the next inline task in the run.';
-
-/**
- * Pure terse transform: collapses a description down to its first sentence.
- * Always shortens — no env check. Use this when you want the terse form
- * unconditionally (e.g., bootstrap-tier filtering at the runner level).
- */
-export function terseDescription(desc: string): string {
-  if (desc.length <= 150) return desc;
-  // First '.' OR newline ends the summary — same rule as the MCP bridge's
-  // terse transform (mcp-bridge.ts). The house style separates the first
-  // sentence from USE/DON'T blocks with '.\n' (no space), which the old
-  // `indexOf('. ')` never matched, hard-cutting mid-word at 150 chars.
-  const firstStop = desc.search(/[.\n]/);
-  if (firstStop > 0 && firstStop <= 150) return desc.slice(0, firstStop + 1).trim();
-  return desc.slice(0, 150).trim() + '…';
-}
-
-/**
- * Optional terse-mode transform: collapses any description down to its first
- * sentence when the CODER_TERSE_TOOLS env flag is set. Called once per tool
- * at registration time (not per-turn) so the result is still cache-stable
- * within a session.
- */
-export function maybeTerse(desc: string): string {
-  return desc;
-}

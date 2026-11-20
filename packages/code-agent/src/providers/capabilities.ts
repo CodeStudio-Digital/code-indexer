@@ -8,12 +8,10 @@
  * the number the model can actually reason over, instead of shipping the
  * full catalog and hoping.
  *
- * The cap is a HINT, not a hard ceiling. It's applied AFTER tier filtering:
- *   final_tools = head(filterByTiers(all_tools), cap_for_model)
- * When the cap trims the list, the lowest-priority tools go first. Priority
- * is determined by tier (bootstrap > navigate > admin) then by the order
- * they appear in the registry — so the critical discovery tools always
- * survive the cut.
+ * The cap bounds the stable workflow catalog (core/runner/assembly/tools.ts):
+ *   direct budget = min(cap_for_model, verified provider limit, session cap or 28)
+ * Workflow/control tools are always published; every other authorized tool
+ * stays deferred and reachable through find_tools + code_exec.
  *
  * Runtime priority (highest → lowest):
  *   1. CODER_MODEL_CAPS env var  (JSON: {"model-id": {"maxTools": N, "contextWindow": N}})

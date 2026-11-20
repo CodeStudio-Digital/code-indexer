@@ -92,6 +92,7 @@ describe('agent-run control stays out of every internal bridge', () => {
       expect(src.indexOf(earlier), earlier).toBeGreaterThan(0);
       expect(src.indexOf(earlier), earlier).toBeLessThan(prune);
     }
-    expect(prune).toBeLessThan(src.indexOf('const parentTools = allDisabled.size > 0'));
+    // Before the child snapshot every subagent (and request_review) draws from.
+    expect(src.indexOf('childToolSnapshot = childDisabled.size > 0')).toBeGreaterThan(prune);
   });
 });

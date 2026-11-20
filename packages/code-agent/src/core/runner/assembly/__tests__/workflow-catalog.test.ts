@@ -28,7 +28,7 @@ function tool(name: string, overrides: Partial<CoderTool> = {}): CoderTool {
 function args(overrides: Partial<BuildToolsArgs> = {}): BuildToolsArgs {
   const registry = new ToolRegistry();
   registry.registerAll([...NAMES, ...Array.from({ length: 200 }, (_, i) => `cold_${i}`)].map(name => tool(name)));
-  return { registry, stableCatalog: true, activeTiers: new Set(['bootstrap', 'navigate']),
+  return { registry, activeTiers: new Set(['bootstrap', 'navigate']),
     provider: { name: 'openai-chatgpt', model: 'gpt-6.1-sol' } as ChatProvider,
     toolContext: { cwd: tmpdir(), projectName: 'catalog' }, ...overrides };
 }
@@ -56,7 +56,7 @@ describe('workflow catalog', () => {
     const before = buildTools(input);
     const reversed = new ToolRegistry();
     reversed.registerAll([...input.registry.list()].reverse());
-    const after = buildTools({ ...input, registry: reversed, pinnedTools: new Set(['cold_1', 'cold_2', 'run_command']) });
+    const after = buildTools({ ...input, registry: reversed });
     expect(fingerprintTools(after.tools)).toBe(fingerprintTools(before.tools));
   });
 

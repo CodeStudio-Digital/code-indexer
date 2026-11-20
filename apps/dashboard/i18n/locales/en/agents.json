@@ -287,7 +287,7 @@
   "role.tierFull": "Full",
   "role.skills": "Skills",
   "role.availableMcps": "Available MCP packs",
-  "role.availableMcpsHint": "Subordinates unlock each pack on demand via expand_toolset(tier: \"<id>\"). Configure servers in Admin → MCP Servers.",
+  "role.availableMcpsHint": "Subordinates reach each pack on demand through find_tools. Configure servers in Admin → MCP Servers.",
   "role.systemPrompt": "Role instructions",
   "role.systemPromptHint": "(editable preset — markdown supported)",
   "role.systemPromptPlaceholder": "Instructions for this role. Use ${{PROJECT_NAME}}, ${{SESSION_ID}}, ${{USER_INPUT}}, ${{OS}}, ${{TIMESTAMP}} as template variables.",

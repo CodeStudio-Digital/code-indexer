@@ -11,7 +11,6 @@ import { WORKFLOW_DESC, workflowSchema } from './workflow-schema.js';
 import { randomUUID } from 'node:crypto';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import {
   MICRO_AGENT_PROFILE_NAMES,
@@ -137,7 +136,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
   return {
     name: 'workflow',
     effectBoundary: 'nested',
-    description: maybeTerse(WORKFLOW_DESC),
+    description: WORKFLOW_DESC,
     parameters: workflowSchema,
     source: 'native',
     mutates: true,
@@ -396,12 +395,6 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           `steps=${record.steps.length} waves=${totalWaves}`,
         );
         await executeWorkflow(deps, ctx, record);
-        if (record.steps.some(step => step.integration?.state === 'pending')) {
-          // Request the next two schemas; ordinary projection/dispatch still
-          // decides visibility and authorization. This never executes either tool.
-          ctx.runner?.promoteTool?.('read_chat_changes');
-          ctx.runner?.promoteTool?.('integrate_chat_changes');
-        }
         return workflowToolResult(record, renderWorkflowResult(record), true);
       } catch (error) {
         // Once the workflow id exists, convert fatal execution failures into a

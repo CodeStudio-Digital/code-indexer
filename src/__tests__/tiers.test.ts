@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   getToolTier,
   profileToTiers,
-  filterByTiers,
   inferProfileFromMessage,
   TIER_COUNTS,
   BOOTSTRAP_TOOLS,
@@ -10,10 +9,15 @@ import {
   type ToolTier,
 } from '@mcp/code-agent/tools/tiers.js';
 
+/** The tools of `tools` whose tier is active (filterByTiers was removed with the non-stable catalog). */
+const inTiers = <T extends { name: string }>(tools: readonly T[], tiers: ReadonlySet<string>): T[] =>
+  tools.filter((t) => tiers.has(getToolTier(t.name)));
+
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {
     // Goal telemetry was retired; task_list remains the active task surface.
-    expect(TIER_COUNTS.bootstrap).toBe(49);
+    // +4 explicit placements (wait_chats, propose_task, prepare_chat_schedule, record_memo).
+    expect(TIER_COUNTS.bootstrap).toBe(51);
     expect(BOOTSTRAP_TOOLS.has('create_goal')).toBe(false);
     expect(BOOTSTRAP_TOOLS.has('update_goal')).toBe(false);
     expect(BOOTSTRAP_TOOLS.has('task_list')).toBe(true);
@@ -75,7 +79,7 @@ describe('tool tiers', () => {
     expect(profileToTiers('full')).toEqual(new Set<ToolTier>(['bootstrap', 'navigate', 'admin']));
   });
 
-  it('filterByTiers only returns tools whose tier is active', () => {
+  it('tier placement selects only tools whose tier is active', () => {
     const tools = [
       { name: 'read_file' },
       { name: 'write_file' },
@@ -84,10 +88,10 @@ describe('tool tiers', () => {
       { name: 'mcp__find_references' },
       { name: 'mcp__index_project' },
     ];
-    const bootstrap = filterByTiers(tools, profileToTiers('bootstrap'));
+    const bootstrap = inTiers(tools, profileToTiers('bootstrap'));
     expect(bootstrap.map((t) => t.name).sort()).toEqual(['mcp__get_project_pulse']);
 
-    const navigate = filterByTiers(tools, profileToTiers('navigate'));
+    const navigate = inTiers(tools, profileToTiers('navigate'));
     expect(navigate.map((t) => t.name).sort()).toEqual([
       'mcp__find_references',
       'mcp__get_project_pulse',
@@ -95,22 +99,8 @@ describe('tool tiers', () => {
       'write_file',
     ]);
 
-    const full = filterByTiers(tools, profileToTiers('full'));
+    const full = inTiers(tools, profileToTiers('full'));
     expect(full).toHaveLength(6);
-  });
-
-  it('filterByTiers preserves input order (for cache stability)', () => {
-    const tools = [
-      { name: 'mcp__get_project_pulse' },
-      { name: 'write_file' },
-      { name: 'read_file' },
-      { name: 'git_commit' },
-    ];
-    const result = filterByTiers(tools, profileToTiers('navigate'));
-    // Order from the input is preserved — write_file stays between
-    // get_project_pulse and read_file even though alphabetical sort would
-    // rearrange them.
-    expect(result.map((t) => t.name)).toEqual(['mcp__get_project_pulse', 'write_file', 'read_file']);
   });
 
   it('inferProfileFromMessage routes git operations to full', () => {

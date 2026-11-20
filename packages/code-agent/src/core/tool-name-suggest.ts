@@ -30,6 +30,8 @@ export const RETIRED_TOOL_REPLACEMENTS: Readonly<Record<string, string>> = {
   update_todo: 'Use task_list with `updates` ({ id, status }) to flip checklist items.',
   submit_tasks: "Use task_list with `items` and gate:'approve' (Plan mode only).",
   poll_session: 'Use write_stdin with the session_id and empty (or omitted) `chars` — an empty write is the poll.',
+  expand_toolset: 'Use find_tools to discover a tool and its schema; call hidden non-interactive tools inside code_exec. The visible catalog never changes mid-run.',
+  capability_catalog: 'Use find_tools for tools; for skills use get_skills_list and get_skill_content.',
 };
 
 /** The error text for a retired tool name, or null when the name was never retired. */

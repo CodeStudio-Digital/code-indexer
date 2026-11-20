@@ -10,11 +10,14 @@ import { describe, expect, it } from 'vitest';
 import {
   getToolTier,
   profileToTiers,
-  filterByTiers,
   getAllKnownToolsMeta,
   BOOTSTRAP_TOOLS,
   contextualTiersForRuntime,
 } from '@mcp/code-agent/tools/tiers.js';
+
+/** The tools of `tools` whose tier is active (filterByTiers was removed with the non-stable catalog). */
+const inTiers = <T extends { name: string }>(tools: readonly T[], tiers: ReadonlySet<string>): T[] =>
+  tools.filter((t) => tiers.has(getToolTier(t.name)));
 
 describe('tool tiers — persistent-shell session trio', () => {
   it('places exec_command / write_stdin / list_sessions in navigate, not bootstrap', () => {
@@ -36,14 +39,14 @@ describe('tool tiers — persistent-shell session trio', () => {
       { name: 'list_sessions' },
       { name: 'write_file' },
     ];
-    const visible = filterByTiers(tools, bootstrap).map((t) => t.name);
+    const visible = inTiers(tools, bootstrap).map((t) => t.name);
     expect(visible).toEqual(['mcp__read_file']);
   });
 
   it('reveals the trio once navigate is active', () => {
     const navigate = profileToTiers('navigate');
     const tools = [{ name: 'write_stdin' }, { name: 'exec_command' }, { name: 'list_sessions' }, { name: 'write_file' }];
-    const visible = filterByTiers(tools, navigate).map((t) => t.name);
+    const visible = inTiers(tools, navigate).map((t) => t.name);
     expect(visible).toEqual(['write_stdin', 'exec_command', 'list_sessions', 'write_file']);
   });
 });

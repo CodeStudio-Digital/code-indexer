@@ -14,7 +14,6 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import type { CompanyContext } from '@mcp/company/types.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 interface AgentLine {
   path: string;
@@ -84,7 +83,7 @@ function buildLines(ctx: ToolContext): AgentLine[] {
 
 export const listAgents: CoderTool = {
   name: 'list_agents',
-  description: maybeTerse(LIST_AGENTS_DESC),
+  description: LIST_AGENTS_DESC,
   source: 'native',
   mutates: false,
   parallelSafe: true,

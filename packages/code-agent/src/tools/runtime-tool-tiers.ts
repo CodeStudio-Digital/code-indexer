@@ -1,5 +1,9 @@
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
-import type { CustomTierInfo } from '@mcp/code-agent/tools/expand.js';
+/** Display data for an opt-in tool group (system-prompt listing). */
+export interface CustomTierInfo {
+  displayName: string;
+  toolCount: number;
+}
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 
 export interface RuntimeToolTierCatalog {

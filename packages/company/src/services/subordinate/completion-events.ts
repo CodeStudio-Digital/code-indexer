@@ -60,8 +60,8 @@ export type SubordinateCompletionListener = (
 
 /**
  * Process-wide bus. Singleton instance lives in
- * `subordinateCompletionBus` (exported below) — same pattern as
- * the global tool-selection filter. Tests get a fresh instance via
+ * `subordinateCompletionBus` (exported below) — the usual process-wide
+ * singleton pattern. Tests get a fresh instance via
  * `new SubordinateCompletionBus()`.
  */
 export class SubordinateCompletionBus {

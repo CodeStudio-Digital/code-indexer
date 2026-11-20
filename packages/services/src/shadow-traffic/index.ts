@@ -20,8 +20,6 @@ export {
   FeedbackCollector,
   type FeedbackCollectorConfig,
   type OutcomeMatcher,
-  ToolSelectionOutcomeMatcher,
-  type ToolSelectionObservedEvent,
   RolePipelineOutcomeMatcher,
   type RolePipelineObservedEvent,
   KanbanPriorityOutcomeMatcher,

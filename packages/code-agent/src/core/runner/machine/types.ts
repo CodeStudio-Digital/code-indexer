@@ -79,25 +79,6 @@ export interface RunContext {
    */
   activeTiers: Set<ToolTier> | null;
   /**
-   * Tools the model called by name while they were hidden (tier-hidden or
-   * cap-cut). They join the visible list from the next turn (`buildTools`
-   * unions them past the tier filter and protects them from the cap).
-   * Shared BY REFERENCE with the host runner. Runtime pins are a bounded LRU
-   * window: new capabilities may evict older dynamic pins, while configured
-   * pins remain required through RunnerOptions.requiredPinnedTools.
-   */
-  pinnedTools: Set<string>;
-  /**
-   * P5a — description format decided ONCE at the run's first buildTools and
-   * locked for the whole run. Historically `bootstrapOnly` was recomputed
-   * per turn, so the FIRST tier promotion rewrote EVERY surviving tool's
-   * description terse→full — a whole-prefix cache bust on top of the
-   * membership change (~67k chars re-cached). Constant-per-run keeps
-   * existing tool bytes stable; promotions only APPEND new tools. Full
-   * text stays reachable via find_tools/tool_schema. Null = undecided.
-   */
-  terseDescriptionsLock: boolean | null;
-  /**
    * Per-recovery-kind circuit breaker counters. Each kind has its own cap
    * resolved by `recoveryCap()`; the orchestrator aborts when a kind goes
    * over.
@@ -181,7 +162,6 @@ export interface RunContext {
     key: string;
     built: import('../assembly/tools.js').BuildToolsResult;
     variants: Map<string, {
-      selectionApplied?: boolean;
       tools: import('../assembly/tools.js').SerializedTool[];
       json: string | null;
       fingerprint: string | null;
@@ -602,8 +582,7 @@ export interface BridgeCallbacks {
   injectSystemReminder?: (text: string) => void;
   /**
    * Per-turn telemetry persistence — wraps the pure
-   * `core/runner/telemetry/persist-turn.ts` helper with the tool-selection
-   * feedback observer. Returns the written turn metric UUID so the
+   * `core/runner/telemetry/persist-turn.ts` helper. Returns the written turn metric UUID so the
    * Executing node can update `ctx.lastTurnTelemetryId` for the host's
    * `flushPendingTurn` to consume.
    *

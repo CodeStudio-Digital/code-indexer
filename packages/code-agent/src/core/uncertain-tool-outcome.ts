@@ -40,7 +40,7 @@ export function needsOutcomeRecoveryApproval(
   // code_exec's children still cross the same authority with the same context.
   if (tool.source === 'native' && (
     (tool.name === 'code_exec' && tool.effectBoundary === 'nested')
-    || ['find_tools', 'expand_toolset', 'ask_user'].includes(tool.name)
+    || ['find_tools', 'ask_user'].includes(tool.name)
   )) return false;
   const declared = tool.riskOf !== undefined || tool.mutates === false
     || (tool.source === 'native' && BUILTIN_CLASSIFICATION[tool.name]?.mutates === false);
