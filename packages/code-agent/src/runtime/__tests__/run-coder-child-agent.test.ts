@@ -84,8 +84,7 @@ beforeAll(async () => {
   projectId = db.createProject('fixture', projectRoot).id;
   db.close();
   const providers = new ProviderStore(process.env.MCP_INDEX_DB!);
-  // An available kind (LOCAL_PROVIDER_KINDS): any other is stored but never
-  // returned, and its Admin settings would be dropped without a word.
+  // A provider the store returns: its Admin per-profile settings reach the child run.
   providers.upsertProvider({ id: 'fixture', name: 'Fixture', kind: 'openai', enabled: true, use_for_coder: true });
   // The admin per-profile cap the child run must honour (keyed by the creator's provider).
   providers.setSubagentProfileLimits('fixture', 'explore', { maxToolCalls: 3 });

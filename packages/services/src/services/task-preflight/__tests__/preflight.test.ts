@@ -9,7 +9,7 @@ import { asSessionId } from '@mcp/session-storage';
 
 it('omits memory from preflight before loading titles when the user opts out', () => {
   const getMemoryIndex = vi.fn(() => [{ title: 'Private convention' }]);
-  const catalogs = preparePreflightCatalogs({ getToolCatalog: () => [], getMemoryIndex }, {
+  const catalogs = preparePreflightCatalogs({ getMemoryIndex }, {
     projectId: 1, sessionId: asSessionId('00000000-0000-4000-8000-000000000001'),
     userMessage: 'Ignore project memory during this task',
   });

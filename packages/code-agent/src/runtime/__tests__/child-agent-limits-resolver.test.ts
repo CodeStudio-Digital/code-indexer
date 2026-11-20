@@ -24,9 +24,6 @@ beforeEach(() => {
   const providers = new ProviderStore(db.raw());
   providers.upsertProvider({ id: 'main', name: 'Main', kind: 'openai', enabled: true, use_for_coder: true });
   providers.setSubagentProfileLimits('main', 'explore', { maxToolCalls: 3, timeoutMs: 60_000 });
-  // A kind outside LOCAL_PROVIDER_KINDS: stored, but not available to the app.
-  db.raw().prepare(`INSERT INTO provider_configs (id, name, kind, base_url, api_key, auth_mode, enabled, use_for_agent, use_for_coder, is_default)
-    VALUES ('compat', 'Compat', 'openai-compat', '', '', 'api_key', 1, 1, 1, 0)`).run();
   db.close();
   warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 });
@@ -53,8 +50,8 @@ describe('child-agent Admin limits resolver', () => {
     expect(run!.limits).toMatchObject({ maxToolCalls: 3, timeoutMs: 60_000 });
   });
 
+  // This edition exposes every stored provider kind, so only an unknown id is unavailable.
   it.each([
-    ['an unavailable provider kind', 'compat', /not configured or not available/],
     ['an unknown provider', 'missing', /not configured or not available/],
   ])('logs and falls back for %s', (_case, providerId, message) => {
     expect(profileLimitsFromProviderStore(dbPath, providerId)).toBeUndefined();

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 
@@ -38,7 +38,7 @@ afterEach(async () => {
 describe('retired per-session provider fallback', () => {
   it('no longer serves the per-session fallback routes', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Fallback', provider: 'test', model: 'test' });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
 
     const get = await app.request(`/api/coder/sessions/${session.id}/fallback`);

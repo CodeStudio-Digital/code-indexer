@@ -35,7 +35,7 @@ describe('code_exec supervisor liveness', () => {
       tools: [], schemas: [], listing: [], changes: [], stash: [],
     }, { invoke: async () => null, ready() { readyAt = performance.now(); }, log() {}, logOmission() {}, stash() {} });
     try {
-      await expect(run.promise).rejects.toMatchObject({ code: 'CODE_EXEC_JS_TIMEOUT', message: 'code_exec evaluator stopped responding' });
+      await expect(run.promise).rejects.toMatchObject({ code: 'CODE_EXEC_JS_TIMEOUT', message: 'code_exec timed out waiting for the evaluator to respond' });
       const elapsed = performance.now() - readyAt;
       expect(elapsed).toBeGreaterThanOrEqual(500 + WATCHDOG_BUDGET_MARGIN_MS - 5);
       expect(elapsed).toBeLessThan(500 + WATCHDOG_BUDGET_MARGIN_MS + 2_000);

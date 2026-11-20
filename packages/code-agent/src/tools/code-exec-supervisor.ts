@@ -6,7 +6,7 @@ import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tre
 /**
  * The host budget clock (armed on `ready`) and the evaluator's vm timeout use
  * the script budget; the watchdog ticks every 50 ms. A stall threshold equal to
- * the budget let a tick land first and report "stopped responding" instead of
+ * the budget let a tick land first and report the watchdog timeout instead of
  * the deterministic budget error. This margin (five ticks) keeps the budget
  * error first while a truly stuck evaluator is still reported within
  * budget + margin.
