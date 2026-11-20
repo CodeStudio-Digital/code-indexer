@@ -45,7 +45,6 @@ export interface PreflightSeed {
 }
 
 export interface RunCoderOptions {
-  agentReads?: import('@mcp/code-agent/ports/agent-read-port.js').AgentReadPort;
   /** Durable admission barrier after configuration resolves, before provider execution. */
   admitAttempt?: (
     preparation: import('@mcp/agent-runtime-contracts').CoderAttemptPreparationV1,

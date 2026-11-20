@@ -52,8 +52,10 @@ function registry(): ToolRegistry {
     ...previewTools, ...buildProjectMemoryTools(), ...buildSessionDriveTools(), ...buildConversationChapterTools(),
     ...chatCollaborationTools, ...sessionNetworkTools, ...chatChangesTools, ...followupTaskTools,
     ...sendMessageTools, ...sendInputTools, ...toolOutputTools]);
-  for (const name of ['search', 'grep_code', 'get_file_skeleton', 'get_symbol_body', 'prepare_edit', 'start_agent_run']) {
-    r.register(generic(`mcp__${name}`, { source: 'mcp', ...internalMcpContract(name) }));
+  for (const name of ['search', 'grep_code', 'get_file_skeleton', 'get_symbol_body', 'prepare_edit', 'save_memory']) {
+    // As the index tools are registered: native, with the code-indexer identity.
+    r.register(generic(`mcp__${name}`, { source: 'native', ...internalMcpContract(name),
+      capabilityProvenance: { kind: 'native', providerId: 'code-indexer' } }));
   }
   r.registerAll(['ask_user', 'task_list', 'spawn_agent', 'resume_agent', 'invoke_skill', 'view_image'].map(name => generic(name)));
   r.registerAll([taskComplete, buildCollectAgentsTool({} as never)]);
@@ -79,7 +81,7 @@ describe('read-only Explore session authority', () => {
     ['bootstrap+preview', new Set(['bootstrap', 'preview'])],
   ])('removes write, process and delegation tools from the %s projection and authority', (_label, tiers) => {
     const explore = buildTools(args('explore', { activeTiers: tiers as BuildToolsArgs['activeTiers'] }));
-    for (const name of [...WRITE_OR_PROCESS, ...DELEGATION, 'mcp__start_agent_run', 'preview_open', 'preview_click', 'preview_fill']) {
+    for (const name of [...WRITE_OR_PROCESS, ...DELEGATION, 'mcp__save_memory', 'preview_open', 'preview_click', 'preview_fill']) {
       expect(names(explore), name).not.toContain(name);
       expect(authorized(explore).has(name), name).toBe(false);
     }

@@ -25,11 +25,8 @@ describe('external index ownership contract', () => {
     );
   });
 
-  it('keeps MCP mutation tools FTS-only locally and delegates indexing to HTTP', () => {
+  it('keeps the index tools FTS-only locally and delegates semantic reads to the owner', () => {
     const mcp = [
-      'apps/mcp-server/context.ts',
-      'apps/mcp-server/index.ts',
-      'apps/mcp-server/tools/index-project.ts',
       'packages/indexer/src/agent-tools/context.ts',
       'packages/indexer/src/agent-tools/tools/projects.ts',
       'packages/indexer/src/agent-tools/tools/snapshots.ts',
@@ -38,8 +35,7 @@ describe('external index ownership contract', () => {
     expect(mcp).not.toMatch(/from ['"]@mcp\/store\/local-vector-router/);
     expect(mcp).not.toMatch(/from ['"][^'"]*sqlite-vec/);
     expect(mcp).not.toMatch(/\bnew\s+IndexAgent\s*\(/);
-    expect(source('apps/mcp-server/tools/index-project.ts')).toContain('requestMcpLocalServer');
-    expect(source('packages/indexer/src/agent-tools/context.ts')).toContain('createMcpSemanticSearchClient(config)');
+    expect(source('packages/indexer/src/agent-tools/context.ts')).toContain('overrides.semanticSearchClient ?? UNAVAILABLE_SEMANTIC_SEARCH_CLIENT');
     expect(source('packages/indexer/src/agent-tools/context.ts')).toContain(
       'new HybridSearch(db, null, new NullEmbeddingService())',
     );

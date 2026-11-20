@@ -44,7 +44,7 @@ export function toolsRouter(store: ProviderStore): HttpRouter {
       return c.json({ error: 'disabled (boolean) required' }, 400);
     }
     const tier = getToolTier(toolName);
-    const source = toolName.startsWith('ext_') ? 'mcp_external' : toolName.startsWith('mcp__') ? 'mcp' : 'native';
+    const source = toolName.startsWith('ext_') ? 'mcp_external' : toolName.startsWith('mcp__') ? 'index' : 'native';
     store.setGlobalToolDisabled(toolName, body.disabled, { tier, source });
     return c.json({ ok: true });
   });
@@ -61,7 +61,7 @@ export function toolsRouter(store: ProviderStore): HttpRouter {
       tool_name: t.name,
       disabled: t.disabled,
       tier: getToolTier(t.name),
-      source: t.name.startsWith('ext_') ? 'mcp_external' : t.name.startsWith('mcp__') ? 'mcp' : 'native',
+      source: t.name.startsWith('ext_') ? 'mcp_external' : t.name.startsWith('mcp__') ? 'index' : 'native',
     }));
     store.bulkSetGlobalDisabled(items);
     return c.json({ ok: true });

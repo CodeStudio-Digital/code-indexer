@@ -1,4 +1,5 @@
-import type { McpTier } from '@mcp/services/auth/domain/api-token.js';
+/** Same union as McpTier in @mcp/indexer/agent-tools/tool.ts (code-agent does not depend on the indexer). */
+type McpTier = 'bootstrap' | 'navigate' | 'admin';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { ToolSourceTruncation } from '@mcp/code-agent/core/tool.js';
 

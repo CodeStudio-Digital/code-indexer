@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { McpToolBridge } from '../mcp-bridge.js';
+import { internalToolDefinition } from '../internal-tool-adapter.js';
 import { ToolRegistry } from '../../core/registry.js';
 import { ToolCallLedger } from '../../core/tool-call-ledger.js';
 import { createMutationFenceAuthority } from '../../core/mutation-fence.js';
@@ -9,9 +9,8 @@ import { parseProjectMemoryInput } from '@mcp/shared/memory-write.js';
 const input = { title: ' Bound reads ', content: 'Use a bounded page.', category: 'convention', importance: 0.92, referenced_files: ['src\\index.ts'] };
 async function fixture() {
   const callTool = vi.fn(), invoke = vi.fn(async () => ({ created: 1, merged: 0, skipped: 0 }));
-  const bridge = new McpToolBridge();
-  (bridge as any).client = { callTool, listTools: async () => ({ tools: [{ name: 'save_memory', inputSchema: { type: 'object', properties: {} } }] }) };
-  const tool = (await bridge.listTools({ projectName: 'bound' }))[0]!;
+  const tool = internalToolDefinition({ name: 'save_memory', inputSchema: { type: 'object', properties: {} } },
+    { projectName: 'bound' }, 'test', { prepare: async () => callTool });
   const registry = new ToolRegistry(); registry.register(tool);
   const context = { cwd: process.cwd(), projectName: 'bound', currentToolUseId: 'memory-call', ports: { memoryMutations: { invoke } },
     toolCallLedger: new ToolCallLedger(), mutationFence: createMutationFenceAuthority({ mode: 'enforce',
@@ -37,7 +36,7 @@ it.each([{ title: '' }, { content: 'x'.repeat(64001) }, { category: 'user' }, { 
   expect((await f.registry.invoke(f.tool.name, { ...input, ...invalid }, f.context)).isError).toBe(true);
   expect(f.invoke).not.toHaveBeenCalled(); expect(f.callTool).not.toHaveBeenCalled();
 });
-it('never falls back to stdio without an owned port or after a lost receipt', async () => {
+it('never falls back to the index tools without an owned port or after a lost receipt', async () => {
   const f = await fixture(); f.context.ports = {};
   expect((await f.registry.invoke(f.tool.name, input, f.context)).isError).toBe(true);
   f.context.ports = { memoryMutations: { invoke: f.invoke } };

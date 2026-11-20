@@ -1,5 +1,5 @@
-import type { Clock } from '../../../auth/ports/clock.js';
-import type { RandomId } from '../../../auth/ports/random-id.js';
+import type { Clock } from '../support/ports/clock.js';
+import type { RandomId } from '../support/ports/random-id.js';
 import { PendingAuthorization } from '../domain/pending-authorization.js';
 import type { McpOAuthRegistrationReaderRepo } from '../ports/oauth-registration-repository.js';
 import type { PendingAuthorizationRepo } from '../ports/pending-authorization-repository.js';

@@ -6,6 +6,7 @@ import type { ToolContext, CoderTool } from '../core/tool.js';
 import { childChatId } from '@mcp/session-storage/collaboration/types.js';
 import { defaultLocalFilesystemPort, type IFilesystemPort } from '../ports/filesystem-port.js';
 import { lockUltraIntegration } from './ultra-integration-lock.js';
+import { isIndexTool } from '../core/index-tool-identity.js';
 
 export interface UltraWorkspace {
   actor: string; source: string; path: string; baseTree: string;
@@ -98,6 +99,9 @@ export function gitBlobHash(bytes: Buffer, algorithm = 'sha1'): string {
 
 /** Native writes are scoped. Host shell/MCP execution stays with the coordinator. */
 export function isolatedChildTool(tool: CoderTool): boolean {
+  // Index tools (mcp__*) are bound to the main project's root and index, not
+  // the isolated worktree: they stay with the coordinator, as when they were MCP.
+  if (isIndexTool(tool)) return false;
   if (tool.executionClass === 'control' && tool.riskLevel === 'read') return true;
   if (tool.source !== 'native' || tool.name === 'code_exec') return false;
   if (['run_command', 'exec_command', 'enter_worktree', 'exit_worktree'].includes(tool.name)) return false;

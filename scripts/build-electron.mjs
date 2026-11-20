@@ -114,7 +114,6 @@ async function buildPreload() {
 
 console.log('Building CodeStudio Electron app…');
 run('node', ['scripts/check-desktop-runtime-dependencies.mjs']);
-run('node', ['--import', 'tsx', 'apps/mcp-server/scripts/generate-internal-mcp-catalog.ts', '--check']);
 console.log(`  root: ${root}`);
 console.log(
   `  flags: tsc=${!skipTsc} dashboard=${!skipDashboard}`

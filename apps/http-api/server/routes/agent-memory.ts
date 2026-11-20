@@ -4,6 +4,7 @@ import { parseIdParam, parseIntQuery, notFound } from './_helpers.js';
 import { memoryPage, mountAgentMemoryCurationRoutes } from './agent-memory-curation.js';
 import { mountAgentMemorySemanticRoutes } from './agent-memory-semantic.js';
 import { mountAgentMemoryEvolutionRoutes } from './agent-memory-evolution.js';
+import { searchProjectMemory } from '../index-search-service.js';
 
 /**
  * Agent-memory curation — the human feedback loop over the LIVE store
@@ -23,16 +24,9 @@ export function mountAgentMemoryRoutes(app: HttpRouter, deps: ServerDeps): void 
    * service itself preserves FTS results when semantic retrieval is offline. */
   app.get('/api/projects/:id/agent-memory/search', async (c) => {
     const projectId = parseIdParam(c);
-    const project = db.getProject(projectId);
-    if (!project) return notFound(c);
-    const query = (c.req.query('q') ?? '').trim();
-    if (!query) return c.json({ results: [] });
-    const limit = Math.min(50, Math.max(1, parseIntQuery(c, 'limit', 5)));
-    if (query.length > 4096) return c.json({ error: 'query exceeds 4096 characters' }, 400);
-    const signal = c.req.raw.signal;
-    signal.throwIfAborted();
-    const results = await agentMemoryService.search('project', projectId, query, limit, undefined, signal);
-    signal.throwIfAborted();
+    const outcome = await searchProjectMemory(deps, projectId, c.req.query('q') ?? '', parseIntQuery(c, 'limit', 5), c.req.raw.signal);
+    if (outcome.status !== 200) return outcome.status === 404 ? notFound(c) : c.json({ error: outcome.error }, 400);
+    const { results } = outcome;
     if (c.req.query('projection') === 'ids') return c.json({ results: results.map(row => ({ id: row.id, score: row.score })) });
     return c.json({ results });
   });

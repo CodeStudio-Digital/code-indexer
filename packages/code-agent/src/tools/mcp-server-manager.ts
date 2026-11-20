@@ -11,7 +11,7 @@ import { DeferredMcpValidator } from './deferred-mcp-validator.js';
  * aggregates their tools into CoderTool[] with `ext_<server_id>__` prefix.
  *
  * Lifecycle: instantiate → connectAll() → listAllTools() → closeAll().
- * Used inside runCoder() alongside the internal McpToolBridge.
+ * Used inside runCoder() alongside the in-process index tools.
  */
 
 import { awaitMcpConnection } from './mcp-connection-wait.js';

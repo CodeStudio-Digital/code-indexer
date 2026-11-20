@@ -1,0 +1,27 @@
+{
+  "SV1": {
+    "content": "Memory \"Paridade\" saved (created=1 merged=0)."
+  },
+  "SV2": {
+    "content": "Memory \"Paridade\" skipped (created=0 merged=0)."
+  },
+  "SV3": {
+    "content": "Error: save_memory: invalid project memory category",
+    "isError": true,
+    "error": {
+      "code": "TOOL_ERROR",
+      "kind": "tool_error",
+      "retryable": false
+    }
+  },
+  "SV4": {
+    "content": "Memory save requires its owned persistence port.",
+    "isError": true
+  },
+  "R16": {
+    "content": "src/target.ts | 121 lines | ts\n[lines 1-121] [auto-full: file ≤800 lines]\n1\t// filler 1\n2\t// filler 2\n3\t// filler 3\n4\t// filler 4\n5\t// filler 5\n6\t// filler 6\n7\t// filler 7\n8\t// filler 8\n9\t// filler 9\n10\texport function target() {\n11\t  return PUBLIC_LIMIT + 1; // edited\n12\t}\n13\t// filler 13\n14\t// filler 14\n15\t// filler 15\n16\t// filler 16\n17\t// filler 17\n18\t// filler 18\n19\t// filler 19\n20\t// filler 20\n21\t// filler 21\n22\t// filler 22\n23\t// filler 23\n24\t// filler 24\n25\t// filler 25\n26\t// filler 26\n27\t// filler 27\n28\t// filler 28\n29\t// filler 29\n30\texport interface Shape {\n31\t  area(): number;\n32\t}\n33\t// filler 33\n34\t// filler 34\n35\t// filler 35\n36\t// filler 36\n37\t// filler 37\n38\t// filler 38\n39\t// filler 39\n40\texport class Widget implements Shape {\n41\t  area() { return 1; }\n42\t}\n43\t// filler 43\n44\t// filler 44\n45\t// filler 45\n46\t// filler 46\n47\t// filler 47\n48\t// filler 48\n49\t// filler 49\n50\t// filler 50\n51\t// filler 51\n52\t// filler 52\n53\t// filler 53\n54\t// filler 54\n55\t// filler 55\n56\t// filler 56\n57\t// filler 57\n58\t// filler 58\n59\t// filler 59\n60\t// filler 60\n61\t// filler 61\n62\t// filler 62\n63\t// filler 63\n64\t// filler 64\n65\t// filler 65\n66\t// filler 66\n67\t// filler 67\n68\t// filler 68\n69\t// filler 69\n70\t// filler 70\n71\t// filler 71\n72\t// filler 72\n73\t// filler 73\n74\t// filler 74\n75\t// filler 75\n76\t// filler 76\n77\t// filler 77\n78\t// filler 78\n79\t// filler 79\n80\t// filler 80\n81\t// filler 81\n82\t// filler 82\n83\t// filler 83\n84\t// filler 84\n85\t// filler 85\n86\t// filler 86\n87\t// filler 87\n88\t// filler 88\n89\t// filler 89\n90\t// filler 90\n91\t// filler 91\n92\t// filler 92\n93\t// filler 93\n94\t// filler 94\n95\t// filler 95\n96\t// filler 96\n97\t// filler 97\n98\t// filler 98\n99\t// filler 99\n100\texport const PUBLIC_LIMIT = 17;\n101\t// filler 101\n102\t// filler 102\n103\t// filler 103\n104\t// filler 104\n105\t// filler 105\n106\t// filler 106\n107\t// filler 107\n108\t// filler 108\n109\t// filler 109\n110\t// filler 110\n111\t// filler 111\n112\t// filler 112\n113\t// filler 113\n114\t// filler 114\n115\t// filler 115\n116\t// filler 116\n117\t// filler 117\n118\t// filler 118\n119\t// filler 119\n120\t// filler 120\n121\t"
+  },
+  "R17": {
+    "content": "src/target.ts — symbol body (lines 10-12 of 121)\n10\texport function target() {\n11\t  return PUBLIC_LIMIT + 1; // edited\n12\t}\n[For surrounding content: read_file file_path=\"src/target.ts\", start_line=13]"
+  }
+}

@@ -161,7 +161,7 @@ export function setCoderWorkerDocDeps(
   deps: {
     documentExport?: CoderWorkerDocDeps['documentExport'];
     projectIndex?: CoderWorkerDocDeps['projectIndex'];
-    agentReads?: CoderWorkerDocDeps['agentReads'];
+    indexSearch?: CoderWorkerDocDeps['indexSearch'];
     docSearch?: CoderWorkerDocDeps['docSearch'];
     docsResearch?: CoderWorkerDocDeps['docsResearch'];
     vision?: CoderWorkerDocDeps['vision'];
@@ -179,7 +179,7 @@ export function setCoderWorkerDocDeps(
   if (deps.docSearch !== undefined) docDeps.docSearch = deps.docSearch;
   if (deps.documentExport !== undefined) docDeps.documentExport = deps.documentExport;
   if (deps.projectIndex !== undefined) docDeps.projectIndex = deps.projectIndex;
-  if (deps.agentReads !== undefined) docDeps.agentReads = deps.agentReads;
+  if (deps.indexSearch !== undefined) docDeps.indexSearch = deps.indexSearch;
   if (deps.docsResearch !== undefined) docDeps.docsResearch = deps.docsResearch;
   if (deps.vision !== undefined) docDeps.vision = deps.vision;
   if (deps.memoryRetriever !== undefined) docDeps.memoryRetriever = deps.memoryRetriever;

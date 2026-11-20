@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 export interface SessionToolItem {
   name: string;
   tier: string;
-  source: 'native' | 'mcp' | 'mcp_external';
+  source: 'native' | 'index' | 'mcp_external';
   description: string;
   globallyDisabled: boolean;
   sessionDisabled: boolean;

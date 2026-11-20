@@ -6,7 +6,6 @@
       "roots": [
         "apps/cli",
         "apps/http-api",
-        "apps/mcp-server",
         "benchmarks",
         "docker",
         "evals",
@@ -173,8 +172,7 @@
     ]
   },
   "unitEntrypoints": [
-    "apps/http-api/public.js",
-    "apps/mcp-server/agent-read-client.js"
+    "apps/http-api/public.js"
   ],
   "runtimeModules": {
     "scripts/harness-session-storage-compat.mjs": [

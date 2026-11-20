@@ -1,7 +1,7 @@
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
-import { AGENT_READ_NAMES, type AgentReadName } from '../ports/agent-read-port.js';
 
-// First-party contracts, checked against apps/mcp-server/tools in tests.
+// First-party contracts, checked against the index tools' declared access in
+// apps/http-api/workers/__tests__/native-index-definitions.test.ts.
 // Remote MCP annotations never grant read/parallel execution rights here.
 export const INTERNAL_MCP_ACCESS = {
   search: 'read', grep_code: 'read',
@@ -13,17 +13,14 @@ export const INTERNAL_MCP_ACCESS = {
   get_costs: 'read', export_docs: 'admin', list_models: 'read',
   rag_search_docs: 'read', rag_read_doc: 'read', rag_doc_outline: 'read',
   index_project: 'admin', get_project_overview: 'read', get_project_pulse: 'read', get_repo_map: 'read',
-  list_agents: 'read', start_agent_run: 'write', list_agent_runs: 'read',
-  get_agent_run: 'read', get_agent_result: 'read', cancel_agent_run: 'write',
 } as const;
 
-type Contract = Required<Pick<CoderTool, 'mutates' | 'riskLevel' | 'parallelSafe'>> & Pick<CoderTool, 'effectBoundary' | 'repeatPolicy'>;
-const independentReads = new Set(['list_agents', 'list_agent_runs', 'get_agent_run', 'get_agent_result', 'search', 'grep_code', 'get_recently_modified_files', 'get_dependencies', 'get_dependents', 'get_project_overview', 'get_project_pulse', 'rag_search_docs', 'rag_read_doc', 'rag_doc_outline', 'get_costs', 'list_models', 'list_directory', 'read_file', 'get_file_skeleton', 'get_hierarchy', 'find_implementations', 'get_symbol_body', 'find_references', 'semantic_neighbors', 'trace_usage', 'prepare_edit', 'get_repo_map', 'search_memory']);
+type Contract = Required<Pick<CoderTool, 'mutates' | 'riskLevel' | 'parallelSafe'>> & Pick<CoderTool, 'effectBoundary'>;
+const independentReads = new Set(['search', 'grep_code', 'get_recently_modified_files', 'get_dependencies', 'get_dependents', 'get_project_overview', 'get_project_pulse', 'rag_search_docs', 'rag_read_doc', 'rag_doc_outline', 'get_costs', 'list_models', 'list_directory', 'read_file', 'get_file_skeleton', 'get_hierarchy', 'find_implementations', 'get_symbol_body', 'find_references', 'semantic_neighbors', 'trace_usage', 'prepare_edit', 'get_repo_map', 'search_memory']);
 export function internalMcpContract(name: string): Contract {
   const access = Object.hasOwn(INTERNAL_MCP_ACCESS, name)
     ? INTERNAL_MCP_ACCESS[name as keyof typeof INTERNAL_MCP_ACCESS] : 'write';
   return {
-    ...(AGENT_READ_NAMES.includes(name as AgentReadName) ? { repeatPolicy: 'volatile' as const } : {}),
     ...(name === 'export_docs' ? { effectBoundary: 'control' as const } : {}),
     ...(name === 'index_project' ? { effectBoundary: 'control' as const } : {}),
     ...(name === 'save_memory' ? { effectBoundary: 'database' as const } : {}),

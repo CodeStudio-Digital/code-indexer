@@ -551,7 +551,7 @@
   "toolConfig.sessionDisabled": "Desabilitadas na sessão: {{count}}",
   "toolConfig.globalDisabled": "Desabilitadas globalmente: {{count}}",
   "toolConfig.filterPlaceholder": "Filtrar ferramentas...",
-  "toolConfig.mcp": "mcp",
+  "toolConfig.index": "índice",
   "toolConfig.ext": "ext",
   "toolConfig.globalOff": "desligada globalmente",
   "toolConfig.bootstrap": "Bootstrap",

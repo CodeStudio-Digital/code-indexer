@@ -112,8 +112,7 @@ import { interactionTools } from '@mcp/code-agent/tools/interaction.js';
 import { buildFindToolsTool } from '@mcp/code-agent/tools/find-tools.js';
 import { buildRequestReviewTool } from '@mcp/code-agent/tools/request-review.js';
 import { buildSelfReviewTool } from '@mcp/code-agent/tools/self-review.js';
-import { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
-import { buildMcpResourceTools } from '@mcp/code-agent/tools/mcp-resources.js';
+import { runIndexTools } from '@mcp/code-agent/tools/index-tool-source.js';
 import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
@@ -175,7 +174,7 @@ import { dbTools } from '@mcp/code-agent/tools/db/index.js';
 import { diagramTools } from '@mcp/code-agent/tools/diagram/index.js';
 import { globTools } from '@mcp/code-agent/tools/glob.js';
 import { getGlobalDocSearch, ragSearchDocsTools } from '@mcp/code-agent/tools/rag-search-docs.js';
-import { prefixedBridgeTools, primaryBridgeTools, pruneRedundantPrimaryTwins } from '@mcp/code-agent/tools/internal-mcp-exposure.js';
+import { prefixedBridgeTools, pruneRedundantPrimaryTwins } from '@mcp/code-agent/tools/internal-mcp-exposure.js';
 import { sessionFileKnowledge } from '@mcp/code-agent/tools/file-knowledge.js';
 import { ragReadDocTools } from '@mcp/code-agent/tools/rag-read-doc.js';
 import { ragDocOutlineTools } from '@mcp/code-agent/tools/rag-doc-outline.js';
@@ -664,7 +663,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Side-file store for truncated tool outputs — enables `get_tool_output`.
   const toolOutputStore = new BundleToolOutputStore(store, session.id);
 
-  // Tool registry: native tools + bridged MCP tools
+  // Tool registry: native tools + index tools (mcp__*)
   const registry = new ToolRegistry();
   registry.registerAll(chatCollaborationTools);
   if (!opts.companyContext) registry.registerAll(sessionNetworkTools);
@@ -819,90 +818,67 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.register(buildCodeExecTool(registry, runtimeToolTiers));
   registry.registerAll(worktreeTools);
 
-  // MCP bridges — Master gets N bridges (one per company project, prefixed tools),
-  // subordinates and regular sessions get a single bridge. A GLOBAL session gets
-  // the regular single bridge for its PRIMARY project PLUS one prefixed bridge
-  // per linked secondary project (the block after the if/else below). `projectSlug`
-  // and `secondaryOverlays` are built in Seam A above.
-  const bridge = new McpToolBridge({ deferConnection: true });
-  const extraBridges: McpToolBridge[] = [];
+  // Index tools (mcp__*), served in-process by this process's index tools port.
+  // Master: one prefixed set per company project. Regular sessions and
+  // subordinates: one primary set. A GLOBAL session adds one prefixed set per
+  // linked secondary project (the loop after the if/else). `projectSlug` and
+  // `secondaryOverlays` are built in Seam A above.
+  const indexTools = runIndexTools(db);
   let mcpBridgeOk = false;
+  console.log(`[coder] index tools: ${indexTools.available ? 'native' : 'unavailable'}`);
 
   if (opts.companyContext?.isMaster) {
-    // Master: register prefixed MCP tools for ALL company projects
+    // Master: register prefixed index tools for ALL company projects
     const companyProjects = opts.companyContext.orchestrator.listProjects();
     for (const proj of companyProjects) {
-      const projBridge = new McpToolBridge({ deferConnection: true });
-      try {
-        const slug = projectSlug(proj.name);
-        const projOverlay = new SessionOverlay(resolvePath(proj.rootPath));
-        const mcpTools = await projBridge.listTools({
-          projectName: proj.name,
-          projectRoot: proj.rootPath,
-          overlay: projOverlay,
-        });
-        // Rename mcp__read_file → mcp__{slug}__read_file, without agent-run control.
-        const prefixed = prefixedBridgeTools(mcpTools, slug);
-        registry.registerAll(prefixed);
-        extraBridges.push(projBridge);
-        console.log(`[coder] Master: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
-      } catch (e) {
-        console.warn(`[coder] MCP bridge for ${proj.name} failed: ${e instanceof Error ? e.message : String(e)}`);
-        await projBridge.close();
-      }
-    }
-    mcpBridgeOk = extraBridges.length > 0;
-  } else {
-    // Regular session / subordinate: single bridge
-    try {
-      const mcpTools = await bridge.listTools({
-        projectName: project.name,
-        projectRoot: project.root_path,
-        overlay,
-      });
-      // Agent-run control never reaches the agent (internal-mcp-exposure.ts).
-      // Twins of native tools (read/list/doc) are pruned after the filters below.
-      registry.registerAll(primaryBridgeTools(mcpTools));
-      // Resource discovery/read tools — companion to the bridged tools.
-      // Cheap to expose: handlers no-op when the server publishes nothing.
-      registry.registerAll(buildMcpResourceTools(bridge));
-      mcpBridgeOk = mcpTools.length > 0;
-    } catch (e) {
-      console.warn(`[coder] MCP bridge failed to connect: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  // Global (multi-project) session: ALSO expose each linked SECONDARY project as
-  // prefixed `mcp__<slug>__*` read tools, on top of the primary's native bridge
-  // above. `linkedSecondaryProjects` is empty for normal sessions and company
-  // runs, so this loop never executes for them (the regular path is unchanged).
-  // Reuses the exact master prefixing so the model's cross-project tool
-  // vocabulary (`mcp__<slug>__read_file`, etc.) is identical in both modes.
-  for (const proj of linkedSecondaryProjects) {
-    const projBridge = new McpToolBridge({ deferConnection: true });
-    try {
       const slug = projectSlug(proj.name);
-      // Reuse the same overlay the write path uses for this root, so a write
-      // and a subsequent MCP read in this project see consistent fresh content.
-      const projOverlay = secondaryOverlays.get(proj.id) ?? new SessionOverlay(resolvePath(proj.rootPath));
-      const mcpTools = await projBridge.listTools({
+      const projOverlay = new SessionOverlay(resolvePath(proj.rootPath));
+      const mcpTools = indexTools.forProject({
         projectName: proj.name,
         projectRoot: proj.rootPath,
         overlay: projOverlay,
       });
-      // Prefixed: no agent-run control (internal-mcp-exposure.ts).
+      // Rename mcp__read_file → mcp__{slug}__read_file.
       const prefixed = prefixedBridgeTools(mcpTools, slug);
       registry.registerAll(prefixed);
-      extraBridges.push(projBridge);
-      console.log(`[coder] Global session: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
-    } catch (e) {
-      console.warn(`[coder] MCP bridge for ${proj.name} failed: ${e instanceof Error ? e.message : String(e)}`);
-      await projBridge.close();
+      console.log(`[coder] Master: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
     }
+    mcpBridgeOk = indexTools.available && companyProjects.length > 0;
+  } else {
+    // Regular session / subordinate: one primary set
+    const mcpTools = indexTools.forProject({
+      projectName: project.name,
+      projectRoot: project.root_path,
+      overlay,
+    });
+    // Twins of native tools (read/list/doc) are pruned after the filters below.
+    registry.registerAll(mcpTools);
+    mcpBridgeOk = mcpTools.length > 0;
+  }
+
+  // Global (multi-project) session: ALSO expose each linked SECONDARY project as
+  // prefixed `mcp__<slug>__*` read tools, on top of the primary set above.
+  // `linkedSecondaryProjects` is empty for normal sessions and company runs, so
+  // this loop never executes for them (the regular path is unchanged). Reuses
+  // the exact master prefixing so the model's cross-project tool vocabulary
+  // (`mcp__<slug>__read_file`, etc.) is identical in both modes.
+  for (const proj of linkedSecondaryProjects) {
+    const slug = projectSlug(proj.name);
+    // Reuse the same overlay the write path uses for this root, so a write
+    // and a subsequent read in this project see consistent fresh content.
+    const projOverlay = secondaryOverlays.get(proj.id) ?? new SessionOverlay(resolvePath(proj.rootPath));
+    const mcpTools = indexTools.forProject({
+      projectName: proj.name,
+      projectRoot: proj.rootPath,
+      overlay: projOverlay,
+    });
+    const prefixed = prefixedBridgeTools(mcpTools, slug);
+    registry.registerAll(prefixed);
+    console.log(`[coder] Global session: ${prefixed.length} MCP tools for project ${proj.name} (prefix: mcp__${slug}__*)`);
   }
 
   // External MCP servers — configured via admin panel (migration 015).
-  // Connected AFTER internal bridge so external tools are at the tail of the
+  // Connected AFTER the index tools so external tools are at the tail of the
   // registry, meaning they are trimmed first when the model tool cap kicks in.
   //
   // Prefer the caller-provided manager (typically the http-api's pool-backed
@@ -1693,7 +1669,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Gated on the per-project toggle (any linked member for a global session);
     // absent ports → tools answer clearly. Writes land on the primary real
     // project; recall reads all linked projects, interleaved and labeled.
-    agentReads: opts.agentReads,
     projectMemory:
       opts.projectMemory && anyMemoryEnabled
         ? {
@@ -3629,8 +3604,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       await closeChatMailbox?.();
       await toolOutputStore.drain();
       await mcpServerManager.closeAll();
-      await bridge.close();
-      for (const b of extraBridges) await b.close();
       // Phase 2: `store`, `db` and `skillStore` all share ONE process-wide
       // central connection now (getSharedCentral). They are NOT closed per-run —
       // a concurrent subordinate run shares the same handle. closeSharedCentral()

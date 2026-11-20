@@ -113,7 +113,6 @@ import {
 import { normalizeCoderTerminalSignal } from '../../../packages/agent-runtime-contracts/src/coder-terminal.js';
 import { RemoteMcpServerManager } from './RemoteMcpServerManager.js';
 import { buildWorkerMemoryShims } from './memory-shims.js';
-import { createWorkerAgentReadPort } from './agent-read-port.js';
 import { materializePendingAgentTransition } from './coder-agent-transition.js';
 import { setInvestigationSemanticIndex } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
 import { installWorkerLspShim } from './lsp-shim.js';
@@ -131,6 +130,10 @@ import { PluginStorageStore } from '../../../packages/store/src/plugin-storage-s
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
 import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
+import { setGlobalIndexTools } from '@mcp/code-agent/ports/index-tools-port.js';
+import { docsTools } from '@mcp/code-agent/tools/index-docs/docs.js';
+import { createIndexToolsPort } from '@mcp/indexer/agent-tools/port.js';
+import { createRpcSemanticSearchClient, requestNamespaceReconcile } from './index-search-rpc.js';
 import type {
   JsonValue,
   ProjectId,
@@ -241,6 +244,17 @@ const workerDocStore = new DocStore(dbConn.handle);
 const workerDocSearch = buildWorkerDocSearch(workerDocStore);
 const docSearchShim: DocSearchBackend = { search: workerDocSearch.search, ...buildDocNavigation(workerDocStore) };
 setGlobalDocSearch(docSearchShim);
+
+// ─── Index tools port ───────────────────────────────────────────────
+// Registered unconditionally; runCoder serves the index tools (mcp__*)
+// in-process from it. A process without a port runs without index tools.
+// The documentation readers live in code-agent and are handed in here.
+// Vector/memory search and the namespace wake-up go to the host over RPC.
+setGlobalIndexTools(createIndexToolsPort({
+  extraTools: docsTools,
+  semanticSearchClient: createRpcSemanticSearchClient(bridge),
+  mutationSinkWake: (namespace) => requestNamespaceReconcile(bridge, namespace),
+}));
 
 // ─── <indexed-docs> hint provider: worker-local DB reads ─────────────
 // The hint only does two SELECTs against the same worker-local DocStore,
@@ -845,9 +859,6 @@ bridge.handle('runFresh', async (payload) => {
       );
     }
     const coderOptions: Parameters<typeof runCoder>[0] = {
-      agentReads: createWorkerAgentReadPort(bridge, run.runId, run.bus.ctrl.signal, () => {
-        if (activeRun !== run || !run.inProgress) throw new Error('Agent read lost its worker owner');
-      }),
       session: { id: sessionId },
       controlPlaneParentAgentRunId: opts.controlPlaneParentAgentRunId,
       admitAttempt: opts.controlPlaneAdmissionRequired

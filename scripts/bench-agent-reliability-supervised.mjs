@@ -13,13 +13,6 @@ const input = JSON.parse(readFileSync(resolve(arg('--plan', '')), 'utf8'));
 if (!Array.isArray(input.jobs) || input.jobs.some(j => typeof j.caseId !== 'string' || j.model !== 'glm-5.3' || !Number.isSafeInteger(j.repetition) || j.repetition < 1)) {
   throw new Error('An explicit GLM 5.3 job plan is required');
 }
-// Reject an inconsistent frozen runtime once, before profiles or paid calls.
-const preflight = spawnSync(electron, ['--import', 'tsx', join(sourceRoot, 'apps/mcp-server/scripts/generate-internal-mcp-catalog.ts'), '--check'], {
-  cwd: resolve('.'), env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', TSX_TSCONFIG_PATH: join(sourceRoot, 'tsconfig.json') },
-  encoding: 'utf8', windowsHide: true, timeout: 60_000, maxBuffer: 1024 * 1024,
-});
-if (preflight.status !== 0) throw new Error(`Frozen MCP catalog preflight failed: ${preflight.error?.message ?? preflight.stderr}`);
-console.log(preflight.stdout.trim());
 const output = resolve('.tmp/agent-ide-reliability', `supervised-${Date.now()}-${process.pid}`);
 mkdirSync(output, { recursive: true });
 const results = [];

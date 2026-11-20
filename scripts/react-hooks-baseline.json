@@ -157,16 +157,6 @@
       "count": 1
     },
     {
-      "fingerprint": "4c175a4c3a4cbff063f933ce1e4552564bbcf9b0aadd043482df78eee51ce286",
-      "file": "apps/dashboard/features/admin/ApiTokensPanel.tsx",
-      "rule": "react-hooks/set-state-in-effect",
-      "description": "Error: Calling setState synchronously within an effect can trigger cascading renders",
-      "excerpt": "load",
-      "line": 57,
-      "column": 26,
-      "count": 1
-    },
-    {
       "fingerprint": "1798fa8da65200e2903d74d0c315399b0947206dc22118969b5fd0d6c450fd3b",
       "file": "apps/dashboard/features/admin/app-settings/useAppSettings.ts",
       "rule": "react-hooks/set-state-in-effect",
@@ -184,26 +174,6 @@
       "excerpt": "setActiveCategory",
       "line": 35,
       "column": 7,
-      "count": 1
-    },
-    {
-      "fingerprint": "b764db4c05cfda9fe619df9e9d8e80dabf089403c564eb39d55c9e6f74e37a8a",
-      "file": "apps/dashboard/features/admin/AuditLogPanel.tsx",
-      "rule": "react-hooks/set-state-in-effect",
-      "description": "Error: Calling setState synchronously within an effect can trigger cascading renders",
-      "excerpt": "load",
-      "line": 44,
-      "column": 26,
-      "count": 1
-    },
-    {
-      "fingerprint": "df410954836d02a383b939f816d080ea393d15def022d970de560d260fce40dc",
-      "file": "apps/dashboard/features/admin/AuditLogPanel.tsx",
-      "rule": "react-hooks/exhaustive-deps",
-      "description": "React Hook useEffect has a missing dependency: 'load'. Either include it or remove the dependency array.",
-      "excerpt": "[]",
-      "line": 44,
-      "column": 37,
       "count": 1
     },
     {
@@ -337,16 +307,6 @@
       "count": 1
     },
     {
-      "fingerprint": "83147de264e57bfd8e57bd8c0a353ff53355b62934adac52cedc9a0928891f0e",
-      "file": "apps/dashboard/features/admin/McpHttpStatusPanel.tsx",
-      "rule": "react-hooks/set-state-in-effect",
-      "description": "Error: Calling setState synchronously within an effect can trigger cascading renders",
-      "excerpt": "load",
-      "line": 69,
-      "column": 10,
-      "count": 1
-    },
-    {
       "fingerprint": "2f2524398f128c65f48a611554a98dfbb9a5831a40d5a6944dc28e6a6433f772",
       "file": "apps/dashboard/features/admin/McpOAuthConnectDialog.tsx",
       "rule": "react-hooks/immutability",
@@ -354,16 +314,6 @@
       "excerpt": "refresh",
       "line": 63,
       "column": 10,
-      "count": 1
-    },
-    {
-      "fingerprint": "5246757f44ffca903c069542214d146de2d1849db2b086b50425c866898dade4",
-      "file": "apps/dashboard/features/admin/OAuthClientsPanel.tsx",
-      "rule": "react-hooks/set-state-in-effect",
-      "description": "Error: Calling setState synchronously within an effect can trigger cascading renders",
-      "excerpt": "load",
-      "line": 20,
-      "column": 26,
       "count": 1
     },
     {

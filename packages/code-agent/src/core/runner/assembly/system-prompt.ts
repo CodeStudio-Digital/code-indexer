@@ -111,4 +111,6 @@
 // 2026-11-19.3 — align mode transitions, discovery, roles and review contracts.
 // 2026-11-19.4 bump — the dynamic "# Tool visibility" block (a duplicate of
 // "# Tool discovery") was removed with the non-stable catalog projection.
-export const SYSTEM_PROMPT_VERSION = '20261119.4';
+// 2026-11-19.5 bump — "# Session overlay" names what reflects session edits
+// (reads, grep, skeletons, listings) and that index results may lag.
+export const SYSTEM_PROMPT_VERSION = '20261119.5';

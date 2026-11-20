@@ -1,7 +1,7 @@
 export interface ToolConfigItem {
   name: string;
   tier: string;
-  source: 'native' | 'mcp' | 'mcp_external';
+  source: 'native' | 'index' | 'mcp_external';
   description: string;
   globallyDisabled: boolean;
 }

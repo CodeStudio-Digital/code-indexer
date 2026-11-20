@@ -10,9 +10,9 @@
  * trivial (três new) e evita acoplamento entre os dois subsistemas — um
  * pode ser desabilitado sem afetar o outro.
  */
-import { Sha256Hasher } from '../../auth/crypto/sha256-hasher.js';
-import { NodeCryptoRandom } from '../../auth/runtime/node-crypto-random.js';
-import { SystemClock } from '../../auth/runtime/system-clock.js';
+import { Sha256Hasher } from './support/crypto/sha256-hasher.js';
+import { NodeCryptoRandom } from './support/runtime/node-crypto-random.js';
+import { SystemClock } from './support/runtime/system-clock.js';
 
 import { SqliteMcpOAuthRegistrationRepo } from '@mcp/store/mcp-client/sqlite-oauth-registration-repo.js';
 import { SqliteMcpOAuthTokensRepo } from '@mcp/store/mcp-client/sqlite-oauth-tokens-repo.js';

@@ -13,7 +13,8 @@ import type { CoderTool, ToolContext } from '../../core/tool.js';
 import { ToolRegistry } from '../../core/registry.js';
 import { CoderRunner } from '../../core/runner.js';
 import { dispatchTools } from '../../core/runner/nodes/executing-dispatch.js';
-import { McpToolBridge } from '../mcp-bridge.js';
+import type { CodeIndexDB } from '@mcp/store/db.js';
+import { buildNativeIndexTools } from '../native-index-tools.js';
 import { buildCodeExecTool } from '../code-exec.js';
 import { runSubagent } from '../implement-subagent.js';
 import { fsTools } from '../fs.js';
@@ -73,13 +74,12 @@ describe('write_file overwrite rule', () => {
   it('counts a mcp__read_file read (primary and prefixed names), but not its symbol mode', async () => {
     writeFileSync(join(root, 'a.txt'), 'old');
     writeFileSync(join(root, 'b.ts'), 'function foo() {}\n');
-    const fakeClient = {
-      listTools: async () => ({ tools: [{ name: 'read_file', inputSchema: { type: 'object', properties: {} } }] }),
-      callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'old' }] })),
+    const port = {
+      catalog: () => [{ name: 'read_file', description: 'read a file', inputSchema: { type: 'object', properties: {} } }],
+      invoke: vi.fn(async () => ({ content: [{ type: 'text', text: 'old' }] })),
     };
-    const bridge = new McpToolBridge();
-    (bridge as unknown as { client: typeof fakeClient }).client = fakeClient;
-    const [mcpRead] = await bridge.listTools({ projectName: 'og', projectRoot: root });
+    const mcpRead = buildNativeIndexTools({ port, db: {} as CodeIndexDB, binding: { projectName: 'og', projectRoot: root } })
+      .find(t => t.name === 'mcp__read_file');
     const prefixed: CoderTool = { ...mcpRead!, name: 'mcp__other__read_file' };
     await prefixed.handler({ file_path: 'b.ts', symbol: 'foo' }, ctx);
     expect((await write('b.ts', 'x')).isError).toBe(true);

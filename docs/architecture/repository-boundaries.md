@@ -34,13 +34,9 @@ Imports entre aplicações do mesmo domínio passam somente pelos caminhos
 exatos em `unitEntrypoints`:
 
 - `apps/http-api/public.ts` oferece o runtime CLI com request, projetos e close.
-- `apps/mcp-server/agent-read-client.ts` oferece leitura de catálogo e runs por
-  transporte injetado; não expõe banco, admission, start ou cancel.
 
 Imports de internals entre aplicações e imports entre domínios permanecem
-proibidos. Fixtures de renderer pertencem ao dashboard; testes da integração
-MCP pertencem ao servidor MCP. O gerador do catálogo também pertence ao seu
-produtor e continua validando o artefato consumido pelo code-agent no build.
+proibidos. Fixtures de renderer pertencem ao dashboard.
 
 `runtimeModules` é uma lista por arquivo para módulos fornecidos pelo runtime.
 O harness de compatibilidade de sessões usa `original-fs` do Electron para

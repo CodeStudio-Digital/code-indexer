@@ -48,149 +48,75 @@ describe('overlay handlers', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  describe('read_file', () => {
-    it('returns disk content for a dirty file and skips delegation', () => {
-      const overlay = new SessionOverlay(root);
-      writeFileSync(join(root, 'src/foo.ts'), 'line1\nline2\nline3\n');
-      overlay.mark('src/foo.ts');
-
-      const handler = getOverlayHandler('read_file')!;
-      const result = handler.pre!({ file_path: 'src/foo.ts' }, overlay, root);
-      expect(result).not.toBeNull();
-      expect(result!.isError).toBeUndefined();
-      expect(result!.content).toContain('[session overlay]');
-      expect(result!.content).toContain('line1');
-      expect(result!.content).toContain('line3');
-    });
-
-    it('returns null for clean files (delegates to MCP)', () => {
-      const overlay = new SessionOverlay(root);
-      const handler = getOverlayHandler('read_file')!;
-      const result = handler.pre!({ file_path: 'src/untouched.ts' }, overlay, root);
-      expect(result).toBeNull();
-    });
+  // read_file, get_symbol_body and grep_code read current disk bytes in the
+  // index tool core. Their dirty-file behaviour (disk content, current body,
+  // grep honouring glob/language/max_results) is proven end to end through
+  // the adapter in apps/http-api/workers/__tests__/overlay-native-reads.test.ts.
+  it('has no per-tool copy for tools whose core already reads the disk', () => {
+    for (const tool of ['read_file', 'get_symbol_body', 'grep_code']) expect(getOverlayHandler(tool)).toBeUndefined();
   });
 
   describe('get_file_skeleton', () => {
-    it('extracts symbols via regex from a dirty TypeScript file', () => {
+    it('asks the core for the disk outline of a dirty file only', () => {
       const overlay = new SessionOverlay(root);
-      writeFileSync(
-        join(root, 'src/math.ts'),
-        `export function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport class Calc {\n  multiply(a: number, b: number) { return a * b; }\n}\n`
-      );
       overlay.mark('src/math.ts');
-
       const handler = getOverlayHandler('get_file_skeleton')!;
-      const result = handler.pre!({ file_path: 'src/math.ts' }, overlay, root);
-      expect(result).not.toBeNull();
-      expect(result!.content).toContain('[session overlay]');
-      expect(result!.content).toContain('add');
-      expect(result!.content).toContain('Calc');
-    });
-  });
-
-  describe('get_symbol_body', () => {
-    it('finds and extracts a function body from a dirty file', () => {
-      const overlay = new SessionOverlay(root);
-      writeFileSync(
-        join(root, 'src/util.ts'),
-        `function greet(name: string) {\n  return \`hello \${name}\`;\n}\n\nfunction other() { return 1; }\n`
-      );
-      overlay.mark('src/util.ts');
-
-      const handler = getOverlayHandler('get_symbol_body')!;
-      const result = handler.pre!({ file_path: 'src/util.ts', symbol_name: 'greet' }, overlay, root);
-      expect(result).not.toBeNull();
-      expect(result!.isError).toBeUndefined();
-      expect(result!.content).toContain('greet');
-      expect(result!.content).toContain('hello');
-      expect(result!.content).toContain('[session overlay]');
-    });
-
-    it('returns an error when the symbol is not found in the dirty file', () => {
-      const overlay = new SessionOverlay(root);
-      writeFileSync(join(root, 'src/empty.ts'), 'const x = 1;\n');
-      overlay.mark('src/empty.ts');
-
-      const handler = getOverlayHandler('get_symbol_body')!;
-      const result = handler.pre!({ file_path: 'src/empty.ts', symbol_name: 'nope' }, overlay, root);
-      expect(result).not.toBeNull();
-      expect(result!.isError).toBe(true);
-    });
-
-    it('returns null when file is clean (delegates to MCP)', () => {
-      const overlay = new SessionOverlay(root);
-      const handler = getOverlayHandler('get_symbol_body')!;
-      const result = handler.pre!({ file_path: 'src/x.ts', symbol_name: 'foo' }, overlay, root);
-      expect(result).toBeNull();
+      expect(handler.internalArgs!({ file_path: 'src/math.ts' }, overlay)).toEqual({ __prefer_disk: true });
+      expect(handler.internalArgs!({ file_path: 'src\\math.ts' }, overlay)).toEqual({ __prefer_disk: true });
+      expect(handler.internalArgs!({ file_path: 'src/other.ts' }, overlay)).toBeNull();
+      expect(handler.internalArgs!({}, overlay)).toBeNull();
     });
   });
 
   describe('list_directory postProcess', () => {
-    it('appends dirty files under the requested prefix', () => {
-      const overlay = new SessionOverlay(root);
-      overlay.mark('src/new.ts');
-      overlay.mark('src/nested/another.ts');
+    const touch = (path: string) => { mkdirSync(join(root, path, '..'), { recursive: true }); writeFileSync(join(root, path), 'x\n'); };
 
+    it('appends existing dirty files under the prefix, in the listing path form', () => {
+      const overlay = new SessionOverlay(root);
+      for (const path of ['src/new.ts', 'src/nested/another.ts']) { touch(path); overlay.mark(path); }
+      overlay.mark('src/deleted.ts');
       const handler = getOverlayHandler('list_directory')!;
-      const result = handler.postProcess!('existing.ts (10L)', { path: 'src' }, overlay, root);
-      expect(result.content).toContain('existing.ts');
-      expect(result.content).toContain('new.ts');
-      expect(result.content).toContain('another.ts');
-      expect(result.content).toContain('[session overlay]');
+      const result = handler.postProcess!('src/existing.ts (10L)', { path: 'src' }, overlay, root);
+      expect(result.content).toBe([
+        'src/existing.ts (10L)', '-- session overlay (2) --',
+        'src/nested/another.ts [session overlay]', 'src/new.ts [session overlay]',
+      ].join('\n'));
     });
 
-    it('returns the MCP text unchanged when no dirty files match prefix', () => {
+    it('never repeats a dirty file the listing already shows', () => {
       const overlay = new SessionOverlay(root);
-      overlay.mark('other/x.ts');
-
+      touch('src/existing.ts'); overlay.mark('src/existing.ts');
+      touch('src/nested/listed.ts'); overlay.mark('src/nested/listed.ts');
       const handler = getOverlayHandler('list_directory')!;
-      const result = handler.postProcess!('foo.ts\nbar.ts', { path: 'src' }, overlay, root);
-      expect(result.content).toBe('foo.ts\nbar.ts');
+      const listing = 'src/existing.ts (10L)\nsrc/nested/listed.ts (3B)';
+      expect(handler.postProcess!(listing, { path: 'src' }, overlay, root).content).toBe(listing);
     });
 
-    it('handles empty MCP result ("Empty.") correctly', () => {
+    it('respects depth and adds nothing beyond the first page', () => {
       const overlay = new SessionOverlay(root);
-      overlay.mark('src/fresh.ts');
+      touch('src/deep/er/file.ts'); overlay.mark('src/deep/er/file.ts');
+      const handler = getOverlayHandler('list_directory')!;
+      expect(handler.postProcess!('src/a.ts (1L)', { path: 'src', depth: 1 }, overlay, root).content).toBe('src/a.ts (1L)');
+      expect(handler.postProcess!('src/a.ts (1L)', { path: 'src', offset: 1 }, overlay, root).content).toBe('src/a.ts (1L)');
+      expect(handler.postProcess!('src/a.ts (1L)', { path: 'src', depth: 2 }, overlay, root).content)
+        .toContain('src/deep/er/file.ts [session overlay]');
+    });
 
+    it('returns the text unchanged when no dirty files match the prefix', () => {
+      const overlay = new SessionOverlay(root);
+      touch('other/x.ts'); overlay.mark('other/x.ts');
+      const handler = getOverlayHandler('list_directory')!;
+      expect(handler.postProcess!('src/foo.ts (1L)\nsrc/bar.ts (1L)', { path: 'src' }, overlay, root).content)
+        .toBe('src/foo.ts (1L)\nsrc/bar.ts (1L)');
+    });
+
+    it('replaces an empty listing ("Empty.")', () => {
+      const overlay = new SessionOverlay(root);
+      touch('src/fresh.ts'); overlay.mark('src/fresh.ts');
       const handler = getOverlayHandler('list_directory')!;
       const result = handler.postProcess!('Empty.', { path: 'src' }, overlay, root);
       expect(result.content).not.toContain('Empty.');
-      expect(result.content).toContain('fresh.ts');
-    });
-  });
-
-  describe('grep_code postProcess', () => {
-    it('scans dirty files and merges hits into MCP output', () => {
-      const overlay = new SessionOverlay(root);
-      writeFileSync(join(root, 'src/needle.ts'), 'const magic = 42;\nconsole.log(magic);\n');
-      overlay.mark('src/needle.ts');
-
-      const handler = getOverlayHandler('grep_code')!;
-      const result = handler.postProcess!(
-        'src/old.ts:3: const magic = 0',
-        { pattern: 'magic' },
-        overlay,
-        root
-      );
-      expect(result.content).toContain('src/old.ts');
-      expect(result.content).toContain('src/needle.ts');
-      expect(result.content).toContain('[session overlay]');
-    });
-
-    it('returns MCP text unchanged when dirty files have no hits', () => {
-      const overlay = new SessionOverlay(root);
-      writeFileSync(join(root, 'src/clean.ts'), 'const x = 1;\n');
-      overlay.mark('src/clean.ts');
-
-      const handler = getOverlayHandler('grep_code')!;
-      const result = handler.postProcess!(
-        'src/old.ts:3: const magic = 0',
-        { pattern: 'magic' },
-        overlay,
-        root
-      );
-      expect(result.content).toBe('src/old.ts:3: const magic = 0');
+      expect(result.content).toContain('src/fresh.ts [session overlay]');
     });
   });
 

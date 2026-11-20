@@ -4,18 +4,11 @@ import { NATIVE_TWIN_OF } from '../core/tool-name-suggest.js';
 import type { DocSearchBackend } from './doc-search-types.js';
 
 /**
- * Which internal MCP tools the agent's own bridges register: the primary
- * project's single bridge, the Company master's prefixed bridges and the
- * prefixed bridges of a global session's secondary projects. The MCP server
- * and the generated catalog are untouched, so external MCP clients keep every
- * tool.
+ * How the index tools reach the agent's registry: the primary project's set
+ * as published (its twins of native tools pruned), and the per-project
+ * `mcp__<slug>__*` sets of the Company master and of a global session's
+ * secondary projects.
  */
-
-// Starting or cancelling an agent run opens or stops a whole other session.
-// Both are write risk, `auto` permission mode does not pause write, and no
-// prompt, skill or contract routes an internal agent to them. The read verbs
-// (list_agents, list_agent_runs, get_agent_run, get_agent_result) stay.
-const AGENT_RUN_CONTROL: ReadonlySet<string> = new Set(['start_agent_run', 'cancel_agent_run']);
 
 /**
  * Doc twins also need the host doc backend to expose the verb their native
@@ -27,12 +20,8 @@ const DOC_TWIN_READY: Record<string, (backend: DocSearchBackend) => boolean> = {
   mcp__rag_doc_outline: backend => !!backend.outline,
 };
 
-/** The bridge lists every server tool as `mcp__<name>`. */
+/** Every index tool is registered as `mcp__<name>`. */
 const serverName = (name: string): string => name.replace(/^mcp__/, '');
-
-function isAgentRunControl(tool: Pick<CoderTool, 'name'>): boolean {
-  return AGENT_RUN_CONTROL.has(serverName(tool.name));
-}
 
 /**
  * A primary-bridge tool that only duplicates an available native tool
@@ -48,11 +37,6 @@ export function isRedundantPrimaryTwin(
   if (!native || !nativeAvailable(native)) return false;
   const ready = DOC_TWIN_READY[tool.name];
   return !ready || (!!docBackend && ready(docBackend));
-}
-
-/** Tools the primary project's bridge registers (twins are pruned later). */
-export function primaryBridgeTools<T extends Pick<CoderTool, 'name'>>(tools: readonly T[]): T[] {
-  return tools.filter(tool => !isAgentRunControl(tool));
 }
 
 /**
@@ -72,7 +56,5 @@ export function pruneRedundantPrimaryTwins(
 
 /** Tools a prefixed bridge registers, renamed `mcp__<slug>__<name>`. */
 export function prefixedBridgeTools<T extends Pick<CoderTool, 'name'>>(tools: readonly T[], slug: string): T[] {
-  return tools
-    .filter(tool => !isAgentRunControl(tool))
-    .map(tool => ({ ...tool, name: `mcp__${slug}__${serverName(tool.name)}` }));
+  return tools.map(tool => ({ ...tool, name: `mcp__${slug}__${serverName(tool.name)}` }));
 }

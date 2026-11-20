@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ok, type CoderTool, type ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '../registry.js';
-import { RETIRED_TOOL_REPLACEMENTS, retiredToolInstruction } from '../tool-name-suggest.js';
+import { RETIRED_TOOL_REPLACEMENTS, retiredToolInstruction, toolReplacement } from '../tool-name-suggest.js';
 import { buildCodeExecTool } from '../../tools/code-exec.js';
 import { buildCodeExecFailureHint } from '../../tools/code-exec-hints.js';
 
@@ -42,12 +42,24 @@ const EXPECTED: Record<string, RegExp> = {
   poll_session: /write_stdin .*empty/,
   expand_toolset: /find_tools.*code_exec/,
   capability_catalog: /find_tools.*get_skills_list and get_skill_content/,
+  mcp__index_project: /application\/CLI action.*mcp__get_project_overview/,
+  mcp__export_docs: /application\/CLI action.*mcp__get_repo_map/,
+  mcp_list_resources: /no longer publishes MCP resources.*mcp__get_project_overview and mcp__get_repo_map/,
+  mcp_read_resource: /no longer publishes MCP resources.*mcp__get_project_overview and mcp__get_repo_map/,
+  mcp__list_agents: /agent-run API was removed together with the MCP server; there is no replacement tool\.$/,
+  mcp__list_agent_runs: /agent-run API was removed together with the MCP server; there is no replacement tool\.$/,
+  mcp__get_agent_run: /agent-run API was removed together with the MCP server; there is no replacement tool\.$/,
+  mcp__get_agent_result: /agent-run API was removed together with the MCP server; there is no replacement tool\.$/,
 };
+const AGENT_RUN_READS = ['list_agents', 'list_agent_runs', 'get_agent_run', 'get_agent_result'];
+const AGENT_RUN_TEXT = 'The agent-run API was removed together with the MCP server; there is no replacement tool.';
 
 describe('retired tool map', () => {
-  it('names exactly the eight retired tools and their replacements', () => {
+  it('names exactly the sixteen retired tools and their replacements', () => {
     expect(Object.keys(RETIRED_TOOL_REPLACEMENTS).sort())
-      .toEqual(['capability_catalog', 'create_file', 'expand_toolset', 'multi_edit', 'poll_session', 'submit_tasks', 'todo_write', 'update_todo']);
+      .toEqual(['capability_catalog', 'create_file', 'expand_toolset', 'mcp__export_docs', 'mcp__get_agent_result',
+        'mcp__get_agent_run', 'mcp__index_project', 'mcp__list_agent_runs', 'mcp__list_agents', 'mcp_list_resources',
+        'mcp_read_resource', 'multi_edit', 'poll_session', 'submit_tasks', 'todo_write', 'update_todo']);
     expect(retiredToolInstruction('edit_file')).toBeNull();
     for (const [name, pattern] of Object.entries(EXPECTED)) {
       expect(retiredToolInstruction(name)).toMatch(new RegExp(`^${name} was retired\\.`));
@@ -108,5 +120,56 @@ describe('nested code_exec call of a retired name', () => {
     expect(res.isError).toBe(true);
     expect(res.content).toContain(`tool_schema: ${retiredToolInstruction(name)}`);
     expect(res.content).not.toContain('unknown tool');
+  });
+});
+
+describe('retired index tools in the per-project form', () => {
+  it('answers the primary form', () => {
+    expect(toolReplacement('mcp__index_project')).toEqual({ code: 'RETIRED_TOOL', text: retiredToolInstruction('mcp__index_project') });
+    expect(retiredToolInstruction('mcp__export_docs')!.startsWith('mcp__export_docs was retired. Documentation export is an application/CLI action')).toBe(true);
+  });
+
+  it('answers the prefixed form, pointing at the same project tools (the slug may contain _)', () => {
+    const exportDocs = toolReplacement('mcp__parity_second__export_docs');
+    expect(exportDocs?.code).toBe('RETIRED_TOOL');
+    expect(exportDocs!.text.startsWith('mcp__parity_second__export_docs was retired. Documentation export is an application/CLI action')).toBe(true);
+    expect(exportDocs?.text).toContain('mcp__parity_second__get_project_overview and mcp__parity_second__get_repo_map');
+    expect(exportDocs?.text).not.toMatch(/(^|[^_])mcp__get_/);
+    const index = toolReplacement('mcp__my_app__v2__index_project');
+    expect(index?.code).toBe('RETIRED_TOOL');
+    expect(index!.text.startsWith('mcp__my_app__v2__index_project was retired. Indexing is an application/CLI action')).toBe(true);
+    expect(index?.text).toContain('mcp__my_app__v2__get_project_overview');
+  });
+
+  it('leaves prefixed tools that were not retired unanswered', () => {
+    for (const name of ['mcp__parity_second__grep_code', 'mcp__parity_second__read_file', 'mcp__parity_second__index_projects', 'ext_server__index_project']) {
+      expect(toolReplacement(name), name).toBeNull();
+    }
+  });
+
+  it('refuses a prefixed retired call at the registry without dispatching', async () => {
+    const { registry, spies } = registryWithReplacements();
+    const res = await registry.invoke('mcp__parity_second__index_project', {}, ctx());
+    expect(res.isError).toBe(true);
+    expect(res.content).toBe(retiredToolInstruction('mcp__parity_second__index_project'));
+    expect(res.error).toMatchObject({ code: 'RETIRED_TOOL', kind: 'invalid_input', retryable: false });
+    for (const s of spies) expect(s.handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('retired agent-run reads', () => {
+  it('answer the primary and the prefixed form with the same text, which names no other tool', () => {
+    for (const name of AGENT_RUN_READS.flatMap(n => [`mcp__${n}`, `mcp__parity_second__${n}`, `mcp__my_app__v2__${n}`])) {
+      expect(toolReplacement(name), name).toEqual({ code: 'RETIRED_TOOL', text: `${name} was retired. ${AGENT_RUN_TEXT}` });
+    }
+    expect(AGENT_RUN_TEXT).not.toMatch(/[a-z]+_[a-z_]+/); // no tool name: list_agents and the delegation tools vary by session
+  });
+
+  it('leave the never-registered control verbs to the plain unknown-tool error', async () => {
+    for (const name of ['mcp__start_agent_run', 'mcp__cancel_agent_run', 'mcp__parity_second__start_agent_run', 'list_agents']) {
+      expect(toolReplacement(name), name).toBeNull();
+    }
+    const { registry } = registryWithReplacements();
+    expect((await registry.invoke('mcp__start_agent_run', {}, ctx())).content).toMatch(/^Unknown tool: mcp__start_agent_run\./);
   });
 });

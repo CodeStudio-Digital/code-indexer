@@ -18,7 +18,10 @@ import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { CollaborationFiles } from '@mcp/session-storage/collaboration/files.js';
 import { CollaborationRevisions } from '@mcp/session-storage/collaboration/revisions.js';
 import type { BudgetState } from '@mcp/session-storage/collaboration/budget.js';
-import { McpToolBridge } from '@mcp/code-agent/tools/mcp-bridge.js';
+import { setGlobalIndexTools } from '@mcp/code-agent/ports/index-tools-port.js';
+import { docsTools } from '@mcp/code-agent/tools/index-docs/docs.js';
+import { createIndexToolsPort } from '@mcp/indexer/agent-tools/port.js';
+import { createBenchNamespaceWake, createBenchSemanticSearchClient } from './bench-semantic-http.js';
 
 type CaseId = string;
 
@@ -956,9 +959,16 @@ async function main(): Promise<void> {
     pricingSource: 'local model_prices glm-5.3 litellm; estimate, not billing proof',
     enforcement: 'between cases; one in-flight case can exceed the estimate', startedAt: new Date().toISOString() }, null, 2));
   const checkpoint = join(reportDir, `in-progress-${process.pid}.json`);
-  // Fail before any paid call if the prepared and live MCP sources disagree.
-  const bridge = new McpToolBridge({ deferConnection: true });
-  try { await bridge.connect(); } finally { await bridge.close(); }
+  // runCoder serves the index tools (mcp__*) in-process from this port, as the
+  // coder and Company workers do; vector search and namespace wake-ups go to
+  // the app at apiBase over HTTP (the workers use RPC instead). Without the
+  // port every case would run without index tools; without the client, search
+  // would silently fall back to FTS.
+  setGlobalIndexTools(createIndexToolsPort({
+    extraTools: docsTools,
+    semanticSearchClient: createBenchSemanticSearchClient(apiBase),
+    mutationSinkWake: createBenchNamespaceWake(apiBase),
+  }));
   for (const [index, job] of jobs.entries()) {
     if (estimatedUsd >= maximumUsd || Date.now() - roundStarted >= maximumMinutes * 60_000) {
       process.stderr.write(`[agent-eval] Budget reached after ${results.length}/${jobs.length} cases. Remaining cases are not_run.\n`);

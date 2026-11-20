@@ -14,7 +14,6 @@ export type SectionId =
   | 'hygiene'
   | 'tools'
   | 'mcp-servers'
-  | 'mcp-http'
   | 'skills'
   | 'agents'
   | 'plugins'
@@ -22,8 +21,7 @@ export type SectionId =
   | 'lsp-servers'
   | 'chrome-service'
   | 'pipeline-bindings'
-  | 'perf'
-  | 'auth';
+  | 'perf';
 
 export type GroupId = 'models' | 'knowledge' | 'extensions' | 'services' | 'system';
 

@@ -10,7 +10,6 @@
     "dist/apps/electron/**/*",
     "dist/apps/cli/**/*",
     "dist/apps/http-api/**/*",
-    "dist/apps/mcp-server/**/*",
     "dist/dashboard/**/*",
     "dist/packages/**/*",
     "package.json",

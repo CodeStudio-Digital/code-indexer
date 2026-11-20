@@ -16,7 +16,6 @@ import { FsConversationWriter } from './conversation-writer.js';
 import { installExternalImportApi, type FsExternalImportApi } from './external-import-repository.js';
 import { FsSessionDirectory, type FsSessionDirectoryOptions } from './session-directory.js';
 import { FsSessionMutations } from './session-mutations.js';
-import { queryMcpRunMetadata, type FsMcpRunQuery } from './mcp-run-query.js';
 import { FsToolOutputReader } from './tool-output-reader.js';
 import { FsToolOutcomeRepository } from './tool-outcome-repository.js';
 import type { FsResolveToolOutcomeInput, FsResolveToolOutcomeResult, FsToolOutcomeState,
@@ -172,11 +171,6 @@ export class FsSessionStore {
     } = {},
   ): Promise<FsCoderSession[]> {
     return this.#directory.listSessions(projectId, options);
-  }
-
-  async listMcpRunMetadata(query: FsMcpRunQuery) {
-    await this.#directory.ensureCatalog();
-    return queryMcpRunMetadata(this.#directory.catalog.entriesSnapshot(), query);
   }
 
   listGlobalSessions(

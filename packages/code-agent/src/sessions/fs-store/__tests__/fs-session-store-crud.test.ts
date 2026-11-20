@@ -85,21 +85,22 @@ describe('FsSessionStore session catalog', () => {
     expect(metricsRead).not.toHaveBeenCalled();
   });
 
-  it('queries MCP metadata and active identities without opening metrics or transcript files', async () => {
-    const sessions = [];
-    for (const [principal, profile, project] of [['a', null, 1], ['b', null, 1], ['a', 'p', 2], ['a', null, 2]] as const) {
-      sessions.push(await store.createSession({ project_id: project, title: 'MCP', provider: 'fixture', model: 'local',
-        metadata: { mcp_agent_run: { schema_version: 1, principal, profile_id: profile, agent_id: 'build', task_preview: 'task' } } }));
-    }
-    const metrics = vi.spyOn(store.repository, 'readMetricsSummarySync').mockImplementation(() => { throw new Error('Unexpected bundle hydration'); });
-    const page = await store.listMcpRunMetadata({ principal: 'a', limit: 1 });
-    expect(page.total_count).toBe(3); expect(page.items).toHaveLength(1);
-    const scoped = await store.listMcpRunMetadata({ principal: 'a', projectId: 1, profileId: null, limit: 1 });
-    expect(scoped.total_count).toBe(1); expect(scoped.items.map(item => item.id)).toEqual([sessions[0]!.id]);
-    const active = await store.listMcpRunMetadata({ principal: 'a', profileId: null, limit: 0,
-      activeSessionIds: new Set([sessions[0]!.id, sessions[1]!.id, sessions[2]!.id]) });
-    expect(active).toEqual({ items: [], total_count: 1, active_ids: [sessions[0]!.id] });
-    expect(metrics).not.toHaveBeenCalled();
+  it('opens and lists a session the retired agent-run API created, its metadata intact after a restart', async () => {
+    // The shape McpAgentRunManager wrote before the agent-run API was removed (E7a/E8d).
+    const run = { schema_version: 1, principal: 'local-dev', profile_id: null, agent_id: 'build', task_preview: 'task' };
+    const plain = await store.createSession({ project_id: 1, title: 'Plain', provider: 'fixture', model: 'local' });
+    const legacy = await store.createSession({ project_id: 1, title: 'MCP', provider: 'fixture', model: 'local',
+      metadata: { mcp_agent_run: run } });
+    const reopened = FsSessionStore.fromRoots({ dataDir, projectRootResolver: {
+      resolveProjectRoot: (projectId) => projectRoots.get(projectId),
+      listProjectRoots: () => [...projectRoots].map(([project_id, root_path]) => ({ project_id, root_path })),
+    } });
+    try {
+      for (const view of [store, reopened]) {
+        expect((await view.getSession(legacy.id))?.metadata).toMatchObject({ mcp_agent_run: run });
+        expect((await view.listSessions(1)).map(session => session.id).sort()).toEqual([plain.id, legacy.id].sort());
+      }
+    } finally { await reopened.close(); }
   });
 
   it('publishes creation-time runtime settings in the initial state projection', async () => {

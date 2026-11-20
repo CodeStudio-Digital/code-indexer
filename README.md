@@ -58,7 +58,6 @@ Starting Electron in development builds and installs the bundled providers, Angu
 | `pnpm dev:dashboard` | Dashboard only — pairs with `electron:dev` or `dev:server` |
 | `pnpm start:api` | Production backend (`node dist/apps/http-api/server.js`) |
 | `pnpm start` | CLI (`node dist/apps/cli/index.js`) |
-| `pnpm start:server` | MCP Server (stdio protocol for Claude Desktop / Cursor / etc.) |
 
 See [docs/ELECTRON_DEV.md](docs/ELECTRON_DEV.md) for the full Electron dev setup, including how to swap native modules between Node and Electron ABIs.
 
@@ -92,7 +91,6 @@ apps/
   electron/            Electron main + preload + IPC bridge
   http-api/            Fetch routes and standalone HTTP entry point
   cli/                 mcp-code-indexer CLI
-  mcp-server/          MCP protocol server (stdio)
   landing/             marketing surface (in progress)
 packages/
   api-bus/             Transport-agnostic RPC contract (types only)

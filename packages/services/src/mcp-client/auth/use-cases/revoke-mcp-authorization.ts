@@ -1,4 +1,4 @@
-import type { Clock } from '../../../auth/ports/clock.js';
+import type { Clock } from '../support/ports/clock.js';
 import type {
   McpOAuthRegistrationAdminRepo,
   McpOAuthRegistrationReaderRepo,

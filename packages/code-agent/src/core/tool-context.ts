@@ -108,14 +108,23 @@ export interface ToolContextServices {
    * overwrite rule of write_file / apply_patch Add File. One per CoderRunner.
    */
   fileKnowledge?: import('../tools/file-knowledge.js').SessionFileKnowledge;
+  /**
+   * Counts child-agent results once and refreshes the files they changed; the
+   * E6 chat tools claim through it. Set by runCoder for root and child sessions.
+   */
+  childAgentAccounting?: import('../runtime/child-agent-freshness.js').ChildAgentAccounting;
+  /** The app's child chats, as this session (outside Company). */
+  childChats?: import('../ports/child-chat-port.js').ChildChatPort;
+  /** Set when this session is itself a child agent: its depth and whether it is read-only. */
+  childAgentSelf?: { depth: number; readOnly: boolean };
   /** Host-derived unresolved history. Inherited by nested calls; never cleared by model text. */
   outcomeRecovery?: import('./outcome-recovery-state.js').OutcomeRecoveryState;
   /**
    * Per-session tool-output cap LEVEL (economic|medium|high|extra|max|ultra).
    * Replaces the legacy binary `unrestrictedToolOutput`. Each cap site calls
-   * `capFor(level, <its base>, <its ceiling>)` (`MCP_OUTPUT_HARD_CAP` in
-   * mcp-bridge, `MAX_OUTPUT_BYTES` in code_exec, `READ_FILE_HARD_MAX` clamp on
-   * read_file, and the runner push-time cap). Undefined → 'economic' (production
+   * `capFor(level, <its base>, <its ceiling>)` (`READ_FILE_HARD_MAX` clamp on
+   * mcp__read_file in the index tool adapter, `MAX_OUTPUT_BYTES` in code_exec,
+   * and the runner push-time cap). Undefined → 'economic' (production
    * defaults). Auto-compaction still runs. Mirrors the bundle state projection.
    */
   toolOutputCapLevel?: import('./runner/output-caps.js').ToolOutputCapLevel;
@@ -303,7 +312,6 @@ export interface ToolContextServices {
    * `recall_memory` tool. Undefined → tools answer with a clear message
    * instead of throwing (company sessions, subagents, tests).
    */
-  agentReads?: import('@mcp/code-agent/ports/agent-read-port.js').AgentReadPort;
   /** Current user turn explicitly excludes durable memory from recall. */
   memoryReadSuppressed?: boolean;
   projectMemory?: {

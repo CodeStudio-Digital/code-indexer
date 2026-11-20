@@ -119,6 +119,10 @@ import { mergeAdjacentStreamDeltas } from './stream-delta-coalescer.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
 import { getSharedSessionStore } from '../../../packages/code-agent/src/index.js';
 import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
+import { setGlobalIndexTools } from '@mcp/code-agent/ports/index-tools-port.js';
+import { docsTools } from '@mcp/code-agent/tools/index-docs/docs.js';
+import { createIndexToolsPort } from '@mcp/indexer/agent-tools/port.js';
+import { createRpcSemanticSearchClient, requestNamespaceReconcile } from './index-search-rpc.js';
 import type {
   CompanySessionId,
   ProjectId,
@@ -205,6 +209,17 @@ const workerSearchDocStore = new DocStore(dbConn.handle);
 const workerDocSearch = buildWorkerDocSearch(workerSearchDocStore);
 const docSearchShim: DocSearchBackend = { search: workerDocSearch.search, ...buildDocNavigation(workerSearchDocStore) };
 setGlobalDocSearch(docSearchShim);
+
+// ─── Index tools port ───────────────────────────────────────────────
+// Registered unconditionally; runCoder serves the index tools (mcp__*)
+// in-process from it. A process without a port runs without index tools.
+// The documentation readers live in code-agent and are handed in here.
+// Vector/memory search and the namespace wake-up go to the host over RPC.
+setGlobalIndexTools(createIndexToolsPort({
+  extraTools: docsTools,
+  semanticSearchClient: createRpcSemanticSearchClient(bridge),
+  mutationSinkWake: (namespace) => requestNamespaceReconcile(bridge, namespace),
+}));
 
 // Role recommender shim → forwards to the main process (WorkerOrchestratorPool
 // registers the `recommend` handler). The embedding pipeline + roleEmbeddingStore

@@ -14,8 +14,6 @@
  *   POST   /api/docs/sources/dry-run/pdf                      pre-flight estimate (PDF)
  *   POST   /api/docs/search                                   search test panel
  *
- * Auth: same `bearerMiddleware` as the rest of /api when enabled.
- *
  * Domain errors are mapped via `mapDocError` so route handlers stay terse.
  */
 import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';

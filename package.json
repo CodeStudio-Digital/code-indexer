@@ -13,8 +13,7 @@
     "node": ">=22.13.0"
   },
   "bin": {
-    "mcp-code-indexer": "./dist/apps/cli/index.js",
-    "mcp-code-indexer-server": "./dist/apps/mcp-server/index.js"
+    "mcp-code-indexer": "./dist/apps/cli/index.js"
   },
   "scripts": {
     "build": "tsc && node scripts/prune-build-output.mjs && node scripts/resolve-build-aliases.mjs && node scripts/copy-prompts.mjs",
@@ -34,7 +33,6 @@
     "electron:rebuild": "electron-rebuild -f -o better-sqlite3",
     "node:rebuild": "pnpm rebuild better-sqlite3 node-pty",
     "start": "node --max-old-space-size=8192 dist/apps/cli/index.js",
-    "start:server": "node --max-old-space-size=8192 dist/apps/mcp-server/index.js",
     "start:api": "node --max-old-space-size=8192 dist/apps/http-api/server.js",
     "test": "node scripts/test-workspace.mjs --quick",
     "test:quick": "node scripts/test-workspace.mjs --quick",

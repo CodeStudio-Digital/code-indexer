@@ -40,14 +40,14 @@ async function main() {
     const map = buildRepoMap(db, project.id, 1024);
     assert.match(map, /constant PUBLIC_LIMIT/); assert.match(map, /license-configuration\.json/);
   } finally { db.close(); }
-  const { McpToolBridge } = load('code-agent/src/tools/mcp-bridge.js');
-  const bridge = new McpToolBridge({ deferConnection: true });
-  let mcpPid;
+  // The agent's index tools run in-process from the packaged port (no MCP child).
+  const { createIndexToolsPort } = load('indexer/src/agent-tools/port.js');
+  const { buildNativeIndexTools } = load('code-agent/src/tools/native-index-tools.js');
+  const { docsTools } = load('code-agent/src/tools/index-docs/docs.js');
+  const indexDb = new CodeIndexDB(process.env.MCP_INDEX_DB);
   try {
-    await bridge.connect(join(root, 'app.asar', 'dist', 'apps', 'mcp-server', 'index.js'));
-    mcpPid = bridge.transport?.pid;
-    if (mcpPid) owned.push(mcpPid);
-    const tools = await bridge.listTools({ projectName: project.name, projectRoot });
+    const port = createIndexToolsPort({ extraTools: docsTools });
+    const tools = buildNativeIndexTools({ port, db: indexDb, binding: { projectName: project.name, projectRoot } });
     const toolCtx = { cwd: projectRoot, projectId: project.id };
     const page = await tools.find(tool => tool.name === 'mcp__get_repo_map').handler({ format: 'json' }, toolCtx);
     assert.notEqual(page.isError, true); assert.match(page.content, /PUBLIC_LIMIT/);
@@ -56,9 +56,8 @@ async function main() {
     assert.deepEqual(grep.structuredData.hits, []);
     assert.deepEqual(grep.structuredData.pathHints, ['license-configuration.json']);
     assert.equal(grep.structuredData.absenceConclusive, false);
-    results.push({ configurationRepoMap: 'passed', mcpCatalogParity: 'passed', mcpPathHints: 'passed' });
-  } finally { await bridge.close(); }
-  if (mcpPid) assert.throws(() => process.kill(mcpPid, 0), `Owned MCP ${mcpPid} remains alive`);
+    results.push({ configurationRepoMap: 'passed', indexToolsPort: 'passed', mcpPathHints: 'passed' });
+  } finally { indexDb.close(); }
 
   const { superviseCodeExec } = load('code-agent/src/tools/code-exec-supervisor.js');
   const bootstrap = { timeoutMs: 200, maxOutputBytes: 10000, priorityErrorBytes: 1000,

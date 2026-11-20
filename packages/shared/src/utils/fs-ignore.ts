@@ -8,7 +8,7 @@
  * `apps/http-api/server/routes/workspace/file-service.ts` (subconjunto). O array
  * é o seed canônico; o Set é o que os call-sites consultam via `.has()`.
  *
- * NÃO inclui os blocklists agent-side (`apps/mcp-server`, `services/seed-files`,
+ * NÃO inclui os blocklists agent-side (`indexer/agent-tools`, `services/seed-files`,
  * `code-agent/manage-path`) — contrato diferente (respeitam .gitignore/escopo).
  */
 export const TREE_BLOCK_DIRS: readonly string[] = [

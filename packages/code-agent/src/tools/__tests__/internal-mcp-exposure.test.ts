@@ -7,8 +7,8 @@ import type { DocSearchBackend } from '../doc-search-types.js';
 import { ragSearchDocsTools } from '../rag-search-docs.js';
 import { ragReadDocTools } from '../rag-read-doc.js';
 import { ragDocOutlineTools } from '../rag-doc-outline.js';
-import { isRedundantPrimaryTwin, prefixedBridgeTools, primaryBridgeTools } from '../internal-mcp-exposure.js';
-import { INTERNAL_MCP_CATALOG } from '../generated/internal-mcp-catalog.js';
+import { isRedundantPrimaryTwin, prefixedBridgeTools } from '../internal-mcp-exposure.js';
+import { INTERNAL_MCP_ACCESS } from '../internal-mcp-contract.js';
 
 const TWINS = ['mcp__rag_search_docs', 'mcp__rag_read_doc', 'mcp__rag_doc_outline'];
 const fullBackend = { search: async () => ({ results: [] }), readChunk: async () => null,
@@ -21,9 +21,11 @@ function nativeRegistry(): ToolRegistry {
 }
 /** A native counts as available when registered (index.ts also checks the disabled lists). */
 const available = (registry: ToolRegistry) => (name: string) => !!registry.get(name);
-/** The bridge lists every server tool as `mcp__<name>`. */
-const bridged = () => INTERNAL_MCP_CATALOG.map(t => tool(`mcp__${t.name}`));
-const AGENT_RUN_READS = ['list_agents', 'list_agent_runs', 'get_agent_run', 'get_agent_result'];
+/** Every first-party index tool as `mcp__<name>` (the access map covers each one the server defines). */
+const FIRST_PARTY = Object.keys(INTERNAL_MCP_ACCESS);
+const bridged = () => FIRST_PARTY.map(name => tool(`mcp__${name}`));
+/** The agent-run API's verbs: four reads (retired in E8d) and two control verbs (never registered). */
+const AGENT_RUN_VERBS = ['list_agents', 'list_agent_runs', 'get_agent_run', 'get_agent_result', 'start_agent_run', 'cancel_agent_run'];
 
 describe('primary MCP duplicates of native doc tools', () => {
   it('drops the three MCP doc twins when the native tools and their backend verbs exist', () => {
@@ -53,34 +55,24 @@ describe('primary MCP duplicates of native doc tools', () => {
   });
 });
 
-describe('agent-run control stays out of every internal bridge', () => {
-  it('the server still publishes all six agent-run tools to external MCP clients', () => {
-    const names = INTERNAL_MCP_CATALOG.map(t => t.name);
-    for (const name of [...AGENT_RUN_READS, 'start_agent_run', 'cancel_agent_run']) expect(names).toContain(name);
+describe('index tools as the internal bridges register them', () => {
+  it('the first-party index tools carry no agent-run verb', () => {
+    for (const name of AGENT_RUN_VERBS) expect(FIRST_PARTY, name).not.toContain(name);
   });
 
-  it('the primary bridge registers the four read verbs and neither control verb', () => {
-    const names = primaryBridgeTools(bridged()).map(t => t.name);
-    for (const name of AGENT_RUN_READS) expect(names).toContain(`mcp__${name}`);
-    expect(names).not.toContain('mcp__start_agent_run');
-    expect(names).not.toContain('mcp__cancel_agent_run');
-    expect(names).toHaveLength(INTERNAL_MCP_CATALOG.length - 2);
-  });
-
-  it('a prefixed bridge (Company master, global secondary) prefixes and drops the same two', () => {
+  it('a prefixed bridge (Company master, global secondary) prefixes every tool and drops none', () => {
     const names = prefixedBridgeTools(bridged(), 'proj').map(t => t.name);
-    for (const name of AGENT_RUN_READS) expect(names).toContain(`mcp__proj__${name}`);
-    expect(names.some(n => /(start|cancel)_agent_run$/.test(n))).toBe(false);
+    expect(names).toEqual(FIRST_PARTY.map(name => `mcp__proj__${name}`));
     expect(names).toContain('mcp__proj__rag_search_docs'); // no native twin per secondary project
-    expect(names.every(n => n.startsWith('mcp__proj__'))).toBe(true);
   });
 
-  it('every internal bridge registration in index.ts goes through this module', () => {
+  it('every index tool listing in index.ts is registered, primary as published and secondary prefixed', () => {
     const src = readFileSync(fileURLToPath(new URL('../../index.ts', import.meta.url)), 'utf8');
-    const listings = src.match(/\.listTools\(\{/g)?.length ?? 0;
-    const filtered = (src.match(/\b(?:primaryBridgeTools|prefixedBridgeTools)\(mcpTools\b/g) ?? []).length;
+    const listings = src.match(/\.forProject\(\{/g)?.length ?? 0;
+    const primary = src.match(/\bregistry\.registerAll\(mcpTools\)/g)?.length ?? 0;
+    const prefixed = src.match(/\bprefixedBridgeTools\(mcpTools\b/g)?.length ?? 0;
     expect(listings).toBe(3);
-    expect(filtered).toBe(listings);
+    expect([primary, prefixed]).toEqual([1, 2]);
   });
 
   it('index.ts prunes primary twins once, after the disabled lists and every registry filter', () => {

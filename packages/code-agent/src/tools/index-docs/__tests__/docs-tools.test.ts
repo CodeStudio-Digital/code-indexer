@@ -196,7 +196,7 @@ describe('MCP documentation tools', () => {
       }),
     }));
 
-    // The MCP scope is derived from `access` by apps/mcp-server (mcp-tool-contract.test.ts).
+    // The adapter's contract is derived from `access` (native-index-definitions.test.ts).
     expect(docsTools.map((tool) => [tool.name, tool.access])).toEqual([
       ['rag_search_docs', 'read'],
       ['rag_read_doc', 'read'],

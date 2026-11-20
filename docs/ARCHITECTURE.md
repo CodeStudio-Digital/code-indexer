@@ -152,7 +152,8 @@ Fetch router in its main process. `pnpm dev` and `pnpm start:api` serve those
 routes over `node:http`. Electron can open a loopback listener for debugging
 with `MCP_DEV_HTTP=1` and an ephemeral listener for browser OAuth callbacks.
 
-The MCP integration uses the SDK's Web Standard HTTP and stdio transports.
+The MCP integration is client-only (the MCP server for external clients was
+removed) and uses the SDK's Web Standard HTTP and stdio transports.
 The pnpm overrides remove the SDK dependencies that were used by its separate
 Node HTTP adapter.
 
