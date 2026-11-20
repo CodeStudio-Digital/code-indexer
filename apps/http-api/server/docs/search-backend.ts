@@ -8,11 +8,12 @@
  * Scoping policy (migration 134): when the tool call carries a
  * `project_id` and no explicit `collection`, the search is filtered to the
  * project's linked collections — falling back to the global corpus when
- * the project has no links (or the links table predates the migration).
+ * the catalog confirms that the project has no links.
  * `scope: 'all'` opts out per call.
  */
 import type { DocHybridSearch, DocSearchInput } from '@mcp/services/services/docs/index.js';
 import { DEFAULT_MIN_RELEVANCE } from '@mcp/services/services/docs/index.js';
+import { resolveDocSearchScope } from '@mcp/services/services/docs/search-scope.js';
 import type { DocStore } from '@mcp/store/doc-store.js';
 import type { DocsHintCollection, DocsHintProvider } from '@mcp/code-agent/core/docs-hint.js';
 import { buildDocNavVerbs } from './doc-nav-backend.js';
@@ -69,32 +70,17 @@ interface DocSearchBackendDeps {
 }
 
 export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBackendDeps) {
-  // Env-flag-aware enhancements — they default ON so the first-line
-  // `rag_search_docs` every agent reaches for gets calibrated relevance and
-  // an honest "no good match" without opting in. Set to '0' to disable.
-  //   DOCS_RAG_REWRITE=0  → query rewriter OFF
-  //   DOCS_RAG_RERANK=0   → reranker OFF (also disables calibrated scores)
-  // Both still degrade to no-op when the corresponding binding is
-  // unconfigured in the admin panel — flags only control the OPT-IN.
+  // The held-out document passages lost Recall@5 with the optional cross-encoder.
+  // Operators can enable it for a collection workload they have evaluated.
   const docsRagRewrite = process.env.DOCS_RAG_REWRITE !== '0';
-  const docsRagRerank = process.env.DOCS_RAG_RERANK !== '0';
+  const docsRagRerank = process.env.DOCS_RAG_RERANK === '1';
 
   return {
     search: async (input: BackendSearchInput, signal?: AbortSignal) => {
       signal?.throwIfAborted();
       const { scope, project_id, ...rest } = input;
 
-      // Resolve the project's linked collections. Defensive try/catch: a
-      // dev DB that predates migration 134 must degrade to global search,
-      // not break every doc search in the process.
-      let scoped: Array<{ id: number; name: string }> = [];
-      if (!input.collection && scope !== 'all' && project_id != null) {
-        try {
-          scoped = docStore.listCollectionsForProject(project_id);
-        } catch {
-          scoped = [];
-        }
-      }
+      const { scope: resolvedScope, collections: scoped } = resolveDocSearchScope(docStore, input);
 
       const forward: DocSearchInput = {
         // Threshold weak hits so the tool can report "nothing relevant"
@@ -102,6 +88,7 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
         // calibrated scores; a caller-supplied value still wins.
         min_relevance: DEFAULT_MIN_RELEVANCE,
         ...rest,
+        signal,
         enhancements: { rewrite: docsRagRewrite && shouldRewrite(input.query), rerank: docsRagRerank },
       };
       if (scoped.length > 0) forward.collection_ids = scoped.map((c) => c.id);
@@ -109,7 +96,6 @@ export function buildDocSearchBackend({ docHybridSearch, docStore }: DocSearchBa
       const started = Date.now();
       const out = await docHybridSearch.search(forward);
       signal?.throwIfAborted();
-      const resolvedScope = scoped.length > 0 ? 'project' : 'all';
       out.diag.scope = resolvedScope;
       if (scoped.length > 0) out.diag.scoped_collections = scoped.map((c) => c.name);
       const explicitCollectionId = input.collection ? docStore.getCollectionByName(input.collection)?.id : undefined;

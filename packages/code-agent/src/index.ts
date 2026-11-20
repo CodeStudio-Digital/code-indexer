@@ -2803,6 +2803,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     preflightHint: preflightHintSeed
       ? renderPreflightHint(preflightHintSeed, { bugWorkflow: false })
       : undefined,
+    preflightHintWithoutMemory: preflightHintSeed
+      ? renderPreflightHint({ ...preflightHintSeed, memories: [] }, { bugWorkflow: false })
+      : undefined,
     sessionToolCap,
     agentDecisionGuidance,
     agentDecisionTelemetry,

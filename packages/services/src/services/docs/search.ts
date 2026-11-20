@@ -113,6 +113,8 @@ export class DocHybridSearch {
     const useVector =
       forcedMode !== 'fts' && this.embeddingService != null && this.vectorStore != null;
     let staleVectorHits = 0;
+    const attemptedCollections = new Set<number>();
+    const failedCollections = new Set<number>();
 
     // ─── Stage 1: query rewrite (optional) ────────────────────────
     // Produces N variants (incl. original) that each get a hybrid search.
@@ -139,7 +141,8 @@ export class DocHybridSearch {
       queries.map(async (q) => {
         const [fts, vec] = await Promise.all([
           useFts ? this.runFts(q, collectionIds, ftsBudget) : Promise.resolve([] as RankedHit[]),
-          useVector ? this.runVector(q, collectionIds, vectorBudget, (n) => { staleVectorHits += n; }, input.signal) : Promise.resolve([] as RankedHit[]),
+          useVector ? this.runVector(q, collectionIds, vectorBudget, (n) => { staleVectorHits += n; },
+            attemptedCollections, failedCollections, input.signal) : Promise.resolve([] as RankedHit[]),
         ]);
         return { fts, vec };
       }),
@@ -208,6 +211,10 @@ export class DocHybridSearch {
     // ─── Stage 3: rerank (optional) ───────────────────────────────
     let rerankUsed = false;
     let rerankDropped = 0;
+    const rerankCandidates = results.length;
+    let rerankSkipReason = input.enhancements?.rerank
+      ? !reranker ? 'disabled' : results.length <= 1 ? 'insufficient_candidates' : undefined
+      : undefined;
     if (wantRerank && reranker && results.length > 1) {
       const candidates: Array<RerankCandidate & { __result: DocSearchResult }> = results.map((r) => ({
         chunk_id: r.chunk_id,
@@ -224,6 +231,7 @@ export class DocHybridSearch {
       });
       input.signal?.throwIfAborted();
       rerankUsed = rerank.reranked;
+      rerankSkipReason = rerank.skipReason;
       rerankDropped = rerank.dropped;
       results = rerank.candidates.map((c) => c.__result);
       // Surface the calibrated 0-1 score the reranker just computed, instead
@@ -250,7 +258,7 @@ export class DocHybridSearch {
     if (input.min_relevance != null) {
       const outcome = applyThreshold(results, input.min_relevance);
       results = outcome.kept;
-      noGoodMatch = outcome.noGoodMatch;
+      noGoodMatch = outcome.noGoodMatch && failedCollections.size === 0;
       if (outcome.topRelevance != null) topRelevance = outcome.topRelevance;
     }
 
@@ -273,10 +281,17 @@ export class DocHybridSearch {
         rewrite_used: rewriteUsed,
         rewrite_variants: rewriteVariants,
         rerank_used: rerankUsed,
+        rerank_candidates: rerankCandidates,
+        rerank_skip_reason: rerankSkipReason,
         rerank_dropped: rerankDropped,
         no_good_match: noGoodMatch,
         top_relevance: topRelevance,
         stale_vector_hits: staleVectorHits,
+        ...(useVector ? { vector_collections: {
+          attempted: attemptedCollections.size,
+          completed: attemptedCollections.size - failedCollections.size,
+          failed: [...failedCollections].sort((a, b) => a - b),
+        } } : {}),
         vector_coverage: this.vectorCoverage(collectionIds),
         results_before_limit: resultsBeforeLimit,
         results_truncated: resultsTruncated,
@@ -298,6 +313,8 @@ export class DocHybridSearch {
     collectionIds: number[] | undefined,
     budget: number,
     onStale: (count: number) => void,
+    attempted: Set<number>,
+    failed: Set<number>,
     signal?: AbortSignal,
   ): Promise<RankedHit[]> {
     if (!this.embeddingService || !this.vectorStore) return [];
@@ -310,20 +327,24 @@ export class DocHybridSearch {
     // (collections are few). This replaces the old "fetch 10× and filter in
     // memory" hack that existed only because code+docs shared one index.
     const ids = collectionIds ?? this.docStore.listCollections().map((c) => c.id);
+    const spaces = new Map<number, string>();
     const searchCollection = async (id: number): Promise<RankedHit[]> => {
       signal?.throwIfAborted();
+      attempted.add(id);
       const namespace = docNamespace(id);
       try {
         // Each collection may still serve a different active generation while
         // an atomic profile migration rolls forward. Encode in that exact
         // namespace's model space; one failed target degrades only its branch.
-        const { vector, generationId } = await embedQueryForNamespace(this.embeddingService!, namespace, query, signal ? { signal } : undefined);
+        const { vector, generationId, spaceFingerprint } = await embedQueryForNamespace(this.embeddingService!, namespace, query, signal ? { signal } : undefined);
+        if (spaceFingerprint) spaces.set(id, spaceFingerprint);
         signal?.throwIfAborted();
-        const results = await this.searchNamespace(vector, namespace, budget, onStale, generationId);
+        const results = await this.searchNamespace(vector, id, budget, onStale, generationId, signal);
         signal?.throwIfAborted();
         return results;
       } catch {
         signal?.throwIfAborted();
+        failed.add(id);
         return [];
       }
     };
@@ -339,31 +360,40 @@ export class DocHybridSearch {
       }
     };
     await Promise.all(Array.from({ length: Math.min(4, ids.length) }, () => worker()));
-    return perCollection
-      .flat()
-      .sort((a, b) => b.score - a.score)
-      .slice(0, budget);
+    const bySpace = new Map<string | undefined, RankedHit[]>();
+    perCollection.forEach((hits, index) => {
+      if (!hits.length) return;
+      const space = spaces.get(ids[index]!);
+      const group = bySpace.get(space) ?? [];
+      group.push(...hits);
+      bySpace.set(space, group);
+    });
+    const ranked = [...bySpace.values()].map(group => group.sort((a, b) => b.score - a.score));
+    if (ranked.length <= 1) return (ranked[0] ?? []).slice(0, budget);
+    // Cosine magnitudes across different encoders are incomparable. Give each
+    // active space one vote at each rank, retaining cosine order inside it.
+    return rrfMerge(ranked.map((items, index) => ({ name: String(index), items })), { k: RRF_DEFAULT_K, limit: budget })
+      .map(hit => ({ candidateId: hit.candidateId, score: hit.rrfScore }));
   }
 
   /** One namespaced vector query → ranked chunk hits. */
   private async searchNamespace(
     queryVec: number[],
-    namespace: string,
+    collectionId: number,
     budget: number,
     onStale: (count: number) => void,
     generationId?: number,
+    signal?: AbortSignal,
   ): Promise<RankedHit[]> {
-    let matches: Awaited<ReturnType<VectorStore['search']>>;
-    try {
-      matches = await this.vectorStore!.search(queryVec, { topK: budget, namespace, generationId });
-    } catch {
-      return [];
-    }
+    const matches = await this.vectorStore!.search(queryVec, { topK: budget, namespace: docNamespace(collectionId), generationId, signal });
+    signal?.throwIfAborted();
     const parsed = matches.map((m) => ({
       match: m,
       chunkId: Number(m.metadata?.chunk_id ?? extractChunkIdFromVectorId(m.id)),
     })).filter((x) => Number.isFinite(x.chunkId));
     const chunks = this.docStore.getChunksByIds(parsed.map((x) => x.chunkId));
+    const accepted = generationId === undefined ? undefined : this.docStore.acceptedVectorHashes?.(
+      docNamespace(collectionId), generationId, parsed.map(x => vectorIdForChunk(x.chunkId)));
     const byId = new Map(chunks.map((chunk) => [chunk.id, chunk]));
     const hits: RankedHit[] = [];
     let stale = 0;
@@ -375,7 +405,9 @@ export class DocHybridSearch {
       // semantic_items is its acceptance ledger. A missing corpus row is stale,
       // but doc_chunks.embedding_* is only a compatibility mirror and must not
       // veto an otherwise active local vector.
-      if (!chunk) {
+      const indexedHash = accepted?.get(vectorIdForChunk(chunkId)) ?? m.metadata?.embedding_hash;
+      if (!chunk || chunk.collection_id !== collectionId || (chunk.embedding_input_hash &&
+          (accepted || indexedHash) && chunk.embedding_input_hash !== indexedHash)) {
         stale++;
         continue;
       }

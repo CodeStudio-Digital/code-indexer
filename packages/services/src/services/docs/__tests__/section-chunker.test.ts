@@ -4,8 +4,22 @@
  */
 import { describe, it, expect } from 'vitest';
 import { chunkMarkdown } from '../section-chunker.js';
+import { heuristicAccepts } from '../relevance-gate.js';
 
 describe('chunkMarkdown', () => {
+  it('keeps short references in the ingestion gate and in their original section', () => {
+    const markdown = '# API\n\n## flush() {#flush}\n\nLimpa a fila.';
+    expect(heuristicAccepts({ markdown } as never).accept).toBe(true);
+    expect(chunkMarkdown(markdown)).toMatchObject([{ heading_path: 'API > flush()', anchor: 'flush', content: 'Limpa a fila.' }]);
+  });
+
+  it.each(['````', '~~~~'])('keeps shell comments and shorter delimiters inside %s', (fence: string) => {
+    const example = [fence + 'sh', '# Exemplo interno', fence.slice(1), '# Dentro', fence + fence[0]].join('\n');
+    const chunks = chunkMarkdown(['# Manual', '## Comando', example, '## Outro', 'Descrição breve.'].join('\n'), { maxChars: 16 });
+    expect(chunks.map(c => c.heading_path)).toEqual(['Manual > Comando', 'Manual > Outro']);
+    expect(chunks[0]!.content).toBe(example);
+    expect(chunkMarkdown('# Manual\n' + fence + 'sh\n# Incompleto')[0]!.heading_path).toBe('Manual');
+  });
   it('extracts {#id} into anchor and strips it from heading_path', () => {
     const md = `# Guide {#guide}\n\n${'a'.repeat(80)}\n\n## Button {#button-api}\n\n${'b'.repeat(80)}`;
     const chunks = chunkMarkdown(md);

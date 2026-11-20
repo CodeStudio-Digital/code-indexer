@@ -61,6 +61,7 @@
     "postinstall": "pnpm rebuild better-sqlite3",
     "eval": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase",
     "eval:strict": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase --modes fts,hybrid --min-recall 0.7 --gate-mode hybrid",
+    "eval:release": "tsx src/benchmarks/search-quality.ts --project CodeStudio/MCP-CodeBase --modes fts,hybrid --min-recall 0.90 --gate-mode hybrid",
     "eval:docs": "tsx scripts/docs-rag-eval.ts --file packages/services/src/services/docs/__tests__/eval/gold-set.example.jsonl",
     "eval:agent-engineering": "tsx scripts/eval-agent-engineering.ts",
     "test:workspace": "node scripts/test-workspace.mjs",

@@ -17,6 +17,14 @@ function fixture() {
 }
 
 describe('agent memory access receipts', () => {
+  it('flags only memories with file references if verification fails', async () => {
+    const { rows, db, retriever } = fixture();
+    Object.assign(rows[0]!, { referenced_files: '["src/main.ts"]' });
+    db.getAgentMemoryStaleBatch.mockImplementation(() => { throw new Error('index unavailable'); });
+    const hits = await retriever.recall('project', 10, 'durable fact');
+    expect(hits.find(hit => hit.id === '1')?.staleNote).toMatch(/could not be verified/);
+    expect(hits.find(hit => hit.id === '2')?.staleNote).toBeUndefined();
+  });
   it('does not mark candidates accessed and records only assembled IDs', async () => {
     const { db, retriever } = fixture();
     const candidates = await retriever.retrieve('project', 10, 'Find a durable fact');

@@ -39,12 +39,19 @@ export interface GateVerdict {
  * we're highly confident — borderline cases proceed to the LLM gate.
  */
 export function heuristicAccepts(page: RawPage): GateVerdict {
+  if (page.extraction_gap) return { accept: false, reason: page.extraction_gap };
   const md = page.markdown ?? '';
-  if (md.length < MIN_BODY_CHARS) {
+  // Small API pages often consist of one callable heading and a one-line definition.
+  const pdfPage = page.source === 'pdf' || (page.source === 'folder' && /[&#]page=\d+$/.test(page.uri));
+  const shortReference = md.length < MIN_BODY_CHARS && (
+    /^ {0,3}#{1,6}\s+[^\n]*(?:\w+\([^)\n]*\)|`[^`\n]+`|--[\w-]+)[^\n]*\n\s*[\p{L}\p{N}`]/mu.test(md) ||
+    (pdfPage && md.split('\n').slice(1).join(' ').trim().split(/\s+/).length >= 5)
+  );
+  if (md.length < MIN_BODY_CHARS && !shortReference) {
     return { accept: false, reason: `body too short (${md.length} chars)` };
   }
   // Pages with no headings AND no paragraphs are almost certainly nav-only.
-  if (!/[#\n]{2}/.test(md) && md.split(/\s+/).length < 100) {
+  if (!shortReference && !/[#\n]{2}/.test(md) && md.split(/\s+/).length < 100) {
     return { accept: false, reason: 'no structure (likely nav stub)' };
   }
   // Login/error pages fingerprint.

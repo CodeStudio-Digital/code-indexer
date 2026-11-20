@@ -23,7 +23,7 @@
  * gold-set survives re-indexing.
  */
 import { parseArgs } from 'node:util';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
@@ -38,86 +38,7 @@ import {
 } from '@mcp/indexer/benchmarks/active-query.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import { DocHybridSearch, CrossEncoderReranker } from '@mcp/services/services/docs/index.js';
-import {
-  labelRanked,
-  successAtK,
-  recallAtK,
-  ndcgAtK,
-  mrr,
-  mean,
-  type RelevantSpec,
-} from '@mcp/services/services/docs/eval-metrics.js';
-
-type Mode = 'fts' | 'hybrid' | 'rerank';
-
-interface GoldQuery {
-  query: string;
-  doc_type?: string;
-  collection?: string;
-  relevant: RelevantSpec[];
-}
-
-interface QueryScore {
-  mode: Mode;
-  doc_type: string;
-  success5: number;
-  recall5: number;
-  ndcg10: number;
-  rr: number;
-}
-
-const LIMIT = 10;
-
-function parseGold(path: string): GoldQuery[] {
-  const out: GoldQuery[] = [];
-  for (const line of readFileSync(path, 'utf-8').split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t || t.startsWith('#')) continue;
-    try {
-      const q = JSON.parse(t) as GoldQuery;
-      // Each `relevant` entry = ONE distinct expected document; skip queries
-      // with none (they'd score 0 across the board and skew the averages).
-      if (q.query && Array.isArray(q.relevant) && q.relevant.length > 0) out.push(q);
-    } catch (e) {
-      console.error(`[docs-eval] skipping malformed line: ${(e as Error).message}`);
-    }
-  }
-  return out;
-}
-
-async function runOne(search: DocHybridSearch, mode: Mode, q: GoldQuery): Promise<QueryScore> {
-  const input = {
-    query: q.query,
-    collection: q.collection,
-    limit: LIMIT,
-    ...(mode === 'fts' ? { mode: 'fts' as const } : {}),
-    ...(mode === 'rerank' ? { enhancements: { rerank: true, top_k_for_rerank: 20 } } : {}),
-  };
-  const { results } = await search.search(input);
-  const ranked = labelRanked(
-    results.map((r) => ({ source_uri: r.source_uri, heading_path: r.heading_path })),
-    q.relevant,
-  );
-  const n = q.relevant.length;
-  return {
-    mode,
-    doc_type: q.doc_type ?? '(untyped)',
-    success5: successAtK(ranked, 5),
-    recall5: recallAtK(ranked, 5, n),
-    ndcg10: ndcgAtK(ranked, 10, n),
-    rr: mrr(ranked),
-  };
-}
-
-function aggregate(rows: QueryScore[]): { recall5: number; success5: number; ndcg10: number; mrr: number; n: number } {
-  return {
-    recall5: mean(rows.map((r) => r.recall5)),
-    success5: mean(rows.map((r) => r.success5)),
-    ndcg10: mean(rows.map((r) => r.ndcg10)),
-    mrr: mean(rows.map((r) => r.rr)),
-    n: rows.length,
-  };
-}
+import { aggregate, parseGold, runOne, type Mode, type QueryScore } from './docs-rag-evaluation.js';
 
 function printTable(title: string, rows: Array<{ label: string; recall5: number; success5: number; ndcg10: number; mrr: number; n: number }>): void {
   console.log(`\n${title}`);
@@ -134,6 +55,7 @@ async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       file: { type: 'string' },
+      output: { type: 'string' },
       modes: { type: 'string' },
       'min-recall': { type: 'string' },
       'gate-mode': { type: 'string' },
@@ -178,7 +100,7 @@ async function main(): Promise<void> {
       `[docs-eval] --gate-mode ${gateMode} was not requested (modes: ${modes.join(', ')})`,
     );
   }
-  const gold = parseGold(values.file);
+  const gold = parseGold(readFileSync(values.file, 'utf8'));
   if (gold.length === 0) {
     console.error('[docs-eval] gold-set is empty');
     process.exit(1);
@@ -224,10 +146,7 @@ async function main(): Promise<void> {
   // reranker merely to construct the evaluator.
   const rerankerService = (() => {
     if (!modes.includes('rerank')) return new NullReranker();
-    const rerankerTarget = semanticRuntime.currentRerankerTarget('knowledge');
-    return rerankerTarget.kind === 'disabled'
-      ? new NullReranker()
-      : semanticRuntime.reranker('knowledge');
+    return semanticRuntime.reranker('docs', { strict: true });
   })();
   const reranker = new CrossEncoderReranker(rerankerService);
   const search = new DocHybridSearch(docStore, embeddingService, searchable, undefined, { reranker });
@@ -258,6 +177,18 @@ async function main(): Promise<void> {
   }
 
   // Overall per mode.
+  for (const mode of modes) {
+    const rows = all.filter(row => row.mode === mode);
+    const stats = aggregate(rows);
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      const key = [row.executed, row.reranked ? 'reranked' : row.skipReason ?? 'base'].join('/');
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    console.log(`[docs-eval] requested=${mode} executed=${JSON.stringify(Object.fromEntries(counts))} `
+      + `correctAbsence=${stats.correctAbsences}/${stats.negatives} positives=${stats.n}`);
+  }
+  if (values.output) writeFileSync(values.output, JSON.stringify({ modes, rows: all }, null, 2));
   printTable(
     'Overall by mode',
     modes.map((m) => ({ label: m, ...aggregate(all.filter((r) => r.mode === m)) })),
@@ -292,7 +223,18 @@ async function main(): Promise<void> {
 
   // Optional CI gate.
   if (Number.isFinite(minRecall)) {
-    const r5 = aggregate(all.filter((r) => r.mode === gateMode)).recall5;
+    const rows = all.filter(row => row.mode === gateMode);
+    if (!rows.some(row => row.positive)) throw new Error('[gate] no positive documentation cases');
+    if (gateMode !== 'fts' && rows.some(row => row.executed !== 'hybrid' || row.vectorCollections?.failed.length)) {
+      throw new Error('[gate] incomplete hybrid retrieval');
+    }
+    if (gateMode === 'rerank' && !rows.some(row => row.positive && row.reranked)) {
+      throw new Error('[gate] no positive case executed reranking');
+    }
+    if (rows.some(row => ['inference_unavailable', 'incomplete_scores'].includes(row.skipReason ?? ''))) {
+      throw new Error('[gate] required inference degraded');
+    }
+    const r5 = aggregate(rows).recall5;
     console.log(`\n[gate] ${gateMode} R@5=${r5.toFixed(3)} (min ${minRecall})`);
     if (r5 < minRecall) {
       throw new Error('[gate] FAILED — retrieval recall below threshold');

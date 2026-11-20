@@ -133,6 +133,9 @@ export class DocStore {
   // ─── Chunks ───────────────────────────────────────────────────
   insertChunks(inputs: DocChunkInput[]): number[] { return chunks.insert(this.db, inputs); }
   replaceChunksForSource(sourceId: number, inputs: DocChunkInput[]): number[] { return chunks.replaceForSource(this.db, sourceId, inputs); }
+  reconcileChunksForSource(sourceId: number, inputs: DocChunkInput[]): chunks.UpsertItemChunksResult {
+    return chunks.reconcileSource(this.db, sourceId, inputs);
+  }
   getChunk(id: number): DocChunk | null { return chunks.get(this.db, id); }
   getChunksByIds(ids: readonly number[]): DocChunk[] { return chunks.getByIds(this.db, ids); }
   getChunkNeighbors(chunkId: number, window: number = 1): DocChunk[] { return chunks.getNeighbors(this.db, chunkId, window); }
@@ -168,6 +171,9 @@ export class DocStore {
 
   // ─── Vector mapping ───────────────────────────────────────────
   listVectorIdsForSource(sourceId: number): DocVectorRef[] { return vectorMapping.listForSource(this.db, sourceId); }
+  acceptedVectorHashes(namespace: string, generation: number, ids: readonly string[]): Map<string, string> {
+    return vectorMapping.acceptedHashes(this.db, namespace, generation, ids);
+  }
   listVectorIdsForCollection(collectionId: number): DocVectorRef[] { return vectorMapping.listForCollection(this.db, collectionId); }
   countVectorMappings(): number { return vectorMapping.countMappings(this.db); }
   countIndexedVectorsByCollection(collectionId: number): number { return vectorMapping.countIndexedForCollection(this.db, collectionId); }

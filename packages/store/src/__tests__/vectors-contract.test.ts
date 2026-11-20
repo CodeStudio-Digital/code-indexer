@@ -36,5 +36,8 @@ describe('local-only vector storage contract', () => {
     const generation = 'semantic:space:space-dimension:384:rebuild:1784102400000:a1b2c3';
     expect(embeddingFingerprintForGeneration(generation)).toBe('semantic:space');
     expect(generationMatchesEmbeddingFingerprint(generation, 'semantic:space')).toBe(true);
+    const next = 'semantic:space:input-layout:v2:space-dimension:384:rebuild:1784102400001:a2';
+    expect(embeddingFingerprintForGeneration(next)).toBe('semantic:space');
+    expect(generationMatchesEmbeddingFingerprint(next, 'semantic:other')).toBe(false);
   });
 });

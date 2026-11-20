@@ -1,4 +1,5 @@
 import { minimatch } from 'minimatch';
+import { suppressesMemoryRecall } from '@mcp/shared/memory-opt-out.js';
 import type { SessionId } from '@mcp/session-storage';
 import type {
   PreflightMemoryEntry,
@@ -81,7 +82,7 @@ export function preparePreflightCatalogs(
   const toolCatalog = deps.getToolCatalog().filter((tool) =>
     !input.isGlobalWorkspace || !tool.name.startsWith('git_'),
   );
-  const memoryIndex = input.isGlobalWorkspace
+  const memoryIndex = suppressesMemoryRecall(input.userMessage) ? [] : input.isGlobalWorkspace
     ? workspaceProjects.flatMap((project) =>
         deps.getMemoryIndex(project.projectId).map((memory) => ({ ...memory, projectSlug: project.slug })),
       )

@@ -11,7 +11,7 @@ import type { HyDEService } from '@mcp/indexer/search/hyde.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { planQuery } from '@mcp/indexer/search/planner.js';
 import { buildConceptFtsMatch } from './lexical-concepts.js';
-import { codeResultInScope, codeSearchFolders, rerankWithinSlots } from './code-vector-matches.js';
+import { codeResultInScope, codeSearchFolders, codeVectorFilter, distinctCodeMatches, rerankWithinSlots } from './code-vector-matches.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '@mcp/shared/types.js';
@@ -21,7 +21,7 @@ import {
   createHybridSearchPipeline,
   rerankDocumentText,
   runHybridSearchPipeline,
-  semanticProjectContext,
+  codeQueryVariants,
   type HybridSearchPipelineCandidate,
   type HybridSearchPipelineQuery,
 } from '@mcp/indexer/search/hybrid-pipeline.js';
@@ -91,6 +91,16 @@ export interface SearchDiagnostics {
   telemetryRequestId?: string;
 }
 
+/** Reject a mislabeled semantic measurement even when a store and model are present. */
+export function verifySemanticRetrieval(diagnostics: SearchDiagnostics, expectCandidates: boolean): void {
+  if (diagnostics.vectorError || diagnostics.rerankerError || diagnostics.fallback) {
+    throw new Error(diagnostics.vectorError ?? diagnostics.rerankerError ?? diagnostics.fallbackReason ?? 'Semantic search degraded');
+  }
+  if (expectCandidates && ((diagnostics.vectorRawMatches ?? 0) <= 0 || (diagnostics.vectorRehydrated ?? 0) <= 0)) {
+    throw new Error(diagnostics.vectorSkippedReason ?? 'Semantic search returned no usable vector candidates. Check the selected folders and active index generation.');
+  }
+}
+
 export interface HybridSearchOptions {
   mode?: SearchMode;
   type?: SearchType;
@@ -101,6 +111,8 @@ export interface HybridSearchOptions {
   signal?: AbortSignal;
   /** Force a fresh execution for diagnostics/benchmarks. Never used by normal consumers. */
   bypassCache?: boolean;
+  /** The caller already generated this variant. Applies to the vector branch. */
+  preExpanded?: boolean;
   /** Transport/session attribution. Raw query text is never persisted. */
   telemetryContext?: SemanticSearchTelemetryContext;
 }
@@ -136,11 +148,6 @@ function classifyQuery(
   return 'concept';
 }
 
-/** Preserve the user's semantic intent. Generic English template prefixes
- * add inference work and bias multilingual queries toward boilerplate. */
-function buildQueryVariants(query: string): string[] {
-  return [query.trim()];
-}
 export class HybridSearch {
   private reranker: RerankerService;
   private memoryEmbeddingService: EmbeddingService;
@@ -205,7 +212,7 @@ export class HybridSearch {
     includeReranker = true,
     requestOptions: Pick<
       HybridSearchOptions,
-      'supersessionKey' | 'signal' | 'telemetryContext'
+      'supersessionKey' | 'signal' | 'telemetryContext' | 'preExpanded'
     > = {},
   ): Promise<HybridSearchResult[]> {
     let pipeline = includeReranker ? this.hybridPipeline : this.globalRetrievalPipeline;
@@ -235,6 +242,7 @@ export class HybridSearch {
       limit,
       supersessionKey: requestOptions.supersessionKey,
       signal: requestOptions.signal,
+      preExpanded: requestOptions.preExpanded,
       resolveContext: {
         sessionId: requestOptions.telemetryContext?.sessionId,
         companySessionId: requestOptions.telemetryContext?.companySessionId,
@@ -536,7 +544,7 @@ export class HybridSearch {
     // Check cache (key includes resolved mode so `auto` and `hybrid`
     // share a result row when the planner picks `hybrid`).
     const structuralRevision = this.db.getStructuralRevision?.(projectId);
-    const cacheKey = options?.bypassCache
+    const cacheKey = options?.bypassCache || options?.preExpanded
       ? null
       : this.queryCacheKey(projectId, query, mode, type, limit);
     const cached = cacheKey ? this.queryCache.get(cacheKey) : undefined;
@@ -747,14 +755,7 @@ export class HybridSearch {
     return results.slice(0, limit);
   }
 
-  /**
-   * Vector search with multi-query expansion and diagnostics.
-   *
-   * NL queries like "how create tools" don't match code embeddings well.
-   * We expand the query into 2-3 variants (e.g. "implementation of create tools",
-   * "function class create tools") and RRF-merge the per-variant results.
-   * If a HyDE service is available, we also include a synthetic code snippet.
-   */
+  /** Search the original text and, when available, one generated code variant. */
   private async vectorSearchExpanded(
     projectId: number,
     projectName: string,
@@ -780,39 +781,14 @@ export class HybridSearch {
     }
 
     try {
-      // Build query variants for better NL→code recall.
-      // Identifier-shaped queries gain nothing from HyDE — the LLM call adds
-      // 200-400ms and the synthetic snippet drifts away from exact-name
-      // matching — so when the planner classifies the query as fts-shaped,
-      // embed only the raw query. Kill switch: MCP_HYBRID_HYDE_SKIP_FTS=0.
-      const skipExpansion = process.env.MCP_HYBRID_HYDE_SKIP_FTS !== '0'
-        && planQuery(query).mode === 'fts';
-      let variants: string[];
-      if (skipExpansion) {
-        variants = [query.trim()];
-      } else if (this.hydeService) {
-        const hypothetical = await this.hydeService.generate(
-          query,
-          semanticProjectContext(this.db, projectId, projectName),
-          options?.signal,
-        );
-        variants =
-          hypothetical && hypothetical !== query
-            ? [query, hypothetical]
-            : buildQueryVariants(query);
-      } else {
-        variants = buildQueryVariants(query);
-      }
+      const variants = await codeQueryVariants(this.db, projectId, projectName, query,
+        options?.preExpanded ? null : this.hydeService, options?.signal);
       diag.queryVariants = variants;
       options?.signal?.throwIfAborted();
 
       // Project isolation rides on the namespace now; `type` stays a metadata
       // filter to pick files vs symbols within the project.
-      const filter: Record<string, string> = {};
-      if (type === 'files') filter.type = 'file';
-      // Do not filter symbol queries to metadata.type='symbol': body and
-      // sibling-group vectors carry the same structural ref_id and must be
-      // eligible for semantic_neighbors and natural-language symbol search.
+      const filter = codeVectorFilter(type);
 
       const perVariant = Math.max(limit, 10);
       let totalRawMatches = 0;
@@ -831,14 +807,14 @@ export class HybridSearch {
           if (vector.length === 0) return [];
           const matches = await this.vectorStore!.search(vector, {
             topK: perVariant,
-            filter,
+            ...filter,
             namespace,
             generationId,
             signal: options?.signal,
           });
           options?.signal?.throwIfAborted();
           totalRawMatches += matches.length;
-          return this.rehydrateVectorMatches(matches, projectId);
+          return this.rehydrateVectorMatches(distinctCodeMatches(matches, type), projectId);
         }),
       );
 
@@ -909,48 +885,27 @@ export class HybridSearch {
     return results;
   }
 
-  /**
-   * Query expansion for NL questions. Two modes:
-   *
-   *   1. **Real HyDE (when hydeService is provided)** — calls an LLM to draft
-   *      a short hypothetical code snippet / docstring that would answer the
-   *      query, then uses BOTH the raw query and the synthetic snippet as
-   *      variants. Adds ~200-400ms of latency but dramatically improves
-   *      recall for questions the codebase never phrases the same way.
-   *
-   *   2. **Template-based (fallback)** — rewrites `how does X work?` into
-   *      `implementation of X` and `function class X`. Deterministic and
-   *      free. Ships when no HyDE service is wired in the tool context.
-   *
-   * In both cases we run the hybrid search once per variant and RRF-merge
-   * the results. Scores are normalized to each variant's rank so the raw
-   * query doesn't dominate a strong HyDE match.
-   */
+  /** Fuse hybrid result ranks from the original query and one optional HyDE reformulation. */
   async searchExpanded(
     projectId: number,
     projectName: string,
     query: string,
-    options?: { type?: SearchType; limit?: number }
+    options?: { type?: SearchType; limit?: number; signal?: AbortSignal; requireSemantic?: boolean | 'candidates' }
   ): Promise<HybridSearchResult[]> {
     const type = options?.type ?? 'all';
     const limit = options?.limit ?? 20;
 
-    // Real HyDE takes precedence when available; we still include the raw
-    // query so exact-token matches aren't lost.
-    let variants: string[];
-    if (this.hydeService) {
-      const hypothetical = await this.hydeService.generate(query);
-      variants =
-        hypothetical && hypothetical !== query
-          ? [query, hypothetical]
-          : buildQueryVariants(query);
-    } else {
-      variants = buildQueryVariants(query);
-    }
+    const variants = await codeQueryVariants(this.db, projectId, projectName, query, this.hydeService, options?.signal);
 
     const perVariant = Math.max(limit, 10);
     const runs = await Promise.all(
-      variants.map((v) => this.search(projectId, projectName, v, { mode: 'hybrid', type, limit: perVariant }))
+      variants.map(async v => {
+        const { results, diagnostics } = await this.searchWithDiag(projectId, projectName, v, {
+          mode: 'hybrid', type, limit: perVariant, preExpanded: true, signal: options?.signal, bypassCache: !!options?.requireSemantic,
+        });
+        if (options?.requireSemantic) verifySemanticRetrieval(diagnostics, options.requireSemantic === 'candidates');
+        return results;
+      })
     );
 
     // RRF merge across variants using the same K as rrfMerge.

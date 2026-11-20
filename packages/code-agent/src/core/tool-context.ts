@@ -299,6 +299,8 @@ export interface ToolContextServices {
    * instead of throwing (company sessions, subagents, tests).
    */
   agentReads?: import('@mcp/code-agent/ports/agent-read-port.js').AgentReadPort;
+  /** Current user turn explicitly excludes durable memory from recall. */
+  memoryReadSuppressed?: boolean;
   projectMemory?: {
     save(entry: {
       title: string;

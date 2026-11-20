@@ -44,6 +44,7 @@ interface Scored {
   row: import('@mcp/shared/types.js').AgentMemoryRow & { score?: number };
   stale?: string[];
   unknown?: number;
+  referenceCheckFailed?: boolean;
   type: string;
   score: number;
 }
@@ -91,7 +92,7 @@ export class AgentMemoryRetriever {
       title: t.row.name,
       content: t.row.content,
       importance: clamp01(t.row.importance ?? 0.5),
-      staleNote: buildStaleNote(t.stale, t.unknown),
+      staleNote: buildStaleNote(t.stale, t.unknown, t.referenceCheckFailed),
     }));
     // LLM aboutness pass (fail-open) — only worth a (paid) call when there are
     // MORE candidates than we'll keep, i.e. something to actually discriminate.
@@ -135,7 +136,7 @@ export class AgentMemoryRetriever {
       category: t.type,
       source: t.row.source,
       importance: clamp01(t.row.importance ?? 0.5),
-      staleNote: buildStaleNote(t.stale, t.unknown),
+      staleNote: buildStaleNote(t.stale, t.unknown, t.referenceCheckFailed),
     }));
   }
 
@@ -162,6 +163,7 @@ export class AgentMemoryRetriever {
         row,
         stale: st?.stale,
         unknown: st?.unknown,
+        referenceCheckFailed: !staleMap && !!row.referenced_files && row.referenced_files.trim() !== '[]',
         type: row.type,
         score: blendedMemoryScore({
           relevance, importance: imp, recency: rec, usage: use, type: row.type, staleMult,
@@ -198,7 +200,7 @@ function toMs(s: string | null): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-function buildStaleNote(stale: string[] | undefined, unknown = 0): string | undefined {
+function buildStaleNote(stale: string[] | undefined, unknown = 0, referenceCheckFailed = false): string | undefined {
   const parts: string[] = [];
   if (stale?.length) {
     const shown = stale.slice(0, 3).join(', ');
@@ -206,5 +208,6 @@ function buildStaleNote(stale: string[] | undefined, unknown = 0): string | unde
     parts.push(`${shown}${extra} changed since recorded`);
   }
   if (unknown > 0) parts.push(`${unknown} file reference(s) could not be verified; re-read current source`);
+  if (referenceCheckFailed) parts.push('File references could not be verified. Read current source before relying on this memory.');
   return parts.length ? parts.join('; ') : undefined;
 }

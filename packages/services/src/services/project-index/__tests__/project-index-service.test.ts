@@ -675,6 +675,31 @@ describe('ProjectIndexService', () => {
     await svc.dispose();
   });
 
+  it('reconciles the interval between a timed-out initial scan and live watcher coverage', async () => {
+    const prev = process.env.MCP_WATCH_READY_TIMEOUT_MS;
+    process.env.MCP_WATCH_READY_TIMEOUT_MS = '10';
+    const exec = new FakeExecutor();
+    const row = { structural_indexed_at: null as string | null, last_indexed: null };
+    exec.onRun = () => { row.structural_indexed_at = '2026-01-01T00:00:00Z'; };
+    const watcher = new FakeFileWatcher();
+    let release!: () => void;
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    watcher.waitUntilReady = () => ready;
+    const svc = new ProjectIndexService(fakeDb(row), exec, watcher as never, () => ({ ...SETTINGS, autoWatch: true }), new FakeGitMetaWatcher() as never);
+    try {
+      svc.activate(1, 'view');
+      expect((await svc.ensureStructuralReady(1, 2000)).status).toBe('ready');
+      expect(exec.runs).toBe(1);
+      release();
+      await vi.waitFor(() => expect(exec.runs).toBe(2));
+    } finally {
+      release();
+      if (prev === undefined) delete process.env.MCP_WATCH_READY_TIMEOUT_MS;
+      else process.env.MCP_WATCH_READY_TIMEOUT_MS = prev;
+      await svc.dispose();
+    }
+  });
+
   it('arms and awaits the file watcher before scanning, then drains scan-time changes before ready', async () => {
     const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
     const exec = new FakeExecutor();

@@ -62,6 +62,19 @@ function fakeReranker(scores: Record<number, number>): Reranker {
 }
 
 describe('DocHybridSearch relevance + threshold', () => {
+  it('keeps lexical answers when the actual local profile skips Portuguese inference', async () => {
+    const infer = vi.fn().mockResolvedValue([]);
+    const reranker = new CrossEncoderReranker({ name: 'local', rerank: infer,
+      queryBlockReason: () => 'local_reranker_language_not_supported:pt' } as RerankerService);
+    const search = new DocHybridSearch(fakeDocStore(fakeChunks()), null, null, undefined, { reranker });
+    const { results, diag } = await search.search({ query: 'Como limpar a fila?', min_relevance: 0.45,
+      enhancements: { rerank: true } });
+    expect(results.map(r => r.chunk_id)).toEqual([1, 2, 3]);
+    expect(diag).toMatchObject({ rerank_used: false, no_good_match: false,
+      rerank_skip_reason: 'local_reranker_language_not_supported:pt' });
+    expect(infer).not.toHaveBeenCalled();
+  });
+
   it('reranks the actual chunk beyond the UI preview while keeping the response compact', async () => {
     const chunks = fakeChunks();
     chunks[0]!.content = 'intro '.repeat(100) + 'needle beyond the preview';
@@ -214,13 +227,36 @@ describe('DocHybridSearch relevance + threshold', () => {
     } as unknown as DocStore;
     const search = new DocHybridSearch(store, embeddingService, vectorStore);
 
-    const { results, diag } = await search.search({ query: 'q', mode: 'vector', limit: 5 });
+    const signal = new AbortController().signal;
+    const { results, diag } = await search.search({ query: 'q', mode: 'vector', limit: 5, signal });
 
     expect(namespaceCalls.sort()).toEqual(['docs:c1', 'docs:c2', 'docs:c3']);
     expect(embeddingService.embedQuery).not.toHaveBeenCalled();
-    expect(vectorStore.search).toHaveBeenCalledWith([1, 0], expect.objectContaining({ generationId: 41 }));
+    expect(vectorStore.search).toHaveBeenCalledWith([1, 0], expect.objectContaining({ generationId: 41, signal }));
+    expect(diag.vector_collections).toEqual({ attempted: 3, completed: 2, failed: [3] });
     expect(vectorStore.search).toHaveBeenCalledWith([0, 1], expect.objectContaining({ generationId: 42 }));
     expect(results.map((result) => result.chunk_id).sort()).toEqual([11, 22]);
     expect(diag.vector_hits).toBe(2);
+  });
+
+  it('compares raw similarity only within one model space and rejects cross-collection rows', async () => {
+    const chunks = Array.from({ length: 6 }, (_, i) => ({
+      ...fakeChunks()[0]!, id: i + 1, collection_id: i < 4 ? 1 : 2,
+    }));
+    let different = true;
+    const encoder = { embedQueryForNamespace: async (namespace: string) => ({
+      vector: [1], tokens: 1, spaceFingerprint: different ? namespace : 'shared',
+    }) } as unknown as EmbeddingService;
+    const vectors = { search: async (_v: number[], { namespace }: { namespace: string }) =>
+      (namespace === 'docs:c1' ? [[1, .99], [2, .98], [3, .97], [4, .96], [6, .95]] : [[5, .52]])
+        .map(([id, score]) => ({ id: 'doc_chunk:' + id, score, metadata: { chunk_id: String(id) } })),
+    } as unknown as VectorStore;
+    const engine = new DocHybridSearch(fakeDocStore(chunks), encoder, vectors);
+    const top = () => engine.search({ query: 'version', mode: 'vector', limit: 2, collection_ids: [1, 2] });
+    const mixed = await top();
+    expect(mixed.results.map(r => r.chunk_id)).toEqual([1, 5]);
+    expect(mixed.diag.stale_vector_hits).toBe(1);
+    different = false;
+    expect((await top()).results.map(r => r.chunk_id)).toEqual([1, 2]);
   });
 });

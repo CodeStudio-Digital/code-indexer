@@ -361,7 +361,7 @@ export function SemanticSearchTestDialog({
                         {t('index.semanticTest.executionStatus')}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {diagnostics?.fallbackReason ?? diagnostics?.rerankerError ?? diagnostics?.vectorError
+                        {diagnostics?.fallbackReason ?? diagnostics?.rerankerError ?? diagnostics?.vectorError ?? diagnostics?.vectorSkippedReason
                           ?? (diagnostics?.rerankerApplied
                             ? t('index.semanticTest.executionReranked')
                             : t('index.semanticTest.executionRrf'))}

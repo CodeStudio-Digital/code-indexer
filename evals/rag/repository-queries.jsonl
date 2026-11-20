@@ -1,0 +1,18 @@
+{"project":"indexer","kind":"identifier","query":"resolveBundledEmbeddingPath","path":"bundled-model-path.ts","evidence":"resourcesPath"}
+{"project":"indexer","kind":"identifier","query":"SemanticInferenceScheduler","path":"semantic-inference-scheduler.ts","evidence":"class SemanticInferenceScheduler"}
+{"project":"indexer","kind":"concept-pt","query":"O que acontece quando a placa de vídeo falha durante o cálculo das representações de texto?","path":"local-embeddings.ts","evidence":"cpu"}
+{"project":"indexer","kind":"concept-en","query":"How do simultaneous requests for the same text avoid encoding it repeatedly across collections?","path":"semantic-profile-runtime.ts","evidence":"queryInflight"}
+{"project":"indexer","kind":"concept-pt","query":"Como impedir que um arquivo com muitos chamadores domine os vizinhos de uma busca?","path":"graph-expansion-source.ts","evidence":"maxNeighborsPerSeed"}
+{"project":"indexer","kind":"concept-en","query":"Where is the choice between a literal lookup and a natural language search made?","path":"planner.ts","evidence":"planQuery"}
+{"project":"indexer","kind":"cross-module","query":"Which caller uses expandGraph to add neighboring files to search results?","path":"hybrid-pipeline.ts","evidence":"expandGraph(this.deps.db"}
+{"project":"indexer","kind":"cross-module","query":"Quem usa a função preferredOnnxEmbeddingDevice ao carregar o modelo de embeddings?","path":"local-embeddings.ts","evidence":"preferredOnnxEmbeddingDevice("}
+{"project":"indexer","kind":"literal","query":"MCP_HYBRID_HYDE_SKIP_FTS","path":"hybrid-pipeline.ts","evidence":"MCP_HYBRID_HYDE_SKIP_FTS"}
+{"project":"docs","kind":"identifier","query":"runIncrementalFolderIngest","path":"index-doc-use-case/incremental-folder.ts","evidence":"function runIncrementalFolderIngest"}
+{"project":"docs","kind":"identifier","query":"CrossEncoderReranker","path":"cross-encoder-reranker.ts","evidence":"class CrossEncoderReranker"}
+{"project":"docs","kind":"concept-pt","query":"Como impedir que um comentário de shell vire uma seção nova dentro de um bloco de exemplo?","path":"section-chunker.ts","evidence":"openingFence"}
+{"project":"docs","kind":"concept-en","query":"What distinguishes a trustworthy relevance score from an uncalibrated retrieval score?","path":"relevance-policy.ts","evidence":"applyThreshold"}
+{"project":"docs","kind":"concept-pt","query":"Onde a extração de páginas de um PDF guarda o número da página para a citação?","path":"pdf-parser.ts","evidence":"#page="}
+{"project":"docs","kind":"concept-en","query":"How does an incremental refresh retain the identity of a cited section?","path":"incremental-metadata.ts","evidence":"stableChunkKey"}
+{"project":"docs","kind":"cross-module","query":"Which consumer uses buildEmbeddingText to send a documentation passage to the vector store?","path":"index-doc-use-case/embed-upsert.ts","evidence":"buildEmbeddingText("}
+{"project":"docs","kind":"cross-module","query":"Onde a atualização de uma pasta usa buildItemChunks depois de verificar as páginas?","path":"index-doc-use-case/incremental-folder.ts","evidence":"buildItemChunks("}
+{"project":"docs","kind":"literal","query":"no_extractable_text","path":"pdf-parser.ts","evidence":"no_extractable_text"}

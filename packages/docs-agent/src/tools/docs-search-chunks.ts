@@ -8,6 +8,7 @@
  *   - Honors the optional `collections[]` scoping set on the run.
  */
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
+import { docPassageUri } from '@mcp/shared/doc-passage-uri.js';
 import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { DocHybridSearch } from '@mcp/services/services/docs/index.js';
@@ -16,6 +17,8 @@ import type { ResolveContext } from '@mcp/services/pipelines/index.js';
 import type { DocsEvidenceLedger } from './evidence-ledger.js';
 
 export interface DocsSearchToolDeps {
+  scopeIds?: ReadonlySet<number>;
+  collectionIdsByName?: ReadonlyMap<string, number>;
   docHybridSearch: DocHybridSearch;
   /** Caller-side resolve context, forwarded to the rewriter/reranker. */
   resolveContext?: ResolveContext;
@@ -34,7 +37,7 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
       'Hybrid (FTS5 + vector) search over the indexed doc corpus. Returns up to N chunks ranked by relevance.\n' +
       'USE when you need to find passages that cover a topic, API, or concept.\n' +
       'USE `use_rewrite: true` for conceptual queries (expands synonyms via LLM).\n' +
-      'USE `use_rerank: true` when ordering matters (LLM scores top-K).\n' +
+      'Set `use_rerank: true` to request the configured cross-encoder for the candidate passages.\n' +
       'Both flags are cached and degrade to no-op when no binding is configured — safe to leave on.\n' +
       'When the snippet looks truncated or you need full context, follow up with docs_read_chunk.',
     source: 'native',
@@ -89,6 +92,8 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
         : 0;
       const requestedCollection =
         typeof args.collection === 'string' ? args.collection.trim() : undefined;
+      if (deps.scopeIds?.size === 0 || (requestedCollection && deps.scopedCollections?.length &&
+          !deps.scopedCollections.includes(requestedCollection))) return err('Collection outside this task’s documentation scope.');
       const collection =
         requestedCollection ||
         (deps.scopedCollections && deps.scopedCollections.length === 1
@@ -96,12 +101,15 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
           : undefined);
       const useRewrite = args.use_rewrite === true;
       const useRerank = args.use_rerank === true;
+      const fixedId = collection ? deps.collectionIdsByName?.get(collection) : undefined;
+      if (collection && deps.collectionIdsByName && fixedId === undefined) return err('Collection unavailable for this task.');
 
       let response;
       try {
         response = await deps.docHybridSearch.search({
           query,
-          collection: collection || undefined,
+          collection: fixedId === undefined ? collection || undefined : undefined,
+          ...(fixedId !== undefined ? { collection_ids: [fixedId] } : deps.scopeIds ? { collection_ids: [...deps.scopeIds] } : {}),
           limit,
           enhancements:
             useRewrite || useRerank
@@ -117,8 +125,11 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
       }
 
       const { results, diag } = response;
+      const coverage = diag.vector_collections;
+      const partial = coverage?.failed.length ? ` Vector retrieval completed in ${coverage.completed}/${coverage.attempted} collections.` : '';
       deps.ledger?.recordSearch(subQuestion, results.map((r) => r.chunk_id));
       if (results.length === 0) {
+        if (partial) return ok('Search coverage is incomplete.' + partial);
         const hint = !diag.embedding_available
           ? ' (no embedder configured — FTS5 only)'
           : !diag.vector_available
@@ -134,12 +145,12 @@ export function makeDocsSearchTool(deps: DocsSearchToolDeps): CoderTool {
         `(mode=${diag.mode}, fts=${diag.fts_hits}, vector=${diag.vector_hits}` +
         (diag.rewrite_used ? `, rewrite=${diag.rewrite_variants ?? 1}` : '') +
         (diag.rerank_used ? `, rerank+, dropped=${diag.rerank_dropped ?? 0}` : '') +
-        ')';
+        ')' + partial;
 
       const blocks = results.map((r, i) => {
         const lines: string[] = [];
         lines.push(`## [${i + 1}] chunk_id=${r.chunk_id} — ${r.heading_path ?? '(untitled)'} — ${r.collection}`);
-        if (r.source_uri) lines.push(`Source: ${r.source_uri}`);
+        if (r.source_uri) lines.push(`Source: ${docPassageUri(r.source_uri, r.anchor)}`);
         // Prefer the calibrated relevance (present when use_rerank ran); fall
         // back to the opaque RRF score, clearly flagged as uncalibrated.
         if (r.relevance != null) {

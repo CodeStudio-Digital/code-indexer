@@ -12,7 +12,7 @@
  *   - `ord`:         monotonic ordinal so neighbor hydration can reconstruct context
  */
 
-import { packSections } from './chunk-packer.js';
+import { closesFence, openingFence, packSections } from './chunk-packer.js';
 
 /** Approximate hard cap per chunk — ~1200 tokens × 4 chars/token. */
 export const MAX_CHUNK_CHARS = 4_800;
@@ -20,6 +20,7 @@ export const MAX_CHUNK_CHARS = 4_800;
 export const TARGET_CHUNK_CHARS = 3_200;
 /** Don't emit chunks shorter than this — they're almost never useful retrieval units. */
 export const MIN_CHUNK_CHARS = 60;
+export const SECTION_FORMAT = 'sections-v2';
 
 export interface SectionChunk {
   ord: number;
@@ -48,19 +49,27 @@ export function chunkMarkdown(markdown: string, opts: ChunkOptions = {}): Sectio
   const defaultRoot = opts.defaultRootTitle ?? 'Document';
 
   const lines = markdown.split(/\r?\n/);
-  const sections: { headingPath: string; anchor: string | null; lines: string[] }[] = [];
+  const sections: { headingPath: string; anchor: string | null; lines: string[]; headed: boolean }[] = [];
   const stack: string[] = [defaultRoot];
   let currentLines: string[] = [];
   // Anchor of the heading that opened the section currently being accumulated.
   let currentAnchor: string | null = null;
+  let headed = false;
+  let fence: string | undefined;
 
   const pushSection = () => {
     if (currentLines.length === 0) return;
-    sections.push({ headingPath: stack.join(' > '), anchor: currentAnchor, lines: currentLines });
+    sections.push({ headingPath: stack.join(' > '), anchor: currentAnchor, lines: currentLines, headed });
     currentLines = [];
   };
 
   for (const line of lines) {
+    if (fence) {
+      currentLines.push(line);
+      if (closesFence(line, fence)) fence = undefined;
+      continue;
+    }
+    fence = openingFence(line);
     const heading = parseHeading(line);
     if (heading) {
       pushSection();
@@ -70,6 +79,7 @@ export function chunkMarkdown(markdown: string, opts: ChunkOptions = {}): Sectio
       while (stack.length < level) stack.push(text);
       stack[stack.length - 1] = text;
       currentAnchor = anchor;
+      headed = true;
       continue;
     }
     currentLines.push(line);
@@ -82,7 +92,7 @@ export function chunkMarkdown(markdown: string, opts: ChunkOptions = {}): Sectio
   let ord = 0;
   for (const sec of sections) {
     const body = sec.lines.join('\n').trim();
-    if (body.length < MIN_CHUNK_CHARS) continue;
+    if (!body || (body.length < MIN_CHUNK_CHARS && !sec.headed)) continue;
     for (const piece of packSections(body, maxChars)) {
       chunks.push({
         ord: ord++,

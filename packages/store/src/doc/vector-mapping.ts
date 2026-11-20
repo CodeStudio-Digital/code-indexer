@@ -3,6 +3,14 @@ import type { DocVectorRef } from './types.js';
 
 // ─── Vector mapping ──────────────────────────────────────────────
 
+export function acceptedHashes(db: DB, namespace: string, generation: number, ids: readonly string[]): Map<string, string> {
+  if (!ids.length) return new Map();
+  const rows = db.prepare(`SELECT item_key,source_hash FROM semantic_items
+    WHERE namespace=? AND generation_id=? AND status='indexed' AND item_key IN (${ids.map(() => '?').join(',')})`)
+    .all(namespace, generation, ...ids) as Array<{ item_key: string; source_hash: string }>;
+  return new Map(rows.map(r => [r.item_key, r.source_hash]));
+}
+
 /**
  * Collect vectors recorded by the semantic control-plane ledger. Chunk-level
  * embedding columns are a compatibility mirror only; they never decide which

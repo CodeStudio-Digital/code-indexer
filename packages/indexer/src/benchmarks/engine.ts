@@ -15,7 +15,7 @@
  */
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
-import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
+import { HybridSearch, verifySemanticRetrieval } from '@mcp/indexer/search/hybrid.js';
 import type { HyDEService } from '@mcp/indexer/search/hyde.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
@@ -171,19 +171,26 @@ export async function runBenchmark(
       let negatives = 0, correctNegatives = 0;
 
       for (const q of cfg.querySet) {
+        const hasTargets = targets(q).length > 0;
         const start = Date.now();
         let results: HybridSearchResult[];
         if (mode === 'expanded') {
           results = await search.searchExpanded(cfg.projectId, cfg.projectName, q.query, {
             type: 'all',
             limit,
+            requireSemantic: hasTargets ? 'candidates' : true,
           });
         } else {
-          results = await search.search(cfg.projectId, cfg.projectName, q.query, {
+          const response = await search.searchWithDiag(cfg.projectId, cfg.projectName, q.query, {
             mode: mode as SearchMode,
             type: 'all',
             limit,
+            bypassCache: true,
           });
+          if (mode !== 'fts' && !(mode === 'auto' && response.diagnostics.plannedMode === 'fts')) {
+            verifySemanticRetrieval(response.diagnostics, hasTargets);
+          }
+          results = response.results;
         }
         latencies.push(Date.now() - start);
 
@@ -196,7 +203,7 @@ export async function runBenchmark(
         }
         r5 += recallAt(results, q, 5);
         r10 += recallAt(results, q, 10);
-        if (!targets(q).length) { negatives++; if (!results.length) correctNegatives++; }
+        if (!hasTargets) { negatives++; if (!results.length) correctNegatives++; }
         rr += firstHit === -1 ? 0 : 1 / (firstHit + 1);
         ndcg += ndcgAt(results, q, 10);
 

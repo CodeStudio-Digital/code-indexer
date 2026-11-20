@@ -10,6 +10,7 @@ interface MockCounters {
   created: number;
   disposed: number;
   devices: string[];
+  tokenLimits?: number[];
   failGpu?: 'load' | 'infer' | 'invalid';
 }
 
@@ -26,7 +27,9 @@ vi.mock('@huggingface/transformers', () => {
     if (gpu && counters.failGpu === 'load') throw new Error('GPU session could not start');
 
     counters.created++;
+    const tokenizer = { config: { model_max_length: 32768 }, get model_max_length() { return this.config.model_max_length; } };
     const extractor = async (texts: string[]) => {
+      (counters.tokenLimits ??= []).push(tokenizer.model_max_length);
       if (gpu && counters.failGpu === 'infer') throw new Error('GPU device lost');
       return { tolist: () => texts.map((_, i) =>
         gpu && counters.failGpu === 'invalid' ? [Number.NaN] : [0.1 + i, 0.2, 0.3]) };
@@ -34,7 +37,7 @@ vi.mock('@huggingface/transformers', () => {
     (extractor as unknown as { dispose: () => Promise<void> }).dispose = async () => {
       counters.disposed++;
     };
-    return extractor;
+    return Object.assign(extractor, { tokenizer });
   };
 
   const AutoTokenizer = {
@@ -67,6 +70,7 @@ beforeEach(async () => {
   c.created = 0;
   c.disposed = 0;
   c.devices = [];
+  c.tokenLimits = [];
   c.failGpu = undefined;
 });
 afterEach(() => { vi.useRealTimers(); });
@@ -81,6 +85,7 @@ describe('LocalEmbeddingService lifecycle', () => {
     expect(r1.vectors).toHaveLength(2);
     await svc.embedQuery('q');
     expect(c.created).toBe(1); // shared session across calls
+    expect(c.tokenLimits).toEqual([512, 512]);
     expect(svc.diagnostics().executionProvider).toBe('dml');
 
     await vi.advanceTimersByTimeAsync(1100);

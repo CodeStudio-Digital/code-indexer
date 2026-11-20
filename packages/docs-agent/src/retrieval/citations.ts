@@ -9,9 +9,18 @@
  * surfaced to the caller.
  */
 import type { DocChunk } from '@mcp/store/doc-store.js';
+import { docPassageUri } from '@mcp/shared/doc-passage-uri.js';
 
 /** Match `[^123]` markers. The pattern intentionally excludes `[^a]` etc. */
 const FOOTNOTE_RE = /\[\^(\d+)\]/g;
+
+/** The persisted markdown indexes the cited list from one. Some generators use raw chunk ids. */
+export function normalizeFootnotes(markdown: string, ids: readonly number[]): string | null {
+  const labels = [...markdown.matchAll(FOOTNOTE_RE)].map(match => Number(match[1]));
+  if (labels.every(n => n >= 1 && n <= ids.length)) return markdown;
+  if (!labels.every(n => ids.includes(n))) return null;
+  return markdown.replace(FOOTNOTE_RE, (_match, raw: string) => '[^' + (ids.indexOf(Number(raw)) + 1) + ']');
+}
 
 /**
  * Walk the markdown and return the unique 1-based footnote indices,
@@ -52,7 +61,7 @@ export function resolveCitedChunkIds(markdown: string, chunks: DocChunk[]): numb
  */
 export function formatCitation(chunk: DocChunk, footnoteIndex: number): string {
   const heading = chunk.heading_path ?? '(untitled)';
-  const source = chunk.source_uri ?? '(local)';
+  const source = chunk.source_uri ? docPassageUri(chunk.source_uri, chunk.anchor) : '(local)';
   return `[^${footnoteIndex}]: \`${heading}\` — ${source}`;
 }
 

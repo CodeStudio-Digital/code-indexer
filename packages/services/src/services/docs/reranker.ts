@@ -74,6 +74,7 @@ export interface RerankResult<TCandidate extends RerankCandidate = RerankCandida
   scoreByChunkId?: Map<number, number>;
   /** Whether the reranker ran (false on degraded paths). */
   reranked: boolean;
+  skipReason?: string;
   /** Whether the rerank verdict came from cache. */
   cacheHit: boolean;
   /** Number of candidates dropped vs input length. */
@@ -122,6 +123,7 @@ export interface DocReranker {
  */
 type RerankFailure = 'none' | 'skipped' | 'no_binding' | 'llm_error';
 
+/** @deprecated Compatibility adapter for clients using a chat-model reranker. The application uses CrossEncoderReranker. */
 export class Reranker implements DocReranker {
   constructor(private opts: RerankerOptions) {}
 

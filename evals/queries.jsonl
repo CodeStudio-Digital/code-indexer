@@ -1,5 +1,5 @@
 {"query": "hybrid search RRF merge", "relevant_files": ["packages/indexer/src/search/hybrid.ts"]}
-{"query": "how does contextual retrieval prepend context before embedding", "relevant_files": ["packages/indexer/src/indexer/indexer/embedding-candidates.ts", "packages/indexer/src/indexer/indexer.ts"]}
+{"query": "how does contextual retrieval prepend context before embedding", "relevant_files": ["packages/indexer/src/indexer/indexer/embedding-candidates.ts"]}
 {"query": "tree-sitter symbol extractor", "relevant_files": ["packages/indexer/src/indexer/tree-sitter/extractor.ts"]}
 {"query": "vector store abstraction", "relevant_files": ["packages/store/src/vectors.ts"]}
 {"query": "cloudflare BGE embeddings service", "relevant_files": ["packages/indexer/src/search/embeddings.ts"]}
@@ -27,8 +27,8 @@
 {"query": "planQuery", "relevant_files": ["packages/indexer/src/search/planner.ts"], "relevant_symbols": ["planQuery"]}
 {"query": "withConcurrency", "relevant_files": ["packages/indexer/src/indexer/indexer/enrich-references.ts"], "relevant_symbols": ["withConcurrency"]}
 {"query": "codeNamespace", "relevant_files": ["packages/shared/src/vector-namespace.ts"], "relevant_symbols": ["codeNamespace"]}
-{"query": "how are deleted files removed from the vector store", "relevant_files": ["packages/indexer/src/indexer/indexer.ts", "packages/store/src/db/vectors.ts"]}
-{"query": "what happens when the embedding model fingerprint changes", "relevant_files": ["packages/indexer/src/indexer/indexer.ts"]}
+{"query": "how are deleted files removed from the vector store", "relevant_files": ["packages/store/src/local-vector-router.ts", "packages/store/src/sqlite-vec-store.ts"]}
+{"query": "what happens when the embedding model fingerprint changes", "relevant_files": ["packages/indexer/src/search/semantic-profile-runtime.ts"]}
 {"query": "how does the local cross encoder reranker score candidates offline", "relevant_files": ["packages/indexer/src/search/local-reranker.ts"]}
 {"query": "como o planner decide entre busca fts e híbrida", "relevant_files": ["packages/indexer/src/search/planner.ts"]}
 {"query": "como os corpos de funções grandes são divididos em janelas para embedding", "relevant_files": ["packages/indexer/src/indexer/indexer/embedding-candidates.ts", "packages/shared/src/utils/sliding-window.ts"]}

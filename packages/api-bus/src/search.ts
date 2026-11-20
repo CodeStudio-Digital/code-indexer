@@ -64,6 +64,7 @@ export interface SearchDiagnostics {
   embeddingAvailable?: boolean;
   queryVariants?: string[];
   vectorRawMatches?: number;
+  vectorSkippedReason?: string;
   vectorRehydrated?: number;
   vectorError?: string;
   ftsCount?: number;

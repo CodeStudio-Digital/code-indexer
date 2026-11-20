@@ -67,6 +67,8 @@ export interface NamespaceQueryEmbedding {
   vector: number[];
   tokens: number;
   generationId?: number;
+  /** Equal fingerprints identify comparable vector spaces across generations. */
+  spaceFingerprint?: string;
 }
 
 export interface NamespaceDocumentEmbedding {

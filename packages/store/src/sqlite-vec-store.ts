@@ -275,6 +275,11 @@ export class SqliteVecVectorStore implements VectorStore {
 
     const where: string[] = ['embedding MATCH ?', 'k = ?'];
     const params: unknown[] = [normalizedVector(queryVector), topK];
+    if (options?.types) {
+      if (options.types.length === 0) return [];
+      where.push(`type IN (${options.types.map(() => '?').join(', ')})`);
+      params.push(...options.types);
+    }
     if (options?.namespace) {
       where.push('namespace = ?');
       params.push(options.namespace);

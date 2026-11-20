@@ -5,7 +5,7 @@ export type { CandidateSymbol, CandidateFile, EmbeddingCandidate } from './embed
 import { createHash } from 'node:crypto';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { VectorItemState } from '@mcp/store/vectors.js';
-import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
+import { codeBodyTexts } from './code-body-windows.js';
 
 const MIN_BODY_LINES = Number(process.env.MCP_INDEX_BODY_MIN_LINES ?? 8);
 const MAX_BODY_CHARS = Number(process.env.MCP_INDEX_BODY_MAX_CHARS ?? 2500);
@@ -277,17 +277,12 @@ function appendBodyCandidate(
   embeddingFingerprint: string,
 ): void {
   const fullBody = fileLines.slice(lineStart, lineEnd).join('\n');
-  const windows = slidingWindows(fullBody, {
+  const header = `[Context: ${globalContext}]\n${sym.kind} ${sym.name}\n${sym.signature ?? ''}\n---\n`;
+  const chunkTexts = codeBodyTexts(fullBody, header, {
     windowChars: MAX_BODY_CHARS,
     overlapChars: BODY_OVERLAP_CHARS,
     maxChunks: MAX_BODY_CHUNKS,
   });
-  const header = `[Context: ${globalContext}]\n${sym.kind} ${sym.name}\n${sym.signature ?? ''}\n---\n`;
-  // Single-window case is byte-identical to the pre-windowing text+hash, so
-  // unchanged small symbols never re-embed. Multi-window adds a part marker.
-  const chunkTexts = windows.map((w, i) =>
-    windows.length > 1 ? `${header}(part ${i + 1}/${windows.length})\n${w}` : `${header}${w}`,
-  );
 
   // One combined hash gates the whole body: any window change re-emits all
   // windows. It lives in the symbol's single body-hash slot.

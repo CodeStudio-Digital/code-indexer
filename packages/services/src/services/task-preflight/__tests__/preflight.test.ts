@@ -3,8 +3,19 @@
  * stub object and the provider call is intercepted via `fetchFn`, so the
  * suite runs ABI-free.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { preparePreflightCatalogs } from '../preflight-context.js';
 import { asSessionId } from '@mcp/session-storage';
+
+it('omits memory from preflight before loading titles when the user opts out', () => {
+  const getMemoryIndex = vi.fn(() => [{ title: 'Private convention' }]);
+  const catalogs = preparePreflightCatalogs({ getToolCatalog: () => [], getMemoryIndex }, {
+    projectId: 1, sessionId: asSessionId('00000000-0000-4000-8000-000000000001'),
+    userMessage: 'Ignore project memory during this task',
+  });
+  expect(getMemoryIndex).not.toHaveBeenCalled();
+  expect(catalogs.memoryIndex).toEqual([]);
+});
 import type { PipelineProviderResolver, ResolvedBinding } from '../../../pipelines/index.js';
 import {
   TaskPreflightService,

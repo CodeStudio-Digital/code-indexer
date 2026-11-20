@@ -10,6 +10,8 @@ import type {
 import { generationMatchesEmbeddingFingerprint } from '@mcp/store/vectors.js';
 import { SemanticProfileRuntime } from '../semantic-profile-runtime.js';
 import { semanticEmbeddingFingerprint } from '../semantic-fingerprint.js';
+import { localEmbeddingFingerprint } from '../local-embeddings.js';
+import { BUNDLED_EMBEDDING_TARGET } from '@mcp/shared/providers/bundled-semantic-model.js';
 import type { EmbeddingService } from '../embeddings.js';
 
 const NOW = '2026-07-15 12:00:00';
@@ -35,6 +37,32 @@ function profile(
 afterEach(() => vi.unstubAllGlobals());
 
 describe('SemanticProfileRuntime session cache', () => {
+  it.each(['', ':unit-v1'])('opens both historical ONNX generation identities with adapter suffix "%s"', async suffix => {
+    const target = BUNDLED_EMBEDDING_TARGET;
+    const local = localEmbeddingFingerprint({ ...target, protocol: target });
+    const standard = semanticEmbeddingFingerprint(target, EMPTY_PROVIDERS, local);
+    const legacy = semanticEmbeddingFingerprint(target, EMPTY_PROVIDERS, local + ':unit-v1');
+    let stored = standard;
+    const generation = () => ({ id: 9, purpose: 'code', dimension: 2, embedding_target: target,
+      fingerprint: stored + ':input-layout:v2:space-dimension:2' } as SemanticGenerationRow);
+    const runtime = new SemanticProfileRuntime({ getProfile: purpose => profile(purpose, target),
+      getActiveGeneration: generation, getWriteGeneration: generation }, EMPTY_PROVIDERS, () => ({
+      fingerprint: () => local + suffix,
+      embedQuery: async () => ({ vector: [1, 0], tokens: 1 }),
+      embed: async () => ({ vectors: [[1, 0]], tokens: 1 }),
+    }));
+    const query = runtime.queryEmbedding('code'), embed = runtime.embedding('code');
+    expect(embed.fingerprint?.()).toBe(standard);
+    for (stored of [standard, legacy]) {
+      expect(query.cacheRevisionForNamespace?.('code:p1')).toContain(':current:');
+      expect((await query.embedQueryForNamespace!('code:p1', 'receipt')).spaceFingerprint).toBe(stored);
+      expect((await embed.embedDocumentsForNamespace!('code:p1', ['receipt'])).writeTarget?.embeddingFingerprint).toBe(stored);
+    }
+    stored = semanticEmbeddingFingerprint({ ...target, revision: 'different' }, EMPTY_PROVIDERS, local);
+    await expect(query.embedQueryForNamespace!('code:p1', 'receipt')).rejects.toThrow('no longer matches');
+    await runtime.dispose();
+  });
+
   it('keeps automatic code retrieval on the evaluated hybrid baseline while allowing explicit rerankers', async () => {
     let reranker: RerankerTarget = { kind: 'onnx', model: 'auto' };
     const runtime = new SemanticProfileRuntime({

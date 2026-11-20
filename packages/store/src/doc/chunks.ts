@@ -57,23 +57,55 @@ export function insert(db: DB, inputs: DocChunkInput[]): number[] {
   return ids;
 }
 
-/**
- * Idempotent re-index: drop existing chunks for the source and insert the
- * new set in a single transaction. FTS triggers keep the index in sync.
- */
-export function replaceForSource(db: DB, sourceId: number, inputs: DocChunkInput[]): number[] {
-  const ids: number[] = [];
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM doc_chunks WHERE source_id = ?').run(sourceId);
-    if (inputs.length === 0) return;
-    const stmt = db.prepare(CHUNK_INSERT_SQL);
-    for (const c of inputs) {
-      const r = stmt.run(...chunkValues(c));
-      ids.push(r.lastInsertRowid as number);
+/** A citable passage keeps its id across ordering or parser changes when its source and text still agree. */
+export function reconcileSource(db: DB, sourceId: number, inputs: DocChunkInput[]): UpsertItemChunksResult {
+  return db.transaction(() => {
+    const existing = db.prepare(`SELECT id,source_uri,heading_path,anchor,content_hash,api_signature
+      FROM doc_chunks WHERE source_id=? ORDER BY ord DESC,id DESC`).all(sourceId) as
+      Array<Pick<DocChunk, 'id' | 'source_uri' | 'heading_path' | 'anchor' | 'content_hash' | 'api_signature'>>;
+    const key = (c: Pick<DocChunkInput, 'source_uri' | 'heading_path' | 'anchor' | 'content_hash' | 'api_signature'>) =>
+      JSON.stringify([c.source_uri ?? null, c.heading_path ?? null, c.anchor ?? null, c.content_hash, c.api_signature ?? null]);
+    const available = new Map<string, number[]>();
+    const obsolete = new Set(existing.map(row => row.id));
+    for (const row of existing) {
+      const identity = key(row);
+      const ids = available.get(identity) ?? [];
+      ids.push(row.id);
+      available.set(identity, ids);
     }
-  });
-  tx();
-  return ids;
+    const update = db.prepare(`UPDATE doc_chunks SET ord=?, token_count=?, doc_type=?, api_symbol=?,
+      embedding_input_hash=COALESCE(?,embedding_input_hash) WHERE id=?`);
+    const add = db.prepare(CHUNK_INSERT_SQL);
+    const ids: number[] = [], changedIds: number[] = [];
+    const matched = inputs.map(input => {
+      if (input.source_id !== sourceId) throw new Error('Documentation input belongs to a different source');
+      const id = available.get(key(input))?.pop();
+      if (id !== undefined) obsolete.delete(id);
+      return id;
+    });
+    const removedVectors = removeChunkIds(db, [...obsolete]);
+    const reserve = db.prepare('UPDATE doc_chunks SET ord=-id WHERE id=? AND ord<>?');
+    matched.forEach((id, i) => { if (id !== undefined) reserve.run(id, inputs[i]!.ord); });
+    for (const [i, input] of inputs.entries()) {
+      let id = matched[i];
+      if (id === undefined) {
+        id = Number(add.run(...chunkValues(input)).lastInsertRowid);
+        changedIds.push(id);
+      } else {
+        update.run(input.ord, input.token_count ?? 0, input.doc_type ?? null, input.api_symbol ?? null,
+          input.embedding_input_hash ?? null, id);
+      }
+      ids.push(id);
+    }
+    return { ids, changedIds, removedVectors };
+  })();
+}
+
+export function replaceForSource(db: DB, sourceId: number, inputs: DocChunkInput[]): number[] {
+  return db.transaction(() => {
+    db.prepare('DELETE FROM doc_chunks WHERE source_id=?').run(sourceId);
+    return insert(db, inputs);
+  })();
 }
 
 export interface UpsertItemChunksResult {

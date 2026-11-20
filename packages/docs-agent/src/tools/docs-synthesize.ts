@@ -23,6 +23,7 @@ import { pickChatFn } from '@mcp/services/quality/chat-dispatcher.js';
 import { buildSynthesisPrompt } from '../prompts/synthesis-prompt.js';
 
 export interface DocsSynthesizeToolDeps {
+  scopeIds?: ReadonlySet<number>;
   docStore: DocStore;
   resolver: PipelineProviderResolver;
   resolveContext?: ResolveContext;
@@ -80,9 +81,9 @@ export function makeDocsSynthesizeTool(deps: DocsSynthesizeToolDeps): CoderTool 
         .filter((s) => s.length > 0);
       if (outline.length === 0) return err('outline must contain at least one section title');
       const rawChunkIds = Array.isArray(args.chunk_ids) ? args.chunk_ids : [];
-      const chunkIds = rawChunkIds
+      const chunkIds = [...new Set(rawChunkIds
         .map((n) => Number(n))
-        .filter((n) => Number.isFinite(n) && n > 0);
+        .filter((n) => Number.isFinite(n) && n > 0))];
       if (chunkIds.length === 0) return err('chunk_ids must contain at least one chunk id');
       if (chunkIds.length > MAX_SYNTH_CHUNKS) {
         return err(`chunk_ids has ${chunkIds.length} entries — max ${MAX_SYNTH_CHUNKS}. Pick the most relevant ones.`);
@@ -90,6 +91,9 @@ export function makeDocsSynthesizeTool(deps: DocsSynthesizeToolDeps): CoderTool 
 
       // Hydrate chunks (preserving the caller's order).
       const all = deps.docStore.getChunksByIds(chunkIds);
+      if (deps.scopeIds && all.some(chunk => !deps.scopeIds!.has(chunk.collection_id))) {
+        return err('A cited passage is outside the documentation scope of this task.');
+      }
       const byId = new Map(all.map((c) => [c.id, c]));
       const chunks: DocChunk[] = [];
       const missing: number[] = [];

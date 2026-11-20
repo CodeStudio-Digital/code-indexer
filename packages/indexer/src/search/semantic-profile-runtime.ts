@@ -10,6 +10,7 @@ import {
   type VectorWriteTarget,
 } from '@mcp/store/vectors.js';
 import type { EmbeddingService, QueryEmbeddingOptions } from './embeddings.js';
+import { localEmbeddingFingerprint } from './local-embeddings.js';
 import type {
   RerankCandidate,
   RerankRequestOptions,
@@ -281,10 +282,25 @@ export class SemanticProfileRuntime {
   private resolveEmbeddingSnapshot(
     target: EmbeddingTarget,
     purpose: SemanticPurpose,
+    generationFingerprint?: string,
   ): { service: EmbeddingService; fingerprint: string } {
     const service = this.resolveEmbeddingTarget(target);
     const serviceFingerprint = service.fingerprint?.()
       ?? `semantic:${purpose}:unfingerprinted`;
+    if (target.kind === 'onnx') {
+      // Both the worker and the in-process adapter return unit vectors. Earlier
+      // CLI generations included the validation wrapper in their service ID.
+      const local = localEmbeddingFingerprint({ ...target, protocol: target });
+      const wrapped = local + ':unit-v1';
+      if (serviceFingerprint === local || serviceFingerprint === wrapped) {
+        const fingerprint = semanticEmbeddingFingerprint(target, this.providerStore, local);
+        if (generationFingerprint && !generationMatchesEmbeddingFingerprint(generationFingerprint, fingerprint)) {
+          const legacy = semanticEmbeddingFingerprint(target, this.providerStore, wrapped);
+          if (generationMatchesEmbeddingFingerprint(generationFingerprint, legacy)) return { service, fingerprint: legacy };
+        }
+        return { service, fingerprint };
+      }
+    }
     return {
       service,
       fingerprint: semanticEmbeddingFingerprint(target, this.providerStore, serviceFingerprint),
@@ -296,7 +312,7 @@ export class SemanticProfileRuntime {
     namespace: string,
     text: string,
     options?: QueryEmbeddingOptions,
-  ): Promise<{ vector: number[]; tokens: number; generationId: number }> {
+  ): Promise<{ vector: number[]; tokens: number; generationId: number; spaceFingerprint: string }> {
     const blocked = this.activeQueryBlockReason(purpose, namespace);
     if (blocked) throw new Error(blocked);
     // Disabling a desired profile is an immediate serving decision. Keep the
@@ -314,7 +330,7 @@ export class SemanticProfileRuntime {
     if (generation.embedding_target.kind === 'disabled') {
       throw new Error(`Active generation for ${namespace} has no embedding target`);
     }
-    const snapshot = this.resolveEmbeddingSnapshot(generation.embedding_target, purpose);
+    const snapshot = this.resolveEmbeddingSnapshot(generation.embedding_target, purpose, generation.fingerprint);
     if (!generationMatchesEmbeddingFingerprint(generation.fingerprint, snapshot.fingerprint)) {
       throw new Error(
         `Active generation ${generation.id} backend context no longer matches its embedding service`,
@@ -351,7 +367,7 @@ export class SemanticProfileRuntime {
         `Active generation for ${namespace} expects ${generation.dimension} dimensions, got ${result.vector.length}`,
       );
     }
-    return { ...result, vector: [...result.vector], generationId: generation.id };
+    return { ...result, vector: [...result.vector], generationId: generation.id, spaceFingerprint: snapshot.fingerprint };
   }
 
   private async embedWriteDocuments(
@@ -370,7 +386,7 @@ export class SemanticProfileRuntime {
 
     // Resolve the concrete service once. A profile edit after this point may
     // create a new generation, but cannot change the model used by this batch.
-    const snapshot = this.resolveEmbeddingSnapshot(generation.embedding_target, purpose);
+    const snapshot = this.resolveEmbeddingSnapshot(generation.embedding_target, purpose, generation.fingerprint);
     const { service, fingerprint: embeddingFingerprint } = snapshot;
     if (!generationMatchesEmbeddingFingerprint(generation.fingerprint, embeddingFingerprint)) {
       throw new Error(
@@ -410,7 +426,7 @@ export class SemanticProfileRuntime {
       return `semantic:${purpose}:wrong-purpose:${generation.purpose}:g${generation.id}`;
     }
     try {
-      const current = this.resolveEmbeddingSnapshot(generation.embedding_target, purpose).fingerprint;
+      const current = this.resolveEmbeddingSnapshot(generation.embedding_target, purpose, generation.fingerprint).fingerprint;
       const state = generationMatchesEmbeddingFingerprint(generation.fingerprint, current)
         ? 'current'
         : 'backend-context-mismatch';

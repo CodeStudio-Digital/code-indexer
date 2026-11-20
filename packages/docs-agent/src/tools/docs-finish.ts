@@ -19,6 +19,8 @@ import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { ResearchConfidence } from '../types.js';
 import { DOCS_BUDGET, type DocsEvidenceLedger } from './evidence-ledger.js';
 import type { PlanSlot } from './docs-plan.js';
+import type { DocStore } from '@mcp/store/doc-store.js';
+import { normalizeFootnotes } from '../retrieval/citations.js';
 
 export interface DocsFinishPayload {
   markdown: string;
@@ -32,6 +34,8 @@ export interface DocsFinishSlot {
 }
 
 export interface DocsFinishToolDeps {
+  docStore?: Pick<DocStore, 'getChunksByIds'>;
+  scopeIds?: ReadonlySet<number>;
   /** Mutable slot the wrapper inspects after the runner exits. */
   slot: DocsFinishSlot;
   ledger?: DocsEvidenceLedger;
@@ -82,12 +86,15 @@ export function makeDocsFinishTool(deps: DocsFinishToolDeps): CoderTool {
     riskLevel: 'read',
     interactive: true, // never run in parallel with other tools — terminal
     handler: async (args, ctx): Promise<ToolResult> => {
-      const markdown = String(args.markdown ?? '').trim();
+      let markdown = String(args.markdown ?? '').trim();
       if (!markdown) return err('markdown cannot be empty');
       const rawChunks = Array.isArray(args.chunks_cited) ? args.chunks_cited : [];
-      const chunks_cited = rawChunks
+      const chunks_cited = [...new Set(rawChunks
         .map((n) => Number(n))
-        .filter((n) => Number.isFinite(n) && n > 0);
+        .filter((n) => Number.isSafeInteger(n) && n > 0))];
+      const normalized = normalizeFootnotes(markdown, chunks_cited);
+      if (normalized === null) return err('Footnotes must use positions [^1] through [^N] in chunks_cited order. Check the cited IDs.');
+      markdown = normalized;
       const rawConfidence = String(args.confidence ?? '').trim().toLowerCase();
       if (!CONFIDENCE_VALUES.has(rawConfidence as ResearchConfidence)) {
         return err(`confidence must be one of: high, medium, low. Got: "${rawConfidence}"`);
@@ -100,6 +107,15 @@ export function makeDocsFinishTool(deps: DocsFinishToolDeps): CoderTool {
       if (confidence === 'high' && deps.ledger) {
         const problem = deps.ledger.validateHighConfidence(deps.planSlot?.subQuestions?.length ?? 1, chunks_cited);
         if (problem) return err(`high confidence rejected: ${problem}. Use medium confidence or gather the missing evidence.`);
+      }
+      if (deps.docStore && chunks_cited.length) {
+        const evidence = deps.docStore.getChunksByIds(chunks_cited);
+        if (evidence.length !== chunks_cited.length || evidence.some(c => deps.scopeIds && !deps.scopeIds.has(c.collection_id))) {
+          return err('A cited passage is missing or outside the scope of this task.');
+        }
+        if (evidence.some(c => deps.ledger?.contentChanged(c.id, c.content_hash))) {
+          return err('A cited passage changed after it was read. Read the current revision before finishing.');
+        }
       }
       const notes = typeof args.notes === 'string' ? args.notes.trim().slice(0, 1000) : undefined;
 

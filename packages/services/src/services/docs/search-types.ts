@@ -94,6 +94,8 @@ export interface DocSearchDiagnostics {
   rewrite_variants?: number;
   /** Whether reranker actually ran (false if disabled or no binding). */
   rerank_used?: boolean;
+  rerank_skip_reason?: string;
+  rerank_candidates?: number;
   /** Candidates dropped by the reranker (vs incoming top-K). */
   rerank_dropped?: number;
   /** True when calibrated scoring ran and nothing cleared `min_relevance`. */
@@ -105,7 +107,8 @@ export interface DocSearchDiagnostics {
    * 'project' when the search was filtered to project-linked collections,
    * 'all' when it ran over the global corpus.
    */
-  scope?: 'project' | 'all';
+  scope?: 'project' | 'all' | 'collection';
+  vector_collections?: { attempted: number; completed: number; failed: number[] };
   /** Names of the collections searched when scope === 'project'. */
   scoped_collections?: string[];
   /** Remote hits rejected because the local chunk is pending/stale. */

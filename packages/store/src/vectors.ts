@@ -28,7 +28,7 @@ export function embeddingFingerprintForGeneration(generationFingerprint: string)
   const forced = /^(.*):rebuild:\d+:[0-9a-f]{1,6}$/i.exec(generationFingerprint);
   const withoutRebuild = forced?.[1] ?? generationFingerprint;
   const dimension = /^(.*):space-dimension:\d+$/i.exec(withoutRebuild);
-  return dimension?.[1] ?? withoutRebuild;
+  return dimension ? dimension[1]!.replace(/:input-layout:v2$/, '') : withoutRebuild;
 }
 
 /** Central-ledger view of one logical embedding item. The physical vector
@@ -48,6 +48,8 @@ export interface VectorSearchOptions {
   signal?: AbortSignal;
   topK?: number;
   filter?: Record<string, string>;
+  /** Eligible metadata types, applied by KNN before topK. */
+  types?: readonly string[];
   namespace?: string;
   /** Immutable read target returned by the namespace-aware query embedder.
    * When present, local routing must not resolve the active pointer again. */

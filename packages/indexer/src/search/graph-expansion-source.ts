@@ -21,7 +21,7 @@
  * Dormant data activated: `symbol_references` (call-extractor) and
  * `file_dependencies` (import resolver) are populated at index time but were
  * never consulted during retrieval until this source. Flag-gated by the
- * caller (`MCP_PIPELINES_GRAPH_EXPANSION`), default OFF.
+ * caller (`MCP_PIPELINES_GRAPH_EXPANSION`), enabled unless set to 0.
  */
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { DBFile, DBSymbol, HybridSearchResult, SearchType } from '@mcp/shared/types.js';

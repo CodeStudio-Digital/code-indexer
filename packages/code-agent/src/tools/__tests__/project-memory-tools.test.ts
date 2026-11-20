@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../../core/tool.js';
 import { forgetMemoryTool, rememberTool, recallMemoryTool } from '../project-memory-tools.js';
+import { suppressesMemoryRecall } from '@mcp/shared/memory-opt-out.js';
 
 const context = (overrides: Partial<ToolContext>): ToolContext => ({
   cwd: 'D:\\project',
@@ -9,6 +10,18 @@ const context = (overrides: Partial<ToolContext>): ToolContext => ({
 } as ToolContext);
 
 describe('project memory write tools', () => {
+  it('skips project and user recall and list on a turn that excludes memory', async () => {
+    const recall = vi.fn(), list = vi.fn(), ports = { save: vi.fn(), recall, list };
+    for (const scope of ['project', 'user']) {
+      const ctx = context({ projectMemory: ports, userMemory: ports, memoryReadSuppressed: suppressesMemoryRecall('Não use a memória neste pedido.') });
+      for (const mode of ['search', 'list']) expect((await recallMemoryTool.handler({ scope, mode, query: 'policy' }, ctx)).isError).toBe(true);
+    }
+    expect(recall).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(suppressesMemoryRecall('Ignore the memory leak in this trace')).toBe(false);
+    expect(suppressesMemoryRecall('Ignore o consumo de memória por enquanto.')).toBe(false);
+    expect(suppressesMemoryRecall('Do not use project memory for this task')).toBe(true);
+  });
   it('reads and lists global preferences without enabling project memory', async () => {
     const recall = vi.fn().mockResolvedValue([{ id: '1', title: 'Language', content: 'Portuguese' }]);
     const list = vi.fn().mockResolvedValue([{ name: 'Language', description: 'Portuguese', type: 'preference' }]);

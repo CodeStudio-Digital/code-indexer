@@ -26,6 +26,16 @@ function freshDir(): string {
 }
 
 describe('SqliteVecVectorStore', () => {
+  it('applies symbol families before KNN truncates a file-heavy neighborhood', async () => {
+    const store = new SqliteVecVectorStore({ path: ':memory:' });
+    try {
+      const files = Array.from({ length: 12 }, (_, i) => rec('f' + i, [1, 0], { type: 'file' }));
+      await store.upsert([...files, rec('body', [0.8, 0.2], { type: 'symbol_body' }),
+        rec('group', [0.7, 0.3], { type: 'symbol_group' })], 'code:p7');
+      const hits = await store.search([1, 0], { namespace: 'code:p7', topK: 2, types: ['symbol', 'symbol_body', 'symbol_group'] });
+      expect(hits.map(hit => hit.id)).toEqual(['body', 'group']);
+    } finally { store.close(); }
+  });
   it('retries loading after a repaired native extension instead of caching rejection forever', async () => {
     const database = new SqliteVecDatabase(':memory:');
     try {

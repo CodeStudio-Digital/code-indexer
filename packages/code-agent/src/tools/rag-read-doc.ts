@@ -16,6 +16,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { getGlobalDocSearch, type DocChunkNeighborRef, type DocSectionRead } from './rag-search-docs.js';
 import { stripUnpairedSurrogates } from '@mcp/code-agent/core/text-boundaries.js';
 import { docPageArgs } from './doc-page.js';
+import { docPassageUri } from '@mcp/shared/doc-passage-uri.js';
 
 /** Neighbor previews are capped — the agent reads them in full by chunk_id. */
 const NEIGHBOR_PREVIEW_CHARS = 1_200;
@@ -127,7 +128,7 @@ export const ragReadDocTool: CoderTool = {
     const { chunk, prev, next } = read;
     const lines: string[] = [];
     lines.push(`# ${chunk.heading_path ?? '(untitled)'} — ${chunk.collection}`);
-    if (chunk.source_uri) lines.push(`Source: ${chunk.source_uri}${chunk.anchor ? `#${chunk.anchor}` : ''}`);
+    if (chunk.source_uri) lines.push(`Source: ${docPassageUri(chunk.source_uri, chunk.anchor)}`);
     if (chunk.api_signature) lines.push(`Signature: ${chunk.api_signature}`);
     else if (chunk.api_symbol) lines.push(`Symbol: ${chunk.api_symbol}`);
     lines.push(`chunk_id: ${chunk.chunk_id} · ~${chunk.token_count} tokens`);
@@ -186,7 +187,7 @@ function neighborPreviewPrefix(content: string): string {
 function renderSection(sec: DocSectionRead): string {
   const lines: string[] = [];
   lines.push(`# ${sec.heading_path ?? '(untitled)'} — ${sec.collection} [${sec.next_offset != null || sec.offset || sec.chunks.some(c => c.next_char_offset != null) ? 'section page' : 'full section'}]`);
-  if (sec.source_uri) lines.push(`Source: ${sec.source_uri}${sec.anchor ? `#${sec.anchor}` : ''}`);
+  if (sec.source_uri) lines.push(`Source: ${docPassageUri(sec.source_uri, sec.anchor)}`);
   if (sec.api_signature) lines.push(`Signature: ${sec.api_signature}`);
   else if (sec.api_symbol) lines.push(`Symbol: ${sec.api_symbol}`);
   lines.push(

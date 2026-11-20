@@ -7,6 +7,7 @@
  * scorer_llm (Sonnet) only emits the outline, not the full prose.
  */
 import type { DocChunk } from '@mcp/store/doc-store.js';
+import { docPassageUri } from '@mcp/shared/doc-passage-uri.js';
 
 export interface SynthesisInput {
   /** The developer's original query — repeated so the LLM stays on-topic. */
@@ -46,7 +47,7 @@ export function buildSynthesisPrompt(input: SynthesisInput): SynthesisPrompt {
   const passages = input.chunks
     .map((chunk, idx) => {
       const head = `### Passage ${idx + 1}\nHeading: ${chunk.heading_path ?? '(untitled)'}`;
-      const src = chunk.source_uri ? `\nSource: ${chunk.source_uri}` : '';
+      const src = chunk.source_uri ? `\nSource: ${docPassageUri(chunk.source_uri, chunk.anchor)}` : '';
       const concepts = chunk.concepts.length > 0 ? `\nConcepts: ${chunk.concepts.join(', ')}` : '';
       // Cap at 2500 chars per chunk — leaves room for ~20 passages within
       // a 60k-context window after system + outline.

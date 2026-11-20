@@ -54,7 +54,8 @@ export interface DocSearchBackend {
       /** Best calibrated relevance seen (even when below the bar). */
       top_relevance?: number | null;
       /** 'project' when filtered to project-linked collections. */
-      scope?: 'project' | 'all';
+      scope?: 'project' | 'all' | 'collection';
+      vector_collections?: { attempted: number; completed: number; failed: number[] };
       /** Names of the collections searched when scope === 'project'. */
       scoped_collections?: string[];
       /** Candidates present immediately before the requested top-K was applied. */

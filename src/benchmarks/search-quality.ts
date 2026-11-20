@@ -17,10 +17,7 @@
  *    "relevant_symbols": ["processEmbeddings"]}
  *
  * If --file is omitted, the script auto-loads `evals/queries.jsonl` from the
- * current working directory when it exists. Otherwise a minimal synthetic
- * set is used so the script is runnable out of the box on any project — the
- * numbers won't be scientific but they are reproducible and let you spot
- * regressions.
+ * current working directory. A missing or invalid gold file fails the run.
  *
  * When --min-recall is set, the process exits with code 1 if the best
  * recall@10 across the selected modes drops below the threshold. Use this
@@ -38,7 +35,7 @@ import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import { SemanticStore } from '@mcp/store/semantic-store.js';
 import { LocalVectorRouter } from '@mcp/store/local-vector-router.js';
 import { SemanticProfileRuntime } from '@mcp/indexer/search/semantic-profile-runtime.js';
-import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
+import { HybridSearch, verifySemanticRetrieval } from '@mcp/indexer/search/hybrid.js';
 import { HyDEService } from '@mcp/indexer/search/hyde.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import { runBenchmark, isRelevant, recallAt, type CellResult, type EmbeddingEntry } from '@mcp/indexer/benchmarks/engine.js';
@@ -66,51 +63,20 @@ interface ModeResult {
   median_ms: number;
   p95_ms: number;
   queries: number;
+  positives: number;
+  negatives: number;
+  correct_absences: number;
+  eligible_at_10: number;
+  eligible_recall_at_10: number;
 }
 
-const BUILTIN_QUERIES: EvalQuery[] = [
-  {
-    query: 'how does the indexer handle incremental reindex',
-    relevant_files: ['src/core/indexer/indexer.ts'],
-  },
-  {
-    query: 'vector store abstraction and factory',
-    relevant_files: ['src/store/vectors.ts'],
-  },
-  {
-    query: 'hybrid search with RRF merge',
-    relevant_files: ['src/core/search/hybrid.ts'],
-  },
-  {
-    query: 'snapshot embedding and upsert into vector store',
-    relevant_files: ['src/core/services/snapshots.ts'],
-  },
-  {
-    query: 'HyDE query expansion with LLM',
-    relevant_files: ['src/core/search/hyde.ts', 'src/core/search/hybrid.ts'],
-  },
-];
-
-/**
- * Default JSONL gold set checked into the repo. Picked up when --file is
- * omitted and the file exists at CWD — keeps `npm run eval` zero-config.
- */
 const DEFAULT_QUERIES_PATH = 'evals/queries.jsonl';
 
-function loadQueries(path?: string): { queries: EvalQuery[]; source: string } {
-  // Explicit path always wins.
-  if (path) {
-    if (!existsSync(path)) {
-      console.error(`[bench] query file not found: ${path}, falling back to builtin set`);
-      return { queries: BUILTIN_QUERIES, source: 'builtin (file not found)' };
-    }
-    return { queries: parseJsonl(path), source: path };
-  }
-  // No --file: try the checked-in default at CWD.
-  if (existsSync(DEFAULT_QUERIES_PATH)) {
-    return { queries: parseJsonl(DEFAULT_QUERIES_PATH), source: DEFAULT_QUERIES_PATH };
-  }
-  return { queries: BUILTIN_QUERIES, source: 'builtin' };
+function loadQueries(path = DEFAULT_QUERIES_PATH): { queries: EvalQuery[]; source: string } {
+  if (!existsSync(path)) throw new Error('[bench] gold query file not found: ' + path);
+  const queries = parseJsonl(path);
+  if (!queries.length) throw new Error('[bench] empty gold query file: ' + path);
+  return { queries, source: path };
 }
 
 function parseJsonl(path: string): EvalQuery[] {
@@ -120,9 +86,16 @@ function parseJsonl(path: string): EvalQuery[] {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     try {
-      out.push(JSON.parse(trimmed) as EvalQuery);
+      const row = JSON.parse(trimmed) as EvalQuery;
+      if (typeof row?.query !== 'string' || !row.query.trim()
+          || (row.relevant_files === undefined && row.relevant_symbols === undefined)
+          || ![row.relevant_files, row.relevant_symbols].every(list => list === undefined ||
+            (Array.isArray(list) && list.every(value => typeof value === 'string' && value.trim())))) {
+        throw new Error('invalid query or relevance labels');
+      }
+      out.push(row);
     } catch (e) {
-      console.error(`[bench] skipping malformed line: ${(e as Error).message}`);
+      throw new Error(`[bench] invalid gold query in ${path}: ${trimmed.slice(0, 100)}`, { cause: e });
     }
   }
   return out;
@@ -146,23 +119,39 @@ async function evalMode(
   let totalRecall5 = 0;
   let totalRecall10 = 0;
   let totalRR = 0; // reciprocal rank
+  let positives = 0, negatives = 0, correctAbsences = 0, eligible = 0, eligibleRecall = 0;
 
   for (const q of queries) {
+    const targets = new Set(q.relevant_files).size + new Set(q.relevant_symbols).size;
     const start = Date.now();
     let results: HybridSearchResult[];
     if (mode === 'expanded') {
       results = await search.searchExpanded(projectId, projectName, q.query, {
         type: 'all',
         limit: 20,
+        requireSemantic: targets ? 'candidates' : true,
       });
     } else {
-      results = await search.search(projectId, projectName, q.query, {
+      const response = await search.searchWithDiag(projectId, projectName, q.query, {
         mode: mode as SearchMode,
         type: 'all',
         limit: 20,
+        bypassCache: true,
       });
+      if (mode !== 'fts') verifySemanticRetrieval(response.diagnostics, targets > 0);
+      results = response.results;
     }
     latencies.push(Date.now() - start);
+    if (targets === 0) {
+      negatives++;
+      if (results.length === 0) correctAbsences++;
+      continue;
+    }
+    positives++;
+    if (targets <= 10) {
+      eligible++;
+      eligibleRecall += recallAt(results, q, 10);
+    }
 
     // Recall credits each distinct gold target; MRR uses the first relevant row.
     let firstHitRank = -1;
@@ -178,9 +167,11 @@ async function evalMode(
 
   return {
     mode,
-    recall_at_5: totalRecall5 / queries.length,
-    recall_at_10: totalRecall10 / queries.length,
-    mrr: totalRR / queries.length,
+    recall_at_5: totalRecall5 / (positives || 1),
+    recall_at_10: totalRecall10 / (positives || 1),
+    mrr: totalRR / (positives || 1),
+    positives, negatives, correct_absences: correctAbsences,
+    eligible_at_10: eligible, eligible_recall_at_10: eligibleRecall / (eligible || 1),
     median_ms: percentile(latencies, 50),
     p95_ms: percentile(latencies, 95),
     queries: queries.length,
@@ -188,7 +179,7 @@ async function evalMode(
 }
 
 function printTable(rows: ModeResult[]): void {
-  const header = ['mode', 'R@5', 'R@10', 'MRR', 'p50(ms)', 'p95(ms)', 'N'];
+  const header = ['mode', 'R@5', 'R@10', 'MRR', 'p50(ms)', 'p95(ms)', 'N', 'eligible R@10', 'abstained/negative'];
   const widths = header.map((h) => h.length);
   const cells: string[][] = rows.map((r) => [
     r.mode,
@@ -198,6 +189,8 @@ function printTable(rows: ModeResult[]): void {
     String(r.median_ms),
     String(r.p95_ms),
     String(r.queries),
+    r.eligible_recall_at_10.toFixed(3) + ' (' + r.eligible_at_10 + ')',
+    r.correct_absences + '/' + r.negatives,
   ]);
   for (const row of cells) {
     for (let i = 0; i < row.length; i++) {
@@ -558,7 +551,8 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     const label = gateMode ? `${gateMode} recall@10` : 'best recall@10';
-    const bestRecall = Math.max(...gated.map((r) => r.recall_at_10));
+    if (gated.some(r => !r.eligible_at_10)) throw new Error('[gate] no eligible positive queries');
+    const bestRecall = Math.max(...gated.map((r) => r.eligible_recall_at_10));
     if (bestRecall < minRecall) {
       console.error(
         `\n[bench] FAIL: ${label} ${bestRecall.toFixed(3)} < threshold ${minRecall.toFixed(3)}`

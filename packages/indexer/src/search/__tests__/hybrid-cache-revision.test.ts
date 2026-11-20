@@ -3,7 +3,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import type { EmbeddingService } from '../embeddings.js';
 import type { RerankCandidate, RerankerService } from '../reranker.js';
-import { HybridSearch } from '../hybrid.js';
+import { HybridSearch, verifySemanticRetrieval } from '../hybrid.js';
 
 function database(): CodeIndexDB {
   return {
@@ -24,6 +24,36 @@ afterEach(() => {
 });
 
 describe('HybridSearch semantic cache revisions', () => {
+  it('keeps lexical results when folders are unset and rejects them as a positive semantic benchmark', async () => {
+    const db = database();
+    db.getProjectCatalogEntry = vi.fn(() => ({ semantic_index_folders: '[]' })) as unknown as CodeIndexDB['getProjectCatalogEntry'];
+    const vectors = { search: vi.fn() };
+    const search = new HybridSearch(db, vectors as unknown as VectorStore, { embedQuery: vi.fn() } as unknown as EmbeddingService);
+    const { results, diagnostics } = await search.searchWithDiag(7, 'fixture', 'semantic cache', { mode: 'hybrid' });
+    expect(results.length).toBeGreaterThan(0);
+    expect(diagnostics).toMatchObject({ plannedMode: 'hybrid', effectiveMode: 'fts' });
+    expect(vectors.search).not.toHaveBeenCalled();
+    expect(() => verifySemanticRetrieval(diagnostics, true)).toThrow(/folders/);
+    expect(() => verifySemanticRetrieval(diagnostics, false)).not.toThrow();
+    await expect(search.searchExpanded(7, 'fixture', 'semantic cache', { requireSemantic: 'candidates' })).rejects.toThrow(/folders/);
+  });
+
+  it('requires a rehydrated candidate for positive semantic measurements', () => {
+    const diagnostics = { embeddingAvailable: true, vectorAvailable: true, vectorRawMatches: 7, vectorRehydrated: 0 };
+    expect(() => verifySemanticRetrieval(diagnostics, true)).toThrow(/no usable vector candidates/);
+    expect(() => verifySemanticRetrieval({ ...diagnostics, vectorRehydrated: 1 }, true)).not.toThrow();
+  });
+  it('uses one generated reformulation across both expanded hybrid searches', async () => {
+    const db = database();
+    const generate = vi.fn(async () => 'function resolveDeadlines()');
+    const embedQuery = vi.fn(async () => ({ vector: [1, 0], tokens: 1 }));
+    const search = new HybridSearch(db, { search: async () => [] } as unknown as VectorStore,
+      { embedQuery } as unknown as EmbeddingService,
+      { generate } as unknown as import('../hyde.js').HyDEService);
+    await search.searchExpanded(7, 'fixture', 'Where is the limit on available time calculated?');
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(embedQuery).toHaveBeenCalledTimes(2);
+  });
   it.each(['vector', 'hybrid'] as const)('stops %s after a cancelled embedding without vector dispatch or caching', async mode => {
     const controller = new AbortController();
     let release!: () => void;

@@ -11,6 +11,7 @@
 import { createHash } from 'node:crypto';
 import type { DocSearchBackend } from '../../../packages/code-agent/src/tools/doc-search-types.js';
 import { DocHybridSearch } from '../../../packages/services/src/services/docs/search.js';
+import { resolveDocSearchScope } from '../../../packages/services/src/services/docs/search-scope.js';
 import type { DocSearchInput } from '../../../packages/services/src/services/docs/search.js';
 import type { DocStore } from '../../../packages/store/src/doc-store.js';
 import type { DocSearchEventInput } from '../../../packages/store/src/doc/rag-telemetry.js';
@@ -127,20 +128,12 @@ export function buildWorkerDocSearch(docStore: DocStore): WorkerDocSearchBackend
     search: async (input, signal) => {
       signal?.throwIfAborted();
       const { scope, project_id, ...rest } = input;
-      let scoped: Array<{ id: number; name: string }> = [];
-
-      if (!input.collection && scope !== 'all' && project_id != null) {
-        try {
-          scoped = docStore.listCollectionsForProject(project_id);
-        } catch {
-          // Pre-migration databases retain the existing global-search fallback.
-          scoped = [];
-        }
-      }
+      const { scope: resolvedScope, collections: scoped } = resolveDocSearchScope(docStore, input);
 
       const forward: DocSearchInput = {
         ...rest,
         mode: 'fts',
+        signal,
         enhancements: { rewrite: false, rerank: false },
       };
       if (scoped.length > 0) forward.collection_ids = scoped.map((collection) => collection.id);
@@ -148,7 +141,7 @@ export function buildWorkerDocSearch(docStore: DocStore): WorkerDocSearchBackend
       const started = Date.now();
       const out = await lexicalSearch.search(forward);
       signal?.throwIfAborted();
-      out.diag.scope = scoped.length > 0 ? 'project' : 'all';
+      out.diag.scope = resolvedScope;
       if (scoped.length > 0) out.diag.scoped_collections = scoped.map((collection) => collection.name);
 
       const explicitCollectionId = input.collection

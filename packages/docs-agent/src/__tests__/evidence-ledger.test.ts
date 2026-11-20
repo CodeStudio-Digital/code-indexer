@@ -27,4 +27,17 @@ describe('DocsEvidenceLedger', () => {
     ledger.recordSearch(0, [42]);
     expect(ledger.validateHighConfidence(1, [42])).toMatch(/not read in full/);
   });
+
+  it('requires contiguous coverage of the same content revision', () => {
+    const ledger = new DocsEvidenceLedger();
+    const read = (hash: string, start: number, end: number) => ledger.recordPassages([{ id: 5, hash, start, end, total: 12 }]);
+    ledger.recordSearch(0, [5]);
+    read('first', 0, 3);
+    read('first', 7, 12);
+    expect(ledger.validateHighConfidence(1, [5])).toMatch(/not read in full/);
+    read('first', 3, 8);
+    expect(ledger.validateHighConfidence(1, [5])).toBeNull();
+    read('changed', 8, 12);
+    expect(ledger.validateHighConfidence(1, [5])).toMatch(/not read in full/);
+  });
 });

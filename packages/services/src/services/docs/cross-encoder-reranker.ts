@@ -39,7 +39,7 @@ export class CrossEncoderReranker implements DocReranker {
     // Trivial input → don't claim a rerank happened, so the search layer marks
     // scores uncalibrated instead of trusting them.
     if (candidates.length <= 1) {
-      return degraded(candidates, started);
+      return degraded(candidates, started, 'insufficient_candidates');
     }
 
     const docs = candidates.map((c) => ({
@@ -55,16 +55,22 @@ export class CrossEncoderReranker implements DocReranker {
       // here. Credential/config rotation can make that resolution fail, which
       // is the same degraded condition as an inference failure.
       serviceName = this.service.name;
-      if (serviceName === 'null') return degraded(candidates, started);
+      if (serviceName === 'null') return degraded(candidates, started, 'disabled');
+      const blocked = this.service.queryBlockReason?.(query);
+      if (blocked) return degraded(candidates, started, blocked);
       ranked = await (opts.signal ? this.service.rerank(query, docs, candidates.length, { signal: opts.signal })
         : this.service.rerank(query, docs, candidates.length));
       opts.signal?.throwIfAborted();
     } catch {
       opts.signal?.throwIfAborted();
-      return degraded(candidates, started);
+      return degraded(candidates, started, 'inference_unavailable');
     }
 
     const scoreById = new Map<number, number>(ranked.map((r) => [Number(r.id), r.score]));
+    if (scoreById.size !== candidates.length || ranked.length !== candidates.length ||
+        candidates.some(c => !Number.isFinite(scoreById.get(c.chunk_id)))) {
+      return degraded(candidates, started, 'incomplete_scores');
+    }
     const cutoff = opts.scoreCutoff ?? 0;
     const reordered = candidates
       .map((c) => ({ c, score: scoreById.get(c.chunk_id) ?? 0 }))
@@ -84,10 +90,11 @@ export class CrossEncoderReranker implements DocReranker {
   }
 }
 
-function degraded<T extends RerankCandidate>(candidates: T[], started: number): RerankResult<T> {
+function degraded<T extends RerankCandidate>(candidates: T[], started: number, skipReason: string): RerankResult<T> {
   return {
     candidates,
     reranked: false,
+    skipReason,
     cacheHit: false,
     dropped: 0,
     modelId: null,

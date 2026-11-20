@@ -29,8 +29,9 @@ const COREML_USE_CPU_AND_GPU = 0x020;
 /** Minimal shape of the transformers.js feature-extraction pipeline. */
 type FeatureExtractor = ((
   texts: string[],
-  opts: { pooling: 'mean' | 'cls'; normalize: boolean; truncation: boolean; max_length: number },
+  opts: { pooling: 'mean' | 'cls'; normalize: boolean },
 ) => Promise<{ tolist: () => number[][]; dispose?: () => void }>) & {
+  tokenizer: { config: { model_max_length?: number }; readonly model_max_length: number };
   /** Releases the underlying ONNX session(s) — native memory returns to the OS. */
   dispose(): Promise<unknown>;
 };
@@ -178,6 +179,9 @@ export class LocalEmbeddingService implements EmbeddingService {
           } : {}),
         },
       }) as FeatureExtractor;
+      // Transformers.js feature-extraction invokes its tokenizer with just
+      // padding/truncation. It reads the limit from this session's tokenizer.
+      extractor.tokenizer.config.model_max_length = Math.min(extractor.tokenizer.model_max_length, this.protocol.maxTokens);
       if (this.loadedDevice !== device) {
         console.info(`[local-embeddings] ${this.model}: ONNX device=${device}`);
         this.loadedDevice = device;
@@ -251,8 +255,6 @@ export class LocalEmbeddingService implements EmbeddingService {
     const output = await extractor(texts, {
       pooling: this.protocol.pooling,
       normalize: this.protocol.normalize,
-      truncation: true,
-      max_length: this.protocol.maxTokens,
     });
     try {
       const vectors = output.tolist();

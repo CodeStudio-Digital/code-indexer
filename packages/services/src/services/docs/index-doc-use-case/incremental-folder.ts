@@ -2,6 +2,7 @@ import { buildItemChunks, runSelectiveEnrichment, mapConcurrent } from './increm
 import type { ProcessedEntry } from './incremental-folder-processing.js';
 import type { DocChunkInput, DocCollection, DocSource } from '@mcp/store/doc-store.js';
 import { docNamespace } from '@mcp/shared/vector-namespace.js';
+import { SECTION_FORMAT } from '../section-chunker.js';
 
 import { gatePages, heuristicAccepts } from '../relevance-gate.js';
 import { scanFolderFiles } from '../folder-reader.js';
@@ -75,6 +76,7 @@ export async function runIncrementalFolderIngest(
     let errored = 0;
     let acceptedPages = 0;
     let rejectedPages = 0;
+    const pagesWithoutText: string[] = [];
     let legacyRemoved = false;
     let extractionMs = 0;
 
@@ -105,7 +107,8 @@ export async function runIncrementalFolderIngest(
       offset = end;
       const batch = await mapConcurrent(entries, desiredWorkers, async (entry) => {
         const prior = docStore.getSourceItem(source.id, entry.relPath);
-        if (prior && prior.status === 'done' && prior.size_bytes === entry.size && prior.mtime_ms === Math.trunc(entry.mtimeMs)) {
+        if (prior?.content_hash?.startsWith(SECTION_FORMAT + ':') && prior.status === 'done'
+            && prior.size_bytes === entry.size && prior.mtime_ms === Math.trunc(entry.mtimeMs)) {
           return { entry, kind: 'unchanged' } satisfies ProcessedEntry;
         }
         try {
@@ -113,7 +116,7 @@ export async function runIncrementalFolderIngest(
           extractionMs += extracted.durationMs;
           const result = extracted.result;
           if (typeof result === 'string') return { entry, kind: 'skipped', error: result } satisfies ProcessedEntry;
-          const contentHash = hashContent(result.map((p) => p.markdown).join('\n\0\n'));
+          const contentHash = SECTION_FORMAT + ':' + hashContent(result.map((p) => p.markdown).join('\n\0\n'));
           if (prior?.content_hash === contentHash && prior.status === 'done') {
             return { entry, kind: 'unchanged', contentHash } satisfies ProcessedEntry;
           }
@@ -175,6 +178,7 @@ export async function runIncrementalFolderIngest(
         changed++;
         const accepted: RawPage[] = [];
         for (const page of item.pages ?? []) {
+          if (page.extraction_gap) pagesWithoutText.push(page.uri);
           const verdict = verdicts[verdictCursor++] ?? { accept: false, reason: 'missing verdict' };
           page.gate_reason = verdict.reason;
           page.is_documentation = verdict.accept;
@@ -312,6 +316,7 @@ export async function runIncrementalFolderIngest(
       pages_accepted: acceptedPages,
       pages_rejected: rejectedPages,
       pages_via_browser: 0,
+      ...(pagesWithoutText.length ? { pages_without_text: pagesWithoutText } : {}),
       cost_usd: 0,
       elapsed_ms: elapsed,
       run_id: run.id,
@@ -349,6 +354,7 @@ export async function runIncrementalFolderIngest(
       const result: DocIngestResult = {
         source_id: source.id, chunks_indexed: chunks, pages_fetched: acceptedPages + rejectedPages,
         pages_accepted: acceptedPages, pages_rejected: rejectedPages, pages_via_browser: 0,
+        ...(pagesWithoutText.length ? { pages_without_text: pagesWithoutText } : {}),
         cost_usd: 0, elapsed_ms: elapsed, run_id: run.id, state, searchable: chunks > 0,
       };
       await emit({ phase: state, current: processed, total: scan.entries.length, state, searchable: chunks > 0 });

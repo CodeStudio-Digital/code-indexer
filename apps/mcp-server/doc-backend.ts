@@ -2,6 +2,7 @@ import { DocStore } from '@mcp/store/doc-store.js';
 import type { ToolContext } from './context.js';
 import { buildDocNavigation } from '@mcp/services/services/docs/agent-navigation.js';
 import { DocHybridSearch } from '@mcp/services/services/docs/search.js';
+import { resolveDocSearchScope } from '@mcp/services/services/docs/search-scope.js';
 import { getGlobalDocSearch, type DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 
 const backends = new WeakMap<object, DocSearchBackend>();
@@ -18,8 +19,7 @@ export function documentationBackend(ctx: ToolContext): DocSearchBackend {
     ...buildDocNavigation(store),
     search: async (input, signal) => {
       signal?.throwIfAborted();
-      const scoped = !input.collection && input.scope !== 'all' && input.project_id != null
-        ? store.listCollectionsForProject(input.project_id) : [];
+      const { scope, collections: scoped } = resolveDocSearchScope(store, input);
       // Keep body hydration bounded, including a corpus containing huge chunks.
       // The map belongs to this request so concurrent reads cannot cross results.
       const lengths = new Map<number, { source: number; retained: number }>();
@@ -40,7 +40,7 @@ export function documentationBackend(ctx: ToolContext): DocSearchBackend {
         })),
       } as unknown as DocStore, null, null);
       const result = await lexical.search({ query: input.query, collection: input.collection, limit: input.limit,
-        ...(scoped.length ? { collection_ids: scoped.map(c => c.id) } : {}), mode: 'fts' });
+        ...(scoped.length ? { collection_ids: scoped.map(c => c.id) } : {}), mode: 'fts', signal });
       signal?.throwIfAborted();
       for (const item of result.results) {
         const length = lengths.get(item.chunk_id)!;
@@ -49,7 +49,7 @@ export function documentationBackend(ctx: ToolContext): DocSearchBackend {
         if (truncated && !item.snippet_truncated) item.snippet += '…';
         item.snippet_truncated = truncated;
       }
-      result.diag.scope = scoped.length ? 'project' : 'all';
+      result.diag.scope = scope;
       if (scoped.length) result.diag.scoped_collections = scoped.map(c => c.name);
       return result;
     },

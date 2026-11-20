@@ -166,6 +166,7 @@ export const recallMemoryTool: CoderTool = {
   },
   handler: async (args, ctx): Promise<ToolResult> => {
     if (args.scope !== undefined && args.scope !== 'project' && args.scope !== 'user') return err('recall_memory: scope must be project or user.');
+    if (ctx.memoryReadSuppressed) return err('Memory recall is disabled for this user request.');
     const scope = args.scope === 'user' ? 'user' : 'project';
     const pm = scope === 'user' ? ctx.userMemory : ctx.projectMemory;
     if (!pm) return err(UNAVAILABLE);

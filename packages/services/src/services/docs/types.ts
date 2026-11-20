@@ -37,6 +37,7 @@ export interface DocIngestProgress {
   pages_rejected?: number;
   /** Pages that needed the headless browser due to bot detection. */
   pages_via_browser?: number;
+  pages_without_text?: string[];
   chunks_indexed?: number;
   cost_usd?: number;
   elapsed_ms?: number;
@@ -67,6 +68,8 @@ export interface DocIngestResult {
   pages_rejected: number;
   /** Pages that needed the headless browser due to bot detection. */
   pages_via_browser: number;
+  /** Original page URIs without extractable PDF text in this ingest. */
+  pages_without_text?: string[];
   cost_usd: number;
   elapsed_ms: number;
   run_id?: number;
@@ -90,6 +93,7 @@ export interface DocIngestEstimate {
  * normalize them into a single `RawPage` shape.
  */
 export interface RawPage extends PipelineCandidate {
+  extraction_gap?: 'no_extractable_text';
   /** Stable identifier for the candidate-pipeline (URL or "pdf://<source>#page=N"). */
   candidateId: string;
   /** Original URL or `pdf://<source_id>#page=N`. */

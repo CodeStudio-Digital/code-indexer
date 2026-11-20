@@ -1828,7 +1828,7 @@ describe('SemanticIndexCoordinator code generations', () => {
     await h.coordinator.ensureCodeProject(1);
     const first = h.store.createGeneration.mock.results[0]?.value as Generation;
     expect(first).toMatchObject({
-      fingerprint: 'semantic-embedding:v2:context-a:space-dimension:3',
+      fingerprint: 'semantic-embedding:v2:context-a:input-layout:v2:space-dimension:3',
       dimension: 3,
       embedding_target: { kind: 'onnx', model: 'code-model' },
     });
@@ -1841,7 +1841,7 @@ describe('SemanticIndexCoordinator code generations', () => {
     expect(h.store.createGeneration).toHaveBeenCalledTimes(2);
     const second = h.store.createGeneration.mock.results[1]?.value as Generation;
     expect(second).toMatchObject({
-      fingerprint: 'semantic-embedding:v2:context-b:space-dimension:3',
+      fingerprint: 'semantic-embedding:v2:context-b:input-layout:v2:space-dimension:3',
       dimension: 3,
       embedding_target: first.embedding_target,
     });

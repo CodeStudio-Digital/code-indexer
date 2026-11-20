@@ -3,6 +3,14 @@
  * synthesized markdown and map them back to chunk ids.
  */
 import { describe, it, expect } from 'vitest';
+import { normalizeFootnotes } from '../retrieval/citations.js';
+
+it('keeps footnotes aligned with the returned citation list', () => {
+  expect(normalizeFootnotes('Current [^42], previous [^77].\n[^77]: previous', [42, 77]))
+    .toBe('Current [^1], previous [^2].\n[^2]: previous');
+  expect(normalizeFootnotes('Current [^1] and [^2]', [42, 77])).toBe('Current [^1] and [^2]');
+  expect(normalizeFootnotes('Unknown [^91]', [42])).toBeNull();
+});
 import {
   extractCitedIndices,
   resolveCitedChunkIds,

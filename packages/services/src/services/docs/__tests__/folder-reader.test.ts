@@ -21,6 +21,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs, mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { chunkMarkdown } from '../section-chunker.js';
+import { heuristicAccepts } from '../relevance-gate.js';
+import { docPassageUri } from '@mcp/shared/doc-passage-uri.js';
 import {
   readFolder,
   FOLDER_DEFAULT_INCLUDE_GLOB,
@@ -48,6 +51,43 @@ afterEach(() => {
 });
 
 describe('readFolder — basic dispatch', () => {
+  it('preserves passage text and distinct page locators across PDF, HTML and Markdown', async () => {
+    const sentence = 'CommitPolicy verifies the receipt before publishing.';
+    const stream = 'BT /F1 12 Tf 40 500 Td (' + sentence + ') Tj ET\n';
+    const objects = [
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 600] /Resources << >> >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 600] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      '<< /Length ' + stream.length + ' >>\nstream\n' + stream + 'endstream',
+    ];
+    let pdf = '%PDF-1.4\n';
+    const offsets = objects.map((obj, i) => {
+      const start = pdf.length;
+      pdf += (i + 1) + ' 0 obj\n' + obj + '\nendobj\n';
+      return String(start).padStart(10, '0') + ' 00000 n \n';
+    });
+    const xref = pdf.length;
+    pdf += 'xref\n0 7\n0000000000 65535 f \n' + offsets.join('') + 'trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n';
+    makeFile('first.pdf', pdf);
+    makeFile('second.pdf', pdf);
+    makeFile('manual.md', '# verifyReceipt() {#verify}\n\n' + sentence);
+    makeFile('manual.html', '<html><body><main><h1 id="verify">verifyReceipt()</h1><p>' + sentence + '</p></main></body></html>');
+    const { pages } = await readFolder({ rootPath: tmpRoot, sourceId: 9 });
+    expect(pages).toHaveLength(6);
+    expect(new Set(pages.map(p => p.candidateId)).size).toBe(6);
+    const gaps = pages.filter(p => p.extraction_gap);
+    expect(gaps.map(p => p.uri).sort()).toEqual(['first', 'second'].map(n => 'folder://9#file=' + n + '.pdf&page=1'));
+    expect(gaps.every(p => !heuristicAccepts(p).accept)).toBe(true);
+    for (const page of pages.filter(p => !p.extraction_gap)) {
+      expect(heuristicAccepts(page).accept).toBe(true);
+      expect(chunkMarkdown(page.markdown, { defaultRootTitle: page.title ?? 'Manual' })
+        .some(chunk => chunk.content.includes(sentence))).toBe(true);
+    }
+    expect(docPassageUri('folder://9#file=manual.md', 'verify')).toBe('folder://9#file=manual.md&anchor=verify');
+    expect(docPassageUri('https://example.test/docs#old', 'verify')).toBe('https://example.test/docs#verify');
+  });
   it('reads .html, .md, .txt and assembles RawPages with source=folder', async () => {
     makeFile(
       'index.html',

@@ -72,6 +72,22 @@ describe('DocStore.tryAcquireSource', () => {
     rmSync(h.dir, { recursive: true, force: true });
   });
 
+  it('keeps citations to unchanged passages across reorder and rolls back an interrupted refresh', () => {
+    const collection = h.store.createCollection({ name: 'guide' });
+    const source = h.store.createSource({ collection_id: collection.id, type: 'url', uri: 'fixture://guide' });
+    const row = (text: string, ord: number) => ({ source_id: source.id, collection_id: collection.id, ord,
+      heading_path: text, source_uri: source.uri, content: text, content_hash: text });
+    const [a, b] = h.store.insertChunks([row('alpha', 0), row('beta', 1)]);
+    const result = h.store.reconcileChunksForSource(source.id, [row('beta', 0), row('gamma', 1), row('alpha', 2)]);
+    expect(result.ids).toEqual([b, result.changedIds[0], a]);
+    expect(h.store.getChunk(a!)?.ord).toBe(2);
+    expect(() => h.store.reconcileChunksForSource(source.id, [row('beta', 0), row('collision', 0)])).toThrow();
+    expect(h.store.getChunk(a!)?.content).toBe('alpha');
+    expect(h.store.getChunk(b!)?.ord).toBe(0);
+    h.store.reconcileChunksForSource(source.id, [row('beta', 0)]);
+    expect(h.store.getChunk(a!)).toBeNull();
+  });
+
   it('flips a queued source to fetching and returns true', () => {
     const c = h.store.createCollection({ name: 'col-a' });
     const s = h.store.createSource({ collection_id: c.id, type: 'url', uri: 'https://a.example' });

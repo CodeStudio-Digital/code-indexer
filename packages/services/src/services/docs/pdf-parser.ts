@@ -49,19 +49,27 @@ export async function parsePdf(bytes: Uint8Array, opts: ParsePdfOptions): Promis
   const perPageRaw: string[] = normalizeExtractedText(extracted, totalPages);
 
   const pages: RawPage[] = [];
-  for (let i = 0; i < perPageRaw.length; i++) {
+  for (let i = 0; i < totalPages; i++) {
     const raw = (perPageRaw[i] ?? '').trim();
-    if (!raw) continue;
     const pageNumber = i + 1;
     const title = outlineTitles.get(pageNumber) ?? firstNonEmptyLine(raw) ?? `${opts.titleHint ?? 'Page'} — p.${pageNumber}`;
-    const markdown = paragraphsToMarkdown(raw);
+    const body = paragraphsToMarkdown(raw);
+    // Very short extracted pages still have an independently citable parent page.
+    const markdown = body && body.length < 500
+      ? '# ' + (outlineTitles.get(pageNumber) ?? opts.titleHint ?? 'Page ' + pageNumber) + '\n\n' + body
+      : body;
+    const folderPage = opts.sourceUri.startsWith('folder://') && opts.sourceUri.includes('#file=');
+    const uri = folderPage
+      ? opts.sourceUri + '&page=' + pageNumber
+      : opts.sourceUri.split('#', 1)[0] + '#page=' + pageNumber;
     pages.push({
-      candidateId: `pdf://${opts.sourceId}#page=${pageNumber}`,
-      uri: `${opts.sourceUri}#page=${pageNumber}`,
+      candidateId: folderPage ? uri : `pdf://${opts.sourceId}#page=${pageNumber}`,
+      uri,
       title,
       markdown,
       source: 'pdf',
       bytes: raw.length,
+      ...(raw ? {} : { extraction_gap: 'no_extractable_text' as const }),
     });
   }
   return pages;

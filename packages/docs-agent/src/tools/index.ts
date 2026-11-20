@@ -48,13 +48,20 @@ export interface BuildDocsToolsetInput {
 
 export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
   const ledger = new DocsEvidenceLedger();
+  const collectionIdsByName = input.scopedCollections?.length ? new Map(input.scopedCollections.flatMap(name => {
+    const collection = input.docStore.getCollectionByName(name);
+    return collection ? [[name, collection.id] as const] : [];
+  })) : undefined;
+  const scopeIds = collectionIdsByName ? new Set(collectionIdsByName.values()) : undefined;
   return [
     makeDocsPlanTool({ slot: input.planSlot }),
-    makeDocsListSourcesTool({ docStore: input.docStore }),
+    makeDocsListSourcesTool({ docStore: input.docStore, scopeIds }),
     makeDocsSearchTool({
       docHybridSearch: input.docHybridSearch,
       resolveContext: input.resolveContext,
       scopedCollections: input.scopedCollections,
+      collectionIdsByName,
+      scopeIds,
       ledger,
       subQuestionCount: () => input.planSlot.subQuestions?.length ?? 1,
       onCall: () => {
@@ -63,6 +70,7 @@ export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
     }),
     makeDocsReadChunkTool({
       docStore: input.docStore,
+      scopeIds,
       ledger,
       onCall: () => {
         input.counters.chunks_read++;
@@ -70,6 +78,7 @@ export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
     }),
     makeDocsSynthesizeTool({
       docStore: input.docStore,
+      scopeIds,
       resolver: input.resolver,
       resolveContext: input.resolveContext,
       onCall: () => {
@@ -81,6 +90,6 @@ export function buildDocsToolset(input: BuildDocsToolsetInput): CoderTool[] {
         if (usage.cost_usd != null) input.counters.cost_usd += usage.cost_usd;
       },
     }),
-    makeDocsFinishTool({ slot: input.finishSlot, ledger, planSlot: input.planSlot }),
+    makeDocsFinishTool({ slot: input.finishSlot, ledger, planSlot: input.planSlot, docStore: input.docStore, scopeIds }),
   ];
 }

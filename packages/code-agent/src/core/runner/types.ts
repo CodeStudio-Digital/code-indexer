@@ -221,6 +221,7 @@ export interface RunnerOptions {
    * `min(model cap, sessionToolCap)` for the whole session.
   */
   preflightHint?: string;
+  preflightHintWithoutMemory?: string;
   sessionToolCap?: number;
   /** Compact Agent Decision Engine guidance for this task/turn, when enabled by the host. */
   agentDecisionGuidance?: AgentDecisionGuidance | null;

@@ -65,7 +65,7 @@ import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import { expandGraph } from '@mcp/indexer/search/graph-expansion-source.js';
-import { codeResultInScope, codeSearchFolders, rerankWithinSlots } from './code-vector-matches.js';
+import { codeResultInScope, codeSearchFolders, codeVectorFilter, distinctCodeMatches, rerankWithinSlots } from './code-vector-matches.js';
 import type {
   ContextSnapshot,
   DBFile,
@@ -89,6 +89,7 @@ function rerankDepth(q: HybridSearchPipelineQuery, reranker: RerankerService): n
 // ─── Query and Candidate types ────────────────────────────────────────
 
 export interface HybridSearchPipelineQuery extends PipelineQuery {
+  preExpanded?: boolean;
   projectId: number;
   projectName: string;
   query: string;
@@ -194,6 +195,22 @@ export function semanticProjectContext(
   }
 }
 
+/** Preserve the original query and allow at most one generated retrieval variant. */
+export async function codeQueryVariants(db: CodeIndexDB, projectId: number, project: string, text: string,
+  hyde: HyDEService | null, signal?: AbortSignal): Promise<string[]> {
+  signal?.throwIfAborted();
+  const query = text.trim();
+  if (!hyde || !query || (process.env.MCP_HYBRID_HYDE_SKIP_FTS !== '0' && planQuery(query).mode === 'fts')) return [query];
+  try {
+    const extra = (await hyde.generate(query, semanticProjectContext(db, projectId, project), signal))?.trim();
+    signal?.throwIfAborted();
+    return extra && extra !== query ? [query, extra] : [query];
+  } catch {
+    signal?.throwIfAborted();
+    return [query];
+  }
+}
+
 export class FtsSource implements Source<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> {
   readonly name = 'fts';
   constructor(private deps: RawSearchInputs) {}
@@ -277,16 +294,14 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
     if (!this.deps.vectorStore) return [];
     q.signal?.throwIfAborted();
     try {
-      const variants = await this.buildVariants(q);
+      const variants = await codeQueryVariants(this.deps.db, q.projectId, q.projectName, q.query,
+        q.preExpanded ? null : this.deps.hyde, q.signal);
       q.signal?.throwIfAborted();
       q.diag.queryVariants = variants;
 
       // Project isolation rides on the namespace; `type` stays a metadata filter.
       const namespace = codeNamespace(q.projectId);
-      const filter: Record<string, string> = {};
-      if (q.type === 'files') filter.type = 'file';
-      // Symbol search must include signature, body and sibling-group vectors.
-      // They all rehydrate through ref_id to the owning structural symbol.
+      const filter = codeVectorFilter(q.type);
 
       const perVariant = Math.max(q.overFetch, 10);
       let totalRaw = 0;
@@ -306,13 +321,13 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
           if (vector.length === 0) return [];
           const matches = await this.deps.vectorStore!.search(vector, {
             topK: perVariant,
-            filter,
+            ...filter,
             namespace,
             generationId,
             signal: q.signal,
           });
           totalRaw += matches.length;
-          return this.rehydrate(matches, q.projectId);
+          return this.rehydrate(distinctCodeMatches(matches, q.type), q.projectId);
         }),
       );
       q.diag.vectorRawMatches = totalRaw;
@@ -359,28 +374,6 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
     }
   }
 
-  private async buildVariants(q: HybridSearchPipelineQuery): Promise<string[]> {
-    const query = q.query;
-    // Same shortcut as the legacy path: identifier-shaped queries skip the
-    // HyDE LLM call and template expansion (covers callers that request
-    // hybrid explicitly). Kill switch: MCP_HYBRID_HYDE_SKIP_FTS=0.
-    if (process.env.MCP_HYBRID_HYDE_SKIP_FTS !== '0' && planQuery(query).mode === 'fts') {
-      return [query.trim()];
-    }
-    if (this.deps.hyde) {
-      const hypothetical = await this.deps.hyde.generate(
-        query,
-        semanticProjectContext(
-          this.deps.db,
-          q.projectId,
-          q.projectName,
-        ),
-        q.signal,
-      );
-      if (hypothetical && hypothetical !== query) return [query, hypothetical];
-    }
-    return [query.trim()];
-  }
 
   private rehydrate(
     matches: Array<{ score: number; metadata: Record<string, string> }>,
@@ -388,7 +381,6 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
   ): HybridSearchPipelineCandidate[] {
     const folders = codeSearchFolders(this.deps.db, projectId);
     const out: HybridSearchPipelineCandidate[] = [];
-    const byId = new Map<string, HybridSearchPipelineCandidate>();
     for (const match of matches) {
       const isFile = match.metadata.type === 'file';
       const refId = match.metadata.ref_id ? parseInt(match.metadata.ref_id, 10) : 0;
@@ -405,20 +397,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
         vector_score: match.score,
         data,
       };
-      if (!codeResultInScope(folders, r)) continue;
-      const key = candidateKey(r);
-      const existing = byId.get(key);
-      if (existing) {
-        // Signature/body/sibling vectors may resolve to the same symbol. One
-        // query variant gets one vote per symbol, regardless of chunk count.
-        if (match.score > (existing.result.vector_score ?? -Infinity)) {
-          existing.result.vector_score = match.score;
-        }
-        continue;
-      }
-      const candidate = emptyCandidate(r);
-      byId.set(key, candidate);
-      out.push(candidate);
+      if (codeResultInScope(folders, r)) out.push(emptyCandidate(r));
     }
     return out;
   }
@@ -566,12 +545,11 @@ export class RrfFusionScorer
     // Sources fan-out in parallel, so the same candidateId may appear
     // multiple times in `candidates`. Group by candidateId, sum the RRF
     // contributions from each source, preserve best per-source metadata.
-    type Acc = HybridSearchPipelineCandidate & { _summedFromIds: Set<string> };
-    const byKey = new Map<string, Acc>();
+    const byKey = new Map<string, HybridSearchPipelineCandidate>();
     for (const c of candidates) {
       const existing = byKey.get(c.candidateId);
       if (!existing) {
-        byKey.set(c.candidateId, { ...c, _summedFromIds: new Set() });
+        byKey.set(c.candidateId, { ...c });
       } else {
         existing.ranks = {
           fts: existing.ranks.fts ?? c.ranks.fts,

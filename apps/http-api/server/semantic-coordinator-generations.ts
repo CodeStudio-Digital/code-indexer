@@ -133,7 +133,10 @@ async resolveGeneration(this: SemanticCoordinatorContext, purpose: SemanticPurpo
     // reusable service fingerprint intentionally remains dimension-agnostic
     // until its first probe. Vector/item hashes still recover the service
     // fingerprint through embeddingFingerprintForGeneration().
-    const spaceFingerprint = `${baseFingerprint}:space-dimension:${vector.length}`;
+    // Keep previous generations queryable. A fresh build records the document
+    // layout independently of the embedding space used for query encoding.
+    const layout = purpose === 'code' || purpose === 'docs' || currentTarget.kind === 'onnx' ? ':input-layout:v2' : '';
+    const spaceFingerprint = `${baseFingerprint}${layout}:space-dimension:${vector.length}`;
     const fingerprint = force
       ? `${spaceFingerprint}:rebuild:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`
       : spaceFingerprint;

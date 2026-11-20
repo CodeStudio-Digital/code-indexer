@@ -12,6 +12,7 @@ import { ProjectIndexState } from './service-state.js';
 
 /** Working-tree and Git watcher ownership, subscriptions, and shutdown. */
 export abstract class ProjectIndexWatchers extends ProjectIndexState {
+  private readonly lateWatcherScans = new WeakSet<Promise<void>>();
 
   /** Live filesystem events for the UI. Subscribing arms the watcher. */
   subscribeFsEvents(projectId: number, fn: (events: FsEvent[]) => void): () => void {
@@ -301,10 +302,11 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
     };
     if (!watcher.waitUntilReady) return;
     const timeoutMs = envDelay('MCP_WATCH_READY_TIMEOUT_MS', 30_000);
+    const ready = watcher.waitUntilReady(projectId);
     let timedOut = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      watcher.waitUntilReady(projectId),
+      ready,
       new Promise<void>((resolve) => {
         timeout = setTimeout(() => {
           timedOut = true;
@@ -313,8 +315,13 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
       }),
     ]);
     if (timeout) clearTimeout(timeout);
-    if (timedOut) {
-      console.warn(`[project-index] watcher ready barrier timed out for project ${projectId}; reconciling with watcher gap protection degraded`);
+    if (timedOut && !this.lateWatcherScans.has(ready)) {
+      this.lateWatcherScans.add(ready);
+      console.warn(`[project-index] watcher still warming for project ${projectId}; scheduling another scan when live coverage starts`);
+      void ready.then(() => {
+        if (this.disposed || !this.shouldKeepWatcher(projectId) || !watcher.isWatching(projectId) || watcher.isSkipped?.(projectId)) return;
+        this.ensureFresh(projectId, 'workspace');
+      }).catch(error => console.warn('[project-index] delayed watcher readiness failed:', msg(error)));
     }
   }
 

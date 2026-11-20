@@ -12,6 +12,7 @@ import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import type { DocStore } from '@mcp/store/doc-store.js';
 
 export interface DocsListSourcesToolDeps {
+  scopeIds?: ReadonlySet<number>;
   docStore: DocStore;
 }
 
@@ -39,8 +40,9 @@ export function makeDocsListSourcesTool(deps: DocsListSourcesToolDeps): CoderToo
     handler: async (args): Promise<ToolResult> => {
       const collectionName = typeof args.collection === 'string' ? args.collection.trim() : '';
 
-      const collections = deps.docStore.listCollections();
+      const collections = deps.docStore.listCollections().filter(c => !deps.scopeIds || deps.scopeIds.has(c.id));
       if (collections.length === 0) {
+        if (deps.scopeIds) return ok('No collections are available in the scope of this task.');
         return ok('No collections are indexed yet. The doc corpus is empty — emit docs_finish with confidence=\'low\' explaining the docs aren\'t available.');
       }
 

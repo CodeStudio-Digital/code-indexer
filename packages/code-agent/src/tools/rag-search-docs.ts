@@ -23,6 +23,7 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { DocSearchBackend } from './doc-search-types.js';
+import { docPassageUri } from '@mcp/shared/doc-passage-uri.js';
 
 // The doc-tool type contract lives in doc-search-types.ts (shared with the
 // host backend + worker shims). Re-exported here so existing importers of
@@ -122,6 +123,10 @@ export const ragSearchDocsTool: CoderTool = {
     }
 
     const { results, diag } = response;
+    const coverage = diag.vector_collections;
+    const partialNote = coverage?.failed.length
+      ? ` Vector coverage is partial (${coverage.completed}/${coverage.attempted} collections completed).`
+      : '';
     // When the backend filtered to project-linked collections, say WHICH
     // ones — it makes empty results actionable (retry with scope:'all').
     const scopeNote = diag.scope === 'project'
@@ -148,6 +153,7 @@ export const ragSearchDocsTool: CoderTool = {
           : '';
       return ok(
         `No results for query "${query}"${collection ? ` in collection "${collection}"` : ''}${hint}.` +
+          partialNote +
           scopeNote +
           ' Try a broader query, or check that the collection has been indexed.',
       );
@@ -156,12 +162,12 @@ export const ragSearchDocsTool: CoderTool = {
     const scopeTag = diag.scope === 'project'
       ? `, scope=project (${(diag.scoped_collections ?? []).join(', ')})`
       : '';
-    const header = `Found ${results.length} result${results.length === 1 ? '' : 's'} (mode=${diag.mode}, fts=${diag.fts_hits}, vector=${diag.vector_hits}${scopeTag})`;
+    const header = `Found ${results.length} result${results.length === 1 ? '' : 's'} (mode=${diag.mode}, fts=${diag.fts_hits}, vector=${diag.vector_hits}${scopeTag})${partialNote}`;
     const blocks = results.map((r, i) => {
       const lines: string[] = [];
       lines.push(`## [${i + 1}] ${r.heading_path ?? '(untitled)'} — ${r.collection} (chunk_id: ${r.chunk_id})`);
       // Deep-link to the exact section when an anchor was captured at index time.
-      if (r.source_uri) lines.push(`Source: ${r.source_uri}${r.anchor ? `#${r.anchor}` : ''}`);
+      if (r.source_uri) lines.push(`Source: ${docPassageUri(r.source_uri, r.anchor)}`);
       if (r.api_signature) lines.push(`Signature: ${r.api_signature}`);
       else if (r.api_symbol) lines.push(`Symbol: ${r.api_symbol}`);
       // Prefer the calibrated relevance; fall back to the opaque RRF score

@@ -1,4 +1,5 @@
 import { toolProjectionReceipt } from '../../tool-projection.js';
+import { suppressesMemoryRecall } from '@mcp/shared/memory-opt-out.js';
 import { outcomeRecoveryPrompt } from '../../uncertain-tool-outcome.js';
 import { synchronizeOutcomeRecovery } from '../outcome-recovery.js';
 import { rejectedProviderTools, toolSchemaRecoveryPrompt } from '../provider-schema-recovery.js';
@@ -213,10 +214,8 @@ export class ExecutingNode implements BehaviorNode {
     // coding phrases: no bare "sem" ("sem estourar a memória"), and "memory"
     // followed by leak/usage/check/heap-style words is the RESOURCE, not the
     // agent memory feature ("ignore the memory leak for now").
-    const ignoreMemory =
-      /\b(ignore|disregard|skip|don'?t use|do not use|n[aã]o use|n[aã]o usar)\b[\s\S]{0,20}mem(?:o|ó)r(?:y|ia)\b(?!\s*(?:leak|leaks|usage|check|checks|profile|profiler|pressure|footprint|heap|ram|cache))/i.test(
-        memoryTaskText ?? '',
-      );
+    const ignoreMemory = suppressesMemoryRecall(memoryTaskText);
+    ctx.opts.toolContext.memoryReadSuppressed = ignoreMemory;
     // Perf W1 — the two recall blocks below are independent (distinct
     // injectionState fields + throttle keys) yet ran serially, both awaited
     // on the critical path before the provider call. Run them concurrently;
@@ -414,8 +413,9 @@ export class ExecutingNode implements BehaviorNode {
       }
       // Task-preflight hint — fixed for the whole run; the hash only guards
       // double-injection (turn 1 + post-compaction re-inject).
-      const preflightHint = ctx.opts.preflightHint
-        ? { text: ctx.opts.preflightHint, hash: hashSessionState(ctx.opts.preflightHint) }
+      const preflightText = ignoreMemory ? ctx.opts.preflightHintWithoutMemory : ctx.opts.preflightHint;
+      const preflightHint = preflightText
+        ? { text: preflightText, hash: hashSessionState(preflightText) }
         : null;
       // Skip computing when nothing fresh AND no recent compaction AND no
       // memory AND no nudge AND no state block worth (re-)injecting.

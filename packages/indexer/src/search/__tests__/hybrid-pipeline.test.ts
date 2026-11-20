@@ -275,7 +275,7 @@ describe('hybrid pipeline source fusion', () => {
     expect(results[0]).toMatchObject({ id: 44, type: 'symbol' });
     expect(search).toHaveBeenCalledWith(
       expect.any(Array),
-      expect.objectContaining({ filter: {}, namespace: 'code:p1', generationId: 3 }),
+      expect.objectContaining({ types: ['symbol', 'symbol_body', 'symbol_group'], namespace: 'code:p1', generationId: 3 }),
     );
   });
 });

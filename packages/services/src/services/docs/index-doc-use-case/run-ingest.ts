@@ -8,7 +8,7 @@ import { DocError } from '../errors.js';
 import type { RawPage } from '../types.js';
 import { embedAndUpsert } from './embed-upsert.js';
 import { deleteLocalVectors } from './delete.js';
-import { hashContent } from './utils.js';
+import { buildEmbeddingText, hashContent, hashEmbeddingInput } from './utils.js';
 import {
   HARD_MAX_CHUNKS_PER_SOURCE,
   type IndexDocStreamCallbacks,
@@ -73,6 +73,7 @@ export async function runIngest(
     await tracked.onProgress?.({ phase: 'fetching', current: 0, total: 1 });
     console.log(`[doc-indexer] phase=fetching source=${source.id}`);
     const rawPages = await produceRawPages();
+    const pagesWithoutText = rawPages.filter(page => page.extraction_gap).map(page => page.uri);
     const pagesViaBrowser = rawPages.reduce((acc, p) => acc + (p.via === 'browser' ? 1 : 0), 0);
     console.log(
       `[doc-indexer] fetched ${rawPages.length} raw page(s) source=${source.id} via_browser=${pagesViaBrowser}`,
@@ -100,9 +101,8 @@ export async function runIngest(
       pages_rejected: rejected,
     });
     console.log(`[doc-indexer] persisting ${chunkInputs.length} chunk(s) source=${source.id}`);
-    const obsoleteVectors = docStore.listVectorIdsForSource(source.id);
-    const chunkIds = docStore.replaceChunksForSource(source.id, chunkInputs);
-    await deleteLocalVectors(docStore, vectorStore, obsoleteVectors, docNamespace(collection.id));
+    const { ids: chunkIds, removedVectors } = docStore.reconcileChunksForSource(source.id, chunkInputs);
+    await deleteLocalVectors(docStore, vectorStore, removedVectors, docNamespace(collection.id));
 
     // ── Phase 6: embed + vector upsert ─────────────────────────────
     // Embedding deliberately precedes optional LLM enrichment. A slow or
@@ -163,6 +163,7 @@ export async function runIngest(
 
     const elapsed = Date.now() - startedAt;
     const result: DocIngestResult = {
+      ...(pagesWithoutText.length ? { pages_without_text: pagesWithoutText } : {}),
       source_id: source.id,
       chunks_indexed: chunkInputs.length,
       pages_fetched: rawPages.length,
@@ -174,6 +175,7 @@ export async function runIngest(
     };
     await tracked.onProgress?.({
       phase: 'done',
+      ...(pagesWithoutText.length ? { pages_without_text: pagesWithoutText } : {}),
       current: chunkInputs.length,
       total: chunkInputs.length,
       chunks_indexed: chunkInputs.length,
@@ -286,6 +288,7 @@ function buildChunks(
         heading_path: s.heading_path,
         content: s.content,
         content_hash: hashContent(s.content),
+        embedding_input_hash: hashEmbeddingInput(buildEmbeddingText(s.heading_path, null, s.content, api?.signature)),
         token_count: s.token_count,
         source_uri: page.uri,
         // Stamp the source's documentation type onto every chunk so retrieval

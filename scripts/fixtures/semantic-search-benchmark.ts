@@ -8,8 +8,9 @@ import { buildScratchVectorStore } from '@mcp/indexer/benchmarks/scratch-index.j
 import { LocalEmbeddingService } from '@mcp/indexer/search/local-embeddings.js';
 import { LocalReranker } from '@mcp/indexer/search/local-reranker.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
-import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
+import { HybridSearch, verifySemanticRetrieval } from '@mcp/indexer/search/hybrid.js';
 import { SqliteVecVectorStore } from '@mcp/store/sqlite-vec-store.js';
+import { BUNDLED_EMBEDDING_TARGET } from '@mcp/shared/providers/bundled-semantic-model.js';
 
 const reuse = process.env.RELIABILITY_SEMANTIC_FIXTURE;
 const output = reuse ? resolve(reuse) : resolve('.tmp/agent-ide-reliability', `semantic-ui-${Date.now()}-${process.pid}`);
@@ -33,12 +34,13 @@ const transformers = await import('@huggingface/transformers');
 transformers.env.allowRemoteModels = false;
 const cacheDir = join(process.env.USERPROFILE!, '.mcp', 'models');
 transformers.env.localModelPath = cacheDir + '/';
-const embedding = new LocalEmbeddingService({ cacheDir, dtype: 'fp32' });
+const embedding = new LocalEmbeddingService({ cacheDir });
 const reranker = process.env.RELIABILITY_RERANKER === 'off'
   ? new NullReranker() : new LocalReranker({ cacheDir, dtype: 'fp32', strict: true });
 const db = new CodeIndexDB(join(output, 'index.db'));
 const project = reuse ? db.getProjectByName('semantic-ui-fixture')! : db.createProject('semantic-ui-fixture', root);
 if (!project) throw new Error('Missing fixture project');
+db.updateProject(project.id, { semantic_index_folders: JSON.stringify(['src']) });
 const started = performance.now();
 if (!reuse) {
   const indexed = await runStructuralIndex(db, project.id, { concurrency: 1 });
@@ -46,7 +48,10 @@ if (!reuse) {
   console.log(`Indexed ${indexed.indexed} files; embedding all eligible content`);
 }
 const prior = reuse ? JSON.parse(readFileSync(join(output, 'manifest.json'), 'utf8')) : null;
-if (prior && (prior.corpusSha256 !== createHash('sha256').update(corpusBytes).digest('hex') || prior.files !== 10_000 || prior.embedded !== 20_000)) throw new Error('Fixture manifest mismatch');
+if (prior && (prior.corpusSha256 !== createHash('sha256').update(corpusBytes).digest('hex') ||
+    prior.files !== 10_000 || prior.embedded !== 20_000 || prior.fingerprint !== embedding.fingerprint())) {
+  throw new Error('Fixture manifest or embedding fingerprint mismatch');
+}
 const vectors = reuse ? { store: new SqliteVecVectorStore({ path: join(output, 'vectors.db') }), embedded: prior.embedded }
   : await buildScratchVectorStore(db, project, embedding, { scratchPath: join(output, 'vectors.db'),
   onProgress: p => { if (p.current % 1000 === 0) console.log(`Embedded ${p.current}/${p.total}`); } });
@@ -55,7 +60,8 @@ const manifest = { output, pid: process.pid, files: 10_000, embedded: vectors.em
   ...(reuse ? { reopenMs: performance.now() - started, coldBuildMs: prior.coldBuildMs } : { coldBuildMs: performance.now() - started }),
   corpusSha256: createHash('sha256').update(corpusBytes).digest('hex'),
   corpus: '40 authored behavioral files plus 9960 generated numeric-record distractors, all structurally indexed and embedded',
-  embedding: 'Xenova/multilingual-e5-small:fp32', reranker: reranker instanceof LocalReranker ? 'Xenova/bge-reranker-base:fp32' : reranker.name,
+  embedding: BUNDLED_EMBEDDING_TARGET, fingerprint: embedding.fingerprint(), inference: embedding.diagnostics(),
+  reranker: reranker instanceof LocalReranker ? 'Xenova/bge-reranker-base:fp32' : reranker.name,
   node: process.version, electron: process.versions.electron, network: 'disabled' };
 writeFileSync(join(output, reuse ? `reuse-${process.pid}.json` : 'manifest.json'), JSON.stringify(manifest, null, 2));
 process.on('message', async (message: { id: number; query: string; mode?: 'fts' | 'auto' }) => {
@@ -63,7 +69,7 @@ process.on('message', async (message: { id: number; query: string; mode?: 'fts' 
   try {
     const result = await search.searchWithDiag(project.id, project.name, message.query, { mode: message.mode ?? 'auto', limit: 20, bypassCache: true,
       ...(process.env.RELIABILITY_SEARCH_TYPE === 'files' ? { type: 'files' as const } : {}) });
-    if (result.diagnostics.vectorError || result.diagnostics.rerankerError) throw new Error(JSON.stringify(result.diagnostics));
+    if (result.diagnostics.plannedMode !== 'fts') verifySemanticRetrieval(result.diagnostics, true);
     process.send?.({ id: message.id, result, ms: performance.now() - start });
   } catch (error) { process.send?.({ id: message.id, error: String(error) }); }
 });

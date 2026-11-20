@@ -17,6 +17,17 @@ interface Block {
   atomic: boolean;
 }
 
+export function openingFence(line: string): string | undefined {
+  const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (!match || (match[1]![0] === '`' && match[2]!.includes('`'))) return;
+  return match[1];
+}
+
+export function closesFence(line: string, opening: string): boolean {
+  const match = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+  return !!match && match[1]![0] === opening[0] && match[1]!.length >= opening.length;
+}
+
 /**
  * Split `body` into pieces of at most `maxChars`, never cutting inside a
  * fenced code block or a markdown table. Returns `[body]` unchanged when it
@@ -65,16 +76,14 @@ function splitIntoBlocks(body: string): Block[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const fence = /^\s*(```|~~~)/.exec(line);
+    const fence = openingFence(line);
     if (fence) {
       flushPara();
-      const marker = fence[1]!;
       const code = [line];
-      const close = new RegExp(`^\\s*${marker}\\s*$`);
       i++;
       for (; i < lines.length; i++) {
         code.push(lines[i]!);
-        if (close.test(lines[i]!)) break;
+        if (closesFence(lines[i]!, fence)) break;
       }
       blocks.push({ text: code.join('\n'), atomic: true });
       continue;
