@@ -36,10 +36,6 @@ export interface CoderTunables {
   unrestrictedPushTimeCap: number;
   /** Ceiling used when `unrestricted_tool_output=1` is set on the session (subagents). */
   unrestrictedSubagentPushTimeCap: number;
-  /** Per-turn payload budget — emits a warning when about-to-send size exceeds this. */
-  turnBudgetChars: number;
-  /** Minimum turns between consecutive tool-misuse planning interventions. */
-  interventionCooldownTurns: number;
 }
 
 /**
@@ -52,8 +48,6 @@ export const DEFAULT_TUNABLES: Readonly<CoderTunables> = Object.freeze({
   subagentPushTimeCap: 12_000,
   unrestrictedPushTimeCap: 1_000_000,
   unrestrictedSubagentPushTimeCap: 500_000,
-  turnBudgetChars: 30_000,
-  interventionCooldownTurns: 5,
 });
 
 /**
@@ -104,7 +98,5 @@ export function tunablesFromRuntimePolicy(policy: ResolvedRuntimePolicyV1): Code
     subagentPushTimeCap: policy.context.subagentToolResultChars,
     unrestrictedPushTimeCap: policy.context.unrestrictedToolResultChars,
     unrestrictedSubagentPushTimeCap: policy.context.unrestrictedSubagentToolResultChars,
-    turnBudgetChars: policy.context.turnBudgetChars,
-    interventionCooldownTurns: policy.context.interventionCooldownTurns,
   };
 }

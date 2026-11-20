@@ -55,18 +55,6 @@ describe('SubagentJobManager', () => {
     expect(j.resultText).toBe('first');
   });
 
-  it('keeps terminal jobs unresolved until their full result is collected', () => {
-    const j = mk('j1');
-    if ('error' in j) throw new Error('unexpected');
-    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(false);
-    mgr.settle(j, 'full result', usage, 'done');
-    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(true);
-    mgr.markDelivery(j, 'notified');
-    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(true);
-    mgr.markDelivery(j, 'collected');
-    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(false);
-  });
-
   it('expires only collected terminals, never notified-but-uncollected results', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
@@ -82,7 +70,6 @@ describe('SubagentJobManager', () => {
     vi.advanceTimersByTime(1001);
     expect(mgr.get(SID, 'notified')).toBe(notified);
     expect(mgr.get(SID, 'collected')).toBeNull();
-    expect(mgr.hasUncollectedTerminalJobs(SID)).toBe(true);
   });
 
   it('waitAny returns immediately for an already-terminal job', async () => {

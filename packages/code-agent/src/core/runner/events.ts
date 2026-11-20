@@ -461,12 +461,6 @@ export interface RunnerEvents {
     /** prompt_tokens / context_window (0 when window unknown). */
     ratio: number;
   }) => void;
-  /** Emitted when a fallback provider is activated due to persistent errors. */
-  fallback_activated: (payload: {
-    from: { provider: string; model: string };
-    to: { provider: string; model: string };
-    error: string;
-  }) => void;
   /** Emitted when the runner compacts history during auto-continue so the
    *  dashboard can show the user which turns were summarized away. */
   history_compacted: (payload: {

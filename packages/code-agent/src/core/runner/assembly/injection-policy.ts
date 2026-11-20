@@ -1,6 +1,7 @@
 /**
  * Injection policy — how much session-state to inject, and how often,
- * scaled by the model's effective context window.
+ * scaled by the session's effective context window (the same
+ * `deriveTokenLimits(model, contextWindow).effective` the compaction gates use).
  *
  *   - standard (>64k): milestone injection (turn 1, post-compaction, or
  *     the block changed). Plenty of window; keep the tail lean.
@@ -10,9 +11,9 @@
  *     compaction. Tail-only, so the cached prefix is untouched.
  *   - minimal (≤16k): every turn, but skeletal.
  *
- * `CODER_SHORT_WINDOW_TOKENS` moves the short threshold (default 64k).
+ * The short threshold is fixed at 64k tokens (no env var).
  */
-import { getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
+import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import type { SessionStateBudget } from './session-state.js';
 
 export type InjectionMode = 'standard' | 'short' | 'minimal';
@@ -47,10 +48,12 @@ export function resolveInjectionPolicy(
     /** True when `<active-context>` (Agent Loop v2) already carries
      *  todos every turn — the state block then omits them. */
     liveStateCovered?: boolean;
+    /** Session-configured context window; null/undefined = the model's registered window. */
+    contextWindow?: number | null;
   } = {},
 ): InjectionPolicy {
   const enabled = true;
-  const effective = getEffectiveContextWindow(model).effective;
+  const effective = deriveTokenLimits(model, opts.contextWindow).effective;
   const includeLiveState = !opts.liveStateCovered;
 
   if (effective <= MINIMAL_WINDOW_TOKENS) {

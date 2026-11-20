@@ -43,7 +43,6 @@ describe('dispatchTools — supervisor inject', () => {
       registry,
       toolContext: emptyToolContext(),
       turn: 1,
-      dupCalls: new Map(),
       registerInFlightTool: (id, ctl) => { controllers.set(id, ctl); },
       unregisterInFlightTool: (id) => { controllers.delete(id); },
       consumeInjectedToolError: (id) => {
@@ -84,7 +83,6 @@ describe('dispatchTools — supervisor inject', () => {
       registry,
       toolContext: emptyToolContext(),
       turn: 1,
-      dupCalls: new Map(),
       registerInFlightTool: (id, ctl) => { controllers.set(id, ctl); },
       unregisterInFlightTool: (id) => { controllers.delete(id); },
       // no consumeInjectedToolError → plain abort path

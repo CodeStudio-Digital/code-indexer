@@ -9,7 +9,7 @@
  *
  *   - Fix 3: repeated pre-emit compaction is bounded. The pre-emit gate
  *     decrements `turn`, so `maxTurns` can't backstop a compaction that never
- *     frees the window. After `CODER_PREEMIT_COMPACT_MAX` consecutive pre-emit
+ *     frees the window. After the fixed cap (3) of consecutive pre-emit
  *     routings the run aborts with `stopReason='compact_exhausted'` instead of
  *     looping forever.
  */
@@ -95,9 +95,7 @@ describe('runBehaviorTree — Fix 1 (node throw → done, never reject)', () => 
 });
 
 describe('runBehaviorTree — Fix 3 (pre-emit compaction is bounded)', () => {
-  it('aborts with compact_exhausted after CODER_PREEMIT_COMPACT_MAX consecutive pre-emit compactions', async () => {
-    vi.stubEnv('CODER_PREEMIT_COMPACT_MAX', '2');
-
+  it('aborts with compact_exhausted after the fixed cap of consecutive pre-emit compactions', async () => {
     const { ctx } = makeTestContext({
       registry: new ToolRegistry(),
       // A real cwd so `buildTools`' tool-filter hook lookup (join(cwd, …))

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { DupCallEntry } from '../../machine/types.js';
 import { NoProgressTracker } from '../../guards/no-progress.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { dispatchTools, type DispatchArgs } from '../executing-dispatch.js';
@@ -36,7 +35,6 @@ function batch(
     registry,
     toolContext,
     turn,
-    dupCalls: new Map<string, DupCallEntry>(),
   };
 }
 
@@ -82,8 +80,6 @@ describe('dispatchTools — local repeat protection', () => {
     const second = await dispatchTools(batch(registry, 'read_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 2));
 
     expect(invoked).toBe(2);
-    expect(first.toolLoopDetected).toBe(false);
-    expect(second.toolLoopDetected).toBe(false);
     expect(first.results.map((r) => r.guardVerdict?.action)).toEqual([undefined, 'reuse', 'reuse']);
     expect(first.results.map((r) => r.guardVerdict?.count)).toEqual([undefined, 2, 3]);
     expect(second.results.every((r) => !r.isError)).toBe(true);
@@ -101,7 +97,6 @@ describe('dispatchTools — local repeat protection', () => {
     const result = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 1));
     expect(invoked).toBe(3);
     expect(result.results.every((entry) => !entry.isError && !entry.refusalKind)).toBe(true);
-    expect(result.toolLoopDetected).toBe(false);
   });
 
   it('does not retain a hard-refusal counter across dispatch batches', async () => {
@@ -115,8 +110,6 @@ describe('dispatchTools — local repeat protection', () => {
 
     const first = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }, { x: 1 }, { x: 1 }], 1));
     const next = await dispatchTools(batch(registry, 'write_file', [{ x: 1 }], 2));
-    expect(first.toolLoopDetected).toBe(false);
-    expect(next.toolLoopDetected).toBe(false);
     expect(next.results[0].isError).toBe(false);
   });
 
@@ -147,14 +140,13 @@ describe('dispatchTools — local repeat protection', () => {
     expect(invoked).toBe(3);
   });
 
-  it('observes unchanged control-plane snapshots without redirecting the agent', async () => {
+  it('observes unchanged snapshots without redirecting the agent', async () => {
     let invoked = 0;
     const registry = registryWith({
       name: 'app_get_workflow',
       mutates: false,
       executionClass: 'read',
       repeatPolicy: 'volatile',
-      stopOnRepeatedUnchangedResult: true,
     }, () => { invoked++; });
     const noProgressTracker = new NoProgressTracker();
     const context = { ...toolContext, toolCallLedger: new ToolCallLedger() } as ToolContext;
@@ -164,15 +156,14 @@ describe('dispatchTools — local repeat protection', () => {
       noProgressTracker,
     });
 
-    expect((await run(1)).toolLoopDetected).toBe(false);
-    expect((await run(2)).toolLoopDetected).toBe(false);
+    await run(1);
+    await run(2);
     const third = await run(3);
     expect(third.results[0].guardVerdict).toMatchObject({
       action: 'shadow',
       reason: 'cross-turn-no-progress',
       wouldBlock: true,
     });
-    expect(third.toolLoopDetected).toBe(false);
     expect(third.results[0].isError).toBe(false);
     expect(invoked).toBe(3);
   });
@@ -221,7 +212,6 @@ describe('dispatchTools — local repeat protection', () => {
       registry,
       toolContext,
       turn: 1,
-      dupCalls: new Map(),
       toolUses: [
         { id: 'r1', name: 'read_file', input: { path: 'a.ts' } },
         { id: 'w1', name: 'write_file', input: { path: 'a.ts' } },
@@ -269,7 +259,6 @@ describe('dispatchTools — local repeat protection', () => {
       registry,
       toolContext,
       turn: 1,
-      dupCalls: new Map(),
       toolUses: [
         { id: 'r1', name: 'get_session_state', input: {} },
         { id: 'u1', name: 'update_session_state', input: {} },
@@ -309,7 +298,6 @@ describe('dispatchTools — local repeat protection', () => {
       registry,
       toolContext: context,
       turn: 1,
-      dupCalls: new Map(),
       noProgressTracker,
       toolUses: [
         { id: 'r1', name: 'read_file', input: { file_path: 'a.ts' } },
@@ -323,7 +311,6 @@ describe('dispatchTools — local repeat protection', () => {
       registry,
       toolContext: context,
       turn,
-      dupCalls: new Map(),
       noProgressTracker,
       toolUses: [{ id: `r${turn + 1}`, name: 'read_file', input }],
     });

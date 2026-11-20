@@ -300,7 +300,7 @@ const CATALOG_SEED: CatalogSeed[] = [
     pipelineName: 'code-agent',
     bindingRole: 'preflight',
     description:
-      'Cheap model that analyzes the FIRST user prompt of a fresh coder session and seeds it: minimal tool profile, pinned tools, and which project memories to read (titles only, injected as a <preflight> hint). Unset = off; failures never block the session.',
+      'Cheap model that analyzes the FIRST user prompt of a fresh coder session and seeds it: session title, task kind, minimal tool profile, skills and which project memories to read (titles only, injected as a <preflight> hint). Unset = off; failures never block the session.',
     recommendedDefault: {
       providerKind: 'cloudflare',
       modelHint: '@cf/meta/llama-3.1-8b-instruct',

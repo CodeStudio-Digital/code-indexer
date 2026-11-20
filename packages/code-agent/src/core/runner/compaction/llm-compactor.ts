@@ -235,8 +235,8 @@ export async function compactWithLLM(args: CompactArgs): Promise<CompactResult> 
  * Deterministic last-resort compaction — same cutoff pipeline as
  * `compactWithLLM` but NO summary: the head is simply dropped and replaced
  * with a one-line marker. Used by the Compacting node when the summarizer
- * has failed past the `compact-failure` cap: losing the summary is strictly
- * better than losing the run. Never mutates the input array.
+ * failed twice in the same visit: losing the summary is strictly better than
+ * losing the run. Never mutates the input array.
  */
 export function truncateHeadMechanically(args: {
   messages: AgentMessage[];

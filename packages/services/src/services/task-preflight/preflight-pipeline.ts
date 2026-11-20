@@ -26,7 +26,6 @@ import {
   type PreflightMemoryEntry,
   type PreflightSeed,
   type PreflightSkillMeta,
-  type PreflightToolMeta,
   type PreflightWorkspaceProject,
 } from './preflight-prompt.js';
 import {
@@ -39,7 +38,6 @@ const PIPELINE_NAME = 'code-agent';
 const ROLE = 'preflight';
 const LABEL = `${PIPELINE_NAME}/${ROLE}`;
 const DEFAULT_TIMEOUT_MS = 20000;
-const DEFAULT_MAX_TOOLS = 4;
 // Three durable facts are enough to constrain the first move. A five-item seed
 // made weaker models eagerly open several overlapping memories before reading
 // code, increasing latency and context without improving the implementation.
@@ -61,7 +59,6 @@ export interface PreflightRunResult {
 
 export interface TaskPreflightDeps {
   resolver: PipelineProviderResolver;
-  getToolCatalog: () => PreflightToolMeta[];
   getMemoryIndex: (projectId: number) => PreflightMemoryEntry[];
   /** Active skills for the session (id + description + namespace), for task-aware suggestion. */
   getSkillCatalog?: (
@@ -91,7 +88,6 @@ export interface TaskPreflightInput {
   activeSkillIds?: readonly string[] | null;
   /** Overrides for tests; defaults come from env (settings panel). */
   timeoutMs?: number;
-  maxTools?: number;
   fetchFn?: typeof fetch;
 }
 
@@ -203,17 +199,14 @@ export class TaskPreflightService {
       const problem = bindingProblem(binding, { label: LABEL, codePrefix: 'preflight' });
       if (problem) return done({ status: 'provider_error', ...ids, error: problem.message });
 
-      const { toolCatalog, memoryIndex, skillCatalog, workspaceProjects } =
+      const { memoryIndex, skillCatalog, workspaceProjects } =
         preparePreflightCatalogs(this.deps, input);
-      const maxTools = input.maxTools ?? DEFAULT_MAX_TOOLS;
       const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const messages = buildPreflightMessages({
         userMessage: input.userMessage,
-        toolCatalog,
         memoryIndex,
         skillCatalog,
         workspaceProjects: input.isGlobalWorkspace ? workspaceProjects : undefined,
-        maxTools,
         maxMemories: MAX_MEMORIES,
         maxSkills: MAX_SKILLS,
       });
@@ -227,7 +220,7 @@ export class TaskPreflightService {
         temperature: 0,
         maxTokens: typeof cfg.max_tokens === 'number' ? cfg.max_tokens : 700,
         timeoutMs,
-        // One-shot SELECTION task (pick tools/skills/profile): minimize reasoning
+        // One-shot SELECTION task (pick profile/skills/memories): minimize reasoning
         // so a reasoning model answers in ~1-2s instead of blowing the budget.
         // disableThinking is gated per provider (strict OpenAI-family rejects
         // unknown body params) and covers GLM/Gemini; reasoningEffort 'minimal'
@@ -271,7 +264,6 @@ export class TaskPreflightService {
       }
 
       const seed = parsePreflightOutput(result.content, {
-        toolNames: new Set(toolCatalog.map((t) => t.name)),
         memoryTitles: memoryIndex.map((m) => m.title),
         memoryEntries: memoryIndex,
         skillIds: new Set(skillCatalog.map((s) => s.id)),
@@ -280,7 +272,6 @@ export class TaskPreflightService {
           projectSlugs: s.projectSlugs,
         }])),
         projectSlugs: new Set(input.isGlobalWorkspace ? workspaceProjects.map((p) => p.slug) : []),
-        maxTools,
         maxMemories: MAX_MEMORIES,
         maxSkills: MAX_SKILLS,
       });

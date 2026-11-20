@@ -46,16 +46,6 @@ export interface PolicyContext {
   specApproved?: boolean;
   /** Inline task scope, when one is open. */
   taskScope: { id: string; files: string[] } | null;
-  /**
-   * Reserved for Phase 5 hardening. When `true`, the policy enforces
-   * stricter outside-plan-mode checks (e.g., shell allowlist active even
-   * with no planMode) unless the caller explicitly opts back in via
-   * `adminOverride: true`. Today the runner constructs the context with
-   * `strict: false` so behaviour matches Phase 1.
-   */
-  strict?: boolean;
-  /** Operator-set escape hatch — when `true`, bypasses the strict checks. */
-  adminOverride?: boolean;
   /** Whether a sandbox runtime is bound to the session. */
   sandboxBound?: boolean;
   /** The active agent runs a read-only session (`AgentDefinition.readOnly`). */
@@ -71,7 +61,6 @@ export type PolicyReason =
   | 'spec_mode'
   | 'task_scope'
   | 'sandbox_required'
-  | 'admin_required'
   | 'read_only';
 
 export type PolicyDecision =
@@ -171,12 +160,8 @@ const INTERNAL_IRREVERSIBLE: ReadonlySet<string> = new Set([
   // Worktree lifecycle
   'enter_worktree',
   'exit_worktree',
-  // MCP project / snapshot / index mutations
+  // MCP index mutation
   'mcp__index_project',
-  'mcp__delete_project',
-  'mcp__add_snapshot',
-  'mcp__update_snapshot',
-  'mcp__delete_snapshot',
 ]);
 
 /**
@@ -418,22 +403,6 @@ export function evaluateToolInvocation(
       allowed: false,
       reason: 'spec_mode',
       detail: `Tool '${tool.name}' is blocked in spec mode. Call 'submit_spec' first and wait for human approval before mutating the workspace.`,
-      metadata,
-    };
-  }
-
-  // 3. Strict mode — Phase 5 reserved. Today `ctx.strict` is always
-  //    falsy, so this branch is dead code by design. Wired in advance
-  //    so the call-site contract is stable.
-  if (
-    ctx.strict
-    && !ctx.adminOverride
-    && (metadata.riskLevel === 'execute' || metadata.riskLevel === 'admin')
-  ) {
-    return {
-      allowed: false,
-      reason: 'admin_required',
-      detail: `Tool '${tool.name}' (riskLevel=${metadata.riskLevel}) requires adminOverride in strict mode.`,
       metadata,
     };
   }

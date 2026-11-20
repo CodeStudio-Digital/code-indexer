@@ -60,7 +60,6 @@ describe('Behavior Tree transitions', () => {
   it('Executing routes the canonical event set correctly', () => {
     expect(nextState('Executing', events.turnSucceeded({ hasToolCalls: true }))).toBe('Executing');
     expect(nextState('Executing', events.tokenThresholdHit({ ratio: 0.91 }))).toBe('Compacting');
-    expect(nextState('Executing', events.toolLoopDetected({ guard: 'tuple-hash' }))).toBe('Planning');
     expect(nextState('Executing', events.maxTurnsReached({ autoContinueLeft: 0 }))).toBe('Reviewing');
     expect(nextState('Executing', events.providerError({ retryable: true, status: 500 }))).toBe('Recovering');
     expect(nextState('Executing', events.cleanFinish())).toBe('Done');
@@ -69,11 +68,6 @@ describe('Behavior Tree transitions', () => {
   it('Compacting only proceeds via CompactionDone or ProviderError', () => {
     expect(nextState('Compacting', events.compactionDone({ collapsedFrom: 100, collapsedTo: 40 }))).toBe('Reviewing');
     expect(nextState('Compacting', events.providerError({ retryable: false, status: 500 }))).toBe('Recovering');
-    expect(nextState('Compacting', events.toolLoopDetected({ guard: 'tuple-hash' }))).toBe('Done');
-  });
-
-  it('Planning loops back to Executing on success', () => {
-    expect(nextState('Planning', events.turnSucceeded({ hasToolCalls: false }))).toBe('Executing');
   });
 
   it('Reviewing forks: Executing on continue, Done on clean finish', () => {

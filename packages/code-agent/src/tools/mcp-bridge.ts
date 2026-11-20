@@ -32,8 +32,8 @@ const READ_FILE_HARD_MAX = 800;
 /**
  * "Unrestricted tool output" overrides — picked when the active session has
  * `unrestricted_tool_output = 1`. Deliberately not Infinity so the cap arithmetic
- * keeps working on pathological outputs. Auto-compaction in the runner still
- * runs above PRUNE_MINIMUM, so this is not a context-window bypass.
+ * keeps working on pathological outputs. Context-window compaction in the
+ * runner still applies, so this is not a context-window bypass.
  */
 const UNRESTRICTED_READ_FILE_HARD_MAX = 5_000;
 

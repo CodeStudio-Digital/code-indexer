@@ -48,7 +48,6 @@ interface ProviderModalProps {
   onSetModelMaxOutputTokens: (modelId: string, mode: string, value: number | null) => void;
   onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;
   onBackfillContextWindows: () => void;
-  onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;
   onSetSubagentTarget: (
     providerId: string,
     subagentProviderId: string | null,

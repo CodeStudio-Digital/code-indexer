@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseToolsetState,
   resolveSessionProfile,
+  resolveSessionToolCap,
   widenProfile,
 } from '@mcp/code-agent/tools/profile-resolution.js';
 
@@ -167,5 +168,24 @@ describe('resolveSessionProfile — sticky OFF reproduces legacy behavior', () =
       historyToolNames: [], preflightProfile: 'navigate',
     });
     expect(r).toMatchObject({ profile: 'navigate', persistAs: null });
+  });
+});
+
+describe('resolveSessionToolCap', () => {
+  // buildTools falls back to 28 when the session sets no cap.
+  const effective = (cap: number | undefined): number => cap ?? 28;
+
+  it('gives a fresh session the cap the preflight seed used to set', () => {
+    for (const policyCap of [28, 40, undefined]) {
+      const formerSeededCap = policyCap ?? 28;
+      expect(effective(resolveSessionToolCap({ policyCap }))).toBe(formerSeededCap);
+    }
+  });
+
+  it('keeps the precedence managed > persisted > policy', () => {
+    expect(resolveSessionToolCap({ managedCap: 20, persistedCap: 32, policyCap: 28 })).toBe(20);
+    expect(resolveSessionToolCap({ persistedCap: 32, policyCap: 28 })).toBe(32);
+    expect(resolveSessionToolCap({ policyCap: 28 })).toBe(28);
+    expect(resolveSessionToolCap({})).toBeUndefined();
   });
 });

@@ -21,21 +21,14 @@ import type {
 export const TRANSITIONS: TransitionTable = {
   Bootstrap: {
     TurnSucceeded: 'Executing',
-    ToolOutcomeUnknown: 'Done',
     Aborted: 'Done',
   },
   Executing: {
     TurnSucceeded: 'Executing',
     TokenThresholdHit: 'Compacting',
-    ToolLoopDetected: 'Planning',
-    ToolOutcomeUnknown: 'Done',
     MaxTurnsReached: 'Reviewing',
     ProviderError: 'Recovering',
     CleanFinish: 'Done',
-    Aborted: 'Done',
-  },
-  Planning: {
-    TurnSucceeded: 'Executing',
     Aborted: 'Done',
   },
   Compacting: {
@@ -71,8 +64,6 @@ export function nextState(state: NodeState, event: BehaviorEvent): NodeState {
 export const ALL_EVENT_KINDS: readonly BehaviorEventKind[] = [
   'TurnSucceeded',
   'TokenThresholdHit',
-  'ToolLoopDetected',
-  'ToolOutcomeUnknown',
   'MaxTurnsReached',
   'ProviderError',
   'CompactionDone',
@@ -83,7 +74,6 @@ export const ALL_EVENT_KINDS: readonly BehaviorEventKind[] = [
 /** Enumeration of every node state. Exported for combinatorial tests. */
 export const ALL_NODE_STATES: readonly NodeState[] = [
   'Bootstrap',
-  'Planning',
   'Executing',
   'Compacting',
   'Reviewing',

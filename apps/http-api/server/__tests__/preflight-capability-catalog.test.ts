@@ -11,55 +11,11 @@ import type {
   SkillStore,
 } from '@mcp/store/skill-store.js';
 import {
-  buildPreflightToolCatalog,
   buildPreflightSkillCatalog,
 } from '../preflight-capability-catalog.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-const NATIVE = [
-  { name: 'read_file', tier: 'bootstrap', description: 'read' },
-  { name: 'edit_file', tier: 'navigate', description: 'edit' },
-];
-
-function fakeEnumerate(names: string[]): (dbPath: string) => { tools: any[]; details: any[] } {
-  return () => ({
-    tools: names.map((name) => ({ name, tier: 'srv', source: 'mcp_external', description: `${name} desc` })),
-    details: [],
-  });
-}
-
-describe('buildPreflightToolCatalog', () => {
-  it('appends external tools after native, sorted by name', () => {
-    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate(['ext_b__y', 'ext_a__x']));
-    expect(out.map((t) => t.name)).toEqual(['read_file', 'edit_file', 'ext_a__x', 'ext_b__y']);
-  });
-
-  it('drops external tools whose name collides with a native one', () => {
-    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate(['read_file', 'ext_a__x']));
-    expect(out.filter((t) => t.name === 'read_file')).toHaveLength(1);
-    expect(out.map((t) => t.name)).toContain('ext_a__x');
-  });
-
-  it('caps sorted external tools at 40 without counting native tools', () => {
-    const names = Array.from({ length: 43 }, (_, i) => `ext_${String(i).padStart(2, '0')}`);
-    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate([...names].reverse()));
-    expect(out.slice(0, NATIVE.length)).toEqual(NATIVE);
-    expect(out.slice(NATIVE.length).map((tool) => tool.name)).toEqual(names.slice(0, 40));
-  });
-
-  it('retains native tools when no external tools are available', () => {
-    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate([]));
-    expect(out).toEqual(NATIVE);
-    expect(out.some((t) => t.name.startsWith('ext_'))).toBe(false);
-  });
-
-  it('fails open to the native catalog when enumeration throws', () => {
-    const out = buildPreflightToolCatalog('db', NATIVE, () => { throw new Error('no db'); });
-    expect(out).toEqual(NATIVE);
-  });
-});
 
 describe('buildPreflightSkillCatalog', () => {
   function fakeStore(

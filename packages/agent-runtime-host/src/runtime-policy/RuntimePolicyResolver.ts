@@ -38,7 +38,9 @@ const VALIDATORS: Readonly<Record<string, Validator>> = Object.freeze({
   'context.subagentToolResultChars': positiveInt,
   'context.unrestrictedToolResultChars': positiveInt,
   'context.unrestrictedSubagentToolResultChars': positiveInt,
+  // V1 snapshots still carry the retired per-turn payload warning budget. The runner ignores it.
   'context.turnBudgetChars': positiveInt,
+  // V1 snapshots still carry the retired planning cooldown. The runner ignores it.
   'context.interventionCooldownTurns': positiveInt,
   'context.compactionProfile': (v) => v === 'balanced',
   'capabilities.profile': (v) => ['auto', 'bootstrap', 'navigate', 'full'].includes(String(v)),

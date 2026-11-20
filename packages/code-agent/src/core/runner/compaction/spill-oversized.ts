@@ -18,7 +18,7 @@ import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.j
 import { estimateBlockTokens } from '@mcp/code-agent/core/token-accounting.js';
 import { capToolContent, type ToolOutputSpillStore } from '../pure-helpers.js';
 
-/** Inline head kept after spilling. Knob: `CODER_COMPACT_SPILL_HEAD_CHARS`. */
+/** Inline head kept after spilling (fixed; no env var). */
 const DEFAULT_SPILL_HEAD_CHARS = 8192;
 
 /**

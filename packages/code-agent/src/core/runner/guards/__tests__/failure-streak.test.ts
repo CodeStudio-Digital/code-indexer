@@ -15,7 +15,6 @@ import { describe, it, expect } from 'vitest';
 import {
   checkFailureStreak,
   buildFailureStreakReminderMarker,
-  buildFailureStreakRefusalText,
   emptyFailureStreakState,
   isFailureStreakExempt,
   parseErrorSignal,
@@ -189,23 +188,6 @@ describe('marker / refusal text builders', () => {
     expect(text).toContain('turn 7');
   });
 
-  it('refusal text includes the error excerpt when available', () => {
-    const text = buildFailureStreakRefusalText({
-      toolName: 'write_stdin', count: 5, firstFailureTurn: 7,
-      lastError: 'session not active',
-    });
-    expect(text).toContain('REFUSED');
-    expect(text).toContain('5 times');
-    expect(text).toContain('write_stdin');
-    expect(text).toContain('session not active');
-  });
-
-  it('refusal text gracefully omits the error excerpt when blank', () => {
-    const text = buildFailureStreakRefusalText({
-      toolName: 'write_stdin', count: 5, firstFailureTurn: 7, lastError: '',
-    });
-    expect(text).not.toContain('Last error:');
-  });
 });
 
 describe('parseErrorSignal — classification', () => {

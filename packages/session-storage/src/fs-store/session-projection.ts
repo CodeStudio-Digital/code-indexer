@@ -256,8 +256,6 @@ export function mapCatalogEntry(
     agent: coder.agent,
     todos_json: state.todos.length > 0 ? JSON.stringify(state.todos) : null,
     worktree_path: runtimeState.worktree_path,
-    fallback_provider: runtimeState.fallback_provider,
-    fallback_model: runtimeState.fallback_model,
     cloudcode_session_id: runtimeState.cloudcode_session_id,
     last_response_id: runtimeState.last_response_id,
     last_response_message_count: runtimeState.last_response_message_count,

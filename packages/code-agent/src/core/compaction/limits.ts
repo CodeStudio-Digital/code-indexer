@@ -1,29 +1,5 @@
-import type { TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
 import { getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 
-/**
- * Below this char total, auto-compaction is a no-op. Default 60k — fallback
- * for models without a known context_window. Use `deriveCompactionLimits()`
- * to get model-aware thresholds when context_window is available.
- *
- * @deprecated Char-based thresholds are retained only for the legacy code
- * path (CODER_NEW_COMPACTION=0). New path uses token-based limits derived
- * from the model's effective context window. Will be removed.
- */
-export const PRUNE_MINIMUM = 20_000;
-
-/**
- * How many chars of the most-recent history are guaranteed to survive
- * compaction verbatim when using the fixed fallback.
- *
- * @deprecated See `PRUNE_MINIMUM`.
- */
-export const PRUNE_PROTECT = 40_000;
-
-/** Fraction of context window (in chars) at which compaction triggers. */
-const TRIGGER_RATIO = 0.90;
-/** Fraction of context window (in chars) kept verbatim after compaction. */
-const PROTECT_RATIO = 0.55;
 /** chars-per-token heuristic, matching token-budget.ts. */
 const CHARS_PER_TOKEN = 4;
 
@@ -47,11 +23,11 @@ export const PROTECT_TOKEN_RATIO = 0.55;
  * degradation) → back to 0.90 by operator decision: the early trigger wasted
  * ~30% of the window, and continuity across summaries is now carried by the
  * durable session-state / project-memory injection instead of a longer tail.
- * Reversible at runtime via `CODER_COMPACT_TRIGGER_RATIO`.
+ * Fixed product value; no env var overrides it.
  */
 export const DEFAULT_COMPACT_TRIGGER_RATIO = 0.90;
 
-/** Env-resolved trigger ratio, clamped so a typo can't disable compaction. */
+/** The fixed trigger ratio — the single knob of every compaction gate. */
 export function resolveTriggerRatio(): number {
   return DEFAULT_COMPACT_TRIGGER_RATIO;
 }
@@ -62,7 +38,7 @@ export function resolveTriggerRatio(): number {
  * so the backstop lands AT the ratio — never before the primary gate — and
  * capped at 50K for huge windows. The previous fixed 50K went NEGATIVE on a
  * 32k window (trigger=1 → compaction attempted every turn until the no-op
- * breaker silenced it). `CODER_AUTOCOMPACT_BUFFER` still wins when set.
+ * breaker silenced it). No env var overrides it.
  */
 export function autocompactBufferTokens(effective: number): number {
   const slack = Math.floor(effective * (1 - resolveTriggerRatio()));
@@ -197,39 +173,6 @@ export function computeCompactionTrigger(inp: CompactionTriggerInputs): Compacti
   return { shouldCompact: false, reason: 'none', detail: '' };
 }
 
-/** The context-aware compaction path is mandatory. */
-export function isNewCompactionEnabled(): boolean {
-  return true;
-}
-
-export interface CompactionLimits {
-  minimum: number;
-  protect: number;
-  triggerTokens: number | null;
-  protectTokens: number | null;
-}
-
-/**
- * Derive context-aware compaction limits from the model's known context window.
- * When `contextWindowTokens` is null/undefined, falls back to env defaults so
- * behaviour is unchanged for models without registered capacity.
- *
- * Prefer `deriveTokenLimits(model)` (which incorporates output reservation)
- * when the model id is available.
- */
-export function deriveCompactionLimits(contextWindowTokens: number | null | undefined): CompactionLimits {
-  if (!contextWindowTokens) {
-    return { minimum: PRUNE_MINIMUM, protect: PRUNE_PROTECT, triggerTokens: null, protectTokens: null };
-  }
-  const contextChars = contextWindowTokens * CHARS_PER_TOKEN;
-  return {
-    minimum: Math.floor(contextChars * TRIGGER_RATIO),
-    protect: Math.floor(contextChars * PROTECT_RATIO),
-    triggerTokens: Math.floor(contextWindowTokens * TRIGGER_RATIO),
-    protectTokens: Math.floor(contextWindowTokens * PROTECT_TOKEN_RATIO),
-  };
-}
-
 export interface TokenLimits {
   effective: number;
   trigger: number;
@@ -262,10 +205,4 @@ export function deriveTokenLimits(model: string, contextWindow?: number | null):
     rawWindow: eff.window,
     isFallback: eff.isFallback,
   };
-}
-
-/** Should we compact? `total` is the snapshot total (confirmed + estimate). */
-export function shouldCompact(snapshot: TokenSnapshot, model: string, contextWindow?: number | null): boolean {
-  const limits = deriveTokenLimits(model, contextWindow);
-  return snapshot.total >= limits.trigger;
 }

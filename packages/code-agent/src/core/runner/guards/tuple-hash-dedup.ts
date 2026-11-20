@@ -111,8 +111,6 @@ export interface CheckDupArgs {
   repeatPolicy?: ToolRepeatPolicy;
   turn: number;
   useId: string;
-  /** Deprecated compatibility input; invocationState is authoritative. */
-  dupCalls?: Map<string, DupCallEntry>;
   /** Local state created by the caller per invocation scope. */
   invocationState?: InvocationGuardState;
   stateEpoch?: number;
@@ -271,9 +269,4 @@ function buildRefuseText(args: {
     `(call #${args.count}, first at turn ${args.firstTurn}, args=${argsPreview}). ` +
     `Reflect on the prior results or perform a different state-changing step before retrying.]`
   );
-}
-
-/** Compatibility helper for legacy tests/rollback state. */
-export function resetDupCalls(dupCalls: Map<string, DupCallEntry>): void {
-  dupCalls.clear();
 }

@@ -992,7 +992,6 @@
   "agents.hardBudget": "Teto rígido: {{tools}} tool calls / {{time}}",
   "toolbar.temperature": "Temperatura",
   "toolbar.temperatureAuto": "automática",
-  "toolbar.fallback": "Modelo alternativo",
   "toolbar.describeImages": "Descrever imagens: usa um modelo de visão para traduzir imagens anexadas e capturas de tela em texto. Isso é aplicado automaticamente quando o modelo atual não enxerga imagens. Configure o modelo em Configurações → Pipelines (papel “vision”).",
   "toolbar.outputCap.heading": "Saída de ferramentas",
   "toolbar.outputCap.hint": "Limite de saída por chamada de ferramenta. Ajusta o limite de truncamento (Econômico ~24 KB → XL ~4 MB) para leituras grandes e Unity. A compactação automática continua ativa. Aplica-se à próxima saída de ferramenta, inclusive na sessão ativa.",

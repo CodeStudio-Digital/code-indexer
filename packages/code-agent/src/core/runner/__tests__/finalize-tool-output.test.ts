@@ -339,7 +339,7 @@ function registryWithStructuredResult(): ToolRegistry {
 const toolContext = { cwd: process.cwd(), projectName: 'test' } as ToolContext;
 
 function baseArgs(registry: ToolRegistry): DispatchArgs {
-  return { toolUses: [{ id: 't1', name: 'foo', input: {} }], registry, toolContext, turn: 1, dupCalls: new Map() };
+  return { toolUses: [{ id: 't1', name: 'foo', input: {} }], registry, toolContext, turn: 1 };
 }
 
 describe('dispatchTools — finalize hook', () => {

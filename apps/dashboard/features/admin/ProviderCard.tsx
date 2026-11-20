@@ -5,7 +5,6 @@ import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card.js';
 import { Switch } from '../../components/ui/switch.js';
-import { FallbackChainPanel } from './FallbackChainPanel.js';
 import { SubagentProfilesPanel } from './SubagentProfilesPanel.js';
 import { AddModelForm, type AddModelInput } from './providers/AddModelForm.js';
 import { SubagentTargetSelect } from './providers/SubagentTargetSelect.js';
@@ -34,7 +33,6 @@ interface ProviderCardProps {
   onSetModelMaxOutputTokens: (modelId: string, mode: string, value: number | null) => void;
   onSetModelMaxTools: (modelId: string, mode: string, value: number | null) => void;
   onBackfillContextWindows: () => void;
-  onSetFallback: (providerId: string, fallbackProviderId: string | null) => void;
   onSetSubagentTarget: (
     providerId: string,
     subagentProviderId: string | null,
@@ -76,7 +74,6 @@ export function ProviderCard({
   onSetModelMaxOutputTokens,
   onSetModelMaxTools,
   onBackfillContextWindows,
-  onSetFallback,
   onSetSubagentTarget,
   onSetSubagentEffort,
   onSetSubagentLimits,
@@ -300,14 +297,6 @@ export function ProviderCard({
               onSetProfileLimits={(providerId, profileId, patch) =>
                 onSetSubagentLimits(providerId, profileId, patch)
               }
-            />
-          </div>
-          {/* Fallback chain configuration */}
-          <div className="pt-3 mt-3 border-t">
-            <FallbackChainPanel
-              provider={p}
-              allProviders={allProviders}
-              onSetFallback={onSetFallback}
             />
           </div>
         </CardContent>

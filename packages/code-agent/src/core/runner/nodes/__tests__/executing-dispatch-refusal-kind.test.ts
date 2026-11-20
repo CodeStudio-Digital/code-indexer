@@ -8,7 +8,6 @@
 import { describe, it, expect } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { DupCallEntry } from '../../machine/types.js';
 import type { FailureStreakState } from '../../guards/failure-streak.js';
 import { dispatchTools, type DispatchArgs } from '../executing-dispatch.js';
 
@@ -29,7 +28,6 @@ function baseArgs(registry: ToolRegistry, overrides?: Partial<DispatchArgs>): Di
     registry,
     toolContext: { cwd: process.cwd(), projectName: 'refusal-kind-test' } as ToolContext,
     turn: 1,
-    dupCalls: new Map<string, DupCallEntry>(),
     ...overrides,
   };
 }
@@ -69,9 +67,7 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
   it('toolGate refusals happen before tuple-hash dedup accounting', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool'));
-    const dupCalls = new Map<string, DupCallEntry>();
     const r = await dispatchTools(baseArgs(registry, {
-      dupCalls,
       toolGate: () => '[agent-decision-guardrail: blocked]',
       toolUses: [
         { id: 't1', name: 'some_tool', input: { a: 1 } },
@@ -81,8 +77,6 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     }));
     expect(r.results).toHaveLength(3);
     expect(r.results.every((x) => x.refusalKind === 'gate')).toBe(true);
-    expect(dupCalls.size).toBe(0);
-    expect(r.toolLoopDetected).toBe(false);
   });
 
   it("ignores obsolete pre-read hard refusals; a non-error pointer stays a reuse", async () => {
@@ -115,9 +109,7 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
   it('repeated authorized mutations are not tagged as refusals', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool', { mutates: true, executionClass: 'write' }));
-    const dupCalls = new Map<string, DupCallEntry>();
     const r = await dispatchTools(baseArgs(registry, {
-      dupCalls,
       toolUses: [
         { id: 't1', name: 'some_tool', input: { a: 1 } },
         { id: 't2', name: 'some_tool', input: { a: 1 } },
@@ -162,7 +154,6 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.results[0].isError).toBe(true);
     expect(r.results[0].content).toBe('boom');
     expect(r.results[0].refusalKind).toBeUndefined();
-    expect(r.toolLoopDetected).toBe(false);
   });
 
   it('unchanged successful polls remain successful without entering failure streak', async () => {
@@ -184,7 +175,6 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
       },
     });
     expect(failureStreakState.streaks.size).toBe(0);
-    expect(r.toolLoopDetected).toBe(false);
   });
 
   it("per-tool timeout → 'timeout'", async () => {

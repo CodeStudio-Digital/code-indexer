@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { fileTools } from '@apps/mcp-server/tools/file.js';
+import { fileTools } from '@mcp/indexer/agent-tools/tools/file.js';
 
 const get_file_skeleton = fileTools.find((t) => t.name === 'get_file_skeleton')!;
 const list_directory = fileTools.find((t) => t.name === 'list_directory')!;

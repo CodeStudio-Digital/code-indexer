@@ -1,7 +1,7 @@
 import { defineResource, type McpResource, type ResourceContent, type ListedResource } from '../resource.js';
 import type { ToolContext } from '../context.js';
 import { buildRepoMap } from '@mcp/services/services/repo-map.js';
-import { buildProjectSummary } from '../project-summary.js';
+import { buildProjectSummary } from '@mcp/indexer/agent-tools/project-summary.js';
 
 /**
  * URI matchers for the two project-scoped resources. Strict on purpose: the

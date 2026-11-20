@@ -17,7 +17,6 @@ import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ok, type CoderTool, type GuardVerdict, type ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { dispatchTools } from '@mcp/code-agent/core/runner/nodes/executing-dispatch.js';
-import { invocationGuardKey } from '@mcp/code-agent/core/runner/guards/tuple-hash-dedup.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -649,7 +648,6 @@ describe('code_exec nested loop guards (observer wired via ToolContext)', () => 
 
     const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
     const observer = buildNestedToolObserver({
-      dupCalls: new Map(),
       failureStreaks: { streaks: new Map() },
       turn: 1,
       parentToolUseId: 'ce_loop_1',
@@ -871,16 +869,11 @@ describe('code_exec invocation-local stable reuse', () => {
     expect(reads).toBe(2);
   });
 
-  it('a populated legacy table cannot discard any Promise.all sibling', async () => {
+  it('the nested observer cannot discard any Promise.all sibling', async () => {
     const registry = new ToolRegistry();
     registry.register(stableRead(async (args) => ok(`result:${args.path}`)));
     const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
-    const priorExactRead = invocationGuardKey('read_file', {
-      path: 'component.ts',
-      force_reread: false,
-    });
     const observer = buildNestedToolObserver({
-      dupCalls: new Map([[priorExactRead, { count: 2, firstTurn: 1, lastUseId: 'old' }]]),
       failureStreaks: { streaks: new Map() },
       turn: 2,
       parentToolUseId: 'parent-batch',
@@ -958,7 +951,6 @@ describe('code_exec metadata safety and scheduling', () => {
       registry,
       toolContext: { ...makeCtx(), toolCallLedger: new ToolCallLedger() },
       turn: 1,
-      dupCalls: new Map(),
     });
 
     expect(codeExec.parallelSafe).toBe(true);

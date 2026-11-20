@@ -21,7 +21,6 @@ import { TurnPersistenceBarrier } from '../turn-persistence-barrier.js';
  *      polling-stuck on results.
  *   8. push tool-role message, emit per-tool telemetry.
  *   9. decide next event:
- *        - dedup refusal         → ToolLoopDetected (→ Planning)
  *        - token usage ≥ 90% eff → TokenThresholdHit (→ Compacting)
  *        - assistant text only   → CleanFinish
  *        - turn == maxTurns      → MaxTurnsReached or auto-continue
@@ -37,7 +36,6 @@ import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { events } from '../machine/events.js';
 import { accumulateUsage, resetProviderRetrySequence } from '../machine/context.js';
 import { providerTransportError } from '@mcp/provider-sdk/transport-error.js';
-import { envTunables } from '@mcp/code-agent/core/tunables.js';
 import { assembleMessagesForChat } from '../assembly/messages.js';
 import { buildTools, buildToolsCacheKey, fingerprintToolsJson, type BuildToolsResult } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
@@ -71,7 +69,6 @@ import {
   hashSessionState,
 } from '../assembly/session-state.js';
 import { resolveInjectionPolicy } from '../assembly/injection-policy.js';
-import { applySelfReviewDecline, computeSelfReviewNudge } from './executing-self-review.js';
 import {
   latestUserTaskText,
   planMemoryRecall,
@@ -90,7 +87,7 @@ import {
   decideTerminal,
   providerErrorEvent,
 } from './executing-decisions.js';
-import { withAbort, isAbortError } from './executing-abort.js';
+import { isAbortError } from './executing-abort.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 
 const DEBUG = process.env.CODER_BT_DEBUG === '1';
@@ -194,9 +191,6 @@ export class ExecutingNode implements BehaviorNode {
     // stays owned by the host `CoderRunner` class.
     ctx.bridge?.flushPendingMessages?.();
     dbg(`Executing turn=${ctx.turn} messages=${ctx.messages.length}`);
-
-    // Fix A — honor an explicit user "stop reviewing" instruction (session 887).
-    applySelfReviewDecline(ctx, latestUserTaskText(ctx.messages));
 
     // Mem C — proactive project-memory retrieval. Async, so it runs HERE
     // (before the synchronous message assembly) and stashes the result in
@@ -308,7 +302,6 @@ export class ExecutingNode implements BehaviorNode {
         (e as Error).message,
       );
     }
-    const selfReviewNudgeForTurn = await computeSelfReviewNudge(ctx);
 
     // Correction nudge — the user's last message looks like a correction or a
     // durable preference: suggest remember() THIS turn. Cheap regex, throttled
@@ -324,7 +317,6 @@ export class ExecutingNode implements BehaviorNode {
       }
     }
 
-    const tunables = ctx.opts.tunables ?? envTunables();
     // PR-F dynamic injection — invoke the provider once per assembly so
     // the post-injection state updates are coherent. The pure
     // `computeDynamicInjection` decides whether anything fresh is worth
@@ -350,10 +342,6 @@ export class ExecutingNode implements BehaviorNode {
       const recentCompactionAt = ctx.injectionState.recentCompactionAt;
       const pendingMemory = ctx.injectionState.pendingMemory ?? [];
       const pendingConversationChapters = ctx.injectionState.pendingConversationChapters ?? [];
-      // self_review nudge — gated (Fix A) so it fires only for UNREVIEWED
-      // pending changes and hard-stops after a cap / explicit user decline,
-      // instead of every turn while any snapshot is pending (the doom-loop).
-      const selfReviewNudge = selfReviewNudgeForTurn;
       // Session State Block — the always-alive structured state (plan/
       // todos/notes/files/recall) rendered from persisted data, sized and
       // paced by the window-scaled policy. Replaces the old per-field drive
@@ -361,6 +349,7 @@ export class ExecutingNode implements BehaviorNode {
       // milestones or when the block's hash changes.
       const policy = resolveInjectionPolicy(ctx.opts.provider.model, {
         liveStateCovered: !!ctx.opts.agentLoopV2,
+        contextWindow: ctx.opts.contextWindow,
       });
       let sessionState: { block: string; hash: string } | null = null;
       let projectMemoryIndex: { text: string; hash: string } | null = null;
@@ -424,7 +413,6 @@ export class ExecutingNode implements BehaviorNode {
         recentCompactionAt == null &&
         pendingMemory.length === 0 &&
         pendingConversationChapters.length === 0 &&
-        !selfReviewNudge &&
         !sessionState &&
         !projectMemoryIndex &&
         !conversationChapterIndex &&
@@ -450,7 +438,6 @@ export class ExecutingNode implements BehaviorNode {
         lastInjectedMemoryIds: ctx.injectionState.lastInjectedMemoryIds,
         relevantConversationChapters: pendingConversationChapters,
         lastInjectedConversationChapterIds: ctx.injectionState.lastInjectedConversationChapterIds,
-        hasReviewableChanges: selfReviewNudge,
         sessionState,
         sessionStateEveryTurn: policy.stateEveryTurn,
         lastInjectedSessionStateHash: ctx.injectionState.lastInjectedSessionStateHash,
@@ -473,8 +460,6 @@ export class ExecutingNode implements BehaviorNode {
     let reducerStats: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null = null;
     const messagesForChat = assembleMessagesForChat({
       messages: projectVisionContext(ctx.messages, ctx.opts.toolContext.toolOutputStore),
-      tunables,
-      compactionLimits: undefined,
       agentLoopV2: !!ctx.opts.agentLoopV2,
       buildActiveSkillsBlock: ctx.bridge?.buildActiveSkillsBlock ?? (() => null),
       buildActiveContextBlock: ctx.bridge?.buildActiveContextBlock ?? (() => null),
@@ -1315,7 +1300,6 @@ export class ExecutingNode implements BehaviorNode {
       // RAW invocations retain this branch even if recovery advances the host.
       toolContext: { ...ctx.opts.toolContext },
       turn: ctx.turn,
-      dupCalls: ctx.dupCalls,
       noProgressTracker: ctx.noProgressTracker,
       // Hidden registered tools execute when authorized; disabled tools
       // hard-block at dispatch. Visibility never changes mid-run.
@@ -1426,7 +1410,6 @@ export class ExecutingNode implements BehaviorNode {
       makeNestedObserver: (parentToolUseId, parentToolName) => {
         if (parentToolName !== 'code_exec' || !nestedGuardsEnabled()) return undefined;
         return buildNestedToolObserver({
-          dupCalls: ctx.dupCalls,
           failureStreaks: ctx.failureStreaks,
           noProgressTracker: ctx.noProgressTracker,
           toolCallLedger: ctx.opts.toolContext.toolCallLedger,
@@ -1493,41 +1476,29 @@ export class ExecutingNode implements BehaviorNode {
     ctx.cumulativeInputTokens += result.usage?.input_tokens ?? estPromptTokens;
 
     // Per-turn loop backstop: dominance remains active for long zero-text
-    // grinds. Only
-    // pollable tools are exempted inside the helper; volatile calls still get
-    // ordinary failure/dominance protection. Evaluated
-    // only when the per-call guards didn't already flag a
-    // loop — they're more specific, so they win. On a fire the helper resets
-    // both windows; we route to Planning to break the loop.
-    if (!dispatch.toolLoopDetected) {
-      const perTurnLoop = evaluatePerTurnLoops({
-        toolUses: result.toolUses,
-        hadText,
-        isRepeatable: (toolUse) => invocationIsPollable(ctx.opts.registry, toolUse),
-        dominance: ctx.dominance,
+    // grinds. Only pollable tools are exempted inside the helper; volatile
+    // calls still get ordinary failure/dominance protection. On a fire the
+    // helper resets its windows; the verdict is only reported.
+    const perTurnLoop = evaluatePerTurnLoops({
+      toolUses: result.toolUses,
+      hadText,
+      isRepeatable: (toolUse) => invocationIsPollable(ctx.opts.registry, toolUse),
+      dominance: ctx.dominance,
+    });
+    if (perTurnLoop) {
+      ctx.emit('tool_loop_intervention', {
+        kind: perTurnLoop.interventionKind,
+        turn: ctx.turn,
+        toolName: perTurnLoop.toolName,
+        count: perTurnLoop.count,
+        threshold: perTurnLoop.threshold,
+        window: perTurnLoop.window,
+        severity: 'informational',
+        snapshot: perTurnLoop.snapshot,
+        reason: perTurnLoop.reason,
       });
-      if (perTurnLoop) {
-        ctx.emit('tool_loop_intervention', {
-          kind: perTurnLoop.interventionKind,
-          turn: ctx.turn,
-          toolName: perTurnLoop.toolName,
-          count: perTurnLoop.count,
-          threshold: perTurnLoop.threshold,
-          window: perTurnLoop.window,
-          severity: 'informational',
-          snapshot: perTurnLoop.snapshot,
-          reason: perTurnLoop.reason,
-        });
-        // Different, productive operations may share a tool name (notably code_exec).
-        // Keep the diagnostic; resource budgets and health checks govern termination.
-      }
-    }
-
-    if (dispatch.toolLoopDetected && !dispatch.outcomeUnknown) {
-      return events.toolLoopDetected({
-        guard: dispatch.loopGuard ?? 'tuple-hash',
-        ...(dispatch.loopDetail ?? {}),
-      });
+      // Different, productive operations may share a tool name (notably code_exec).
+      // Keep the diagnostic; resource budgets and health checks govern termination.
     }
 
     // Semantic chapter mode: lifecycle hooks may queue a milestone, but a

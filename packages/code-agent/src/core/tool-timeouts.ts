@@ -32,7 +32,6 @@ import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
 const NORMAL_DEFAULT_MS = 5 * 60_000;
 const SLOW_DEFAULT_MS = 30 * 60_000;
-const HEARTBEAT_DEFAULT_MS = 5_000;
 
 /**
  * Native tools we KNOW are long-running. Belt-and-suspenders alongside
@@ -69,15 +68,6 @@ const SLOW_MCP_PREFIX = 'mcp__research';
 
 export const NORMAL_TIMEOUT_MS = NORMAL_DEFAULT_MS;
 export const SLOW_TIMEOUT_MS = SLOW_DEFAULT_MS;
-
-/**
- * Heartbeat interval (ms) for `tool_progress` events emitted while a
- * tool is in flight. This is a product invariant; individual tools may still
- * declare their own invocation timeout.
- */
-export function resolveHeartbeatIntervalMs(): number {
-  return HEARTBEAT_DEFAULT_MS;
-}
 
 /**
  * Pick the right timeout (ms) for a given tool. Returns `Infinity` for

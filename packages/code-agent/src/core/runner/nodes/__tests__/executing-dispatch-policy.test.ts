@@ -4,7 +4,7 @@
  * Proves the zero-behavior-change contract: with no `policyShadow` port the
  * path is identical to the pre-Fase-2 behavior; a shadow port that returns
  * `{ refuse: false }` records but never blocks; and an enforcing port (the
- * dormant `CODER_POLICY_ENGINE_ENFORCE` path) refuses BEFORE the legacy
+ * dormant `PolicyShadowMode.enforce` path) refuses BEFORE the legacy
  * permission gate is consulted.
  */
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
@@ -16,7 +16,6 @@ import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { PermissionGate } from '@mcp/code-agent/core/permission-gate.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
 import { submitSpec } from '@mcp/code-agent/tools/spec/submit-spec.js';
-import type { DupCallEntry } from '../../machine/types.js';
 import { dispatchTools, type DispatchArgs } from '../executing-dispatch.js';
 
 function registryWith(tool: Partial<CoderTool> & { name: string }, onInvoke?: () => void): ToolRegistry {
@@ -45,7 +44,6 @@ function args(registry: ToolRegistry, extra?: Partial<DispatchArgs>): DispatchAr
     registry,
     toolContext,
     turn: 1,
-    dupCalls: new Map<string, DupCallEntry>(),
     ...extra,
   };
 }

@@ -99,21 +99,6 @@ export async function addProviderModel(
   }
 }
 
-export async function setFallbackProvider(
-  providerId: string,
-  fallbackProviderId: string | null,
-): Promise<void> {
-  const r = await fetch(`/api/admin/providers/${providerId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fallback_provider_id: fallbackProviderId }),
-  });
-  if (!r.ok) {
-    const err = (await r.json()) as { error: string };
-    throw new Error(err.error);
-  }
-}
-
 export async function toggleModelEnabled(
   providerId: string,
   modelId: string,

@@ -25,8 +25,8 @@ export function isMutatingFsTool(name: string): boolean {
 }
 
 /**
- * Markers stamped by `postCompactCleanup` / push-time truncation / staleness
- * checks. Anything matching these means the original payload is NO LONGER in
+ * Markers stamped by push-time truncation, staleness checks and the retired
+ * char compaction (still present in older transcripts). Anything matching these means the original payload is NO LONGER in
  * context — the model cannot quote it.
  */
 const ELIDED_CONTENT_PREFIXES = [

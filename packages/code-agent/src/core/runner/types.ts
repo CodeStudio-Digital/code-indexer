@@ -253,10 +253,6 @@ export interface RunnerOptions {
    * whose extended-thinking surface accepts a budget (Anthropic).
    */
   thinkingBudgetTokens?: number;
-  /** Fallback chain for automatic provider recovery on persistent errors. */
-  fallbackChain?: import('@mcp/code-agent/core/fallback.js').FallbackChain;
-  /** Factory function to create a new provider for fallback. */
-  createProvider?: (name: string, model: string) => Promise<ChatProvider>;
   /** Runtime hook registry for lifecycle events. */
   hookRegistry?: import('@mcp/code-agent/core/hook-registry.js').RuntimeHookRegistry;
   /** Pre-resolved context window for this session's model (tokens). */
@@ -333,11 +329,6 @@ export interface RunnerOptions {
    * memories injected into every project, NOT gated by the project toggle.
    */
   getUserMemoryIndex?: () => ReadonlyArray<{ title: string; category?: string; excerpt?: string }> | null;
-  /**
-   * Phase 2 hardening: explicit escape hatch for admin-level operations.
-   * Today the runner constructs the policy context with `strict: false`.
-   */
-  adminOverride?: boolean;
   /** Active agent preset — drives `defaultTemperature` lookup. */
   agentId?: import('@mcp/code-agent/agents/index.js').AgentId | null;
   /** Per-session temperature override. */

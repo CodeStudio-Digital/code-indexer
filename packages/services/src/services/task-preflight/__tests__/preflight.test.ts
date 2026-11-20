@@ -19,16 +19,6 @@ import {
   parsePreflightOutput,
 } from '../preflight-prompt.js';
 
-const CATALOG = [
-  { name: 'read_file', tier: 'bootstrap', description: 'Read file contents' },
-  { name: 'mcp__read_file', tier: 'bootstrap', description: 'Read indexed file contents' },
-  { name: 'mcp__get_symbol_body', tier: 'navigate', description: 'Read one symbol' },
-  { name: 'mcp__get_file_skeleton', tier: 'navigate', description: 'Outline a large file' },
-  { name: 'edit_file', tier: 'navigate', description: 'Find/replace edit' },
-  { name: 'mcp__search', tier: 'bootstrap', description: 'Hybrid search' },
-  { name: 'git_commit', tier: 'admin' },
-  { name: 'ext_srv__do_thing', tier: 'srv', description: 'External integration call' },
-];
 const MEMORY = [
   { title: 'Auth token refresh gotcha', category: 'gotcha', excerpt: 'refresh expires in 25min' },
   { title: 'API error envelope', category: 'convention' },
@@ -40,10 +30,8 @@ const SKILLS = [
   { id: 'init', description: 'Initialize a CLAUDE.md for the repo', namespace: 'builtin', scope: '7' },
 ];
 const PARSE_CTX = {
-  toolNames: new Set(CATALOG.map((t) => t.name)),
   memoryTitles: MEMORY.map((m) => m.title),
   skillIds: new Set(SKILLS.map((s) => s.id)),
-  maxTools: 3,
   maxMemories: 2,
   maxSkills: 2,
 };
@@ -77,7 +65,6 @@ function makeResolver(binding: ResolvedBinding | null): PipelineProviderResolver
 function makeService(binding: ResolvedBinding | null, extra: Partial<TaskPreflightDeps> = {}): TaskPreflightService {
   return new TaskPreflightService({
     resolver: makeResolver(binding),
-    getToolCatalog: () => CATALOG,
     getMemoryIndex: () => MEMORY,
     getSkillCatalog: () => SKILLS,
     ...extra,
@@ -96,7 +83,7 @@ const VALID_OUTPUT = JSON.stringify({
   session_title: 'Corrigir autenticação de login',
   task_kind: 'bugfix',
   profile: 'navigate',
-  tools: [{ name: 'read_file', why: 'inspect' }, { name: 'edit_file', why: 'fix' }],
+  tools: [{ name: 'read_file', why: 'inspect' }, { name: 'edit_file', why: 'fix' }], // legacy field, ignored
   memories: [{ title: 'auth token refresh GOTCHA', why: 'same login flow' }],
 });
 
@@ -107,7 +94,6 @@ describe('parsePreflightOutput', () => {
       sessionTitle: 'Corrigir autenticação de login',
       profile: 'navigate',
       taskKind: 'bugfix',
-      pinTools: ['read_file', 'edit_file'],
       memories: [{ title: 'Auth token refresh gotcha', reason: 'same login flow' }],
     });
   });
@@ -115,66 +101,6 @@ describe('parsePreflightOutput', () => {
   it('parses fenced and prose-wrapped JSON', () => {
     expect(parsePreflightOutput('```json\n' + VALID_OUTPUT + '\n```', PARSE_CTX)).not.toBeNull();
     expect(parsePreflightOutput(`Sure! Here you go: ${VALID_OUTPUT} hope it helps`, PARSE_CTX)).not.toBeNull();
-  });
-
-  it('drops hallucinated tool names and clamps to maxTools', () => {
-    const raw = JSON.stringify({
-      profile: 'bootstrap',
-      tools: [
-        { name: 'made_up_tool' },
-        { name: 'read_file' },
-        { name: 'read_file' }, // duplicate
-        { name: 'edit_file' },
-        { name: 'mcp__search' },
-        { name: 'git_commit' }, // over the cap of 3
-      ],
-    });
-    const seed = parsePreflightOutput(raw, PARSE_CTX);
-    expect(seed?.pinTools).toEqual(['read_file', 'edit_file', 'mcp__search']);
-  });
-
-  it('coalesces overlapping code-read routes before applying the pin cap', () => {
-    const raw = JSON.stringify({
-      tools: [
-        'mcp__search',
-        'mcp__get_file_skeleton',
-        'mcp__get_symbol_body',
-        'mcp__read_file',
-        'edit_file',
-      ],
-    });
-    const seed = parsePreflightOutput(raw, PARSE_CTX);
-    expect(seed?.pinTools).toEqual(['mcp__search', 'mcp__read_file', 'edit_file']);
-  });
-
-  it('does not pin a broad repo map alongside targeted search', () => {
-    const ctx = {
-      ...PARSE_CTX,
-      toolNames: new Set([...PARSE_CTX.toolNames, 'mcp__get_repo_map', 'mcp__get_project_overview']),
-    };
-    const raw = JSON.stringify({
-      tools: ['mcp__get_repo_map', 'mcp__search', 'mcp__get_project_overview', 'mcp__read_file'],
-    });
-    expect(parsePreflightOutput(raw, ctx)?.pinTools).toEqual(['mcp__search', 'mcp__read_file']);
-  });
-
-  it('drops memory tools when the analyzer selected no actual memory', () => {
-    const ctx = {
-      ...PARSE_CTX,
-      toolNames: new Set([...PARSE_CTX.toolNames, 'recall_memory', 'mcp__search_memory']),
-    };
-    const raw = JSON.stringify({
-      profile: 'bootstrap',
-      tools: ['recall_memory', 'mcp__search_memory', 'mcp__search'],
-      memories: [],
-    });
-    expect(parsePreflightOutput(raw, ctx)?.pinTools).toEqual(['mcp__search']);
-  });
-
-  it('pins an external MCP tool when the catalog lists it', () => {
-    const raw = JSON.stringify({ tools: [{ name: 'ext_srv__do_thing', why: 'call the API' }] });
-    const seed = parsePreflightOutput(raw, PARSE_CTX);
-    expect(seed?.pinTools).toEqual(['ext_srv__do_thing']);
   });
 
   it('parses skill suggestions, accepts string entries, drops unknown ids', () => {
@@ -212,7 +138,6 @@ describe('parsePreflightOutput', () => {
     const seed = parsePreflightOutput(JSON.stringify({ skills: ['api-collection'] }), PARSE_CTX);
     expect(seed).not.toBeNull();
     expect(seed?.suggestedSkills?.[0]?.id).toBe('api-collection');
-    expect(seed?.pinTools).toBeUndefined();
   });
 
   it('rejects a valid skill id when deterministic evidence is absent', () => {
@@ -223,22 +148,22 @@ describe('parsePreflightOutput', () => {
     expect(seed).toBeNull();
   });
 
-  it('accepts plain-string tool entries and drops unknown memory titles', () => {
+  it('drops unknown memory titles', () => {
     const raw = JSON.stringify({
-      tools: ['read_file'],
+      profile: 'navigate',
       memories: [{ title: 'Invented memory', why: 'x' }],
     });
     const seed = parsePreflightOutput(raw, PARSE_CTX);
-    expect(seed?.pinTools).toEqual(['read_file']);
+    expect(seed?.profile).toBe('navigate');
     expect(seed?.memories).toBeUndefined();
   });
 
   it('invalid profile/task_kind fail independently without killing the seed', () => {
-    const raw = JSON.stringify({ profile: 'god-mode', task_kind: 'wat', tools: ['edit_file'] });
+    const raw = JSON.stringify({ profile: 'god-mode', task_kind: 'wat', session_title: 'Fix login' });
     const seed = parsePreflightOutput(raw, PARSE_CTX);
     expect(seed?.profile).toBeUndefined();
     expect(seed?.taskKind).toBeUndefined();
-    expect(seed?.pinTools).toEqual(['edit_file']);
+    expect(seed?.sessionTitle).toBe('Fix login');
   });
 
   it('accepts and canonicalizes a task_kind-only seed', () => {
@@ -271,25 +196,21 @@ describe('parsePreflightOutput', () => {
 });
 
 describe('buildPreflightMessages', () => {
-  it('includes task + catalog, omits skill/memory blocks when empty, truncates long tasks', () => {
+  it('includes the task, omits skill/memory blocks when empty, truncates long tasks', () => {
     const long = 'x'.repeat(2500);
     const messages = buildPreflightMessages({
       userMessage: long,
-      toolCatalog: CATALOG,
       memoryIndex: [],
       skillCatalog: [],
-      maxTools: 12,
       maxMemories: 5,
       maxSkills: 3,
     });
     expect(messages[0]!.role).toBe('system');
-    expect(messages[0]!.content).toContain('AT MOST 12 tools');
     expect(messages[0]!.content).toContain('AT MOST 3 skills');
     expect(messages[0]!.content).toContain('session_title');
     const user = messages[1]!.content;
     expect(user).toContain('<task>');
     expect(user).toContain('...[truncated]');
-    expect(user).toContain('read_file [bootstrap] Read file contents');
     expect(user).not.toContain('<memory_index>');
     expect(user).not.toContain('<skill_catalog>');
   });
@@ -297,10 +218,8 @@ describe('buildPreflightMessages', () => {
   it('renders the memory index and skill catalog when present', () => {
     const user = buildPreflightMessages({
       userMessage: 'fix login',
-      toolCatalog: CATALOG,
       memoryIndex: MEMORY,
       skillCatalog: SKILLS,
-      maxTools: 12,
       maxMemories: 5,
       maxSkills: 3,
     })[1]!.content;
@@ -334,8 +253,7 @@ describe('TaskPreflightService.run', () => {
     } as unknown as PipelineProviderResolver;
     const service = new TaskPreflightService({
       resolver,
-      getToolCatalog: () => CATALOG,
-      getMemoryIndex: () => MEMORY,
+        getMemoryIndex: () => MEMORY,
       getSkillCatalog: () => SKILLS,
       getFallbackDefault: () => ({ providerId: 'cf-1', modelId: 'm', mode: '' }) as never,
     });
@@ -364,8 +282,7 @@ describe('TaskPreflightService.run', () => {
   it('runs with getSkillCatalog omitted (skill catalog falls back to empty)', async () => {
     const service = new TaskPreflightService({
       resolver: makeResolver(makeBinding()),
-      getToolCatalog: () => CATALOG,
-      getMemoryIndex: () => MEMORY,
+        getMemoryIndex: () => MEMORY,
       // getSkillCatalog intentionally omitted — exercises the optional-dep false branch
     });
     const result = await service.run({ ...INPUT, fetchFn: okFetch(VALID_OUTPUT) });
@@ -376,12 +293,10 @@ describe('TaskPreflightService.run', () => {
   it('returns ok with a validated seed (incl. suggested skills) on a clean response', async () => {
     const output = JSON.stringify({
       profile: 'navigate',
-      tools: [{ name: 'read_file' }, { name: 'ext_srv__do_thing' }],
       skills: [{ id: 'api-collection', why: 'builds a client' }],
     });
     const result = await makeService(makeBinding()).run({ ...INPUT, fetchFn: okFetch(output) });
     expect(result.status).toBe('ok');
-    expect(result.seed?.pinTools).toContain('ext_srv__do_thing');
     expect(result.seed?.suggestedSkills?.[0]?.id).toBe('api-collection');
     expect(result.seed?.suggestedSkills?.[0]?.evidence).toBe('project_scope');
   });
@@ -481,7 +396,7 @@ describe('TaskPreflightService.run', () => {
     expect(two).not.toBe(one);
   });
 
-  it('omits Git capabilities even from a one-member global workspace', async () => {
+  it('lists no tools, Git included, even for a one-member global workspace', async () => {
     const project = { projectId: 7, name: 'backend', slug: 'backend', rootPath: '/backend', isPrimary: true };
     let prompt = '';
     const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -497,8 +412,9 @@ describe('TaskPreflightService.run', () => {
       workspaceProjects: [project],
       fetchFn,
     });
-    expect(prompt).not.toContain('git_commit [');
-    expect(result.seed?.pinTools).toEqual(['read_file']);
+    expect(prompt).not.toContain('git_commit');
+    expect(prompt).not.toContain('<tool_catalog>');
+    expect(result.seed).toEqual({ profile: 'navigate' });
   });
 
   it('returns provider_error on a non-2xx response', async () => {
@@ -537,11 +453,62 @@ describe('TaskPreflightService.run', () => {
   it('never throws even when the resolver itself blows up', async () => {
     const service = new TaskPreflightService({
       resolver: { resolveOrNull: async () => { throw new Error('db locked'); } } as unknown as PipelineProviderResolver,
-      getToolCatalog: () => CATALOG,
-      getMemoryIndex: () => MEMORY,
+        getMemoryIndex: () => MEMORY,
     });
     const result = await service.run(INPUT);
     expect(result.status).toBe('provider_error');
     expect(result.error).toContain('db locked');
+  });
+});
+
+describe('preflight without tool pins', () => {
+  const NO_TOOLS_CTX = {
+    memoryTitles: MEMORY.map((m) => m.title),
+    skillIds: new Set(SKILLS.map((s) => s.id)),
+    maxMemories: 2,
+    maxSkills: 2,
+  };
+
+  it('sends no tool catalog and asks for no tools', () => {
+    const [system, user] = buildPreflightMessages({
+      userMessage: 'fix login',
+      memoryIndex: MEMORY,
+      skillCatalog: SKILLS,
+      maxMemories: 3,
+      maxSkills: 3,
+    } as Parameters<typeof buildPreflightMessages>[0]);
+    expect(user!.content).not.toContain('<tool_catalog>');
+    expect(system!.content).not.toMatch(/"tools"|tool catalog|\btools the agent\b/i);
+    for (const field of ['session_title', 'task_kind', 'profile', 'projects', 'skills', 'memories']) {
+      expect(system!.content).toContain(`"${field}"`);
+    }
+  });
+
+  it('ignores a tools field in the analyzer answer', () => {
+    const seed = parsePreflightOutput(JSON.stringify({
+      profile: 'navigate',
+      tools: [{ name: 'read_file', why: 'inspect' }],
+    }), NO_TOOLS_CTX as Parameters<typeof parsePreflightOutput>[1]);
+    expect(seed).toEqual({ profile: 'navigate' });
+  });
+
+  it('does not count a tools-only answer as a usable seed', () => {
+    expect(parsePreflightOutput(JSON.stringify({ tools: ['read_file'] }), NO_TOOLS_CTX as Parameters<typeof parsePreflightOutput>[1])).toBeNull();
+  });
+
+  it('runs without a tool catalog dependency', async () => {
+    const svc = new TaskPreflightService({
+      resolver: makeResolver(makeBinding()),
+      getMemoryIndex: () => MEMORY,
+      getSkillCatalog: () => SKILLS,
+    } as TaskPreflightDeps);
+    const result = await svc.run({
+      sessionId: asSessionId('00000000-0000-4000-8000-000000000009'),
+      projectId: 7,
+      userMessage: 'corrija o bug de login',
+      fetchFn: okFetch(JSON.stringify({ task_kind: 'bugfix', profile: 'navigate', tools: ['read_file'] })),
+    });
+    expect(result.status).toBe('ok');
+    expect(result.seed).toEqual({ taskKind: 'bugfix', profile: 'navigate' });
   });
 });

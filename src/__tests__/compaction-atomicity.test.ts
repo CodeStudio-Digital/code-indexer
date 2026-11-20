@@ -2,12 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   computeCutoffIndexByTokens,
   snapCutoffPreservingPairs,
-  compactMessages,
-  postCompactCleanup,
   deriveTokenLimits,
-  shouldCompact,
 } from '@mcp/code-agent/core/compaction.js';
-import { computeSnapshot } from '@mcp/code-agent/core/token-accounting.js';
 import type { AgentMessage, ContentBlock } from "@mcp/provider-sdk";
 
 const text = (t: string): ContentBlock => ({ type: 'text', text: t });
@@ -66,7 +62,7 @@ describe('compaction — atomicity (no orphan tool_use ⇄ tool_result after cut
     expect(snapCutoffPreservingPairs(msgs, 0)).toBe(0);
   });
 
-  it('compactMessages with token cutoff never produces orphans', () => {
+  it('the token cutoff, snapped to pairs, never orphans the kept tail', () => {
     // Build a 30-message conversation with paired tool calls scattered throughout.
     const msgs: AgentMessage[] = [];
     for (let i = 0; i < 15; i++) {
@@ -76,30 +72,29 @@ describe('compaction — atomicity (no orphan tool_use ⇄ tool_result after cut
     }
     // Keep ~30% as protected tail.
     const protectTokens = 1500;
-    const result = compactMessages(msgs, { protectTokens, skipMinimumGuard: true });
-    expect(result.applied).toBe(true);
-    const orphans = findOrphans(result.messages);
+    const cutoff = snapCutoffPreservingPairs(msgs, computeCutoffIndexByTokens(msgs, protectTokens));
+    expect(cutoff).toBeGreaterThan(0);
+    const orphans = findOrphans(msgs.slice(cutoff));
     expect(orphans.uses).toEqual([]);
     expect(orphans.results).toEqual([]);
   });
 
-  it('compactMessages preserves tool_use IDs in the kept tail', () => {
+  it('the snapped cutoff keeps every tool_use of the kept tail', () => {
     const msgs: AgentMessage[] = [];
     for (let i = 0; i < 10; i++) {
       msgs.push(user(text(`req${i}`.repeat(40))));
       msgs.push(assistant(toolUse(`id${i}`, 'read_file', { path: `f${i}.ts` })));
       msgs.push(tool(toolResult(`id${i}`, `data${i}`.repeat(100))));
     }
-    const result = compactMessages(msgs, { protectTokens: 800, skipMinimumGuard: true });
+    const cutoff = snapCutoffPreservingPairs(msgs, computeCutoffIndexByTokens(msgs, 800));
     // Every surviving tool_result should have its tool_use also surviving.
-    const orphans = findOrphans(result.messages);
+    const orphans = findOrphans(msgs.slice(cutoff));
     expect(orphans).toEqual({ uses: [], results: [] });
   });
 
-  it('returns applied=false when protected tail covers everything', () => {
+  it('returns cutoff 0 when the protected tail covers everything', () => {
     const msgs: AgentMessage[] = [user(text('hi')), assistant(text('hello'))];
-    const r = compactMessages(msgs, { protectTokens: 99999, skipMinimumGuard: true });
-    expect(r.applied).toBe(false);
+    expect(computeCutoffIndexByTokens(msgs, 99999)).toBe(0);
   });
 });
 
@@ -124,57 +119,4 @@ describe('compaction — token limits scale with model context window', () => {
     expect(limits.rawWindow).toBe(128_000);
   });
 
-  it('shouldCompact: returns false when total below trigger', () => {
-    const messages: AgentMessage[] = [user(text('hi'))];
-    const snap = computeSnapshot(messages, null);
-    expect(shouldCompact(snap, 'claude-opus-4-7')).toBe(false);
-  });
-
-  it('shouldCompact: returns true when total ≥ trigger', () => {
-    const messages: AgentMessage[] = [user(text('hi'))];
-    const snap = computeSnapshot(messages, { input_tokens: 999_999, messageCountAtTime: 1 });
-    expect(shouldCompact(snap, 'claude-opus-4-7')).toBe(true);
-  });
-});
-
-describe('compaction — postCompactCleanup', () => {
-  it('elides duplicate reads of the same path/slice', () => {
-    const msgs: AgentMessage[] = [
-      assistant(toolUse('id1', 'read_file', { path: 'a.ts' })),
-      tool(toolResult('id1', 'first read of a.ts'.repeat(50))),
-      user(text('again please')),
-      assistant(toolUse('id2', 'read_file', { path: 'a.ts' })),
-      tool(toolResult('id2', 'second read of a.ts'.repeat(50))),
-    ];
-    const r = postCompactCleanup(msgs);
-    expect(r.elidedReads).toBe(1);
-    expect(r.freedChars).toBeGreaterThan(0);
-    // The first (older) result was elided; the second survives verbatim.
-    const firstToolMsg = r.messages[1];
-    const firstResult = firstToolMsg.content[0] as { content: string };
-    expect(firstResult.content).toMatch(/duplicate-read elided/);
-  });
-
-  it('keeps reads of different paths intact', () => {
-    const msgs: AgentMessage[] = [
-      assistant(toolUse('id1', 'read_file', { path: 'a.ts' })),
-      tool(toolResult('id1', 'a contents')),
-      assistant(toolUse('id2', 'read_file', { path: 'b.ts' })),
-      tool(toolResult('id2', 'b contents')),
-    ];
-    const r = postCompactCleanup(msgs);
-    expect(r.elidedReads).toBe(0);
-  });
-
-  it('is idempotent (running twice does not double-elide)', () => {
-    const msgs: AgentMessage[] = [
-      assistant(toolUse('id1', 'read_file', { path: 'a.ts' })),
-      tool(toolResult('id1', 'first read'.repeat(50))),
-      assistant(toolUse('id2', 'read_file', { path: 'a.ts' })),
-      tool(toolResult('id2', 'second read'.repeat(50))),
-    ];
-    const r1 = postCompactCleanup(msgs);
-    const r2 = postCompactCleanup(r1.messages);
-    expect(r2.elidedReads).toBe(0);
-  });
 });

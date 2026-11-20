@@ -2,7 +2,7 @@
  * Active hybrid pre-read behavior: historical reads never become hard
  * refusals, while mutation-aware rereads and context-visibility checks remain.
  */
-import { afterEach, describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
@@ -40,21 +40,7 @@ function makeRunner(provider: ChatProvider, registry: ToolRegistry, agentLoopV2 
   });
 }
 
-afterEach(() => {
-  delete process.env.CODER_DEDUP_POLICY;
-});
-
 describe('hybrid mutation-aware rereads', () => {
-  beforeEach(() => {
-    process.env.CODER_DEDUP_POLICY = 'hybrid';
-    delete process.env.CODER_READ_DUP_THRESHOLD;
-    delete process.env.CODER_READ_DUP_WINDOW;
-    delete process.env.CODER_READ_AUTO_DOWNGRADE;
-    process.env.CODER_DOOM_LOOP_THRESHOLD = '0';
-    process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD = '0';
-    process.env.CODER_DOMINANCE_WINDOW = '0';
-  });
-
   function getMessages(runner: CoderRunner): AgentMessage[] {
     return (runner as unknown as { messages: AgentMessage[] }).messages;
   }
@@ -77,7 +63,7 @@ describe('hybrid mutation-aware rereads', () => {
       async *chat(_req: ChatRequest): AsyncIterable<ChatDelta> {
         callCount++;
         // Before the second tool-emitting turn fires, elide the FIRST
-        // tool_result the same way postCompactCleanup would.
+        // tool_result the way a compaction marker would.
         if (callCount === 2 && runnerRef) {
           for (const m of getMessages(runnerRef)) {
             if (m.role !== 'tool') continue;

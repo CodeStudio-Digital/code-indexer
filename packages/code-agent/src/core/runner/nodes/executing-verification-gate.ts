@@ -146,28 +146,6 @@ export async function evaluateVerificationReadinessAtFinish(
   return persistedReadiness(changedFiles, persisted);
 }
 
-export function formatVerificationReadiness(readiness: VerificationReadiness): string {
-  const signals = readiness.validationSignals.length > 0
-    ? ` Validation seen: ${readiness.validationSignals.join(', ')}.`
-    : '';
-  const files = readiness.changedFiles.slice(0, 8);
-  const fileText = files.length > 0
-    ? ` Changed files: ${files.join(', ')}${readiness.changedFiles.length > files.length ? ' (+more)' : ''}.`
-    : '';
-  switch (readiness.status) {
-    case 'fresh':
-      return `Code verification is fresh and covers the latest code-affecting write; review any documentation edits separately.${signals}${fileText}`;
-    case 'stale':
-      return `Verification is stale or failed; it does not cover the latest recorded write.${signals}${fileText}`;
-    case 'ambiguous':
-      return `Verification freshness is ambiguous because a write and validation share the persisted timestamp.${fileText}`;
-    case 'missing':
-      return `No successful test/typecheck/lint/build was recorded after the latest change.${fileText}`;
-    case 'not_applicable':
-      return 'No code-affecting changes were recorded; code verification is not applicable. Review any prose edits separately.';
-  }
-}
-
 export function maybeVerificationNudge(
   ctx: RunContext,
   readiness: VerificationReadiness,

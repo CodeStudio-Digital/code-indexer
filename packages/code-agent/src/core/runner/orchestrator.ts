@@ -20,7 +20,6 @@ import type {
 import { createRunContext } from './machine/context.js';
 import { nextState } from './machine/transitions.js';
 import { BootstrapNode } from './nodes/bootstrap.js';
-import { PlanningNode } from './nodes/planning.js';
 import { ExecutingNode } from './nodes/executing.js';
 import { CompactingNode } from './nodes/compacting.js';
 import { ReviewingNode } from './nodes/reviewing.js';
@@ -57,7 +56,6 @@ export interface OrchestratorArgs {
 export function buildDefaultNodes(): Record<NodeState, BehaviorNode> {
   return {
     Bootstrap: new BootstrapNode(),
-    Planning: new PlanningNode(),
     Executing: new ExecutingNode(),
     Compacting: new CompactingNode(),
     Reviewing: new ReviewingNode(),
@@ -98,9 +96,9 @@ export async function runBehaviorTree(
   // set means a node returned garbage and we should force-abort the run
   // (silently falling through to 'Done' was masking real bugs upstream).
   const VALID_EVENT_KINDS: ReadonlySet<string> = new Set([
-    'TurnSucceeded', 'TokenThresholdHit', 'ToolLoopDetected',
+    'TurnSucceeded', 'TokenThresholdHit',
     'MaxTurnsReached', 'ProviderError', 'CompactionDone',
-    'CleanFinish', 'ToolOutcomeUnknown', 'Aborted',
+    'CleanFinish', 'Aborted',
   ]);
 
   let state: NodeState = 'Bootstrap';
@@ -140,7 +138,7 @@ export async function runBehaviorTree(
         // abort() may arrive while a provider/tool node is in flight. Let that
         // awaited operation settle, then prevent every subsequent tree node
         // (and therefore every subsequent provider/tool turn) from running.
-        if (event.kind !== 'Aborted' && event.kind !== 'ToolOutcomeUnknown' && ctx.bridge?.isAbortRequested?.()) {
+        if (event.kind !== 'Aborted' && ctx.bridge?.isAbortRequested?.()) {
           ctx.aborted = true;
           ctx.stopReason = 'aborted';
           event = { kind: 'Aborted' };

@@ -34,7 +34,6 @@ function baseArgs(registry: ToolRegistry): DispatchArgs {
     registry,
     toolContext,
     turn: 1,
-    dupCalls: new Map(),
   };
 }
 
@@ -82,7 +81,6 @@ describe('dispatchTools — Fix 2 (guarded bridge callbacks)', () => {
     expect(res.results).toHaveLength(1);
     expect(res.results[0].content).toBe('RAW');
     expect(res.results[0].isError).toBe(false);
-    expect(res.toolLoopDetected).toBe(false);
   });
 
   it('skips post-processing when postProcessToolResult throws', async () => {

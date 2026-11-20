@@ -674,8 +674,8 @@ export function mountCoderStreamRoutes(
   /**
    * Task preflight — when the `code-agent/preflight` binding is configured
    * (Admin → Pipelines), analyze the FIRST prompt of a fresh session with a
-   * cheap model and seed the run: minimal profile, pinned tools, and which
-   * project memories to read. Runs OUTSIDE the session lock (up to ~4s);
+   * cheap model and seed the run: title, task kind, minimal profile, skills
+   * and which project memories to read. Runs OUTSIDE the session lock (up to ~4s);
    * worst case two racing POSTs pay the analysis twice and the lock loser's
    * seed is discarded with its run. Fail-open by construction: any non-ok
    * status (unconfigured / timeout / provider error / unparseable output)
@@ -688,7 +688,7 @@ export function mountCoderStreamRoutes(
     try {
       // Only resume runs are never fresh tasks. An explicit agent/profile no
       // longer blocks preflight: it still runs on a fresh session to seed
-      // tools + relevant memories, and its profile seed loses to the explicit
+      // relevant skills + memories, and its profile seed loses to the explicit
       // choice downstream (resolveSessionProfile: explicit > seed > heuristic).
       // The dashboard always sends the default agent='explore', which used to
       // suppress preflight on every chat — that's the bug this removes.
@@ -767,8 +767,10 @@ export function mountCoderStreamRoutes(
             seed?: PreflightSeed;
           };
           if (cached && cached.seed && cached.h === cacheHash) {
-            await applyGeneratedSessionTitle(id, cached.seed.sessionTitle);
-            return cached.seed;
+            // Seeds cached before tool pins were retired still carry `pinTools`.
+            const { pinTools: _retiredPins, ...seed } = cached.seed as PreflightSeed & { pinTools?: unknown };
+            await applyGeneratedSessionTitle(id, seed.sessionTitle);
+            return seed;
           }
         } catch { /* fall through to clear + recompute */ }
         try {
@@ -802,10 +804,6 @@ export function mountCoderStreamRoutes(
             session_title: result.seed?.sessionTitle ?? null,
             task_kind: result.seed?.taskKind ?? null,
             profile: result.seed?.profile ?? null,
-            tools: result.seed?.pinTools ?? [],
-            // External MCP tools the analyzer pinned (subset of pinTools) —
-            // distinguishes MCP suggestions from native pins in the funnel.
-            ext_tools: result.seed?.pinTools?.filter((t) => t.startsWith('ext_')) ?? [],
             skills: result.seed?.suggestedSkills?.map((s) => s.id) ?? [],
             target_projects: result.seed?.targetProjects?.map((p) => p.slug) ?? [],
             memories: result.seed?.memories?.map((m) => m.title) ?? [],

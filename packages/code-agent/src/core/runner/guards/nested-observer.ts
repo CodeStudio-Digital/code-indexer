@@ -28,7 +28,6 @@ import {
 } from './tuple-hash-dedup.js';
 import type { NoProgressTracker } from './no-progress.js';
 import type { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
-import type { DupCallEntry } from '../machine/types.js';
 import type {
   NestedToolObserver,
   NestedToolCallRecord,
@@ -42,12 +41,6 @@ export function nestedGuardsEnabled(): boolean {
 const RESULT_PREVIEW_CHARS = 2_000;
 
 export interface NestedObserverDeps {
-  /**
-   * Legacy construction input retained so existing factories do not need an
-   * atomic migration. Hybrid/observe ignore it; explicit legacy mode uses it
-   * as the rollback table.
-   */
-  dupCalls?: Map<string, DupCallEntry>;
   /** The run's failure-streak state — shared with direct dispatch. */
   failureStreaks: FailureStreakState;
   /** Turn the parent code_exec was dispatched on. */
@@ -122,9 +115,6 @@ export function buildNestedToolObserver(deps: NestedObserverDeps): NestedToolObs
           repeatPolicy,
           turn: deps.turn,
           useId: attemptId,
-          // Hybrid/observe use only the local state. The shared legacy table is
-          // supplied solely when the explicit rollback mode is selected.
-          dupCalls: deps.dupCalls,
           invocationState: local,
           forceReread: opts?.forceReread,
         });

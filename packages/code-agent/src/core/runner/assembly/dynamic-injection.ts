@@ -74,13 +74,6 @@ export interface DynamicInjectionContext {
   relevantConversationChapters?: ReadonlyArray<{ id: string; title: string; content: string }>;
   lastInjectedConversationChapterIds?: ReadonlySet<string>;
   /**
-   * True when the session has active (un-kept/un-reverted) file snapshots AND
-   * the CODER_SELF_REVIEW toggle is on. Surfaces a one-line `self_review`
-   * reminder. Intentionally NOT deduped — recomputed every turn so it persists
-   * while changes are pending (most importantly on the "I'm done" turn).
-   */
-  hasReviewableChanges?: boolean;
-  /**
    * Session State Block (`assembly/session-state.ts`) — the always-alive
    * structured state of the session (plan/todos/notes/files/recall),
    * pre-rendered by the Executing node. Subsumes the old per-field drive
@@ -257,7 +250,6 @@ export function computeDynamicInjection(
     !showUserMemory &&
     !showPreflight &&
     !recentCompaction &&
-    !ctx.hasReviewableChanges &&
     !ctx.correctionHint
   ) {
     return null;
@@ -328,12 +320,6 @@ export function computeDynamicInjection(
   }
   if (showSessionState && ctx.sessionState) {
     lines.push(ctx.sessionState.block);
-  }
-  if (ctx.hasReviewableChanges) {
-    lines.push(
-      'this session has pending file changes — review the changed behavior before reporting completion. ' +
-        'Use `self_review` when available and warranted by risk; address its findings. Reuse a review that still covers the current changes, and report any required validation gap.',
-    );
   }
 
   return {

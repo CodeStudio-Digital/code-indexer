@@ -18,7 +18,7 @@ it('stops the batch after an uncertain effect and pairs every requested tool res
   const next = vi.fn(async () => ({ content: 'should not run' }));
   registry.register(external);
   registry.register({ ...external, name: 'next_write', handler: next });
-  const result = await dispatchTools({ registry, toolContext: context(), turn: 1, dupCalls: new Map(),
+  const result = await dispatchTools({ registry, toolContext: context(), turn: 1,
     toolUses: [{ id: 'a', name: external.name, input: {} }, { id: 'b', name: 'next_write', input: {} }] });
   expect(result.outcomeUnknown).toBe(true);
   expect(result.results.map(r => r.toolUseId)).toEqual(['a', 'b']);
@@ -47,7 +47,7 @@ it('treats the runner timeout after external dispatch as uncertain', async () =>
     await new Promise<void>(resolve => ctx.signal!.addEventListener('abort', () => resolve(), { once: true }));
     return { content: 'late success' };
   } });
-  const result = await dispatchTools({ registry, toolContext: context(), turn: 1, dupCalls: new Map(),
+  const result = await dispatchTools({ registry, toolContext: context(), turn: 1,
     toolUses: [{ id: 'a', name: external.name, input: {} }] });
   expect(result.outcomeUnknown).toBe(true);
   expect(result.results[0].effectOutcome).toBe('unknown');
@@ -64,7 +64,7 @@ it.each([
     await new Promise<void>(resolve => ctx.signal!.addEventListener('abort', () => resolve(), { once: true }));
     return ok('late terminal response');
   } });
-  const result = await dispatchTools({ registry, toolContext: context(), turn: 1, dupCalls: new Map(),
+  const result = await dispatchTools({ registry, toolContext: context(), turn: 1,
     toolUses: [{ id: 'a', name: metadata.name, input: {} }] });
   expect(result.outcomeUnknown === true).toBe(uncertain);
   expect(result.results[0].effectOutcome).toBe(uncertain ? 'unknown' : undefined);
@@ -77,7 +77,7 @@ it('does not claim an effect when a mutation expires waiting for its unsafe lane
   const toolContext = context();
   const release = await toolContext.toolCallLedger.reserveUnsafe();
   try {
-    const result = await dispatchTools({ registry, toolContext, turn: 1, dupCalls: new Map(),
+    const result = await dispatchTools({ registry, toolContext, turn: 1,
       toolUses: [{ id: 'a', name: external.name, input: {} }] });
     expect(result.outcomeUnknown).not.toBe(true);
     expect(result.results[0].effectOutcome).toBeUndefined();
@@ -90,7 +90,7 @@ it('does not claim an effect when cancellation precedes Registry handler dispatc
   const handler = vi.fn(async () => ok('must not run'));
   registry.register({ ...external, source: 'native', handler });
   const result = await dispatchTools({ registry, toolContext: { ...context(), signal: AbortSignal.abort() },
-    turn: 1, dupCalls: new Map(), toolUses: [{ id: 'a', name: external.name, input: {} }] });
+    turn: 1, toolUses: [{ id: 'a', name: external.name, input: {} }] });
   expect(result.outcomeUnknown).not.toBe(true);
   expect(handler).not.toHaveBeenCalled();
 });
@@ -102,7 +102,7 @@ it('keeps an outer wrapper timeout read-only when no physical child effect start
   registry.register({ ...buildCodeExecTool(registry), timeoutMs: 10,
     handler: async () => pending });
   try {
-    const result = await dispatchTools({ registry, toolContext: context(), turn: 1, dupCalls: new Map(),
+    const result = await dispatchTools({ registry, toolContext: context(), turn: 1,
       toolUses: [{ id: 'wrapper', name: 'code_exec', input: { code: 'no effects' } }] });
     expect(result.outcomeUnknown).not.toBe(true);
   } finally { finish(ok('cleanup')); }
@@ -117,7 +117,7 @@ it('detects a physical nested mutation when its wrapper wait expires first', asy
     return registry.invoke(external.name, {}, { ...ctx, currentToolUseId: 'nested' });
   } });
   try {
-    const result = await dispatchTools({ registry, toolContext: context(), turn: 1, dupCalls: new Map(),
+    const result = await dispatchTools({ registry, toolContext: context(), turn: 1,
       toolUses: [{ id: 'wrapper', name: 'code_exec', input: { code: 'write' } }] });
     expect(result.outcomeUnknown).toBe(true);
     expect(result.results[0].effectOutcome).toBe('unknown');

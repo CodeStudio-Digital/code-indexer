@@ -119,7 +119,7 @@ describe('write_file overwrite rule', () => {
     registry.registerAll(fsTools);
     registry.register(buildCodeExecTool(registry));
     const nested: Array<{ name: string; refusalKind?: string }> = [];
-    const result = await dispatchTools({ registry, turn: 1, dupCalls: new Map(), toolContext: ctx,
+    const result = await dispatchTools({ registry, turn: 1, toolContext: ctx,
       makeNestedObserver: () => ({ beforeNestedCall: () => null, afterNestedCall: (c) => { nested.push(c); } }),
       toolUses: [{ id: 'w', name: 'write_file', input: { path: 'a.txt', content: 'x' } },
         { id: 'c', name: 'code_exec', input: { code: "try { await tools.write_file({ path: 'a.txt', content: 'y' }); } catch { return 'refused'; }" } }] });

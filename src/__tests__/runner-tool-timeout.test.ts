@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
@@ -64,18 +64,11 @@ function captureResults(runner: CoderRunner) {
 }
 
 describe('runner — universal tool timeout', () => {
-  beforeEach(() => {
-    delete process.env.MCP_TOOL_HEARTBEAT_MS;
-    delete process.env.MCP_TOOL_NORMAL_TIMEOUT_MS;
-    delete process.env.MCP_TOOL_SLOW_TIMEOUT_MS;
-  });
   afterEach(() => {
     vi.useRealTimers();
   });
 
   it('hanging tool with explicit short timeoutMs emits synthetic isError result', async () => {
-    // Disable heartbeat so we don't get spammy events from the test.
-    process.env.MCP_TOOL_HEARTBEAT_MS = '0';
     const hangingTool: CoderTool = {
       name: 'hangs',
       description: 'never returns',
@@ -101,7 +94,6 @@ describe('runner — universal tool timeout', () => {
   });
 
   it('explicit timeoutMs on the tool wins over the runner default', async () => {
-    process.env.MCP_TOOL_HEARTBEAT_MS = '0';
     let observedTimeoutMs: number | undefined;
     const hangingTool: CoderTool = {
       name: 'slow',
@@ -124,7 +116,6 @@ describe('runner — universal tool timeout', () => {
   });
 
   it('timeoutMs: Infinity opts out — runner does not race the handler', async () => {
-    process.env.MCP_TOOL_HEARTBEAT_MS = '0';
     let handlerResolve: (v: { content: string }) => void = () => {};
     const longTool: CoderTool = {
       name: 'long',
@@ -150,7 +141,6 @@ describe('runner — universal tool timeout', () => {
   });
 
   it('per-call signal aborts when the timeout fires (cooperative tools can clean up)', async () => {
-    process.env.MCP_TOOL_HEARTBEAT_MS = '0';
     let capturedSignal: AbortSignal | undefined;
     const observingTool: CoderTool = {
       name: 'observes',
@@ -171,9 +161,6 @@ describe('runner — universal tool timeout', () => {
 });
 
 describe('runner — tool_progress heartbeat', () => {
-  beforeEach(() => {
-    delete process.env.MCP_TOOL_HEARTBEAT_MS;
-  });
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -204,7 +191,6 @@ describe('runner — tool_progress heartbeat', () => {
   });
 
   it('ctx.reportProgress emits tool_progress with a trimmed note', async () => {
-    process.env.MCP_TOOL_HEARTBEAT_MS = '0'; // suppress noisy heartbeats
     const longNote = 'x'.repeat(500);
     const reportingTool: CoderTool = {
       name: 'reports',
@@ -226,7 +212,6 @@ describe('runner — tool_progress heartbeat', () => {
   });
 
   it('suppresses heartbeat when tool has timeoutMs: Infinity', async () => {
-    process.env.MCP_TOOL_HEARTBEAT_MS = '15';
     let handlerResolve: (v: { content: string }) => void = () => {};
     const interactiveTool: CoderTool = {
       name: 'asks',
@@ -247,15 +232,11 @@ describe('runner — tool_progress heartbeat', () => {
 });
 
 describe('runner — try/catch fallback emits tool_call_result on dispatch crash', () => {
-  beforeEach(() => {
-    delete process.env.MCP_TOOL_HEARTBEAT_MS;
-  });
   afterEach(() => {
     vi.useRealTimers();
   });
 
   it('a handler that throws yields exactly one isError tool_call_result (covered by registry.invoke today; verify the contract still holds)', async () => {
-    process.env.MCP_TOOL_HEARTBEAT_MS = '0';
     const throwingTool: CoderTool = {
       name: 'boom',
       description: '',

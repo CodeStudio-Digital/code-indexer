@@ -6,7 +6,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderSummaryV2,
-  overlayLiveState,
   type CompactionSummaryV2,
 } from '@mcp/code-agent/core/summarizer.js';
 
@@ -86,18 +85,6 @@ describe('renderSummaryV2 — tagged sections', () => {
     expect(m![1]).toContain('key concepts: session storage, CSRF token');
     expect(m![1]).toContain('`src/auth.ts`');
     expect(m![1]).toContain('files:');
-  });
-
-  it('still surfaces overlaid live state via overlayLiveState', () => {
-    const overlaid = overlayLiveState(
-      sampleSummary,
-      [
-        { content: 'Add the test', activeForm: 'Adding the test', status: 'in_progress' },
-      ],
-    );
-    const out = renderSummaryV2(overlaid);
-    expect(out).toContain('<pending_tasks>');
-    expect(out).toContain('Add the test');
   });
 
   it('renders deterministically — same input → same bytes', () => {

@@ -218,26 +218,6 @@ describe('computeDynamicInjection', () => {
     expect((excerptPayload.match(/b/g) ?? []).length).toBeLessThanOrEqual(400);
   });
 
-  it('surfaces the self_review nudge when hasReviewableChanges is set (alone)', () => {
-    const out = computeDynamicInjection(baseCtx({ hasReviewableChanges: true }));
-    expect(out).not.toBeNull();
-    expect(out!.reminder).toContain('self_review');
-    expect(out!.reminder).toContain('pending file changes');
-  });
-
-  it('does NOT surface the self_review nudge when hasReviewableChanges is false', () => {
-    expect(computeDynamicInjection(baseCtx({ hasReviewableChanges: false }))).toBeNull();
-  });
-
-  it('self_review nudge is not deduped — fires alongside other signals', () => {
-    const out = computeDynamicInjection(baseCtx({
-      newlyRegisteredSkillIds: ['s1'],
-      hasReviewableChanges: true,
-    }));
-    expect(out!.reminder).toContain('s1');
-    expect(out!.reminder).toContain('self_review');
-  });
-
   it('G3 — reminds not to re-run setup for already-executed skills after compaction', () => {
     const out = computeDynamicInjection(baseCtx({
       turn: 10,

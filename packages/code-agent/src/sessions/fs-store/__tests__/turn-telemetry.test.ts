@@ -67,6 +67,8 @@ describe('FsTurnTelemetryRepository', () => {
 
     const first = await telemetry.recordTurnTelemetry(input);
     const second = await telemetry.recordTurnTelemetry(input);
+    // Turn telemetry is a best-effort derived record written by the queue.
+    await store.repository.flushDiagnostics();
 
     expect(first).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -176,6 +178,7 @@ describe('FsTurnTelemetryRepository', () => {
       paginate_count: 0,
     };
     await telemetry.recordTurnTelemetry(input);
+    await store.repository.flushDiagnostics();
     const location = await store.getSessionLocation(session.id);
     expect(location).not.toBeNull();
     await writeFile(
@@ -186,6 +189,7 @@ describe('FsTurnTelemetryRepository', () => {
 
     await expect(listFilesystemTurnTelemetry(store, session.id)).resolves.toHaveLength(1);
     await telemetry.recordTurnTelemetry({ ...input, turn: 2 });
+    await store.repository.flushDiagnostics();
     const rows = await listFilesystemTurnTelemetry(store, session.id);
     expect(rows.map((row) => row.turn)).toEqual([1, 2]);
   });

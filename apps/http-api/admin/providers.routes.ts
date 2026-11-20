@@ -111,7 +111,6 @@ export function providersRouter(store: ProviderStore): Hono {
       use_for_general?: boolean;
       is_default?: boolean;
       extra?: Record<string, unknown>;
-      fallback_provider_id?: string | null;
     }>();
     if ((body.kind && body.kind !== existing.kind) || body.extra?.zai_has_coding_mode === true) {
       return c.json({ error: 'Create a new provider to use a different format.' }, 400);
@@ -132,10 +131,6 @@ export function providersRouter(store: ProviderStore): Hono {
       is_default: body.is_default ?? existing.is_default,
       extra: body.extra ?? existing.extra,
     });
-    // Handle fallback_provider_id separately (not part of upsertProvider)
-    if (body.fallback_provider_id !== undefined) {
-      store.setFallbackProvider(id, body.fallback_provider_id);
-    }
     return c.json(publicProvider(updated));
   });
 

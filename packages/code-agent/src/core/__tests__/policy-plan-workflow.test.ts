@@ -35,8 +35,6 @@ function makeCtx(overrides: Partial<PolicyContext> = {}): PolicyContext {
     specMode: false,
     specApproved: false,
     taskScope: null,
-    strict: false,
-    adminOverride: true,
     sandboxBound: true,
     ...overrides,
   };

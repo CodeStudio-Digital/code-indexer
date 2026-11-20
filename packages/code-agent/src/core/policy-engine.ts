@@ -105,7 +105,7 @@ function legacyToVote(legacy: LegacyPolicyDecision): PolicySourceVote {
   if (legacy.allowed) {
     return { sourceType: 'session', sourceRef: 'core/policy.ts', outcome: 'abstain' };
   }
-  // plan_mode / spec_mode / task_scope / sandbox_required / admin_required all
+  // plan_mode / spec_mode / task_scope / sandbox_required / read_only all
   // sit in the session/plan/spec/task precedence band.
   return {
     sourceType: 'session',

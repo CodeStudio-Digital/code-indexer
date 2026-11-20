@@ -82,8 +82,9 @@ export interface FailureStreakState {
  *   - `pass`     → no intervention; let the result through unchanged.
  *   - `reminder` → prepend a sharp marker to the result content; the
  *                  model still sees the underlying error.
- *   - `refuse`   → replace content with a refusal; caller MUST flip
- *                  `isError=true` and emit ToolLoopDetected.
+ *   - `refuse`   → the streak crossed the refuse threshold. Direct
+ *                  dispatch reports it like a reminder; the code_exec
+ *                  nested pre-check records a `shadow` verdict.
  */
 export type FailureStreakVerdict =
   | { kind: 'pass' }
@@ -121,9 +122,9 @@ export interface CheckFailureStreakInput {
    */
   refuseThreshold?: number;
   /**
-   * C2-b — enable error-signal classification (CODER_FAILURE_CLASSIFICATION).
-   * Passed by the caller (executing-dispatch) so the pure function stays
-   * env-free and testable. When false/omitted the guard behaves exactly as
+   * C2-b — enable error-signal classification. Direct dispatch passes `true`;
+   * the nested observer leaves it off. No env var controls it, so the pure
+   * function stays testable. When false/omitted the guard behaves exactly as
    * before (the extra `signalCategory` field is inert).
    */
   classifyErrors?: boolean;
@@ -200,8 +201,7 @@ export function checkFailureStreak(inp: CheckFailureStreakInput): FailureStreakV
     signalCategory: signal ?? prev?.signalCategory,
   });
 
-  // Refuse takes precedence over reminder. The first time we cross the
-  // refuse threshold the BT also routes to Planning (see dispatch).
+  // Refuse takes precedence over reminder.
   if (refuseThreshold > 0 && consecutive >= refuseThreshold) {
     return { kind: 'refuse', count: consecutive, firstFailureTurn, lastError };
   }
@@ -231,46 +231,7 @@ export function buildFailureStreakReminderMarker(verdict: {
   );
 }
 
-/**
- * Refusal payload that REPLACES the tool result content when the
- * streak crosses the refuse threshold. Caller MUST flip `isError=true`
- * and emit ToolLoopDetected so the orchestrator transitions to Planning.
- */
-export function buildFailureStreakRefusalText(verdict: {
-  count: number;
-  firstFailureTurn: number;
-  lastError: string;
-} & { toolName: string }): string {
-  const errExcerpt = verdict.lastError
-    ? `\nLast error: ${verdict.lastError}`
-    : '';
-  return (
-    `[failure-streak REFUSED: tool \`${verdict.toolName}\` has failed ` +
-    `${verdict.count} times consecutively (turns ${verdict.firstFailureTurn}…now). ` +
-    `Refusing this dispatch and forcing a planning turn so the model can ` +
-    `change approach.${errExcerpt}\n` +
-    `Next steps: STOP retrying \`${verdict.toolName}\`. Either list available ` +
-    `state (e.g. \`list_sessions\` for write_stdin failures), pick a different ` +
-    `tool, or ask the user to clarify what they want next.]`
-  );
-}
-
 /** Factory for the initial state attached to a new RunContext. */
 export function emptyFailureStreakState(): FailureStreakState {
   return { streaks: new Map() };
-}
-
-/**
- * Clear every per-tool streak in place. Called by the Planning node alongside
- * `resetDupCalls` so a forced re-plan gives failing tools a clean slate — the
- * documented "the Planning-turn reset clears both together" contract (see
- * nested-observer.ts). Without this, a tool that crossed the refuse threshold
- * INSIDE a code_exec script stayed pre-refused for the rest of the run (its
- * nested pre-check throws before dispatch, so it can never succeed to clear
- * itself) — permanently blocking a legitimately-needed retry. A fresh count is
- * safe: a genuinely-broken tool simply re-accumulates and re-trips, which is
- * already bounded by maxTurns and the loop-guard reflection marker.
- */
-export function resetFailureStreaks(state: FailureStreakState): void {
-  state.streaks.clear();
 }

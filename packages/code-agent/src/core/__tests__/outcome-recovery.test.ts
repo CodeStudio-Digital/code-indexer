@@ -77,7 +77,7 @@ describe('continuing a conversation with historical uncertain effects', () => {
     });
     const registry = new ToolRegistry(); const mutate = vi.fn(write.handler);
     registry.register({ ...write, timeoutMs: 40, handler: mutate });
-    const result = await dispatchTools({ registry, toolContext: context(g.value), turn: 1, dupCalls: new Map(),
+    const result = await dispatchTools({ registry, toolContext: context(g.value), turn: 1,
       toolUses: [{ id: 'new-call', name: write.name, input: { value: 1 } }] });
     expect(result.results[0].isError).toBe(false);
     expect(result.outcomeUnknown).toBeFalsy();
@@ -89,7 +89,7 @@ describe('continuing a conversation with historical uncertain effects', () => {
     g.wait.mockImplementation(async () => { abort.abort(); return JSON.stringify({ approved: true }); });
     const registry = new ToolRegistry(); const mutate = vi.fn(write.handler);
     registry.register({ ...write, handler: mutate });
-    await dispatchTools({ registry, toolContext: { ...context(g.value), signal: abort.signal }, turn: 1, dupCalls: new Map(),
+    await dispatchTools({ registry, toolContext: { ...context(g.value), signal: abort.signal }, turn: 1,
       toolUses: [{ id: 'new-call', name: write.name, input: { value: 1 } }] });
     expect(mutate).not.toHaveBeenCalled();
   });

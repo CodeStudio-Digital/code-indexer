@@ -17,6 +17,5 @@ export {
   type PreflightSeed,
   type PreflightSkillMeta,
   type PreflightSkillEvidence,
-  type PreflightToolMeta,
   type PreflightWorkspaceProject,
 } from './preflight-prompt.js';

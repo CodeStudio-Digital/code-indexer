@@ -1,25 +1,18 @@
-import { compactHistoryForLLM } from './runner/assembly/compact-history.js';
 export { compactHistoryForLLM } from './runner/assembly/compact-history.js';
 import { EventEmitter } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
 import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'node:path';
 import { statSync as fsStatSync } from 'node:fs';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type {
   AgentMessage,
-  ChatDelta,
   ChatProviderResponseMeta,
   ChatUsage,
   ContentBlock,
   ToolUseBlock,
-  PlanBlock,
-  SpecBlock,
   QuestionBlock,
   ToolResultBlock,
 } from '@mcp/code-agent/core/messages.js';
-import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import { resolveHeartbeatIntervalMs, resolveToolTimeoutMs } from '@mcp/code-agent/core/tool-timeouts.js';
 // Post-legacy-removal: only the helpers still consumed by
 // `compactHistoryForLLM` (re-exported below) and the BT bridge
 // (`enforcePreReadForBridge`, `postProcessToolResultForBridge`) remain.
@@ -40,7 +33,6 @@ import {
   evaluateSoftAgentDecisionGuardrail,
   evaluateToolInvocation,
   findScopeViolations,
-  isIrreversibleTool,
 } from '@mcp/code-agent/core/policy.js';
 import {
   ReadCoverageLedger,
@@ -52,12 +44,9 @@ import {
   visibleSpanOf,
 } from '@mcp/code-agent/core/runner/guards/read-coverage.js';
 import { type CoderTunables, envTunables } from '@mcp/code-agent/core/tunables.js';
-import { repairToolPairing } from '@mcp/code-agent/core/transcript-repair.js';
-import { AGENTS, isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
+import { isReadOnlyAgent } from '@mcp/code-agent/agents/index.js';
 import { SessionFileKnowledge } from '@mcp/code-agent/tools/file-knowledge.js';
-import { isSummarizerEnabled, summarizeSpan, summarizeSpanV2, renderSummary, renderSummaryV2, isStructuredSummaryEnabled, overlayLiveState } from '@mcp/code-agent/core/summarizer.js';
-import { computeSnapshot, type TokenSnapshot } from '@mcp/code-agent/core/token-accounting.js';
-import { profileToTiers, PREVIEW_TOOLS, type ToolTier, type CoderProfile } from '@mcp/code-agent/tools/tiers.js';
+import { profileToTiers, PREVIEW_TOOLS, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { parkForBackgroundWork } from '@mcp/code-agent/tools/subagent-jobs-lifecycle.js';
 import { approvedPlanForRevision } from '@mcp/code-agent/tools/plan.js';
@@ -67,11 +56,8 @@ import {
   type ResolvedToolOutputPolicy,
 } from '@mcp/code-agent/core/tool-output-policy.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
-import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
-import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { asSessionId } from '@mcp/session-storage';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
-import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
 import {
   type TodoItem,
@@ -119,30 +105,14 @@ const PUSH_TIME_CAP = 24_000;
 /** Tighter per-block cap used inside subagents — they accumulate many small
  *  tool results in a short window, so a 12k cap fits ~10 turns under the budget. */
 const SUBAGENT_PUSH_TIME_CAP = 12_000;
-/**
- * "Unrestricted tool output" ceilings — picked when a session has
- * `unrestricted_tool_output = 1`. Deliberately NOT `Infinity` so that
- * the marker arithmetic (`content.length - cap`) and the `toolOutputStore.put`
- * gate keep working even on pathological outputs. Auto-compaction still
- * fires above PRUNE_MINIMUM (60k) so this is not a context-window bypass —
- * it just lifts the per-tool-call ceiling so individual MCP/Unity outputs
- * arrive intact in the turn that produced them.
- */
-// (Tunable constants — UNRESTRICTED_PUSH_TIME_CAP / UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP /
-// TURN_BUDGET_CHARS /
-// POLLING_STUCK_* / SUMMARIZER_* / canRunSummarizer — moved to
-// './runner/constants.ts'.)
+// (POLLING_STUCK_* lives in './runner/constants.ts'.)
 // Post-legacy-removal: only constants actively consumed by the BT
 // bridge / `buildToolResultBlock` / re-exports survive. Legacy global
 // duplicate-call/result knobs were removed with their unused consumers.
 import {
-  UNRESTRICTED_PUSH_TIME_CAP,
-  UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP,
   POLLING_STUCK_CAP,
   POLLING_STUCK_MIN_CHARS,
-  canRunSummarizer,
 } from './runner/constants.js';
-export { canRunSummarizer };
 
 // (Pre-class helpers + tunable constants extracted to ./runner/* sub-modules —
 // see the import block above. The corresponding doc-blocks live in those files.)
@@ -151,17 +121,10 @@ import {
   type ToolOutputCapLevel,
 } from './runner/output-caps.js';
 import { batchBudgetUnits } from './batch-return-format.js';
-import { isEssentialCompanyTool } from './runner/company-essentials.js';
 
 // Assembly modules — extracted in Commit 2 of the BT refactor. The legacy
 // closures/methods below delegate to these so the BT's Executing node can
 // reuse them once Commit 3 lands. Byte-identical to the legacy bodies.
-import {
-  buildTools as buildToolsImpl,
-  buildToolsCacheKey as buildToolsCacheKeyImpl,
-  fingerprintTools,
-} from './runner/assembly/tools.js';
-import { assembleMessagesForChat as assembleMessagesForChatImpl } from './runner/assembly/messages.js';
 
 // Behavior Tree orchestrator — the SOLE execution path post-Frente-E.
 // The legacy while-loop (formerly ~2400 LOC inside `run()`) was removed;
@@ -181,7 +144,6 @@ export { buildPollingStuckRefusal };
 // (previewToolArgs / stableArgsKey / readDupThreshold / readDupWindow /
 // read helpers moved to './runner/dup-utils.ts'.)
 import {
-  previewToolArgs,
   stableArgsKey,
   readDupThreshold,
   readDupWindow,
@@ -193,22 +155,17 @@ export { stableArgsKey };
 // still consumed by `runViaBehaviorTree` / persistence / the BT bridge
 // stay imported here — `preserveLastNTurns`, `transientRetry*` etc. were
 // dead code paths from the legacy loop.)
-import {
-  type RecoveryKind,
-  recoveryCap,
-} from './runner/recovery-config.js';
 
 // (nonRetryableProviderErrorReason + backoffDelayMs moved to './runner/provider-retry.ts'.)
 import {
-  nonRetryableProviderErrorReason,
   backoffDelayMs,
 } from './runner/provider-retry.js';
 export { backoffDelayMs };
 
 // Cycle-aware dominance guard (Fix G — session 609's 50+ silent turns of
 // `mcp__read_file`) is now implemented in `runner/guards/dominance.ts` and
-// wired by the Executing node via `evaluatePerTurnLoops`. Its window/ratio
-// tunables (`CODER_DOMINANCE_WINDOW`/`_RATIO`) live in `runner/constants.ts`
+// wired by the Executing node via `evaluatePerTurnLoops`. Its fixed window and
+// ratio (8 turns / 0.75) live in `runner/constants.ts`
 // (dominanceWindow/dominanceRatio). The dead consts that used to sit here
 // were never read — the guard had no implementation until P0.
 // Post-legacy-removal: the auto-continue cap lives entirely inside the
@@ -217,26 +174,16 @@ export { backoffDelayMs };
 // legacy while-loop and the process-wide env override are gone. Filesystem
 // session state is now the only authority for top-level run limits.
 
-/** How often (in turns) to re-inject the deliverable reminder for subordinate agents. */
-const SUBORDINATE_REMINDER_INTERVAL = 8;
-const SUBORDINATE_REMINDER_MSG =
-  '[System reminder] Before you stop or consider the task done, your LAST action MUST be ' +
-  '`post_to_board` with kind="deliverable" summarizing your work. Never finish silently — ' +
-  'the master is waiting for your report and cannot see your work any other way.';
 const PRESERVED_TOOL_OUTPUT_CAP = 200_000;
 
-// (toolCallsSignature + toolNamesSignature moved to './runner/signatures.ts'.)
-import { toolCallsSignature, toolNamesSignature } from './runner/signatures.js';
-export { toolCallsSignature, toolNamesSignature };
 
-// (approxChars + shouldSpillToolOutput moved to './runner/pure-helpers.ts'.)
+// (approxChars moved to './runner/pure-helpers.ts'.)
 import {
   approxChars,
-  shouldSpillToolOutput,
   capToolContent,
   finalizeToolOutput,
 } from './runner/pure-helpers.js';
-export { approxChars, shouldSpillToolOutput, capToolContent };
+export { approxChars, capToolContent };
 import { resolveFinalizeCap } from './runner/compaction/threshold.js';
 
 /**
@@ -491,7 +438,7 @@ export class CoderRunner extends EventEmitter {
    *
    * Each entry carries the `useId` of the corresponding tool_use block so
    * the smarter guard can check whether the matching tool_result is still
-   * visible in `this.messages` (or has been elided by postCompactCleanup —
+   * visible in `this.messages` (or has been elided by a compaction marker —
    * in which case re-reading is legitimate, not a loop). `mtimeMs` and
    * `contentHash` are populated AFTER dispatch and used to detect staleness
    * and to short-circuit the diff path when the file has not changed.
@@ -683,24 +630,6 @@ export class CoderRunner extends EventEmitter {
    */
   public readonly tunables: CoderTunables;
 
-  /**
-   * Best-effort mirror of a runtime system-reminder injection into
-   * the session bundle's input records so the dashboard's Input tab shows what was
-   * pushed under the hood. No-op when sessionStore/sessionId are absent
-   * (subagents, tests). Dedup is handled by SessionStore.recordSessionInput.
-   */
-  private logSystemReminder(tag: string, content: string): void {
-    if (!this.sessionStore || this.sessionId == null) return;
-    void this.sessionStore.recordSessionInput({
-        session_id: this.sessionId,
-        kind: 'system_reminder',
-        source_label: `reminder:${tag}`,
-        content,
-      })
-      .catch(() => {
-        // best-effort
-      });
-  }
   constructor(opts: RunnerOptions) {
     super();
     // `context_window` predates the runner-wide compaction plumbing. Keep one
@@ -1614,18 +1543,11 @@ export class CoderRunner extends EventEmitter {
         // /inject (or another producer) still has a message buffered for the
         // next Executing boundary.
         hasPendingMessages: () => this.hasPendingUserMessages(),
-        // Loop-enforcement steering — the Executing node calls this when a
-        // tool+args got refused across multiple planning cycles. Wraps
-        // `pushUserMessage` so the reminder lands at the next turn (after the
-        // ToolLoopDetected → Planning hop) via the same drain as above.
-        injectSystemReminder: (text: string) => this.pushUserMessage(text),
         // Background (fire-and-forget) subagent liveness. Main runner only —
         // subagents/company masters never create ephemeral background jobs, so
         // `hasActive()` is false there and the orchestrator never parks.
         backgroundJobs: this.isSubagent || this.sessionId == null ? undefined : {
           hasActive: () => getSubagentJobManager().hasActiveJobs(this.sessionId!),
-          hasUncollectedTerminal: () =>
-            getSubagentJobManager().hasUncollectedTerminalJobs(this.sessionId!),
           park: (signal: AbortSignal) => parkForBackgroundWork({
             manager: getSubagentJobManager(),
             sessionId: this.sessionId!,

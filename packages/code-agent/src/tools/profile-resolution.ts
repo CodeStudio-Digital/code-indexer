@@ -36,6 +36,20 @@ export interface PersistedToolsetState {
   visibleCap: number | null;
 }
 
+/**
+ * Session visible-tool cap: a host-managed cap wins, then the persisted
+ * (widen-only) cap, then the runtime policy. Undefined lets the catalog builder
+ * apply its own default (28).
+ */
+export function resolveSessionToolCap(args: {
+  managedCap?: number | null;
+  persistedCap?: number | null;
+  policyCap?: number | null;
+}): number | undefined {
+  if (args.managedCap != null && args.managedCap > 0) return args.managedCap;
+  return args.persistedCap ?? args.policyCap ?? undefined;
+}
+
 function isCoderProfile(v: unknown): v is CoderProfile {
   return v === 'bootstrap' || v === 'navigate' || v === 'full';
 }

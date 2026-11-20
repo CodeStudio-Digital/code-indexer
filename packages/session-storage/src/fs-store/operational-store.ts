@@ -124,19 +124,6 @@ export class FsOperationalSessionStore {
     ) => self.advanced.setLastResponseState(id, responseId, count),
     this,
   );
-  getSessionFallback = thisCall(
-    (self, id: SessionId | string) => self.advanced.getFallback(id),
-    this,
-  );
-  setSessionFallback = thisCall(
-    (
-      self,
-      id: SessionId | string,
-      provider: string | null,
-      model: string | null,
-    ) => self.advanced.setFallback(id, provider, model),
-    this,
-  );
   setSessionWorktree = thisCall(
     (self, id: SessionId | string, path: string | null) =>
       self.advanced.setWorktree(id, path),

@@ -38,7 +38,7 @@ import {
   DEFAULT_RESOURCE_SCOPE,
 } from '../resources/index.js';
 import { resourcePage } from '../resources/page.js';
-import { coerceArgs } from '../utils.js';
+import { coerceArgs } from '@mcp/indexer/agent-tools/utils.js';
 import { SessionManager } from './session-manager.js';
 
 /**

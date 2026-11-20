@@ -5,10 +5,6 @@ import { BUILTIN_CLASSIFICATION } from './tool-classification.js';
 import type { ToolPermissionMode } from './permission-gate.js';
 
 /** Inspect typed host evidence, never strings returned by an untrusted tool. */
-export function unresolvedToolOutcome(messages: readonly AgentMessage[]): string | undefined {
-  return unresolvedToolOutcomes(messages)[0];
-}
-
 export function unresolvedToolOutcomes(messages: readonly AgentMessage[]): string[] {
   const pending = new Set<string>();
   for (const message of messages) {

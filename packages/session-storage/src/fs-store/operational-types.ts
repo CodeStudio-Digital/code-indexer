@@ -57,8 +57,6 @@ export interface FsRuntimeSessionState {
   last_response_id: string | null;
   last_response_message_count: number | null;
   worktree_path: string | null;
-  fallback_provider: string | null;
-  fallback_model: string | null;
   cloudcode_session_id: string | null;
   base_commit_sha: string | null;
   last_review_at: string | null;

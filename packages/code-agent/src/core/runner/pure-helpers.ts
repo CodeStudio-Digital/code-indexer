@@ -30,31 +30,6 @@ export function approxChars(messages: AgentMessage[]): number {
 }
 
 /**
- * Decide whether a tool result should be spilled to the side-file store
- * (`ToolOutputStore`) so the agent can recover the full content later via
- * `get_tool_output(id)`. Two triggers:
- *
- *   1. **Size**: content exceeds the push-time cap (would otherwise be
- *      truncated to head + marker by buildToolResultBlock).
- *   2. **Failure**: the call returned an error, regardless of size.
- *      Short failure lines ("FAILED tests/foo.py::bar") routinely hide
- *      the full stack trace behind a smart-reducer or truncation marker
- *      — preserving the raw output unconditionally on isError lets the
- *      agent inspect the trace without rerunning the failing command.
- *
- * Extracted from the runner's tool-dispatch loop (around the
- * `toolResultBlocks.push(buildToolResultBlock(...))` site) to keep the
- * spill condition independently testable. Pure function — caller still
- * gates on `toolOutputStore` availability separately.
- */
-export function shouldSpillToolOutput(
-  result: { content: string; isError?: boolean },
-  cap: number,
-): boolean {
-  return result.content.length > cap || !!result.isError;
-}
-
-/**
  * Pure head-cut + deterministic truncation marker. Shared by
  * `buildToolResultBlock` (resume) and `finalizeToolOutput` (live) so both
  * produce byte-identical truncation. The marker depends only on the original

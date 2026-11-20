@@ -38,7 +38,6 @@ import {
   type FailureStreakState,
   type FailureStreakVerdict,
 } from '../guards/failure-streak.js';
-import type { DupCallEntry } from '../guards/dup-call-entry.js';
 import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-abort.js';
 import { resolveToolInvocationMetadata } from '../../policy.js';
 import { declaresPolling } from '../../tool-classification.js';
@@ -59,8 +58,8 @@ import {
  * `resolveToolMetadata` because the built-in interactive set declares the
  * flag in `policy.ts` (BUILTIN_CLASSIFICATION), NOT on the tool object —
  * reading the raw `tool.interactive` here is exactly what made submit_plan /
- * ask_user hit the 5-min timeout while blocked on the user. Override the
- * tiers via MCP_TOOL_NORMAL_TIMEOUT_MS / MCP_TOOL_SLOW_TIMEOUT_MS.
+ * ask_user hit the 5-min timeout while blocked on the user. The tiers are
+ * fixed (5 min / 30 min); no env var overrides them.
  */
 
 /**
@@ -75,8 +74,6 @@ export type RefusalKind =
   | 'task-mode'
   | 'dedup'
   | 'user_denied' // permission-gate denial — name matches classifyToolRefusal's legacy tag
-  | 'failure-streak'
-  | 'polling-stuck'
   | 'timeout'
   | 'abort'
   | 'overwrite-guard'; // write_file / apply_patch Add File over an unknown existing file
@@ -91,8 +88,6 @@ export interface DispatchedToolResult {
   isError: boolean;
   effectOutcome?: 'unknown';
   durationMs: number;
-  /** True when synthesized by the dedup refusal path (no real invocation). */
-  wasRefusedByDedup: boolean;
   /** Set on every harness-synthesized refusal/replacement — see RefusalKind. */
   refusalKind?: RefusalKind;
   /**
@@ -129,13 +124,12 @@ export interface DispatchArgs {
   /**
    * Deterministic, same-batch retrieval planning. This removes provably
    * redundant search/map/grep invocations without adding prompt text. Omit to
-   * retain legacy dispatch; CODER_RETRIEVAL_GUARD=0 is the runtime kill switch.
+   * retain legacy dispatch (there is no env kill switch).
    */
   retrievalBatch?: Omit<RetrievalBatchPlanOptions, 'enabled'>;
   registry: ToolRegistry;
   toolContext: ToolContext;
   turn: number;
-  dupCalls: Map<string, DupCallEntry>;
   /** Run-scoped, post-result observation and state epoch. */
   noProgressTracker?: NoProgressTracker;
   /**
@@ -169,8 +163,8 @@ export interface DispatchArgs {
   /**
    * Fase 2 Policy Engine shadow port (default-off). When present AND its
    * flags are enabled, it evaluates a shadow PolicyDecision, records the
-   * comparison vs. the legacy gate, and — only when `CODER_POLICY_ENGINE_ENFORCE`
-   * is set (dormant) — may itself refuse a call. When absent, the dispatch path
+   * comparison vs. the legacy gate, and — only when the composition layer sets
+   * `PolicyShadowMode.enforce` (dormant; no env var) — may itself refuse a call. When absent, the dispatch path
    * is byte-identical to the pre-Fase-2 behavior. It runs immediately BEFORE the
    * permission gate so its enforcement, if ever enabled, precedes the legacy
    * approval prompt.
@@ -326,23 +320,6 @@ export interface DispatchArgs {
 export interface DispatchResult {
   results: DispatchedToolResult[];
   outcomeUnknown?: boolean;
-  /** True when at least one call was refused — caller routes to Planning. */
-  toolLoopDetected: boolean;
-  /**
-   * PR 5 — which guard fired the most recent refusal in this batch.
-   * `undefined` when `toolLoopDetected` is false. Routed by the
-   * Executing node into `events.toolLoopDetected({ guard })` so the
-   * orchestrator and dashboard see WHICH guard fired (not just THAT
-   * one did).
-   */
-  loopGuard?: 'tuple-hash' | 'doom-loop' | 'failure-streak';
-  /**
-   * A1 — tool + repetition count behind the most recent refusal in this
-   * batch (mirrors `loopGuard`: last one wins). Threaded into
-   * `events.toolLoopDetected` so Planning can NAME the loop in its
-   * reflection reminder instead of a generic "a repeated tool call".
-   */
-  loopDetail?: { toolName: string; count: number };
 }
 
 export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult> {
@@ -351,13 +328,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     ...args.retrievalBatch,
     enabled: args.retrievalBatch !== undefined,
   });
-  let toolLoopDetected = false;
   let outcomeUnknown = false;
-  // PR 5 — which guard fired last. Tracked so the Executing node can
-  // surface the correct guard kind to the orchestrator.
-  let loopGuard: DispatchResult['loopGuard'] | undefined;
-  // A1 — tool/count behind the last refusal (mirrors loopGuard).
-  let loopDetail: DispatchResult['loopDetail'];
   const invocationGuard = createInvocationGuardState(
     args.noProgressTracker?.stateEpoch ?? 0,
   );
@@ -413,12 +384,12 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       outcomeUnknown = true;
       await pushResult({ toolUseId: tu.id, name: tu.name,
         content: 'Tool not dispatched because a previous tool outcome is unresolved. Reconcile before retrying.',
-        isError: true, durationMs: 0, wasRefusedByDedup: false, refusalKind: 'gate' });
+        isError: true, durationMs: 0, refusalKind: 'gate' });
       return;
     }
     if (asAbortSignal(args.toolContext.signal)?.aborted) {
       await pushResult({ toolUseId: tu.id, name: tu.name, content: 'Tool execution cancelled before dispatch.',
-        isError: true, durationMs: 0, wasRefusedByDedup: false, refusalKind: 'abort' });
+        isError: true, durationMs: 0, refusalKind: 'abort' });
       return;
     }
     if (retrievalDecision?.action === 'coalesce') {
@@ -428,7 +399,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         content: retrievalDecision.content,
         isError: false,
         durationMs: 0,
-        wasRefusedByDedup: false,
         guardVerdict: {
           action: 'reuse',
           reason: retrievalDecision.reason,
@@ -461,7 +431,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           content: blockedText,
           isError: true,
           durationMs: 0,
-          wasRefusedByDedup: false,
           refusalKind: 'gate',
           stateEpoch: invocationGuard.stateEpoch,
         });
@@ -479,7 +448,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         content: gateRefusal,
         isError: true,
         durationMs: 0,
-        wasRefusedByDedup: false,
         refusalKind: 'gate',
         stateEpoch: invocationGuard.stateEpoch,
       });
@@ -497,12 +465,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     ) ?? null;
     // Historical reads never turn into a hard error. Preserve a non-error
     // pointer, but ignore obsolete string refusals and fetch fresh content.
-    const enforcePreReadResult =
-      preReadRefusal !== null &&
-      typeof preReadRefusal !== 'string';
-    if (enforcePreReadResult) {
-      const content = typeof preReadRefusal === 'string' ? preReadRefusal : preReadRefusal.content;
-      const isError = typeof preReadRefusal === 'string' ? true : preReadRefusal.isError ?? true;
+    if (preReadRefusal !== null && typeof preReadRefusal !== 'string') {
+      const content = preReadRefusal.content;
+      const isError = preReadRefusal.isError ?? true;
       const guardVerdict: GuardVerdict = isError
         ? {
             action: 'block',
@@ -529,7 +494,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         content,
         isError,
         durationMs: 0,
-        wasRefusedByDedup: false,
         // The auto-downgrade variant (isError=false) is a degraded SUCCESS,
         // not a refusal — leave it untagged so error analytics stay clean.
         ...(isError ? { refusalKind: 'pre-read' as const } : {}),
@@ -553,7 +517,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         content: taskModeRefusal,
         isError: true,
         durationMs: 0,
-        wasRefusedByDedup: false,
         refusalKind: 'task-mode',
         stateEpoch: invocationGuard.stateEpoch,
       });
@@ -570,7 +533,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // absent — the default — this block is skipped entirely and the path is
     // byte-identical to the pre-Fase-2 behavior. In shadow mode the port
     // records its comparison and returns `{ refuse: false }`, so nothing
-    // changes; only with CODER_POLICY_ENGINE_ENFORCE can it refuse.
+    // changes; only an enforcing mode (`PolicyShadowMode.enforce`) can refuse.
     if (args.policyShadow) {
       const shadow = await args.policyShadow({
         tool,
@@ -586,7 +549,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           content: shadow.refusalText,
           isError: true,
           durationMs: 0,
-          wasRefusedByDedup: false,
           refusalKind: 'user_denied',
           stateEpoch: invocationGuard.stateEpoch,
         });
@@ -618,7 +580,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
           content: decision.refusalText,
           isError: true,
           durationMs: 0,
-          wasRefusedByDedup: false,
           refusalKind: 'user_denied',
           stateEpoch: invocationGuard.stateEpoch,
         });
@@ -653,7 +614,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         toolUseId: tu.id,
         name: tu.name,
         durationMs: 0,
-        wasRefusedByDedup: false,
         refusalKind: undefined,
         ledgerEntry: undefined,
         guardVerdict: reuseVerdict,
@@ -754,16 +714,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
               input.turn,
               input.toolUseId,
             ) ?? null;
-            const enforcePreReadResult =
-              preReadRefusal !== null
-              && typeof preReadRefusal !== 'string';
-            if (enforcePreReadResult) {
-              const content = typeof preReadRefusal === 'string'
-                ? preReadRefusal
-                : preReadRefusal.content;
-              const isError = typeof preReadRefusal === 'string'
-                ? true
-                : preReadRefusal.isError ?? true;
+            if (preReadRefusal !== null && typeof preReadRefusal !== 'string') {
+              const content = preReadRefusal.content;
+              const isError = preReadRefusal.isError ?? true;
               return {
                 content,
                 isError,
@@ -851,14 +804,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       invocationSourceTruncations = normalizeSourceTruncations(result.sourceTruncations);
       if (invocationGuardVerdict?.action === 'block') {
         refusalKind = (invocationGuardVerdict.refusalKind as RefusalKind | undefined) ?? 'dedup';
-        if (invocationGuardVerdict.shouldReflect) {
-          toolLoopDetected = true;
-          loopGuard = 'tuple-hash';
-          loopDetail = {
-            toolName: invocationGuardVerdict.sourceTool ?? tu.name,
-            count: invocationGuardVerdict.count ?? 1,
-          };
-        }
       }
     } catch (e) {
       // A lost wait is uncertain only after a physical effect-capable handler
@@ -1074,23 +1019,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       productive: stateChangingSuccess || ledgerEntry?.productive,
       stateEpoch: args.noProgressTracker.stateEpoch,
     }) ?? null;
-    // Most unchanged reads remain observation-only: a later user request may
-    // legitimately ask for the same snapshot. A small set of control-plane
-    // tools can opt in when repeating an unchanged result inside the current
-    // run is itself the failure mode (App Studio's workflow snapshot is the
-    // motivating case). The successful third result is delivered, but the BT
-    // is routed through Planning before another provider continuation.
-    const stopRepeatedUnchangedResult =
-      tool?.stopOnRepeatedUnchangedResult === true && noProgressVerdict?.wouldBlock === true;
-    const effectiveNoProgressVerdict = stopRepeatedUnchangedResult
-      ? {
-          ...noProgressVerdict,
-          action: 'shadow' as const,
-          reason: 'cross-turn-no-progress',
-          shouldReflect: false,
-        }
-      : noProgressVerdict;
-    const selectedGuardVerdict = invocationGuardVerdict ?? effectiveNoProgressVerdict;
+    // Unchanged results are observation-only: a later user request may
+    // legitimately ask for the same snapshot.
+    const selectedGuardVerdict = invocationGuardVerdict ?? noProgressVerdict;
     const finalGuardVerdict = selectedGuardVerdict && stateChangingSuccess
       ? { ...selectedGuardVerdict, stateEpoch: invocationGuard.stateEpoch }
       : selectedGuardVerdict;
@@ -1112,7 +1043,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       isError: finalIsError,
       ...(invocationOutcomeUnknown ? { effectOutcome: 'unknown' as const } : {}),
       durationMs,
-      wasRefusedByDedup: false,
       refusalKind,
       extraUserBlocks: invocationExtraBlocks,
       ...(finalTruncated ? { truncated: true, originalSize: finalOriginalSize } : {}),
@@ -1200,7 +1130,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   const carrier = results[results.length - 1];
   if (notice && carrier) carrier.content = `${carrier.content}\n\n${notice}`;
 
-  return { results, toolLoopDetected, loopGuard, loopDetail, ...(outcomeUnknown ? { outcomeUnknown: true } : {}) };
+  return { results, ...(outcomeUnknown ? { outcomeUnknown: true } : {}) };
 }
 
 /** Compact error-to-string for the guarded bridge-callback warnings. */

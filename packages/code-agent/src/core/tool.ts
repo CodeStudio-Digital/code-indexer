@@ -203,14 +203,6 @@ export interface CoderTool {
    * pollable policy exempts failures from the failure-streak guard.
    */
   repeatPolicyOf?(input: unknown): ToolRepeatPolicy;
-  /**
-   * Promote the cross-turn unchanged-result detector from telemetry-only to
-   * an active loop break for this tool. Use sparingly for control-plane
-   * snapshots whose repeated identical result cannot advance the task. The
-   * third unchanged call is still delivered, then the runner forces a
-   * planning turn so the model must choose a different action.
-   */
-  stopOnRepeatedUnchangedResult?: boolean;
   /** Scheduling class used by nested and future parallel dispatchers. */
   executionClass?: ToolExecutionClass;
   /**
@@ -404,8 +396,7 @@ export interface ToolContext extends ToolContextServices {
   /**
    * Loop-guard + telemetry observer for nested tool calls (code_exec).
    * Built per parent call by the Executing node over the run's own guard
-   * state; absent in tests/subagent paths and when
-   * `CODER_NESTED_GUARDS_DISABLE=1`. See runner/guards/nested-observer.ts.
+   * state; absent in tests/subagent paths. See runner/guards/nested-observer.ts.
    */
   nestedToolObserver?: NestedToolObserver;
   /**

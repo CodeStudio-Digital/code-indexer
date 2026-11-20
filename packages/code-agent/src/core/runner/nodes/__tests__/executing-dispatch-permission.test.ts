@@ -10,7 +10,6 @@ import { describe, it, expect } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { PermissionGate } from '@mcp/code-agent/core/permission-gate.js';
-import type { DupCallEntry } from '../../machine/types.js';
 import { dispatchTools, type DispatchArgs } from '../executing-dispatch.js';
 
 function registryWith(tool: Partial<CoderTool> & { name: string }, onInvoke?: () => void): ToolRegistry {
@@ -43,7 +42,6 @@ function args(
     registry,
     toolContext,
     turn: 1,
-    dupCalls: new Map<string, DupCallEntry>(),
     ...extra,
   };
 }
@@ -63,10 +61,8 @@ describe('dispatchTools — permission gate', () => {
       toolUseId: 'tu1',
       isError: true,
       durationMs: 0,
-      wasRefusedByDedup: false,
     });
     expect(result.results[0].content.startsWith('[user-denied')).toBe(true);
-    expect(result.toolLoopDetected).toBe(false);
   });
 
   it('approval proceeds to the handler', async () => {

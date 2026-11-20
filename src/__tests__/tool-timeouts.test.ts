@@ -2,12 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 
 /**
- * Policy tests for `resolveToolTimeoutMs` and `resolveHeartbeatIntervalMs`.
+ * Policy tests for `resolveToolTimeoutMs`.
  *
  * The module reads its NORMAL/SLOW constants at module load time, so the
  * env-override tests use `vi.resetModules()` + dynamic import to pick up
- * a fresh module under each env scenario. The heartbeat resolver re-reads
- * env on every call, so it's tested without re-import.
+ * a fresh module under each env scenario.
  */
 
 const ENV_KEYS = [
@@ -126,37 +125,6 @@ describe('resolveToolTimeoutMs — env overrides', () => {
     const { NORMAL_TIMEOUT_MS, SLOW_TIMEOUT_MS } = await import('@mcp/code-agent/core/tool-timeouts.js');
     expect(NORMAL_TIMEOUT_MS).toBe(5 * 60_000);
     expect(SLOW_TIMEOUT_MS).toBe(30 * 60_000);
-    expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
-  });
-});
-
-describe('resolveHeartbeatIntervalMs', () => {
-  beforeEach(() => {
-    clearEnv();
-  });
-  afterEach(() => {
-    clearEnv();
-  });
-
-  it('returns the 5000 default when no env is set', async () => {
-    const { resolveHeartbeatIntervalMs } = await import('@mcp/code-agent/core/tool-timeouts.js');
-    expect(resolveHeartbeatIntervalMs()).toBe(5_000);
-  });
-
-  it('keeps the fixed heartbeat interval despite retired overrides', async () => {
-    const { resolveHeartbeatIntervalMs } = await import('@mcp/code-agent/core/tool-timeouts.js');
-    process.env.MCP_TOOL_HEARTBEAT_MS = '1234';
-    expect(resolveHeartbeatIntervalMs()).toBe(5_000);
-    process.env.MCP_TOOL_HEARTBEAT_MS = '0';
-    expect(resolveHeartbeatIntervalMs()).toBe(5_000);
-  });
-
-  it('falls back to default on invalid input', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { resolveHeartbeatIntervalMs } = await import('@mcp/code-agent/core/tool-timeouts.js');
-    process.env.MCP_TOOL_HEARTBEAT_MS = 'oops';
-    expect(resolveHeartbeatIntervalMs()).toBe(5_000);
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });

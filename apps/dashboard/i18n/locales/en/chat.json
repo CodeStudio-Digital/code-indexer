@@ -992,7 +992,6 @@
   "agents.hardBudget": "Hard cap: {{tools}} tool calls / {{time}}",
   "toolbar.temperature": "Temperature",
   "toolbar.temperatureAuto": "auto",
-  "toolbar.fallback": "Fallback",
   "toolbar.describeImages": "Describe images: uses a vision model to translate attached images and screenshots into text. This is applied automatically when the current model cannot see images. Configure the model in Settings → Pipelines (the “vision” role).",
   "toolbar.outputCap.heading": "Tool output",
   "toolbar.outputCap.hint": "Output limit per tool call. Scales the truncation cap (Economy ~24 KB → XL ~4 MB) for large reads and Unity. Auto-compaction remains enabled. Applies to the next tool output, including in the active session.",

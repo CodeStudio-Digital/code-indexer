@@ -3,12 +3,10 @@ import type { SessionId } from '@mcp/session-storage';
 import type {
   PreflightMemoryEntry,
   PreflightSkillMeta,
-  PreflightToolMeta,
   PreflightWorkspaceProject,
 } from './preflight-prompt.js';
 
 interface PreflightCatalogDeps {
-  getToolCatalog: () => PreflightToolMeta[];
   getMemoryIndex: (projectId: number) => PreflightMemoryEntry[];
   getSkillCatalog?: (
     sessionId: SessionId,
@@ -28,7 +26,6 @@ interface PreflightCatalogInput {
 }
 
 export interface PreparedPreflightCatalogs {
-  toolCatalog: PreflightToolMeta[];
   memoryIndex: PreflightMemoryEntry[];
   skillCatalog: PreflightSkillMeta[];
   workspaceProjects: PreflightWorkspaceProject[];
@@ -78,9 +75,6 @@ export function preparePreflightCatalogs(
   input: PreflightCatalogInput,
 ): PreparedPreflightCatalogs {
   const workspaceProjects = input.workspaceProjects ?? [];
-  const toolCatalog = deps.getToolCatalog().filter((tool) =>
-    !input.isGlobalWorkspace || !tool.name.startsWith('git_'),
-  );
   const memoryIndex = input.isGlobalWorkspace
     ? workspaceProjects.flatMap((project) =>
         deps.getMemoryIndex(project.projectId).map((memory) => ({ ...memory, projectSlug: project.slug })),
@@ -149,13 +143,12 @@ export function preparePreflightCatalogs(
     skillCatalog.push({ ...meta, evidence, ...(projectSlugs?.length ? { projectSlugs } : {}) });
   }
 
-  return { toolCatalog, memoryIndex, skillCatalog, workspaceProjects };
+  return { memoryIndex, skillCatalog, workspaceProjects };
 }
 
 export function preflightCapabilityFingerprint(prepared: PreparedPreflightCatalogs): string {
   return stableHash(JSON.stringify({
     projects: prepared.workspaceProjects.map((p) => [p.projectId, p.slug, p.isPrimary]),
-    tools: prepared.toolCatalog.map((t) => [t.name, t.tier, t.description ?? '']),
     skills: prepared.skillCatalog.map((s) => [
       s.id,
       s.name ?? '',

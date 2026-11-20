@@ -84,8 +84,7 @@ export const DEFAULT_BODY_AFTER_PREFIX_RATIO = 0.85;
  * Body gate default derived from the single trigger knob: trigger ratio − 0.05
  * (0.85 with the default 0.90). Subtracting the prefix from both numerator and
  * denominator INCREASES the ratio, so the body gate naturally fires slightly
- * before the total gate — keeping it 5pp tighter preserves that ordering for
- * any `CODER_COMPACT_TRIGGER_RATIO` override.
+ * before the total gate — keeping it 5pp tighter preserves that ordering.
  */
 export function resolveBodyAfterPrefixRatio(): number {
   return Math.max(0.5, resolveTriggerRatio() - 0.05);

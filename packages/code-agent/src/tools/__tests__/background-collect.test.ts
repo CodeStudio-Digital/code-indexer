@@ -103,7 +103,6 @@ describe('spawn_agent background + collect_agents', () => {
     // Let the fire-and-forget job settle.
     const manager = getSubagentJobManager();
     await manager.get(SID, jobId)!.settled;
-    expect(manager.hasUncollectedTerminalJobs(SID)).toBe(true);
 
     const collect = buildCollectAgentsTool(deps);
     const r = await collect.handler({ job_id: jobId, wait: true }, ctx);
@@ -117,7 +116,6 @@ describe('spawn_agent background + collect_agents', () => {
       partialCount: 0,
       failedCount: 0,
     });
-    expect(manager.hasUncollectedTerminalJobs(SID)).toBe(false);
     // Usage accounted exactly once, at settle.
     expect(bump).toHaveBeenCalledTimes(1);
     expect(bump).toHaveBeenCalledWith(

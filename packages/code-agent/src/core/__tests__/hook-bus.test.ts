@@ -4,7 +4,6 @@ import {
   createRuntimeHookBus,
   isValidJsonPatch,
   orderHooks,
-  registerRuntimeHook,
   type DecisionHookResult,
   type HookDefinition,
 } from '../hook-bus.js';
@@ -90,23 +89,6 @@ describe('HookBus observation containment', () => {
 });
 
 describe('HookBus runtime wiring', () => {
-  it('copies process registrations into each fresh per-run bus', async () => {
-    let fired = 0;
-    const unregister = registerRuntimeHook(def({
-      hookId: 'runtime-observer',
-      kind: 'observation',
-      stage: 'run_started',
-      handler: () => { fired += 1; },
-    }));
-    try {
-      await createRuntimeHookBus().fireObservation('run_started', {});
-      expect(fired).toBe(1);
-    } finally {
-      unregister();
-    }
-    expect(createRuntimeHookBus().list('run_started')).toEqual([]);
-  });
-
   it('fires run terminal in finally and preserves execution when a run hook fails', async () => {
     const order: string[] = [];
     const bus = new HookBus();

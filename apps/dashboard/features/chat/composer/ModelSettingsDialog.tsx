@@ -17,7 +17,6 @@ import { Input } from '../../../components/ui/input.js';
 import { Combobox, type ComboboxOption } from '../../../components/ui/combobox.js';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
 import { Switch } from '../../../components/ui/switch.js';
-import { FallbackPicker } from '../../../components/FallbackPicker.js';
 import { PROVIDERS } from '../constants.js';
 import type { EnrichedProviderModel, ExecutionMode, ProviderOption } from '../types.js';
 import { AgentPicker } from './AgentPicker.js';
@@ -82,9 +81,6 @@ interface ModelSettingsDialogProps {
   /** Per-session output style (migration 178): proactive | explanatory | learning. */
   outputStyle?: string | null;
   setOutputStyle?: (v: string | null) => void;
-  fallbackProvider: string | null;
-  fallbackModel: string | null;
-  onFallbackChange: (provider: string | null, model: string | null) => void;
   getModelsForProvider: (providerId: string) => EnrichedProviderModel[];
 }
 
@@ -132,9 +128,6 @@ function ModelSettingsDialogBody({
   setResponseLanguage,
   outputStyle,
   setOutputStyle,
-  fallbackProvider,
-  fallbackModel,
-  onFallbackChange,
   getModelsForProvider,
 }: Omit<ModelSettingsDialogProps, 'open' | 'onOpenChange'>) {
   const { t } = useTranslation(['chat', 'common']);
@@ -427,16 +420,6 @@ function ModelSettingsDialogBody({
               </div>
             </div>
           )}
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground">{t('chat:toolbar.fallback', { defaultValue: 'Fallback' })}</label>
-            <FallbackPicker
-              fallbackProvider={fallbackProvider}
-              fallbackModel={fallbackModel}
-              providerOptions={providerOptions}
-              getModelsForProvider={getModelsForProvider}
-              onChange={onFallbackChange}
-            />
-          </div>
       </div>
     </>
   );

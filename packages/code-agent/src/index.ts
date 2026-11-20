@@ -20,7 +20,7 @@ import { CodeIndexDB } from '@mcp/store/db.js';
 import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
-import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
+import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { PromptContextMeasurement } from '@mcp/provider-sdk/prompt-cache-metrics.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { admitCoderAttempt, prepareCoderAttempt } from './runtime/attempt-preparation.js';
@@ -129,7 +129,6 @@ import {
   type MicroAgentProfileId,
 } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { buildSpawnAgentTool } from '@mcp/code-agent/tools/spawn-agent.js';
-import { loadPrompt, interpolate } from '@mcp/code-agent/prompts/loader.js';
 import { buildDiagramGuidance } from '@mcp/code-agent/prompts/diagram-guidance.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 import { buildKanbanTools } from '@mcp/company/tools/kanban-tools.js';
@@ -150,12 +149,10 @@ import { createRuntimeHookBus } from '@mcp/code-agent/core/hook-bus.js';
 import {
   contextualTiersForRuntime,
   profileToTiers,
-  getToolTier,
   type CoderProfile,
   type ToolTier,
 } from '@mcp/code-agent/tools/tiers.js';
-import { parseToolsetState, resolveSessionProfile } from '@mcp/code-agent/tools/profile-resolution.js';
-import { getModelMaxTools } from '@mcp/code-agent/providers/capabilities.js';
+import { parseToolsetState, resolveSessionProfile, resolveSessionToolCap } from '@mcp/code-agent/tools/profile-resolution.js';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import {
   type ReadProject,
@@ -166,7 +163,6 @@ import {
 } from '@mcp/code-agent/core/runner/assembly/union-memory.js';
 import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { decisionGuidanceForTask, decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
-import { classifyIntent } from '@mcp/code-agent/agents/task-intent.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { toolOutputTools } from '@mcp/code-agent/tools/tool-output.js';
 import { diagnosticsTools } from '@mcp/code-agent/tools/diagnostics.js';
@@ -1399,7 +1395,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // THIS session's active snapshots so the agent can validate its own work
   // before claiming done. Registered after the subagent parentTools snapshot
   // above so ephemeral subagents don't inherit it. Always available (bootstrap
-  // tier); the CODER_SELF_REVIEW toggle only governs the proactive reminder.
+  // tier); the runner never pushes an automatic reminder to call it.
   registry.register(
     buildSelfReviewTool({
       settingsDbHandle: db.raw(),
@@ -1811,7 +1807,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     currentAgent: effectiveAgentId,
     hasHistory: hasHistory0,
   };
-  const currentTurnIntent = classifyIntent(opts.userMessage ?? '');
   const agentDecisionGuidance = (
     opts.agentDecisionGuidanceEnabled ||
     opts.agentDecisionSoftGuardrail ||
@@ -1830,7 +1825,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const preflightSeed = !hasHistory0 ? opts.preflight : undefined;
   // Runtime guidance may render as a preflight reminder even when the host did
   // not provide a real preflight seed. Keep it separate so guidance-only does
-  // not accidentally activate seeded tool caps, profile hints, or pinned tools.
+  // not accidentally activate a seeded profile.
   const preflightHintSeed = !hasHistory0
     ? (
       agentDecisionGuidance && opts.agentDecisionGuidanceEnabled
@@ -1847,20 +1842,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const persistedToolset = stickyToolset
     ? parseToolsetState(session.tool_profile, session.tool_state_json)
     : null;
-  // Seeded sessions cap the visible tool list at min(model cap, this) —
-  // real reduction even on large-catalog models. Required pins survive.
-  // The cap is persisted (widen-only state) so resumes rebuild the SAME
-  // visible membership instead of dropping the cut and re-flipping the array.
-  const seededToolCap = preflightSeed
-    ? (opts.runtimePolicy?.capabilities.visibleToolCap ?? 28)
-    : undefined;
-  const managedToolCap = opts.initialVisibleToolCap != null && opts.initialVisibleToolCap > 0
-    ? opts.initialVisibleToolCap
-    : undefined;
-  const sessionToolCap = managedToolCap
-    ?? seededToolCap
-    ?? persistedToolset?.visibleCap
-    ?? opts.runtimePolicy?.capabilities.visibleToolCap;
+  // The visible-tool cap is persisted (widen-only state) so resumes rebuild the
+  // SAME visible membership. It no longer depends on a preflight having run.
+  const sessionToolCap = resolveSessionToolCap({
+    managedCap: opts.initialVisibleToolCap,
+    persistedCap: persistedToolset?.visibleCap,
+    policyCap: opts.runtimePolicy?.capabilities.visibleToolCap,
+  });
   if (stickyToolset && sessionToolCap != null) {
     try { await store.mergeSessionToolsetState(session.id, { visibleCap: sessionToolCap }); } catch { /* best-effort */ }
   }
@@ -2378,37 +2366,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try { observe(event); } catch { /* index/preview observations are best-effort */ }
     }
   };
-  // Always defined so the runner can refresh OAuth credentials (e.g. the
-  // Copilot 25-min token) on 401 even when no fallback chain is configured.
-  const createProviderForFallback = async (name: string, model: string) => {
-    return budgetedProvider(await createCoderProvider(name, model), sharedBudget);
-  };
-  let fallbackChain: import('@mcp/code-agent/core/fallback.js').FallbackChain | undefined;
-  // App role fallbacks are owned by the Company lifecycle, which records the
-  // effective model and fallback reason on the bundle agent-run entity before retrying.
-  // Letting the coder-local provider/env chain run here could silently jump to
-  // a global mini model without updating that provenance. Generic Company and
-  // solo sessions retain their existing fallback chain unchanged.
-  if (!isAppStudioCompany) {
-    try {
-      const { buildFallbackChain } = await import('@mcp/code-agent/core/fallback.js');
-      const providerStore = new ProviderStore(config.dbPath);
-      const sessionFallback = await store.getSessionFallback(session.id);
-      const providerChain = providerStore.getFallbackChain(session.provider);
-      providerStore.close();
-      const chain = buildFallbackChain(
-        sessionFallback,
-        providerChain,
-        undefined,
-      );
-      if (chain.entries.length > 0) {
-        fallbackChain = chain;
-        console.log(`[coder] Fallback chain: ${chain.entries.map((e) => `${e.provider}:${e.model}`).join(' → ')}`);
-      }
-    } catch {
-      // Fallback config not available (migration not run yet) — skip silently
-    }
-  }
 
   const verificationEvidenceEnabled = !opts.companyContext;
 
@@ -2419,7 +2376,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // capabilities.ts) so the dashboard's context bar renders for legacy
   // sessions without forcing a re-discovery.
   let sessionContextWindow: number | null = null;
-  let sessionModelCanReason: boolean | null = null;
   try {
     const ps = new ProviderStore(config.dbPath);
     const [sessionModelId, sessionModelMode = ''] = session.model.split('::');
@@ -2427,7 +2383,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       m.model_id === sessionModelId && (!sessionModelMode || m.mode === sessionModelMode));
     ps.close();
     sessionContextWindow = dbModel?.context_window ?? null;
-    sessionModelCanReason = dbModel?.can_reason ?? null;
   } catch {
     // Non-fatal — registry fallback below
   }
@@ -2745,8 +2700,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
     externalToolTiers: runtimeToolTiers,
-    fallbackChain,
-    createProvider: createProviderForFallback,
     verificationEvidenceEnabled,
     collectVerifyEvidence: verificationEvidenceEnabled
       ? () => buildVerifyEvidence(store, session.id)
@@ -2759,7 +2712,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // the owning Company run. Null for individual coder sessions.
     companyAgentRunId: opts.companyContext?.agentRunId ?? null,
     companySessionId: opts.companyContext?.companySessionId ?? null,
-    adminOverride: opts.adminOverride,
     agentId: effectiveAgentId,
     sessionTemperature: session.temperature_override,
     roleTemperature: opts.roleTemperature,
