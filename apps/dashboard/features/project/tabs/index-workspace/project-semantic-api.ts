@@ -87,6 +87,7 @@ export interface ProjectSemanticSearchDiagnostics {
   fallbackReason?: string;
   queryVariants?: string[];
   vectorRawMatches?: number;
+  vectorSkippedReason?: string;
   vectorRehydrated?: number;
   vectorError?: string;
   ftsCount?: number;
@@ -111,6 +112,7 @@ export interface ProjectSemanticSearchTestResult {
 
 export interface ProjectSemanticStatus {
   project_id: number;
+  code_folders?: string[];
   profiles: Array<{
     purpose: 'code' | 'docs' | 'memory';
     embedding_target: {

@@ -21,7 +21,7 @@ export interface ProcessFileStructuralResult {
  * and hand completed records to one writer.
  */
 export interface PreparedFileStructural {
-  file: ScannedFile;
+  file: Omit<ScannedFile, 'content'>;
   content: string;
   hash: string;
   sizeBytes: number;
@@ -45,12 +45,13 @@ export async function prepareFileStructural(
   // Lazy content read, same drift handling as processFile: the file may have
   // changed between scan and process; `files.content_hash` must match what we
   // actually parsed.
-  let content = file.content ?? '';
+  const { content: source, ...metadata } = file;
+  let content = source ?? '';
   let hash = file.hash;
   let sizeBytes = file.sizeBytes;
   let lineCount = file.lineCount;
   let mtimeMs = file.mtimeMs ?? null;
-  if (!content && file.path) {
+  if (source === undefined && file.path) {
     content = readFileSync(file.path, 'utf-8');
     const freshHash = hashContent(content);
     if (freshHash !== hash) {
@@ -74,7 +75,7 @@ export async function prepareFileStructural(
   const pathFlags = structuralPathFlags(file.relativePath);
 
   return {
-    file,
+    file: metadata,
     content,
     hash,
     sizeBytes,
@@ -148,7 +149,7 @@ export function persistPreparedFileStructural(
       db.upsertSymbolReferences(projectId, id, file.relativePath, enrichReferencesWithLines(references, content));
     }
 
-    db.upsertFileContent(id, content, sizeBytes, projectId);
+    db.upsertFileContent(id, content, sizeBytes, projectId, hash);
     return id;
   });
 

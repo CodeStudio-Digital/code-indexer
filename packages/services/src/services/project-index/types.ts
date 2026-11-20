@@ -94,6 +94,7 @@ export interface StructuralRunSummary {
   };
   peakRssMb?: number;
   aborted?: 'too_large' | 'signal' | 'empty_scan';
+  unavailableRoots?: string[];
 }
 
 export interface IndexFilesSummary {
@@ -165,7 +166,7 @@ export interface ProjectIndexSettings {
   autoIndex: boolean;
   /** MCP_AUTO_WATCH — real-time watcher per opened project. */
   autoWatch: boolean;
-  /** MCP_AUTO_INDEX_MAX_FILES — candidate cap before bailing too_large. */
+  /** MCP_AUTO_INDEX_MAX_FILES — optional automatic candidate cap, 0 means unlimited. */
   maxFiles: number;
   /** MCP_WATCH_MAX_PROJECTS — LRU cap on concurrently watched projects. */
   maxWatchedProjects: number;
@@ -211,7 +212,7 @@ export function readProjectIndexSettings(): ProjectIndexSettings {
   return {
     autoIndex: process.env.MCP_AUTO_INDEX_STRUCTURAL !== '0',
     autoWatch: process.env.MCP_AUTO_WATCH !== '0',
-    maxFiles: envInt('MCP_AUTO_INDEX_MAX_FILES', 100000),
+    maxFiles: envIntZero('MCP_AUTO_INDEX_MAX_FILES', 0),
     maxWatchedProjects: envInt('MCP_WATCH_MAX_PROJECTS', 3),
     watchDebounceMs: envInt('MCP_WATCH_DEBOUNCE_MS', 1000),
     watchOpenDelayMs: envIntZero('MCP_WATCH_OPEN_DELAY_MS', 1200),

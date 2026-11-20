@@ -25,6 +25,8 @@ import {
   type PreparedFileStructural,
 } from './indexer/process-file-structural.js';
 import { resolveStructuralPipelineSchedule } from './structural-pipeline-schedule.js';
+import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
+import { canEnumerate } from './scanner.js';
 
 export interface IndexFilesStructuralOptions {
   ignorePatterns?: string[];
@@ -55,6 +57,9 @@ export async function indexFilesStructural(
   const project = db.getProject(projectId);
   if (!project) throw new Error(`project ${projectId} not found`);
   const root = project.root_path;
+  const linkedRoots = project.is_synthetic
+    ? new Map(assignWorkspaceSlugs(db.listUnionProjectIds(projectId)).map(source => [source.slug, source.root_path]))
+    : undefined;
   const ig = buildScannerIgnore(
     root,
     mergeIndexIgnorePatterns(opts.ignorePatterns, projectIndexIgnorePatterns(project)),
@@ -76,9 +81,16 @@ export async function indexFilesStructural(
         removals.push(rel);
         continue;
       }
-      const abs = join(root, rel);
+      const [prefix] = rel.split('/', 1);
+      const sourceRoot = linkedRoots ? linkedRoots.get(prefix!) : root;
+      if (!sourceRoot) {
+        removals.push(rel);
+        continue;
+      }
+      const abs = join(sourceRoot, linkedRoots ? rel.slice(prefix!.length + 1) : rel);
       const st = statSync(abs, { throwIfNoEntry: false });
       if (!st?.isFile() || st.size > maxBytes) {
+        if (!st && !canEnumerate(sourceRoot)) throw new Error('Source unavailable: ' + sourceRoot);
         // Gone or over the cap — match the full scanner, which drops
         // oversized files from the index (they land in toRemove).
         removals.push(rel);

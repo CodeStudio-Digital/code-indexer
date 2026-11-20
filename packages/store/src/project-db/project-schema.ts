@@ -32,15 +32,14 @@ export function initProjectSchema(db: DB): void {
     (latest, migration) => Math.max(latest, migration.version),
     0,
   );
-  // A global-only update must not bootstrap/drop the central schema in every
-  // project or sweep all indexed rows. Older/shared migrations retain the full
-  // bootstrap: some historical migrations require those base tables to exist.
+  // Apply trim-compatible migrations directly. Historical shared migrations
+  // may still need the full bootstrap and its central base tables.
   if (isProjectSchemaTrimCurrent(db)) {
     const currentVersion = getSchemaVersion(db);
-    const onlyCentralUpdates = MIGRATIONS
+    const canKeepTrimmed = MIGRATIONS
       .filter((migration) => migration.version > currentVersion)
-      .every((migration) => migration.scope === 'central');
-    if (currentVersion >= latestVersion || onlyCentralUpdates) {
+      .every((migration) => migration.scope === 'central' || migration.runsOnTrimmedProject === true);
+    if (currentVersion >= latestVersion || canKeepTrimmed) {
       if (currentVersion < latestVersion) runMigrations(db, { scope: 'project' });
       assertSessionScopedSqliteAbsent(db);
       return;

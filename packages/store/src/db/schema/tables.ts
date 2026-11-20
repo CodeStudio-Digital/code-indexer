@@ -199,6 +199,7 @@ export function createBaseTables(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);
     CREATE INDEX IF NOT EXISTS idx_files_tier ON files(project_id, index_tier);
     CREATE INDEX IF NOT EXISTS idx_symbols_project ON symbols(project_id);
+    CREATE INDEX IF NOT EXISTS idx_symbols_project_file_line ON symbols(project_id, file_path, line);
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
     CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
@@ -220,6 +221,7 @@ export function createBaseTables(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_file_deps_target ON file_dependencies(target_file_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_refs_name ON symbol_references(symbol_name);
     CREATE INDEX IF NOT EXISTS idx_symbol_refs_file ON symbol_references(referencing_file_id);
+    CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_id ON symbol_references(symbol_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_rels_symbol ON symbol_relations(symbol_id);
     CREATE INDEX IF NOT EXISTS idx_symbol_rels_name ON symbol_relations(related_symbol_name);
     CREATE INDEX IF NOT EXISTS idx_snapshot_versions_snapshot ON snapshot_versions(snapshot_id);

@@ -12,10 +12,13 @@ import { purgeIgnoredIndexedFiles } from '@mcp/indexer/indexer/purge-ignored.js'
 import { streamSSE } from 'hono/streaming';
 import { mountProjectCollectionRoutes } from './project-collection-routes.js';
 import { mapApiError } from './project-route-errors.js';
+import { mountProjectSemanticFoldersRoutes } from './project-semantic-folders-routes.js';
+import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 
 export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   const h = createProjectsHandlers(deps);
   mountProjectCollectionRoutes(app, deps, h);
+  mountProjectSemanticFoldersRoutes(app, deps);
 
   app.get('/api/projects/:id', async (c) => {
     try {
@@ -179,7 +182,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
    * resolves an LLM or embedding provider. */
   app.post('/api/projects/:id/index/structural/reconcile', async (c) => {
     const id = parseIdParam(c);
-    if (!deps.db.getProject(id)) return notFound(c);
+    if (!deps.db.getProjectCatalogEntry(id)) return notFound(c);
     const readiness = await deps.projectIndexService.reconcileStructural(
       id,
       180_000,
@@ -192,7 +195,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/projects/:id/indexing/jobs', async (c) => {
     const id = parseIdParam(c);
-    if (!deps.db.getProject(id)) return notFound(c);
+    if (!deps.db.getProjectCatalogEntry(id)) return notFound(c);
     const namespaces = new Set([
       codeNamespace(id),
       snapshotNamespace(id),
@@ -208,7 +211,9 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/projects/:id/semantic/status', async (c) => {
     try {
     const id = parseIdParam(c);
-    if (!deps.db.getProject(id)) return notFound(c);
+    const project = deps.db.getProjectCatalogEntry(id);
+    if (!project) return notFound(c);
+    const codeFolders = projectSemanticFolders(project);
     const namespaces = [
       codeNamespace(id),
       snapshotNamespace(id),
@@ -276,6 +281,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       [{ projectId: id, generationIds: [...generationIds] }], c.req.raw.signal);
     return c.json({
       project_id: id,
+      code_folders: codeFolders,
       profiles: deps.semanticStore.listProfiles(),
       namespaces: namespaceStatus,
       generations,
@@ -285,7 +291,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
       next_before_id: page.nextBeforeId,
       reindex_job: reindexJob,
       automatic_backfill: {
-        enabled: automatic,
+        enabled: automatic && codeFolders.length > 0,
         target_kind: profile?.embedding_target.kind ?? 'disabled',
         reason: automatic
           ? 'local_profile'
@@ -390,7 +396,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   /** Live filesystem events (SSE) — coalesced batches from the watcher. */
   app.get('/api/projects/:id/fs-events/stream', async (c) => {
     const id = parseIdParam(c);
-    if (!deps.db.getProject(id)) return notFound(c);
+    if (!deps.db.getProjectCatalogEntry(id)) return notFound(c);
     return streamSSE(c, async (stream) => {
       let seq = 0;
       try {
@@ -406,7 +412,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   /** Live git-metadata stream (SSE) — branch switches + ref/sequencer changes. */
   app.get('/api/projects/:id/git-meta/stream', async (c) => {
     const id = parseIdParam(c);
-    if (!deps.db.getProject(id)) return notFound(c);
+    if (!deps.db.getProjectCatalogEntry(id)) return notFound(c);
     return streamSSE(c, async (stream) => {
       let seq = 0;
       try {
@@ -422,7 +428,7 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   /** Live status stream (SSE) — initial frame + one per transition. */
   app.get('/api/projects/:id/index-status/stream', async (c) => {
     const id = parseIdParam(c);
-    if (!deps.db.getProject(id)) return notFound(c);
+    if (!deps.db.getProjectCatalogEntry(id)) return notFound(c);
     return streamSSE(c, async (stream) => {
       let seq = 0;
       try {

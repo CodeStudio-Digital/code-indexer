@@ -9,19 +9,18 @@
  *  2. Checks `fs.stat` first: size over the cap skips without reading; a
  *     stored `mtime_ms` + `size` match proves "unchanged" with zero bytes
  *     read (`MCP_SCAN_PARANOID=1` forces the old hash-everything behavior).
- *  3. Reads + hashes only when the stat gate can't decide. A hash match
+ *  3. Uses a content hash when stat can't settle an existing file. A hash match
  *     stamps the fresh mtime (`touchFileMtime`) so the NEXT scan takes the
  *     stat-only shortcut — this is also the automatic backfill for rows
  *     created before migration 137.
- *  4. Never returns file content — `ScannedFile.content` stays undefined and
- *     `processFile` reads lazily, so scan peak memory is O(1 file) instead
- *     of O(changed set).
+ *  4. The structural scan defers reading new files to the bounded prepare
+ *     stage. The scan never retains source text across files.
  *
  * Known blind spot (same class as git's index): an edit that keeps BOTH
  * size and mtime (same-ms write, same byte count) passes the stat gate.
  * `MCP_SCAN_PARANOID` and `--force` exist for that.
  */
-import { readFileSync, statSync } from 'node:fs';
+import { opendirSync, readFileSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { globIterate } from 'glob';
 import type { CodeIndexDB } from '@mcp/store/db.js';
@@ -48,6 +47,14 @@ export interface ScanOptions {
   onScanProgress?: (scanned: number, total: number) => void;
 }
 
+export interface DeferredScannedFile extends Omit<ScannedFile, 'content' | 'hash' | 'lineCount'> {
+  deferred: true;
+}
+
+type StructuralScanResult = Omit<ScanResult, 'toIndex'> & {
+  toIndex: Array<ScannedFile | DeferredScannedFile>;
+};
+
 /** Files between progress emits during the stat walk. */
 const SCAN_STEP = 500;
 /** Bound how long an interactive operation waits for the synchronous stat loop. */
@@ -55,6 +62,15 @@ const PRIORITY_YIELD_STEP = 100;
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+export function canEnumerate(root: string): boolean {
+  try {
+    opendirSync(root).closeSync();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class FileScanner {
@@ -68,7 +84,13 @@ export class FileScanner {
     this.maxFileSizeBytes = maxFileSizeKB * 1024;
   }
 
-  async scan(db: CodeIndexDB, projectId: number, opts: ScanOptions = {}): Promise<ScanResult> {
+  scan(db: CodeIndexDB, projectId: number, opts: ScanOptions & { deferNewFileReads: true }): Promise<StructuralScanResult>;
+  scan(db: CodeIndexDB, projectId: number, opts?: ScanOptions): Promise<ScanResult>;
+  async scan(
+    db: CodeIndexDB,
+    projectId: number,
+    opts: ScanOptions & { deferNewFileReads?: true } = {},
+  ): Promise<StructuralScanResult> {
     const project = db.getProject(projectId);
     const sources = project?.is_synthetic
       ? assignWorkspaceSlugs(db.listUnionProjectIds(projectId)).map((p) => ({
@@ -76,12 +98,17 @@ export class FileScanner {
           prefix: p.slug,
         }))
       : [{ rootPath: this.rootPath, prefix: '' }];
-    const validFiles: Array<{ absolutePath: string; relativePath: string }> = [];
+    const sourceByPrefix = new Map(sources.map(source => [source.prefix, source.rootPath]));
+    const ignoresByPrefix = new Map<string, ScannerIgnore>();
+    const unavailable = new Set<string>();
+    const validFiles: Array<{ absolutePath: string; relativePath: string; root: string }> = [];
     let ignoredCount = 0;
     for (const source of sources) {
       await opts.waitForInteractivePriority?.();
-      const sourceStat = statSync(source.rootPath, { throwIfNoEntry: false });
-      if (!sourceStat?.isDirectory()) continue;
+      if (!canEnumerate(source.rootPath)) {
+        unavailable.add(source.rootPath);
+        continue;
+      }
       // Synthetic projects are scanned as an explicit list of real roots from
       // the DB. We never ask glob to follow symlinks, so nested/untrusted links
       // cannot escape the declared workspace.
@@ -93,6 +120,7 @@ export class FileScanner {
         projectRules,
       );
       const projectPrunes = projectGlobPrunePatterns(projectRules);
+      ignoresByPrefix.set(source.prefix, sourceIgnore);
       for await (const rawRelPath of globIterate('**/*', {
         cwd: source.rootPath,
         nodir: true,
@@ -110,6 +138,7 @@ export class FileScanner {
           continue;
         }
         validFiles.push({
+          root: source.rootPath,
           absolutePath: join(source.rootPath, sourceRel),
           relativePath: source.prefix ? `${source.prefix}/${sourceRel}` : sourceRel,
         });
@@ -143,7 +172,7 @@ export class FileScanner {
     const indegrees = db.getFileIndegrees(projectId);
     const paranoid = process.env.MCP_SCAN_PARANOID === '1';
 
-    const toIndex: ScannedFile[] = [];
+    const toIndex: StructuralScanResult['toIndex'] = [];
     const unchanged: string[] = [];
     const stats: ScanStats = { statOnly: 0, hashed: 0, skippedTooLarge: 0, ignored: ignoredCount };
 
@@ -166,7 +195,13 @@ export class FileScanner {
       const absPath = file.absolutePath;
       const normalizedPath = file.relativePath;
 
-      const st = statSync(absPath, { throwIfNoEntry: false });
+      let st;
+      try {
+        st = statSync(absPath, { throwIfNoEntry: false });
+      } catch {
+        unavailable.add(file.root);
+        continue;
+      }
       if (!st?.isFile()) continue;
       if (st.size > this.maxFileSizeBytes) { stats.skippedTooLarge++; continue; }
 
@@ -182,21 +217,24 @@ export class FileScanner {
         continue;
       }
 
-      let content: string;
-      try {
-        content = readFileSync(absPath, 'utf-8');
-      } catch {
-        continue; // unreadable — skip (and forget: deletion handled below)
-      }
-      stats.hashed++;
-
-      const hash = hashContent(content);
-      if (!opts.forceReparse && meta && meta.content_hash === hash) {
-        // mtime moved but content didn't (git checkout, touch) — stamp the
-        // fresh mtime so the next scan is stat-only again.
-        db.touchFileMtime(projectId, normalizedPath, mtimeMs);
-        unchanged.push(normalizedPath);
-        continue;
+      let fingerprint: Pick<ScannedFile, 'hash' | 'lineCount'> | undefined;
+      if (meta || !opts.deferNewFileReads) {
+        let content: string;
+        try {
+          content = readFileSync(absPath, 'utf-8');
+        } catch {
+          unavailable.add(file.root);
+          continue;
+        }
+        stats.hashed++;
+        const hash = hashContent(content);
+        if (!opts.forceReparse && meta?.content_hash === hash) {
+          // Refresh the stamp when only mtime changed.
+          db.touchFileMtime(projectId, normalizedPath, mtimeMs);
+          unchanged.push(normalizedPath);
+          continue;
+        }
+        fingerprint = { hash, lineCount: countLines(content) };
       }
 
       const classification = classifyPath(normalizedPath, st.size);
@@ -209,23 +247,48 @@ export class FileScanner {
         promotedTier !== classification.tier
           ? `${classification.reason} + graph promotion (indegree=${indegree})`
           : classification.reason;
-      toIndex.push({
+      const metadata = {
         path: absPath,
         relativePath: normalizedPath,
-        // content intentionally NOT carried — processFile reads lazily.
-        hash,
         sizeBytes: st.size,
-        lineCount: countLines(content),
         mtimeMs,
         tier: promotedTier as Exclude<FileIndexTier, 'excluded'>,
         mapperReason: reason,
-      });
+      };
+      toIndex.push(fingerprint ? { ...metadata, ...fingerprint } : { ...metadata, deferred: true });
     }
 
-    // Remaining entries in existingMeta are files to remove.
-    const toRemove = Array.from(existingMeta.keys());
+    // A mount may disappear while glob is walking it. A detached project has no
+    // configured root and its old entries remain eligible for reconciliation.
+    for (const source of sources) {
+      if (!canEnumerate(source.rootPath)) unavailable.add(source.rootPath);
+    }
+    const removalCandidates: Array<{ path: string; root?: string }> = [];
+    for (const path of existingMeta.keys()) {
+      const prefix = project?.is_synthetic ? path.split('/', 1)[0]! : '';
+      const root = sourceByPrefix.get(prefix);
+      if (root && unavailable.has(root)) continue;
+      const relative = prefix ? path.slice(prefix.length + 1) : path;
+      if (root && !ignoresByPrefix.get(prefix)?.ignores(relative) && !relative.split('/').some(part => part.startsWith('.'))) {
+        // glob can omit a subtree after an I/O or permissions error. An absent
+        // listing alone is insufficient evidence that its files were deleted.
+        try {
+          const st = statSync(join(root, relative), { throwIfNoEntry: false });
+          if (st?.isFile() && st.size <= this.maxFileSizeBytes) {
+            unavailable.add(root);
+            continue;
+          }
+        } catch {
+          unavailable.add(root);
+          continue;
+        }
+      }
+      removalCandidates.push({ path, root });
+    }
+    const toRemove = removalCandidates.filter(item => !item.root || !unavailable.has(item.root)).map(item => item.path);
 
-    return { toIndex, unchanged, toRemove, totalFiles: toIndex.length + unchanged.length, stats };
+    return { toIndex, unchanged, toRemove, totalFiles: toIndex.length + unchanged.length, stats,
+      ...(unavailable.size ? { unavailableRoots: [...unavailable] } : {}) };
   }
 
   /** @deprecated kept for callers/tests — use content-hash.ts going forward. */

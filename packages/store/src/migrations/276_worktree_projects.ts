@@ -3,6 +3,7 @@ import type { Migration } from './types.js';
 export const worktreeProjects276: Migration = {
   version: 276,
   name: 'worktree_projects',
+  runsOnTrimmedProject: true,
   up(db) {
     const columns = db.prepare('PRAGMA table_info(projects)').all() as { name: string }[];
     if (!columns.some(column => column.name === 'worktree_parent_id')) {

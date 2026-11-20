@@ -17,20 +17,25 @@ import type { EmbeddingService } from './embeddings.js';
 import { resolveModelCacheDir } from './model-cache.js';
 import { resolveBundledEmbeddingPath } from './bundled-model-path.js';
 import { resolveOnnxIdleTtlMs } from './onnx-idle.js';
-import { onnxSessionOptions } from './onnx-resource-policy.js';
+import {
+  onnxSessionOptions, preferredOnnxEmbeddingDevice, type OnnxEmbeddingDevice,
+} from './onnx-resource-policy.js';
 import type { SemanticOnnxDtype } from '@mcp/store/semantic-store.js';
 
 const DEFAULT_MODEL = BUNDLED_EMBEDDING_TARGET.model;
 const BATCH = 8;
+const COREML_USE_CPU_AND_GPU = 0x020;
 
 /** Minimal shape of the transformers.js feature-extraction pipeline. */
 type FeatureExtractor = ((
   texts: string[],
   opts: { pooling: 'mean' | 'cls'; normalize: boolean; truncation: boolean; max_length: number },
-) => Promise<{ tolist: () => number[][] }>) & {
+) => Promise<{ tolist: () => number[][]; dispose?: () => void }>) & {
   /** Releases the underlying ONNX session(s) — native memory returns to the OS. */
   dispose(): Promise<unknown>;
 };
+
+type EmbeddingSession = { extractor: FeatureExtractor; device: OnnxEmbeddingDevice };
 
 export interface LocalEmbeddingProtocol {
   /** Template containing `{text}`. Empty means the raw text. */
@@ -89,7 +94,9 @@ export class LocalEmbeddingService implements EmbeddingService {
   private dtype: SemanticOnnxDtype;
   private protocol: Required<LocalEmbeddingProtocol>;
   private dimension: number | null = null;
-  private lease: IdleResource<FeatureExtractor>;
+  private preferredDevice: OnnxEmbeddingDevice;
+  private loadedDevice: OnnxEmbeddingDevice | null = null;
+  private readonly lease: IdleResource<EmbeddingSession>;
 
   constructor(opts?: {
     model?: string;
@@ -98,6 +105,7 @@ export class LocalEmbeddingService implements EmbeddingService {
     dtype?: SemanticOnnxDtype;
     protocol?: LocalEmbeddingProtocol;
     idleTtlMs?: number;
+    device?: 'cpu';
   }) {
     this.model = opts?.model || DEFAULT_MODEL;
     // Only the explicit admin override is stored; the auto default
@@ -106,14 +114,15 @@ export class LocalEmbeddingService implements EmbeddingService {
     this.revision = opts?.revision;
     this.dtype = opts?.dtype ?? 'q8';
     this.protocol = resolveProtocol(this.model, opts?.protocol);
+    this.preferredDevice = opts?.device ?? preferredOnnxEmbeddingDevice();
     // The session used to live forever after first use; the idle lease
     // evicts it after a quiet period and re-creates lazily. `acquire`
     // refcounts, so a dispose can never land mid-inference.
-    this.lease = createIdleResource<FeatureExtractor>({
+    this.lease = createIdleResource<EmbeddingSession>({
       name: `local-embeddings(${this.model})`,
       idleTtlMs: resolveOnnxIdleTtlMs(opts?.idleTtlMs),
       create: () => this.loadExtractor(),
-      destroy: async (p) => { await p.dispose(); },
+      destroy: async ({ extractor }) => { await extractor.dispose(); },
     });
   }
 
@@ -122,16 +131,17 @@ export class LocalEmbeddingService implements EmbeddingService {
    * is currently resident in memory (the weights are native allocations —
    * they show in RSS, never in the JS heap).
    */
-  diagnostics(): { model: string; dtype: SemanticOnnxDtype; dimension: number | null; loaded: boolean } {
+  diagnostics() {
     return {
       model: this.model,
       dtype: this.dtype,
       dimension: this.dimension,
       loaded: this.lease.isLoaded(),
+      executionProvider: this.loadedDevice,
     };
   }
 
-  private async loadExtractor(): Promise<FeatureExtractor> {
+  private async loadExtractor(): Promise<EmbeddingSession> {
     const bundled = this.model === BUNDLED_EMBEDDING_TARGET.model;
     if (bundled && (this.dtype !== BUNDLED_EMBEDDING_TARGET.dtype
       || (this.revision && this.revision !== BUNDLED_EMBEDDING_TARGET.revision))) {
@@ -149,19 +159,64 @@ export class LocalEmbeddingService implements EmbeddingService {
           `Install it with: pnpm add @huggingface/transformers (${(e as Error).message})`,
       );
     }
-    return (await mod.pipeline(
-      'feature-extraction',
-      bundled ? resolveBundledEmbeddingPath() : this.model,
-      {
+    const modelPath = bundled ? resolveBundledEmbeddingPath() : this.model;
+    const sources = bundled ? { local_files_only: true } : {
+      cache_dir: resolveModelCacheDir(this.cacheDir),
+      local_files_only: this.model === 'Xenova/multilingual-e5-small' && !!process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR,
+      ...(this.revision ? { revision: this.revision } : {}),
+    };
+    const load = async (device: OnnxEmbeddingDevice): Promise<EmbeddingSession> => {
+      const extractor = await mod.pipeline('feature-extraction', modelPath, {
+        ...sources,
         dtype: this.dtype,
-        session_options: onnxSessionOptions(),
-        ...(bundled ? { local_files_only: true } : {
-          cache_dir: resolveModelCacheDir(this.cacheDir),
-          local_files_only: this.model === 'Xenova/multilingual-e5-small' && !!process.env.MCP_BUNDLED_SEMANTIC_MODELS_DIR,
-          ...(this.revision ? { revision: this.revision } : {}),
-        }),
-      },
-    )) as unknown as FeatureExtractor;
+        device,
+        session_options: {
+          ...onnxSessionOptions(),
+          ...(device === 'dml' ? { enableMemPattern: false } : {}),
+          ...(device === 'coreml' ? {
+            executionProviders: [{ name: 'coreml', coreMlFlags: COREML_USE_CPU_AND_GPU }],
+          } : {}),
+        },
+      }) as FeatureExtractor;
+      if (this.loadedDevice !== device) {
+        console.info(`[local-embeddings] ${this.model}: ONNX device=${device}`);
+        this.loadedDevice = device;
+      }
+      return { extractor, device };
+    };
+    const device = this.preferredDevice;
+    try {
+      return await load(device);
+    } catch (error) {
+      if (device === 'cpu') throw error;
+      this.fallbackToCpu(device, error);
+      return load('cpu');
+    }
+  }
+
+  private fallbackToCpu(device: OnnxEmbeddingDevice, error: unknown): void {
+    this.preferredDevice = 'cpu';
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[local-embeddings] ${device} failed for ${this.model}, using CPU: ${message}`);
+  }
+
+  private async withExtractor<T>(run: (extractor: FeatureExtractor) => Promise<T>): Promise<T> {
+    let attempted: OnnxEmbeddingDevice | undefined;
+    try {
+      return await this.lease.acquire(({ extractor, device }) => {
+        attempted = device;
+        return run(extractor);
+      });
+    } catch (error) {
+      if (!attempted || attempted === 'cpu') throw error;
+      if (this.preferredDevice !== 'cpu') {
+        this.fallbackToCpu(attempted, error);
+        // Wait outside the acquisition so other in-flight GPU calls can finish
+        // before the native session is released. New calls await this eviction.
+        await this.lease.dispose();
+      }
+      return this.lease.acquire(({ extractor }) => run(extractor));
+    }
   }
 
   /** transformers.js doesn't surface token counts; estimate for cost parity. */
@@ -173,38 +228,43 @@ export class LocalEmbeddingService implements EmbeddingService {
     if (texts.length === 0) return { vectors: [], tokens: 0 };
     // The whole multi-batch loop runs inside ONE acquire — eviction can
     // never strike between batches of the same embed() call.
-    return this.lease.acquire(async (extractor) => {
+    return this.withExtractor(async (extractor) => {
       const vectors: number[][] = [];
       for (let i = 0; i < texts.length; i += BATCH) {
         const batch = texts
           .slice(i, i + BATCH)
           .map((t) => applyTemplate(this.protocol.documentTemplate, t));
-        const out = await extractor(batch, {
-          pooling: this.protocol.pooling,
-          normalize: this.protocol.normalize,
-          truncation: true,
-          max_length: this.protocol.maxTokens,
-        });
-        const batchVectors = out.tolist();
-        this.captureDimension(batchVectors);
-        vectors.push(...batchVectors);
+        vectors.push(...await this.extractVectors(extractor, batch));
       }
       return { vectors, tokens: this.estimateTokens(texts) };
     });
   }
 
   async embedQuery(text: string): Promise<{ vector: number[]; tokens: number }> {
-    return this.lease.acquire(async (extractor) => {
-      const out = await extractor([applyTemplate(this.protocol.queryTemplate, text)], {
-        pooling: this.protocol.pooling,
-        normalize: this.protocol.normalize,
-        truncation: true,
-        max_length: this.protocol.maxTokens,
-      });
-      const vector = out.tolist()[0] ?? [];
-      this.captureDimension([vector]);
+    return this.withExtractor(async (extractor) => {
+      const [vector] = await this.extractVectors(extractor, [applyTemplate(this.protocol.queryTemplate, text)]);
       return { vector, tokens: this.estimateTokens([text]) };
     });
+  }
+
+  private async extractVectors(extractor: FeatureExtractor, texts: string[]): Promise<number[][]> {
+    const output = await extractor(texts, {
+      pooling: this.protocol.pooling,
+      normalize: this.protocol.normalize,
+      truncation: true,
+      max_length: this.protocol.maxTokens,
+    });
+    try {
+      const vectors = output.tolist();
+      const dimension = this.dimension ?? vectors[0]?.length;
+      if (vectors.length !== texts.length || !dimension || vectors.some(vector =>
+        vector.length !== dimension || vector.some(value => !Number.isFinite(value)) || !vector.some(value => value !== 0),
+      )) throw new Error('Local embedding returned invalid vectors');
+      this.dimension = dimension;
+      return vectors;
+    } finally {
+      output.dispose?.();
+    }
   }
 
   /** Release the ONNX session now (shutdown). The next embed reloads lazily. */
@@ -222,18 +282,7 @@ export class LocalEmbeddingService implements EmbeddingService {
   }
 
   maxConcurrency(): number {
-    // CPU-bound single ONNX pipeline session — concurrent embed() calls
-    // would serialize on the session anyway and only raise peak memory.
+    // Keep a single active batch per ONNX session to bound native memory.
     return 1;
-  }
-
-  private captureDimension(vectors: number[][]): void {
-    for (const vector of vectors) {
-      if (vector.length === 0) continue;
-      if (this.dimension === null) this.dimension = vector.length;
-      else if (this.dimension !== vector.length) {
-        throw new Error(`local embedding dimension changed from ${this.dimension} to ${vector.length}`);
-      }
-    }
   }
 }

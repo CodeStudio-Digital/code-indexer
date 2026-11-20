@@ -18,7 +18,7 @@ function pruneLocalHistory(db: DB, projectId: number): void {
 type ProjectUpdates = Partial<Pick<Project,
   'name' | 'description' | 'group_name' | 'root_path' | 'provider' | 'model' |
   'last_indexed' | 'structural_indexed_at' | 'structural_last_checked_at' | 'file_count' | 'symbol_count' |
-  'embeddings_enabled' | 'search_mode' | 'index_ignore_patterns' |
+  'embeddings_enabled' | 'search_mode' | 'index_ignore_patterns' | 'semantic_index_folders' |
   'node_version' | 'runner_shell' | 'builder_json' | 'language_levels' | 'runtime_versions' |
   'package_managers' | 'wsl_runtime_versions' | 'wsl_package_managers' | 'git_remote' | 'default_branch'
 >>;
@@ -65,6 +65,20 @@ export function readEditorConfig(db: DB, id: number): { settings_json: string | 
     if (!/no such table: project_editor_config/i.test((error as Error).message)) throw error;
     return undefined;
   }
+}
+
+export type ProjectSettingsRows = {
+  runtime?: Partial<RuntimeConfig>;
+  editor?: { settings_json: string | null };
+};
+
+export function readProjectSettingsRows(db: DB, id: number): ProjectSettingsRows {
+  return { runtime: readRuntimeConfig(db, id), editor: readEditorConfig(db, id) };
+}
+
+export function isProjectSettingsBusy(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  return typeof code === 'string' && /^SQLITE_(BUSY|LOCKED)(_|$)/.test(code);
 }
 
 /** One catalog identity per validated checkout, even with concurrent windows. */

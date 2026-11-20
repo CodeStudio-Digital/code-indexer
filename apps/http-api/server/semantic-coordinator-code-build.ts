@@ -8,11 +8,13 @@ semanticItemKeysForIndexedPaths
 import {
 codeNamespace
 } from '@mcp/shared/vector-namespace.js';
+import { isSemanticPath, projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
+import { embeddingFingerprintForGeneration } from '@mcp/store/vectors.js';
 import {
 type SemanticGenerationRow,
 type SemanticJobRow
 } from '@mcp/store';
-import { DeltaBuildPendingError,errorMessage,mergeCodeDeltaCursor,readCodeDeltaCursor,type CodeDeltaCursor } from './semantic-coordinator-shared.js';
+import { CodeScopeChangedError,DeltaBuildPendingError,errorMessage,mergeCodeDeltaCursor,readCodeDeltaCursor,type CodeDeltaCursor } from './semantic-coordinator-shared.js';
 
 import type { SemanticCoordinatorContext } from './semantic-coordinator-context.js';
 
@@ -26,14 +28,21 @@ async buildCodeNamespace(this: SemanticCoordinatorContext,
     this.assertNamespaceProjectActive(namespace);
     const project = this.deps.db.getProject(projectId);
     if (!project) throw new Error(`Project ${projectId} not found`);
+    const folders = projectSemanticFolders(project);
+    if (!folders.length) return;
+    const assertScope = () => {
+      if (this.deps.db.getProjectCatalogEntry(projectId)?.semantic_index_folders !== project.semantic_index_folders) {
+        throw new CodeScopeChangedError('Semantic folders changed');
+      }
+    };
     const before = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
     const incrementalActive = !force && before?.active_generation_id === generation.id;
     const resumableDeltaJobs = this.captureCodeDeltaJobs(namespace, generation.id, !incrementalActive);
     if (incrementalActive) {
-      await this.drainActiveCodeDeltas(projectId, project.root_path, generation, resumableDeltaJobs);
+      await this.drainActiveCodeDeltas(projectId, project.root_path, generation, resumableDeltaJobs, folders, assertScope);
       return;
     }
-    const expected = this.deps.db.countFiles(projectId);
+    const expected = this.deps.db.countFilesInFolders(projectId, folders);
     this.prepareNamespaceGeneration(namespace, 'code', generation.id, expected);
     const deltaJobs = resumableDeltaJobs;
     for (const deltaJob of deltaJobs) {
@@ -59,7 +68,8 @@ async buildCodeNamespace(this: SemanticCoordinatorContext,
     }
     this.deps.semanticStore.updateJob(job.id, { status: 'running' });
     try {
-      const result = await this.runCodeEmbedding(projectId, project.root_path, namespace, job.id);
+      assertScope();
+      const result = await this.runCodeEmbedding(projectId, project.root_path, generation, job.id, assertScope);
       if (result.failedBatches > 0) throw new Error(`${result.failedBatches} embedding batch(es) failed`);
       if (result.skipped > 0) throw new Error(`${result.skipped} source file(s) disappeared during embedding`);
 
@@ -72,6 +82,7 @@ async buildCodeNamespace(this: SemanticCoordinatorContext,
         && candidate.generation_id === generation.id
         && !capturedIds.has(candidate.id)
         && (candidate.status === 'pending' || candidate.status === 'paused' || candidate.status === 'running'));
+      assertScope();
       if (newerDelta) throw new DeltaBuildPendingError(namespace);
 
       const verifiedItems = await this.verifyCodeVectorCoverage(
@@ -79,7 +90,9 @@ async buildCodeNamespace(this: SemanticCoordinatorContext,
         project.root_path,
         generation.id,
         namespace,
+        assertScope,
       );
+      assertScope();
       const drainedItems = deltaJobs
         .filter((deltaJob) => deltaJob.kind === 'delta')
         .reduce((sum, deltaJob) => sum + Math.max(deltaJob.expected_items, 1), 0);
@@ -107,12 +120,13 @@ async buildCodeNamespace(this: SemanticCoordinatorContext,
       });
       await this.cleanupGenerationIfUnreferenced(namespace, before?.active_generation_id ?? null);
     } catch (error) {
-      if (error instanceof EmbeddingPauseRequestedError) {
+      if (error instanceof EmbeddingPauseRequestedError || error instanceof CodeScopeChangedError) {
+        const message = error instanceof CodeScopeChangedError ? error.message : 'paused because project is not active';
         for (const deltaJob of deltaJobs) {
           const current = this.deps.semanticStore.getJob(deltaJob.id);
           if (current?.status !== 'completed') {
             this.deps.semanticStore.updateJob(deltaJob.id, {
-              status: 'paused', failed_items: 0, error: 'paused because project is not active',
+              status: 'paused', failed_items: 0, error: message,
             });
           }
         }
@@ -121,7 +135,7 @@ async buildCodeNamespace(this: SemanticCoordinatorContext,
           last_error: null,
         });
         this.deps.semanticStore.updateJob(job.id, {
-          status: 'paused', failed_items: 0, error: 'paused because project is not active',
+          status: 'paused', failed_items: 0, error: message,
         });
         throw error;
       }
@@ -168,6 +182,8 @@ async drainActiveCodeDeltas(this: SemanticCoordinatorContext,
     rootPath: string,
     generation: SemanticGenerationRow,
     initial: SemanticJobRow[],
+    folders: readonly string[],
+    assertScope: () => void,
   ): Promise<void> {
     const namespace = codeNamespace(projectId);
     let captured = initial;
@@ -191,21 +207,22 @@ async drainActiveCodeDeltas(this: SemanticCoordinatorContext,
       }
       const wildcard = cursor.events.some((event) => event.path === '*');
       try {
+        assertScope();
         let indexedItems: number;
         if (wildcard) {
           const result = await this.runCodeEmbedding(
-            projectId, rootPath, namespace, captured[0].id, undefined, false,
+            projectId, rootPath, generation, captured[0].id, assertScope, undefined, false,
           );
           if (result.failedBatches > 0) {
             throw new Error(`${result.failedBatches} embedding batch(es) failed`);
           }
           indexedItems = await this.verifyCodeVectorCoverage(
-            projectId, rootPath, generation.id, namespace,
+            projectId, rootPath, generation.id, namespace, assertScope,
           );
         } else {
           const latestByPath = new Map(cursor.events.map((event) => [event.path, event]));
           const upsertPaths = [...latestByPath.values()]
-            .filter((event) => event.kind === 'upsert')
+            .filter((event) => event.kind === 'upsert' && isSemanticPath(folders, event.path))
             .map((event) => event.path);
           const currentKeys = new Set(semanticItemKeysForIndexedPaths(
             this.deps.db,
@@ -225,7 +242,7 @@ async drainActiveCodeDeltas(this: SemanticCoordinatorContext,
           }
           if (upsertPaths.length > 0) {
             const result = await this.runCodeEmbedding(
-              projectId, rootPath, namespace, captured[0].id, upsertPaths, false,
+              projectId, rootPath, generation, captured[0].id, assertScope, upsertPaths, false,
             );
             if (result.failedBatches > 0) {
               throw new Error(`${result.failedBatches} embedding batch(es) failed`);
@@ -240,6 +257,7 @@ async drainActiveCodeDeltas(this: SemanticCoordinatorContext,
           indexedItems = items.length;
         }
 
+        assertScope();
         const finish = this.deps.semanticStore.finishNamespaceMutationPass({
           namespace,
           generation_id: generation.id,
@@ -252,7 +270,7 @@ async drainActiveCodeDeltas(this: SemanticCoordinatorContext,
         captured = this.captureCodeDeltaJobs(namespace, generation.id);
       } catch (error) {
         const message = errorMessage(error);
-        const paused = error instanceof EmbeddingPauseRequestedError;
+        const paused = error instanceof EmbeddingPauseRequestedError || error instanceof CodeScopeChangedError;
         for (const job of captured) {
           const current = this.deps.semanticStore.getJob(job.id);
           if (current?.status !== 'completed') {
@@ -304,8 +322,9 @@ captureCodeDeltaJobs(this: SemanticCoordinatorContext,
 runCodeEmbedding(this: SemanticCoordinatorContext,
     projectId: number,
     rootPath: string,
-    _namespace: string,
+    generation: SemanticGenerationRow,
     jobId: number | null,
+    assertScope: () => void,
     paths?: readonly string[],
     reportNamespaceProgress = true,
   ) {
@@ -325,7 +344,11 @@ runCodeEmbedding(this: SemanticCoordinatorContext,
           });
         }
       },
-      shouldPause: () => this.shouldPauseCodeProject(projectId),
+      embeddingFingerprint: embeddingFingerprintForGeneration(generation.fingerprint),
+      shouldPause: () => {
+        assertScope();
+        return this.shouldPauseCodeProject(projectId);
+      },
       ...(paths ? { paths } : {}),
     });
   }

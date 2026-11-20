@@ -77,7 +77,7 @@
   "item.MCP_AGENT_WATCHDOG_MS.label": "Limite de stall (ms)",
   "item.MCP_AGENT_WATCHDOG_TICK_MS.description": "Com que frequência o watchdog de ociosidade verifica uma sessão travada. Padrão 60000 (60s).",
   "item.MCP_AGENT_WATCHDOG_TICK_MS.label": "Intervalo de checagem de stall (ms)",
-  "item.MCP_AUTO_INDEX_MAX_FILES.description": "Projetos com mais arquivos candidatos que isso pulam a indexação automática (o status mostra \"muito grande — indexe manualmente\").",
+  "item.MCP_AUTO_INDEX_MAX_FILES.description": "Acima desse número de arquivos candidatos, a indexação é manual. Use 0 para indexar projetos grandes automaticamente em lotes.",
   "item.MCP_AUTO_INDEX_MAX_FILES.label": "Teto de arquivos do auto-index",
   "item.MCP_AUTO_INDEX_STRUCTURAL.description": "Indexa símbolos + FTS automaticamente ao abrir um projeto (só tree-sitter — sem LLM, sem embeddings, R$ 0). 0 desliga.",
   "item.MCP_AUTO_INDEX_STRUCTURAL.label": "Índice estrutural automático ao abrir",

@@ -77,7 +77,7 @@
   "item.MCP_AGENT_WATCHDOG_MS.label": "Stall threshold (ms)",
   "item.MCP_AGENT_WATCHDOG_TICK_MS.description": "How often the idle watchdog polls for a stalled session. Default 60000 (60s).",
   "item.MCP_AGENT_WATCHDOG_TICK_MS.label": "Stall check interval (ms)",
-  "item.MCP_AUTO_INDEX_MAX_FILES.description": "Projects with more candidate files than this skip the automatic run (status shows \"too large — index manually\").",
+  "item.MCP_AUTO_INDEX_MAX_FILES.description": "Above this candidate count, projects require manual indexing. Use 0 to index large projects automatically in batches.",
   "item.MCP_AUTO_INDEX_MAX_FILES.label": "Auto-index file cap",
   "item.MCP_AUTO_INDEX_STRUCTURAL.description": "Index symbols + FTS automatically when a project is opened (tree-sitter only — no LLM, no embeddings, $0). 0 disables.",
   "item.MCP_AUTO_INDEX_STRUCTURAL.label": "Auto structural index on open",

@@ -1,4 +1,5 @@
 import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 import {
 codeNamespace,
 docNamespace,
@@ -22,6 +23,10 @@ import type { SemanticCoordinatorContext } from './semantic-coordinator-context.
 export const operations = {
 async runPurpose(this: SemanticCoordinatorContext, purpose: SemanticPurpose, force: boolean): Promise<ReindexResult> {
     if (this.embeddingDisabled(purpose)) return this.disabledResult(purpose);
+    const codeProjects = purpose === 'code'
+      ? this.deps.db.listProjects().filter((project) => !project.is_synthetic && projectSemanticFolders(project).length)
+      : [];
+    if (purpose === 'code' && !codeProjects.length) return this.disabledResult(purpose);
     const generation = await this.ensureGeneration(purpose, force);
     const completed: string[] = [];
     const failed: Array<{ namespace: string; error: string }> = [];
@@ -36,8 +41,7 @@ async runPurpose(this: SemanticCoordinatorContext, purpose: SemanticPurpose, for
     };
 
     if (purpose === 'code') {
-      for (const project of this.deps.db.listProjects()) {
-        if (project.is_synthetic) continue;
+      for (const project of codeProjects) {
         const build = () => run(
           codeNamespace(project.id),
           () => this.runCodeProjectBuild(project.id, generation, force),

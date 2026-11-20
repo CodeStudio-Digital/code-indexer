@@ -198,7 +198,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
 
     // Expose synthetic-global work immediately so the non-blocking status
     // indicator reflects the scheduled pass before the session starts.
-    if (this.db.getProject(projectId)?.is_synthetic) {
+    if (this.db.getProjectCatalogEntry(projectId)?.is_synthetic) {
       this.status.setPhase(projectId, 'scanning');
     }
     // Both watchers are armed before the pass. The recursive watcher barrier
@@ -427,20 +427,14 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     const beforeScan = this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER);
     this.status.setPhase(projectId, 'scanning');
     const result = await this.executor.runStructuralIndex(projectId, {
-      maxFiles: s.maxFiles,
+      maxFiles: manual ? undefined : s.maxFiles,
       allowEmptyWipe: manual,
       forceReparse: manual,
       onProgress: (p) => this.publishStructuralProgress(projectId, p),
       onChanges: async (events, previousItemKeys) => {
         // A cold scan also owns durable deltas: watcher history may not include
         // files that predate startup. Failed publication must leave them replayable.
-        const pending = this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER);
-        const pendingPaths = new Set(pending.entries.map(entry => entry.path));
-        const discovered = events.filter(event => !pendingPaths.has(event.path));
-        this.dirty.add(projectId, discovered);
-        const discoveredPaths = new Set(discovered.map(event => event.path));
-        beforeScan.entries.push(...this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER).entries
-          .filter(entry => discoveredPaths.has(entry.path)));
+        beforeScan.entries.push(...this.dirty.addMissing(projectId, events));
         // Only scan-owned versions may be acknowledged. Watcher events arriving
         // during the scan remain pending, even when their path occurs in events.
         await this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys);
@@ -448,6 +442,10 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     });
     if (result.aborted === 'too_large') {
       this.status.setPhase(projectId, 'too_large');
+      return false;
+    }
+    if (result.unavailableRoots?.length) {
+      this.status.setPhase(projectId, 'error', `Index coverage is partial. Unavailable roots: ${result.unavailableRoots.join(', ')}. Pending changes retained.`);
       return false;
     }
     if (result.aborted === 'empty_scan') {
@@ -459,10 +457,13 @@ export class ProjectIndexService extends ProjectIndexWatchers {
       return false;
     }
     if (result.aborted || result.errorCount > 0) {
-      this.status.setPhase(projectId, 'error', 'Structural publication did not complete; the previous index and pending deltas were preserved.');
+      this.status.setPhase(projectId, 'error', 'Structural publication did not complete. Pending changes will be retried.');
       return false;
     }
-    this.dirty.ack(projectId, beforeScan);
+    for (let offset = 0; offset < beforeScan.entries.length; offset += 250) {
+      this.dirty.ack(projectId, { entries: beforeScan.entries.slice(offset, offset + 250) });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     return true;
   }
 

@@ -150,6 +150,25 @@ export function list(db: DB, projectId: number, language?: string): DBFile[] {
     .all(projectId) as DBFile[];
 }
 
+// The slash and its next ASCII byte form an indexed half-open range. "src"
+// covers "src/file.ts" without including "src-other" or spilling into a glob.
+export function listInFolders(db: DB, projectId: number, folders: readonly string[]): DBFile[] {
+  if (folders.includes('.')) return list(db, projectId);
+  if (!folders.length) return [];
+  const query = db.prepare('SELECT * FROM files WHERE project_id = ? AND path >= ? AND path < ? ORDER BY path');
+  return folders.flatMap((folder) => query.all(projectId, folder + '/', folder + '0') as DBFile[]);
+}
+
+export function countInFolders(db: DB, projectId: number, folders: readonly string[]): number {
+  if (!folders.length) return 0;
+  if (folders.includes('.')) {
+    return (db.prepare('SELECT COUNT(*) AS n FROM files WHERE project_id = ?').get(projectId) as { n: number }).n;
+  }
+  const query = db.prepare('SELECT COUNT(*) AS n FROM files WHERE project_id = ? AND path >= ? AND path < ?');
+  return folders.reduce((count, folder) =>
+    count + (query.get(projectId, folder + '/', folder + '0') as { n: number }).n, 0);
+}
+
 export interface FileScanMeta {
   path: string;
   content_hash: string;

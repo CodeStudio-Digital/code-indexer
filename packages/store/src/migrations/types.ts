@@ -7,6 +7,8 @@ export interface Migration {
   name: string;
   /** Central-only changes are recorded, but never executed, in project databases. */
   scope?: 'central' | 'all';
+  /** Uses only tables retained by the project trim and needs no shared bootstrap. */
+  runsOnTrimmedProject?: true;
   up: (db: DB) => void;
   /**
    * Opt-out do auto-wrap em `db.transaction()`. Necessário para

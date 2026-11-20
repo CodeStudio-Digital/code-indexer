@@ -36,7 +36,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
       bypassCache,
       consumer,
     }, ctx) {
-      const project = db.getProject(projectId);
+      const project = await db.getProjectAsync(projectId, ctx.signal);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
       const effectiveMode = (mode ?? project.search_mode ?? 'hybrid') as SearchMode;
       const { results, diagnostics } = await hybridSearch.searchWithDiag(
@@ -115,7 +115,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
     },
 
     async outcome({ projectId, requestId, semanticWin }) {
-      if (!db.getProject(projectId)) {
+      if (!db.getProjectCatalogEntry(projectId)) {
         throw new ApiError('not_found', 404, 'project not found');
       }
       const normalizedRequestId = requestId.trim();
@@ -131,7 +131,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
     },
 
     async symbols({ projectId, query, limit }) {
-      if (!db.getProject(projectId)) throw new ApiError('not_found', 404, 'project not found');
+      if (!db.getProjectCatalogEntry(projectId)) throw new ApiError('not_found', 404, 'project not found');
       const cap = limit ?? 50;
       const trimmed = query.trim();
       if (!trimmed) return [];
@@ -156,7 +156,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
     },
 
     async text({ projectId, query, limit }) {
-      if (!db.getProject(projectId)) throw new ApiError('not_found', 404, 'project not found');
+      if (!db.getProjectCatalogEntry(projectId)) throw new ApiError('not_found', 404, 'project not found');
       const match = buildContentMatchQuery(query.trim(), true);
       if (!match) return [];
       try {

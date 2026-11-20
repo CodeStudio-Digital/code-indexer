@@ -24,6 +24,7 @@ import {
 import { executeEmbedding, type EmbedExecutorDeps } from './embed-executor.js';
 import { EMBED_CHUNK_SIZE, resolveEmbedConcurrency, runEmbedChunks } from './embed-parallel.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
+import { isSemanticPath, projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 
 export interface EmbeddingProgress { current: number; total: number; percent: number }
 
@@ -67,6 +68,7 @@ export async function retryEmbeddings(
     /** Project-relative paths for a watcher/editor delta. Omitted means the
      * explicit full-generation sweep. */
     paths?: readonly string[];
+    embeddingFingerprint?: string;
     /** Cooperative lifecycle fence checked only between bounded file waves.
      * The currently-running native ONNX batch always finishes cleanly. */
     shouldPause?: () => boolean;
@@ -80,15 +82,16 @@ export async function retryEmbeddings(
   }
 
   const project = deps.db.resolveProject(undefined, projectNameOrPath) ?? deps.db.resolveProject(projectNameOrPath);
+  const folders = projectSemanticFolders(project);
   const requestedPaths = options?.paths
     ? [...new Set(options.paths.map((path) => path.replace(/\\/g, '/')))]
     : null;
   const dbFiles = requestedPaths
-    ? requestedPaths.flatMap((path) => {
+    ? requestedPaths.filter((path) => isSemanticPath(folders, path)).flatMap((path) => {
         const file = deps.db.getFile(project.id, path);
         return file ? [file] : [];
       })
-    : deps.db.listFiles(project.id);
+    : folders.includes('.') ? deps.db.listFiles(project.id) : deps.db.listFilesInFolders(project.id, folders);
   const requestedWaveFiles = options?.waveFiles ?? configuredWaveFiles();
   const waveFiles = clampWaveFiles(requestedWaveFiles);
   const concurrency = resolveEmbedConcurrency(deps.embeddingService);
@@ -142,12 +145,13 @@ export async function retryEmbeddings(
 
     const keys = semanticItemKeysForCandidateFiles(deps.db, project.id, files);
     const currentItems = await deps.vectorStore.listItems?.(codeNamespace(project.id), keys) ?? [];
+    if (options?.shouldPause?.()) throw new EmbeddingPauseRequestedError();
     const candidates = buildEmbeddingCandidates(
       deps.db,
       project,
       files,
       currentItems,
-      deps.embeddingService.fingerprint?.() ?? 'embedding:unknown',
+      options?.embeddingFingerprint ?? deps.embeddingService.fingerprint?.() ?? 'embedding:unknown',
     );
     if (candidates.length > 0) {
       const res = await runEmbedChunks(candidates, {

@@ -65,6 +65,7 @@ import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import { expandGraph } from '@mcp/indexer/search/graph-expansion-source.js';
+import { codeResultInScope, codeSearchFolders, rerankWithinSlots } from './code-vector-matches.js';
 import type {
   ContextSnapshot,
   DBFile,
@@ -259,6 +260,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
   constructor(private deps: RawSearchInputs) {}
 
   enable(q: HybridSearchPipelineQuery): boolean {
+    if (!codeSearchFolders(this.deps.db, q.projectId).length) return false;
     // Skip vector when embeddings/vector store missing — degrade gracefully
     // to FTS-only. Mirrors the legacy `vectorSearchExpanded` early return.
     const blocked = this.deps.embeddingService.queryBlockReasonForNamespace?.(
@@ -382,8 +384,9 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
 
   private rehydrate(
     matches: Array<{ score: number; metadata: Record<string, string> }>,
-    projectId?: number,
+    projectId: number,
   ): HybridSearchPipelineCandidate[] {
+    const folders = codeSearchFolders(this.deps.db, projectId);
     const out: HybridSearchPipelineCandidate[] = [];
     const byId = new Map<string, HybridSearchPipelineCandidate>();
     for (const match of matches) {
@@ -402,6 +405,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
         vector_score: match.score,
         data,
       };
+      if (!codeResultInScope(folders, r)) continue;
       const key = candidateKey(r);
       const existing = byId.get(key);
       if (existing) {
@@ -757,11 +761,14 @@ export class RerankerHydrator
     q: HybridSearchPipelineQuery,
     candidates: readonly HybridSearchPipelineCandidate[],
   ): Promise<Array<{ ok: true; candidate: HybridSearchPipelineCandidate }>> {
-    q.diag.rerankerCandidates = candidates.length;
+    const folders = codeSearchFolders(this.db, q.projectId);
+    const eligible = (candidate: HybridSearchPipelineCandidate) => codeResultInScope(folders, candidate.result);
+    const scoped = candidates.filter(eligible);
+    q.diag.rerankerCandidates = scoped.length;
     q.diag.rerankerApplied = false;
-    if (candidates.length === 0) {
+    if (scoped.length === 0) {
       q.diag.rerankerReturned = 0;
-      return [];
+      return candidates.map((candidate) => ({ ok: true, candidate }));
     }
     // Pass the public top-K separately from the expanded candidate pool. The
     // semantic worker uses it to resolve the hardware tier (20/40/64) and
@@ -781,7 +788,7 @@ export class RerankerHydrator
       const sourceCache = new Map<string, string[]>();
       const budget = { bytes: 8 * 1024 * 1024 };
       if (this.db) {
-        const paths = [...new Set(candidates.map(({ result }) => {
+        const paths = [...new Set(scoped.map(({ result }) => {
           const data = result.data as unknown as Record<string, unknown>;
           return String(result.type === 'file' ? data.path ?? '' : data.file_path ?? '');
         }))];
@@ -790,12 +797,12 @@ export class RerankerHydrator
         });
       }
       q.signal?.throwIfAborted();
-      const rerankInput = candidates.map((candidate) => ({
+      const rerankInput = scoped.map((candidate) => ({
         id: candidate.candidateId,
         text: rerankDocumentText(candidate.result, this.db, q.projectId, sourceCache),
         originalScore: candidate.score,
       }));
-      const expected = Math.min(q.limit, candidates.length);
+      const expected = Math.min(q.limit, scoped.length);
       const reranked = await this.reranker.rerank(q.query, rerankInput, expected, {
         supersessionKey: q.supersessionKey,
         signal: q.signal,
@@ -825,20 +832,21 @@ export class RerankerHydrator
       q.diag.rerankerError = error instanceof Error ? error.message : String(error);
       q.diag.rerankerReturned = 0;
     }
-    return candidates.map((c, index) => {
+    const withScore = (c: HybridSearchPipelineCandidate, score: number): HybridSearchPipelineCandidate => ({
+      ...c, score, result: { ...c.result, score },
+    });
+    const scored = scoped.map((c, index) => {
       const newScore = newScoreById.get(c.candidateId)
         ?? (floorScore !== null && !rerankedIds.has(c.candidateId)
           ? floorScore - index * Number.EPSILON
           : c.score);
-      return {
-        ok: true as const,
-        candidate: {
-          ...c,
-          score: newScore,
-          result: { ...c.result, score: newScore },
-        },
-      };
+      return withScore(c, newScore);
     });
+    const output = scoped.length === candidates.length ? scored
+      : !q.diag.rerankerApplied ? candidates
+        : rerankWithinSlots(candidates, scored.sort((a, b) => b.score - a.score), eligible,
+          (ranked, original) => withScore(ranked, original.score));
+    return output.map((candidate) => ({ ok: true, candidate }));
   }
 
   update(candidate: HybridSearchPipelineCandidate, hydrated: HybridSearchPipelineCandidate): void {

@@ -279,6 +279,10 @@ import { agentMemoryEvolution275 } from './275_agent_memory_evolution.js';
 import { worktreeProjects276 } from './276_worktree_projects.js';
 import { semanticRecovery277 } from './277_semantic_recovery.js';
 import { bundledGraniteEmbedding278 } from './278_bundled_granite_embedding.js';
+import { symbolReferenceTargetIndex279 } from './279_symbol_reference_target_index.js';
+import { fileContentFtsExclusion280 } from './280_file_content_fts_exclusion.js';
+import { symbolFileLookup281 } from './281_symbol_file_lookup.js';
+import { projectSemanticFolders282 } from './282_project_semantic_folders.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -557,6 +561,10 @@ export const MIGRATIONS: Migration[] = [
   worktreeProjects276,
   semanticRecovery277,
   bundledGraniteEmbedding278,
+  symbolReferenceTargetIndex279,
+  fileContentFtsExclusion280,
+  symbolFileLookup281,
+  projectSemanticFolders282,
 ];
 
 /**

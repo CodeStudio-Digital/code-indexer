@@ -2,6 +2,7 @@ import type { OwnedProjectIndexService } from './owned-project-index-types.js';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { ServerDeps } from './deps.js';
+import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 
 
 
@@ -29,6 +30,9 @@ class OwnedProjectIndex implements OwnedProjectIndexService {
     const readiness = await deps.projectIndexService.reconcileStructural(projectId, 180_000, control.signal, check);
     check();
     if (readiness.status !== 'ready') return `Structural reconciliation is still ${readiness.status}; semantic indexing was not requested. Inspect project index status before continuing.`;
+    if (!projectSemanticFolders(deps.db.getProject(projectId)).length) {
+      return 'Structural index is ready. Choose the folders for semantic indexing in the project search settings.';
+    }
     const job = deps.semanticCoordinator.enqueueCodeProjectReindex(projectId, input.rebuild_semantic === true);
     check();
     return `Structural index is ready. Semantic ${input.rebuild_semantic === true ? 'rebuild' : 'start'} job #${job.id} was accepted by the server-owned worker.`;

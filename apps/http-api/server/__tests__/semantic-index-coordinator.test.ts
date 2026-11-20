@@ -495,10 +495,12 @@ function makeHarness(options: {
   };
   db = {
     countFiles: vi.fn((id: number) => fileCounts[id] ?? 0),
+    countFilesInFolders: vi.fn((id: number) => fileCounts[id] ?? 0),
     listProjects: vi.fn(() => projectIds.map((id) => ({ id, is_synthetic: false, root_path: roots.get(id)! }))),
     getProject: vi.fn((id: number) => projectIds.includes(id)
       ? { id, name: `p${id}`, is_synthetic: false, root_path: roots.get(id)! }
       : null),
+    getProjectCatalogEntry: (id: number) => db.getProject(id) ?? undefined,
     listFiles: vi.fn((id: number) => Array.from({ length: fileCounts[id] ?? 0 }, (_, index) => ({
       id: index + 1,
       path: `src/file-${index + 1}.ts`,
@@ -506,6 +508,7 @@ function makeHarness(options: {
       summary: `Summary ${index + 1}`,
       concepts: '[]',
     }))),
+    listFilesInFolders: (id: number) => db.listFiles(id),
     getFile: vi.fn((id: number, path: string) => {
       const index = /^src\/file-(\d+)\.ts$/.exec(path)?.[1];
       const ordinal = index ? Number(index) : 0;

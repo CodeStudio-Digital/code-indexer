@@ -59,8 +59,8 @@ export class SemanticIndexCoordinator {
     this.#context.cleanupUnusedVectors = (projectId) => this.cleanupUnusedVectors(projectId);
     this.#context.ensureCodeProject = (projectId) => this.ensureCodeProject(projectId);
     this.#context.catchUpCodeProject = (projectId) => this.catchUpCodeProject(projectId);
-    this.#context.reindexCodeProject = (projectId, force) => this.reindexCodeProject(projectId, force);
-    this.#context.enqueueCodeProjectReindex = (projectId, force, reason) => this.enqueueCodeProjectReindex(projectId, force, reason);
+    this.#context.reindexCodeProject = (...args) => this.reindexCodeProject(...args);
+    this.#context.enqueueCodeProjectReindex = (...args) => this.enqueueCodeProjectReindex(...args);
     this.#context.ensureMemoryNamespace = (namespace, force, beforeStart) => this.ensureMemoryNamespace(namespace, force, beforeStart);
     this.#context.catchUpMemoryNamespace = (namespace) => this.catchUpMemoryNamespace(namespace);
     this.#context.beginDocsCollectionMutation = (collectionId, operation) => this.beginDocsCollectionMutation(collectionId, operation);
@@ -90,8 +90,13 @@ export class SemanticIndexCoordinator {
   private performUnusedVectorCleanup(projectId?: number): Promise<SemanticUnusedVectorCleanupResult> { return this.#context.performUnusedVectorCleanup(projectId); }
   ensureCodeProject(projectId: number): Promise<void> { return this.#implementation.ensureCodeProject(projectId); }
   catchUpCodeProject(projectId: number): Promise<void> { return this.#implementation.catchUpCodeProject(projectId); }
-  reindexCodeProject(projectId: number, force?: boolean): Promise<ReindexResult> { return this.#implementation.reindexCodeProject(projectId, force); }
-  enqueueCodeProjectReindex(projectId: number, force?: boolean, reason?: string): SemanticJobRow { return this.#implementation.enqueueCodeProjectReindex(projectId, force, reason); }
+  reindexCodeProject(projectId: number, force?: boolean, preserveGeneration?: boolean): Promise<ReindexResult> {
+    return this.#implementation.reindexCodeProject(projectId, force, preserveGeneration);
+  }
+  setCodeProjectFolders(projectId: number, folders: readonly string[]): void {
+    this.#context.setCodeProjectFolders(projectId, folders);
+  }
+  enqueueCodeProjectReindex(...args: Parameters<SemanticCoordinatorContext['enqueueCodeProjectReindex']>): SemanticJobRow { return this.#implementation.enqueueCodeProjectReindex(...args); }
   private dispatchCodeProjectReindex(projectId: number, jobId: number): void { return this.#context.dispatchCodeProjectReindex(projectId, jobId); }
   private coalesceCodeCatchup(projectId: number, operation: () => Promise<void>): Promise<void> { return this.#context.coalesceCodeCatchup(projectId, operation); }
   private runCodeProjectBuild(projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void> { return this.#context.runCodeProjectBuild(projectId, generation, force); }
@@ -145,10 +150,10 @@ export class SemanticIndexCoordinator {
   private assertNamespaceProjectActive(namespace: string): void { return this.#context.assertNamespaceProjectActive(namespace); }
   private prepareNamespaceGeneration(namespace: string, purpose: SemanticPurpose, generationId: number, expectedItems: number): void { return this.#context.prepareNamespaceGeneration(namespace, purpose, generationId, expectedItems); }
   private buildCodeNamespace(projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void> { return this.#context.buildCodeNamespace(projectId, generation, force); }
-  private drainActiveCodeDeltas(projectId: number, rootPath: string, generation: SemanticGenerationRow, initial: SemanticJobRow[]): Promise<void> { return this.#context.drainActiveCodeDeltas(projectId, rootPath, generation, initial); }
+  private drainActiveCodeDeltas(...args: Parameters<SemanticCoordinatorContext['drainActiveCodeDeltas']>): Promise<void> { return this.#context.drainActiveCodeDeltas(...args); }
   private captureCodeDeltaJobs(namespace: string, generationId: number, includePreviousGenerations?: boolean): SemanticJobRow[] { return this.#context.captureCodeDeltaJobs(namespace, generationId, includePreviousGenerations); }
-  private runCodeEmbedding(projectId: number, rootPath: string, _namespace: string, jobId: number | null, paths?: readonly string[], reportNamespaceProgress?: boolean): Promise<EmbeddingRetryResult> { return this.#context.runCodeEmbedding(projectId, rootPath, _namespace, jobId, paths, reportNamespaceProgress); }
-  private verifyCodeVectorCoverage(projectId: number, rootPath: string, generationId: number, namespace: string): Promise<number> { return this.#context.verifyCodeVectorCoverage(projectId, rootPath, generationId, namespace); }
+  private runCodeEmbedding(...args: Parameters<SemanticCoordinatorContext['runCodeEmbedding']>): Promise<EmbeddingRetryResult> { return this.#context.runCodeEmbedding(...args); }
+  private verifyCodeVectorCoverage(...args: Parameters<SemanticCoordinatorContext['verifyCodeVectorCoverage']>): Promise<number> { return this.#context.verifyCodeVectorCoverage(...args); }
   private buildDocsNamespace(collectionId: number, generation: SemanticGenerationRow, force: boolean): Promise<void> { return this.#context.buildDocsNamespace(collectionId, generation, force); }
   private verifyDocsVectorCoverage(collectionId: number, generationId: number, namespace: string): Promise<number> { return this.#context.verifyDocsVectorCoverage(collectionId, generationId, namespace); }
   private buildSnapshotNamespace(projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void> { return this.#context.buildSnapshotNamespace(projectId, generation, force); }

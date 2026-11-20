@@ -11,6 +11,7 @@ import type { HyDEService } from '@mcp/indexer/search/hyde.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import { planQuery } from '@mcp/indexer/search/planner.js';
 import { buildConceptFtsMatch } from './lexical-concepts.js';
+import { codeResultInScope, codeSearchFolders, rerankWithinSlots } from './code-vector-matches.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import type { HybridSearchResult, SearchMode, SearchType, DBFile, DBSymbol, ContextSnapshot } from '@mcp/shared/types.js';
@@ -50,6 +51,7 @@ export interface SearchDiagnostics {
   queryVariants?: string[];
   vectorRawMatches?: number;
   vectorRehydrated?: number;
+  vectorSkippedReason?: string;
   vectorError?: string;
   ftsCount?: number;
   /** Set when the planner chose a backend on the caller's behalf. */
@@ -337,7 +339,12 @@ export class HybridSearch {
     const candidates = gathered.slice(0, Math.min(gathered.length, rerankDepth));
     let finalCandidates = candidates;
     if (mode === 'hybrid' && candidates.length > 0 && this.reranker.name !== 'null' && !this.reranker.queryBlockReason?.(query)) {
-      const rerankInput = candidates.map((candidate) => ({
+      const foldersByProject = new Map(projects.map((project) => [project.id, codeSearchFolders(this.db, project.id)]));
+      const eligible = (candidate: typeof candidates[number]) =>
+        codeResultInScope(foldersByProject.get(candidate.projectId) ?? [], candidate.result);
+      const scoped = candidates.filter(eligible);
+      if (!scoped.length) return candidates.slice(0, limit);
+      const rerankInput = scoped.map((candidate) => ({
         id: `${candidate.projectId}:${candidate.result.type}:${candidate.result.id}`,
         text: rerankDocumentText(candidate.result, this.db, candidate.projectId),
         originalScore: candidate.result.score,
@@ -357,17 +364,24 @@ export class HybridSearch {
         })) {
           throw new Error(`${this.reranker.name} returned an incomplete or invalid global result set`);
         }
-        const byId = new Map(candidates.map((candidate) => [
+        const byId = new Map(scoped.map((candidate) => [
           `${candidate.projectId}:${candidate.result.type}:${candidate.result.id}`,
           candidate,
         ]));
-        finalCandidates = reranked.map((row) => {
+        const ordered = reranked.map((row) => {
           const candidate = byId.get(row.id)!;
           return {
             ...candidate,
             result: { ...candidate.result, score: row.score },
           };
         });
+        finalCandidates = scoped.length === candidates.length ? ordered
+          : rerankWithinSlots(candidates, [
+            ...ordered.sort((a, b) => b.result.score - a.result.score),
+            ...scoped.filter((candidate) => !received.has(`${candidate.projectId}:${candidate.result.type}:${candidate.result.id}`)),
+          ], eligible, (ranked, original) => ({
+            ...ranked, result: { ...ranked.result, score: original.result.score },
+          }));
       } catch (error) {
         console.warn(`[hybrid-search] ${this.reranker.name} global rerank unavailable; preserving RRF order: ${
           error instanceof Error ? error.message : String(error)
@@ -435,6 +449,7 @@ export class HybridSearch {
         mode,
         type,
         limit,
+        mode === 'fts' ? null : codeSearchFolders(this.db, projectId),
         embeddingRevision,
         rerankerRevision,
       ]);
@@ -543,13 +558,15 @@ export class HybridSearch {
       return response;
     }
 
+    const emptyScope = mode !== 'fts' && !codeSearchFolders(this.db, projectId).length;
     const diag: SearchDiagnostics = {
       structuralRevision,
       vectorAvailable: !!this.vectorStore,
       embeddingAvailable: !(this.embeddingService instanceof NullEmbeddingService),
       requestedMode,
       plannedMode: mode,
-      effectiveMode: mode,
+      effectiveMode: emptyScope && mode === 'hybrid' ? 'fts' : mode,
+      ...(emptyScope ? { vectorSkippedReason: 'No project folders selected for semantic search' } : {}),
       cacheHit: false,
       telemetryRequestId,
       ...(mode !== 'fts'
@@ -748,6 +765,7 @@ export class HybridSearch {
     options?: HybridSearchOptions,
   ): Promise<HybridSearchResult[]> {
     options?.signal?.throwIfAborted();
+    if (!codeSearchFolders(this.db, projectId).length) return [];
     const namespace = codeNamespace(projectId);
     const blocked = this.embeddingService.queryBlockReasonForNamespace?.(namespace) ?? null;
     if (blocked) {
@@ -861,11 +879,12 @@ export class HybridSearch {
     }
   }
 
-  /** Rehydrate vector matches from SQLite — shared by vectorSearchExpanded and snapshot search. */
+  /** Rehydrate vector matches from SQLite within the current code scope. */
   private rehydrateVectorMatches(
     matches: Array<{ score: number; metadata: Record<string, string> }>,
-    projectId?: number,
+    projectId: number,
   ): HybridSearchResult[] {
+    const folders = codeSearchFolders(this.db, projectId);
     const results: HybridSearchResult[] = [];
     for (const match of matches) {
       const isFile = match.metadata.type === 'file';
@@ -877,14 +896,15 @@ export class HybridSearch {
         : this.db.getSymbolById(refId, projectId);
       if (!data) continue;
 
-      results.push({
+      const result: HybridSearchResult = {
         id: data.id,
         type: isFile ? 'file' : 'symbol',
         score: match.score,
         fts_rank: null,
         vector_score: match.score,
         data,
-      });
+      };
+      if (codeResultInScope(folders, result)) results.push(result);
     }
     return results;
   }

@@ -2,6 +2,7 @@ import type { DirtyEvent } from '@mcp/services/services/project-index/index.js';
 import {
 codeNamespace
 } from '@mcp/shared/vector-namespace.js';
+import { isSemanticPath, projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 import { CODE_DELTA_BUSY_TIMEOUT_MS,CODE_DELTA_RETRY_BASE_MS,CODE_DELTA_RETRY_MAX_MS,isSqliteBusyError,mergeCodeDeltaCursor } from './semantic-coordinator-shared.js';
 
 import type { SemanticCoordinatorContext } from './semantic-coordinator-context.js';
@@ -40,6 +41,8 @@ persistCodeDelta(this: SemanticCoordinatorContext,
   ): void {
     const namespace = codeNamespace(projectId);
     if (!this.allowsNamespaceMutation(namespace)) return;
+    const folders = projectSemanticFolders(this.deps.db.getProjectCatalogEntry(projectId));
+    if (!folders.length) return;
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
     const normalized = events.length > 0
       ? Array.from(new Map(events.map((event) => [
@@ -47,6 +50,8 @@ persistCodeDelta(this: SemanticCoordinatorContext,
           { kind: event.kind, path: event.path.replace(/\\/g, '/') },
         ])).values())
       : [{ kind: 'upsert' as const, path: '*' }];
+    const scopedEvents = normalized.filter((event) => event.path === '*' || isSemanticPath(folders, event.path));
+    if (!scopedEvents.length) return;
     const generationId = state?.building_generation_id ?? state?.active_generation_id ?? null;
     const kind = generationId === null ? 'backfill' as const : 'delta' as const;
     const existing = this.deps.semanticStore.listJobs({ namespace, statuses: ['pending', 'paused'], kinds: [kind] }).find((job) =>
@@ -54,7 +59,7 @@ persistCodeDelta(this: SemanticCoordinatorContext,
       && job.kind === kind
       && (job.status === 'pending' || job.status === 'paused')
       && job.cursor?.reason === 'code-delta');
-    const cursor = mergeCodeDeltaCursor(existing?.cursor ?? null, normalized, previousItemKeys);
+    const cursor = mergeCodeDeltaCursor(existing?.cursor ?? null, scopedEvents, previousItemKeys);
     const nextExpected = cursor.events.length;
     const previousExpected = existing?.expected_items ?? 0;
     if (existing) {

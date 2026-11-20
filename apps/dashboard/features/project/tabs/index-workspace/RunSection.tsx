@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Database,
   Eye,
+  Folder,
   Loader2,
   Play,
   RefreshCw,
@@ -15,9 +16,11 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '../../../../components/ui/badge.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../../components/ui/card.js';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../../components/ui/dialog.js';
 import { confirm, toast } from '../../../../components/ui/prompt-dialog.js';
 import { Progress } from '../../../../components/ui/progress.js';
 import { useIndexStatus } from '../../../workspace/jetbrains/status-bar/useIndexStatus.js';
+import { SemanticFolderPicker } from '../../settings/SemanticFolderPicker.js';
 import {
   codeNamespaceStatus,
   semanticCoveragePercent,
@@ -61,12 +64,15 @@ export function RunSection({
 }) {
   const { t } = useTranslation('projects');
   const [semanticTestOpen, setSemanticTestOpen] = useState(false);
+  const [semanticFoldersOpen, setSemanticFoldersOpen] = useState(false);
   const structural = useIndexStatus(projectId);
   const semantic = useProjectSemanticStatus(projectId);
   const code = codeNamespaceStatus(semantic.status);
   const profile = semantic.status?.profiles.find((item) => item.purpose === 'code') ?? null;
   const job = semantic.status?.reindex_job ?? null;
   const semanticBusy = semanticWorkIsActive(semantic.status);
+  const folders = semantic.status?.code_folders;
+  const needsFolders = folders?.length === 0;
 
   const phase = structural?.phase as string | undefined;
   const structuralState = phase === 'error'
@@ -270,6 +276,8 @@ export function RunSection({
                 <p className="rounded-md border bg-muted/20 p-2 text-muted-foreground">
                   {semanticDisabled
                     ? 'Embedding desativado neste perfil.'
+                    : needsFolders
+                      ? t('edit.semanticFoldersRequired')
                     : localAutomatic
                       ? 'Target local: o primeiro backfill deste projeto pode iniciar automaticamente após o estrutural.'
                       : 'Target remoto: a primeira geração exige confirmação; abrir o projeto não faz chamadas automáticas.'}
@@ -301,6 +309,11 @@ export function RunSection({
                   </div>
                 ) : null}
                 <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+                  {folders && !needsFolders && (
+                    <Button type="button" size="sm" variant="outline" onClick={() => setSemanticFoldersOpen(true)}>
+                      <Folder className="h-4 w-4" /> {t('edit.semanticFoldersTitle')}
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     size="sm"
@@ -359,11 +372,16 @@ export function RunSection({
                       : <Trash2 className="mr-2 h-4 w-4" />}
                     {t('index.overview.cleanupUnused')}
                   </Button>
-                  <Button type="button" size="sm" onClick={() => void semantic.reindex()} disabled={semanticDisabled || semanticBusy || semantic.requesting || semantic.cleaning}>
+                  <Button type="button" size="sm" onClick={() => {
+                    if (needsFolders) setSemanticFoldersOpen(true);
+                    else void semantic.reindex();
+                  }} disabled={semanticDisabled || semanticBusy || semantic.requesting || semantic.cleaning}>
                     {semantic.requesting || semanticBusy
                       ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       : <Play className="mr-2 h-4 w-4" />}
-                    {job?.status === 'paused'
+                    {needsFolders
+                      ? t('edit.semanticChooseFolders')
+                      : job?.status === 'paused'
                       ? 'Retomar este projeto'
                       : code?.active
                         ? 'Reconstruir este projeto'
@@ -388,6 +406,17 @@ export function RunSection({
           </CardContent>
         </Card>
       </div>
+      <Dialog open={semanticFoldersOpen} onOpenChange={setSemanticFoldersOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{t('edit.semanticFoldersTitle')}</DialogTitle>
+          </DialogHeader>
+          <SemanticFolderPicker projectId={projectId} onSaved={() => {
+            setSemanticFoldersOpen(false);
+            void semantic.refresh();
+          }} />
+        </DialogContent>
+      </Dialog>
       <SemanticSearchTestDialog
         projectId={projectId}
         projectName={projectName}

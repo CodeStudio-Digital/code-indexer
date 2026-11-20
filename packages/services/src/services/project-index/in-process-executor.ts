@@ -43,6 +43,7 @@ export function createInProcessStructuralExecutor(
         totalFiles: r.totalFiles, indexed: r.indexed, removed: r.removed,
         skipped: r.skipped, errorCount: r.errorCount, durationMs: r.durationMs,
         phaseTimings: r.phaseTimings, peakRssMb: r.peakRssMb, aborted: r.aborted,
+        unavailableRoots: r.unavailableRoots,
       };
     },
     async indexFiles(projectId, relPaths, opts) {

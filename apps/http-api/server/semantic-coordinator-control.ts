@@ -1,6 +1,7 @@
 import {
 codeNamespace
 } from '@mcp/shared/vector-namespace.js';
+import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 import {
 type SemanticJobRow,
 type SemanticPurpose,
@@ -88,6 +89,7 @@ activateCodeProject(this: SemanticCoordinatorContext, projectId: number, leaseId
     leases.add(leaseId);
     this.codeProjectLeases.set(projectId, leases);
     this.codePauseRequested.delete(projectId);
+    if (!projectSemanticFolders(project).length) return null;
     const target = this.deps.semanticStore.getProfile('code')?.embedding_target;
     if (target?.kind !== 'onnx' && target?.kind !== 'local_http') return null;
     const namespace = codeNamespace(projectId);

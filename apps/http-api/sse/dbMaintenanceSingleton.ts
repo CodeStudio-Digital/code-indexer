@@ -18,6 +18,7 @@
  * env-agnostic).
  */
 import { WorkerHost } from '@mcp/orchestrator-host';
+import type { ProjectSettingsRows } from '@mcp/store/db/projects.js';
 import { resolveWorkerFile } from './workerFileResolution.js';
 
 let cached: WorkerHost | null = null;
@@ -84,6 +85,23 @@ export async function recoverSemanticMutationFences(
     { timeoutMs: 60_000 },
   );
   return result.recovered;
+}
+
+/** Read a project's settings without opening or closing its partition on Electron-main. */
+export async function readProjectSettingsInWorker(
+  dbPath: string,
+  projectId: number,
+): Promise<ProjectSettingsRows | undefined | null> {
+  const host = cached;
+  const starting = cachedStart;
+  if (!host || !starting) return null;
+  await starting;
+  if (cached !== host || !host.isRunning()) return null;
+  const result = await host.requireBridge().request<{ rows?: ProjectSettingsRows; busy?: true }>(
+    'project.read-settings', { dbPath, projectId }, { timeoutMs: 15_000 },
+  );
+  if (result.busy) throw Object.assign(new Error('Project settings database is busy'), { code: 'SQLITE_BUSY' });
+  return result.rows;
 }
 
 /**

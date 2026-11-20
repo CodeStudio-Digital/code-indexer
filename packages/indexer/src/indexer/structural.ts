@@ -12,10 +12,11 @@
  */
 import { join } from 'node:path';
 import { StructuralGeneration } from './structural-generation.js';
-import { readFileSync, statSync } from 'node:fs';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { MAX_CONTENT_BYTES, type ContentBackfillCandidate } from '@mcp/store/db/file-contents.js';
 import { mergeIndexIgnorePatterns, projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
+import { readDeferredScannedFile, readFileContentByHash } from './scanned-file-snapshot.js';
 import { buildTreeSitterDispatch } from '@mcp/indexer/indexer/tree-sitter-dispatch.js';
 import { withConcurrency } from './indexer/enrich-references.js';
 import {
@@ -28,6 +29,8 @@ import { removeFilesStructural } from './structural-incremental.js';
 import { semanticItemKeysForIndexedPaths } from './indexer/embedding-candidates.js';
 
 export { resolveStructuralPipelineSchedule } from './structural-pipeline-schedule.js';
+
+const MAX_ATOMIC_DELTA_FILES = 1_000;
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -80,6 +83,7 @@ export interface StructuralPhaseTimings {
 }
 
 export interface StructuralIndexResult {
+  unavailableRoots?: string[];
   runId?: number;
   totalFiles: number;
   indexed: number;
@@ -121,13 +125,15 @@ export async function runStructuralIndex(
     console.warn(`[structural] project-db split skipped for ${projectId}:`, (e as Error).message);
   }
 
+  const maxFileSizeKB = opts.maxFileSizeKB ?? 200;
   const scanner = new FileScanner(
     project.root_path,
     mergeIndexIgnorePatterns(opts.ignorePatterns, projectIndexIgnorePatterns(project)),
-    opts.maxFileSizeKB ?? 200,
+    maxFileSizeKB,
   );
   const scanStarted = Date.now();
   const scan = await scanner.scan(db, projectId, {
+    deferNewFileReads: true,
     maxFiles: opts.maxFiles,
     forceReparse: opts.forceReparse,
     waitForInteractivePriority: opts.waitForInteractivePriority,
@@ -138,6 +144,7 @@ export async function runStructuralIndex(
   phaseTimings.scanMs = Date.now() - scanStarted;
   sampleRss();
   const totalFiles = scan.totalFiles ?? scan.toIndex.length + scan.unchanged.length;
+  const partial = scan.unavailableRoots?.length ? { unavailableRoots: scan.unavailableRoots } : undefined;
 
   if (scan.aborted === 'too_large' || (opts.maxFiles && totalFiles > opts.maxFiles)) {
     return {
@@ -169,11 +176,15 @@ export async function runStructuralIndex(
   // (and repair legacy missing content coverage) without polluting `runs` or
   // the user-facing activity history with a fake 0/N execution.
   if (scan.toIndex.length === 0 && scan.toRemove.length === 0) {
+    if (partial) return {
+      ...partial, totalFiles, indexed: 0, removed: 0, skipped: scan.unchanged.length,
+      errorCount: 0, durationMs: Date.now() - startTime, phaseTimings, peakRssMb,
+    };
     let coverageErrors = 0;
     await opts.waitForInteractivePriority?.();
     const sweepStarted = Date.now();
     try {
-      const sweep = sweepContentCoverage(db, projectId, project.root_path);
+      const sweep = await sweepContentCoverage(db, projectId, project.root_path, opts);
       if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
     } catch (err) {
       coverageErrors++;
@@ -181,6 +192,13 @@ export async function runStructuralIndex(
     }
     phaseTimings.sweepMs += Date.now() - sweepStarted;
     sampleRss();
+    if (opts.signal?.aborted) {
+      return {
+        totalFiles, indexed: 0, removed: 0, skipped: scan.unchanged.length,
+        errorCount: coverageErrors, durationMs: Date.now() - startTime,
+        phaseTimings, peakRssMb, aborted: 'signal',
+      };
+    }
     const stats = db.getStats(projectId, { fresh: true });
     const checkedAt = new Date().toISOString();
     const needsMetadataRepair = stats.file_count !== project.file_count
@@ -210,18 +228,21 @@ export async function runStructuralIndex(
     };
   }
 
-  const exactChanges = [
-    ...scan.toRemove.map((path) => ({ path, kind: 'delete' as const })),
-    ...scan.toIndex.map((file) => ({ path: file.relativePath, kind: 'upsert' as const })),
-  ];
-  const previousItemKeys = opts.onChanges
-    ? semanticItemKeysForIndexedPaths(
-        db,
-        projectId,
-        exactChanges.map((event) => event.path),
-      )
-    : [];
-  await opts.onChanges?.(exactChanges, previousItemKeys);
+  const reportChanges = async (events: Array<{ path: string; kind: 'upsert' | 'delete' }>) => {
+    if (!opts.onChanges || events.length === 0) return;
+    const previousItemKeys = semanticItemKeysForIndexedPaths(db, projectId, events.map((event) => event.path));
+    await opts.onChanges(events, previousItemKeys);
+  };
+  // Keep full publication atomic for small deltas. Large builds re-use the
+  // same per-file transaction and commit the waves directly, so a restart
+  // rediscovers only the uncommitted paths and never has to replay staging.
+  const batched = scan.toRemove.length + scan.toIndex.length > MAX_ATOMIC_DELTA_FILES;
+  if (!batched) {
+    await reportChanges([
+      ...scan.toRemove.map((path) => ({ path, kind: 'delete' as const })),
+      ...scan.toIndex.map((file) => ({ path: file.relativePath, kind: 'upsert' as const })),
+    ]);
+  }
   await opts.waitForInteractivePriority?.();
 
   const pipelineSchedule = resolveStructuralPipelineSchedule(
@@ -234,6 +255,7 @@ export async function runStructuralIndex(
   const runId = db.startRun(projectId);
 
   let indexed = 0;
+  let unavailable = 0;
   let errorCount = 0;
   let aborted: StructuralIndexResult['aborted'];
   let completed = 0;
@@ -252,6 +274,7 @@ export async function runStructuralIndex(
           prepared?: PreparedFileStructural;
           error?: unknown;
           aborted?: boolean;
+          unavailable?: boolean;
         }> = new Array(wave.length);
 
         const parseStarted = Date.now();
@@ -261,10 +284,10 @@ export async function runStructuralIndex(
             return;
           }
           try {
-            outcomes[index] = {
-              file,
-              prepared: await prepareFileStructural(file, treeSitter),
-            };
+            const source = 'deferred' in file ? readDeferredScannedFile(file, maxFileSizeKB * 1024) : file;
+            outcomes[index] = source
+              ? { file, prepared: await prepareFileStructural(source, treeSitter) }
+              : { file, unavailable: true };
           } catch (error) {
             outcomes[index] = { file, error };
           }
@@ -276,10 +299,21 @@ export async function runStructuralIndex(
         let waveErrors = 0;
         const writeStarted = Date.now();
         try {
+          if (batched) {
+            const events = outcomes.flatMap(({ file, prepared }) =>
+              prepared ? [{ path: file.relativePath, kind: 'upsert' as const }] : []);
+            if (!opts.signal?.aborted) await reportChanges(events);
+            await opts.waitForInteractivePriority?.();
+            if (opts.signal?.aborted) { aborted = 'signal'; break; }
+          }
           db.indexTransaction(projectId, () => {
             for (const outcome of outcomes) {
               if (outcome.aborted) {
                 aborted = 'signal';
+                continue;
+              }
+              if (outcome.unavailable) {
+                unavailable++;
                 continue;
               }
               if (outcome.error || !outcome.prepared) {
@@ -288,7 +322,8 @@ export async function runStructuralIndex(
                 continue;
               }
               try {
-                generation.stage(outcome.prepared);
+                if (batched) persistPreparedFileStructural(db, projectId, outcome.prepared);
+                else generation.stage(outcome.prepared);
                 waveIndexed++;
               } catch (error) {
                 waveErrors++;
@@ -301,7 +336,7 @@ export async function runStructuralIndex(
         } catch (error) {
           // A commit-level failure rolls the whole wave back. Per-file failures
           // above are isolated by nested savepoints and do not reach this path.
-          errorCount += outcomes.filter((outcome) => !outcome.aborted).length;
+          errorCount += outcomes.filter((outcome) => !outcome.aborted && !outcome.unavailable).length;
           console.error('[structural] Error committing structural write wave:', error);
         }
         phaseTimings.writeMs += Date.now() - writeStarted;
@@ -317,6 +352,7 @@ export async function runStructuralIndex(
             currentFile: outcome.file.relativePath,
           });
         }
+        if (batched && errorCount > 0) break;
         if (completed % pipelineSchedule.yieldEvery === 0) await yieldToEventLoop();
       }
       if (opts.signal?.aborted) aborted = 'signal';
@@ -325,7 +361,28 @@ export async function runStructuralIndex(
     }
   }
 
-  if (!aborted && errorCount === 0) {
+  if (!aborted && errorCount === 0 && unavailable === totalFiles
+      && scan.toRemove.length > 0 && !opts.allowEmptyWipe) {
+    aborted = 'empty_scan';
+    console.error(`[structural] all deferred files were unavailable for project ${projectId} — preserving the existing index`);
+  }
+  if (batched) {
+    for (let offset = 0; !aborted && errorCount === 0 && offset < scan.toRemove.length; offset += pipelineSchedule.writeBatchSize) {
+      const paths = scan.toRemove.slice(offset, offset + pipelineSchedule.writeBatchSize);
+      const writeStarted = Date.now();
+      try {
+        await reportChanges(paths.map((path) => ({ path, kind: 'delete' })));
+        await opts.waitForInteractivePriority?.();
+        if (opts.signal?.aborted) { aborted = 'signal'; break; }
+        removed += db.indexTransaction(projectId, () => removeFilesStructural(db, projectId, paths).removed);
+      } catch (error) {
+        errorCount++;
+        console.error('[structural] Error committing structural removal wave:', error);
+      }
+      phaseTimings.writeMs += Date.now() - writeStarted;
+      await yieldToEventLoop();
+    }
+  } else if (!aborted && errorCount === 0 && (indexed > 0 || scan.toRemove.length > 0)) {
     try {
       const published = generation.publish(scan.toRemove, opts.signal);
       indexed = published.indexed;
@@ -341,18 +398,21 @@ export async function runStructuralIndex(
   await opts.waitForInteractivePriority?.();
   const sweepStarted = Date.now();
   try {
-    const sweep = !aborted && errorCount === 0 ? sweepContentCoverage(db, projectId, project.root_path) : { added: 0, skipped: 0 };
-    if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
+    if (!aborted && errorCount === 0) {
+      const sweep = await sweepContentCoverage(db, projectId, project.root_path, opts);
+      if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
+    }
   } catch (err) {
     errorCount++;
     console.error('[structural] Content coverage sweep failed:', err);
   }
   phaseTimings.sweepMs += Date.now() - sweepStarted;
   sampleRss();
+  if (opts.signal?.aborted) aborted = 'signal';
 
   const status = aborted || errorCount > scan.toIndex.length / 2
     ? 'failed'
-    : errorCount > 0 ? 'completed_with_errors' : 'completed';
+    : errorCount > 0 || partial ? 'completed_with_errors' : 'completed';
 
   // Counters always reflect reality; the READY stamp only lands when the run
   // actually succeeded over a non-empty project — a failed/empty run must
@@ -363,7 +423,7 @@ export async function runStructuralIndex(
   db.updateProject(projectId, {
     file_count: stats.file_count,
     symbol_count: stats.symbol_count,
-    structural_last_checked_at: checkedAt,
+    ...(!partial ? { structural_last_checked_at: checkedAt } : {}),
     ...(status === 'completed' && indexed + scan.unchanged.length > 0
       ? { structural_indexed_at: checkedAt }
       : {}),
@@ -373,14 +433,14 @@ export async function runStructuralIndex(
     status,
     totalFiles,
     indexedFiles: indexed,
-    skippedFiles: scan.unchanged.length,
+    skippedFiles: scan.unchanged.length + unavailable,
     errorCount,
     phaseTimings,
     peakRssMb,
   }, projectId);
 
   return {
-    runId, totalFiles, indexed, removed, skipped: scan.unchanged.length,
+    ...partial, runId, totalFiles, indexed, removed, skipped: scan.unchanged.length + unavailable,
     errorCount, durationMs: Date.now() - startTime,
     phaseTimings, peakRssMb, aborted,
   };
@@ -390,34 +450,43 @@ export async function runStructuralIndex(
  * Backfill `file_contents_fts` for rows without an entry — covers the first
  * upgrade (vtab born empty under existing hashes, so the scanner skips every
  * file), post-corruption recovery (repair recreates empty) and individual
- * failed writes. Guard-rejected files (minified, oversized) are fetched once
- * and skipped — the loop advances through the FULL missing list, never
- * re-querying, so they can't spin it.
+ * failed writes. A policy-versioned exclusion keeps rejected contents out of
+ * later sweeps until their snapshot or the policy changes.
  */
-export function sweepContentCoverage(
+export async function sweepContentCoverage(
   db: CodeIndexDB,
   projectId: number,
   rootPath: string,
-): { added: number; skipped: number } {
-  const missing = db.missingContentFiles(projectId, 1_000_000);
+  opts: Pick<StructuralIndexOptions, 'signal' | 'waitForInteractivePriority'> = {},
+): Promise<{ added: number; skipped: number }> {
+  let afterId = 0;
   let added = 0;
   let skipped = 0;
-  for (let i = 0; i < missing.length; i += 200) {
-    const chunk = missing.slice(i, i + 200);
-    db.indexTransaction(projectId, () => {
-      for (const f of chunk) {
-        try {
-          const abs = join(rootPath, f.path);
-          const st = statSync(abs, { throwIfNoEntry: false });
-          if (!st?.isFile()) { skipped++; continue; }
-          const content = readFileSync(abs, 'utf-8');
-          if (db.upsertFileContent(f.id, content, st.size, projectId)) added++;
-          else skipped++;
-        } catch {
-          skipped++;
-        }
+  while (!opts.signal?.aborted) {
+    await opts.waitForInteractivePriority?.();
+    const candidates = db.contentBackfillCandidates(projectId, afterId, 100);
+    if (candidates.length === 0 || opts.signal?.aborted) break;
+    afterId = candidates[candidates.length - 1].id;
+
+    const ready: Array<{ file: ContentBackfillCandidate; content: string }> = [];
+    for (const file of candidates) {
+      if (file.size === 0 || file.size > MAX_CONTENT_BYTES) {
+        ready.push({ file, content: '' });
+        continue;
       }
-    });
+      const content = readFileContentByHash(join(rootPath, file.path), file.size, file.content_hash);
+      if (content !== undefined) ready.push({ file, content });
+    }
+    skipped += candidates.length - ready.length;
+    if (ready.length > 0) {
+      db.indexTransaction(projectId, () => {
+        for (const { file, content } of ready) {
+          if (db.backfillFileContent(projectId, file, content)) added++;
+          else skipped++;
+        }
+      });
+    }
+    await yieldToEventLoop();
   }
   return { added, skipped };
 }

@@ -39,6 +39,7 @@ import {
 import { registerShutdownTask } from './shutdown-tasks.js';
 import {
   canResolveDbMaintenanceWorker,
+  readProjectSettingsInWorker,
   recoverSemanticMutationFences,
   scheduleProjectDbCheckpoint,
   startDbMaintenanceWorker,
@@ -610,6 +611,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     checkpointOwner: true,
     externalCheckpointer: dbMaintenanceEnabled,
     projectDbCheckpoint: dbMaintenanceEnabled ? scheduleProjectDbCheckpoint : undefined,
+    readProjectSettings: dbMaintenanceEnabled ? readProjectSettingsInWorker : undefined,
     busyTimeoutMs: mainBusyTimeoutMs(),
   });
   if (dbMaintenanceEnabled) {
@@ -736,7 +738,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     },
   );
   const localVectorRouter = new LocalVectorRouter({
-    resolveProject: (projectId) => db.getProject(projectId),
+    resolveProject: (projectId) => db.getProjectCatalogEntry(projectId),
     semanticStore,
   });
   let semanticVectorWorker: SemanticVectorWorkerClient | null = null;
@@ -803,7 +805,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
   // semantic jobs pause visibly until the worker can be restored.
   const vectorOverride = semanticVectorWorker ?? new NullVectorStore();
   const semanticSearchTelemetry = new FileSemanticSearchTelemetryStore((projectId) => {
-    const project = db.getProject(projectId);
+    const project = db.getProjectCatalogEntry(projectId);
     return project && !project.is_synthetic ? project.root_path : null;
   });
   const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
@@ -969,7 +971,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     dataDir: mcpDataDir(),
     projectRootResolver: {
       resolveProjectRoot: (projectId) => {
-        const project = db.getProject(projectId);
+        const project = db.getProjectCatalogEntry(projectId);
         return project && !project.is_synthetic
           ? project.root_path
           : undefined;

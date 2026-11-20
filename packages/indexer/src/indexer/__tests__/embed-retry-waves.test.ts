@@ -4,6 +4,8 @@
  * Requires the Node-ABI better-sqlite3 build.
  */
 import { describe, it, expect, afterEach } from 'vitest';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   makeStructuralHarness,
   smallFileFixture,
@@ -14,7 +16,12 @@ import { NullLshIndexingSink } from '../lsh-indexing-sink.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
 
 const harnesses: StructuralHarness[] = [];
-const make = (): StructuralHarness => { const h = makeStructuralHarness(); harnesses.push(h); return h; };
+const make = (): StructuralHarness => {
+  const h = makeStructuralHarness();
+  harnesses.push(h);
+  h.db.updateProject(h.projectId, { semantic_index_folders: '["."]' });
+  return h;
+};
 afterEach(() => { for (const h of harnesses.splice(0)) h.dispose(); });
 
 function deps(h: StructuralHarness) {
@@ -89,5 +96,29 @@ describe('retryEmbeddings in waves', () => {
     const h = make();
     const badDeps = { ...deps(h), vectorStore: null };
     await expect(retryEmbeddings(badDeps, h.projectRoot)).rejects.toThrow(/not available/);
+  });
+
+  it('limits both a full retry and a file delta to the selected folder and its descendants', async () => {
+    const h = make();
+    for (const path of ['src/nested', 'src-other']) mkdirSync(join(h.projectRoot, path), { recursive: true });
+    h.writeFile('src/keep.ts', smallFileFixture('includedSource'));
+    h.writeFile('src/nested/deep.ts', smallFileFixture('includedNested'));
+    h.writeFile('src-other/skip.ts', smallFileFixture('outsideSource'));
+    await h.indexStructural();
+    h.db.updateProject(h.projectId, { semantic_index_folders: '["src"]' });
+    h.vectorStore.clearItems(codeNamespace(h.projectId));
+
+    const seen: number[] = [];
+    const result = await retryEmbeddings(deps(h), h.projectRoot, {
+      onProgress: (progress) => seen.push(progress.total),
+    });
+    expect(result.embedded).toBeGreaterThan(0);
+    expect(seen.at(-1)).toBe(2);
+    const before = h.embedding.calls;
+    const outside = await retryEmbeddings(deps(h), h.projectRoot, { paths: ['src-other/skip.ts'] });
+    expect(outside.embedded).toBe(0);
+    expect(h.embedding.calls).toBe(before);
+    expect(h.db.countFiles(h.projectId)).toBe(3);
+    expect(h.db.getFile(h.projectId, 'src-other/skip.ts')).toBeDefined();
   });
 });

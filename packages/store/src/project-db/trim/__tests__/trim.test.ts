@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openRawProjectDb } from '../../open.js';
 import { initSchema } from '../../../db/schema/index.js';
-import { runMigrations } from '../../../migrations/index.js';
+import { MIGRATIONS, runMigrations } from '../../../migrations/index.js';
 import { isProjectSchemaTrimCurrent, trimProjectSchema } from '../index.js';
 import { initProjectSchema } from '../../project-schema.js';
 import { CENTRAL_DROP_TABLES, projectKeepTables } from '../drop-list.js';
@@ -88,6 +88,7 @@ describe('trimProjectSchema (C2)', () => {
       db.prepare("INSERT INTO files (project_id, path, language, content_hash) VALUES (1, 'keep.ts', 'ts', 'h')").run();
       db.prepare('DELETE FROM schema_version WHERE version >= 274').run();
       const before = db.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").all();
+      db.exec('DROP INDEX idx_symbol_refs_symbol_id; DROP INDEX idx_projects_worktree');
       const guarded = new Proxy(db, {
         get(target, property) {
           if (property === 'pragma') return (source: string, ...args: unknown[]) => {
@@ -105,7 +106,7 @@ describe('trimProjectSchema (C2)', () => {
       initProjectSchema(guarded);
       initProjectSchema(guarded);
       expect(db.prepare('SELECT version FROM schema_version WHERE version >= 274 ORDER BY version').all())
-        .toEqual([{ version: 274 }, { version: 275 }]);
+        .toEqual(MIGRATIONS.filter(migration => migration.version >= 274).map(({ version }) => ({ version })));
       expect(db.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").all()).toEqual(before);
       expect(db.prepare('SELECT path FROM files').all()).toEqual([{ path: 'keep.ts' }]);
       expect(db.pragma('foreign_key_check')).toEqual([]);

@@ -13,6 +13,7 @@ import { installSqlTiming } from './db/sql-timing.js';
 import { existsSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
+import { abortableRead } from '@mcp/shared/utils/abortable.js';
 import { projectDbFlags, type ProjectDbFlags } from '@mcp/shared/utils/config.js';
 import type { EditorSettingsOverride } from '@mcp/shared/editor-settings.js';
 import {
@@ -96,10 +97,8 @@ export interface EmbeddingCoverage {
 type ProjectSettings = Partial<Pick<Project, 'node_version' | 'runtime_versions' | 'runner_shell' | 'package_managers' |
   'wsl_runtime_versions' | 'wsl_package_managers' | 'editor_settings'>>;
 
-function isSettingsBusy(error: unknown): boolean {
-  const code = (error as { code?: string } | null)?.code;
-  return typeof code === 'string' && /^SQLITE_(BUSY|LOCKED)(_|$)/.test(code);
-}
+// null means the read worker is unavailable; undefined means the partition has no readable settings.
+type ReadProjectSettings = (path: string, projectId: number) => Promise<projects.ProjectSettingsRows | undefined | null>;
 
 export class CodeIndexDB {
   structuralJournal() { return structuralJournal(this.db); }
@@ -113,6 +112,7 @@ export class CodeIndexDB {
   private readonly pdbFlags: ProjectDbFlags;
   /** Per-project DB pool (tiered-hybrid split). Lazily opens project DBs. */
   private readonly projectPool: ProjectDbPool;
+  private readonly readSettingsOffThread?: ReadProjectSettings;
   private configReader?: { id: number; path: string; db: DB; settings?: ProjectSettings };
   /** Cache of the routing decision per project id (avoids a SELECT per call). */
   private readonly routeCache = new Map<number, boolean>();
@@ -135,6 +135,8 @@ export class CodeIndexDB {
       externalCheckpointer?: boolean;
       /** Fire-and-forget project DB checkpoint scheduler owned by a worker. */
       projectDbCheckpoint?: (dbPath: string) => void;
+      /** Read committed partition settings without opening a SQLite handle on the caller's thread. */
+      readProjectSettings?: ReadProjectSettings;
       /**
        * Busy-wait ceiling for this connection, ms. Defaults to the shared 5s.
        * The Electron-main handle passes a small value: better-sqlite3 waits for
@@ -155,6 +157,7 @@ export class CodeIndexDB {
     assertNoSessionMigrationMaintenanceLock(dbPath);
     this.centralDbPath = dbPath;
     this.checkpointOwner = !!opts.checkpointOwner;
+    this.readSettingsOffThread = opts.readProjectSettings;
     this.db = new Database(dbPath);
     try {
       assertSessionStorageLayoutReady(this.db, { allowFreshBootstrap });
@@ -541,10 +544,14 @@ export class CodeIndexDB {
     let delayMs = 20;
     for (;;) {
       signal?.throwIfAborted();
-      try { return this.resolveProjectSettings(id, true); }
+      try {
+        return this.readSettingsOffThread
+          ? await this.resolveProjectSettingsAsync(id, this.readSettingsOffThread, signal)
+          : this.resolveProjectSettings(id, true);
+      }
       catch (error) {
         const remaining = deadline - performance.now();
-        if (!isSettingsBusy(error) || remaining <= 0) throw error;
+        if (!projects.isProjectSettingsBusy(error) || remaining <= 0) throw error;
         await wait(Math.min(delayMs, remaining), undefined, { signal });
         delayMs = Math.min(125, delayMs * 2);
       }
@@ -556,7 +563,29 @@ export class CodeIndexDB {
     if (!project) return undefined;
     if (!project.worktree_parent_id) return this.readProjectSettings(project, retryBusy);
     const owner = this.resolveProjectSettings(project.worktree_parent_id, retryBusy);
-    if (!owner) return undefined;
+    return owner && this.inheritProjectSettings(project, owner);
+  }
+
+  private async resolveProjectSettingsAsync(id: number, read: ReadProjectSettings, signal?: AbortSignal): Promise<Project | undefined> {
+    const project = this.getProjectCatalogEntry(id);
+    if (!project) return undefined;
+    if (project.worktree_parent_id) {
+      const owner = await this.resolveProjectSettingsAsync(project.worktree_parent_id, read, signal);
+      return owner && this.inheritProjectSettings(project, owner);
+    }
+    let rows: projects.ProjectSettingsRows | undefined;
+    if (this.useProjectDb(id)) {
+      const writer = this.projectSettingsWriter(id);
+      const routedRows = writer
+        ? projects.readProjectSettingsRows(writer, id)
+        : await abortableRead(() => read(this.resolveProjectDbPath(id), id), signal);
+      if (routedRows === null) return this.readProjectSettings(project, true);
+      rows = routedRows;
+    }
+    return Object.assign(project, this.loadProjectSettings(id, rows));
+  }
+
+  private inheritProjectSettings(project: Project, owner: Project): Project {
     return {
       ...project,
       name: owner.name,
@@ -648,27 +677,25 @@ export class CodeIndexDB {
     let routed: DB | undefined;
     try {
       routed = this.projectSettingsConnection(id);
-      const settings = this.loadProjectSettings(id, routed);
+      const settings = this.loadProjectSettings(id, projects.readProjectSettingsRows(routed, id), routed === this.db);
       if (this.configReader?.db === routed) this.configReader.settings = settings;
       return Object.assign(project, settings);
     } catch (error) {
       if (routed === this.db) throw error;
-      if (isSettingsBusy(error)) {
+      if (projects.isProjectSettingsBusy(error)) {
         if (retryBusy) throw error;
         if (this.configReader?.id === id && this.configReader.settings) return Object.assign(project, this.configReader.settings);
       } else {
         this.closeConfigReader(id);
       }
-      return Object.assign(project, this.loadProjectSettings(id, this.db));
+      return Object.assign(project, this.loadProjectSettings(id));
     }
   }
 
   private projectSettingsConnection(id: number): DB {
     if (!this.useProjectDb(id)) return this.db;
-    if (this.projectPool.has(id)) {
-      const writer = this.projectPool.get(id).raw();
-      if (writer.inTransaction) return writer;
-    }
+    const writer = this.projectSettingsWriter(id);
+    if (writer) return writer;
     const path = this.resolveProjectDbPath(id);
     if (this.configReader?.id === id && this.configReader.path === path) return this.configReader.db;
     // All linked checkouts share the owner's settings. Reusing one read-only
@@ -679,13 +706,19 @@ export class CodeIndexDB {
       this.configReader = { id, path, db };
       return db;
     } catch (error) {
-      if (isSettingsBusy(error)) throw error;
+      if (projects.isProjectSettingsBusy(error)) throw error;
       return this.db;
     }
   }
 
-  private loadProjectSettings(id: number, routed: DB): ProjectSettings {
-    const cfg = projects.readRuntimeConfig(routed, id) ?? (routed !== this.db ? projects.readRuntimeConfig(this.db, id) : undefined);
+  private projectSettingsWriter(id: number): DB | undefined {
+    if (!this.projectPool.has(id)) return undefined;
+    const writer = this.projectPool.get(id).raw();
+    if (writer.inTransaction) return writer;
+  }
+
+  private loadProjectSettings(id: number, rows?: projects.ProjectSettingsRows, alreadyCentral = false): ProjectSettings {
+    const cfg = rows?.runtime ?? (alreadyCentral ? undefined : projects.readRuntimeConfig(this.db, id));
     const settings: ProjectSettings = { editor_settings: null };
     if (cfg) {
       settings.node_version = cfg.node_version ?? null;
@@ -695,7 +728,7 @@ export class CodeIndexDB {
       settings.wsl_runtime_versions = cfg.wsl_runtime_versions ?? null;
       settings.wsl_package_managers = cfg.wsl_package_managers ?? null;
     }
-    const editor = projects.readEditorConfig(routed, id) ?? (routed !== this.db ? projects.readEditorConfig(this.db, id) : undefined);
+    const editor = rows?.editor ?? (alreadyCentral ? undefined : projects.readEditorConfig(this.db, id));
     if (editor?.settings_json) {
       try {
         const parsed = JSON.parse(editor.settings_json) as EditorSettingsOverride;
@@ -830,6 +863,9 @@ export class CodeIndexDB {
   getFileById(id: number, projectId?: number): DBFile | undefined { return files.getById(this.idx(projectId), id); }
   getFileByPath(projectId: number, path: string): DBFile | undefined { return files.get(this.idx(projectId), projectId, path); }
   listFiles(projectId: number, language?: string): DBFile[] { return files.list(this.idx(projectId), projectId, language); }
+  listFilesInFolders(projectId: number, folders: readonly string[]): DBFile[] {
+    return files.listInFolders(this.idx(projectId), projectId, folders);
+  }
   listFilePathsBounded(projectId: number, language?: string, limit = 5000) { return files.listPathsBounded(this.idx(projectId), projectId, language, limit); }
   listAgentIndexFiles(projectId: number, page: agentIndexReads.IndexPage & { order?: 'path' | 'updated' } = {}) {
     return agentIndexReads.filePage(this.idx(projectId), projectId, page);
@@ -866,7 +902,10 @@ export class CodeIndexDB {
   getAgentProjectShape(projectId: number) { return agentIndexReads.projectShape(this.idx(projectId), projectId); }
   /** Count on the routed index without loading every file row/body. */
   countFiles(projectId: number): number {
-    return (this.idx(projectId).prepare('SELECT COUNT(*) AS n FROM files WHERE project_id = ?').get(projectId) as { n: number }).n;
+    return this.countFilesInFolders(projectId, ['.']);
+  }
+  countFilesInFolders(projectId: number, folders: readonly string[]): number {
+    return files.countInFolders(this.idx(projectId), projectId, folders);
   }
   searchFilePaths(projectId: number, query: string, limit?: number, fuzzy?: boolean): Array<{ path: string }> {
     return files.searchPaths(this.idx(projectId), projectId, query, limit, fuzzy);
@@ -879,10 +918,16 @@ export class CodeIndexDB {
   // ─── Structural layer ───────────────────────────────────────────
   upsertFileStructural(projectId: number, data: filesStructural.UpsertStructuralData): { fileId: number; created: boolean } { return filesStructural.upsertStructural(this.idx(projectId), projectId, data); }
   countSemanticStale(projectId: number): number { return stats.countSemanticBacklog(this.db, projectId); }
-  upsertFileContent(fileId: number, content: string, sizeBytes?: number, projectId?: number): boolean { return fileContents.upsertContent(this.idx(projectId), fileId, content, sizeBytes); }
+  upsertFileContent(fileId: number, content: string, sizeBytes?: number, projectId?: number, contentHash?: string): boolean { return fileContents.upsertContent(this.idx(projectId), fileId, content, sizeBytes, contentHash); }
   removeFileContent(fileId: number, projectId?: number): void { fileContents.removeContent(this.idx(projectId), fileId); }
   searchFileContents(projectId: number, match: string, limit?: number): fileContents.ContentMatch[] { return fileContents.searchContent(this.idx(projectId), projectId, match, limit); }
   missingContentFiles(projectId: number, limit?: number): Array<{ id: number; path: string }> { return fileContents.missingContentFiles(this.idx(projectId), projectId, limit); }
+  contentBackfillCandidates(projectId: number, afterId: number, limit: number): fileContents.ContentBackfillCandidate[] {
+    return fileContents.contentBackfillCandidates(this.idx(projectId), projectId, afterId, limit);
+  }
+  backfillFileContent(projectId: number, file: fileContents.ContentBackfillCandidate, content: string): boolean {
+    return fileContents.backfillContent(this.idx(projectId), file, content);
+  }
   countFileContents(projectId: number): number { return fileContents.countContent(this.idx(projectId), projectId); }
 
   // ─── Symbols ────────────────────────────────────────────────────

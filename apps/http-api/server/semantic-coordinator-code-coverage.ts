@@ -8,7 +8,9 @@ embeddingFingerprintForGeneration
 } from '@mcp/store/vectors.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { CODE_VERIFY_WAVE_FILES } from './semantic-coordinator-shared.js';
+import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 
 import type { SemanticCoordinatorContext } from './semantic-coordinator-context.js';
 
@@ -18,10 +20,11 @@ async verifyCodeVectorCoverage(this: SemanticCoordinatorContext,
     rootPath: string,
     generationId: number,
     namespace: string,
+    assertScope: () => void,
   ): Promise<number> {
     const project = this.deps.db.getProject(projectId);
     if (!project) throw new Error(`Project ${projectId} not found during vector verification`);
-    const dbFiles = this.deps.db.listFiles(projectId);
+    const dbFiles = this.deps.db.listFilesInFolders(projectId, projectSemanticFolders(project));
     const generationFingerprint = this.deps.semanticStore.getGeneration(generationId)?.fingerprint;
     const fingerprint = generationFingerprint
       ? embeddingFingerprintForGeneration(generationFingerprint)
@@ -30,6 +33,10 @@ async verifyCodeVectorCoverage(this: SemanticCoordinatorContext,
     const expectedKeys = new Set<string>();
 
     for (let offset = 0; offset < dbFiles.length; offset += CODE_VERIFY_WAVE_FILES) {
+      // Verification still owns the project lock, but the desktop can process
+      // IPC between bounded batches of synchronous file and SQLite reads.
+      if (offset > 0) await yieldToEventLoop();
+      assertScope();
       const files: CandidateFile[] = [];
       for (const file of dbFiles.slice(offset, offset + CODE_VERIFY_WAVE_FILES)) {
         let content: string;
@@ -89,12 +96,20 @@ async verifyCodeVectorCoverage(this: SemanticCoordinatorContext,
       }
     }
 
+    assertScope();
     let items = this.deps.semanticStore.listItems({ generation_id: generationId, namespace });
     const obsoleteKeys = [...new Set(items
       .filter((item) => !expectedKeys.has(item.item_key))
       .map((item) => item.item_key))];
-    if (obsoleteKeys.length > 0) {
-      await this.workerDeleteItemKeys(namespace, generationId, obsoleteKeys);
+    for (let i = 0; i < obsoleteKeys.length; i += 256) {
+      assertScope();
+      const keys = obsoleteKeys.slice(i, i + 256);
+      const staleIds = this.deps.semanticStore.listItems({
+        generation_id: generationId, namespace, item_keys: keys,
+      }).flatMap((item) => item.vector_id ? [item.vector_id] : []);
+      await this.workerDeleteItemKeys(namespace, generationId, keys);
+      try { await this.deps.lshSink.afterDelete?.(projectId, staleIds); }
+      catch { /* LSH cleanup is best-effort. */ }
     }
     const obsoleteIds = items.flatMap((item) =>
       item.vector_id && expectedKeys.has(item.item_key)

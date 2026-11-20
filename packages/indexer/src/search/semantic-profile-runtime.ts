@@ -66,7 +66,7 @@ export class SemanticProfileRuntime {
 
   constructor(
     private readonly semanticStore: Pick<SemanticStore, 'getProfile' | 'getActiveGeneration'>
-      & Partial<Pick<SemanticStore, 'getWriteGeneration' | 'requiresExplicitNamespaceReindex'>>,
+      & Partial<Pick<SemanticStore, 'getWriteGeneration' | 'requiresExplicitNamespaceReindex' | 'listNamespaceGenerations'>>,
     private readonly providerStore: ProviderStore,
     private readonly decorateEmbedding?: EmbeddingDecorator,
     private readonly decorateReranker?: RerankerDecorator,
@@ -414,7 +414,10 @@ export class SemanticProfileRuntime {
       const state = generationMatchesEmbeddingFingerprint(generation.fingerprint, current)
         ? 'current'
         : 'backend-context-mismatch';
-      return `semantic:${purpose}:g${generation.id}:${generation.fingerprint}:${generation.dimension}:${state}:${current}`;
+      const pendingCodeChanges = purpose === 'code'
+        ? this.semanticStore.listNamespaceGenerations?.({ namespace })[0]?.delta_items ?? 0
+        : 0;
+      return `semantic:${purpose}:g${generation.id}:${generation.fingerprint}:${generation.dimension}:${state}:${current}:${pendingCodeChanges}`;
     } catch {
       // Keep this synchronous cache hook fail-safe. The subsequent query will
       // surface the concrete provider error and the hybrid pipeline degrades

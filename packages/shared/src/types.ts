@@ -67,6 +67,8 @@ export interface Project {
    * Managed by the project settings UI; does not create files in the repo root.
    */
   index_ignore_patterns?: string | null;
+  /** JSON array of project-relative roots for code embeddings. "." includes the whole project. */
+  semantic_index_folders?: string;
   embeddings_enabled: number;
   search_mode: SearchMode;
   /** Per-project agent-memory toggle (migration 115; default 1 = on). */
@@ -530,6 +532,8 @@ export interface ScanResult {
   toIndex: ScannedFile[];
   unchanged: string[];
   toRemove: string[];
+  /** Configured roots that could not be enumerated or read in this scan. */
+  unavailableRoots?: string[];
   /** Candidate files seen before an early abort, or the final candidate count. */
   totalFiles?: number;
   /** Early scan abort; lets callers bail before mutating project index state. */

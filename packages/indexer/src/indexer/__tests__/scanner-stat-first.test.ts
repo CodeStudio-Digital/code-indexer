@@ -4,11 +4,13 @@
  * CodeIndexDB on tmpdir (requires the Node-ABI better-sqlite3 build).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { FileScanner } from '../scanner.js';
+import { indexFilesStructural } from '../structural-incremental.js';
+import { runStructuralIndex } from '../structural.js';
 import { hashContent } from '../content-hash.js';
 
 let dir: string;
@@ -62,6 +64,18 @@ describe('FileScanner stat-first', () => {
       expect(f.content).toBeUndefined();
       expect(f.mtimeMs).toBeGreaterThan(0);
       expect(f.hash).toHaveLength(64);
+    }
+  });
+
+  it('can plan newly discovered files without reading their contents', async () => {
+    const scanner = new FileScanner(root);
+    const plan = await scanner.scan(db, projectId, { deferNewFileReads: true });
+
+    expect(plan.stats).toMatchObject({ hashed: 0, statOnly: 0 });
+    expect(plan.toIndex).toHaveLength(FILES.length);
+    for (const file of plan.toIndex) {
+      expect(file).toHaveProperty('deferred', true);
+      expect(file).not.toHaveProperty('hash');
     }
   });
 
@@ -134,6 +148,45 @@ describe('FileScanner stat-first', () => {
     rmSync(join(root, 'c.ts'));
     const res = await scanner.scan(db, projectId);
     expect(res.toRemove).toEqual(['c.ts']);
+  });
+
+  it('retains the published revision and retries a watcher event when its root returns', async () => {
+    const initial = await runStructuralIndex(db, projectId);
+    expect(initial.indexed).toBe(FILES.length);
+    const revision = db.getStructuralRevision(projectId);
+    const checkedAt = db.getProject(projectId)?.structural_last_checked_at;
+    const moved = join(dir, 'disconnected');
+    renameSync(root, moved);
+    const { createInProcessStructuralExecutor } = await import('@mcp/services/services/project-index/in-process-executor.js');
+    const offline = await createInProcessStructuralExecutor(db).runStructuralIndex(projectId, {});
+    expect(offline.unavailableRoots).toEqual([root]);
+    expect(offline.removed).toBe(0);
+    expect((await indexFilesStructural(db, projectId, ['a.ts'])).failedPaths).toEqual(['a.ts']);
+    expect(db.getStructuralRevision(projectId)).toBe(revision);
+    expect(db.getProject(projectId)?.structural_last_checked_at).toBe(checkedAt);
+    expect(db.getFile(projectId, 'a.ts')).toBeDefined();
+    renameSync(moved, root);
+    rmSync(join(root, 'a.ts'));
+    expect((await indexFilesStructural(db, projectId, ['a.ts'])).removed).toBe(1);
+  });
+
+  it('reconciles removed, offline, reconnected and explicitly detached roots independently', async () => {
+    const offline = join(dir, 'offline');
+    const linked = [{ name: 'Online', root_path: root }, { name: 'Offline', root_path: offline }];
+    const catalog = {
+      getProject: () => ({ is_synthetic: true }), listUnionProjectIds: () => linked,
+      listFileScanMeta: () => ['online/gone.ts', 'offline/keep.ts'].map(path => ({ path })),
+      getFileIndegrees: () => new Map(),
+    } as unknown as CodeIndexDB;
+    const scanner = new FileScanner(root);
+    const partial = await scanner.scan(catalog, projectId);
+    expect(partial.toRemove).toEqual(['online/gone.ts']);
+    expect(partial.unavailableRoots).toEqual([offline]);
+    mkdirSync(offline);
+    writeFileSync(join(offline, 'keep.ts'), 'export const restored = true;');
+    expect((await scanner.scan(catalog, projectId)).toRemove).toEqual(['online/gone.ts']);
+    linked.pop();
+    expect((await scanner.scan(catalog, projectId)).toRemove).toEqual(['online/gone.ts', 'offline/keep.ts']);
   });
 
 });

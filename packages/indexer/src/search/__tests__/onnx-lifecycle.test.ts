@@ -6,16 +6,31 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-interface MockCounters { created: number; disposed: number }
+interface MockCounters {
+  created: number;
+  disposed: number;
+  devices: string[];
+  failGpu?: 'load' | 'infer' | 'invalid';
+}
+
+vi.mock('../onnx-resource-policy.js', async (importOriginal: () => Promise<typeof import('../onnx-resource-policy.js')>) => ({
+  ...await importOriginal(),
+  preferredOnnxEmbeddingDevice: () => 'dml',
+}));
 
 vi.mock('@huggingface/transformers', () => {
-  const counters: MockCounters = { created: 0, disposed: 0 };
+  const counters: MockCounters = { created: 0, disposed: 0, devices: [] };
+  const pipeline = async (_task: string, _model: string, opts: { device: string }) => {
+    counters.devices.push(opts.device);
+    const gpu = opts.device !== 'cpu';
+    if (gpu && counters.failGpu === 'load') throw new Error('GPU session could not start');
 
-  const pipeline = async (_task: string, _model: string) => {
     counters.created++;
-    const extractor = async (texts: string[]) => ({
-      tolist: () => texts.map((_, i) => [0.1 + i, 0.2, 0.3]),
-    });
+    const extractor = async (texts: string[]) => {
+      if (gpu && counters.failGpu === 'infer') throw new Error('GPU device lost');
+      return { tolist: () => texts.map((_, i) =>
+        gpu && counters.failGpu === 'invalid' ? [Number.NaN] : [0.1 + i, 0.2, 0.3]) };
+    };
     (extractor as unknown as { dispose: () => Promise<void> }).dispose = async () => {
       counters.disposed++;
     };
@@ -51,6 +66,8 @@ beforeEach(async () => {
   const c = await counters();
   c.created = 0;
   c.disposed = 0;
+  c.devices = [];
+  c.failGpu = undefined;
 });
 afterEach(() => { vi.useRealTimers(); });
 
@@ -64,6 +81,7 @@ describe('LocalEmbeddingService lifecycle', () => {
     expect(r1.vectors).toHaveLength(2);
     await svc.embedQuery('q');
     expect(c.created).toBe(1); // shared session across calls
+    expect(svc.diagnostics().executionProvider).toBe('dml');
 
     await vi.advanceTimersByTimeAsync(1100);
     expect(c.disposed).toBe(1); // idle eviction released the session
@@ -86,6 +104,37 @@ describe('LocalEmbeddingService lifecycle', () => {
     expect(c.disposed).toBe(0);
     await svc.dispose();
     expect(c.disposed).toBe(1);
+  });
+
+  it('shares the CPU session when GPU initialization fails concurrently', async () => {
+    const { LocalEmbeddingService } = await import('../local-embeddings.js');
+    const svc = new LocalEmbeddingService();
+    const c = await counters();
+    c.failGpu = 'load';
+    try {
+      const [docs, query] = await Promise.all([svc.embed(['a', 'b']), svc.embedQuery('q')]);
+      expect(docs.vectors).toHaveLength(2);
+      expect(query.vector).toHaveLength(3);
+      expect(c.devices).toEqual(['dml', 'cpu']);
+      expect(svc.diagnostics().executionProvider).toBe('cpu');
+      expect(svc.fingerprint()).toBe(new LocalEmbeddingService({ device: 'cpu' }).fingerprint());
+    } finally { await svc.dispose(); }
+  });
+
+  it.each(['infer', 'invalid'] as const)('releases the failed GPU session on %s and retries in CPU', async (failure: 'infer' | 'invalid') => {
+    const { LocalEmbeddingService } = await import('../local-embeddings.js');
+    const svc = new LocalEmbeddingService();
+    const c = await counters();
+    try {
+      await svc.embed(['warm-up']);
+      c.failGpu = failure;
+      const [docs, query] = await Promise.all([svc.embed(['a', 'b']), svc.embedQuery('q')]);
+      expect(docs.vectors).toEqual([[0.1, 0.2, 0.3], [1.1, 0.2, 0.3]]);
+      expect(query.vector).toEqual([0.1, 0.2, 0.3]);
+      expect(c.devices).toEqual(['dml', 'cpu']);
+      expect(c.disposed).toBe(1);
+      expect(svc.diagnostics().executionProvider).toBe('cpu');
+    } finally { await svc.dispose(); }
   });
 });
 

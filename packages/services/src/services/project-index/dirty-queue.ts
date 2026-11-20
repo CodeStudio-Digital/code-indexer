@@ -30,13 +30,19 @@ export class DirtyQueue {
     return map;
   }
 
-  add(projectId: number, events: DirtyEvent[]): void {
-    if (events.length === 0) return;
+  add(projectId: number, events: readonly DirtyEvent[]): DirtyRecord[] {
+    if (events.length === 0) return [];
     const map = this.entries(projectId);
     const entries = events.map((e) => ({ ...e, version: ++this.sequence }));
     // Persist before publishing. Unacknowledged work is replayed after restart.
     this.journal?.put(projectId, entries);
     for (const e of entries) map.set(e.path, e);
+    return entries;
+  }
+
+  addMissing(projectId: number, events: readonly DirtyEvent[]): DirtyRecord[] {
+    const map = this.entries(projectId);
+    return this.add(projectId, events.filter((event) => !map.has(event.path)));
   }
 
   size(projectId: number): number {
@@ -57,7 +63,7 @@ export class DirtyQueue {
       deletes: entries.filter((e) => e.kind === 'delete').map((e) => e.path) };
   }
 
-  ack(projectId: number, batch: DirtyBatch, failedPaths: readonly string[] = []): void {
+  ack(projectId: number, batch: Pick<DirtyBatch, 'entries'>, failedPaths: readonly string[] = []): void {
     const failed = new Set(failedPaths);
     const entries = batch.entries.filter((e) => !failed.has(e.path));
     this.journal?.ack(projectId, entries);

@@ -31,11 +31,11 @@ export const INDEXING_SETTINGS: readonly SettingDef[] = [
   {
     key: 'MCP_AUTO_INDEX_MAX_FILES',
     label: 'Auto-index file cap',
-    description: 'Projects with more candidate files than this skip the automatic run (status shows "too large — index manually").',
+    description: 'Above this candidate count, projects require manual indexing. 0 allows automatic indexing of large projects in batches.',
     type: 'int',
     category: 'indexing',
-    default: '100000',
-    min: 100,
+    default: '0',
+    min: 0,
     advanced: true,
   },
   {

@@ -411,6 +411,23 @@ describe('RerankerHydrator', () => {
     });
   });
 
+  it('reranks only the selected folders and keeps the lexical slot of excluded files', async () => {
+    const db = { getProjectCatalogEntry: () => ({ semantic_index_folders: '["src"]' }) } as unknown as CodeIndexDB;
+    const rerank = vi.fn(async (_query: string, input: RerankCandidate[]) =>
+      [...input].reverse().map((row, index) => ({ ...row, score: 10 - index })));
+    const candidates = ['src/first.ts', 'src-other/outside.ts', 'src/sub/last.ts'].map((path, index) => {
+      const candidate = makeCandidate(index + 1, { fts: index + 1 });
+      candidate.result.data = { ...candidate.result.data, path };
+      candidate.score = 3 - index;
+      return candidate;
+    });
+    const out = await new RerankerHydrator({ name: 'mock', rerank }, db)
+      .hydrate({ ...emptyQuery, diag: {} }, candidates);
+    expect(rerank.mock.calls[0][1].map((row: RerankCandidate) => row.id)).toEqual(['file:1', 'file:3']);
+    expect(out.map(({ candidate }) => [candidate.candidateId, candidate.score]))
+      .toEqual([['file:3', 3], ['file:2', 2], ['file:1', 1]]);
+  });
+
   it('preserves the complete RRF ordering when the reranker returns a partial set', async () => {
     const reranker: RerankerService = {
       name: 'mock',

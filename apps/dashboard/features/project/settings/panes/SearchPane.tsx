@@ -16,6 +16,7 @@ import { Combobox } from '../../../../components/ui/combobox.js';
 import { Input } from '../../../../components/ui/input.js';
 import { confirm } from '../../../../components/ui/prompt-dialog.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
+import { SemanticFolderPicker } from '../SemanticFolderPicker.js';
 
 interface PurgeIgnoredResult {
   local_deleted: number;
@@ -103,6 +104,11 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
         />
         <p className="text-xs text-muted-foreground">{t('edit.searchModeHint')}</p>
       </div>
+
+      <section aria-labelledby="semantic-folders-heading" className="space-y-2 border-t pt-4">
+        <h3 id="semantic-folders-heading" className="text-sm font-medium">{t('edit.semanticFoldersTitle')}</h3>
+        <SemanticFolderPicker key={project.id} projectId={project.id} />
+      </section>
 
       <div className="space-y-3 border-t pt-4">
         <div className="space-y-0.5">

@@ -115,7 +115,7 @@ export abstract class ProjectIndexState {
       let scheduledReconcile = false;
       for (const projectId of this.activations.keys()) {
         if (!watcher.isSkipped(projectId)) continue;
-        const project = this.db.getProject(projectId);
+        const project = this.db.getProjectCatalogEntry(projectId);
         if (!project?.root_path) continue;
         // Closed files, creations and deletions also need an authoritative scan.
         // One worker pass at a time; yield to foreground operations and lifecycle scans.

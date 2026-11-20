@@ -100,6 +100,8 @@ export function projectRemovalKind(options: ProjectRemovalOptions): ProjectRemov
   return options.finalize ? 'delete' : 'cleanup';
 }
 
+export class CodeScopeChangedError extends Error {}
+
 export class DeltaBuildPendingError extends Error {
   constructor(namespace: string) {
     super(`delta queue pending for ${namespace}`);

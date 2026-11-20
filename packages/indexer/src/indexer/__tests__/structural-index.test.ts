@@ -6,7 +6,7 @@
  *    structural_indexed_at stamped, last_indexed untouched, structural run recorded.
  *  - watcher-grade indexFilesStructural: hash short-circuit + delete handling.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -14,8 +14,10 @@ import {
   smallFileFixture,
   type StructuralHarness,
 } from './structural-test-harness.js';
-import { runStructuralIndex } from '../structural.js';
+import { runStructuralIndex, sweepContentCoverage } from '../structural.js';
+import { FileScanner } from '../scanner.js';
 import { indexFilesStructural, removeFilesStructural } from '../structural-incremental.js';
+import { hashContent } from '../content-hash.js';
 
 describe('structural index pipeline', () => {
   let h: StructuralHarness;
@@ -97,6 +99,44 @@ describe('structural index pipeline', () => {
     ]);
   });
 
+  it('uses the current snapshot and skips new files that disappear or grow after discovery', async () => {
+    h.writeFile('empty.ts', '');
+    h.writeFile('growing.ts', 'export const small = 1;');
+    const indexContent = vi.spyOn(h.db, 'upsertFileContent');
+    const replacement = 'export function refreshed() { return "leitura"; }\n';
+    const result = await runStructuralIndex(h.db, h.projectId, {
+      maxFileSizeKB: 1,
+      onChanges: () => {
+        h.writeFile('alpha.ts', replacement);
+        h.deleteFile('beta.ts');
+        h.writeFile('growing.ts', ' '.repeat(1025));
+      },
+    });
+
+    expect(result).toMatchObject({ totalFiles: 4, indexed: 2, skipped: 2, errorCount: 0 });
+    expect(h.db.listFiles(h.projectId).map(file => file.path)).toEqual(['alpha.ts', 'empty.ts']);
+    expect(h.db.getFile(h.projectId, 'alpha.ts')?.content_hash).toBe(hashContent(replacement));
+    const empty = h.db.getFile(h.projectId, 'empty.ts')!;
+    expect(empty.content_hash).toBe(hashContent(''));
+    expect(indexContent.mock.calls.filter(([fileId]: [number, ...unknown[]]) => fileId === empty.id)).toHaveLength(1);
+    expect(h.db.getSymbolsByFile(h.projectId, 'alpha.ts').map(symbol => symbol.name)).toEqual(['refreshed']);
+    expect(h.db.searchFileContents(h.projectId, 'refreshed').map(file => file.path)).toEqual(['alpha.ts']);
+  });
+
+  it('preserves a previous generation if the only new candidate disappears before preparation', async () => {
+    expect((await h.indexStructural()).indexed).toBe(2);
+    h.deleteFile('alpha.ts');
+    h.deleteFile('beta.ts');
+    h.writeFile('temporary.ts', 'export const temp = 1;');
+
+    const result = await runStructuralIndex(h.db, h.projectId, {
+      onChanges: () => h.deleteFile('temporary.ts'),
+    });
+
+    expect(result).toMatchObject({ aborted: 'empty_scan', indexed: 0, removed: 0 });
+    expect(h.db.listFiles(h.projectId).map(file => file.path)).toEqual(['alpha.ts', 'beta.ts']);
+  });
+
   it('does not mutate structural rows when the semantic delta fence fails', async () => {
     await expect(runStructuralIndex(h.db, h.projectId, {
       concurrency: 1,
@@ -107,6 +147,70 @@ describe('structural index pipeline', () => {
 
     expect(h.db.listFiles(h.projectId)).toHaveLength(0);
     expect(h.db.getRuns(h.projectId)).toHaveLength(0);
+  });
+
+  it('resumes a large publication from committed files and delays removals until upserts finish', async () => {
+    await h.indexStructural();
+    h.deleteFile('beta.ts');
+    const content = 'resumable coverage\n';
+    h.writeFile('first.txt', content);
+    h.writeFile('second.txt', content);
+    const paths = ['first.txt', 'second.txt', ...Array.from({ length: 999 }, (_, i) => `pending-${i}.txt`)];
+    const scan = vi.spyOn(FileScanner.prototype, 'scan').mockResolvedValueOnce({
+      toIndex: paths.map(relativePath => ({
+        path: join(h.projectRoot, relativePath), relativePath, content, hash: hashContent(content),
+        sizeBytes: Buffer.byteLength(content), lineCount: 2,
+      })),
+      unchanged: ['alpha.ts'],
+      toRemove: ['beta.ts'],
+    });
+    vi.stubEnv('MCP_INDEX_WRITE_BATCH_SIZE', '1');
+    try {
+      const controller = new AbortController();
+      const changes: string[] = [];
+      const partial = await runStructuralIndex(h.db, h.projectId, {
+        signal: controller.signal,
+        onChanges: (events) => {
+          changes.push(...events.map(event => event.path));
+          if (events.some(event => event.path === 'second.txt')) controller.abort();
+        },
+      });
+      expect(partial).toMatchObject({ aborted: 'signal', indexed: 1, removed: 0 });
+      expect(changes).toEqual(['first.txt', 'second.txt']);
+      expect(h.db.searchFileContents(h.projectId, 'resumable').map(row => row.path)).toEqual(['first.txt']);
+      expect(h.db.getFile(h.projectId, 'beta.ts')).toBeTruthy();
+      const retry = await runStructuralIndex(h.db, h.projectId);
+      expect(retry).toMatchObject({ indexed: 1, removed: 1, errorCount: 0 });
+      expect(h.db.searchFileContents(h.projectId, 'resumable')).toHaveLength(2);
+    } finally {
+      vi.unstubAllEnvs();
+      scan.mockRestore();
+    }
+  });
+
+  it('memoizes FTS exclusions by snapshot and repairs only content matching committed hashes', async () => {
+    const path = 'coverage.txt';
+    h.writeFile(path, 'z'.repeat(5_000));
+    await h.indexStructural();
+    const scoped = h.db.projectScopedDb(h.projectId);
+    scoped.prepare('UPDATE files SET content_fts_exclusion = NULL WHERE path = ?').run(path);
+    const revision = h.db.getStructuralRevision(h.projectId);
+
+    expect(await sweepContentCoverage(h.db, h.projectId, h.projectRoot)).toEqual({ added: 0, skipped: 1 });
+    expect(h.db.getStructuralRevision(h.projectId)).toBe(revision);
+    expect(await sweepContentCoverage(h.db, h.projectId, h.projectRoot)).toEqual({ added: 0, skipped: 0 });
+    h.writeFile(path, 'now searchable\n');
+    expect((await h.indexStructural()).indexed).toBe(1);
+    expect(h.db.searchFileContents(h.projectId, 'searchable').map(hit => hit.path)).toEqual([path]);
+
+    const file = h.db.getFile(h.projectId, path)!;
+    h.db.removeFileContent(file.id, h.projectId);
+    expect(await sweepContentCoverage(h.db, h.projectId, h.projectRoot)).toEqual({ added: 1, skipped: 0 });
+    expect(h.db.searchFileContents(h.projectId, 'searchable').map(hit => hit.path)).toEqual([path]);
+    h.db.removeFileContent(file.id, h.projectId);
+    h.writeFile(path, 'oops unindexed\n');
+    expect(await sweepContentCoverage(h.db, h.projectId, h.projectRoot)).toEqual({ added: 0, skipped: 1 });
+    expect(h.db.searchFileContents(h.projectId, 'unindexed')).toEqual([]);
   });
 
   it('records no history item for a stat-first reconciliation with no changes', async () => {

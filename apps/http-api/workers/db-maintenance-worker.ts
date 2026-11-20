@@ -124,6 +124,26 @@ async function bootWorker(port: MessagePort, dbPath: string): Promise<void> {
   });
   registerPerfStatsHandler(bridge);
 
+  const { Database } = await import('@mcp/store/db/types.js');
+  const { readProjectSettingsRows, isProjectSettingsBusy } = await import('@mcp/store/db/projects.js');
+  bridge.handle('project.read-settings', (payload: unknown) => {
+    const input = payload as { dbPath?: string; projectId?: number };
+    if (typeof input?.dbPath !== 'string' || !isAbsolute(input.dbPath)
+      || typeof input.projectId !== 'number' || !Number.isSafeInteger(input.projectId)) {
+      throw new Error('project.read-settings requires an absolute dbPath and projectId');
+    }
+    try {
+      const project = new Database(input.dbPath, { readonly: true, fileMustExist: true, timeout: 0 });
+      try {
+        return { rows: readProjectSettingsRows(project, input.projectId) };
+      } finally {
+        project.close();
+      }
+    } catch (error) {
+      return isProjectSettingsBusy(error) ? { busy: true } : {};
+    }
+  });
+
   bridge.handle('semantic.recover-mutation-fences', async (payload: unknown) => {
     const input = payload as { prefixes?: unknown; currentOwner?: unknown };
     if (!Array.isArray(input?.prefixes)
