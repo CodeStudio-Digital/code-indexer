@@ -1,9 +1,9 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import { notFound, parseIdParam } from './_helpers.js';
 import { memoryCurationTotals } from '@mcp/store/db/agent-memory-curation.js';
 
-export function mountAgentMemoryEvolutionRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAgentMemoryEvolutionRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/projects/:id/agent-memory/overview', c => {
     const projectId = parseIdParam(c);
     if (!deps.db.getProject(projectId)) return notFound(c);

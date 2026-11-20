@@ -18,7 +18,7 @@
  * native ABI where a real Database() throws ERR_DLOPEN_FAILED.
  */
 import { describe, expect, it, beforeEach } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { IN_PROCESS_ENV } from '../../../middleware/local-origin.js';
 import { mountDbClientRoutes } from '../index.js';
 import type { ServerDeps } from '../../../deps.js';
@@ -28,7 +28,7 @@ const CONNECTIONS = `http://internal/api/projects/${PID}/db-client/connections`;
 const SAVED = `http://internal/api/projects/${PID}/db-client/saved-queries`;
 const HISTORY = `http://internal/api/projects/${PID}/db-client/connections/3/history`;
 
-/** Hono `env` as @hono/node-server builds it: the raw Node request. */
+/** Socket metadata supplied by the Node HTTP adapter. */
 const peer = (remoteAddress: string) => ({ incoming: { socket: { remoteAddress } } });
 
 /** Only the reads exercised below are stubbed; a refused request never gets here. */
@@ -39,10 +39,10 @@ const emptyStore = {
 };
 
 describe('db-client routes — trusted-local guard', () => {
-  let app: Hono;
+  let app: HttpRouter;
 
   beforeEach(() => {
-    app = new Hono();
+    app = new HttpRouter();
     mountDbClientRoutes(app, { dbClientFor: () => emptyStore } as unknown as ServerDeps);
   });
 

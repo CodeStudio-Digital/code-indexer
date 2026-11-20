@@ -16,7 +16,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { drawioVendorDir } from '@mcp/shared/assets/drawio-vendor.js';
 
 
@@ -45,7 +45,7 @@ const PLACEHOLDER = `<!doctype html><html><head><meta charset="utf-8"><title>dra
 <style>body{font:14px/1.5 system-ui,sans-serif;color:#ddd;background:#1e1e1e;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center}code{background:#333;padding:2px 6px;border-radius:4px}</style></head>
 <body><div><p>The draw.io editor isn't installed yet.</p><p>Run <code>pnpm drawio:fetch</code> to vendor it into <code>apps/http-api/vendor/drawio</code>.</p></div></body></html>`;
 
-export function mountDrawioStaticRoutes(app: Hono): void {
+export function mountDrawioStaticRoutes(app: HttpRouter): void {
   app.get('/drawio/*', async (c) => {
     const dir = drawioVendorDir();
     const rel = c.req.path.replace(/^\/drawio\/?/, '') || 'index.html';

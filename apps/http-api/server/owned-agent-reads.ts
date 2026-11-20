@@ -1,11 +1,11 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { createAgentReadClient } from '../../mcp-server/agent-read-client.js';
 import type { AgentReadName } from '@mcp/code-agent/ports/agent-read-port.js';
 import type { ServerDeps } from './deps.js';
 
-/** Use the same Hono application as this worker owner. Internal MCP must never
+/** Use the same HttpRouter application as this worker owner. Internal MCP must never
  * find another CodeStudio instance by falling back to a configured TCP port. */
-export function createOwnedAgentReads(app: Hono, deps: Pick<ServerDeps, 'sessionStore' | 'config'>) {
+export function createOwnedAgentReads(app: HttpRouter, deps: Pick<ServerDeps, 'sessionStore' | 'config'>) {
   return { async read(projectId: number, name: AgentReadName, input: Record<string, unknown>, signal: AbortSignal) {
     signal.throwIfAborted();
     if (!Number.isSafeInteger(projectId) || projectId <= 0) throw new Error('Agent reads require a project owner');

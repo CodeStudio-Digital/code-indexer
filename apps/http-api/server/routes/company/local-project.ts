@@ -18,7 +18,7 @@
  *      allowlist before `spawn()` — AI output is never trusted.
  */
 
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -27,7 +27,7 @@ import {
 } from '../_helpers.js';
 import { getLocalProcessManager } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 
-export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyLocalProjectRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, companyLocalProjectStore } = deps;
 
   // GET status — used by the UI to render the "host" row in the sidebar.

@@ -3,6 +3,7 @@ vi.mock('../../../../hooks/useApi.js', () => ({ apiPost: vi.fn() }));
 import { apiPost } from '../../../../hooks/useApi.js';
 import { agentStreamLastSeenBusIdMap, updateAgentSession } from '../../../../hooks/agent-stream/session-stream-store.js';
 import { deliverQueuedMessage } from '../deliver-queued-message.js';
+import { MessageNotStartedError } from '../message-queue.js';
 
 const post = vi.mocked(apiPost);
 beforeEach(() => { post.mockReset(); });
@@ -70,5 +71,15 @@ describe('message admission and stream observation', () => {
     post.mockResolvedValue({ accepted: true, terminal: { event: 'error', data: { message: 'provider failed' } } });
     await expect(deliverQueuedMessage(options)).rejects.toThrow('provider failed');
     expect(options.refresh).toHaveBeenCalledOnce(); expect(post).toHaveBeenCalledOnce();
+  });
+
+  it.each(['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input'])('requires proof before resubmitting %s', async reason => {
+    const options = setup();
+    post.mockResolvedValueOnce({ accepted: true, terminal: { event: 'error', data: { reason, not_started: true } } });
+    await expect(deliverQueuedMessage(options)).rejects.toBeInstanceOf(MessageNotStartedError);
+    post.mockResolvedValueOnce({ accepted: true, terminal: { event: 'error', data: { reason } } });
+    await expect(deliverQueuedMessage(options)).rejects.not.toBeInstanceOf(MessageNotStartedError);
+    post.mockResolvedValueOnce({ accepted: true, terminal: { event: 'error', data: { reason: 'worker-crashed' } } });
+    await expect(deliverQueuedMessage(options)).rejects.not.toBeInstanceOf(MessageNotStartedError);
   });
 });

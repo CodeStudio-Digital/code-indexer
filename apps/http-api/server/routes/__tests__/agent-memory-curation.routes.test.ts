@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
 import { SnapshotService } from '@mcp/services/services/snapshots.js';
@@ -13,13 +13,13 @@ import { mountAgentMemoryRoutes } from '../agent-memory.js';
 import { mountSnapshotsRoutes } from '../snapshots.js';
 
 describe('active memory curation and preserved legacy import', () => {
-  let root: string; let db: CodeIndexDB; let service: AgentMemoryService; let app: Hono; let projectId: number;
+  let root: string; let db: CodeIndexDB; let service: AgentMemoryService; let app: HttpRouter; let projectId: number;
   let ordinal = 0;
   beforeAll(() => { root = mkdtempSync(join(tmpdir(), 'memory-curation-')); db = new CodeIndexDB(join(root, 'index.db')); });
   afterAll(() => { db.close(); rmSync(root, { recursive: true, force: true }); });
   beforeEach(() => {
     projectId = db.createProject(`curation-${++ordinal}`, join(root, `project-${ordinal}`)).id;
-    service = new AgentMemoryService(db); app = new Hono();
+    service = new AgentMemoryService(db); app = new HttpRouter();
     const deps = { db, agentMemoryService: service, snapshotService: new SnapshotService(db) } as unknown as ServerDeps;
     mountAgentMemoryRoutes(app, deps); mountSnapshotsRoutes(app, deps);
   });

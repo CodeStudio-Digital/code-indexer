@@ -1,7 +1,7 @@
 /** Preview plans come from durable run criteria; legacy Playwright plans stay
  * readable in their own service workspace. Opening this view never provisions
  * a sandbox or initializes a container driver. */
-import type { Hono, Context } from 'hono';
+import type { HttpRouter, HttpContext } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../../deps.js';
 import { notFound, parseCompanySessionIdParam, parseJsonBody, resolveCompanySessionContext } from '../../_helpers.js';
 import { tryGetSandboxManager } from '@mcp/services/sandbox/index.js';
@@ -10,12 +10,12 @@ import type { QaTestPlan } from '@mcp/services/qa/types.js';
 const TEST_PLAN_PATH = 'tests/e2e/TEST_PLAN.md';
 const MAX_BODY_BYTES = 200 * 1024;
 const emptyPlan: QaTestPlan = { exists: false, content: '', source: 'none' };
-function serviceId(c: Context): string | null {
+function serviceId(c: HttpContext): string | null {
   const id = c.req.query('service') || 'main';
   return /^[a-zA-Z0-9_-]{1,64}$/.test(id) ? id : null;
 }
 
-export function mountQaTestPlanRoutes(app: Hono, deps: ServerDeps): void {
+export function mountQaTestPlanRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/qa/test-plan', async c => {
     const id = parseCompanySessionIdParam(c);
     if (!await resolveCompanySessionContext(deps.sessionStore, id)) return notFound(c);

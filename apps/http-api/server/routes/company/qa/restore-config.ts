@@ -11,13 +11,13 @@
  * No request body required; returns the `WorkspaceRestoreReport` so the
  * UI can render ✓/⚠ feedback without a second roundtrip.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../../deps.js';
 import { parseSessionIdParam } from '../../_helpers.js';
 import { tryGetSandboxManager } from '@mcp/services/sandbox/index.js';
 import { restoreQaWorkspace } from '@mcp/services/qa/workspace-restore.js';
 
-export function mountQaRestoreConfigRoute(app: Hono, deps: ServerDeps): void {
+export function mountQaRestoreConfigRoute(app: HttpRouter, deps: ServerDeps): void {
   void deps; // SandboxManager is the only dependency, accessed as a singleton.
 
   app.post('/api/company/sessions/:id/qa/restore-config', async (c) => {

@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   assertSupportedConversationFormat,
@@ -7,7 +7,7 @@ import {
 
 const SESSION_PATH = /^\/api\/coder\/(?:session-workbench\/)?sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i;
 
-export function mountConversationFormatGuard(app: Hono, deps: ServerDeps): void {
+export function mountConversationFormatGuard(app: HttpRouter, deps: ServerDeps): void {
   app.use('/api/coder/*', async (c, next) => {
     let path: string;
     try {

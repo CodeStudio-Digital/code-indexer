@@ -10,7 +10,7 @@
  * it. No tab state lives in the dashboard — the bundle is the source of
  * truth.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { resolveSessionWorkspaceRoot } from '../../worktree-reads.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../deps.js';
@@ -35,7 +35,7 @@ import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
 import { mountToolSnapshotRoutes } from './tool-snapshot.js';
 
-export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderSnapshotRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
   const snapshotStore = sessionStore;
   mountToolSnapshotRoutes(app, snapshotStore);

@@ -5,6 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  '@modelcontextprotocol/sdk@1.29.0>@hono/node-server': '-'
+  '@modelcontextprotocol/sdk@1.29.0>hono': '-'
   electron-builder-squirrel-windows: 26.15.3
   '@tanstack/react-virtual>@tanstack/virtual-core': 3.17.0
   shell-quote: 1.11.0
@@ -32,9 +34,6 @@ importers:
       '@google/genai':
         specifier: ^1.48.0
         version: 1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))
-      '@hono/node-server':
-        specifier: ^1.19.12
-        version: 1.19.14(hono@4.12.14)
       '@huggingface/transformers':
         specifier: ^4.2.0
         version: 4.2.0
@@ -140,9 +139,6 @@ importers:
       hast-util-to-jsx-runtime:
         specifier: 2.3.6
         version: 2.3.6
-      hono:
-        specifier: ^4.7.5
-        version: 4.12.14
       html-url-attributes:
         specifier: 3.0.1
         version: 3.0.1
@@ -1671,12 +1667,6 @@ packages:
     engines: {node: '>=10'}
     peerDependencies:
       vue: ^3.2.0
-
-  '@hono/node-server@1.19.14':
-    resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
-    engines: {node: '>=18.14.1'}
-    peerDependencies:
-      hono: ^4
 
   '@huggingface/jinja@0.5.9':
     resolution: {integrity: sha512-uWTG+l3VJRsl7EXxYizuL3P+cCPoc3cRqbWWRcQN0FhejRfbdq0RNhCmbY/YDtnTcz9icdLYuLDjsnz4d8JMuw==}
@@ -4915,10 +4905,6 @@ packages:
 
   highlightjs-vue@1.0.0:
     resolution: {integrity: sha512-PDEfEF102G23vHmPhLyPboFCD+BkMGu+GuJe2d9/eH4FsCwvgBpnc9n0pGE+ffKdph38s6foEZiEjdgHdzp+IA==}
-
-  hono@4.12.14:
-    resolution: {integrity: sha512-am5zfg3yu6sqn5yjKBNqhnTX7Cv+m00ox+7jbaKkrLMRJ4rAdldd1xPd/JzbBWspqaQv6RSTrgFN95EsfhC+7w==}
-    engines: {node: '>=16.9.0'}
 
   hookable@5.5.3:
     resolution: {integrity: sha512-Yc+BQe8SvoXH1643Qez1zqLRmbA5rCL+sSmk6TVos0LWVfNIB7PGncdlId77WzLGSIB5KaWgTaNTs2lNVEI6VQ==}
@@ -8443,10 +8429,6 @@ snapshots:
       '@tanstack/vue-virtual': 3.13.24(vue@3.5.34(typescript@5.9.3))
       vue: 3.5.34(typescript@5.9.3)
 
-  '@hono/node-server@1.19.14(hono@4.12.14)':
-    dependencies:
-      hono: 4.12.14
-
   '@huggingface/jinja@0.5.9': {}
 
   '@huggingface/tokenizers@0.1.3': {}
@@ -8848,7 +8830,6 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.14)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -8858,7 +8839,6 @@ snapshots:
       eventsource-parser: 3.0.6
       express: 5.2.1
       express-rate-limit: 8.3.2(express@5.2.1)
-      hono: 4.12.14
       jose: 6.2.2
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -8870,7 +8850,6 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@4.6.7)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.14)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -8880,7 +8859,6 @@ snapshots:
       eventsource-parser: 3.0.6
       express: 5.2.1
       express-rate-limit: 8.3.2(express@5.2.1)
-      hono: 4.12.14
       jose: 6.2.2
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -12256,8 +12234,6 @@ snapshots:
   highlightjs-curl@1.3.0: {}
 
   highlightjs-vue@1.0.0: {}
-
-  hono@4.12.14: {}
 
   hookable@5.5.3: {}
 

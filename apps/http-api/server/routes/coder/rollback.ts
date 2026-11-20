@@ -12,7 +12,7 @@
  * (ended) bus afterwards so the next POST /messages rebuilds a fresh runner
  * from the truncated DB.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseSessionIdParam, parseJsonBody, parseSeqValue, notFound } from '../_helpers.js';
@@ -20,7 +20,7 @@ import { withSessionLock } from './sessionLock.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 
 export function mountCoderRollbackRoute(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   runtime: CoderRuntime,
 ): void {

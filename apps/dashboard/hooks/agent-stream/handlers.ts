@@ -1,3 +1,4 @@
+import { formatCoderTerminalError } from '../../features/chat/terminal-error.js';
 import type {
   AgentStatus,
   AgentsGroup,
@@ -1173,7 +1174,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
 
     error: (data) => {
       const d = data as { reason?: string; error?: string; message?: string };
-      const message = String(d.message ?? d.error ?? d.reason ?? 'unknown');
+      const message = formatCoderTerminalError(d);
       markInFlightBlocksFailed(blocks, message);
       // Covers what markInFlightBlocksFailed does not: activity heartbeats and
       // workflow runs. Same reconciliation contract as the `done` path.

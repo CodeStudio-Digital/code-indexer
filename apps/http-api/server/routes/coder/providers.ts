@@ -1,9 +1,9 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { SUPPORTED_CODER_PROVIDERS } from '@mcp/code-agent/index.js';
 import { getDefinition } from '@mcp/services/providers/registry.js';
 import type { ServerDeps } from '../../deps.js';
 
-export function mountCoderProvidersRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderProvidersRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { providerStore } = deps;
 
   app.get('/api/coder/providers', (c) => {

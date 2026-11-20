@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { summarizeSpanV2 } from '@mcp/code-agent/core/summarizer.js';
 import { DistillLlmError } from '@mcp/services/memory/distill-call.js';
@@ -18,7 +18,7 @@ import { parseIdParam, parseSessionIdValue } from './_helpers.js';
  */
 const SPAN_MESSAGE_CAP = 200;
 
-export function mountMemoryDiagnosticsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountMemoryDiagnosticsRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.post('/api/projects/:id/memory/distill-dry-run', async (c) => {
     const projectId = parseIdParam(c);
     const body = await c.req

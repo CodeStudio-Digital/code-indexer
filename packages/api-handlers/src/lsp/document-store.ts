@@ -8,7 +8,7 @@
  * design.
  *
  * MODULE SINGLETON by necessity: `createLspHandlers(deps)` is instantiated
- * twice in Electron (IPC mount + Hono dispatch fallback); factory state
+ * twice in Electron (IPC mount + Route dispatch fallback); factory state
  * would split the buffers between the two instances.
  *
  * Delta application is by absolute offset into the PRE-change buffer.

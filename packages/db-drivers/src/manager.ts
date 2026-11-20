@@ -13,7 +13,7 @@ import { createDriver } from './factory.js';
 import type { DatabaseDriver, DbConnectConfig, DbEngine, DbEngineKind } from './types.js';
 
 /** Per-connection metadata co-located with the pool so EVERY handler instance
- *  (IPC + Hono fallback + agent path) resolves it from one shared source. */
+ *  (IPC + HTTP route fallback + agent path) resolves it from one shared source. */
 export interface ConnMeta {
   engine?: DbEngine;
   readOnly?: boolean;

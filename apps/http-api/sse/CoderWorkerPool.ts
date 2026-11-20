@@ -44,7 +44,7 @@ import { registerWorkerBrowserCalls } from './worker-browser-calls.js';
 import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
 import { admitWorkerAttempt } from './coder-attempt-bridge.js';
 import { activateCoderRuntimeFacade } from './coder-runtime-facade.js';
-import { CoderStartupUncertainError, isCoderInteractionNotPendingError } from './coder-runtime-errors.js';
+import { CoderStartupUncertainError, CoderTurnEndedError, CoderWorkerBootError, CoderWorkerDrainError, coderSetupFailure, isCoderInteractionNotPendingError, isCoderWorkerStoppingError } from './coder-runtime-errors.js';
 import { assertSupportedConversationFormat } from '../retired-conversation-format.js';
 import type { AgentRunHandleApi } from '@mcp/agent-runtime-host';
 import { readFile } from 'node:fs/promises';
@@ -364,6 +364,9 @@ export interface SessionRuntimeContext {
 
 interface PoolEntry {
   host: WorkerHost;
+  retiring: boolean;
+  writerReleased?: boolean;
+  startupUncertain?: CoderStartupUncertainError;
   bus: CoderRunBus;
   sessionContext: SessionRuntimeContext;
   currentRunId: number;
@@ -400,6 +403,8 @@ interface PoolEntry {
    */
   controlPlaneLeaseRenewTimer: ReturnType<typeof setInterval> | null;
 }
+
+type WorkerWriterCleanup = Parameters<typeof releaseSessionWriterLeaseForOwner>[0] & { host?: WorkerHost };
 
 interface RunFreshOpts {
   userMessage: string;
@@ -498,7 +503,8 @@ export class CoderWorkerPool {
    */
   private readonly entryStarts = new Map<SessionId, Promise<PoolEntry>>();
   private readonly evictions = new Map<SessionId, Promise<void>>();
-  private readonly lifecycleFailures = new Map<SessionId, Error>();
+  private readonly failedTerminalWrites = new Map<SessionId, Set<() => Promise<void>>>();
+  private readonly pendingWriterCleanup = new Map<SessionId, WorkerWriterCleanup>();
   private readonly ttlMs: number;
   private readonly postRunLingerMs: number;
   private readonly log: (level: 'info' | 'warn' | 'error', msg: string) => void;
@@ -516,9 +522,9 @@ export class CoderWorkerPool {
   }
 
   /** Read the mirrored bus for a session. Touches `lastTouchedAt`. */
-  getBus(sessionId: SessionId): CoderRunBus | null {
+  getBus(sessionId: SessionId, forInput = false): CoderRunBus | null {
     const entry = this.entries.get(sessionId);
-    if (!entry) return null;
+    if (!entry || !entry.currentRunId || (forInput && entry.retiring)) return null;
     entry.lastTouchedAt = Date.now();
     return entry.bus;
   }
@@ -594,18 +600,32 @@ export class CoderWorkerPool {
    */
   async runFresh(sessionId: SessionId, opts: RunFreshOpts): Promise<CoderRunBus> {
     await assertSupportedConversationFormat(this.opts.dbPath, sessionId);
+    return this.startFresh(sessionId, opts, true);
+  }
+
+  private async startFresh(sessionId: SessionId, opts: RunFreshOpts, replaceStoppingWorker: boolean): Promise<CoderRunBus> {
     const { controlPlaneRunContext, ...workerOpts } = opts;
     const runtimePolicy = workerOpts.runtimePolicy ?? this.opts.resolveRuntimePolicy?.();
     let entry: PoolEntry;
     try {
-      entry = await this.ensureEntry(sessionId);
-    } catch (error) {
+      do {
+        entry = await this.ensureEntry(sessionId);
+      } while (entry.retiring || this.entries.get(sessionId) !== entry);
+    } catch (cause) {
+      // A lost ACK belongs to the original durable command. A different command
+      // blocked in ensureEntry never crossed the worker boundary.
+      let error = cause;
+      if (cause instanceof CoderStartupUncertainError) {
+        const previous = this.getControlPlaneRunContext(sessionId);
+        if (!controlPlaneRunContext || previous?.commandId === controlPlaneRunContext.commandId) throw cause;
+        error = new CoderWorkerDrainError(cause);
+      }
       await terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         controlPlaneRunContext,
         {
           event: 'error',
-          data: { message: error instanceof Error ? error.message : String(error) },
+          data: { reason: coderSetupFailure('worker-runFresh-failed', error).reason, message: error instanceof Error ? error.message : String(error) },
           mode: 'worker_start_failure',
         },
       );
@@ -642,9 +662,8 @@ export class CoderWorkerPool {
     if (controlPlaneRunContext) {
       this.startControlPlaneLeaseRenewal(entry, sessionId, runId, controlPlaneRunContext);
     }
-    const bridge = entry.host.requireBridge();
     try {
-      await bridge.request('runFresh', {
+      await entry.host.requireBridge().request('runFresh', {
         ...workerOpts,
         ...(runtimePolicy ? { runtimePolicy } : {}),
         runId,
@@ -652,37 +671,47 @@ export class CoderWorkerPool {
         controlPlaneAdmissionRequired: controlPlaneRunContext != null,
       }, { timeoutMs: 60_000 });
     } catch (err) {
+      // An explicit refusal before worker preparation is the only startup RPC
+      // we can repeat. Keep the original durable command and input identity.
+      if (isCoderWorkerStoppingError(err)) {
+        entry.retiring = true;
+        if (replaceStoppingWorker && !entry.runtimeAdmission && !entry.bus.ended
+          && !entry.bus.ctrl.signal.aborted && !entry.runtimeCancellationRequested && this.entries.get(sessionId) === entry) {
+          this.stopControlPlaneLeaseRenewal(entry);
+          entry.runInProgress = false;
+          entry.controlPlaneRunContext = null;
+          markEnded(entry.bus, 'error', { reason: 'worker-stopped-before-start', message: err.message });
+          return this.startFresh(sessionId, opts, false);
+        }
+      }
       if (isMutationOutcomeUnknownError(err)) {
         // A timed-out request does not cancel the worker handler. Keep its
         // authority and writer fence until stop has acknowledged preparation
         // and physical cleanup; never start another run over a lost ACK.
         const uncertain = new CoderStartupUncertainError(err);
-        this.lifecycleFailures.set(sessionId, uncertain);
+        entry.startupUncertain = uncertain;
         try { await this.evict(sessionId); }
         catch (drainError) {
           this.log('error', `[coder-pool] startup cleanup unconfirmed session=${sessionId}: ${String(drainError)}`);
           throw uncertain;
         }
         if (this.entries.get(sessionId) === entry) throw uncertain;
-        this.lifecycleFailures.delete(sessionId);
         throw err;
       }
       this.stopControlPlaneLeaseRenewal(entry);
       entry.runInProgress = false;
+      const failure = coderSetupFailure('worker-runFresh-failed', err);
       await terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         entry.controlPlaneRunContext,
-        { event: 'error', data: { message: err instanceof Error ? err.message : String(err) }, mode: 'worker_start_failure' },
+        { event: 'error', data: { ...failure, message: err instanceof Error ? err.message : String(err) }, mode: 'worker_start_failure' },
       );
       entry.controlPlaneRunContext = null;
       if (!entry.bus.ended) {
         const message = err instanceof Error ? err.message : String(err);
-        publish(entry.bus, 'error', { message, reason: 'worker-runFresh-failed', sessionId });
-        markEnded(entry.bus, 'error', {
-          message,
-          reason: 'worker-runFresh-failed',
-          sessionId,
-        });
+        const data = { ...failure, message, sessionId };
+        publish(entry.bus, 'error', data);
+        markEnded(entry.bus, 'error', data);
         this.schedulePostRunEvict(entry, sessionId);
       }
       throw err;
@@ -700,16 +729,15 @@ export class CoderWorkerPool {
   ): Promise<number> {
     await assertSupportedConversationFormat(this.opts.dbPath, sessionId);
     const entry = this.entries.get(sessionId);
-    if (!entry) throw new Error(`coder-pool: no active run for session ${sessionId}`);
-    this.cancelPostRunEvict(entry);
+    if (!entry || entry.retiring || !entry.runInProgress || entry.bus.ended) {
+      throw new CoderTurnEndedError();
+    }
     entry.lastTouchedAt = Date.now();
-    // (B) — re-engaging the worker mid-linger restarts the in-flight
-    // semantics. Cleared again when the next `bus.end` arrives.
-    entry.runInProgress = true;
     const result = await entry.host.requireBridge().request<{
       ok: boolean;
       roundMessageId: number;
     }>('pushUserMessage', {
+      runId: entry.currentRunId,
       content,
       selectedSkillIds,
       operationId,
@@ -736,6 +764,7 @@ export class CoderWorkerPool {
     if (starting) await starting;
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
+    if (entry.retiring) return true;
     await entry.host.requireBridge().request(
       'appendSessionEvent',
       {
@@ -754,6 +783,7 @@ export class CoderWorkerPool {
     if (starting) await starting;
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
+    if (entry.retiring) return true;
     await entry.host.requireBridge().request('appendPipelineDiagnostic', { event }, { timeoutMs: 5_000 });
     return true;
   }
@@ -895,7 +925,7 @@ export class CoderWorkerPool {
         `[coder-pool] authority-lost abort dispatch failed session=${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    void this.evict(sessionId);
+    this.evictInBackground(sessionId);
   }
 
   private prepareRunBus(entry: PoolEntry, sessionId: SessionId, runId: number): void {
@@ -914,18 +944,18 @@ export class CoderWorkerPool {
 
   private schedulePostRunEvict(entry: PoolEntry, sessionId: SessionId): void {
     if (entry.postRunEvictTimer) clearTimeout(entry.postRunEvictTimer);
-    entry.postRunEvictTimer = setTimeout(() => {
+    const timer = setTimeout(() => {
       // Re-check: a fresh run might have already cleared the timer
       // and bumped lastTouchedAt. Don't evict if so.
       const still = this.entries.get(sessionId);
-      if (!still) return;
-      if (still.postRunEvictTimer === null) return;
+      if (still !== entry || entry.postRunEvictTimer !== timer || entry.runInProgress) return;
       this.log(
         'info',
         `[coder-pool] post-run linger expired — evicting session=${sessionId}`,
       );
-      void this.evict(sessionId);
+      this.evictInBackground(sessionId);
     }, this.postRunLingerMs);
+    entry.postRunEvictTimer = timer;
     if (typeof (entry.postRunEvictTimer as { unref?: () => void }).unref === 'function') {
       (entry.postRunEvictTimer as { unref: () => void }).unref();
     }
@@ -1181,6 +1211,8 @@ export class CoderWorkerPool {
   async evict(sessionId: SessionId): Promise<void> {
     const existingEviction = this.evictions.get(sessionId);
     if (existingEviction) return existingEviction;
+    const entry = this.entries.get(sessionId);
+    if (entry) entry.retiring = true;
 
     // Publish the lifecycle fence before running any asynchronous teardown.
     // ensureEntry() observes this promise and waits for the old worker to
@@ -1196,13 +1228,34 @@ export class CoderWorkerPool {
     }
   }
 
+  private evictInBackground(sessionId: SessionId): void {
+    void this.evict(sessionId).catch(error => {
+      this.log('warn', `[coder-pool] worker retirement pending session=${sessionId}: ${String(error)}`);
+    });
+  }
+
+  private async cleanupWorkerWriter(sessionId: SessionId, writer: WorkerWriterCleanup): Promise<boolean> {
+    this.pendingWriterCleanup.set(sessionId, writer);
+    // An acquisition ACK can be lost before the entry is published. Retain that
+    // host until its exit is confirmed, just like an already-running worker.
+    if (writer.host) await writer.host.evict();
+    const released = await releaseSessionWriterLeaseForOwner(writer);
+    if (this.pendingWriterCleanup.get(sessionId) === writer) this.pendingWriterCleanup.delete(sessionId);
+    return released;
+  }
+
   private async evictEntry(sessionId: SessionId): Promise<void> {
     const starting = this.entryStarts.get(sessionId);
     if (starting) {
       await starting.catch(() => undefined);
     }
     const entry = this.entries.get(sessionId);
-    if (!entry) return;
+    if (!entry) {
+      const pending = this.pendingWriterCleanup.get(sessionId);
+      if (pending) await this.cleanupWorkerWriter(sessionId, pending);
+      return;
+    }
+    entry.retiring = true;
     const activityId = enterBackgroundActivity(`coder-worker:evict:${sessionId}`);
     try {
       this.cancelPostRunEvict(entry);
@@ -1210,14 +1263,24 @@ export class CoderWorkerPool {
       // open writer.lease creates a lease that PID liveness can never reclaim.
       // Make lease release a separately acknowledged phase before the generic
       // WorkerHost stop/terminate sequence.
-      await entry.host.requireBridge().request(
-        'releaseSessionWriter',
-        {},
-        { timeoutMs: 15_000 },
-      );
+      if (!entry.writerReleased) {
+        const release = await entry.host.requireBridge().request<{ ok: boolean }>(
+          'releaseSessionWriter', {}, { timeoutMs: 15_000 },
+        );
+        if (release?.ok !== true) throw new Error('Worker did not acknowledge releasing the session writer');
+        entry.writerReleased = true;
+      }
       // Retain run authority until the worker acknowledges writer release.
       // A timeout must leave recovery authority intact.
       this.stopControlPlaneLeaseRenewal(entry);
+      entry.runInProgress = false;
+      if (entry.currentRunId && !entry.bus.ended) {
+        const terminal = { reason: 'worker-evicted', message: 'The session worker stopped. You can continue in this conversation.' };
+        publish(entry.bus, 'error', terminal);
+        markEnded(entry.bus, 'error', terminal);
+      }
+      // Readers can finish after the drain ACK. New writers must still wait
+      // for the durable terminal and the old thread's physical exit.
       await terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         entry.controlPlaneRunContext,
@@ -1230,17 +1293,7 @@ export class CoderWorkerPool {
       closePreviewSession(sessionId);
       entry.detachBusMirror();
       const aliveMs = Date.now() - entry.lastTouchedAt;
-      let hostEvicted = false;
-      try {
-        await entry.host.evict(5_000);
-        hostEvicted = true;
-      } catch (err) {
-        this.log(
-          'warn',
-          `[coder-pool] evict session=${sessionId} failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      if (!hostEvicted) return;
+      await entry.host.evict(5_000);
       if (this.entries.get(sessionId) === entry) {
         this.entries.delete(sessionId);
       }
@@ -1253,11 +1306,10 @@ export class CoderWorkerPool {
       const ownerId = entry.sessionContext.writerOwnerId;
       if (ownerId) {
         try {
-          const released = await releaseSessionWriterLeaseForOwner({
+          const released = await this.cleanupWorkerWriter(sessionId, {
             bundlePath: entry.sessionContext.bundlePath,
             ownerId,
           });
-          this.lifecycleFailures.delete(sessionId);
           if (released) {
             this.log(
               'warn',
@@ -1270,7 +1322,6 @@ export class CoderWorkerPool {
             `coder-pool: failed to recover evicted writer for session ${sessionId}: ${failure.message}`,
             { cause: failure },
           );
-          this.lifecycleFailures.set(sessionId, lifecycleFailure);
           this.log(
             'error',
             `[coder-pool] evicted writer recovery failed session=${sessionId}: ${failure.message}`,
@@ -1293,6 +1344,7 @@ export class CoderWorkerPool {
       ...this.entries.keys(),
       ...this.entryStarts.keys(),
       ...this.evictions.keys(),
+      ...this.pendingWriterCleanup.keys(),
     ]));
     await Promise.all(ids.map((id) => this.evict(id)));
   }
@@ -1351,7 +1403,7 @@ export class CoderWorkerPool {
       // (Frente E) — but the normal sweep here stays hands-off.
       if (entry.runInProgress) continue;
       if (now - entry.lastTouchedAt > this.ttlMs) {
-        void this.evict(id);
+        this.evictInBackground(id);
       }
     }
   }
@@ -1381,9 +1433,19 @@ export class CoderWorkerPool {
 
   private async ensureEntry(sessionId: SessionId): Promise<PoolEntry> {
     const evicting = this.evictions.get(sessionId);
-    if (evicting) await evicting;
-    const lifecycleFailure = this.lifecycleFailures.get(sessionId);
-    if (lifecycleFailure) throw lifecycleFailure;
+    const previous = this.entries.get(sessionId);
+    try {
+      if (evicting) await evicting;
+      else if (previous?.retiring) await this.evict(sessionId);
+    } catch (error) {
+      throw previous?.startupUncertain ?? new CoderWorkerDrainError(error);
+    }
+    const pending = this.failedTerminalWrites.get(sessionId);
+    if (pending) {
+      // Retry the original command's idempotent terminal write before new work.
+      for (const retry of pending) { await retry(); pending.delete(retry); }
+      if (pending.size === 0 && this.failedTerminalWrites.get(sessionId) === pending) this.failedTerminalWrites.delete(sessionId);
+    }
 
     const existing = this.entries.get(sessionId);
     if (existing) return existing;
@@ -1403,6 +1465,11 @@ export class CoderWorkerPool {
   }
 
   private async createEntry(sessionId: SessionId): Promise<PoolEntry> {
+    const previousWriter = this.pendingWriterCleanup.get(sessionId);
+    if (previousWriter) {
+      try { await this.cleanupWorkerWriter(sessionId, previousWriter); }
+      catch (error) { throw new CoderWorkerDrainError(error); }
+    }
     const resolvedContext = await this.resolveRuntimeContext(sessionId);
     const writerOwnerId = `coder-worker:${randomUUID()}`;
     const sessionContext: SessionRuntimeContext = {
@@ -1511,7 +1578,7 @@ export class CoderWorkerPool {
               'error',
               { reason: 'worker-crashed' },
             );
-          })();
+          })().catch(cause => this.log('error', `[coder-pool] crash reconciliation failed session=${sessionId}: ${String(cause)}`));
         }
         closePreviewSession(sessionId);
         if (this.entries.get(sessionId)?.host === host) {
@@ -1522,13 +1589,15 @@ export class CoderWorkerPool {
         resolveWorkerClosed();
         if (planned) return;
         const ownerId = sessionContext.writerOwnerId;
-        if (!ownerId || this.evictions.has(sessionId)) return;
-        const cleanup = releaseSessionWriterLeaseForOwner({
+        if (!ownerId) return;
+        // An unplanned exit can interrupt the release RPC itself. Queue the
+        // exact dead owner's cleanup even when that eviction rejects.
+        const previousEviction = this.evictions.get(sessionId);
+        const cleanup = Promise.resolve(previousEviction).catch(() => undefined).then(() => this.cleanupWorkerWriter(sessionId, {
           bundlePath: sessionContext.bundlePath,
           ownerId,
-        })
+        }))
           .then((released) => {
-            this.lifecycleFailures.delete(sessionId);
             if (released) {
               this.log(
                 'warn',
@@ -1538,13 +1607,6 @@ export class CoderWorkerPool {
           })
           .catch((error) => {
             const failure = error instanceof Error ? error : new Error(String(error));
-            this.lifecycleFailures.set(
-              sessionId,
-              new Error(
-                `coder-pool: failed to recover crashed writer for session ${sessionId}: ${failure.message}`,
-                { cause: failure },
-              ),
-            );
             this.log(
               'error',
               `[coder-pool] crashed writer recovery failed session=${sessionId}: ${failure.message}`,
@@ -1563,67 +1625,28 @@ export class CoderWorkerPool {
     });
     const startedAt = Date.now();
     const activityId = enterBackgroundActivity(`coder-worker:spawn:${sessionId}`);
-    let hostStarted = false;
     try {
       await host.start();
-      hostStarted = true;
       // Worker boot can overlap best-effort main-process metadata jobs (for
       // example title/model persistence) that started before the session lock
       // was acquired. Drain that repository once more, then require the worker
       // to acknowledge acquisition before any run RPC can be dispatched.
       await this.opts.handoffSessionWriter?.(sessionContext);
-      await host.requireBridge().request(
+      const acquired = await host.requireBridge().request<{ ok: boolean }>(
         'acquireSessionWriter',
         {},
         { timeoutMs: SESSION_WRITER_ACQUIRE_TIMEOUT_MS },
       );
+      if (acquired?.ok !== true) throw new Error('Worker did not acknowledge acquiring the session writer');
     } catch (error) {
-      let evicted = false;
       try {
-        await host.evict();
-        // Before `worker.ready`, WorkerHost may still be in `starting`; its
-        // generic eviction path cannot yet guarantee isolate exit. Only a host
-        // that completed start() is safe for coordinator-side lease recovery.
-        evicted = hostStarted;
-      } catch (evictionError) {
-        this.log(
-          'error',
-          `[coder-pool] failed-start eviction failed session=${sessionId}: ${evictionError instanceof Error ? evictionError.message : String(evictionError)}`,
-        );
+        const released = await this.cleanupWorkerWriter(sessionId, { host, bundlePath: sessionContext.bundlePath, ownerId: writerOwnerId });
+        if (released) this.log('warn', `[coder-pool] reclaimed residual failed-start worker lease session=${sessionId}`);
+      } catch (recoveryError) {
+        this.log('error', `[coder-pool] failed-start worker cleanup pending session=${sessionId}: ${String(recoveryError)}`);
       }
-
-      // `createEntry()` fails before the host is published in `entries`, so the
-      // normal `evictEntry()` residual-lease recovery cannot run. Once
-      // WorkerHost.evict() has observed/forced the isolate exit, reclaim only
-      // the pool-minted owner lease. This is essential for worker_threads:
-      // their lease PID is the still-live Electron PID and can never be proven
-      // dead while the app remains open.
-      if (evicted) {
-        try {
-          const released = await releaseSessionWriterLeaseForOwner({
-            bundlePath: sessionContext.bundlePath,
-            ownerId: writerOwnerId,
-          });
-          this.lifecycleFailures.delete(sessionId);
-          if (released) {
-            this.log(
-              'warn',
-              `[coder-pool] reclaimed residual failed-start worker lease session=${sessionId}`,
-            );
-          }
-        } catch (recoveryError) {
-          const failure = recoveryError instanceof Error
-            ? recoveryError
-            : new Error(String(recoveryError));
-          const lifecycleFailure = new Error(
-            `coder-pool: failed to recover writer after worker startup failure for session ${sessionId}: ${failure.message}`,
-            { cause: failure },
-          );
-          this.lifecycleFailures.set(sessionId, lifecycleFailure);
-          this.log('error', `[coder-pool] ${lifecycleFailure.message}`);
-        }
-      }
-      throw error;
+      this.log('warn', `[coder-pool] worker startup failed session=${sessionId}: ${String(error)}`);
+      throw new CoderWorkerBootError(error);
     } finally {
       exitBackgroundActivity(activityId);
     }
@@ -1751,7 +1774,7 @@ export class CoderWorkerPool {
     // (in `connectAll()`) and routes every tool invocation through
     // `mcpExt.callTool`. The pool field is mutable on `opts` because
     // the singleton wire-up sets it after the pool finishes booting
-    // (server.ts boots Hono synchronously, then awaits pool.boot()).
+    // (server.ts builds the router synchronously, then awaits pool.boot()).
     const offMcpSnapshot = bridge.handle('mcpExt.snapshot', async () => {
       const pool = this.opts.getMcpExternalPool?.() ?? null;
       if (!pool) {
@@ -1852,7 +1875,7 @@ export class CoderWorkerPool {
       // The bus terminal is already visible to SSE above. The filesystem
       // authority is queued before any following command for this session, then
       // the diagnostic comparison runs after that durable transition.
-      void (async () => {
+      const reconcile = async () => {
         const authority = this.opts.getControlPlaneStore?.();
         await terminalizeLocalCoderRun(authority, terminalContext, terminal);
         await this.compareShadowTerminalState(
@@ -1861,9 +1884,15 @@ export class CoderWorkerPool {
           terminal.event,
           terminal.data,
         );
-      })().catch((cause: unknown) => {
+      };
+      void reconcile().catch((cause: unknown) => {
         const failure = cause instanceof Error ? cause : new Error(String(cause));
-        this.lifecycleFailures.set(sessionId, failure);
+        if (terminalContext) {
+          const pending = this.failedTerminalWrites.get(sessionId) ?? new Set<() => Promise<void>>();
+          let inFlight: Promise<void> | undefined;
+          pending.add(() => inFlight ??= reconcile().finally(() => { inFlight = undefined; }));
+          this.failedTerminalWrites.set(sessionId, pending);
+        }
         this.log('error', `[coder-pool] terminal reconciliation failed session=${sessionId}: ${failure.message}`);
       });
       // (B) — terminal event: run is no longer in progress; sweep may
@@ -1892,6 +1921,7 @@ export class CoderWorkerPool {
     let entry: PoolEntry;
     entry = {
       host,
+      retiring: false,
       bus,
       sessionContext,
       currentRunId: 0,

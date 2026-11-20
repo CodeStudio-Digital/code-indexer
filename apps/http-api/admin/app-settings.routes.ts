@@ -9,7 +9,7 @@
  * sends them in one shot when the operator hits "Save", so we get a
  * single transactional write and a single audit event per save.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { AppSettingsStore, settingsRestartRequired } from '@mcp/store/app-settings-store.js';
 import { APP_SETTINGS, SETTING_CATEGORIES, getSettingDef } from '@mcp/store/app-settings-catalog.js';
 import { resolveAppRuntimePolicy } from '../runtime-policy.js';
@@ -26,8 +26,8 @@ export function setSettingsRestartHook(fn: (() => void) | null): void {
   restartHook = fn;
 }
 
-export function createAppSettingsRouter(dbPath: string): Hono {
-  const app = new Hono();
+export function createAppSettingsRouter(dbPath: string): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/settings', (c) => {
     const store = new AppSettingsStore(dbPath);

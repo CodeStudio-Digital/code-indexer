@@ -1,7 +1,7 @@
 /**
- * Minimal slice of Hono's SSE stream that the scaffold pump uses — narrow
+ * SSE operations used by the scaffold pump — narrow
  * enough that a test can supply a fake to assert the flush-before-close
- * discipline without standing up an HTTP server. The real Hono
+ * discipline without standing up an HTTP server. The concrete SSE
  * `SSEStreamingApi` is structurally assignable to this.
  */
 export interface ScaffoldSseStream {

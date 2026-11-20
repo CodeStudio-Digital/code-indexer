@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AuthBundle } from '../auth/composition.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
 import type { GrantType, TokenEndpointAuthMethod } from '@mcp/services/auth/domain/oauth-client.js';
@@ -18,8 +18,8 @@ const VALID_AUTH_METHODS: readonly TokenEndpointAuthMethod[] = ['none', 'client_
  * Dynamic Client Registration (RFC 7591).
  * Disabled via `MCP_OAUTH_ALLOW_DCR=false`. Defaults public (PKCE-only).
  */
-export function createRegisterRouter(bundle: AuthBundle, config: IndexerConfig): Hono {
-  const app = new Hono();
+export function createRegisterRouter(bundle: AuthBundle, config: IndexerConfig): HttpRouter {
+  const app = new HttpRouter();
 
   app.post('/register', async (c) => {
     if (!config.mcp.oauth.allowDcr) {

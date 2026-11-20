@@ -10,12 +10,8 @@
  *   ├── package.json          — wrangler (dev) + typescript
  *   ├── wrangler.toml         — `name`, `main`, compat date, no bindings
  *   ├── tsconfig.json         — Worker types + ESM NodeNext
- *   ├── src/index.ts          — minimal Hono-on-Workers fetch handler
+ *   ├── src/index.ts          — Worker fetch handler
  *   └── docs/                 — empty
- *
- * Why Hono here too? Same rationale as `vite-api`: the handler is plain
- * Fetch API, so the same source can be dropped into `vite-api` later
- * or vice-versa. Keeps the surface area of the scaffolders symmetrical.
  */
 
 import type { IScaffolder, ScaffoldContext } from './scaffolder-port.js';
@@ -63,7 +59,7 @@ export class CfWorkerScaffolder implements IScaffolder {
       kind: 'step',
       sandboxId,
       step: 'installing-deps',
-      message: 'Installing wrangler + hono…',
+      message: 'Installing Wrangler and TypeScript…',
     });
     const installRes = await driver.exec(
       containerId,
@@ -144,9 +140,6 @@ function renderPackageJson(): string {
         deploy: 'wrangler deploy',
         typecheck: 'tsc --noEmit',
       },
-      dependencies: {
-        hono: '^4.12.27',
-      },
       devDependencies: {
         '@cloudflare/workers-types': '^4.20260627.1',
         typescript: '^6.0.0',
@@ -202,35 +195,36 @@ function renderWranglerToml(opts: { devPort: number }): string {
 
 function renderWorkerEntry(): string {
   return [
-    `import { Hono } from 'hono';`,
-    ``,
-    `/**`,
-    ` * Cloudflare Worker entry. Runs on workerd locally (via wrangler`,
-    ` * dev) and on Cloudflare's edge in production. The Hono app below`,
-    ` * is portable — the same source compiles unchanged against the`,
-    ` * \`vite-api\` stack (Node + Vite) if you ever want to lift it.`,
-    ` *`,
-    ` * Add bindings in wrangler.toml (KV, D1, R2, vars) and type them`,
-    ` * via the \`Bindings\` generic below.`,
-    ` */`,
-    `type Bindings = {`,
-    `  // EXAMPLE_KV: KVNamespace;`,
-    `  // DB: D1Database;`,
-    `};`,
-    ``,
-    `const app = new Hono<{ Bindings: Bindings }>();`,
-    ``,
-    `app.get('/', (c) => c.json({ service: 'cf-worker', ok: true }));`,
-    ``,
-    `app.get('/health', (c) => c.text('ok'));`,
-    ``,
-    `app.post('/api/echo', async (c) => {`,
-    `  const body = await c.req.json().catch(() => ({}));`,
-    `  return c.json({ received: body, at: new Date().toISOString() });`,
-    `});`,
-    ``,
-    `export default app;`,
-    ``,
+    'export default {',
+    '  async fetch(request: Request): Promise<Response> {',
+    '    const { pathname } = new URL(request.url);',
+    "    if (request.method === 'GET' && pathname === '/') return Response.json({ service: 'cf-worker', ok: true });",
+    "    if (request.method === 'GET' && pathname === '/health') return new Response('ok');",
+    "    if (request.method === 'POST' && pathname === '/api/echo') {",
+    '      const reader = request.body?.getReader();',
+    '      const decoder = new TextDecoder();',
+    "      let text = '';",
+    '      let size = 0;',
+    '      try {',
+    '        while (reader) {',
+    '          const { done, value } = await reader.read();',
+    '          if (done) break;',
+    '          size += value.byteLength;',
+    '          if (size > 1024 * 1024) {',
+    '            await reader.cancel();',
+    "            return new Response('Payload Too Large', { status: 413 });",
+    '          }',
+    '          text += decoder.decode(value, { stream: true });',
+    '        }',
+    '      } finally { reader?.releaseLock(); }',
+    '      let received = {};',
+    '      try { received = JSON.parse(text + decoder.decode()); } catch { /* empty or invalid JSON */ }',
+    '      return Response.json({ received, at: new Date().toISOString() });',
+    '    }',
+    "    return new Response('Not Found', { status: 404 });",
+    '  },',
+    '} satisfies ExportedHandler;',
+    '',
   ].join('\n');
 }
 

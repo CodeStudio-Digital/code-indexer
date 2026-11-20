@@ -9,8 +9,9 @@
  * Real `worker_threads.Worker` integration. Tests run in vitest's
  * `pool: 'forks'` so the parent process exits cleanly between files.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { WorkerHost } from '../WorkerHost.js';
 
 const fakeWorkerUrl = new URL('./fixtures/fake-worker.mjs', import.meta.url);
@@ -87,5 +88,76 @@ describe('WorkerHost ↔ real worker_threads', () => {
     await host.evict(500);
     expect(host.isRunning()).toBe(false);
     expect(host.state).toBe('idle');
+  });
+
+  it('reports the actual exit before ready without waiting for the startup timeout', async () => {
+    const host = makeHost({ maxRestarts: 0, workerData: { exitBeforeReady: true } });
+    await expect(host.start()).rejects.toThrow(/exited.*17.*before.*ready/i);
+    expect(host.state).toBe('crashed');
+    expect(host.messageBridge).toBeNull();
+  }, 3_000);
+
+  it('terminates a worker that never signals ready and allows another start', async () => {
+    const data = { skipReady: true };
+    const host = makeHost({ readyTimeoutMs: 500, workerData: data });
+    await expect(host.start()).rejects.toThrow(/ready/i);
+    expect(host.messageBridge).toBeNull();
+    data.skipReady = false;
+    await host.start();
+    expect(host.isRunning()).toBe(true);
+  }, 4_000);
+
+  it('stops a boot in progress and waits for the same exit on concurrent eviction', async () => {
+    const onExit = vi.fn();
+    const host = makeHost({ workerData: { skipReady: true }, onExit });
+    const boot = host.start().catch((error: Error) => error);
+    const first = host.evict(50);
+    await host.evict(50);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith(expect.any(Number), true);
+    await first;
+    expect(await boot).toBeInstanceOf(Error);
+    expect(host.state).toBe('idle');
+  });
+
+  it('cancels an automatic restart if evicted during backoff', async () => {
+    let exited!: () => void;
+    const exit = new Promise<void>(resolve => { exited = resolve; });
+    const host = makeHost({ onExit: exited, restartBackoffMs: 40 });
+    await host.start();
+    await host.requireBridge().request('exitSoon', {});
+    await exit;
+    await host.evict();
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expect(host.messageBridge).toBeNull();
+    expect(host.state).toBe('idle');
+  });
+
+  it('uses one grace deadline when a real worker never acknowledges stop', async () => {
+    const host = makeHost({ workerData: { ignoreStop: true } });
+    await host.start();
+    const terminate = vi.spyOn(Worker.prototype, 'terminate');
+    vi.useFakeTimers();
+    try {
+      const stopped = host.evict(250);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(terminate).toHaveBeenCalledOnce();
+      await stopped;
+      expect(host.messageBridge).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      terminate.mockRestore();
+    }
+  });
+
+  it('retains the real isolate if termination fails so shutdown can be retried', async () => {
+    const host = makeHost();
+    await host.start();
+    const termination = vi.spyOn(Worker.prototype, 'terminate').mockRejectedValueOnce(new Error('temporary termination failure'));
+    try {
+      await expect(host.evict(75)).rejects.toThrow('temporary termination failure');
+      expect(await host.requireBridge().request('ping', { value: 'still alive' })).toEqual({ pong: 'still alive' });
+      await host.evict(75);
+      expect(host.state).toBe('idle');
+    } finally { termination.mockRestore(); }
   });
 });

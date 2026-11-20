@@ -10,7 +10,7 @@
  * mandatory worker pool is mocked at its route-facing RPC boundary.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 
 const { poolMock, workerEntries } = vi.hoisted(() => ({
@@ -33,6 +33,7 @@ import { mountCoderStreamRoutes } from '../stream.js';
 import { createBus, markEnded, publish, type CoderRunBus } from '../../../../coder-bus.js';
 import { RecentMessageKeys } from '../../recent-message-keys.js';
 import { SessionRecoveryError } from '../../../../control-plane-recovery-error.js';
+import { CoderTurnEndedError, CoderWorkerBootError, CoderWorkerDrainError } from '../../../../sse/coder-runtime-errors.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
@@ -246,7 +247,7 @@ function setup(
     recentMessageKeys,
   } as unknown as CoderRuntime;
 
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderStreamRoutes(app, deps, runtime);
 
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -1033,6 +1034,70 @@ describe('POST /continue idempotency + live-run hardening', () => {
   });
 });
 
+
+describe('worker recovery on the same conversation', () => {
+  it('replays the pre-write refusal if a live turn finishes before a follow-up reaches its worker', async () => {
+    const h = setup();
+    const { bus } = seedLiveRun(h.activeRuns, SESSION_ID);
+    poolMock.pushUserMessage.mockImplementationOnce(async () => {
+      markEnded(bus, 'done', { reason: 'completed' });
+      throw new CoderTurnEndedError();
+    });
+    const url = '/api/coder/sessions/' + SESSION_ID + '/messages';
+    const input = { content: 'late follow-up', client_msg_id: 'late-followup', response_mode: 'json' };
+    const terminal = { event: 'error', data: { reason: 'turn-ended-before-input', not_started: true } };
+    expect(await (await h.post(url, input)).json()).toMatchObject({ terminal });
+    expect(await (await h.post(url, input)).json()).toMatchObject({ terminal });
+    expect(poolMock.pushUserMessage).toHaveBeenCalledTimes(1);
+    expect(poolMock.runFresh).not.toHaveBeenCalled();
+  });
+
+  it('shows a finished conversation as idle while its worker is still warm', async () => {
+    const h = setup();
+    const { bus } = seedLiveRun(h.runtime.activeRuns, SESSION_ID);
+    const state = async () => (await h.app.request('/api/coder/sessions/' + SESSION_ID + '/state')).json();
+    expect(await state()).toHaveProperty('alive', true);
+    markEnded(bus, 'done', { reason: 'completed' });
+    expect(h.runtime.activeRuns.has(SESSION_ID)).toBe(true);
+    expect(await state()).toHaveProperty('alive', false);
+  });
+
+  it.each([
+    ['messages', 'worker-draining'], ['continue', 'worker-draining'],
+    ['messages', 'worker-unavailable-before-input'], ['continue', 'worker-unavailable-before-input'],
+  ])('replays a proven pre-start refusal on %s (%s) and accepts the next command', async (path, reason) => {
+    const h = setup();
+    const url = '/api/coder/sessions/' + SESSION_ID + '/' + path;
+    const body = { content: 'same message', client_msg_id: 'first-command', response_mode: 'json' };
+    const failure = reason === 'worker-draining' ? new CoderWorkerDrainError(new Error('lost drain acknowledgement'))
+      : new CoderWorkerBootError(new Error('thread exited before ready'));
+    poolMock.runFresh.mockRejectedValueOnce(failure);
+    async function expectRefusal(response: Response) {
+      expect(response.status).toBe(200);
+      if (path === 'messages') {
+        expect(await response.json()).toMatchObject({ terminal: { event: 'error', data: {
+          reason, not_started: true, message: expect.stringContaining('worker'),
+        } } });
+      } else {
+        const stream = await response.text();
+        expect(stream).toContain('event: error');
+        expect(stream).toContain(JSON.stringify(reason));
+        expect(stream).toContain('"not_started":true');
+      }
+    }
+    await expectRefusal(await h.post(url, body));
+    await expectRefusal(await h.post(url, body));
+    const restored = setup(new RecentMessageKeys(), { controlPlaneCommands: h.controlPlaneCommands });
+    await expectRefusal(await restored.post(url, body));
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
+    const next = await restored.post(url, { ...body, client_msg_id: 'new-command' });
+    expect(next.status).toBe(200);
+    expect(poolMock.runFresh).toHaveBeenCalledTimes(2);
+    markEnded(restored.activeRuns.get(SESSION_ID)!, 'done', { reason: 'completed' });
+    if (path === 'continue') expect(await next.text()).toContain('completed');
+    else expect(await next.json()).toMatchObject({ started: true });
+  });
+});
 
 describe('uncertain tool effect admission', () => {
   it.each(['messages', 'continue'])('keeps the original command live after unconfirmed startup cleanup on %s', async path => {

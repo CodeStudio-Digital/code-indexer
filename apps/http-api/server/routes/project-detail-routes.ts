@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import { createProjectsHandlers } from '@mcp/api-handlers/projects/index.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
@@ -9,13 +9,13 @@ import { visualEdit, type VisualEditBody } from '@mcp/api-handlers/projects/visu
 import { codeNamespace, docNamespace, projectMemoryNamespace, snapshotNamespace } from '@mcp/shared/vector-namespace.js';
 import { readProjectJobPage, readCurrentProjectJobs } from './project-job-queries.js';
 import { purgeIgnoredIndexedFiles } from '@mcp/indexer/indexer/purge-ignored.js';
-import { streamSSE } from 'hono/streaming';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import { mountProjectCollectionRoutes } from './project-collection-routes.js';
 import { mapApiError } from './project-route-errors.js';
 import { mountProjectSemanticFoldersRoutes } from './project-semantic-folders-routes.js';
 import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 
-export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountProjectsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const h = createProjectsHandlers(deps);
   mountProjectCollectionRoutes(app, deps, h);
   mountProjectSemanticFoldersRoutes(app, deps);

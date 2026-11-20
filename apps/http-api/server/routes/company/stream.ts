@@ -1,8 +1,8 @@
 import { persistBoardAttachments } from '@mcp/company/services/board-attachments.js';
 import { randomUUID } from 'node:crypto';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { sessionRecoveryFailure } from '../../../control-plane-recovery-error.js';
-import { bodyLimit } from 'hono/body-limit';
+import { bodyLimit } from '@mcp/shared/http/middleware.js';
 import type { ServerDeps } from '../../deps.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
 import {
@@ -129,7 +129,7 @@ type PersistedPromptDeliveryResult =
       code: string;
     };
 
-export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyStreamRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db, providerStore } = deps;
   // Idempotency store for the streaming POSTs (/start, /resume). Per-mount so
   // route tests get a fresh, isolated instance. See recent-message-keys.ts.

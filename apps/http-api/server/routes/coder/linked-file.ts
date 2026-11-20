@@ -1,6 +1,6 @@
 import { realpath, stat } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import { resolveSafe, resolveWorkspacePath, type WorkspacePathContext } from '@mcp/code-agent/tools/paths.js';
 import { resolveSessionProjectAuthority } from '@mcp/session-storage/fs-store/index.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
@@ -14,7 +14,7 @@ const imageTypes: Record<string, string> = {
 };
 
 /** Resolve message links in the same checkout and project namespace as the agent. */
-export function mountCoderLinkedFileRoute(app: Hono, { db, sessionStore }: ServerDeps): void {
+export function mountCoderLinkedFileRoute(app: HttpRouter, { db, sessionStore }: ServerDeps): void {
   app.get('/api/projects/:id/linked-file', c => {
     const project = db.getProjectCatalogEntry(parseIdParam(c));
     if (!project || project.is_synthetic || !project.root_path.trim()) return c.json({ error: 'workspace' }, 404);
@@ -49,7 +49,7 @@ export function mountCoderLinkedFileRoute(app: Hono, { db, sessionStore }: Serve
   });
 }
 
-async function readLinkedFile(c: Context, context: WorkspacePathContext, worktree: string | null) {
+async function readLinkedFile(c: HttpContext, context: WorkspacePathContext, worktree: string | null) {
   const path = c.req.query('path')?.replace(/\\/g, '/');
   if (!path || path.length > 32768 || path.startsWith('//') || /[\x00-\x1f]/.test(path)
     || (process.platform === 'win32' && path.replace(/^[a-z]:\//i, '').includes(':'))) {

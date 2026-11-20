@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { readAgentMemoryCoverage } from '@mcp/store/db/agent-memory-coverage.js';
 import type { ServerDeps } from '../deps.js';
 import { notFound, parseIdParam } from './_helpers.js';
@@ -20,7 +20,7 @@ export function memorySemanticFailureCode(error: string | null | undefined): str
   return 'embedding_failed';
 }
 
-export function mountAgentMemorySemanticRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAgentMemorySemanticRoutes(app: HttpRouter, deps: ServerDeps): void {
   const repairs = new Map<string, Promise<void>>();
   const repairErrors = new Map<string, string>();
   const stateFor = (projectId: number, scope: 'project' | 'user') => {

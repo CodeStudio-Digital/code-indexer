@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import {
@@ -22,7 +22,7 @@ type SshHostRoutePatch = SshHostPatch & Partial<Pick<SshHost, 'known_host_sha256
  * split one with its own DB — sees it. The list unions shared + own; item ops
  * resolve via `sharedOrOwnedHost` and operate on whichever store holds the row.
  */
-export function mountSshHostRoutes(app: Hono, deps: ServerDeps): void {
+export function mountSshHostRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/ssh';
 
   // Valid jump target for a host of the given shared-ness:

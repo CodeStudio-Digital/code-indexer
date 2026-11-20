@@ -4,7 +4,7 @@
  * Dia 2 scope: CRUD over sessions, providers, groups, skills metadata.
  * The heavy operations — `stream.sendMessage` / `attach` / `continueSession`
  * and the `interaction.*` answers — depend on the worker pool + per-session
- * lock and are scheduled for Dia 3. The Hono routes still serve those
+ * lock and are scheduled for Dia 3. The HTTP routes still serve those
  * paths; the Electron IPC stub below throws `not_implemented` so the
  * renderer falls back to HTTP until the worker-pool wiring lands.
  *
@@ -327,7 +327,7 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
     stream: {
       sendMessage(_input: SendMessageInput): AsyncIterable<CoderEvent> {
         // Dia 3 scope: full bus/worker-pool integration. Until then the
-        // dashboard hits the legacy Hono /messages SSE endpoint. The
+        // dashboard hits the legacy /messages SSE endpoint. The
         // Electron IPC bridge will route to this stub; surfacing the
         // 501 makes the dependency explicit instead of returning silent
         // empty streams.
@@ -343,7 +343,7 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
         const session = await sessionStore.getSession(sessionId);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
         // `alive` requires the activeRuns map which lives in CoderRuntime —
-        // we surface it as `false` here and let the Hono route override
+        // we surface it as `false` here and let the HTTP route override
         // until the worker-pool integration moves into this handler.
         return {
           sessionId,

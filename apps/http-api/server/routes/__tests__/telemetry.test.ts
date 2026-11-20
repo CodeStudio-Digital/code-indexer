@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { FsTurnTelemetryRepository } from '@mcp/session-storage/fs-store/turn-telemetry.js';
 import type { ServerDeps } from '../../deps.js';
@@ -89,7 +89,7 @@ describe('filesystem telemetry routes', () => {
       'utf8',
     );
 
-    const app = new Hono();
+    const app = new HttpRouter();
     mountTelemetryRoutes(app, {
       sessionStore: store,
       providerStore: {},
@@ -117,7 +117,7 @@ describe('filesystem telemetry routes', () => {
   });
 
   it('rejects legacy numeric session ids', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     mountTelemetryRoutes(app, {
       sessionStore: store,
       providerStore: {},

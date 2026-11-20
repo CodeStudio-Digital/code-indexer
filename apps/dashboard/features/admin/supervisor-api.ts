@@ -8,10 +8,10 @@
  *
  * **Transport**: every call routes through `apiBaseUrl()` so Electron
  * dispatches via the `mcp://app` custom protocol (no socket, no
- * loopback — the Hono HTTP listener stays off by default in dev with
+ * loopback — the HTTP listener stays off by default in dev with
  * MCP_DEV_HTTP=0). In browser dev (MCP_DEV_HTTP=1), `apiBaseUrl()`
  * returns empty and relative URLs route through the Vite proxy to
- * the standalone Hono process at :3333.
+ * the standalone API process.
  */
 
 import { apiBaseUrl } from '../../lib/api-client.js';

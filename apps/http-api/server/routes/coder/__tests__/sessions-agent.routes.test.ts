@@ -7,7 +7,7 @@
  * targets, idempotence, the unknown-agent 400, and the unknown-session 404.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
@@ -90,7 +90,7 @@ function setup() {
   };
   const deps = { sessionStore, providerStore } as unknown as ServerDeps;
   const runtime = { activeRuns: new Map() } as unknown as CoderRuntime;
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionsRoutes(app, deps, runtime);
 
   const patchAgent = (id: SessionId, agent: unknown) =>

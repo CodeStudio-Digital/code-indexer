@@ -24,7 +24,7 @@
  *     selected virtual project dirs + selected
  *     dependency volumes.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { rm } from 'node:fs/promises';
 import type { ServerDeps } from '../../deps.js';
 import {
@@ -77,7 +77,7 @@ async function stopCompanySessionRuntime(sessionId: CompanySessionId): Promise<v
   }
 }
 
-export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanySessionDeleteRoutes(app: HttpRouter, deps: ServerDeps): void {
   const {
     db,
     operationalSessionFiles,

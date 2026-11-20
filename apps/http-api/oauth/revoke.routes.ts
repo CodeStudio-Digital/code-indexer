@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AuthBundle } from '../auth/composition.js';
 
 /**
@@ -6,8 +6,8 @@ import type { AuthBundle } from '../auth/composition.js';
  * avoid leaking whether a token existed. Only refresh tokens are stateful;
  * access tokens (JWTs) just expire.
  */
-export function createRevokeRouter(bundle: AuthBundle): Hono {
-  const app = new Hono();
+export function createRevokeRouter(bundle: AuthBundle): HttpRouter {
+  const app = new HttpRouter();
 
   app.post('/revoke', async (c) => {
     const body = await c.req.parseBody();

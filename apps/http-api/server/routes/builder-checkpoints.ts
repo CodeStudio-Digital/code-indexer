@@ -1,11 +1,11 @@
 /**
- * Hono routes for the Builder checkpoint timeline:
+ * HTTP routes for the Builder checkpoint timeline:
  *   GET    /api/projects/:id/checkpoints                 → rows (newest first)
  *   POST   /api/projects/:id/checkpoints/:cid/restore    → forward-only restore
  *   GET    /api/projects/:id/checkpoints/:cid/diff[?from]→ unified patch
  *   GET    /api/projects/:id/checkpoints/:cid/thumbnail  → image artifact
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { ApiError } from '@mcp/api-bus';
 import {
   checkpointDiff,
@@ -17,9 +17,9 @@ import {
 import { isUuid } from '@mcp/session-storage';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
-import type { Context } from 'hono';
+import type { HttpContext } from '@mcp/shared/http/router.js';
 
-function mapApiError(c: Context, err: unknown) {
+function mapApiError(c: HttpContext, err: unknown) {
   if (err instanceof ApiError) {
     return c.json({ error: err.message, code: err.code }, err.status as never);
   }
@@ -33,7 +33,7 @@ function parseCheckpointId(value: string | undefined): string {
   return value.toLowerCase();
 }
 
-export function mountBuilderCheckpointRoutes(app: Hono, deps: ServerDeps): void {
+export function mountBuilderCheckpointRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/projects/:id/checkpoints', async (c) => {
     try {
       return c.json({

@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { companyFixture } from '@mcp/company/services/__tests__/company-multisession-fixture.js';
@@ -23,7 +23,7 @@ async function fixture() {
     { publish: (_type: string, data: unknown) => { events.push(data); } } as never, {} as never);
   board.post('human', null, 'message', 'Confira os anexos', undefined, attachments);
   const entry = fixture.files(fixture.child.id).listBoardEntriesSync()[0]!;
-  const app = new Hono(); mountCompanyBoardRoutes(app, { sessionStore: fixture.sessionStore } as unknown as ServerDeps);
+  const app = new HttpRouter(); mountCompanyBoardRoutes(app, { sessionStore: fixture.sessionStore } as unknown as ServerDeps);
   const base = `/api/company/sessions/${fixture.child.id}/board/${entry.id}/attachments`;
   return { ...fixture, app, base, entry, image, events };
 }

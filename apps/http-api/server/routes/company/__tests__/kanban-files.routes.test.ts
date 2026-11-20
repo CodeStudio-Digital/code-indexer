@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import {
@@ -72,7 +72,7 @@ async function harness() {
     },
   });
   await sessionStore.refresh();
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCompanyKanbanRoutes(app, {
     sessionStore,
   } as unknown as ServerDeps);

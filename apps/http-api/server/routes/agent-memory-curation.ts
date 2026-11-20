@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { z } from 'zod';
 import { listLegacyMemoryPage, listMemoryCurationPage } from '@mcp/store/db/agent-memory-curation.js';
 import { importLegacyMemories } from '@mcp/services/memory/legacy-memory-import.js';
@@ -18,7 +18,7 @@ export function memoryPage(deps: ServerDeps, projectId: number,
 }
 
 /** Human curation uses the same fenced store as recall. No direct model call. */
-export function mountAgentMemoryCurationRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAgentMemoryCurationRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db, agentMemoryService: service } = deps;
   app.post('/api/projects/:id/agent-memory', async c => {
     const projectId = parseIdParam(c);

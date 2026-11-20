@@ -22,7 +22,7 @@
  * bookkeeping table needed.
  */
 import { invalidateCompanyDoc } from '@mcp/company/services/company-doc-corpus.js';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -83,7 +83,7 @@ function ingestDeps(deps: ServerDeps, sessionId: CompanySessionId): IndexDocUseC
   };
 }
 
-export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyDocsRagRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.post('/api/company/sessions/:id/docs/index-rag', async (c) => {
     const resolved = await resolveCompanySessionContext(
       deps.sessionStore,

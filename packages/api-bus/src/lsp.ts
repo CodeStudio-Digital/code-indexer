@@ -349,7 +349,7 @@ export interface LspApi {
   /**
    * Push diagnostics — batches of (file, source) frames, coalesced per
    * file. Replaces the renderer's 1s polling loop. The `Stream` suffix is
-   * load-bearing (auto MessagePort on Electron; SSE route on Hono).
+   * load-bearing (auto MessagePort on Electron; SSE over HTTP).
    */
   diagnosticsStream(
     input: { projectId: number },

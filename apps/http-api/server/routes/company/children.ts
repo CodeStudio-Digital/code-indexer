@@ -5,7 +5,7 @@
  * Archiving only changes `state.json`; it never removes or rewrites the
  * child's conversation and artifacts.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   notFound,
@@ -26,7 +26,7 @@ import { withSessionLock } from '../coder/sessionLock.js';
 interface CreateChildBody { name: string; workspace?: 'shared' | 'isolated' }
 interface RenameChildBody { name: string }
 
-export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyChildRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/company/companies/:id/workspace', async c => {
     const id = parseCompanySessionIdParam(c);
     const session = await deps.operationalSessionFiles.getCompanySession(id);

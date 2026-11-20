@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { companyFixture } from '@mcp/company/services/__tests__/company-multisession-fixture.js';
 import { mountCompanyChildRoutes } from '../children.js';
@@ -9,7 +9,7 @@ const runtime = vi.hoisted(() => ({ get: vi.fn(() => null) }));
 beforeEach(() => { runtime.get.mockReset().mockReturnValue(null); });
 vi.mock('../../../../sse/companyOrchestrator.js', () => ({ getCompanyOrchestrator: runtime.get, evictCompanyOrchestrator: vi.fn(), hasCompanyOrchestrator: vi.fn(), deleteCompanyOrchestrator: vi.fn() }));
 vi.mock('../stream.js', () => ({ activeOrchestrators: { get: runtime.get } }));
-async function fixture() { const f = await companyFixture(); const app = new Hono(); mountCompanyFileSessionRoutes(app, f as never); mountCompanyChildRoutes(app, f as never); mountCompanyInboxRoutes(app, f as never); return { ...f, app }; }
+async function fixture() { const f = await companyFixture(); const app = new HttpRouter(); mountCompanyFileSessionRoutes(app, f as never); mountCompanyChildRoutes(app, f as never); mountCompanyInboxRoutes(app, f as never); return { ...f, app }; }
 describe('Company and session API compatibility', () => {
   it('aggregates child session status without changing the legacy root status', async () => {
     const f = await fixture();

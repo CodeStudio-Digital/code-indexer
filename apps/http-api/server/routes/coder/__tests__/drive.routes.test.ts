@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { describe, expect, it, vi } from 'vitest';
 import { asSessionId } from '@mcp/agent-runtime-contracts';
 import { mountCoderDriveRoutes } from '../drive.js';
@@ -22,7 +22,7 @@ function setup() {
     setSessionMemoryPinned: vi.fn(async () => true),
     deleteSessionMemory: vi.fn(async () => true),
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderDriveRoutes(app, { sessionStore } as never);
   return { app, sessionStore };
 }

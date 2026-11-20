@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import { readBoardAttachment } from '@mcp/company/services/board-attachments.js';
@@ -10,7 +10,7 @@ import {
   notFound,
 } from '../_helpers.js';
 
-export function mountCompanyBoardRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyBoardRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore } = deps;
 
   app.get('/api/company/sessions/:id/board/:entryId/attachments/:index', async c => {

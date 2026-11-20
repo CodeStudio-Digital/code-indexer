@@ -4,12 +4,12 @@
  * Provider-specific flows (copilot device flow, openai PKCE, bedrock creds)
  * live in sibling files and are mounted at separate prefixes by admin/index.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import { maskKey } from './shared/mask.js';
 
-export function oauthRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function oauthRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/oauth/:providerId', (c) => {
     const t = store.getOAuth(c.req.param('providerId'));

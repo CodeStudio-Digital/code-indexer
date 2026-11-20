@@ -205,7 +205,7 @@ function ProviderStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     try {
       // admin.providers.update is the canonical "save+enable provider"
       // call. The handler accepts {id, api_key, enabled} and is wired
-      // by the Hono dispatch bridge in handlers-mount (mcp:// scheme).
+      // by the route dispatch bridge in handlers-mount.
       await apiCall('admin.providers.update', {
         id: providerId,
         api_key: apiKey.trim(),

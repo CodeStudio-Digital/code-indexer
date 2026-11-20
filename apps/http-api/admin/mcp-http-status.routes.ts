@@ -5,7 +5,7 @@
  * any of those answers in the dashboard bundle (they're config-driven
  * on the server).
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { allTools } from '@apps/mcp-server/tools/index.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
 import type { McpTool } from '@apps/mcp-server/tool.js';
@@ -37,8 +37,8 @@ export function createMcpHttpStatusRouter(
   config: IndexerConfig,
   db: CodeIndexDB,
   providerStore: ProviderStore,
-): Hono {
-  const app = new Hono();
+): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/mcp-http/agent-export', (c) => {
     const agentId = c.req.query('agent_id') ?? '';

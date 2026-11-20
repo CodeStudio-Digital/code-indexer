@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody } from '../_helpers.js';
 import { callGeneralAiJson, stripJsonFences } from '@mcp/api-handlers/aiJson.js';
@@ -66,7 +66,7 @@ function buildUserPrompt(b: AssistRequest): string {
   return lines.filter(Boolean).join('\n');
 }
 
-export function mountApiScriptAssistRoute(app: Hono, deps: ServerDeps): void {
+export function mountApiScriptAssistRoute(app: HttpRouter, deps: ServerDeps): void {
   app.post('/api/projects/:projectId/api-client/script-assist', async (c) => {
     parseIdParam(c, 'projectId'); // validate shape (route is project-scoped; the AI call itself isn't store-bound)
     const body = await parseJsonBody<AssistRequest>(c);

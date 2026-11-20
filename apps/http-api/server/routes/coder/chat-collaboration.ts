@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { ChatCollaborationStore, rootChatId } from '@mcp/session-storage/collaboration/store.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
@@ -15,7 +15,7 @@ import type { ChatNetworkSnapshot } from '@mcp/agent-runtime-contracts/chat-netw
 import { asSessionId } from '@mcp/session-storage';
 import { setCoderWorkerPublishedChatImporter } from '../../../sse/coderWorkerPoolSingleton.js';
 
-export function mountChatCollaborationRoutes(app: Hono, deps: ServerDeps, runtime: CoderRuntime): void {
+export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, runtime: CoderRuntime): void {
   const mailbox = new ChatCollaborationStore(deps.sessionStore.locator.dataDir);
   const ready = mailbox.init();
   const network = new SessionNetwork({ sessions: deps.sessionStore, mailbox, project: id => deps.db.getProject(id),

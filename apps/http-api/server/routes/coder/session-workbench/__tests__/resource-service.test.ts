@@ -1,7 +1,7 @@
 import { asSessionId } from '@mcp/session-storage';
 import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 import type { SkillSummaryPage } from '@mcp/store/skill-store.js';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerDeps } from '../../../../deps.js';
 import { mountSessionWorkbenchRoutes } from '../routes.js';
@@ -257,7 +257,7 @@ describe('Session Workbench resource routes', () => {
       files: [],
       pageInfo: { totalCount: 0, nextCursor: null },
     }));
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSessionWorkbenchRoutes(app, {} as ServerDeps, {
       service: { listSessions: vi.fn(), bootstrap: vi.fn() } as never,
       resources: {

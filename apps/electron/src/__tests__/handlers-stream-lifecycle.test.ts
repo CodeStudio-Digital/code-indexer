@@ -28,8 +28,8 @@ vi.mock('@mcp/api-handlers', () => ({
     return { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}), return: returned }) };
   } } }),
 }));
-vi.mock('@apps/http-api/server/hono-dispatch.js', () => ({
-  DISPATCH_TABLE: {}, STREAMING_DISPATCH_PATHS: new Set(), dispatchHono: vi.fn(), dispatchStreaming: vi.fn(),
+vi.mock('@apps/http-api/server/route-dispatch.js', () => ({
+  DISPATCH_TABLE: {}, STREAMING_DISPATCH_PATHS: new Set(), dispatchRoute: vi.fn(), dispatchStreaming: vi.fn(),
 }));
 vi.mock('@apps/http-api/server/perf/slow-ipc.js', () => ({ timeCall: (_name: string, fn: () => unknown) => fn() }));
 

@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { AgentMemoryWriter } from '@mcp/services/memory/agent-memory-writer.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam } from './_helpers.js';
@@ -43,7 +43,7 @@ function toPanelRow(row: {
   };
 }
 
-export function mountUserMemoryRoutes(app: Hono, deps: ServerDeps): void {
+export function mountUserMemoryRoutes(app: HttpRouter, deps: ServerDeps): void {
   const writer = new AgentMemoryWriter(deps.db, deps.agentMemoryService);
 
   app.get('/api/user-memory', (c) =>

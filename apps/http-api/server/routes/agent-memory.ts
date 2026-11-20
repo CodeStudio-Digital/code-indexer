@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseIntQuery, notFound } from './_helpers.js';
 import { memoryPage, mountAgentMemoryCurationRoutes } from './agent-memory-curation.js';
@@ -12,7 +12,7 @@ import { mountAgentMemoryEvolutionRoutes } from './agent-memory-evolution.js';
  * `agent_memory_events` so curation feeds the effectiveness KPIs.
  * Convention: pin = importance 0.95 (PIN_THRESHOLD 0.9 — same as snapshots).
  */
-export function mountAgentMemoryRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAgentMemoryRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db, agentMemoryService } = deps;
   mountAgentMemoryCurationRoutes(app, deps);
   mountAgentMemorySemanticRoutes(app, deps);

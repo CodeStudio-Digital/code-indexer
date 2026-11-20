@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import {
   parseJsonBody,
@@ -213,7 +213,7 @@ function buildFeedbackMessage(comments: SnapshotReviewComment<string>[]): string
 }
 
 export function mountSnapshotReviewRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   opts: MountOptions,
 ): void {

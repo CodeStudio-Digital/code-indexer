@@ -1,5 +1,5 @@
-import type { Context } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { HttpContext } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import type { CoderRunBus } from '../../coder-bus.js';
 
 /**
@@ -450,12 +450,12 @@ export function normalizeDedupeKey(raw: unknown): string | undefined {
  * bus). The dashboard's `done` handler refetches the persisted history, so the
  * user still sees the finished run's output.
  */
-export function syntheticDoneSSE(c: Context, data: Record<string, unknown>) {
+export function syntheticDoneSSE(c: HttpContext, data: Record<string, unknown>) {
   return syntheticTerminalSSE(c, 'done', data);
 }
 
 export function syntheticTerminalSSE(
-  c: Context,
+  c: HttpContext,
   event: 'done' | 'error',
   data: Record<string, unknown>,
 ) {

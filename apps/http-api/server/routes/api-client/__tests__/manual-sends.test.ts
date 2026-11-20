@@ -1,14 +1,14 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { expect, it } from 'vitest';
 import { mountManualSends } from '../manual-sends.js';
 
 it('scopes a reservation to its project, accepts only one dispatch and cancels an active send', async () => {
-  const app = new Hono();
+  const app = new HttpRouter();
   const guard = mountManualSends(app);
   let started!: () => void;
   const ready = new Promise<void>(resolve => { started = resolve; });
   app.post('/api/projects/:projectId/dispatch', guard, async c => {
-    const signal = c.get('manualSendSignal');
+    const signal = c.get<AbortSignal>('manualSendSignal') ?? c.req.raw.signal;
     const stopped = new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
     started();
     await stopped;
@@ -27,7 +27,7 @@ it('scopes a reservation to its project, accepts only one dispatch and cancels a
 });
 
 it('honors cancellation before dispatch and keeps legacy sends usable', async () => {
-  const app = new Hono();
+  const app = new HttpRouter();
   const guard = mountManualSends(app);
   let dispatched = 0;
   app.post('/api/projects/:projectId/dispatch', guard, c => { dispatched++; return c.text('ok'); });

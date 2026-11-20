@@ -27,7 +27,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import type { ServerDeps } from '../../deps.js';
 import {
@@ -80,7 +80,7 @@ async function loadRecoveryBriefing(): Promise<string> {
   );
 }
 
-export function mountReestablishMasterRoute(app: Hono, deps: ServerDeps): void {
+export function mountReestablishMasterRoute(app: HttpRouter, deps: ServerDeps): void {
   app.post('/api/company/sessions/:id/reestablish-master', async (c) => {
     const id = parseCompanySessionIdParam(c);
     const session = await deps.operationalSessionFiles.getCompanySession(id);

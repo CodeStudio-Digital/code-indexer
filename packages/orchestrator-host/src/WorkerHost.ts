@@ -39,6 +39,8 @@ export interface WorkerHostOpts<TWorkerData = unknown> {
   restartBackoffMs?: number;
   /** Default request timeout in ms for the bridge. Default 30s. */
   defaultRequestTimeoutMs?: number;
+  /** Maximum wait for worker.ready. Default 30s. */
+  readyTimeoutMs?: number;
   /** Fired when the worker exits unexpectedly and restart budget is exhausted. */
   onCrash?: (err: Error) => void;
   /** Fired on EVERY exit (planned or not). */
@@ -62,6 +64,9 @@ export class WorkerHost<TWorkerData = unknown> {
   private status: WorkerHostStatus = 'idle';
   private plannedExit = false;
   private startPromise: Promise<void> | null = null;
+  private stopPromise: Promise<void> | null = null;
+  private workerExit: Promise<void> = Promise.resolve();
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly opts: Required<Pick<WorkerHostOpts, 'maxRestarts' | 'restartBackoffMs' | 'defaultRequestTimeoutMs'>> & WorkerHostOpts<TWorkerData>;
 
   constructor(opts: WorkerHostOpts<TWorkerData>) {
@@ -88,9 +93,18 @@ export class WorkerHost<TWorkerData = unknown> {
    * concurrent callers so multiple `start()` calls share one boot.
    */
   start(): Promise<void> {
+    if (this.stopPromise || (this.worker && this.plannedExit)) {
+      return this.evict().then(() => this.start());
+    }
     if (this.startPromise) return this.startPromise;
-    this.startPromise = this.startOnce();
-    return this.startPromise;
+    this.cancelRestart();
+    const boot = this.startOnce();
+    this.startPromise = boot;
+    // A synchronous Worker constructor failure has no exit event to reset the host.
+    void boot.catch(() => {
+      if (!this.worker && this.startPromise === boot) this.startPromise = null;
+    });
+    return boot;
   }
 
   /** Underlying bridge — null until `start()` resolves. */
@@ -116,46 +130,55 @@ export class WorkerHost<TWorkerData = unknown> {
    * Falls back to `worker.terminate()` if the worker doesn't exit
    * within `gracePeriodMs`.
    */
-  async evict(gracePeriodMs = 5_000): Promise<void> {
-    if (this.status !== 'running') return;
+  evict(gracePeriodMs = 5_000): Promise<void> {
+    this.cancelRestart();
+    if (this.stopPromise) return this.stopPromise;
+    if (!this.worker) {
+      this.status = 'idle';
+      return Promise.resolve();
+    }
+    const wasStarting = this.status === 'starting';
     this.status = 'evicting';
     this.plannedExit = true;
-    if (this.bridge) {
+    const stop = this.stopWorker(this.worker, this.workerExit, wasStarting ? 0 : gracePeriodMs);
+    this.stopPromise = stop;
+    const settled = () => { if (this.stopPromise === stop) this.stopPromise = null; };
+    void stop.then(settled, settled);
+    return stop;
+  }
+
+  private async stopWorker(worker: WorkerType, exited: Promise<void>, graceMs: number): Promise<void> {
+    if (graceMs > 0 && this.bridge) {
+      // An acknowledgement can be lost or arrive before the thread exits. Both
+      // phases share one deadline; only the physical exit releases ownership.
+      void this.bridge.request('stop', {}, { timeoutMs: graceMs }).catch(() => undefined);
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await this.bridge.request('stop', {}, { timeoutMs: gracePeriodMs });
-      } catch {
-        // Worker may not have a `stop` handler, or may have closed
-        // the port already. Either way, fall through to terminate.
-      }
+        await Promise.race([exited, new Promise<void>(resolve => { timer = setTimeout(resolve, graceMs); })]);
+      } finally { clearTimeout(timer); }
     }
-    if (this.worker) {
-      // Wait briefly for clean exit, then force-terminate.
-      const w = this.worker;
-      const exited = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), gracePeriodMs);
-        w.once('exit', () => {
-          clearTimeout(timer);
-          resolve(true);
-        });
-      });
-      if (!exited) {
-        try { await w.terminate(); } catch { /* best-effort */ }
-      }
+    if (worker.threadId !== -1) {
+      try { await worker.terminate(); }
+      catch (error) { if (this.worker === worker && worker.threadId !== -1) throw error; }
     }
-    this.cleanup();
-    this.status = 'idle';
+    await exited;
+  }
+
+  private cancelRestart(): void {
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
   }
 
   private async startOnce(): Promise<void> {
-    this.status = 'starting';
-    this.plannedExit = false;
     const worker = new Worker(this.opts.workerFile, {
       workerData: this.opts.workerData,
       execArgv: this.opts.execArgv,
       resourceLimits: this.opts.resourceLimits,
     });
+    this.status = 'starting';
+    this.plannedExit = false;
     this.worker = worker;
-    this.bridge = new MessageBridge({
+    const bridge = new MessageBridge({
       // Worker has the `on`/`postMessage` interface MessageBridge needs.
       port: worker as unknown as MessageBridgeOpts['port'],
       defaultTimeoutMs: this.opts.defaultRequestTimeoutMs,
@@ -164,54 +187,50 @@ export class WorkerHost<TWorkerData = unknown> {
       },
       onDispatch: this.opts.onDispatch,
     });
-    worker.on('error', (err) => {
-      this.opts.onError?.(err);
+    this.bridge = bridge;
+    let bootError: Error | undefined;
+    let rejectBoot: ((error: Error) => void) | undefined;
+    let offReady!: () => void;
+    let timer: ReturnType<typeof setTimeout>;
+    const readyMs = this.opts.readyTimeoutMs ?? 30_000;
+    const ready = new Promise<void>((resolve, reject) => {
+      rejectBoot = reject;
+      offReady = bridge.on('worker.ready', () => resolve());
+      timer = setTimeout(() => reject(new Error(`Worker ${this.opts.name ?? '?'} did not signal ready within ${readyMs}ms`)), readyMs);
     });
-    worker.on('exit', (code) => {
+    worker.on('error', err => { bootError = err; this.opts.onError?.(err); });
+    this.workerExit = new Promise<void>(resolve => worker.once('exit', (code) => {
       const planned = this.plannedExit;
-      this.opts.onExit?.(code, planned);
+      rejectBoot?.(bootError ?? new Error(`Worker ${this.opts.name ?? this.opts.workerFile} exited with code ${code} before worker.ready`));
+      resolve();
       this.cleanup();
-      if (planned) {
-        this.status = 'idle';
-        return;
+      const exhausted = !planned && this.restartCount >= this.opts.maxRestarts;
+      this.status = exhausted ? 'crashed' : 'idle';
+      if (!planned && !exhausted) {
+        const delay = Math.min(this.opts.restartBackoffMs * 2 ** this.restartCount, 8_000);
+        this.restartCount += 1;
+        this.restartTimer = setTimeout(() => {
+          this.restartTimer = null;
+          void this.start().catch(err => this.opts.onError?.(err instanceof Error ? err : new Error(String(err))));
+        }, delay);
       }
-      if (this.restartCount >= this.opts.maxRestarts) {
-        this.status = 'crashed';
-        this.opts.onCrash?.(
-          new Error(
-            `Worker ${this.opts.name ?? this.opts.workerFile} exited with code ${code} ` +
-            `after ${this.restartCount} restart attempts.`,
-          ),
-        );
-        return;
-      }
-      this.restartCount += 1;
-      const delay = Math.min(
-        this.opts.restartBackoffMs * 2 ** (this.restartCount - 1),
-        8_000,
-      );
-      setTimeout(() => {
-        this.startPromise = null;
-        // Fire and forget — caller observes via state / next request.
-        void this.start().catch((err) => {
-          this.opts.onError?.(err instanceof Error ? err : new Error(String(err)));
-        });
-      }, delay);
-    });
-
-    // Wait for the worker to signal readiness. The worker entry MUST
-    // emit an event of type `worker.ready` after wiring its handlers.
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Worker ${this.opts.name ?? '?'} did not signal ready within 30s`));
-      }, 30_000);
-      const off = this.bridge!.on('worker.ready', () => {
-        clearTimeout(timer);
-        off();
-        resolve();
-      });
-    });
-    this.status = 'running';
+      this.opts.onExit?.(code, planned);
+      if (exhausted) this.opts.onCrash?.(bootError ?? new Error(
+        `Worker ${this.opts.name ?? this.opts.workerFile} exited with code ${code} after ${this.restartCount} restart attempts.`,
+      ));
+    }));
+    try {
+      await ready;
+      if (this.worker !== worker || this.plannedExit) throw new Error('Worker stopped during startup');
+      this.status = 'running';
+    } catch (error) {
+      if (this.worker === worker && !this.plannedExit) await this.evict(0);
+      throw error;
+    } finally {
+      rejectBoot = undefined;
+      clearTimeout(timer!);
+      offReady();
+    }
   }
 
   private cleanup(): void {

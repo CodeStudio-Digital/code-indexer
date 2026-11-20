@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId } from '@mcp/session-storage';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerDeps } from '../../../../deps.js';
@@ -117,7 +117,7 @@ describe('SessionWorkbenchEventService', () => {
 describe('Session Workbench event route', () => {
   it('validates filters and exposes a conditional GET for the canonical page', async () => {
     const { service } = fixture();
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSessionWorkbenchRoutes(app, {} as ServerDeps, {
       service: { listSessions: vi.fn(), bootstrap: vi.fn() } as never,
       resources: {
@@ -164,7 +164,7 @@ describe('Session Workbench event route', () => {
       detach();
       __resetRuntimeEventLogsForTests();
 
-      const app = new Hono();
+      const app = new HttpRouter();
       mountSessionWorkbenchRoutes(app, {
         sessionStore: {
           getSessionLocation: vi.fn(async () => ({ bundle_path: bundlePath })),

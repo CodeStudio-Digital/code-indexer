@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseJsonBody,
@@ -20,7 +20,7 @@ import {
  * v1 is poll-based (the panel refetches); SSE liveness on the coder bus can
  * be layered on later without changing this contract.
  */
-export function mountCoderDriveRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderDriveRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/coder/sessions/:id/drive', async (c) => {
     const sessionId = parseSessionIdParam(c);
     try {

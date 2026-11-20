@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { asCompanySessionId, type CompanySessionId } from '@mcp/session-storage';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
@@ -12,7 +12,7 @@ import { companySurfaceConflict } from './runtime-capabilities.js';
 
 interface Resolved { requestedId: CompanySessionId; rootId: CompanySessionId; rootFiles: CompanySessionFiles; unavailable: boolean }
 
-export function mountCompanyKanbanDispatchReviewRoutes(app: Hono, deps: ServerDeps, resolve: (c: Context) => Promise<Resolved | null>): void {
+export function mountCompanyKanbanDispatchReviewRoutes(app: HttpRouter, deps: ServerDeps, resolve: (c: HttpContext) => Promise<Resolved | null>): void {
   async function evidence(resolved: Resolved, claim: DispatchClaim) {
     const ownerFiles = new CompanySessionFiles({ companySessionId: claim.sessionId, sessionStore: deps.sessionStore });
     const ownerSession = ownerFiles.getSession();

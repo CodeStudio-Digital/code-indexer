@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { asSessionId } from '@mcp/session-storage';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
@@ -57,7 +57,7 @@ async function setup() {
       content: [{ type: 'text', text: 'Change a.ts' }],
     },
   });
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSnapshotRoutes(app, {
     sessionStore: store,
     db: {

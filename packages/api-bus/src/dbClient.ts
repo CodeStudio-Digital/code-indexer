@@ -6,7 +6,7 @@
  * manager; pools live in the shared `@mcp/db-drivers` `DbConnectionManager`.
  *
  * Saved-connection METADATA (with device-bound `enc_*` secrets) is a separate
- * concern handled by the Hono CRUD routes at /api/projects/:id/db-client/* — the
+ * concern handled by the HTTP CRUD routes at /api/projects/:id/db-client/* — the
  * server never sees plaintext. The renderer decrypts a saved secret via the
  * `secrets:*` IPC and builds a `DbConnectSpec` carrying the plaintext password,
  * which crosses ONLY the in-process IPC channel into the pool, then is dropped.

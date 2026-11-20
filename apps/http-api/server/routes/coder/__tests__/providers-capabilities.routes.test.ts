@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../../deps.js';
 import { mountCoderProvidersRoutes } from '../providers.js';
 
 describe('coder provider capability payload', () => {
   it('exposes fixed/boolean reasoning capability without inventing effort levels', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderProvidersRoutes(app, {
       providerStore: {
         listProviders: () => [{

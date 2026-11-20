@@ -19,6 +19,7 @@ export type QueueDeliver = (text: string, opts: {
   skillIds?: string[];
 }) => Promise<'accepted' | 'busy' | { acceptedMessageId: number }>;
 export interface QueueSnapshot { items: QueuedMessage[]; paused: boolean; restoring: boolean; storageError?: string }
+export class MessageNotStartedError extends Error {}
 
 /** One serialized outbox per conversation, independent of React mount/unmount. */
 export class MessageQueue {
@@ -93,10 +94,12 @@ export class MessageQueue {
 
   promote = (id: string): void => {
     const item = this.snapshot.items.find(value => value.id === id);
-    if (!item || item.status === 'sending' || item.status === 'accepted') return;
+    if (!item || this.explicitSends.has(id) || item.status === 'sending' || item.status === 'accepted') return;
     this.explicitSends.add(id);
+    // An uncertain retry must preserve the complete idempotent request, including only_when_idle.
+    const mode = item.status === 'error' ? item.mode : 'next-turn';
     this.update({ items: this.snapshot.items.map(value => value.id === id
-      ? { ...value, mode: 'next-turn', status: 'pending', error: undefined } : value) });
+      ? { ...value, mode, status: 'pending', error: undefined } : value) });
     this.schedule();
   };
   remove = (id: string): void => {
@@ -115,8 +118,8 @@ export class MessageQueue {
   private async pump(): Promise<void> {
     if (this.running || this.disposed || this.snapshot.restoring) return;
     // Steering may bypass parked tasks, but two steering requests never race.
-    const immediate = this.snapshot.items.find(item => item.mode === 'next-turn' && item.status === 'pending'
-      && (!this.snapshot.paused || this.explicitSends.has(item.id)));
+    const immediate = this.snapshot.items.find(item => item.status === 'pending'
+      && (this.explicitSends.has(item.id) || (!this.snapshot.paused && item.mode === 'next-turn')));
     const first = this.snapshot.items.find(item => item.mode === 'end-of-session');
     const item = immediate ?? (!this.snapshot.paused && !this.runState.streaming && first?.status === 'pending' ? first : undefined);
     if (!item) return;
@@ -132,6 +135,7 @@ export class MessageQueue {
       const result = await this.deliver(item.text, { clientMessageId: item.id, interject: item.mode === 'next-turn', attachments: item.attachments, skillIds: item.skillIds });
       if (this.disposed) return;
       if (result === 'busy') {
+        this.explicitSends.delete(item.id);
         // The server explicitly declined admission. A raced admission may have
         // terminalized the old command key, so the later attempt gets a new ID.
         this.update({ items: this.snapshot.items.map(value => value.id === item.id
@@ -146,8 +150,13 @@ export class MessageQueue {
         : this.snapshot.items.filter(value => value.id !== item.id) });
     } catch (error) {
       this.pause();
-      if (!this.disposed) this.update({ paused: true, items: this.snapshot.items.map(value => value.id === item.id
-        ? { ...value, status: 'error', error: error instanceof Error ? error.message : String(error) } : value) });
+      if (!this.disposed) {
+        // A confirmed pre-start refusal has consumed this command ID. Only an
+        // explicit retry should create work. Unknown delivery keeps its original ID.
+        const retryId = error instanceof MessageNotStartedError ? this.opts.newId?.() ?? globalThis.crypto.randomUUID() : item.id;
+        this.update({ paused: true, items: this.snapshot.items.map(value => value.id === item.id
+          ? { ...value, id: retryId, status: 'error', error: error instanceof Error ? error.message : String(error) } : value) });
+      }
     } finally { this.running = false; }
     this.schedule();
   }

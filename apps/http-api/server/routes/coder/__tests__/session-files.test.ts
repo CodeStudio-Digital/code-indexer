@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import sharp from 'sharp';
 import { mountCoderSessionFilesRoutes } from '../session-files.js';
 
@@ -16,7 +16,7 @@ it('browses and downloads session files without leaving the bundle through paths
   await writeFile(join(bundle, 'generated', 'report.txt'), 'Generated result');
   await writeFile(join(outside, 'private.txt'), 'Outside');
   await symlink(outside, join(bundle, 'escape'), 'junction');
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionFilesRoutes(app, { sessionStore: { getSessionLocation: async (value: string) => value === id ? { bundle_path: bundle } : null } } as never);
   const base = `/api/coder/sessions/${id}/files`;
   const listing = await (await app.request(base)).json();
@@ -31,7 +31,7 @@ it('browses and downloads session files without leaving the bundle through paths
 });
 it('pages attachment metadata and downloads the requested original', async () => {
   const listSessionAttachments = vi.fn(async () => ({ items: [{ name: 'photo.png' }], total: 51, next_offset: null }));
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionFilesRoutes(app, { sessionStore: { getSessionLocation: async () => ({}), listSessionAttachments,
     readSessionAttachment: async () => ({ name: 'photo.png', bytes: Buffer.from('original') }),
   } } as never);
@@ -44,7 +44,7 @@ it('pages attachment metadata and downloads the requested original', async () =>
 
 it('serves bounded image thumbnails and preserves original pixels for preview and download', async () => {
   const original = await sharp({ create: { width: 640, height: 480, channels: 3, background: '#7464ca' } }).png().toBuffer();
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionFilesRoutes(app, { sessionStore: { getSessionLocation: async () => ({}),
     readSessionAttachment: async (_id: string, _seq: number, index: number) => ({ name: 'generated.png', media_type: index ? 'image/svg+xml' : 'image/png', bytes: original }),
   } } as never);

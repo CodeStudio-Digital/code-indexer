@@ -18,9 +18,8 @@
  *
  * Domain errors are mapped via `mapDocError` so route handlers stay terse.
  */
-import type { Context, Hono } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { streamSSE } from 'hono/streaming';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import { accessSync, statSync, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import type { ServerDeps } from '../../deps.js';
@@ -44,20 +43,20 @@ import { docNamespace } from '@mcp/shared/vector-namespace.js';
 
 /**
  * Set the response headers proxies need to pass `text/event-stream`
- * through immediately instead of buffering it. Hono's `streamSSE` already
+ * through immediately instead of buffering it. HttpRouter's `streamSSE` already
  * sets `Content-Type: text/event-stream`, `Cache-Control: no-cache`, and
  * `Connection: keep-alive`; the extra `X-Accel-Buffering: no` is what
  * nginx / http-proxy (Vite dev) / Cloudflare key off of.
  */
-function markUnbuffered(c: Context): void {
+function markUnbuffered(c: HttpContext): void {
   c.header('X-Accel-Buffering', 'no');
 }
 
-function mapDocError(c: Context, err: unknown) {
+function mapDocError(c: HttpContext, err: unknown) {
   if (err instanceof DocError) {
     return c.json(
       { error: err.message, kind: err.kind },
-      docErrorStatus(err.kind) as ContentfulStatusCode,
+      docErrorStatus(err.kind),
     );
   }
   throw err;
@@ -130,7 +129,7 @@ interface CreateFolderSourceBody {
   defer_indexing?: boolean;
 }
 
-export function mountDocsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountDocsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { docStore, indexDocsUseCase, docHybridSearch, docProgressTracker } = deps;
   console.log('[doc-routes] mounted /api/docs/*');
 

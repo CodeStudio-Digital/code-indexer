@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { stat } from 'node:fs/promises';
 import { createProjectsHandlers } from '@mcp/api-handlers/projects/index.js';
 import { createContext } from '@mcp/api-handlers/context.js';
@@ -27,7 +27,7 @@ async function inspectRoot(rootPath: string): Promise<{ missing_on_disk: boolean
  * That way the same logic can be invoked by a CLI command later
  * without duplicating queries.
  */
-export function mountHygieneRoutes(app: Hono, deps: ServerDeps): void {
+export function mountHygieneRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db, vectorStore } = deps;
   const projectsHandler = createProjectsHandlers(deps);
 

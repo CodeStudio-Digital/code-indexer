@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { CoderWorktree } from '@mcp/api-bus';
 import { sharedPtyManager } from '@mcp/api-handlers/terminal/pty-manager.js';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { mountCoderWorktreeRoutes } from '../worktrees.js';
@@ -26,7 +26,7 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
 let root: string;
 let project: string;
 let store: FsSessionStore;
-let app: Hono;
+let app: HttpRouter;
 const post = (path: string, body: unknown) => app.request(`/api/coder/${path}`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 }, IN_PROCESS_ENV);
@@ -45,7 +45,7 @@ beforeEach(async () => {
     db: { getProject, getProjectCatalogEntry: getProject },
     providerStore: { getProvider: () => ({ enabled: true }), listModels: () => [] },
   } as unknown as ServerDeps;
-  app = new Hono();
+  app = new HttpRouter();
   mountCoderWorktreeRoutes(app, deps);
   mountCoderSessionsRoutes(app, deps, { activeRuns: new Map() } as unknown as CoderRuntime);
   mountCoderProjectTreeRoutes(app, deps);

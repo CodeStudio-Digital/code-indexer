@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { secretInProject } from './_ownership.js';
@@ -10,7 +10,7 @@ import type { SshSecretPatch } from '@mcp/store/ssh-store-types.js';
  * renderer; the route never sees plaintext. UNIQUE(project_id, name) → a dup
  * name is reported as 409 so the UI can nudge instead of 500-ing.
  */
-export function mountSshSecretRoutes(app: Hono, deps: ServerDeps): void {
+export function mountSshSecretRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/ssh';
 
   app.get(`${base}/secrets`, (c) => {

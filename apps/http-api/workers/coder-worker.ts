@@ -1,4 +1,5 @@
 import { buildDocNavigation } from '../doc-navigation.js';
+import { CoderTurnEndedError, CoderWorkerStoppingError } from '../sse/coder-runtime-errors.js';
 import { installDiagramRenderShim } from './diagram-render-shim.js';
 import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.js';
 /**
@@ -467,13 +468,16 @@ function prepareWorkerStop(): Promise<void> {
     // as broad best-effort shutdown; the handoff needs a strict per-session
     // acknowledgement so main never spawns a replacement over a live lease.
     await pipelineDiagnostics.flush();
-    const sessionStore = getSharedSessionStore(dbPath);
-    const location = await sessionStore.getSessionLocation(sessionId);
+    const location = await operationalSessionStore.getSessionLocation(sessionId);
     if (location) {
-      await sessionStore.repository.closeSession(location);
+      await operationalSessionStore.repository.closeSession(location);
     }
     await closeSharedCentral();
-  })();
+  })().catch(error => {
+    // Keep rejecting new runs, but let a later release retry the writer drain.
+    stopPreparation = null;
+    throw error;
+  });
   return stopPreparation;
 }
 
@@ -810,7 +814,7 @@ interface RunFreshPayload {
 bridge.handle('runFresh', async (payload) => {
   recordRpc('runFresh');
   if (stopping) {
-    throw new Error('coder-worker: worker is stopping');
+    throw new CoderWorkerStoppingError();
   }
   const opts = payload as RunFreshPayload;
   if (activeRun?.inProgress) throw new Error('coder-worker: run already in progress');
@@ -985,14 +989,17 @@ bridge.handle('interruptWait', () => {
 
 bridge.handle('pushUserMessage', async (payload) => {
   recordRpc('pushUserMessage');
-  const { content, selectedSkillIds, operationId, attachments } = payload as {
+  const { content, selectedSkillIds, operationId, attachments, runId } = payload as {
+    runId?: number;
     content: string;
     selectedSkillIds?: string[];
     operationId: string;
     attachments?: CoderAttachment[];
   };
-  const runner = activeRun?.runner;
-  if (!runner) throw new Error('coder-worker: no runner — call runFresh first');
+  const run = activeRun;
+  const runner = run?.runner;
+  if (stopping) throw new CoderWorkerStoppingError();
+  if (!run?.inProgress || !runner || (runId !== undefined && runId !== run.runId)) throw new CoderTurnEndedError();
   const store = getSharedSessionStore(dbPath);
   if (attachments?.some((attachment) => attachment.path)) {
     const roots = await store.listSessionFilesystemRoots(sessionId);
@@ -1004,6 +1011,7 @@ bridge.handle('pushUserMessage', async (payload) => {
     })));
   }
   const blocks = attachmentsToBlocks(content, attachments);
+  if (stopping || activeRun !== run || !run.inProgress) throw new CoderTurnEndedError();
   const roundMessageId = await store.appendMessage({
     session_id: sessionId,
     operation_id: operationId,
@@ -1237,6 +1245,8 @@ bridge.handle('stop', async () => {
   try { await workerDocSearch.dispose(); } catch { /* telemetry is best-effort */ }
   try { await disposeExecCommandSessions('coder-worker-stop'); } catch { /* best-effort */ }
   try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
+  // MessageBridge posts this acknowledgement before the next event-loop turn.
+  setImmediate(() => process.exit(0));
   return { ok: true };
 });
 

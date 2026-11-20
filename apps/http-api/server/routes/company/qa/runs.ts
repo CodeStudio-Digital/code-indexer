@@ -9,7 +9,7 @@
  * screenshot, video, full report) so the frontend doesn't duplicate
  * encoding logic.
  */
-import type { Hono, Context } from 'hono';
+import type { HttpRouter, HttpContext } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../../deps.js';
 import {
   parseIntQuery,
@@ -22,7 +22,7 @@ import type { QaTestResult } from '@mcp/services/qa/types.js';
 const DEFAULT_LIMIT = 50;
 const SERVICE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
-function readServiceQuery(c: Context): string | undefined {
+function readServiceQuery(c: HttpContext): string | undefined {
   const raw = c.req.query('service');
   if (!raw || raw === 'main') return undefined; // 'main' is the default; treat as unfiltered scope
   if (raw === '__all__') return undefined; // explicit "no filter" in case future UI wants it
@@ -71,7 +71,7 @@ export function enrichResultsWithUrls(
   }));
 }
 
-export function mountQaRunRoutes(app: Hono, deps: ServerDeps): void {
+export function mountQaRunRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { qaTestRunStore, qaTestResultStore } = deps;
 
   app.get('/api/company/sessions/:id/qa/runs', async (c) => {

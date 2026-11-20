@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
@@ -28,7 +28,7 @@ function setup() {
       if (session) session.thinking_enabled = enabled;
     },
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionsRoutes(
     app,
     { sessionStore, providerStore: {} } as unknown as ServerDeps,

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
 
 /**
@@ -11,8 +11,8 @@ import type { IndexerConfig } from '@mcp/shared/utils/config.js';
  * URL is read from config; `issuer` MUST be the public base URL of the
  * deployment for metadata self-consistency.
  */
-export function createWellKnownRouter(config: IndexerConfig): Hono {
-  const app = new Hono();
+export function createWellKnownRouter(config: IndexerConfig): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/.well-known/oauth-protected-resource', (c) => {
     const issuer = config.mcp.oauth.issuer || publicBaseUrl(c.req.url);

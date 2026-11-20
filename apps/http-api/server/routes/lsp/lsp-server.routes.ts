@@ -1,5 +1,5 @@
-import type { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import { createContext } from '@mcp/api-handlers/context.js';
 import type { LspApi } from '@mcp/api-bus';
 import type { ServerDeps } from '../../deps.js';
@@ -31,7 +31,7 @@ function isAngularProfileOverrideBody(value: unknown): value is AngularProfileOv
 }
 
 /** Status, installation and lifecycle routes for host-managed LSP servers. */
-export function mountLspServerRoutes(app: Hono, deps: ServerDeps, h: LspApi): void {
+export function mountLspServerRoutes(app: HttpRouter, deps: ServerDeps, h: LspApi): void {
   app.post('/api/lsp/:projectId/server-status', async (c) => {
     try {
       const projectId = parseIdParam(c, 'projectId');

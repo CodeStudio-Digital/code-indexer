@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ExportSection } from '@mcp/shared/types.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
@@ -9,7 +9,7 @@ interface ExportBody {
   outputPath?: string;
 }
 
-export function mountExportRoutes(app: Hono, deps: ServerDeps): void {
+export function mountExportRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db, exportService } = deps;
 
   app.post('/api/projects/:id/export', async (c) => {

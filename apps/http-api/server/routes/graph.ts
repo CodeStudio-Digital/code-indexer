@@ -1,8 +1,8 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
 
-export function mountGraphRoutes(app: Hono, deps: ServerDeps): void {
+export function mountGraphRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db } = deps;
 
   app.get('/api/projects/:id/dependencies', (c) => {

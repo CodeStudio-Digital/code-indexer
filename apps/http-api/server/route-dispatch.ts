@@ -1,16 +1,16 @@
 /**
- * In-process Hono dispatcher — bridges IPC channels to the existing
- * Hono routes WITHOUT opening a TCP listener.
+ * In-process HttpRouter dispatcher — bridges IPC channels to the existing
+ * HttpRouter routes WITHOUT opening a TCP listener.
  *
  * Why: extracting every namespace (admin, docs, company,
  * workspace, …) into pure handlers in `@mcp/api-handlers` would take
  * days; meanwhile, the IPC bridge needs to cover every dashboard call.
- * Hono exposes a `.fetch(Request) → Promise<Response>` API that runs
+ * HttpRouter exposes a `.fetch(Request) → Promise<Response>` API that runs
  * the entire middleware + route chain in-process. We marshal IPC
  * payloads into synthetic `Request`s, dispatch them through `app.fetch`,
  * and translate the result back to the IPC bus contract.
  *
- * Trade-off: Hono is technically still in the call stack (it parses
+ * Trade-off: HttpRouter is technically still in the call stack (it parses
  * the URL, runs middleware, etc.), but there is NO socket, NO TCP,
  * NO port — `app.fetch` is just a function call. From the operator's
  * point of view, `Get-NetTCPConnection -LocalPort 7333` returns empty.
@@ -24,19 +24,19 @@
  * the SSE stream and yields each `event:`/`data:` block as a typed frame.
  */
 
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 // Marks these dispatches as the socket-less in-process path so guards like
 // `requireTrustedLocalRequest` (SSH CRUD) don't mistake them for a remote peer.
-import { IN_PROCESS_ENV } from '@apps/http-api/server/middleware/local-origin.js';
+import { IN_PROCESS_ENV } from './middleware/local-origin.js';
 
 /**
  * Method path (dotted, as the preload proxy builds it from
  * `window.electronAPI.api.foo.bar`) → `{ method, url(input), body(input) }`.
  *
- * Each entry maps an IPC call to a concrete Hono route. The fn forms
+ * Each entry maps an IPC call to a concrete HttpRouter route. The fn forms
  * exist because some routes take ids in the path (`/projects/:id/...`)
  * and others take JSON bodies — the IPC payload shape is uniform but
- * the Hono shape isn't.
+ * the HttpRouter shape isn't.
  */
 interface DispatchSpec {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -72,7 +72,7 @@ export const STREAMING_DISPATCH_PATHS = new Set<string>([
 /**
  * The route catalogue. Each entry covers an IPC call the renderer is
  * known to make today. Adding a new dashboard call site means either:
- *   (a) adding a row here that maps to an existing Hono route, or
+ *   (a) adding a row here that maps to an existing HttpRouter route, or
  *   (b) implementing a pure handler in @mcp/api-handlers (preferred).
  *
  * Pure handlers (registered separately via `mountIpcHandlers`) shadow
@@ -206,21 +206,21 @@ function qs(i: Record<string, unknown> | undefined, keys: readonly string[]): st
 // ─── dispatcher ──────────────────────────────────────────────────
 
 /**
- * Dispatch a single IPC call via the in-process Hono app.
+ * Dispatch a single IPC call via the in-process HttpRouter app.
  * Returns the parsed JSON (or text) response, or throws an Error with
  * `code` + `status` for non-2xx responses.
  *
  * For streams use `dispatchStreaming`.
  */
-export async function dispatchHono(
-  app: Hono,
+export async function dispatchRoute(
+  app: HttpRouter,
   methodPath: string,
   input: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
   const spec = DISPATCH_TABLE[methodPath];
   if (!spec) {
-    throw new Error(`dispatcher: no Hono route mapped for "${methodPath}"`);
+    throw new Error(`dispatcher: no HttpRouter route mapped for "${methodPath}"`);
   }
   const inputObj = (input ?? undefined) as Record<string, unknown> | undefined;
   const baseRequest = buildRequest(spec, inputObj);
@@ -247,17 +247,17 @@ export async function dispatchHono(
  * caller `return()`s early, we abort the underlying fetch via signal.
  */
 export async function* dispatchStreaming(
-  app: Hono,
+  app: HttpRouter,
   methodPath: string,
   input: unknown,
   signal?: AbortSignal,
 ): AsyncGenerator<unknown, void, unknown> {
   const spec = DISPATCH_TABLE[methodPath];
   if (!spec) {
-    throw new Error(`dispatcher: no Hono route mapped for "${methodPath}"`);
+    throw new Error(`dispatcher: no HttpRouter route mapped for "${methodPath}"`);
   }
   const inputObj = (input ?? undefined) as Record<string, unknown> | undefined;
-  // Build with explicit SSE accept so any negotiation logic on the Hono
+  // Build with explicit SSE accept so any negotiation logic on the HttpRouter
   // side picks the streaming branch.
   const headers = new Headers({ accept: 'text/event-stream' });
   if (spec.body) headers.set('content-type', spec.contentType ?? 'application/json');

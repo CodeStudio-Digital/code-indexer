@@ -1,5 +1,5 @@
-import type { Context } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { HttpContext } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import {
   attachReplayTrimEnabled,
   buildAttachReplay,
@@ -35,7 +35,7 @@ interface PumpBusToSSEOptions {
 }
 
 /**
- * Shared SSE pump — pipes a CoderRunBus into the Hono stream. Extracted to
+ * Shared SSE pump — pipes a CoderRunBus into the HttpRouter stream. Extracted to
  * eliminate duplication that previously lived in company/stream.ts,
  * coder/stream.ts, and projects.ts.
  *
@@ -43,7 +43,7 @@ interface PumpBusToSSEOptions {
  * short-lived streams where the client is expected to disconnect promptly).
  */
 export function pumpBusToSSE(
-  c: Context,
+  c: HttpContext,
   bus: CoderRunBus,
   opts: PumpBusToSSEOptions = {},
 ) {
@@ -58,7 +58,7 @@ export function pumpBusToSSE(
     bus.busId,
   );
   const heartbeat = opts.heartbeat ?? true;
-  // Anti-buffering: Hono's streamSSE already sets Content-Type/Cache-Control/
+  // Anti-buffering: HttpRouter's streamSSE already sets Content-Type/Cache-Control/
   // Connection, but proxies (nginx, Vite dev http-proxy, Cloudflare) key off
   // `X-Accel-Buffering: no` to flush SSE frames immediately instead of
   // delivering tokens in bursts. Set here once so every pump consumer
@@ -199,14 +199,14 @@ export function effectiveSinceForBus(
 }
 
 /** Parse the standard `Last-Event-ID` header (returns -1 when absent/invalid). */
-export function parseLastEventId(c: Context): number {
+export function parseLastEventId(c: HttpContext): number {
   const header = c.req.header('Last-Event-ID');
   if (!header) return -1;
   const n = parseInt(header, 10);
   return Number.isFinite(n) ? n : -1;
 }
 
-function parseLastEventBusId(c: Context): string | null {
+function parseLastEventBusId(c: HttpContext): string | null {
   const header = c.req.header(LAST_EVENT_BUS_ID_HEADER)?.trim();
   return header && header.length <= 256 ? header : null;
 }

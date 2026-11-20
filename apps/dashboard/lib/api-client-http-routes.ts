@@ -1,7 +1,7 @@
 import { type DotPath } from './api-client-transport.js';
 
 /**
- * Map a dotted method path to a Hono REST endpoint (best-effort, used
+ * Map a dotted method path to an HTTP endpoint (best-effort, used
  * only in the browser fallback). Coverage is the IDE-hot subset; less
  * common methods fall through to a thrown error so we don't silently
  * shadow a missing implementation.

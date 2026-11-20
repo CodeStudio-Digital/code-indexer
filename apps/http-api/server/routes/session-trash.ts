@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import {
   SessionRootUnavailableError,
   UnsafeSessionPathError,
@@ -18,7 +18,7 @@ class TrashRequestError extends Error {
   }
 }
 
-function parseScope(c: Context): SessionStorageScope {
+function parseScope(c: HttpContext): SessionStorageScope {
   const kind = c.req.query('scope');
   const rawProjectId = c.req.query('project_id');
   if (kind === 'global' && rawProjectId === undefined) {
@@ -54,7 +54,7 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
 }
 
-function trashErrorResponse(c: Context, error: unknown, operation: 'list' | 'item'): Response {
+function trashErrorResponse(c: HttpContext, error: unknown, operation: 'list' | 'item'): Response {
   if (error instanceof TrashRequestError) {
     return c.json({ error: error.message }, error.status);
   }
@@ -85,7 +85,7 @@ function trashErrorResponse(c: Context, error: unknown, operation: 'list' | 'ite
  * POST /api/sessions/trash/:trashName/restore?...scope...
  * POST /api/sessions/trash/:trashName/purge?...scope...
  */
-export function mountSessionTrashRoutes(app: Hono, deps: SessionTrashDeps): void {
+export function mountSessionTrashRoutes(app: HttpRouter, deps: SessionTrashDeps): void {
   app.get('/api/sessions/trash', async (c) => {
     try {
       const scope = parseScope(c);

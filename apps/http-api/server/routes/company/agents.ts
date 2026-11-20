@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import {
@@ -25,7 +25,7 @@ import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.j
  * every call returns a Promise even though `CompanyOrchestrator`'s
  * signatures look synchronous — hence the `await`s below.
  */
-export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyAgentControlRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore } = deps;
 
   const filesFor = async (

@@ -159,7 +159,7 @@ const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
     MCP_DATA_DIR: devDataDir,
     MCP_MODEL_CACHE_DIR: process.env.MCP_MODEL_CACHE_DIR || path.join(devDataDir, 'models'),
     MCP_ELECTRON_DEV_URL: dashboardUrl,
-    // IPC-first: Hono HTTP listener stays OFF unless the operator
+    // IPC-first: HTTP listener stays OFF unless the operator
     // explicitly opts in (MCP_DEV_HTTP=1) to debug with curl. The
     // dashboard talks to the backend via window.electronAPI.api.* —
     // everything else is a path that needs migrating, not a fallback.

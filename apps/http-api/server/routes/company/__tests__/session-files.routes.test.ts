@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   FileSessionRepository,
@@ -44,7 +44,7 @@ async function appHarness() {
       getProject: (id) => id === project.id ? project : null,
     },
   });
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCompanyFileSessionRoutes(app, {
     operationalSessionFiles,
     db: {

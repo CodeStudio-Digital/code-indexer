@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerDeps } from '../../../deps.js';
 import { mountCoderGroupsRoutes } from '../groups.js';
@@ -22,7 +22,7 @@ function setup() {
     updateGroup: vi.fn(async () => ({ ...group, name: 'API' })),
     deleteGroup: vi.fn(async () => true),
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderGroupsRoutes(app, {
     sessionStore,
   } as unknown as ServerDeps);

@@ -3,7 +3,7 @@
  * session bundle. An archive is one immutable identity record plus
  * `archive_id` stamps on the independent operational entity files.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   evictCompanyOrchestrator,
@@ -91,7 +91,7 @@ function archiveRow(
   };
 }
 
-export function mountCompanyArchiveRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyArchiveRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.post('/api/company/sessions/:id/reset', async (c) => {
     const id = parseCompanySessionIdParam(c);
     const session = await deps.operationalSessionFiles.getCompanySession(id);

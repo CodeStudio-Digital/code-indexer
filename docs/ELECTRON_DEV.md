@@ -30,19 +30,17 @@ pnpm node:rebuild       # before running pnpm dev (Node ABI)
 2. Spawns Electron via `apps/electron/dev.ts`, which:
    - Sets `MCP_ELECTRON_DEV_URL=http://localhost:7317` so the renderer
      loads the live Vite output.
-   - Sets `MCP_DEV_HTTP=1` so the Hono server also listens on
-     `127.0.0.1:7333` in parallel with the IPC bridge. The dashboard's
-     legacy `useApi('/...')` callsites fetch via the Vite proxy →
-     `:7333`; new code uses `apiCall('namespace.method', input)` which
-     prefers IPC. Both work side by side during the migration.
+   - Defaults `MCP_DEV_HTTP` to `0`. `apiCall('namespace.method', input)`
+     prefers IPC. Path-based calls such as `useApi('/...')` go through
+     `mcp://app` to the in-process Fetch router.
    - Forwards `--import tsx/esm` so the Electron main process can
      `require` the TS files in `apps/electron/` and `apps/http-api/`
      directly.
 
-To force IPC-only (surface any callsite that still relies on HTTP) set:
+Set `MCP_DEV_HTTP=1` to open the optional Node HTTP listener on `127.0.0.1:7333` for debugging.
 
 ```bash
-MCP_DEV_HTTP=0 pnpm electron:dev
+MCP_DEV_HTTP=1 pnpm electron:dev
 ```
 
 ## Common gotchas
@@ -110,7 +108,7 @@ works on my machine" — tracked as a follow-up.
 │        └─ spawns Electron                   │
 │             ├─ main process (Node)          │
 │             │   ├─ createApp() backend      │
-│             │   ├─ Hono on 127.0.0.1:7333   │ ← MCP_DEV_HTTP=1
+│             │   ├─ HTTP on 127.0.0.1:7333   │ ← MCP_DEV_HTTP=1
 │             │   ├─ ipcMain handlers         │ ← IPC bridge
 │             │   └─ BrowserWindow            │
 │             │        └─ loadURL :7317       │

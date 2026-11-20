@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../../deps.js';
 const fixture = vi.hoisted(() => ({ content: 'first', ingest: vi.fn(), source: { id: 2, status: 'done', last_indexed_at: '2026-11-04', content_hash: 'first', uri: 'companydoc://session:company/main/adr.md' } }));
 vi.mock('../../_helpers.js', () => ({
@@ -20,7 +20,7 @@ function setup() {
     linkProjectCollection: vi.fn(), updateSourceStats: vi.fn((_id: number, patch: object) => Object.assign(fixture.source, patch)),
     listVectorIdsForSource: () => [], replaceChunksForSource: vi.fn(), deleteSemanticItemsByVectorIds: vi.fn(), updateSourceStatus: vi.fn(),
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCompanyDocsRagRoutes(app, { sessionStore: {}, docStore: store, indexDocsUseCase: { runWithSemanticCollection: async (_id: number, work: () => Promise<unknown>) => work() } } as unknown as ServerDeps);
   return { app, store };
 }

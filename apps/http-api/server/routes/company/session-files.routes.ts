@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
 import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
@@ -54,7 +54,7 @@ async function enrichedFull(
  * `CompanyStore`; every route here reads and writes only the owning bundle.
  */
 export function mountCompanyFileSessionRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   options: { includeDelete?: boolean } = {},
 ): void {

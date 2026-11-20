@@ -1,4 +1,4 @@
-import type { Context } from 'hono';
+import type { HttpContext } from '@mcp/shared/http/router.js';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 import type {
@@ -60,7 +60,7 @@ export async function isAppOwnedCompanySession(
   return (await resolveCompanyRouteRuntime(sessionStore, sessionId))?.runtimeKind === 'app_studio';
 }
 
-export function appOwnedControlPlaneConflict(c: Context, operation: string) {
+export function appOwnedControlPlaneConflict(c: HttpContext, operation: string) {
   return c.json({
     error: `App Studio has been retired. This team's ${operation} is unavailable; saved projects and history are preserved.`,
     code: 'APP_STUDIO_CONTROL_PLANE_OWNED',
@@ -70,7 +70,7 @@ export function appOwnedControlPlaneConflict(c: Context, operation: string) {
 }
 
 /** Stable 409 used by every incompatible Company mutation. */
-export function companySurfaceConflict(c: Context, surface: CompanyRouteSurface) {
+export function companySurfaceConflict(c: HttpContext, surface: CompanyRouteSurface) {
   return c.json({
     error: `Company ${surface} is unavailable for archived App Studio teams.`,
     code: 'COMPANY_SURFACE_UNAVAILABLE_FOR_APP',

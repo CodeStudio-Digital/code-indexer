@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerDeps } from '../../../deps.js';
 import { mountCoderLinkedFileRoute } from '../linked-file.js';
@@ -18,7 +18,7 @@ beforeEach(async () => {
 afterEach(async () => { await rm(temp, { recursive: true, force: true, maxRetries: 4 }); });
 
 function fixture({ worktree = null, global = false, grant = false }: { worktree?: string | null; global?: boolean; grant?: boolean } = {}) {
-  const app = new Hono();
+  const app = new HttpRouter();
   const projects = [{ id: 1, name: 'First', root_path: root }, { id: 2, name: 'Other', root_path: other }];
   mountCoderLinkedFileRoute(app, {
     db: { getProjectCatalogEntry: (pid: number) => projects.find(p => p.id === pid) },

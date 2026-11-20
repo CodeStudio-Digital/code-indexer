@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import { AGENTS, type AgentDefinition, type AgentId } from '@mcp/code-agent/agents/index.js';
 import { getAllKnownToolsMeta, profileToTiers } from '@mcp/code-agent/tools/tiers.js';
@@ -13,8 +13,8 @@ import {
   type ManagedAgentInput,
 } from '../custom-agents.js';
 
-export function customAgentsRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function customAgentsRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   const purposeTiers: Partial<Record<AgentId, readonly string[]>> = {
     app_db: ['db'],

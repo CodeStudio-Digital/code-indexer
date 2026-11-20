@@ -18,14 +18,14 @@
  *   POST   /api/admin/pipeline-bindings/bulk/clear   → wipe matching bindings
  *   POST   /api/admin/pipeline-bindings/bulk/apply   → apply one provider+model to many targets
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import type { BindingScopeType, PipelineBindingActivationInput, PipelineProfileApplyRow, PipelineProviderBindingInput } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PIPELINE_CATALOG, setupTargetsForCapability, type CapabilityKind, type PipelineCatalogEntry } from '@mcp/services/pipelines/index.js';
 import { mountPipelineBindingReadRoutes } from './pipeline-binding-read-routes.js';
 import { type UpsertBody, isValidScope, knownCatalogEntry, unknownCatalogTargetResponse, nonConfigurableCatalogEntry, bindingNotConfigurableResponse, type PatchBody, isValidCapability } from './pipeline-binding-validation.js';
 
-export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAdminPipelineBindingsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { pipelineBindingsStore, pipelineProviderResolver, providerStore } = deps;
   mountPipelineBindingReadRoutes(app, deps);
 

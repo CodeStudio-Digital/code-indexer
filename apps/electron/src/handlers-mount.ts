@@ -1,6 +1,6 @@
 /**
  * Wire the @mcp/api-handlers factory onto Electron's `ipcMain.handle`
- * + MessagePort streaming. Mirrors how Hono adapts the same handlers
+ * + MessagePort streaming. Mirrors how HttpRouter adapts the same handlers
  * to HTTP/SSE in apps/http-api/server.ts.
  *
  * Channel naming convention:
@@ -21,13 +21,13 @@
 import { ipcMain, MessageChannelMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { createHandlers, createContext } from '@mcp/api-handlers';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import {
   DISPATCH_TABLE,
   STREAMING_DISPATCH_PATHS,
-  dispatchHono,
+  dispatchRoute,
   dispatchStreaming,
-} from '@apps/http-api/server/hono-dispatch.js';
+} from '@apps/http-api/server/route-dispatch.js';
 import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
 import {
   type AnyFn,
@@ -197,7 +197,7 @@ function mountStream(channel: string, fn: AnyFn) {
  * preview resolver borrows — a second `createHandlers` would have its own,
  * empty task list and never see the dashboard's running dev servers).
  */
-export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): ReturnType<typeof createHandlers> {
+export function mountIpcHandlers(deps: ServerDeps, httpRouter?: HttpRouter): ReturnType<typeof createHandlers> {
   ensureCancelInvokeMounted();
   const handlers = createHandlers(deps);
   // The walk is shared with the (future) utilityProcess host; only what a leaf
@@ -207,11 +207,11 @@ export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): ReturnType<t
     else mountInvoke(channel, fn);
   });
 
-  // ─── Hono dispatch fallback ─────────────────────────────────
+  // ─── HttpRouter dispatch fallback ─────────────────────────────────
   //
   // Anything in the DISPATCH_TABLE that ISN'T already covered by a
   // pure handler gets a thin IPC wrapper that dispatches via
-  // `app.fetch(Request)` — same Hono routes the dev HTTP listener
+  // `app.fetch(Request)` — same HTTP routes the dev HTTP listener
   // serves, but with zero socket. The wrapper marshals the IPC payload
   // into a synthetic Request and translates the Response back into
   // either an IPC reply (Promise<T>) or an SSE-→-MessagePort stream.
@@ -219,27 +219,27 @@ export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): ReturnType<t
   // As individual namespaces get extracted to pure handlers, their
   // rows can be deleted from DISPATCH_TABLE. End state: this whole
   // block deletes itself.
-  if (honoApp) {
+  if (httpRouter) {
     for (const methodPath of Object.keys(DISPATCH_TABLE)) {
       const channel = `api:${methodPath.split('.').join(':')}`;
       if (boundChannels.has(channel)) continue;
       if (STREAMING_DISPATCH_PATHS.has(methodPath)) {
-        mountHonoStream(channel, methodPath, honoApp);
+        mountRouteStream(channel, methodPath, httpRouter);
       } else {
-        mountHonoInvoke(channel, methodPath, honoApp);
+        mountRouteInvoke(channel, methodPath, httpRouter);
       }
     }
   }
   return handlers;
 }
 
-function mountHonoInvoke(channel: string, methodPath: string, app: Hono) {
+function mountRouteInvoke(channel: string, methodPath: string, app: HttpRouter) {
   ipcMain.handle(channel, async (event, input: unknown) => {
     try {
       const result = await timeCall(channel, () => runInvoke(
         event,
         input,
-        (payload, signal) => dispatchHono(app, methodPath, payload, signal),
+        (payload, signal) => dispatchRoute(app, methodPath, payload, signal),
       ));
       return { ok: true, value: result };
     } catch (err) {
@@ -248,7 +248,7 @@ function mountHonoInvoke(channel: string, methodPath: string, app: Hono) {
   });
 }
 
-function mountHonoStream(channel: string, methodPath: string, app: Hono) {
+function mountRouteStream(channel: string, methodPath: string, app: HttpRouter) {
   ipcMain.on(`stream:${channel}`, (event: IpcMainEvent, msg: { requestId: string; payload: unknown }) => {
     startTrackedStream(event, msg.requestId, signal => dispatchStreaming(app, methodPath, msg.payload, signal));
   });

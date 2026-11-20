@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { activeOrchestrators } from './stream.js';
 import {
@@ -20,7 +20,7 @@ import { CompanySessionMessenger } from '@mcp/company/services/session-messenger
  * human respond) require the orchestrator to be loaded so the metaBus
  * gets the SSE event downstream listeners need.
  */
-export function mountCompanyInboxRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyInboxRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore } = deps;
 
   const filesFor = async (

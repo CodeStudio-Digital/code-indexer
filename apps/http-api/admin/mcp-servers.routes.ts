@@ -5,7 +5,7 @@
  * are masked; write endpoints accept the full value. The `/test` endpoint
  * connects to the MCP server, lists its tools, and disconnects.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { McpServerStore, type McpTransport, type McpAuthType, type McpDefaultTier, type McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { maskKey } from './shared/mask.js';
@@ -130,8 +130,8 @@ function publicServer(s: McpServerConfig) {
 
 export interface McpAdminRuntime { dbPath?: string; bearerResolver?: ResolveMcpBearer; }
 
-export function mcpServersRouter(runtime: McpAdminRuntime = {}): Hono {
-  const app = new Hono();
+export function mcpServersRouter(runtime: McpAdminRuntime = {}): HttpRouter {
+  const app = new HttpRouter();
 
   function getStore() {
     return new McpServerStore(runtime.dbPath ?? loadConfig().dbPath);

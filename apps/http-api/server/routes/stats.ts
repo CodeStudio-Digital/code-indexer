@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { generationMatchesEmbeddingFingerprint, NullVectorStore } from '@mcp/store/vectors.js';
 import { embedQueryForNamespace } from '@mcp/indexer/search/embeddings.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
@@ -7,7 +7,7 @@ import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
 import { timeSection } from '../perf/breakdown.js';
 
-export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountStatsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db, vectorStore, vectorStoreKind } = deps;
 
   app.get('/api/projects/:id/stats', (c) => {

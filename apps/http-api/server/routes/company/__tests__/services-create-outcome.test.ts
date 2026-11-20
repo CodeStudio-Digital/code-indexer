@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerDeps } from '../../../deps.js';
 
@@ -86,7 +86,7 @@ describe('company service creation worker outcome', () => {
         removeProject: vi.fn(async () => undefined),
       },
     } as unknown as ServerDeps;
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCompanyServicesCreateRoutes(app, deps);
 
     const response = await app.request(

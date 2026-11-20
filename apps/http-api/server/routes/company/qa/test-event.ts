@@ -24,7 +24,7 @@
  * `MetaBusPublisher` so the SSE stream pushes incremental updates with
  * zero polling.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../../deps.js';
 import { parseJsonBody, parseSessionIdParam } from '../../_helpers.js';
 import { asCompanySessionId, isUuid } from '@mcp/session-storage';
@@ -89,7 +89,7 @@ const TEST_STATUS_VALUES = new Set<QaTestStatus>([
   'interrupted',
 ]);
 
-export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
+export function mountQaTestEventRoute(app: HttpRouter, deps: ServerDeps): void {
   const { qaTestRunStore, qaTestResultStore, sessionStore } = deps;
 
   app.post('/api/company/sessions/:id/qa/test-event', async (c) => {

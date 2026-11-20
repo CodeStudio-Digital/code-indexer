@@ -6,10 +6,10 @@
  *   GET  /api/admin/counterfactuals/stats
  *   POST /api/admin/counterfactuals/:id/outcome
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 
-export function mountAdminCounterfactualRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAdminCounterfactualRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { counterfactualLogStore } = deps;
 
   app.get('/api/admin/counterfactuals', (c) => {

@@ -4,7 +4,7 @@ import type { SettingDef } from './types.js';
 export const MCP_SETTINGS: readonly SettingDef[] = [
   {
     key: 'MCP_DEV_HTTP',
-    label: 'Expose Hono dev HTTP listener',
+    label: 'Expose HTTP listener for development',
     description:
       'Binds the in-process API to 127.0.0.1:7333 so you can hit endpoints from curl / a second tool. Off by default; the IDE uses mcp:// in-process dispatch instead.',
     type: 'bool',

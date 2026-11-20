@@ -30,7 +30,7 @@ de virtualização/navegação em S4, evitando fixtures divergentes.
 npx tsx benchmarks/session-workbench/read-model.mts
 ```
 
-O benchmark monta a rota Hono em processo, consulta páginas de 100 itens sobre
+O benchmark monta a rota em processo, consulta páginas de 100 itens sobre
 os catálogos de 1.000 e 10.000 sessões e falha se o read model hidratar mais de
 100 bundles. Ele não abre o storage real nem exige reiniciar o backend ativo.
 

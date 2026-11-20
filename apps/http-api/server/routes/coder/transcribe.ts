@@ -10,7 +10,7 @@
  *   412  transcription_not_configured → no model bound (UI points to Pipelines)
  *   502  transcription_failed         → upstream STT provider error
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   createAudioTranscriber,
@@ -28,7 +28,7 @@ interface TranscribeBody {
 // a guard against a runaway/oversized POST OOMing the in-process main thread.
 const MAX_BASE64_LEN = 30 * 1024 * 1024;
 
-export function mountCoderTranscribeRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderTranscribeRoutes(app: HttpRouter, deps: ServerDeps): void {
   const transcriber = createAudioTranscriber({ resolver: deps.pipelineProviderResolver });
 
   app.post('/api/coder/transcribe', async (c) => {

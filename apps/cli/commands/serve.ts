@@ -7,7 +7,7 @@ export function register(program: Command): void {
     .action(async (opts: { port?: number }) => {
       const config = loadConfig();
       const port = opts.port ?? config.dashboard.port;
-      // Dynamic import to avoid loading Hono for CLI-only usage
+      // Load the HTTP entry point only for the serve command.
       const { startServer } = await import('../../http-api/server.js');
       await startServer(port, config.dashboard.host);
     });

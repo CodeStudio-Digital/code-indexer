@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { collectionInProject, requestInProject } from './_ownership.js';
@@ -12,7 +12,7 @@ import type { ApiRequestExample } from '@mcp/store/api-client-types.js';
  * DocModel. All project-scoped under /api/projects/:projectId/api-client.
  * Examples are RE-REDACTED server-side on write (never trust the client strip).
  */
-export function mountApiDocRoutes(app: Hono, deps: ServerDeps): void {
+export function mountApiDocRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/api-client';
 
   // ─── Guide pages ─────────────────────────────────────────────────────

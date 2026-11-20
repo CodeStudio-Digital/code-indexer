@@ -13,12 +13,13 @@
  *   - emits one event of type `tick` 50 ms after ready (verifies the
  *     event stream in both directions)
  */
-import { parentPort } from 'node:worker_threads';
+import { parentPort, workerData } from 'node:worker_threads';
 import v8 from 'node:v8';
 
 if (!parentPort) {
   throw new Error('fake-worker.mjs: not running inside a worker_thread');
 }
+if (workerData?.exitBeforeReady) process.exit(17);
 
 // We use a tiny inline bridge because importing the compiled
 // @mcp/orchestrator-host from a worker would require build artifacts
@@ -43,6 +44,7 @@ parentPort.on('message', async (msg) => {
 });
 
 async function dispatch(type, payload) {
+  if (type === 'exitSoon') { setImmediate(() => process.exit(17)); return {}; }
   if (type === 'ping') return { pong: payload?.value };
   if (type === 'heapLimit') {
     return { heapLimitMB: Math.round(v8.getHeapStatistics().heap_size_limit / 1024 / 1024) };
@@ -52,12 +54,15 @@ async function dispatch(type, payload) {
     await new Promise((r) => setTimeout(r, payload?.ms ?? 50));
     return { slept: payload?.ms };
   }
-  if (type === 'stop') return { ok: true };
+  if (type === 'stop') {
+    if (workerData?.ignoreStop) return new Promise(() => {});
+    return { ok: true };
+  }
   throw new Error(`fake-worker: unknown rpc '${type}'`);
 }
 
 // Emit `worker.ready` so WorkerHost.start() resolves.
-parentPort.postMessage({
+if (!workerData?.skipReady) parentPort.postMessage({
   kind: 'evt',
   type: 'worker.ready',
   seq: 1,

@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type CatalogEntry } from '@mcp/session-storage';
 import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
 import {
@@ -123,7 +123,7 @@ async function measure(count: number) {
     new FsSessionWorkbenchProjection(source),
     () => false,
   );
-  const app = new Hono();
+  const app = new HttpRouter();
   mountSessionWorkbenchRoutes(app, {} as ServerDeps, { service });
 
   const startedAt = performance.now();

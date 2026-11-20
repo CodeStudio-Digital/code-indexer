@@ -22,7 +22,7 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 const APP_SCHEME_ORIGINS = new Set(['mcp://app']);
 
 /**
- * Build the `origin` callback for hono's `cors()`.
+ * Build the origin allowlist callback for CORS.
  *
  * @param allowlist Extra exact-match origins from config (`mcp.http.corsOrigins`),
  *   for an operator who deliberately fronts the API with something else.

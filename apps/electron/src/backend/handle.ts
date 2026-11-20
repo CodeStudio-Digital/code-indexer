@@ -3,7 +3,7 @@
  *
  * Today there is exactly one implementation (`in-process.ts`) and it does what
  * `main.ts` has always done: `createApp()` in this very process. The point of
- * the interface is that `main.ts` stops naming `deps` / `honoApp` directly, so
+ * the interface is that `main.ts` stops naming `deps` / `httpRouter` directly, so
  * a second implementation — the backend living in a `utilityProcess` — can be
  * dropped in without touching the boot sequence.
  *
@@ -12,7 +12,6 @@
  */
 
 import type { WebContents } from 'electron';
-import type { Hono } from 'hono';
 import type { createHandlers } from '@mcp/api-handlers';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
 
@@ -29,12 +28,11 @@ export type ProcessInventoryProvider = NonNullable<ServerDeps['processInventoryP
  * compiler enumerates the remaining work.
  *
  * As of Onda 2 the users are: terminal IPC (`deps`), the OAuth loopback and the
- * IPC dispatch fallback (`honoApp`), the preview runner bridge
+ * IPC dispatch fallback (`httpRouter`), the preview runner bridge
  * (`handlers.runner` + `deps`), and shutdown.
  */
 export interface LocalBackendAccess {
   deps: ServerDeps;
-  honoApp: Hono;
   handlers: ReturnType<typeof createHandlers>;
 }
 

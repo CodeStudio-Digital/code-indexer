@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import { parseSessionIdParam } from './_helpers.js';
 import { getRecentMissingPrices } from '@mcp/code-agent/providers/pricing-cache.js';
@@ -26,7 +26,7 @@ import { getEnabledPriceSources, isRemotePriceSyncEnabled } from '@mcp/services/
  *   GET  /api/sessions/:id/telemetry/turns    → raw rows (for debug/inspect)
  *   GET  /api/sessions/:id/telemetry/attempts → physical upstream attempts
  */
-export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
+export function mountTelemetryRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, providerStore } = deps;
 
   app.get('/api/admin/telemetry/global', async (c) => {

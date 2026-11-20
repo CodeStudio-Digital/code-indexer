@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 
 const mocks = vi.hoisted(() => ({
@@ -34,7 +34,7 @@ describe('project search route', () => {
         totalTimeMs: 12,
       },
     });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSearchRoutes(app, {} as ServerDeps);
 
     const response = await app.request(
@@ -57,7 +57,7 @@ describe('project search route', () => {
 
   it('attributes an MCP search only after validating session project authority', async () => {
     mocks.project.mockResolvedValueOnce({ results: [], diagnostics: {} });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSearchRoutes(app, {
       sessionStore: {
         getSession: vi.fn(async () => ({

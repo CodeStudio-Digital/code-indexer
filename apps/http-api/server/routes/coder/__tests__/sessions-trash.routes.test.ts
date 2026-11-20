@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import type { TrashResult } from '@mcp/session-storage';
 import type { ServerDeps } from '../../../deps.js';
@@ -67,7 +67,7 @@ function setup() {
     purgeTrashedSession: vi.fn(async () => undefined),
     trashSessionsBatch: async (ids: SessionId[]) => ids.map((id) => byId.get(id)!),
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionsRoutes(
     app,
     { sessionStore, providerStore: {} } as unknown as ServerDeps,

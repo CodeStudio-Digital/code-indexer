@@ -10,7 +10,7 @@ const LOG_CAP = 20_000;
 
 /**
  * Drives `system.podmanMachineSetupStream` over the in-process IPC stream
- * (not SSE — there's no Hono route for it). Completes on the terminal
+ * (not SSE — there's no HTTP route for it). Completes on the terminal
  * `done`/`error` frame; `cancel()` returns the iterator (aborts the host child).
  */
 export function useMachineSetupStream() {

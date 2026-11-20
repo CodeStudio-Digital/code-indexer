@@ -1,5 +1,5 @@
-import type { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { bodyLimit } from '@mcp/shared/http/middleware.js';
 import { parsePostmanCollection } from '@mcp/services/api-client/import-postman.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
@@ -14,7 +14,7 @@ import type { ApiCollection, CreateRequestInput } from '@mcp/store/api-client-ty
  * Import a request from a curl/bash command, and export a collection to Postman
  * v2.1 / OpenAPI 3.1 JSON. OpenAPI *spec* import stays in regression.routes.ts.
  */
-export function mountApiImportRoutes(app: Hono, deps: ServerDeps): void {
+export function mountApiImportRoutes(app: HttpRouter, deps: ServerDeps): void {
   // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 

@@ -1,5 +1,5 @@
-import type { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import type { ServerDeps } from '../deps.js';
 import { attachHeartbeat } from '../../sse/SSEHeartbeat.js';
 import {
@@ -52,7 +52,7 @@ type NotificationRouteDeps = Pick<ServerDeps, 'sessionStore' | 'db'> & {
  * A cold connection starts at the current high-water mark; reconnects replay
  * only the bounded notification ring after Last-Event-ID.
  */
-export function mountNotificationRoutes(app: Hono, deps: NotificationRouteDeps): void {
+export function mountNotificationRoutes(app: HttpRouter, deps: NotificationRouteDeps): void {
   app.get('/api/notifications/stream', (c) => {
     const requestedCursor = parseCursor(c.req.header('Last-Event-ID'));
     return streamSSE(c, async (stream) => {

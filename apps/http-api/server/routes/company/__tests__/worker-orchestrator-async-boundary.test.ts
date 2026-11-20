@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { asCompanySessionId } from '@mcp/session-storage';
 import type { ServerDeps } from '../../../deps.js';
@@ -95,7 +95,7 @@ describe('worker-backed Company RPC boundaries', () => {
     };
     H.getActive.mockReturnValue(orchestrator);
 
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCompanyInboxRoutes(app, {
       sessionStore: {
         ensureCatalog: vi.fn(async () => undefined),
@@ -165,7 +165,7 @@ describe('worker-backed Company RPC boundaries', () => {
       }),
     };
     H.getActive.mockReturnValue(null);
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCompanyChildRoutes(app, {
       operationalSessionFiles,
     } as unknown as ServerDeps);
@@ -207,7 +207,7 @@ describe('worker-backed Company RPC boundaries', () => {
       orchestrator: { dispatchCard },
       bus: {},
     });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCompanyKanbanDispatchRoutes(app, {
       sessionStore: {
         ensureCatalog: vi.fn(async () => undefined),

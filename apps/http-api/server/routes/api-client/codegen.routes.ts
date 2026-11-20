@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { requestInProject, resolveScopedEnv } from './_ownership.js';
@@ -11,7 +11,7 @@ import { buildCodegenRequest, generate, isCodegenTarget, languageFor, type Codeg
  * and can optionally resolve env vars (secrets stay server-side; the client gets
  * a `containsSecrets` flag to warn before copying).
  */
-export function mountApiCodegenRoute(app: Hono, deps: ServerDeps): void {
+export function mountApiCodegenRoute(app: HttpRouter, deps: ServerDeps): void {
   // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 

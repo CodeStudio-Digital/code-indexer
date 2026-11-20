@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import {
   asSessionId,
   newSessionId,
@@ -63,7 +63,7 @@ function fixture(status: 'idle' | 'running' = 'idle') {
     },
     listBaselines: () => baselines.slice(),
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderFilesystemRootRoutes(app, {
     sessionStore,
     db: { getProject: (id: number) => id === 10 ? { root_path: projectRoot } : null },

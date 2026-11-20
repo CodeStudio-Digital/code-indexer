@@ -1,8 +1,8 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 
-export function bedrockOAuthRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function bedrockOAuthRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
   app.post('/oauth/bedrock/credentials', async c => {
     const body = await c.req.json<{
       provider_id?: string; method?: 'default' | 'iam' | 'api-key'; access_key_id?: string;

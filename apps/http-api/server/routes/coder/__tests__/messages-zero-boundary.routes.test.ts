@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
@@ -19,7 +19,7 @@ describe('coder archived message pagination', () => {
   it('rejects the retired recent-sessions path before accessing storage and keeps globals available', async () => {
     const loadSessionWithMessages = vi.fn();
     const listGlobalSessions = vi.fn(async () => [{ id: SESSION_ID }]);
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderSessionsRoutes(
       app,
       { sessionStore: { loadSessionWithMessages, listGlobalSessions }, providerStore: {} } as unknown as ServerDeps,
@@ -47,7 +47,7 @@ describe('coder archived message pagination', () => {
         return { messages: [], message_rows: [], next_cursor: 17 };
       },
     };
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderSessionsRoutes(
       app,
       { sessionStore, providerStore: {} } as unknown as ServerDeps,
@@ -81,7 +81,7 @@ describe('coder archived message pagination', () => {
       getArchivedMessageCount: () => 19,
       previousUserMessageSeq: (_sessionId: SessionId, beforeSeq: number) => beforeSeq === 20 ? 11 : null,
     };
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderSessionsRoutes(
       app,
       { sessionStore, providerStore: {} } as unknown as ServerDeps,

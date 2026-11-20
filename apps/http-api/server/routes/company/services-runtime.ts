@@ -9,7 +9,7 @@
  * unpause / logs / restart-dev live in `service-lifecycle.ts` (the
  * lower-level routes that don't need to know about retry semantics).
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -34,7 +34,7 @@ import type {
   CompanySessionFileSnapshot,
 } from '@mcp/company/services/CompanySessionFiles.js';
 
-export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyServicesRuntimeRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
 
   function rejectIfAttached(

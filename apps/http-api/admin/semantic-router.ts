@@ -1,6 +1,6 @@
 import { type EmbeddingTarget, type RerankerTarget, type SemanticCapability, type SemanticPurpose } from '@mcp/store/semantic-store.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { type SemanticAdminRuntime, type SemanticRerankerStatus } from './semantic-admin-types.js';
 import { SemanticReindexDispatcher } from './semantic-reindex-dispatcher.js';
 import { isPurpose, normalizeEmbeddingTarget, normalizeRerankerTarget, assertHeavyFp32Confirmed, requireSuccessfulProbe, syncDetectedModels, catalogId, probeFingerprint, targetProvider, targetModel, catalogProbeFingerprint } from './semantic-target-validation.js';
@@ -42,8 +42,8 @@ async function readRerankerStatus(
 export function semanticRouter(
   providers: ProviderStore,
   runtime: SemanticAdminRuntime,
-): Hono {
-  const app = new Hono();
+): HttpRouter {
+  const app = new HttpRouter();
   const reindexDispatcher = new SemanticReindexDispatcher(runtime);
 
   app.put('/semantic/projects/:id/targets', async (c) => {

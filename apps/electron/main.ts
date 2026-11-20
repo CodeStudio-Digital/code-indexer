@@ -6,7 +6,7 @@
  * Flow on startup:
  *   1. `createBackend()` returns a `BackendHandle` (src/backend/handle.ts).
  *      Today the only implementation boots the full deps graph (SQLite,
- *      providers, stores) in THIS process — same `createDeps` the Hono server
+ *      providers, stores) in THIS process — same `createDeps` the HTTP server
  *      uses, minus `serve()`. Selected by `MCP_BACKEND_PROCESS`.
  *   2. `backend.attachRenderer()` wires every handler in @mcp/api-handlers to
  *      `ipcMain.handle('api:<namespace>:<method>', …)`. Streaming methods
@@ -163,8 +163,8 @@ app.commandLine.appendSwitch('js-flags', `--max-old-space-size=${maxOldSpaceMb}`
 // ─── Custom protocol for in-process backend ──────────────────────
 //
 // `mcp://app/api/...` is intercepted in the main process and dispatched
-// directly to `honoApp.fetch(Request)`. The renderer keeps using a
-// plain `fetch()` call — there is NO socket, NO loopback, NO Hono dev
+// directly to `httpRouter.fetch(Request)`. The renderer keeps using a
+// plain `fetch()` call — there is NO socket, NO loopback, NO HTTP dev
 // listener required for the dashboard to talk to its backend.
 //
 // `installFetchBase` (dashboard side) rewrites the relative `/api/*`
@@ -249,7 +249,7 @@ async function bootstrap() {
   // otherwise, and it does not block the normal boot below.
   runBackendSpike();
 
-  // Boot the backend in-process. The Hono app is built but not served
+  // Boot the backend in-process. The HTTP router is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl
   // the same backend from outside the Electron window for debugging.
   const backend = createBackend();
@@ -257,7 +257,7 @@ async function bootstrap() {
   // `local` is non-null only while the backend shares this process. Everything
   // read through it is coupling that becomes a control-bridge RPC when the
   // backend moves into a utilityProcess — see backend/handle.ts.
-  const { deps, honoApp } = backend.local!;
+  const { deps } = backend.local!;
 
   // Perf monitor: hand the backend the Electron process tree
   // (GPU/renderer/utility working sets — what Task Manager shows).
@@ -307,10 +307,10 @@ async function bootstrap() {
   // main window loads so the CSP header applies to the document.
   installGlobalHardening(pathToFileURL(path.join(__dirname, '../../dashboard/index.html')).href);
 
-  // Pass the Hono app so handlers-mount can register a fallback for
+  // Pass the HTTP router so handlers-mount can register a fallback for
   // every IPC channel not yet covered by a pure handler in
   // @mcp/api-handlers. The fallback dispatches via `app.fetch(Request)`
-  // in-process — same routes, zero port. See hono-dispatch.ts.
+  // in-process — same routes, zero port. See route-dispatch.ts.
   backend.attachRenderer();
   const handlers = backend.local!.handlers;
   mountTerminalIpc(deps);
@@ -732,7 +732,7 @@ function registerNativeIpc() {
 /**
  * Install the `mcp://` URL handler. Every renderer-side `fetch('mcp://app/api/...')`
  * lands here, gets translated into an `http://internal/api/...` Request,
- * and is dispatched through the in-process Hono app. The Response
+ * and is dispatched through the in-process HTTP router. The Response
  * (including streaming body for SSE) is returned verbatim to the
  * renderer, so caller code that expects `await fetch(...)` + ReadableStream
  * behaves identically to talking to a real HTTP server — except there
@@ -742,9 +742,9 @@ function registerMcpProtocol(dispatch: BackendDispatch) {
   protocol.handle('mcp', async (req) => {
     try {
       const url = new URL(req.url);
-      // Reconstruct the Hono-side URL. Pathname carries `/api/...`,
+      // Reconstruct the internal URL. Pathname carries `/api/...`,
       // search carries the query string. Authority is irrelevant —
-      // Hono routes match on pathname only.
+      // HTTP routes match on pathname only.
       const honoUrl = `http://internal${url.pathname}${url.search}`;
       // GET/HEAD have no body in the spec; passing one (even null) makes
       // the WHATWG Request constructor throw.
@@ -754,11 +754,11 @@ function registerMcpProtocol(dispatch: BackendDispatch) {
         headers: req.headers,
         body: hasBody ? req.body : undefined,
         // Preserve renderer cancellation/navigation. Without this bridge the
-        // custom protocol detached Hono work from the originating fetch, so a
+        // custom protocol detached route work from the originating fetch, so a
         // reload could leave expensive snapshot/session reads running in main.
         signal: req.signal,
         // duplex: 'half' is required when streaming a Request body in
-        // Node 18+'s undici impl. Hono routes consume the body eagerly
+        // Node 18+'s undici impl. HTTP routes consume the body eagerly
         // (await c.req.json()), so this is harmless but technically
         // required by the spec when body is a ReadableStream.
         duplex: hasBody ? 'half' : undefined,

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { asSessionId, type SessionId } from '@mcp/session-storage';
 import { mountSnapshotReviewRoutes } from '@apps/http-api/server/routes/snapshot-review-routes.js';
@@ -83,7 +83,7 @@ async function setup() {
 }
 
 async function postSubmit(
-  app: Hono,
+  app: HttpRouter,
   scope: 'coder' | 'company',
   sessionId: SessionId,
   commentIds: string[],
@@ -109,7 +109,7 @@ describe('snapshot review /submit delivery', () => {
     const deliverMessage = vi.fn(
       (_sessionId: SessionId, _message: string) => ({ ok: true as const }),
     );
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSnapshotReviewRoutes(app, ctx.deps, {
       scope: 'company',
       listCoderSessionIds: () => [ctx.session.id],
@@ -142,7 +142,7 @@ describe('snapshot review /submit delivery', () => {
         pending: 'interactive_wait' as const,
       }),
     );
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSnapshotReviewRoutes(app, ctx.deps, {
       scope: 'company',
       listCoderSessionIds: () => [ctx.session.id],
@@ -162,7 +162,7 @@ describe('snapshot review /submit delivery', () => {
   });
 
   it('coder scope does not server-deliver (no deliverMessage hook)', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSnapshotReviewRoutes(app, ctx.deps, { scope: 'coder' });
 
     const { status, body } = await postSubmit(app, 'coder', ctx.session.id, [ctx.comment.id]);

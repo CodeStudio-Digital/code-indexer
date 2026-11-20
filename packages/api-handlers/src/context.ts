@@ -1,6 +1,6 @@
 /**
  * Helpers for constructing `ApiContext` instances inside the transport
- * adapters (Hono routes, Electron `ipcMain.handle`, tests).
+ * adapters (HTTP routes, Electron `ipcMain.handle`, tests).
  *
  * Handlers never construct context themselves — they receive it.
  */

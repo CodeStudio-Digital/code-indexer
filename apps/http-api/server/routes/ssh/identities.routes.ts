@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { identityInProject } from './_ownership.js';
@@ -8,7 +8,7 @@ import type { CreateSshIdentityInput, SshIdentityPatch } from '@mcp/store/ssh-st
  * CRUD for reusable SSH identities (migration 173) — a credential (key or
  * password) + default username shared across hosts. Project-scoped.
  */
-export function mountSshIdentityRoutes(app: Hono, deps: ServerDeps): void {
+export function mountSshIdentityRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/ssh';
 
   app.get(`${base}/identities`, (c) => {

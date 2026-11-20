@@ -17,8 +17,8 @@
  * frame. A future revision can stream per-tool-call events by attaching
  * to the runner's EventEmitter.
  */
-import type { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseIdParam,
@@ -41,7 +41,7 @@ interface ResearchBody {
 }
 
 export function mountDocsAgentRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   bridge: DocsResearchBridge,
 ): void {

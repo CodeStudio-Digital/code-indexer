@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 
 vi.mock('../../apps/http-api/sse/coderWorkerPoolSingleton.js', () => ({
   getCoderWorkerPool: () => ({
@@ -38,7 +38,7 @@ function sessionWithRows(rows: Array<{ role: string; content_json: string }> = [
 }
 
 function mount(data: unknown) {
-  const app = new Hono();
+  const app = new HttpRouter();
   const session = (data as { session?: Record<string, unknown> } | null)?.session ?? null;
   const generateSessionTitle = vi.fn(
     async (_input: { userMessage: string }): Promise<{
@@ -70,7 +70,7 @@ function mount(data: unknown) {
   return { app, sessionStore, generateSessionTitle };
 }
 
-async function postGenerateTitle(app: Hono, body: unknown) {
+async function postGenerateTitle(app: HttpRouter, body: unknown) {
   return app.request(`/api/coder/sessions/${SESSION_ID}/generate-title`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

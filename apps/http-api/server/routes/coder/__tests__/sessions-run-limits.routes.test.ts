@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import {
   asSessionId,
   type SessionId,
@@ -44,7 +44,7 @@ function setup() {
     getSession: (id: SessionId) => id === SESSION_ID ? session : null,
     setSessionRunLimits,
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionsRoutes(
     app,
     {

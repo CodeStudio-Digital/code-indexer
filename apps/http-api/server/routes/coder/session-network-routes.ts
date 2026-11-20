@@ -1,11 +1,11 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import type { SessionNetwork } from '@mcp/code-agent/runtime/session-network.js';
 import type { ChatSpawnInput, ChatTrigger } from '@mcp/session-storage/collaboration/network-types.js';
 import { rootChatId } from '@mcp/session-storage/collaboration/store.js';
 import { parseJsonBody, parseSessionIdParam } from '../_helpers.js';
 
-export function mountSessionNetworkRoutes(app: Hono, deps: ServerDeps, network: SessionNetwork, ready: Promise<void>) {
+export function mountSessionNetworkRoutes(app: HttpRouter, deps: ServerDeps, network: SessionNetwork, ready: Promise<void>) {
   const base = '/api/coder/sessions/:id/collaboration';
   app.get(`${base}/settings`, async c => { await ready; return c.json(await network.config(parseSessionIdParam(c))); });
   app.put(`${base}/settings`, async c => {

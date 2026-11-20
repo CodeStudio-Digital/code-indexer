@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
-import { serve } from '@hono/node-server';
-import { Hono } from 'hono';
+import { listenHttp } from '@mcp/shared/http/node-server.js';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId } from '@mcp/session-storage';
 import type { ServerDeps } from '../../apps/http-api/server/deps.js';
 import { mountSessionWorkbenchRoutes } from '../../apps/http-api/server/routes/coder/session-workbench/routes.js';
@@ -99,7 +99,7 @@ function assertStatus(response: Response, expected: number, label: string): void
   }
 }
 
-const app = new Hono();
+const app = new HttpRouter();
 mountSessionWorkbenchRoutes(app, {} as ServerDeps, {
   service: {
     listSessions: async () => listResponse,
@@ -113,7 +113,7 @@ mountSessionWorkbenchRoutes(app, {} as ServerDeps, {
   },
 });
 
-const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 });
+const server = listenHttp({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 });
 
 try {
   if (!server.listening) {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { companyFixture } from '@mcp/company/services/__tests__/company-multisession-fixture.js';
 import { DispatchClaims } from '@mcp/company/services/scheduler/dispatch-claims.js';
@@ -21,7 +21,7 @@ async function fixture() {
   const ownerFiles = f.files(f.child.id);
   const run = await ownerFiles.createAgentRun({ id: claim.agentRunId, role: 'frontend', coder_session_id: randomUUID(), provider: 'fixture', model: 'fixture', project_ids: [7], status: 'error' });
   files.assignKanbanAgentSync(card.id, run.id, run.role);
-  const app = new Hono(); mountCompanyKanbanDispatchRoutes(app, f as never);
+  const app = new HttpRouter(); mountCompanyKanbanDispatchRoutes(app, f as never);
   const path = `/api/company/sessions/${f.company.id}/kanban/cards/${card.id}/dispatch-review`;
   const post = (body: Record<string, unknown> = { reviewed: true, token: claim.token, epoch: claim.epoch }) => app.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   return { ...f, files, ownerFiles, card, claims, claim, run, app, path, post };

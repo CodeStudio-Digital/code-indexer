@@ -7,7 +7,7 @@
  * docs/index.ts (`markUnbuffered`).
  */
 import { afterEach, describe, it, expect } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { createBus, markEnded, publish } from '../../coder-bus.js';
 import { pumpBusToSSE } from '../pumpBusToSSE.js';
 
@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe('pumpBusToSSE response headers', () => {
   it('sets X-Accel-Buffering: no on the SSE response', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     const bus = createBus(new AbortController());
     app.get('/sse', (c) => pumpBusToSSE(c, bus, { heartbeat: false }));
     const res = await app.request('/sse');
@@ -28,7 +28,7 @@ describe('pumpBusToSSE response headers', () => {
   });
 
   it('still emits the bus_info preamble with dropped_replay_events', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     const bus = createBus(new AbortController());
     publish(bus, 'text', { delta: 'hi' });
     app.get('/sse', (c) => pumpBusToSSE(c, bus, { heartbeat: false }));
@@ -43,7 +43,7 @@ describe('pumpBusToSSE response headers', () => {
   });
 
   it('synthesizes one terminal frame when markEnded had no published terminal row', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     const bus = createBus(new AbortController());
     publish(bus, 'text', { text: 'complete' });
     markEnded(bus, 'done', { reason: 'completed' });
@@ -56,7 +56,7 @@ describe('pumpBusToSSE response headers', () => {
   });
 
   it('does not duplicate a terminal row that was already published', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     const bus = createBus(new AbortController());
     publish(bus, 'done', { reason: 'completed' });
     markEnded(bus, 'done', { reason: 'completed' });
@@ -67,7 +67,7 @@ describe('pumpBusToSSE response headers', () => {
   });
 
   it('applies a cursor only when it is paired with the current bus id', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     const bus = createBus(new AbortController());
     publish(bus, 'text', { text: 'zero' });
     publish(bus, 'text', { text: 'one' });
@@ -94,7 +94,7 @@ describe('pumpBusToSSE response headers', () => {
   });
 
   it('uses bounded semantic replay for a cursorless coder attach by default', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     const bus = createBus(new AbortController());
     publish(bus, 'text', { text: 'persisted-old-delta' }); // seq 0, omitted
     publish(bus, 'message_complete', { usage: {} }); // seq 1, boundary
@@ -114,7 +114,7 @@ describe('pumpBusToSSE response headers', () => {
 
   it('keeps bounded replay when the retired compatibility opt-out is set', async () => {
     process.env.CODER_ATTACH_REPLAY_TRIM = '0';
-    const app = new Hono();
+    const app = new HttpRouter();
     const bus = createBus(new AbortController());
     publish(bus, 'text', { text: 'persisted-old-delta' }); // seq 0
     publish(bus, 'message_complete', { usage: {} }); // seq 1

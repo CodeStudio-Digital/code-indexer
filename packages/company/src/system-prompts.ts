@@ -68,7 +68,7 @@ export interface MasterPromptContext {
      * Full systemPromptOverride for this role. Rendered (truncated) into
      * the master's YOUR TEAM section so the master knows each role's
      * specialty — without this, "cloudflare" is just a role name and the
-     * master would hallucinate Node/Express instead of Workers/Hono/D1.
+     * master would hallucinate Node/Express instead of Workers/D1.
      */
     systemPromptOverride?: string;
   }>;

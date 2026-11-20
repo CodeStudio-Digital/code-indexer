@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mountAgentMemorySemanticRoutes, memorySemanticFailureCode } from '../agent-memory-semantic.js';
 import type { ServerDeps } from '../../deps.js';
 
@@ -15,7 +15,7 @@ function fixture(kind = 'provider') {
       getNamespaceBuildRetry: () => null, listJobs: vi.fn(() => [] as Array<{error:string}>),
       getJob: vi.fn(() => ({id:1,status:'pending'})), updateJob: vi.fn(), noteNamespaceMutation: vi.fn(() => ({id:1})) },
     semanticCoordinator: { ensureMemoryNamespace: vi.fn(() => wait) } };
-  const app = new Hono(); mountAgentMemorySemanticRoutes(app, deps as unknown as ServerDeps);
+  const app = new HttpRouter(); mountAgentMemorySemanticRoutes(app, deps as unknown as ServerDeps);
   return { app, deps, finish };
 }
 const post = (body: unknown) => ({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});

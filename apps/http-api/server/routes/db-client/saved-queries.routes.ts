@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { savedQueryInProject, connectionInProject } from './_ownership.js';
@@ -7,7 +7,7 @@ import type { CreateDbSavedQueryInput, DbSavedQueryPatch } from '@mcp/store/db-c
 /**
  * CRUD for named, reusable queries (migration 174), project-scoped.
  */
-export function mountDbSavedQueryRoutes(app: Hono, deps: ServerDeps): void {
+export function mountDbSavedQueryRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/db-client';
 
   app.get(`${base}/saved-queries`, (c) => {

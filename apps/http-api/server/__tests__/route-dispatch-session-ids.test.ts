@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DISPATCH_TABLE } from '../hono-dispatch.js';
+import { DISPATCH_TABLE } from '../route-dispatch.js';
 
 const SESSION_ID = '10000000-0000-4000-8000-000000000001';
 
-describe('Hono IPC session dispatch', () => {
+describe('IPC session route dispatch', () => {
   it('keeps coder and Company session UUIDs opaque in route paths', () => {
     expect(
       DISPATCH_TABLE['coder.stream.sendMessage'].url({

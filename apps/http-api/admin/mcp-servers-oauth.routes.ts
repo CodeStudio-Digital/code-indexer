@@ -9,7 +9,7 @@
  * Mounted on top of the existing `mcpServersRouter` (migration 015) —
  * this router only adds the new OAuth-specific paths.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { McpClientAuthBundle } from '@mcp/services/mcp-client/auth/composition.js';
 import type { AuthorizationServerMetadata } from '@mcp/services/mcp-client/auth/domain/authorization-server.js';
 import { authorizationMetadataWire, resourceMetadataWire, parseAuthorizationMetadata } from './mcp-oauth-metadata.js';
@@ -24,8 +24,8 @@ import {
 export function createMcpServersOauthRouter(
   bundle: McpClientAuthBundle,
   publicBaseUrl: () => string,
-): Hono {
-  const app = new Hono();
+): HttpRouter {
+  const app = new HttpRouter();
   const attempts = new McpOAuthAttempts();
 
   function redirectUriFor(serverId: string): string {

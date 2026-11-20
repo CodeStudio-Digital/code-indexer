@@ -11,7 +11,7 @@
  * synchronous — it reads a frame the collector already assembled and never
  * awaits a worker — so it stays pollable at 1-2s.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import {
   buildProcessSnapshot,
   type ProcessSnapshotSources,
@@ -23,7 +23,7 @@ type ProcessRoutesDeps = ProcessSnapshotSources;
 
 const DEFAULT_INTERVAL_MS = 2_000;
 
-export function mountProcessRoutes(app: Hono, deps: ProcessRoutesDeps): void {
+export function mountProcessRoutes(app: HttpRouter, deps: ProcessRoutesDeps): void {
   app.get('/api/admin/processes', (c) => {
     const intervalMs = Number(c.req.query('intervalMs')) || DEFAULT_INTERVAL_MS;
     const snapshot = buildProcessSnapshot(deps, intervalMs);

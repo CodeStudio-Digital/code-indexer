@@ -22,7 +22,7 @@ assembled and edited, see [PROMPTS.md](PROMPTS.md).
 │  ─ React 19 + Vite      │    │  ─ Pure handler factories         │
 │  ─ Tailwind + Radix     │    │  ─ Throw ApiError on typed faults │
 │  ─ Zustand state slices │    │  ─ AsyncIterable<T> for streams   │
-│  ─ apiCall / apiStream  │    │  ─ Mounted by ipcMain AND Hono    │
+│  ─ apiCall / apiStream  │    │  ─ Used by IPC and Fetch routes   │
 └─────────────┬───────────┘    └────┬──────────────────────────────┘
               │                     │
               │                     ▼
@@ -36,7 +36,7 @@ assembled and edited, see [PROMPTS.md](PROMPTS.md).
               │   └────────────────────────────────────────────────┘
               │
               │   ┌────────────────────────────────────────────────┐
-              │   │  apps/http-api (Hono)                          │
+              │   │  apps/http-api (Fetch routes)                  │
               │   │  ─ Thin adapter: parses request → calls handler│
               │   │  ─ Only listens when MCP_DEV_HTTP=1            │
               │   │    or running standalone (`pnpm start:api`)     │
@@ -49,13 +49,10 @@ assembled and edited, see [PROMPTS.md](PROMPTS.md).
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-The big decision: **the API surface is one set of pure handlers**.
-Hono routes are an adapter; Electron's IPC is an adapter; tests call
-handlers directly. Adding a new operation means adding a method to the
-`api-bus` interface, implementing it in `api-handlers`, and (optionally)
-mapping it to an HTTP route. The renderer reaches it via
-`window.electronAPI.api.<namespace>.<method>(input)` with full type
-coverage thanks to the bus.
+Define typed desktop operations in `api-bus` and implement them in
+`api-handlers`. Electron binds the handlers to IPC channels. Fetch routes can
+call those same handlers when an operation needs to be available to browsers
+or external clients.
 
 ## Namespaces
 
@@ -90,9 +87,8 @@ appropriate:
   renderer (`webContents.postMessage`) and pumps frames over
   `port.postMessage`. The renderer wraps the port as an
   `AsyncIterable<T>` so the React side never sees the transport.
-- **Hono**: streams are framed as SSE (`text/event-stream`) using
-  Hono's `streamSSE` helper, with the same handler doing the
-  iteration.
+- **Fetch routes** frame events as SSE (`text/event-stream`) with
+  `streamSSE` in `packages/shared/src/http`.
 
 This is why `projects.indexStream` and `terminal.output` and (eventually)
 `coder.stream.sendMessage` all look the same from the React side:
@@ -149,26 +145,16 @@ The Electron build embeds the SQLite native binary via `asarUnpack`
 Native ABI is rebuilt by `pnpm electron:rebuild` — necessary because
 Electron's bundled Node uses a different ABI than the system Node.
 
-## Why not just keep HTTP?
+## HTTP entry points
 
-The original dashboard used `fetch('/api/...')` against the Hono backend
-on `:7333` (via Vite proxy in dev). Inside Electron that's an
-unnecessary loopback hop — serialization, TCP, proxy buffering. Worse:
-the Vite proxy was eating SSE flushes intermittently, which surfaced as
-"chat stuck on iniciando" for the user.
+Electron dispatches path-based renderer calls through `mcp://app` to the
+Fetch router in its main process. `pnpm dev` and `pnpm start:api` serve those
+routes over `node:http`. Electron can open a loopback listener for debugging
+with `MCP_DEV_HTTP=1` and an ephemeral listener for browser OAuth callbacks.
 
-The IPC path:
-- Zero JSON-on-the-wire overhead for streams (MessagePort transfers
-  structured-cloned values directly).
-- Zero spawn cost — the backend lives in the same process as the
-  window.
-- Zero exposed network surface — production builds don't open
-  127.0.0.1:7333.
-
-Hono still exists because: (a) `pnpm dev` (browser only) needs it,
-(b) the standalone API server (`pnpm start:api`) is the integration
-surface for external MCP clients, (c) `MCP_DEV_HTTP=1` makes debugging
-with curl trivial.
+The MCP integration uses the SDK's Web Standard HTTP and stdio transports.
+The pnpm overrides remove the SDK dependencies that were used by its separate
+Node HTTP adapter.
 
 ## Auth + billing (planned)
 

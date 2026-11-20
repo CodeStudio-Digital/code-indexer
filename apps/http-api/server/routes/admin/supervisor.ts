@@ -14,8 +14,8 @@
  * Persisted incidents are read from each Company session bundle
  * (survive worker eviction / process restart without touching SQLite).
  */
-import type { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import {
   FileSupervisionPersistence,
   supervisorEnabled,
@@ -77,7 +77,7 @@ class IncidentReader {
   }
 }
 
-export function mountSupervisorAdminRoutes(app: Hono, deps: SupervisorAdminDeps): void {
+export function mountSupervisorAdminRoutes(app: HttpRouter, deps: SupervisorAdminDeps): void {
   const incidentReader = new IncidentReader(deps.sessionStore);
 
   // GET /status — aggregated across all active workers
@@ -184,7 +184,7 @@ export function mountSupervisorAdminRoutes(app: Hono, deps: SupervisorAdminDeps)
         if (Number.isFinite(sinceMs) && env.detectedAtMs <= sinceMs) continue;
         await send(env);
       }
-      // Hold the stream open until the client disconnects. Hono's
+      // Hold the stream open until the client disconnects. HttpRouter's
       // streamSSE awaits this async function; we await a never-resolving
       // promise + clean up in onClose.
       await new Promise<void>((resolve) => {

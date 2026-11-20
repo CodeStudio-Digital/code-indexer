@@ -5,7 +5,7 @@
  * root bundle shared by all child sessions. Public session/card/run ids are
  * opaque UUIDs throughout.
  */
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
@@ -35,13 +35,13 @@ interface ResolvedKanbanSession {
 }
 
 export function mountCompanyKanbanDispatchRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
 ): void {
   const { sessionStore } = deps;
 
   const resolveSession = async (
-    c: Context,
+    c: HttpContext,
   ): Promise<ResolvedKanbanSession | null> => {
     const requestedId = parseCompanySessionIdParam(c);
     await sessionStore.ensureCatalog();

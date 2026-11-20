@@ -1,6 +1,6 @@
 /** Local acceptance server: real filesystem sessions/routes, no provider execution. */
-import { Hono } from 'hono';
-import { serve } from '@hono/node-server';
+import { HttpRouter } from '@mcp/shared/http/router.js';
+import { listenHttp } from '@mcp/shared/http/node-server.js';
 import { mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
@@ -18,7 +18,7 @@ const sessions = FsSessionStore.fromRoots({ dataDir, projectRootResolver: {
 } });
 const mailbox = new ChatCollaborationStore(dataDir);
 await mailbox.init();
-const app = new Hono();
+const app = new HttpRouter();
 app.get('/__fixture/health', c => c.json({ ok: true }));
 app.post('/__fixture/network', async c => {
   const create = (title: string) => sessions.createSession({ project_id: 1, title, provider: 'fixture', model: 'fixture' });
@@ -35,7 +35,7 @@ mountChatCollaborationRoutes(app, {
   // Automatic admission is intentionally impossible even if a test submits work.
   findPendingInteraction: async () => ({ kind: 'fixture-no-provider' }),
 } as never);
-const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: Number(process.env.CODESTUDIO_E2E_API_PORT ?? 7349) });
+const server = listenHttp({ fetch: app.fetch, hostname: '127.0.0.1', port: Number(process.env.CODESTUDIO_E2E_API_PORT ?? 7349) });
 const shutdown = async () => { await runShutdownTasks(); await sessions.close(); server.close(); };
 process.once('SIGTERM', () => void shutdown()); process.once('SIGINT', () => void shutdown());
 console.log(JSON.stringify({ ready: true, pid: process.pid, port: server.address() }));

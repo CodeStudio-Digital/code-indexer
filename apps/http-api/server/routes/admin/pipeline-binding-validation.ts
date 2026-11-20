@@ -20,7 +20,7 @@ import { PIPELINE_CATALOG, type CapabilityKind, type PipelineCatalogEntry } from
  *   POST   /api/admin/pipeline-bindings/bulk/clear   → wipe matching bindings
  *   POST   /api/admin/pipeline-bindings/bulk/apply   → apply one provider+model to many targets
  */
-import type { Context } from 'hono';
+import type { HttpContext } from '@mcp/shared/http/router.js';
 
 export interface UpsertBody {
   pipeline_name?: string;
@@ -74,7 +74,7 @@ export function knownCatalogEntry(
 }
 
 export function unknownCatalogTargetResponse(
-  c: Context,
+  c: HttpContext,
   pipelineName: string | undefined,
   bindingRole: string | undefined,
 ) {
@@ -85,7 +85,7 @@ export function unknownCatalogTargetResponse(
 }
 
 export function bindingNotConfigurableResponse(
-  c: Context,
+  c: HttpContext,
   entry: PipelineCatalogEntry,
 ) {
   return c.json({

@@ -1,12 +1,12 @@
 /**
  * Integration tests for the admin LSH endpoints.
  *
- * Uses a real Hono instance with in-memory routes and a temp SQLite via
+ * Uses a real HttpRouter instance with in-memory routes and a temp SQLite via
  * CodeIndexDB. Verifies the round-trip: POST /ingest → GET /stats picks
  * up the buckets.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,14 +16,14 @@ import { LSHIndex } from '@mcp/indexer/search/lsh-index.js';
 import { mountAdminLshRoutes } from '../lsh.js';
 import type { ServerDeps } from '../../../deps.js';
 
-interface Handle { app: Hono; db: CodeIndexDB; dir: string }
+interface Handle { app: HttpRouter; db: CodeIndexDB; dir: string }
 
 function setup(): Handle {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-lsh-routes-'));
   const db = new CodeIndexDB(join(dir, 'test.db'));
   const lshIndexStore = new LshIndexStore(db.raw());
   const lshIndex = new LSHIndex({ dim: 8, store: lshIndexStore, numHashes: 2, numBuckets: 16, seed: 1 });
-  const app = new Hono();
+  const app = new HttpRouter();
   mountAdminLshRoutes(app, { lshIndex, lshIndexStore } as unknown as ServerDeps);
   return { app, db, dir };
 }

@@ -1,7 +1,7 @@
 /**
  * Handler dependency surface — what every handler factory accepts.
  *
- * In practice this is the same object the legacy Hono routes consume
+ * In practice this is the same object the legacy HTTP routes consume
  * (`ServerDeps` in apps/http-api/server/deps.ts). To avoid a tight coupling
  * from packages/ → apps/, we type it via the existing path alias and
  * narrow each handler factory to the subset it actually touches.

@@ -2,14 +2,14 @@
  * /tools — list all known tools with global disabled state, toggle individual
  * or batch disable/enable. Includes external MCP server tools.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import { getAllKnownToolsMeta, getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { enumerateExternalTools } from './mcp-servers.routes.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 
-export function toolsRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function toolsRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   /** List all known tools (built-in + external MCP) with global disabled state. */
   app.get('/tools', (c) => {

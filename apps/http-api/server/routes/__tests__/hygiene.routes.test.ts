@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import * as fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -51,12 +51,12 @@ function makeApp(rootPath = join(tmpdir(), `missing-hygiene-${randomUUID()}`)) {
     listNamespaceGenerations: ({ namespace }: { namespace: string }) => namespace === 'code:p1' ? [{ active_generation_id: 1 }] : [],
     listItems: () => [{}],
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountHygieneRoutes(app, { db, vectorStore, semanticCoordinator, projectIndexService, semanticStore } as unknown as ServerDeps);
   return { app, db, project, deleteProject, removeProject, projectIndexService };
 }
 
-function purge(app: Hono, projectIds: unknown = [1], confirm: unknown = true) {
+function purge(app: HttpRouter, projectIds: unknown = [1], confirm: unknown = true) {
   return app.request('/api/hygiene/projects/purge', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ projectIds, confirm }),

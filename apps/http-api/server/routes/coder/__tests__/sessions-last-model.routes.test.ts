@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
@@ -66,7 +66,7 @@ function setup(options: {
     coderPreferences,
     db: { getProject: () => ({ id: 7, builder_json: null }) },
   } as unknown as ServerDeps;
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionsRoutes(app, deps, { activeRuns: new Map() } as unknown as CoderRuntime);
   return {
     app,

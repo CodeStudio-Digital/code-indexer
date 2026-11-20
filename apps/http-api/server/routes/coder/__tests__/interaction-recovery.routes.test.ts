@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SPEC_APPROVAL_REMINDER } from '@mcp/code-agent/tools/spec/index.js';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
@@ -61,7 +61,7 @@ afterEach(async () => {
 describe('coder interaction route filesystem recovery', () => {
   it('transports the explicit recovery review and exact fingerprint without resolving storage in the route', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Recovery transport', provider: 'test', model: 'test' });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
     poolMock.provideUserInput.mockResolvedValueOnce(true);
     const response = await app.request(`/api/coder/sessions/${session.id}/tool-approval`, {
@@ -78,7 +78,7 @@ describe('coder interaction route filesystem recovery', () => {
 
   it('does not convert malformed boolean strings into approval, a permanent grant or recovery review', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Strict approval transport', provider: 'test', model: 'test' });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
     poolMock.provideUserInput.mockResolvedValueOnce(true);
     const response = await app.request(`/api/coder/sessions/${session.id}/tool-approval`, {
@@ -100,7 +100,7 @@ describe('coder interaction route filesystem recovery', () => {
     await store.appendMessage({ session_id: session.id, operation_id: 'pending-once', message: {
       role: 'assistant', content: [{ type: 'tool_use', id: 'write-once', name: 'write_file', input: { path: 'fixture.txt', content: 'once' } }],
     } });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
     poolMock.provideUserInput.mockRejectedValueOnce(new Error('approval dispatched; ACK deadline elapsed')).mockResolvedValueOnce(false);
     const send = () => app.request(`/api/coder/sessions/${session.id}/tool-approval`, {
@@ -125,7 +125,7 @@ describe('coder interaction route filesystem recovery', () => {
       role: 'assistant', content: [{ type: 'tool_use', id: 'write-1', name: 'write_file',
         input: { path: 'result.txt', content: 'once' } }],
     } });
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
     poolMock.provideUserInput.mockRejectedValueOnce(new Error('worker applied approval; ACK lost'));
     const response = await app.request(`/api/coder/sessions/${session.id}/tool-approval`, {
@@ -161,7 +161,7 @@ describe('coder interaction route filesystem recovery', () => {
     await store.close();
     store = openStore();
 
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderInteractionRoutes(
       app,
       { sessionStore: store } as unknown as ServerDeps,
@@ -202,7 +202,7 @@ describe('coder interaction route filesystem recovery', () => {
     });
     await store.close();
     store = openStore();
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderSpecResponseRoute(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
 
     const response = await app.request(`/api/coder/sessions/${session.id}/spec-response`, {
@@ -256,7 +256,7 @@ describe('coder interaction route filesystem recovery', () => {
     await store.close();
     store = openStore();
 
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderInteractionRoutes(
       app,
       { sessionStore: store } as unknown as ServerDeps,

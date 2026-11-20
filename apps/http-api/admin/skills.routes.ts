@@ -3,7 +3,7 @@
  *
  * Thin wrappers around SkillStore. Follows the same pattern as mcp-servers.routes.ts.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { SkillStore, type UpsertSkillInput, type SkillDefinition } from '@mcp/store/skill-store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import {
@@ -21,8 +21,8 @@ function getStore() {
   return new SkillStore(config.dbPath);
 }
 
-export function skillsRouter(sessionStore: FsSessionStore): Hono {
-  const app = new Hono();
+export function skillsRouter(sessionStore: FsSessionStore): HttpRouter {
+  const app = new HttpRouter();
 
   // ─── List all skills ─────────────────────────────────────────
   app.get('/skills', (c) => {

@@ -1,11 +1,11 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { createProjectWorktree } from '@mcp/code-agent/tools/worktree-operations.js';
 import { listProjectWorktrees } from '../../worktree-reads.js';
 import { requireTrustedLocalRequest } from '../../middleware/local-origin.js';
 import { removeConfirmedWorktree, validRemoval, WorktreeRemovalError } from './remove-worktree.js';
 
-export function mountCoderWorktreeRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderWorktreeRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.post('/api/coder/worktrees/remove', requireTrustedLocalRequest, async (c) => {
     if (c.req.header('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json') {
       return c.json({ error: 'Expected a JSON confirmation' }, 415);

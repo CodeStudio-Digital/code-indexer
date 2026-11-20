@@ -1,7 +1,7 @@
 /**
  * Tiny TTL+LRU map shared by the autocomplete pipeline (result cache,
  * member micro-cache). Module-level cache instances built on this are shared
- * across both `createEditorHandlers` instances on Electron (IPC mount + Hono
+ * across both `createEditorHandlers` instances on Electron (IPC mount + HTTP route
  * dispatch fallback).
  *
  * Project-knowledge context building moved to `completion/` (the layered

@@ -1,7 +1,7 @@
 /**
  * Integration tests for the /api/admin/capabilities/* routes (Phase G).
  *
- * Uses a real Hono instance via app.request() — no network, no DB. The
+ * Uses a real HTTP router via app.request() — no network, no DB. The
  * routes touch only the in-memory fallback tracker and pure resolution
  * helpers exported from capabilities.ts.
  */

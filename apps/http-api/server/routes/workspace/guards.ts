@@ -1,4 +1,4 @@
-import type { Context } from 'hono';
+import type { HttpContext } from '@mcp/shared/http/router.js';
 import type { CoreDeps, CoderDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -22,7 +22,7 @@ interface GuardedRequest {
  * order everywhere.
  */
 export async function guardWorkspaceRequest(
-  c: Context,
+  c: HttpContext,
   deps: Pick<CoreDeps, 'db'> & Pick<CoderDeps, 'sessionStore'>,
   relPath: string,
 ): Promise<GuardedRequest | Response> {

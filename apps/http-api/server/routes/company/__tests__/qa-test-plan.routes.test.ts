@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { companyFixture } from '@mcp/company/services/__tests__/company-multisession-fixture.js';
 import { QaTestRunStore } from '@mcp/services/qa/store/qa-test-run-store.js';
@@ -15,7 +15,7 @@ beforeEach(() => { vi.resetAllMocks(); sandbox.readWorkspaceFileOnService.mockRe
 async function fixture() {
   const f = await companyFixture();
   const store = new QaTestRunStore(f.sessionStore);
-  const app = new Hono();
+  const app = new HttpRouter();
   mountQaTestPlanRoutes(app, { sessionStore: f.sessionStore, qaTestRunStore: store } as unknown as ServerDeps);
   mountQaRestoreConfigRoute(app, {} as ServerDeps);
   const url = (id = f.child.id, service = 'main') => `/api/company/sessions/${id}/qa/test-plan?service=${service}`;

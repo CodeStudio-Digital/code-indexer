@@ -39,7 +39,7 @@ const ALLOWED: KillVerdict = { ok: true };
  * Evaluate a kill request.
  *
  * Note on the dashboard rule: the backend runs in-process and serves the
- * renderer through `honoApp.fetch`, so there is no per-renderer identity on
+ * renderer through `httpRouter.fetch`, so there is no per-renderer identity on
  * the request to check against. The guard therefore works off the window
  * label Electron gives us — preview and popout windows stay killable, the
  * dashboard itself never is. That is the correct outcome, just arrived at by

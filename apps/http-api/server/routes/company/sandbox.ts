@@ -15,7 +15,7 @@
  * CRUD makes the lifecycle (start → refresh → retry → delete) easier to
  * follow.
  */
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -35,9 +35,9 @@ import {
   type ExternalProjectRuntime,
 } from './sandbox-helpers.js';
 
-export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanySandboxRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
-  const resolveRoot = async (c: Context) =>
+  const resolveRoot = async (c: HttpContext) =>
     await resolveCompanySessionContext(
       sessionStore,
       parseCompanySessionIdParam(c),
@@ -108,7 +108,7 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
     // omits it so the idempotent fast-path still applies.
     const retry =
       c.req.query('retry') === '1' ||
-      (await c.req.json().catch(() => ({}) as { retry?: boolean })).retry === true;
+      (await c.req.json<{ retry?: boolean }>().catch(() => null))?.retry === true;
 
     const manager = getSandboxManager();
     const cfg = JSON.parse(session.config_json || '{}') as {

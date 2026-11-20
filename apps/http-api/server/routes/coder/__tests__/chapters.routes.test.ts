@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import {
   mountCoderChapterRoutes,
@@ -55,7 +55,7 @@ function setup(options: {
       return { items: [{ seq: 10, role: 'user', content: [] }], next_cursor: 'message:10' };
     },
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderChapterRoutes(
     app,
     { sessionStore },
@@ -67,7 +67,7 @@ function setup(options: {
 describe('coder conversation chapter routes', () => {
   it('pairs calls at a page boundary using bounded recorded results without loading another page', async () => {
     const calls: string[] = [];
-    const app = new Hono();
+    const app = new HttpRouter();
     mountCoderChapterRoutes(app, { sessionStore: {
       getSession: async () => ({ id: SESSION_ID }),
       listConversationChapterSource: async () => {

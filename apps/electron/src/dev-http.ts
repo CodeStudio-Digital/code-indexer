@@ -1,5 +1,5 @@
 /**
- * Optional Hono HTTP listener inside the Electron main process. OFF by
+ * Optional HTTP listener inside the Electron main process. Off by
  * default — the renderer talks to the backend via IPC, no port required.
  *
  * Enable with `MCP_DEV_HTTP=1` (or set a port via `MCP_DEV_HTTP_PORT`)
@@ -13,22 +13,28 @@
  * attack surface exposed on loopback.
  */
 
-import type { Hono } from 'hono';
+import { once } from 'node:events';
+import type { Server } from 'node:http';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 
 /** The live listener handle, kept so quit can close the socket (it would
  *  otherwise leak a bound port until the process actually exits). */
-let handle: {
-  close: (cb?: (err?: Error) => void) => void;
-  closeAllConnections?: () => void;
-} | null = null;
+let handle: Server | null = null;
 
-export async function startOptionalDevHttp(app: Hono): Promise<void> {
+export async function startOptionalDevHttp(app: HttpRouter): Promise<void> {
   if (process.env.MCP_DEV_HTTP !== '1') return;
   if (handle) return;
   const port = Number(process.env.MCP_DEV_HTTP_PORT ?? process.env.MCP_INDEX_PORT ?? 7333);
-  const { serve } = await import('@hono/node-server');
-  handle = serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }) as unknown as NonNullable<typeof handle>;
-  console.log(`[electron] MCP_DEV_HTTP enabled — Hono listening on http://127.0.0.1:${port}`);
+  const { listenHttp } = await import('@mcp/shared/http/node-server.js');
+  const server = listenHttp({ fetch: app.fetch, port, hostname: '127.0.0.1' });
+  handle = server;
+  try {
+    await once(server, 'listening');
+  } catch (error) {
+    if (handle === server) handle = null;
+    throw error;
+  }
+  console.log(`[electron] MCP_DEV_HTTP enabled — HTTP listening on http://127.0.0.1:${port}`);
 }
 
 /** Close the optional dev-http listener on quit. No-op when it was never started. */

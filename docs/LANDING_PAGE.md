@@ -189,10 +189,10 @@ Large tool outputs run through a *smart reducer* (dedup + first/last-line anchor
 #### Pilar 4 — Local-first & BYOK
 
 **PT — Seu código não vai a lugar nenhum.**
-O backend (Hono) roda **dentro do processo do Electron** — sem `child_process`, sem loopback HTTP em produção. O índice, os embeddings e o reranker ficam em **SQLite + arquivos locais** (`~/.mcp`). Suas chaves de API ficam no **SQLite local do app** e só falam com a API do provedor — nunca com um servidor nosso. O sandbox de execução é **opt-in** (containers via Podman). Multi-provedor: Claude, OpenAI, Gemini, DeepSeek e modelos **locais via Ollama**.
+O backend roda **dentro do processo do Electron** — sem `child_process`, sem loopback HTTP em produção. O índice, os embeddings e o reranker ficam em **SQLite + arquivos locais** (`~/.mcp`). Suas chaves de API ficam no **SQLite local do app** e só falam com a API do provedor — nunca com um servidor nosso. O sandbox de execução é **opt-in** (containers via Podman). Multi-provedor: Claude, OpenAI, Gemini, DeepSeek e modelos **locais via Ollama**.
 
 **EN — Your code goes nowhere.**
-The backend (Hono) runs **inside the Electron process** — no `child_process`, no HTTP loopback in production. The index, embeddings, and reranker live in **SQLite + local files** (`~/.mcp`). Your API keys sit in the **app's local SQLite** and only talk to the provider's API — never to a server of ours. The execution sandbox is **opt-in** (Podman containers). Multi-provider: Claude, OpenAI, Gemini, DeepSeek, and **local models via Ollama**.
+The backend runs **inside the Electron process** — no `child_process`, no HTTP loopback in production. The index, embeddings, and reranker live in **SQLite + local files** (`~/.mcp`). Your API keys sit in the **app's local SQLite** and only talk to the provider's API — never to a server of ours. The execution sandbox is **opt-in** (Podman containers). Multi-provider: Claude, OpenAI, Gemini, DeepSeek, and **local models via Ollama**.
 
 *Fato âncora / Anchor:* "BYOK — your key stays in this app's local SQLite, never sent anywhere except the provider's API." (copy real do onboarding / actual onboarding copy, `i18n/locales/en/common.json`)
 

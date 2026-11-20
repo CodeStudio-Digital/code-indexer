@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { requireTrustedLocalRequest } from '../../middleware/local-origin.js';
 import { mountSshHostRoutes } from './hosts.routes.js';
@@ -20,7 +20,7 @@ import { mountSshSecretRoutes } from './secrets.routes.js';
  * infrastructure. The guard admits the in-process Electron dispatch; see
  * `requireTrustedLocalRequest`.
  */
-export function mountSshRoutes(app: Hono, deps: ServerDeps): void {
+export function mountSshRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.use('/api/projects/:projectId/ssh/*', requireTrustedLocalRequest);
   mountSshHostRoutes(app, deps);
   mountSshIdentityRoutes(app, deps);

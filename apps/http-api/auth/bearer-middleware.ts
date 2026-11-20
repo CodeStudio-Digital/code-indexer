@@ -1,4 +1,4 @@
-import type { Context, MiddlewareHandler } from 'hono';
+import type { HttpContext, MiddlewareHandler } from '@mcp/shared/http/router.js';
 import type { AuthContext } from '@mcp/services/auth/domain/auth-context.js';
 import type { EnforceRateLimit } from '@mcp/services/auth/use-cases/enforce-rate-limit.js';
 import type { RecordAudit } from '@mcp/services/auth/use-cases/record-audit.js';
@@ -16,10 +16,10 @@ interface BearerMiddlewareDeps {
 
 /**
  * Unified auth middleware. Runs validate → rate-limit. On success, stores
- * the AuthContext under c.var.authCtx for downstream handlers.
+ * the AuthContext for downstream handlers.
  */
 export function bearerMiddleware(deps: BearerMiddlewareDeps): MiddlewareHandler {
-  return async (c: Context, next) => {
+  return async (c: HttpContext, next) => {
     const rawBearer = parseBearerHeader(c.req.header('authorization'));
     const result = deps.validate.execute({
       rawBearer,
@@ -71,9 +71,8 @@ export function bearerMiddleware(deps: BearerMiddlewareDeps): MiddlewareHandler 
 }
 
 /**
- * Typed accessor to avoid repeating `c.get('authCtx') as AuthContext` in
- * every route handler.
+ * Typed accessor for the authenticated request context.
  */
-export function getAuthCtx(c: Context): AuthContext | undefined {
-  return c.get('authCtx') as AuthContext | undefined;
+export function getAuthCtx(c: HttpContext): AuthContext | undefined {
+  return c.get<AuthContext>('authCtx');
 }

@@ -1,7 +1,7 @@
 import { ChatCollaborationStore } from '@mcp/session-storage/collaboration/store.js';
 import { randomUUID } from 'node:crypto';
-import type { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { bodyLimit } from '@mcp/shared/http/middleware.js';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from "@mcp/provider-sdk";
 import type { SessionId } from '@mcp/agent-runtime-contracts';
@@ -80,7 +80,7 @@ const queuedAttachmentBodyLimit = bodyLimit({
 });
 
 export function mountCoderInteractionRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   runtime: CoderRuntime,
 ): void {

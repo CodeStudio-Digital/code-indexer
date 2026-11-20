@@ -1,9 +1,9 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import v8 from 'node:v8';
 import { existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { cors } from 'hono/cors';
-import { serve } from '@hono/node-server';
+import { cors } from '@mcp/shared/http/middleware.js';
+import { listenHttp } from '@mcp/shared/http/node-server.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
@@ -762,7 +762,7 @@ export function createApp(desktopBrowser?: import('@mcp/services/research-browse
     );
   }
 
-  const app = new Hono();
+  const app = new HttpRouter();
 
   // Loopback origins + the Electron `mcp://app` scheme, NOT `*`. A wildcard here
   // let any page in the user's browser read this API — project list, file
@@ -809,15 +809,10 @@ export function createApp(desktopBrowser?: import('@mcp/services/research-browse
     // off-loopback peers BEFORE we hash + look up a token, so a leaked
     // token outside the box still can't reach the tool catalogue.
     // (Operator can opt-in to LAN access via the admin section later.)
-    const composed: import('hono').MiddlewareHandler = middleware
-      ? async (c, next) =>
-          localhostOnlyMiddleware()(c, async () => {
-            await middleware(c, next);
-          })
-      : localhostOnlyMiddleware();
+    const localhostOnly = localhostOnlyMiddleware();
 
     const mcpApp = createMcpHttpApp(deps.config, {
-      beforeTransport: composed,
+      beforeTransport: middleware ? [localhostOnly, middleware] : localhostOnly,
       resolveAuthContext: getAuthCtx,
       enforceScope: authEnabled ? auth.enforceScope : undefined,
       audit: auth.audit,
@@ -1024,7 +1019,7 @@ export function createApp(desktopBrowser?: import('@mcp/services/research-browse
 
   // LSP worker — the synchronous language compute (TS LanguageService +
   // index-fallback SQLite) moves off the main thread. Every consumer of
-  // createLspHandlers (editor IPC, Hono fallback, agent adapter below)
+  // createLspHandlers (editor IPC, HttpRouter fallback, agent adapter below)
   // dispatches through the module-singleton holder, so this single wiring
   // upgrades them all; with the worker unavailable the holder's executor
   // degrades per-call to the same in-process code as before.
@@ -1186,11 +1181,11 @@ export async function startServer(port: number, host: string) {
   console.log(
     `[workers] diagnostics: GET ${host === '0.0.0.0' ? 'localhost' : host}:${port}/api/admin/workers`,
   );
-  // `serve()` returns the underlying Node http.Server. We keep the
+  // `listenHttp()` returns the underlying Node http.Server. We keep the
   // reference to attach the company stream WS upgrade — the dev-server
   // running inside the sandbox is now reached directly via its
   // loopback port (no MCP-side proxy / HMR upgrade rewriting).
-  const server = serve({ fetch: app.fetch, port, hostname: host });
+  const server = listenHttp({ fetch: app.fetch, port, hostname: host });
   // Node's http.Server default `requestTimeout` is 5 minutes (300_000
   // ms) since Node 18 — it destroys the underlying socket of any HTTP
   // request that's been open longer. That kills our SSE streams the
@@ -1208,21 +1203,20 @@ export async function startServer(port: number, host: string) {
   const httpRequestTimeoutMs = Number(
     process.env.MCP_HTTP_REQUEST_TIMEOUT_MS ?? 60 * 60 * 1000,
   );
-  (server as unknown as import('node:http').Server).requestTimeout =
-    httpRequestTimeoutMs;
+  server.requestTimeout = httpRequestTimeoutMs;
   // P14: parallel WebSocket transport for company sessions. Default
   // remains SSE; the dashboard opts in via `?transport=ws`.
-  attachCompanyStreamUpgrade(server as unknown as import('node:http').Server);
+  attachCompanyStreamUpgrade(server);
   // Phase D: interactive terminal upgrade. Sandbox target wraps
   // `podman exec -it`; host target spawns the operator's local shell
   // (gated by MCP_HOST_TERMINAL_ENABLED=1).
-  attachTerminalUpgrade(server as unknown as import('node:http').Server, {
+  attachTerminalUpgrade(server, {
     sessionStore: deps.sessionStore,
     companySandboxStore: deps.companySandboxStore,
     db: deps.db,
   });
 
-  // Chrome Service auto-start deferred until after serve() so the
+  // Chrome Service auto-start deferred until after listenHttp() so the
   // /api/health reachability probe inside recoverOnBoot finds the port open.
   void chromeService.recoverOnBoot().catch((e) => {
     console.warn(
@@ -1235,7 +1229,7 @@ export async function startServer(port: number, host: string) {
     // connections are force-closed after their owning runtimes are disposed.
     try { server.close(); } catch { /* already closed */ }
     await shutdownAppRuntime({ deps, mcpPool, chromeService, reason });
-    try { (server as unknown as import('node:http').Server).closeAllConnections?.(); } catch { /* old Node */ }
+    server.closeAllConnections();
   };
 }
 

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AuthBundle } from '../auth/composition.js';
 import type { McpTier } from '@mcp/services/auth/domain/api-token.js';
 
@@ -46,8 +46,8 @@ function parseTier(raw: unknown): McpTier | null {
  * unauthenticated (project convention: admin UI is localhost). When that
  * changes, add a middleware on this sub-router.
  */
-export function createApiTokensRouter(bundle: AuthBundle): Hono {
-  const app = new Hono();
+export function createApiTokensRouter(bundle: AuthBundle): HttpRouter {
+  const app = new HttpRouter();
 
   app.post('/api-tokens', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as CreateTokenBody;

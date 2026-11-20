@@ -6,7 +6,7 @@
  * merge logic (persisted row ∪ live manager state ∪ legacy primary ∪
  * orphaned project links) is chunky enough to deserve its own file.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -16,7 +16,7 @@ import {
 import { getSandboxManager, inferPreviewStrategy } from '@mcp/services/sandbox/index.js';
 import { getLocalProcessManager } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 
-export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void {
+export function mountCompanyServicesListRoute(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
 
   app.get('/api/company/sessions/:id/services', async (c) => {

@@ -1,7 +1,7 @@
 /**
  * Thin wrappers over the db-client backend.
  *
- *  - METADATA (saved connections / history / saved queries) → Hono CRUD via
+ *  - METADATA (saved connections / history / saved queries) → HTTP CRUD via
  *    `fetch` against `apiBaseUrl()` (same pattern as the api-client feature).
  *  - LIVE ops (connect / introspect / query / cancel) → the `dbClient` api-bus
  *    namespace via `apiCall` (in-process IPC in Electron).

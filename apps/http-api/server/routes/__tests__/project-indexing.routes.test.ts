@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountProjectsRoutes } from '../projects.js';
 
@@ -115,8 +115,8 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
   return Object.assign(deps, overrides);
 }
 
-function appWith(deps: ServerDeps): Hono {
-  const app = new Hono();
+function appWith(deps: ServerDeps): HttpRouter {
+  const app = new HttpRouter();
   mountProjectsRoutes(app, deps);
   return app;
 }

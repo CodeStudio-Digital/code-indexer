@@ -1,11 +1,11 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { snippetInProject } from './_ownership.js';
 import type { SshSnippetPatch } from '@mcp/store/ssh-store-types.js';
 
 /** CRUD for saved SSH snippets (migration 173) — commands runnable on a host. */
-export function mountSshSnippetRoutes(app: Hono, deps: ServerDeps): void {
+export function mountSshSnippetRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/ssh';
 
   app.get(`${base}/snippets`, (c) => {

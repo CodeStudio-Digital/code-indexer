@@ -18,7 +18,7 @@
  * Live updates ride the session metaBus (`scheduler_*`, `plan_auto_approved`,
  * `supervisor_incident`, `master_nudge`) — this endpoint is only the seed.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -36,7 +36,7 @@ const BOARD_SCAN_LIMIT = 200;
 
 const AUTO_POST_PREFIXES = ['[AUTO]', '[auto-approved]'] as const;
 
-export function mountCompanyAutonomyRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyAutonomyRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/autonomy', async (c) => {
     const id = parseCompanySessionIdParam(c);
     const context = await resolveCompanySessionContext(deps.sessionStore, id);

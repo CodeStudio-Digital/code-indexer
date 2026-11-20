@@ -1,11 +1,11 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import type { ContentBlock } from '@mcp/provider-sdk';
 import { parseSeqParam, parseSessionIdParam, notFound } from '../_helpers.js';
 import { prepareVisionImage } from '@mcp/services/services/docs/vision-image.js';
 
 /** Fetch one visible image at a time, instead of downloading all message attachments. */
-export function registerSessionImageRoutes(app: Hono, store: ServerDeps['sessionStore']) {
+export function registerSessionImageRoutes(app: HttpRouter, store: ServerDeps['sessionStore']) {
   app.get('/api/coder/sessions/:id/messages/:seq/images/:index', async c => {
     const index = Number(c.req.param('index'));
     if (!Number.isSafeInteger(index) || index < 0) return c.json({ error: 'Invalid image index' }, 400);

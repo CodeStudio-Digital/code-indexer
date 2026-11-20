@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,7 +10,7 @@ import { SessionNetwork } from '@mcp/code-agent/runtime/session-network.js';
 import { ChatScheduler } from '@mcp/code-agent/runtime/chat-scheduler.js';
 import { mountUltraFollowupRoutes } from '../ultra-followups.js';
 
-let directory: string, sessions: FsSessionStore, mailbox: ChatCollaborationStore, network: SessionNetwork, scheduler: ChatScheduler, id: string, app: Hono;
+let directory: string, sessions: FsSessionStore, mailbox: ChatCollaborationStore, network: SessionNetwork, scheduler: ChatScheduler, id: string, app: HttpRouter;
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'ultra-routes-')); await mkdir(join(directory, 'project'));
   const project = { id: 1, name: 'Project', root_path: join(directory, 'project') };
@@ -21,7 +21,7 @@ beforeEach(async () => {
   network = new SessionNetwork({ sessions, mailbox, project: () => project }); scheduler = new ChatScheduler(mailbox);
   const session = await sessions.createSession({ project_id: 1, title: 'Main', provider: 'fixture', model: 'fixture' });
   id = session.id; await mailbox.registerRoot(id, session.title); await network.settings(id, { enabled: true });
-  app = new Hono(); mountUltraFollowupRoutes(app, network, scheduler, Promise.resolve());
+  app = new HttpRouter(); mountUltraFollowupRoutes(app, network, scheduler, Promise.resolve());
 });
 afterEach(async () => { vi.restoreAllMocks(); await sessions.close(); await rm(directory, { recursive: true, force: true }); });
 const request = (path: string, body: unknown, method = 'POST') => app.request(`/api/coder/sessions/${id}/collaboration/${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

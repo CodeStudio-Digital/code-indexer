@@ -8,7 +8,7 @@
  * Mounted at `/api/company/sessions/:id/snapshot/*`. Mirrors the coder
  * snapshot API surface so the dashboard component is interchangeable.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -51,7 +51,7 @@ async function listCoderSessionIdsForCompany(
     .map((entry) => entry.session.id);
 }
 
-export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanySnapshotRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
   const snapshotStore = sessionStore;
   mountToolSnapshotRoutes(app, snapshotStore, id => listCoderSessionIdsForCompany(sessionStore, id));

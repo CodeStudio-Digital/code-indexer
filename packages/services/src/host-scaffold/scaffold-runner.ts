@@ -5,7 +5,7 @@
  * the database and NEVER deletes a half-written directory on failure
  * (destructive on the host) — it just reports the path and the error.
  */
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { resolveTargetPath, type ResolvedTarget } from './paths.js';
 import { runHostCommand } from './run-host-command.js';
@@ -47,18 +47,26 @@ export async function runHostScaffold(
 
   cb.onStart?.({ template: input.template, slug: target.slug, targetPath: target.targetPath });
 
-  if (template.createsTargetDir) {
-    mkdirSync(target.targetPath, { recursive: true });
-  }
-
-  const steps = template.build({
+  const context = {
     slug: target.slug,
     targetDir: target.targetPath,
     repoUrl: input.repoUrl,
     gitInit: input.gitInit,
-  });
+  };
+  try {
+    if (input.signal?.aborted) return { ok: false, target, error: { message: 'Cancelled' } };
+    if (template.createsTargetDir) mkdirSync(target.targetPath, { recursive: true });
+    if (template.files) {
+      cb.onPhase?.({ phase: 'configure', label: 'Writing project files' });
+      for (const [file, contents] of Object.entries(template.files(context))) {
+        writeFileSync(path.join(target.targetPath, file), contents, { flag: 'wx' });
+      }
+    }
+  } catch (error) {
+    return { ok: false, target, error: { message: error instanceof Error ? error.message : String(error) } };
+  }
 
-  for (const step of steps) {
+  for (const step of template.build(context)) {
     if (input.signal?.aborted) {
       return { ok: false, target, error: { message: 'Cancelled' } };
     }

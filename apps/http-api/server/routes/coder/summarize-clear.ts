@@ -13,7 +13,7 @@
  * re-injected automatically on turn 1 of the fresh transcript — they survive
  * the clear without any work here.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import {
   renderChapterV3,
   renderResumeV3,
@@ -34,7 +34,7 @@ import { resolveCompactionProviders, summarizeReliably } from './compaction-summ
 const MIN_MESSAGES_TO_SUMMARIZE = 4;
 
 export function mountCoderSummarizeClearRoute(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   runtime: CoderRuntime,
 ): void {

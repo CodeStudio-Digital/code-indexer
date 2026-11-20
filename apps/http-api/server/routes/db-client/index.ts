@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { requireTrustedLocalRequest } from '../../middleware/local-origin.js';
 import { mountDbConnectionRoutes } from './connections.routes.js';
@@ -21,7 +21,7 @@ import { mountDbSavedQueryRoutes } from './saved-queries.routes.js';
  * admits the in-process Electron dispatch (`mcp://app` has no socket).
  * Mirrors `mountSshRoutes`.
  */
-export function mountDbClientRoutes(app: Hono, deps: ServerDeps): void {
+export function mountDbClientRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.use('/api/projects/:projectId/db-client/*', requireTrustedLocalRequest);
   mountDbConnectionRoutes(app, deps);
   mountDbHistoryRoutes(app, deps);

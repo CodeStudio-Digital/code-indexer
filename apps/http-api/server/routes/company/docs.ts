@@ -1,5 +1,5 @@
 /** Read-only projection of the same durable knowledge service used by agent tools. */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
@@ -36,7 +36,7 @@ export async function readCompanyDoc(deps: ServerDeps, sessionId: CompanySession
   return (await companyDocs(deps, sessionId, serviceId)).read(path);
 }
 
-export function mountCompanyDocsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyDocsRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/docs/list', async (c) => {
     const resolved = await resolveCompanySessionContext(
       deps.sessionStore,

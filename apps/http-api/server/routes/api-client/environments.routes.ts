@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { environmentInProject } from './_ownership.js';
@@ -15,7 +15,7 @@ import { maskSecrets, mergeSecrets, type EnvVarMap } from '@mcp/services/api-cli
  * The send/regression paths read the RAW store value server-side. Masking
  * logic lives in @mcp/services/api-client/env-secrets (pure + tested).
  */
-export function mountApiEnvironmentRoutes(app: Hono, deps: ServerDeps): void {
+export function mountApiEnvironmentRoutes(app: HttpRouter, deps: ServerDeps): void {
   // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 

@@ -20,7 +20,7 @@
  *     and silently drop unknown payloads — never echo, never crash.
  *
  * The implementation uses `ws` (already a transitive dependency) for
- * the protocol parser. Hono only handles standard HTTP; we tap the
+ * the protocol parser. The Fetch router handles HTTP requests. We use the
  * underlying `node:http.Server` upgrade event directly — same pattern
  * `attachPreviewUpgrade` already uses in this repo.
  *

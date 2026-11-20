@@ -2,14 +2,14 @@
  * Admin HTTP router — composition root for /api/admin/*.
  *
  * Mounted by src/apps/http-api/server.ts. Each concern lives in a sibling
- * file and exports its own Hono sub-router; this file just wires them
+ * file and exports its own HttpRouter sub-router; this file just wires them
  * together in declaration order.
  *
  * Routes do NOT enforce authentication today — the dashboard runs locally
  * on http://localhost:7333 per project convention. If that ever changes,
  * add a middleware here (`app.use('*', ...)`).
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import { providersRouter } from './providers.routes.js';
 import { modelsRouter } from './models.routes.js';
@@ -36,8 +36,8 @@ export function createAdminRouter(
   semantic: SemanticAdminRuntime,
   sessionStore: FsSessionStore,
   mcpRuntime: McpAdminRuntime = {},
-): Hono {
-  const app = new Hono();
+): HttpRouter {
+  const app = new HttpRouter();
 
   app.route('/', providersRouter(store));
   app.route('/', modelsRouter(store));

@@ -4,7 +4,7 @@
  * Defines the shape of every operation the renderer (or any client) can
  * invoke. The same interfaces are mounted by:
  *   - Electron `ipcMain.handle` + `MessageChannel` (in-process, primary)
- *   - Hono HTTP/SSE routes (browser dev mode, debug, MCP_DEV_HTTP=1)
+ *   - HTTP/SSE routes (browser dev mode, debug, MCP_DEV_HTTP=1)
  *
  * Handlers live in `@mcp/api-handlers` and import this package for types.
  *

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import { InMemoryRoleEmbeddingStore } from '@mcp/company/role-pipeline/index.js';
@@ -127,7 +127,7 @@ async function harness() {
     roleEmbeddingStore: new InMemoryRoleEmbeddingStore(),
     pipelineTelemetrySink: new InMemoryTelemetrySink(),
   } as unknown as ServerDeps;
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCompanyKanbanDispatchRoutes(app, deps);
   return {
     app,

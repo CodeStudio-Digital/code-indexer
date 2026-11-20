@@ -1,6 +1,6 @@
 /**
  * Handlers for the `projects` namespace. Pure functions over the shared
- * `HandlerDeps`; no Hono, no Electron. The legacy Hono routes in
+ * `HandlerDeps`; independent of HTTP and Electron. The legacy HTTP routes in
  * apps/http-api/server/routes/projects.ts now delegate here.
  */
 
@@ -421,7 +421,7 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
   };
 }
 
-// Re-exported so the Hono SSE route can reuse the same producer→iterable
+// Re-exported so the HTTP SSE route can reuse the same producer→iterable
 // bridge the handlers use internally (keeps the scaffold route signal-aware
 // without duplicating the queue logic).
 export { streamFromCallbacks };

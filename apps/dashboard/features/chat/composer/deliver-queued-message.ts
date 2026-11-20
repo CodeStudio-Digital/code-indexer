@@ -1,7 +1,8 @@
 import { apiPost } from '../../../hooks/useApi.js';
 import { getAgentSessionSnapshot, readAgentStreamCursor } from '../../../hooks/agent-stream/session-stream-store.js';
 import { sessionProviderSwitches } from '../../../hooks/agent-stream/provider-switch.js';
-import type { QueueDeliver } from './message-queue.js';
+import { MessageNotStartedError, type QueueDeliver } from './message-queue.js';
+import { formatCoderTerminalError } from '../terminal-error.js';
 
 export interface MessageReceipt {
   accepted?: boolean;
@@ -10,7 +11,7 @@ export interface MessageReceipt {
   started?: boolean;
   bus_id?: string;
   message_id?: number;
-  terminal?: { event: string; data: { reason?: string; message?: string; error?: string } };
+  terminal?: { event: string; data: { reason?: string; message?: string; error?: string; not_started?: boolean } };
 }
 
 /** One admission request, one durable command ID, no fallback resend. */
@@ -41,7 +42,12 @@ export async function deliverQueuedMessage(options: {
   if (receipt.terminal) {
     refresh();
     if (receipt.terminal.event === 'error') {
-      throw new Error(receipt.terminal.data.message ?? receipt.terminal.data.error ?? receipt.terminal.data.reason ?? 'Message execution failed');
+      const data = receipt.terminal.data;
+      const message = formatCoderTerminalError(data);
+      if (data.not_started === true && ['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input'].includes(data.reason ?? '')) {
+        throw new MessageNotStartedError(message);
+      }
+      throw new Error(message);
     }
   }
   return receipt.active && Number.isSafeInteger(receipt.message_id)

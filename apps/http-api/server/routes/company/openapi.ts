@@ -11,7 +11,7 @@
  * `yaml` package import stays dynamic so the http-api boot path
  * doesn't pull it in — the API Reference tab is the only consumer.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { parseCompanySessionIdParam, notFound } from '../_helpers.js';
@@ -33,7 +33,7 @@ async function parseOpenApiYaml(raw: string): Promise<unknown> {
   return mod.parse(raw);
 }
 
-export function mountCompanyOpenApiRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyOpenApiRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/services/:serviceId/openapi', async (c) => {
     const id = parseCompanySessionIdParam(c);
     const serviceId = c.req.param('serviceId');

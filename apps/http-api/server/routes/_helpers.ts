@@ -1,5 +1,5 @@
-import type { Context } from 'hono';
-import { HTTPException } from 'hono/http-exception';
+import type { HttpContext } from '@mcp/shared/http/router.js';
+import { HttpError } from '@mcp/shared/http/context.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import {
   asCompanySessionId,
@@ -20,7 +20,7 @@ import {
  */
 
 /** Parse a URL param as an integer. Defaults to the `id` param. */
-export function parseIdParam(c: Context, key = 'id'): number {
+export function parseIdParam(c: HttpContext, key = 'id'): number {
   return parseInt(c.req.param(key) ?? '', 10);
 }
 
@@ -33,15 +33,15 @@ const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
  * remaining essential SQLite ids stay numeric, while public session ids never
  * pass through integer coercion or a legacy fallback.
  */
-export function parseSessionIdParam(c: Context, key = 'id'): SessionId {
+export function parseSessionIdParam(c: HttpContext, key = 'id'): SessionId {
   return parseSessionIdValue(c.req.param(key) ?? '', key);
 }
 
 /** Parse an opaque UUID for a record stored inside a session bundle. */
-export function parseSessionRecordIdParam(c: Context, key: string): string {
+export function parseSessionRecordIdParam(c: HttpContext, key: string): string {
   const raw = c.req.param(key) ?? '';
   if (!CANONICAL_UUID.test(raw)) {
-    throw new HTTPException(400, {
+    throw new HttpError(400, {
       message: `${key} must be a canonical UUID`,
     });
   }
@@ -50,12 +50,12 @@ export function parseSessionRecordIdParam(c: Context, key: string): string {
 
 /** Parse a Company/App Studio filesystem-session UUID. */
 export function parseCompanySessionIdParam(
-  c: Context,
+  c: HttpContext,
   key = 'id',
 ): CompanySessionId {
   const raw = c.req.param(key) ?? '';
   if (!CANONICAL_UUID.test(raw)) {
-    throw new HTTPException(400, {
+    throw new HttpError(400, {
       message: `${key} must be a canonical company session UUID`,
     });
   }
@@ -66,13 +66,13 @@ export function parseCompanySessionIdParam(
 export function parseSessionIdValue(value: unknown, label = 'session_id'): SessionId {
   const raw = typeof value === 'string' ? value : '';
   if (!CANONICAL_UUID.test(raw)) {
-    throw new HTTPException(400, { message: `${label} must be a canonical session UUID` });
+    throw new HttpError(400, { message: `${label} must be a canonical session UUID` });
   }
   return asSessionId(raw.toLowerCase());
 }
 
 /** Parse a positive numeric sequence path parameter (conversation order). */
-export function parseSeqParam(c: Context, key = 'seq'): number {
+export function parseSeqParam(c: HttpContext, key = 'seq'): number {
   return parseSeqValue(c.req.param(key) ?? '', key);
 }
 
@@ -84,11 +84,11 @@ export function parseSeqValue(value: unknown, label = 'seq'): number {
       ? value
       : '';
   if (!/^[1-9][0-9]*$/.test(raw)) {
-    throw new HTTPException(400, { message: `${label} must be a positive sequence number` });
+    throw new HttpError(400, { message: `${label} must be a positive sequence number` });
   }
   const seq = Number(raw);
   if (!Number.isSafeInteger(seq)) {
-    throw new HTTPException(400, { message: `${label} exceeds the safe sequence range` });
+    throw new HttpError(400, { message: `${label} exceeds the safe sequence range` });
   }
   return seq;
 }
@@ -97,21 +97,21 @@ export function parseSeqValue(value: unknown, label = 'seq'): number {
  * Parse a non-negative sequence cursor. Absence uses the supplied default;
  * malformed values fail closed instead of being silently coerced.
  */
-export function parseSeqQuery(c: Context, key: string, defaultValue = 0): number {
+export function parseSeqQuery(c: HttpContext, key: string, defaultValue = 0): number {
   const raw = c.req.query(key);
   if (raw == null || raw === '') return defaultValue;
   if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
-    throw new HTTPException(400, { message: `${key} must be a non-negative sequence number` });
+    throw new HttpError(400, { message: `${key} must be a non-negative sequence number` });
   }
   const seq = Number(raw);
   if (!Number.isSafeInteger(seq)) {
-    throw new HTTPException(400, { message: `${key} exceeds the safe sequence range` });
+    throw new HttpError(400, { message: `${key} exceeds the safe sequence range` });
   }
   return seq;
 }
 
 /** Parse a query param as integer with a default value. */
-export function parseIntQuery(c: Context, key: string, defaultValue: number): number {
+export function parseIntQuery(c: HttpContext, key: string, defaultValue: number): number {
   const raw = c.req.query(key);
   if (raw == null) return defaultValue;
   const n = parseInt(raw, 10);
@@ -123,7 +123,7 @@ export function parseIntQuery(c: Context, key: string, defaultValue: number): nu
  * Eliminates the `await c.req.json<T>().catch(() => ({} as T))` pattern
  * repeated across many handlers.
  */
-export async function parseJsonBody<T extends object>(c: Context): Promise<Partial<T>> {
+export async function parseJsonBody<T extends object>(c: HttpContext): Promise<Partial<T>> {
   try {
     return (await c.req.json()) as Partial<T>;
   } catch {
@@ -135,7 +135,7 @@ export async function parseJsonBody<T extends object>(c: Context): Promise<Parti
  * Standardized 404 response. Replaces the scattered
  * `return c.json({ error: 'Not found' }, 404)` pattern.
  */
-export function notFound(c: Context, message = 'Not found') {
+export function notFound(c: HttpContext, message = 'Not found') {
   return c.json({ error: message }, 404);
 }
 

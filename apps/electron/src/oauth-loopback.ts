@@ -5,7 +5,7 @@
  * The dashboard opens the provider's login in the user's real browser; the
  * provider redirects back to
  *   http://127.0.0.1:<port>/api/admin/mcp-servers/:id/oauth/callback
- * which this server forwards to the in-process Hono app for the PKCE token
+ * which this server forwards to the in-process HTTP router for the PKCE token
  * exchange. We need a real socket here precisely because the app's normal
  * backend transport is socket-free (mcp:// in-process) — an external browser
  * can't reach that.
@@ -30,15 +30,15 @@ const CALLBACK_PATH = /^\/api\/admin\/mcp-servers\/[^/]+\/oauth\/callback$/;
 const RETURN_HTML =
   '<!doctype html><html><head><meta charset="utf-8"><title>CodeStudio</title></head><body><h2>You are signed in</h2><p>You can close this tab and return to CodeStudio.</p></body></html>';
 
-type LoopbackServer = ReturnType<(typeof import('@hono/node-server'))['serve']>;
+type LoopbackServer = import('node:http').Server;
 
 let server: LoopbackServer | null = null;
 let autoStop: NodeJS.Timeout | null = null;
 /** Shared with the running server's fetch closure so either flow (MCP callback or
  *  browser-login /cb) works regardless of which one started the listener. */
 /**
- * How the callback reaches the backend. A plain function, not the Hono app:
- * once the backend lives in a `utilityProcess` there is no Hono instance in
+ * How the callback reaches the backend. A plain function, not the HTTP router:
+ * once the backend lives in a `utilityProcess` there is no HTTP router in
  * this process to hold — only a way to dispatch. `BackendHandle.fetch` and the
  * `mcp://` protocol handler are satisfied by the same one.
  */
@@ -70,15 +70,15 @@ export async function startOAuthLoopback(dispatch?: BackendDispatch): Promise<Lo
   rearmAutoStop();
   if (server) return { ok: true, port: OAUTH_LOOPBACK_PORT };
 
-  const { serve } = await import('@hono/node-server');
+  const { listenHttp } = await import('@mcp/shared/http/node-server.js');
   return await new Promise<LoopbackResult>((resolve) => {
     let settled = false;
-    const s = serve(
+    const s = listenHttp(
       {
         fetch: (req: Request) => {
           const url = new URL(req.url);
           // Browser-login handoff (P7-B): one-shot capture of ?handoff=, then a
-          // friendly page. No honoApp needed for this path.
+          // friendly page. No httpRouter needed for this path.
           if (url.pathname === '/cb') {
             const handoff = url.searchParams.get('handoff');
             if (handoff && authCapture) {

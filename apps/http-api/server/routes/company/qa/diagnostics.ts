@@ -23,7 +23,7 @@
  * The endpoint is safe to call cheaply — no SSE, no orchestrator lookup
  * (so it works for evicted sessions). It doesn't write anything.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { createHash } from 'node:crypto';
 import type { ServerDeps } from '../../../deps.js';
 import { parseSessionIdParam } from '../../_helpers.js';
@@ -70,7 +70,7 @@ interface DiagnosticsResponse {
 const REPORTER_TEMPLATE_HASH = sha256(REPORTER_TEMPLATE);
 const GLOBAL_SETUP_HASH = sha256(QA_GLOBAL_SETUP_TEMPLATE);
 
-export function mountQaDiagnosticsRoute(app: Hono, deps: ServerDeps): void {
+export function mountQaDiagnosticsRoute(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/qa/diagnostics', async (c) => {
     const sessionId = parseSessionIdParam(c);
     const runs = await deps.qaTestRunStore.listRuns({

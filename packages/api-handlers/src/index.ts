@@ -1,14 +1,14 @@
 /**
  * @mcp/api-handlers — pure handler implementations of the `@mcp/api-bus`
- * contract. Mounted by both the Hono adapter and the Electron IPC bridge.
+ * contract. Mounted by both the HTTP adapter and the Electron IPC bridge.
  *
  * Handlers are factories: `createXxxHandlers(deps): XxxApi`. They take
- * the same `ServerDeps` the Hono routes consume and return an object
+ * the same `ServerDeps` the HTTP routes consume and return an object
  * that satisfies the bus interface.
  *
  * `createHandlers(deps)` returns the aggregate `Partial<Api>` — every
  * namespace whose handler factory has been wired so far. New factories
- * land here as they're extracted from Hono routes.
+ * land here as they're extracted from HTTP routes.
  */
 
 import type { Api } from '@mcp/api-bus';
@@ -90,7 +90,7 @@ export { createSystemHandlers } from './system/index.js';
  *
  * Not yet wired (Dia 4+): admin, docs, company, workspace.
  * Those serve features (multi-agent, doc RAG) that are
- * Pro-tier features and don't block the core IDE loop. Their Hono routes
+ * Pro-tier features and don't block the core IDE loop. Their HTTP routes
  * continue to work as legacy adapters.
  */
 export function createHandlers(deps: HandlerDeps): Partial<Api> {

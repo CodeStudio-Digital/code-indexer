@@ -228,7 +228,7 @@ export interface ProjectsApi {
   /**
    * Streaming status — initial frame + one frame per transition (coalesced
    * ~150ms). The `Stream` suffix is load-bearing: handlers-mount auto-routes
-   * it to a MessagePort on Electron; the Hono route adapts it to SSE.
+   * it to a MessagePort on Electron; the HTTP route adapts it to SSE.
    */
   indexStatusStream(input: { id: number }, ctx: ApiContext): AsyncStream<ProjectIndexStatus>;
 

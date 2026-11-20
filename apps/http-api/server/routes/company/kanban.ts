@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { publish } from '../../../coder-bus.js';
 import { activeOrchestrators } from './stream.js';
@@ -52,7 +52,7 @@ function parseTag(value: unknown): KanbanTag | null | undefined {
   return value as KanbanTag;
 }
 
-export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyKanbanRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore } = deps;
 
   /**
@@ -60,7 +60,7 @@ export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
    * with their root Company bundle. The root is resolved exclusively from
    * `session.json`; no SQLite lookup or compatibility fallback is involved.
    */
-  const resolveKanban = async (c: Context): Promise<KanbanContext | null> => {
+  const resolveKanban = async (c: HttpContext): Promise<KanbanContext | null> => {
     const requestedId = parseCompanySessionIdParam(c);
     await sessionStore.ensureCatalog();
     let requestedFiles: CompanySessionFiles;

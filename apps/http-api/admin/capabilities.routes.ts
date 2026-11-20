@@ -13,15 +13,15 @@
  * with a clean slate, and any model still falling back will be re-recorded
  * on its next session.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import {
   getRecentCapabilityFallbacks,
   resolveContextWindowWithSource,
   getEffectiveContextWindow,
 } from '@mcp/code-agent/providers/capabilities.js';
 
-export function capabilitiesRouter(): Hono {
-  const app = new Hono();
+export function capabilitiesRouter(): HttpRouter {
+  const app = new HttpRouter();
 
   /**
    * GET /api/admin/capabilities/fallbacks — list of every model that has

@@ -112,7 +112,7 @@
   "item.MCP_DESKTOP_NOTIFY_SESSION_FINISHED.description": "Notify when a coder or company session finishes, pauses, fails, or aborts.",
   "item.MCP_DESKTOP_NOTIFY_SESSION_FINISHED.label": "Notify session finished",
   "item.MCP_DEV_HTTP.description": "Binds the in-process API to 127.0.0.1:7333 so you can hit endpoints from curl / a second tool. Off by default; the IDE uses mcp:// in-process dispatch instead.",
-  "item.MCP_DEV_HTTP.label": "Expose Hono dev HTTP listener",
+  "item.MCP_DEV_HTTP.label": "Expose local HTTP listener for development",
   "item.MCP_HTTP_REQUEST_TIMEOUT_MS.description": "Wall-clock cap on HTTP requests, including the SSE streams that drive long `spawn_agents` runs. Node's default (300000ms = 5 min) was killing subagent explorations on big codebases. Default 3600000 (60 min). Lower to kill runaway runs faster; raise for 10k+ file projects. Restart required.",
   "item.MCP_HTTP_REQUEST_TIMEOUT_MS.label": "HTTP request timeout (ms)",
   "item.MCP_INDEX_STRUCTURAL_WORKER.description": "Run structural indexing in a dedicated worker to keep the app responsive. Disabling this pauses desktop structural indexing; standalone CLI hosts can still run in-process for debugging.",

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { rm } from 'node:fs/promises';
@@ -28,15 +28,15 @@ afterAll(async () => {
 });
 
 function app() {
-  const hono = new Hono();
-  mountProjectGitRoutes(hono, {
+  const app = new HttpRouter();
+  mountProjectGitRoutes(app, {
     db: { getProjectRootPath: (id: number) => id === 1 ? root : undefined },
   } as never);
-  return hono;
+  return app;
 }
 
-function request(hono: Hono, path: string, init: RequestInit, peer = '127.0.0.1') {
-  return hono.request(path, init, { incoming: { socket: { remoteAddress: peer } } } as never);
+function request(app: HttpRouter, path: string, init: RequestInit, peer = '127.0.0.1') {
+  return app.request(path, init, { incoming: { socket: { remoteAddress: peer } } });
 }
 
 describe('project git HTTP RPC', () => {

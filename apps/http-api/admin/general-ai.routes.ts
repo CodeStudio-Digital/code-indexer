@@ -15,11 +15,11 @@
  * (e.g. coder generate-title) still falls through to its own
  * fallback chain.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 
-export function generalAiRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function generalAiRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/general-ai', (c) => {
     const current = store.getGeneralDefault();

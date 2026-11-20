@@ -16,7 +16,7 @@
  * `playwright-report/`. Cap configurable via
  * `MCP_QA_ARTIFACT_MAX_BYTES` (default 200 MiB per v4.2 plan).
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import * as fs from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import type { ServerDeps } from '../../../deps.js';
@@ -126,7 +126,7 @@ function parseHintRunId(raw: string | undefined): string | undefined {
   return raw && isUuid(raw) ? raw.toLowerCase() : undefined;
 }
 
-export function mountQaArtifactRoutes(app: Hono, deps: ServerDeps): void {
+export function mountQaArtifactRoutes(app: HttpRouter, deps: ServerDeps): void {
   const maxBytes = resolveMaxBytes();
 
   // GET /qa/artifact?service=&path=&run= — generic single-file serve.

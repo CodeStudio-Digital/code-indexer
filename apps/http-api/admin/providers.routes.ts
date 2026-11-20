@@ -5,7 +5,7 @@
  * on list/get are masked; write endpoints accept the full value. The `/test`
  * endpoint issues a cheap per-kind ping so the UI can show a badge.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type {
   ProviderStore,
   ProviderKind,
@@ -23,8 +23,8 @@ import {
   KIMI_CODE_BASE_URL,
 } from '@mcp/services/services/kimi-code.js';
 
-export function providersRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function providersRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   /**
    * GET /providers/known — registry of known provider shapes.

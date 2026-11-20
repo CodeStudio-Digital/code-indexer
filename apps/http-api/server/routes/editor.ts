@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { createEditorHandlers, createContext } from '@mcp/api-handlers';
 import type { EditorCancelInput, EditorCompleteInput, EditorDeliveryInput, EditorFeedbackInput, EditorProbeInput } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
@@ -9,7 +9,7 @@ import type { ServerDeps } from '../deps.js';
  * The handler itself never throws (fail-open by contract), so no error
  * mapping beyond a defensive 500.
  */
-export function mountEditorRoutes(app: Hono, deps: ServerDeps): void {
+export function mountEditorRoutes(app: HttpRouter, deps: ServerDeps): void {
   const h = createEditorHandlers(deps);
 
   app.post('/api/editor/resolve-config', async (c) => {

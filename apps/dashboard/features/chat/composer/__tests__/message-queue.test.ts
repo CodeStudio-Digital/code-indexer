@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MessageQueue, type QueueDeliver, type QueuedMessage } from '../message-queue.js';
+import { MessageNotStartedError, MessageQueue, type QueueDeliver, type QueuedMessage } from '../message-queue.js';
 
 const active = { streaming: true, doneReason: null, error: null };
 const completed = { streaming: false, doneReason: 'completed', error: null };
@@ -86,6 +86,34 @@ describe('conversation outbox', () => {
     queue.resume();
     await tick();
     expect(deliver).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses a new ID on explicit retry after a confirmed pre-start refusal', async () => {
+    const deliver = vi.fn<QueueDeliver>().mockRejectedValueOnce(new MessageNotStartedError('worker draining')).mockResolvedValue('accepted');
+    const queue = setup(deliver);
+    queue.enqueue('one', 'next-turn');
+    await tick();
+    expect(deliver).toHaveBeenCalledOnce();
+    const [item] = queue.getSnapshot().items;
+    expect(item).toMatchObject({ id: 'message-2', status: 'error', text: 'one' });
+    queue.promote(item.id);
+    await tick();
+    expect(deliver.mock.calls.map(call => call[1].clientMessageId)).toEqual(['message-1', 'message-2']);
+    expect(queue.getSnapshot().items).toEqual([]);
+  });
+
+  it('replays an uncertain parked delivery with its original body and identity', async () => {
+    const deliver = vi.fn<QueueDeliver>().mockRejectedValueOnce(new Error('lost response')).mockResolvedValue('accepted');
+    const queue = setup(deliver, false);
+    queue.enqueue('parked', 'end-of-session');
+    await tick();
+    queue.promote('message-1');
+    queue.promote('message-1');
+    await tick();
+    expect(deliver.mock.calls).toHaveLength(2);
+    expect(deliver.mock.calls[0][1]).toMatchObject({ clientMessageId: 'message-1', interject: false });
+    expect(deliver.mock.calls[1]).toEqual(deliver.mock.calls[0]);
+    expect(queue.getSnapshot().items).toEqual([]);
   });
 
   it('promotes one chosen item without flushing the others', async () => {

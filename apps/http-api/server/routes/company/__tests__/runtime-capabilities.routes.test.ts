@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,7 +34,7 @@ const { mountCompanyInboxRoutes } = await import('../inbox.js');
 const { mountCompanyEnvsRoutes } = await import('../envs.js');
 
 interface Handle {
-  app: Hono;
+  app: HttpRouter;
   companyStore: CompanyStore;
   operationalSessionFiles: OperationalSessionFiles;
   sessionStore: FsSessionStore;
@@ -93,7 +93,7 @@ async function setup(): Promise<Handle> {
     runtime_kind: 'app_studio',
   });
 
-  const app = new Hono();
+  const app = new HttpRouter();
   const deps = {
     companyStore,
     operationalSessionFiles,

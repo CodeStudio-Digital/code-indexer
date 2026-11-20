@@ -18,7 +18,7 @@
  * native ABI where a real Database() throws ERR_DLOPEN_FAILED.
  */
 import { describe, expect, it, beforeEach } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { IN_PROCESS_ENV } from '../../../middleware/local-origin.js';
 import { mountSshRoutes } from '../index.js';
 import type { ServerDeps } from '../../../deps.js';
@@ -27,7 +27,7 @@ const PID = 7;
 const HOSTS = `http://internal/api/projects/${PID}/ssh/hosts`;
 const SECRETS = `http://internal/api/projects/${PID}/ssh/secrets`;
 
-/** Hono `env` as @hono/node-server builds it: the raw Node request. */
+/** Socket metadata supplied by the Node HTTP adapter. */
 const peer = (remoteAddress: string) => ({ incoming: { socket: { remoteAddress } } });
 
 /** Only the reads exercised below are stubbed; a refused request never gets here. */
@@ -39,10 +39,10 @@ const emptyStore = {
 };
 
 describe('ssh routes — trusted-local guard', () => {
-  let app: Hono;
+  let app: HttpRouter;
 
   beforeEach(() => {
-    app = new Hono();
+    app = new HttpRouter();
     mountSshRoutes(app, { sshStore: emptyStore, sshStoreFor: () => emptyStore } as unknown as ServerDeps);
   });
 

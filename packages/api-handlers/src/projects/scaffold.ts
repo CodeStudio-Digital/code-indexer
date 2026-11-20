@@ -3,7 +3,7 @@
  * transports:
  *   - api-bus `projects.scaffold` wraps it via `streamFromCallbacks`
  *     (Electron IPC).
- *   - the Hono SSE route calls it directly with `c.req.raw.signal` so a
+ *   - the HTTP SSE route calls it directly with `c.req.raw.signal` so a
  *     client disconnect aborts the child npm/git process.
  *
  * Registration happens ONLY on a successful scaffold, so a failed run

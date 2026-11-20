@@ -11,12 +11,12 @@ let cancellableInvokeSeq = 0;
  *
  * Inside Electron: prefix with `mcp://app` so the request rides the
  * custom protocol handler we registered in the main process — same
- * Hono routes, but dispatched in-process via `app.fetch(Request)`,
- * NO socket, NO loopback. The Hono dev HTTP listener stays off by
+ * HTTP routes, but dispatched in-process via `app.fetch(Request)`,
+ * NO socket, NO loopback. The HTTP listener for development stays off by
  * default (MCP_DEV_HTTP=0).
  *
  * In browser dev (vite dev): empty base so relative URLs route through
- * the Vite proxy → Hono listener (operator runs `MCP_DEV_HTTP=1`).
+ * the Vite proxy to the standalone HTTP listener.
  *
  * Detection: `navigator.userAgent` contains "Electron" in the desktop
  * shell. We DON'T rely on `window.electronAPI` here — the preload that

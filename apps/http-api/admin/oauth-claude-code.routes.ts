@@ -5,7 +5,7 @@
  * access token for inference; console-only logins store the managed API key
  * created by Claude Code's oauth API key endpoint.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
 import {
   startOAuthFlow as startClaudeCodeFlow,
@@ -27,8 +27,8 @@ interface StartClaudeCodeBody {
   loginMethod?: string;
 }
 
-export function claudeCodeOAuthRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function claudeCodeOAuthRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   app.post('/oauth/claude-code/start', async (c) => {
     try {

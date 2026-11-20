@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -23,7 +23,7 @@ import type { CompanySessionId } from '@mcp/session-storage';
  * returns a `WorkerBackedOrchestrator` RPC proxy whose every method call
  * returns a *Promise* (see WorkerOrchestratorPool's proxy). Calling
  * `orchestrator.driveStore.list()` synchronously yielded a Promise that
- * Hono serialized as `{}`, so the dashboard saw `files: {}` and threw
+ * HttpRouter serialized as `{}`, so the dashboard saw `files: {}` and threw
  * "Unexpected drive response shape" for any running session.
  *
  * When the session IS live we still want dashboard-initiated mutations to
@@ -54,8 +54,8 @@ function getDriveStore(deps: ServerDeps, sessionId: CompanySessionId): CompanyDr
   });
 }
 
-export function mountCompanyDriveRoutes(app: Hono, deps: ServerDeps): void {
-  const resolveRootId = async (c: Context) =>
+export function mountCompanyDriveRoutes(app: HttpRouter, deps: ServerDeps): void {
+  const resolveRootId = async (c: HttpContext) =>
     (
       await resolveCompanySessionContext(
         deps.sessionStore,

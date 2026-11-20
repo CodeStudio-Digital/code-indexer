@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { createMiddleware } from 'hono/factory';
-import type { Hono } from 'hono';
+import type { HttpRouter, MiddlewareHandler } from '@mcp/shared/http/router.js';
 import { parseIdParam } from '../_helpers.js';
 
 /** Electron can finish a custom-protocol fetch after the renderer has aborted it.
  * Reserve before dispatch so even a cancel arriving ahead of the send is final. */
-export function mountManualSends(app: Hono) {
+export function mountManualSends(app: HttpRouter): MiddlewareHandler {
   const reservations = new Map<string, {
     projectId: number; controller: AbortController; expiry: NodeJS.Timeout; claimed: boolean;
   }>();
@@ -28,7 +27,7 @@ export function mountManualSends(app: Hono) {
     }
     return c.json({ ok: true });
   });
-  return createMiddleware<{ Variables: { manualSendSignal: AbortSignal } }>(async (c, next) => {
+  return async (c, next) => {
     const id = c.req.header('X-CodeStudio-Send-Id');
     if (!id) {
       c.set('manualSendSignal', c.req.raw.signal);
@@ -40,5 +39,5 @@ export function mountManualSends(app: Hono) {
     clearTimeout(item.expiry);
     c.set('manualSendSignal', AbortSignal.any([c.req.raw.signal, item.controller.signal]));
     try { await next(); } finally { reservations.delete(id); }
-  });
+  };
 }

@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { connectionInProject } from './_ownership.js';
@@ -9,7 +9,7 @@ import type { CreateDbConnectionInput, DbConnectionPatch } from '@mcp/store/db-c
  * /api/projects/:projectId/db-client. `enc_*` secret fields arrive already
  * encrypted by the renderer's `secrets` shim — this layer never sees plaintext.
  */
-export function mountDbConnectionRoutes(app: Hono, deps: ServerDeps): void {
+export function mountDbConnectionRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/db-client';
 
   app.get(`${base}/connections`, (c) => {

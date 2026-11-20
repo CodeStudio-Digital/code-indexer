@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import {
   parseSessionWorkbenchListQuery,
@@ -104,7 +104,7 @@ function rawEventQuery(query: (name: string) => string | undefined): SessionWork
 }
 
 export function mountSessionWorkbenchRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   options: MountSessionWorkbenchRoutesOptions = {},
 ): void {

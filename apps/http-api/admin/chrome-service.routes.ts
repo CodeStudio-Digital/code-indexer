@@ -14,7 +14,7 @@
  * needed; the singleton row is single-writer through the `ChromeService`
  * class). The runtime singleton is grabbed via `tryGetChromeService()`.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { ChromeServiceStore } from '@mcp/store/chrome-service-store.js';
 import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
@@ -30,8 +30,8 @@ function getStore(): ChromeServiceStore {
   return new ChromeServiceStore(config.dbPath);
 }
 
-export function chromeServiceRouter(): Hono {
-  const app = new Hono();
+export function chromeServiceRouter(): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/chrome-service', async (c) => {
     const svc = tryGetChromeService();

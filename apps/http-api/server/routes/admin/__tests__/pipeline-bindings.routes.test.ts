@@ -8,7 +8,7 @@
  * semantic-profile / cross-encoder roles are absent.
  */
 import { describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mountAdminPipelineBindingsRoutes } from '../pipeline-bindings.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { PipelineProfileApplyRow } from '@mcp/store/pipeline-provider-bindings-store.js';
@@ -75,12 +75,12 @@ function setup(opts: { knownProviders?: Set<string> } = {}) {
       return known.has(id) ? { id, name: id, kind: 'cloudflare', enabled: true } : null;
     },
   };
-  const app = new Hono();
+  const app = new HttpRouter();
   mountAdminPipelineBindingsRoutes(app, { pipelineBindingsStore, providerStore } as unknown as ServerDeps);
   return { app, captured };
 }
 
-async function post(app: Hono, body: unknown) {
+async function post(app: HttpRouter, body: unknown) {
   return app.request('/api/admin/pipeline-bindings/bulk/apply-profile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -88,7 +88,7 @@ async function post(app: Hono, body: unknown) {
   });
 }
 
-async function postBulk(app: Hono, body: unknown) {
+async function postBulk(app: HttpRouter, body: unknown) {
   return app.request('/api/admin/pipeline-bindings/bulk/apply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

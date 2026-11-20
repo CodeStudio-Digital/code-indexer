@@ -2,10 +2,10 @@
  * Shared types for the api-bus RPC contract.
  *
  * The contract is transport-agnostic: the same handler signatures are
- * mounted on Hono routes (HTTP/SSE for browser dev + diagnostics) and on
+ * mounted on HTTP routes (HTTP/SSE for browser dev + diagnostics) and on
  * Electron `ipcMain.handle` + `MessageChannel` (in-process, zero overhead).
  *
- * `AsyncStream<T>` is the streaming primitive. Hono adapts it to SSE;
+ * `AsyncStream<T>` is the streaming primitive. The HTTP layer adapts it to SSE;
  * Electron adapts it to a `MessagePort` posted to the renderer. Callers
  * consume it as a normal `AsyncIterable<T>` and never see the transport.
  */
@@ -23,7 +23,7 @@ export type AsyncStream<T> = AsyncIterable<T>;
  * Per-request context injected by the transport layer.
  *
  * - `user`: present when the caller is authenticated. The Electron IPC
- *   bridge extracts user identity from the cached JWT; Hono extracts it
+ *   bridge extracts user identity from the cached JWT; the HTTP layer extracts it
  *   from the `Authorization` header via `userAuthMiddleware`.
  * - `requestId`: stable id for log correlation across the handler and any
  *   nested calls (worker pool dispatches, provider calls, etc.).

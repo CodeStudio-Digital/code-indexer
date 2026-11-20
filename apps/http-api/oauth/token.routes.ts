@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AuthBundle } from '../auth/composition.js';
 import { presentAuthError } from '../auth/error-presenter.js';
 
@@ -6,8 +6,8 @@ import { presentAuthError } from '../auth/error-presenter.js';
  * /oauth/token — authorization_code + refresh_token grants.
  * Accepts form-encoded body per RFC 6749.
  */
-export function createTokenRouter(bundle: AuthBundle): Hono {
-  const app = new Hono();
+export function createTokenRouter(bundle: AuthBundle): HttpRouter {
+  const app = new HttpRouter();
 
   app.post('/token', async (c) => {
     const body = await c.req.parseBody();
@@ -88,7 +88,7 @@ function stringField(body: Record<string, unknown>, key: string): string {
  * Resolves client_id from (a) Basic auth header, or (b) form field.
  * Basic auth format: Base64("clientId:clientSecret").
  */
-function parseClientId(c: import('hono').Context, body: Record<string, unknown>): string | null {
+function parseClientId(c: import('@mcp/shared/http/router.js').HttpContext, body: Record<string, unknown>): string | null {
   const auth = c.req.header('authorization');
   if (auth?.toLowerCase().startsWith('basic ')) {
     try {

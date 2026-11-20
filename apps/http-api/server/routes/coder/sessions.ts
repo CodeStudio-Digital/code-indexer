@@ -1,7 +1,7 @@
 import { trimMessageBlocks, reconstructMissingToolResults } from './session-message-preview.js';
 import { registerSessionImageRoutes } from './session-images.js';
 import { resolveProjectWorktree } from '../../worktree-reads.js';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
@@ -201,7 +201,7 @@ interface CreateSessionBody {
 }
 
 export function mountCoderSessionsRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   _runtime: CoderRuntime,
 ): void {
@@ -330,7 +330,7 @@ export function mountCoderSessionsRoutes(
 
   /**
    * Global (multi-project) sessions list — powers the "Sessões Globais" menu.
-   * MUST be registered BEFORE /api/coder/sessions/:id so Hono does not
+   * MUST be registered BEFORE /api/coder/sessions/:id so HttpRouter does not
    * interpret "global" as a session id.
    */
   app.get('/api/coder/sessions/global', async (c) => {
@@ -1127,7 +1127,7 @@ export function mountCoderSessionsRoutes(
    * after creation ("anexar projeto"). Rebuilds the junctions + warms the union
    * index so the file tree/search pick it up now; the agent spans the new root
    * on its NEXT run. Rejected (409) while a run is in flight. Returns the updated
-   * link set. MUST stay before the `/:id` catch-all (Hono route ordering).
+   * link set. MUST stay before the `/:id` catch-all (HttpRouter route ordering).
    */
   app.post('/api/coder/sessions/:id/projects', async (c) => {
     const id = parseSessionIdParam(c);

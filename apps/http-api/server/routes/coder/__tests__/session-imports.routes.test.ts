@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { ExternalSessionError, type PersistExternalSessionInput } from '@mcp/code-agent/sessions/import/index.js';
 import type { ServerDeps } from '../../../deps.js';
 import { mountCoderSessionImportRoutes } from '../session-imports.js';
@@ -32,12 +32,12 @@ function setup(rootPath = 'D:\\MCP', persist?: (input: PersistExternalSessionInp
       },
     },
   } as unknown as ServerDeps;
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionImportRoutes(app, deps);
   return { app, imported };
 }
 
-function post(app: Hono, path: string, body: unknown): Promise<Response> {
+function post(app: HttpRouter, path: string, body: unknown): Promise<Response> {
   return Promise.resolve(app.request(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }));

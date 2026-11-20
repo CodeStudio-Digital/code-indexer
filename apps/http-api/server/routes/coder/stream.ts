@@ -1,6 +1,6 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { sessionRecoveryFailure } from '../../../control-plane-recovery-error.js';
-import { bodyLimit } from 'hono/body-limit';
+import { bodyLimit } from '@mcp/shared/http/middleware.js';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
@@ -33,7 +33,7 @@ import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
-import { isCoderStartupUncertainError } from '../../../sse/coder-runtime-errors.js';
+import { coderSetupFailure, isCoderStartupUncertainError } from '../../../sse/coder-runtime-errors.js';
 import { parseSessionIdParam, notFound } from '../_helpers.js';
 import {
   normalizeDedupeKey,
@@ -165,7 +165,7 @@ const attachmentBodyLimit = bodyLimit({
 });
 
 export function mountCoderStreamRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   runtime: CoderRuntime,
 ): void {
@@ -212,9 +212,10 @@ export function mountCoderStreamRoutes(
       return { event: 'done', data: { reason: 'completed', duplicate: true, persisted: true } };
     }
     if (status === 'failed' || status === 'cancelled' || status === 'rejected') {
+      const details = coderSetupFailure(acceptance.commandReasonCode ?? '');
       return {
         event: 'error',
-        data: { reason: `command-${status}`, duplicate: true, persisted: true },
+        data: { ...(details.message ? details : { reason: `command-${status}` }), duplicate: true, persisted: true },
       };
     }
     return null;
@@ -895,7 +896,8 @@ export function mountCoderStreamRoutes(
     const id = parseSessionIdParam(c);
     const session = await sessionStore.getSession(id);
     if (!session) return c.json({ error: 'session not found' }, 404);
-    const alive = activeRuns.has(id);
+    const bus = activeRuns.get(id);
+    const alive = !!bus && !bus.ended;
     return c.json({
       sessionId: id,
       status: session.status,
@@ -1012,7 +1014,7 @@ export function mountCoderStreamRoutes(
       return unique.length > 0 ? unique : undefined;
     })();
 
-    const liveAtClaim = workerPool.getBus(id);
+    const liveAtClaim = workerPool.getBus(id, true);
     // Command identity cannot depend on mutable transcript state: after the
     // first append, a retry must still resolve the same durable row. Historical
     // first-message `start` rows are handled transactionally as an alias by the
@@ -1105,9 +1107,10 @@ export function mountCoderStreamRoutes(
     ): Promise<void> => {
       if (commandSettled) return;
       commandSettled = true;
+      const details = coderSetupFailure(reason, error);
       await terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
         status,
-        reason,
+        reason: details.reason,
         ...(error
           ? { errorRef: error instanceof Error ? `error:${error.name}` : 'error:unknown' }
           : {}),
@@ -1115,7 +1118,7 @@ export function mountCoderStreamRoutes(
       if (dedupeKey) {
         recentMessageKeys.recordTerminal(id, dedupeKey, {
           event: 'error',
-          data: { reason, duplicate: false },
+          data: { ...details, duplicate: false },
         }, -1, claimGuard);
       }
     };
@@ -1123,7 +1126,7 @@ export function mountCoderStreamRoutes(
     try {
     // Always resolve command identity first: an acknowledgement lost after a
     // fresh run started must replay that receipt, not queue the same task again.
-    const busyAtAdmission = workerPool.getBus(id);
+    const busyAtAdmission = workerPool.getBus(id, true);
     if (body.only_when_idle && busyAtAdmission && !busyAtAdmission.ended) {
       await settleClaimFailure('run-became-active');
       return c.json({ accepted: false, busy: true, bus_id: busyAtAdmission.busId });
@@ -1204,7 +1207,7 @@ export function mountCoderStreamRoutes(
       // (`isWaitingForInput`, `pushUserMessage`, `interruptWait`) are RPCs;
       // no request is allowed to fall back onto the Electron/backend loop.
       const pool = workerPool;
-      const existingBus = pool.getBus(id);
+      const existingBus = pool.getBus(id, true);
       if (existingBus && !existingBus.ended) {
         if (body.only_when_idle) return { kind: 'busy', bus: existingBus };
         if (
@@ -1365,6 +1368,8 @@ export function mountCoderStreamRoutes(
         return c.json({ error: error.message, code: error.code, retryable: false }, 503);
       }
       await settleClaimFailure('request-setup-failed', error);
+      const details = coderSetupFailure('request-setup-failed', error);
+      if (details.not_started) return replyTerminal('error', { ...details, duplicate: false });
       if (isUncertainToolOutcomeError(error) || isWorkspaceRuntimeConflict(error)) return c.json({ error: error.message, code: error.code, retryable: false }, 409);
       throw error;
     }
@@ -1411,7 +1416,7 @@ export function mountCoderStreamRoutes(
     const continueMaxAutoContinues = normalizeSessionMaxAutoContinues(
       body.max_auto_continues ?? continueSession.max_auto_continues,
     );
-    const liveAtContinueClaim = workerPool.getBus(id);
+    const liveAtContinueClaim = workerPool.getBus(id, true);
     const continueEarlyClaim = await withSessionLock(id, async () => claimCoderCommand({
       sessionId: id,
       kind: 'resume',
@@ -1489,9 +1494,10 @@ export function mountCoderStreamRoutes(
     ): Promise<void> => {
       if (continueSettled) return;
       continueSettled = true;
+      const details = coderSetupFailure(reason, error);
       await terminalizeLocalCoderCommand(controlPlaneStore, continueAcceptance, {
         status: 'failed',
-        reason,
+        reason: details.reason,
         ...(error
           ? { errorRef: error instanceof Error ? `error:${error.name}` : 'error:unknown' }
           : {}),
@@ -1499,7 +1505,7 @@ export function mountCoderStreamRoutes(
       if (dedupeKey) {
         recentMessageKeys.recordTerminal(id, dedupeKey, {
           event: 'error',
-          data: { reason, duplicate: false },
+          data: { ...details, duplicate: false },
         }, -1, continueClaimGuard);
       }
     };
@@ -1514,7 +1520,7 @@ export function mountCoderStreamRoutes(
       decision = await withSessionLock(id, async () => {
         // A live run already owns this session. Tail it rather than replacing
         // activeRuns; the early command claim is terminalized as attached.
-        const live = workerPool.getBus(id);
+        const live = workerPool.getBus(id, true);
         if (live && !live.ended) {
           const tailFrom = live.nextSeq - 1;
           if (
@@ -1584,6 +1590,8 @@ export function mountCoderStreamRoutes(
         return c.json({ error: error.message, code: error.code, retryable: false }, 503);
       }
       await settleContinueFailure('continue-setup-failed', error);
+      const details = coderSetupFailure('continue-setup-failed', error);
+      if (details.not_started) return syntheticTerminalSSE(c, 'error', { ...details, duplicate: false });
       if (isUncertainToolOutcomeError(error) || isWorkspaceRuntimeConflict(error)) return c.json({ error: error.message, code: error.code, retryable: false }, 409);
       throw error;
     }

@@ -656,7 +656,7 @@ busca e exclusao de vetores sempre usam os bancos sqlite-vec locais.
 src/
   agent/           # Scanner + IndexAgent + Providers
     providers/     # Anthropic, OpenAI, DeepSeek, Gemini, ZAI
-  api/             # Hono REST API
+  api/             # HTTP API
   dashboard/       # React SPA (Vite + Tailwind v4)
   mcp/             # MCP Server (stdio)
   search/          # Hybrid search (FTS5 + Vector + RRF)

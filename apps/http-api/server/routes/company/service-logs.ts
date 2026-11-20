@@ -9,7 +9,7 @@
  * `sandbox.service.log_batch` SSE event. These endpoints back the
  * "load earlier" pagination and the transitions timeline.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -25,7 +25,7 @@ function parseCursor(v: string | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
 }
 
-export function mountCompanyServiceLogsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyServiceLogsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore } = deps;
 
   // Registered BEFORE any `/services/:serviceId` sibling patterns would

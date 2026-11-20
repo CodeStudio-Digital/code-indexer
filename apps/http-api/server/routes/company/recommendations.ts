@@ -4,7 +4,7 @@
  * Reusable role templates and pipeline configuration remain in SQLite. Session
  * existence, agent availability and Kanban inputs come only from bundles.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   notFound,
@@ -22,7 +22,7 @@ import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.j
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
 
 export function mountCompanyRecommendationsRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
 ): void {
   const { sessionStore, pipelineTelemetrySink } = deps;

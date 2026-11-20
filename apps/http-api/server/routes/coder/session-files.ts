@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { assertContainedPath, assertPathHasNoLinks, UnsafeSessionPathError } from '@mcp/session-storage';
 import type { ServerDeps } from '../../deps.js';
 import { notFound, parseSeqParam, parseSessionIdParam } from '../_helpers.js';
@@ -16,7 +16,7 @@ function disposition(name: string): string {
 }
 
 /** Browse only this session's bundle. No recursive tree or attachment bodies on list. */
-export function mountCoderSessionFilesRoutes(app: Hono, { sessionStore: store }: ServerDeps) {
+export function mountCoderSessionFilesRoutes(app: HttpRouter, { sessionStore: store }: ServerDeps) {
   app.get('/api/coder/sessions/:id/attachments', async c => {
     const id = parseSessionIdParam(c);
     if (!await store.getSessionLocation(id)) return notFound(c);

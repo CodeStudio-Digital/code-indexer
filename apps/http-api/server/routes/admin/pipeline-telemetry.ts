@@ -8,10 +8,10 @@
  *   GET /api/admin/telemetry/pipelines/cache-stats  → hit rate per component
  *   POST /api/admin/telemetry/pipelines/prune       → drop rows older than cutoff
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 
-export function mountAdminPipelineTelemetryRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAdminPipelineTelemetryRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { pipelineTelemetryStore } = deps;
 
   app.get('/api/admin/telemetry/pipelines', (c) => {

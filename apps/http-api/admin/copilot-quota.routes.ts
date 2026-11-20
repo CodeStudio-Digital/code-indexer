@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { CopilotQuotaCategory, CopilotQuotaReport, CopilotQuotaSnapshot } from '@mcp/api-bus';
 import { startCopilotClient, stopCopilotClient } from '@mcp/code-agent/providers/copilot-sdk-client.js';
 import { abortableRead } from '@mcp/shared/utils/abortable.js';
@@ -53,8 +53,8 @@ function summarizeQuota(snapshots: QuotaMap, user?: AccountDetails): CopilotQuot
   return { checkedAt: new Date(now).toISOString(), quotas };
 }
 
-export function copilotQuotaRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function copilotQuotaRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
   app.get('/providers/:id/copilot-quota', async c => {
     c.header('Cache-Control', 'no-store');
     const provider = store.getProvider(c.req.param('id'));

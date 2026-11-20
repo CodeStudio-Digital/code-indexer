@@ -144,7 +144,7 @@ async function openDbTunnel(spec: DbConnectSpec): Promise<{ config: DbConnectCon
 export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
   const mgr = sharedDbConnectionManager();
   // Engine + read-only live on the SHARED manager (not this closure), so the
-  // IPC handler instance, the Hono-fallback instance and the agent path all
+  // IPC handler instance, the HTTP route fallback instance and the agent path all
   // resolve them from one place — otherwise editRow/ddl could hit an instance
   // whose maps are empty and (wrongly) report "not connected".
 

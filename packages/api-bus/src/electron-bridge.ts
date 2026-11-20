@@ -8,7 +8,7 @@
  * methods return `Promise<T>` from `ipcRenderer.invoke`.
  *
  * Outside Electron `window.electronAPI` is undefined; the dashboard's
- * `apiClient` falls back to `fetch` against the Hono routes.
+ * `apiClient` falls back to `fetch` against the HTTP routes.
  */
 
 import type { SerializableAsyncIterator } from '@mcp/shared/utils/serializable-stream.js';

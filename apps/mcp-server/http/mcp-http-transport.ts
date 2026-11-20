@@ -10,7 +10,7 @@
  * that add API token / OAuth protection layer on top without changing
  * anything here.
  */
-import { Hono } from 'hono';
+import { HttpRouter, type HttpContext, type MiddlewareHandler } from '@mcp/shared/http/router.js';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -126,10 +126,10 @@ function isResourceAllowedForPolicy(
 }
 
 interface McpHttpDeps {
-  /** Resolves a request-bound AuthContext from Hono's variable bag. */
-  resolveAuthContext?: (c: import('hono').Context) => AuthContext | undefined;
+  /** Resolves a request-bound AuthContext from HttpRouter's variable bag. */
+  resolveAuthContext?: (c: HttpContext) => AuthContext | undefined;
   /** Middleware to run before the transport handler (auth, rate limit, ...). */
-  beforeTransport?: import('hono').MiddlewareHandler;
+  beforeTransport?: MiddlewareHandler | MiddlewareHandler[];
   /** Policy check invoked before a tool handler runs. */
   enforceScope?: EnforceScope;
   /** Audit sink — receives tool_call_ok / tool_call_error / scope_denied. */
@@ -137,13 +137,13 @@ interface McpHttpDeps {
 }
 
 /**
- * Build the Hono sub-app that serves the MCP endpoint. Stateless by default.
+ * Build the HttpRouter sub-app that serves the MCP endpoint. Stateless by default.
  * Stateful mode opts-in via config.mcp.http.stateful.
  */
 export function createMcpHttpApp(
   config: IndexerConfig,
   deps: McpHttpDeps = {},
-): Hono {
+): HttpRouter {
   const ctx = buildContext();
   const registry = buildToolRegistry();
   const sessions = new SessionManager();
@@ -163,9 +163,9 @@ export function createMcpHttpApp(
     finally { await server.close(); }
   };
 
-  const app = new Hono();
+  const app = new HttpRouter();
 
-  if (deps.beforeTransport) app.use('*', deps.beforeTransport);
+  if (deps.beforeTransport) app.use('*', ...[deps.beforeTransport].flat());
 
   // All MCP traffic (POST/GET/DELETE) lands on the root of this sub-app.
   app.all('/', async (c) => {

@@ -14,8 +14,8 @@
  *
  * Mounted by server.ts next to `mountWorkersDiagnosticRoute`.
  */
-import type { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { bodyLimit } from '@mcp/shared/http/middleware.js';
 import { getPerfSampler } from '../../perf/perf-sampler.js';
 import { resetSlowCalls, slowCallsSnapshot } from '../../perf/slow-ipc.js';
 import { breakdownEnabled, breakdownSnapshot, resetBreakdown } from '../../perf/breakdown.js';
@@ -122,7 +122,7 @@ const rendererFreezeBodyLimit = bodyLimit({
   onError: (c) => c.json({ error: 'renderer freeze batch too large' }, 413),
 });
 
-export function mountPerfRoutes(app: Hono): void {
+export function mountPerfRoutes(app: HttpRouter): void {
   app.get('/api/admin/perf/current', async (c) => {
     const sampler = getPerfSampler();
     if (!sampler) return c.json({ error: 'perf sampler not started' }, 503);

@@ -1,7 +1,7 @@
 /**
  * Handlers for the `snapshots` namespace. Thin wrapper over the existing
  * `SnapshotService` (apps/http-api/server/routes/snapshots.ts mounts the
- * same operations as Hono routes).
+ * same operations as HTTP routes).
  */
 
 import type { SnapshotsApi } from '@mcp/api-bus';

@@ -10,7 +10,7 @@
  * without spawning real worker threads.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 
 type Orch = {
   metaBus: unknown;
@@ -350,7 +350,7 @@ function setup(
     } : null,
   } as unknown as ServerDeps;
 
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCompanyStreamRoutes(app, deps);
 
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>

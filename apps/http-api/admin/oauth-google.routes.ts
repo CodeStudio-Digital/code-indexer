@@ -6,7 +6,7 @@
  * upserts the provider row, and seeds a model list (live first, falling
  * back to GOOGLE_SEED_MODELS).
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { createAuthClient, setupCloudCode, retrieveUserQuota } from '@mcp/services/services/cloudcode.js';
 import { refreshIfExpired } from '@mcp/services/services/oauth/google.js';
@@ -29,8 +29,8 @@ const GOOGLE_SEED_MODEL_IDS = [
   'gemini-3.1-flash-lite-preview',
 ];
 
-export function googleOAuthRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function googleOAuthRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   /**
    * Start the Google PKCE flow. Boots the loopback server on :1456 and

@@ -1,14 +1,14 @@
-import type { Context } from 'hono';
+import type { HttpContext } from '@mcp/shared/http/router.js';
 import { authErrorHttpStatus, authErrorMessage, type AuthError } from '@mcp/services/auth/domain/errors.js';
 
 /**
- * Converts a domain AuthError into a Hono JSON response with the right HTTP
+ * Converts a domain AuthError into a HttpRouter JSON response with the right HTTP
  * status + optional `WWW-Authenticate` / `Retry-After` headers.
  *
  * Centralizing this is DRY: every route that gates on auth funnels failures
  * through here, so error shape and status codes stay consistent.
  */
-export function presentAuthError(c: Context, err: AuthError, issuer?: string): Response {
+export function presentAuthError(c: HttpContext, err: AuthError, issuer?: string): Response {
   const status = authErrorHttpStatus(err);
   const body = { error: err.kind, error_description: authErrorMessage(err) };
 

@@ -1,6 +1,6 @@
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { ApiError } from '@mcp/api-bus';
 import { normalizeSemanticFolders, projectSemanticFolders } from '@mcp/shared/utils/semantic-folders.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
@@ -30,7 +30,7 @@ async function checkFolders(rootPath: string, folders: readonly string[]): Promi
   }
 }
 
-export function mountProjectSemanticFoldersRoutes(app: Hono, deps: ServerDeps): void {
+export function mountProjectSemanticFoldersRoutes(app: HttpRouter, deps: ServerDeps): void {
   const path = '/api/projects/:id/semantic/folders';
   app.get(path, (c) => {
     try {

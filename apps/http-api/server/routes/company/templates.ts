@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CompanyRoleConfig } from '@mcp/company/types.js';
 import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
@@ -16,7 +16,7 @@ interface UpdateTemplateBody {
   roles?: CompanyRoleConfig[];
 }
 
-export function mountCompanyTemplateRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyTemplateRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { companyStore } = deps;
 
   app.get('/api/company/templates', (c) => {

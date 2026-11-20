@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { ChatCollaborationStore, rootChatId } from '@mcp/session-storage/collabo
 import { SessionNetwork } from '@mcp/code-agent/runtime/session-network.js';
 import { mountSessionNetworkRoutes } from '../session-network-routes.js';
 
-let directory: string, sessions: FsSessionStore, mailbox: ChatCollaborationStore, network: SessionNetwork, parentId: string, app: Hono;
+let directory: string, sessions: FsSessionStore, mailbox: ChatCollaborationStore, network: SessionNetwork, parentId: string, app: HttpRouter;
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'session-network-routes-'));
   await mkdir(join(directory, 'project'));
@@ -20,7 +20,7 @@ beforeEach(async () => {
   network = new SessionNetwork({ sessions, mailbox, project: () => project, validateModel: (_provider, model) => { if (model !== 'model') throw new Error('Unavailable model'); } });
   const parent = await sessions.createSession({ project_id: 1, title: 'Coordinator', provider: 'provider', model: 'model' });
   parentId = parent.id; await mailbox.registerRoot(parent.id, parent.title); await network.settings(parentId, { enabled: true });
-  app = new Hono();
+  app = new HttpRouter();
   mountSessionNetworkRoutes(app, { sessionStore: sessions, db: { listProjectsForGlobalPicker: () => [project] } } as never, network, Promise.resolve());
 });
 afterEach(async () => { await sessions.close(); await rm(directory, { recursive: true, force: true }); });

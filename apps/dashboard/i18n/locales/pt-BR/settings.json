@@ -112,7 +112,7 @@
   "item.MCP_DESKTOP_NOTIFY_SESSION_FINISHED.description": "Notify when a coder, pipeline, or company session finishes, pauses, fails, or aborts.",
   "item.MCP_DESKTOP_NOTIFY_SESSION_FINISHED.label": "Notify session finished",
   "item.MCP_DEV_HTTP.description": "Liga a API in-process em 127.0.0.1:7333 para você acessar endpoints via curl / uma segunda ferramenta. Desligado por padrão; a IDE usa dispatch in-process via mcp://.",
-  "item.MCP_DEV_HTTP.label": "Expor o listener HTTP de dev (Hono)",
+  "item.MCP_DEV_HTTP.label": "Expor listener HTTP local para desenvolvimento",
   "item.MCP_HTTP_REQUEST_TIMEOUT_MS.description": "Teto de relógio em requisições HTTP, incluindo os streams SSE que dirigem runs longos de `spawn_agents`. O padrão do Node (300000ms = 5 min) estava matando explorações de subagente em codebases grandes. Padrão 3600000 (60 min). Diminua para matar runs descontrolados mais rápido; aumente para projetos com 10k+ arquivos. Requer reinício.",
   "item.MCP_HTTP_REQUEST_TIMEOUT_MS.label": "Timeout de requisição HTTP (ms)",
   "item.MCP_INDEX_STRUCTURAL_WORKER.description": "Roda o pipeline estrutural numa worker_thread dedicada (mantém o app responsivo). 0 força in-process (debug).",

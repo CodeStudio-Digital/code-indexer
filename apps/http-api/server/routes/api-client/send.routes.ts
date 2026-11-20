@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody } from '../_helpers.js';
 import { requestInProject, resolveScopedEnv } from './_ownership.js';
@@ -98,12 +98,12 @@ function recordHistory(
   } catch { /* non-fatal */ }
 }
 
-export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
+export function mountApiSendRoute(app: HttpRouter, deps: ServerDeps): void {
   // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
 
   const manualSend = mountManualSends(app);
   app.post('/api/projects/:projectId/api-client/requests/:rid/send', manualSend, async (c) => {
-    const signal = c.get('manualSendSignal');
+    const signal = c.get<AbortSignal>('manualSendSignal') ?? c.req.raw.signal;
     const projectId = parseIdParam(c, 'projectId');
     const store = deps.apiClientFor(projectId);
     const rid = parseIdParam(c, 'rid');
@@ -160,7 +160,7 @@ export function mountApiSendRoute(app: Hono, deps: ServerDeps): void {
   // body (no DB row). Mirrors /send but reads the request fields from the client
   // and uses a scratch jar. Script var-sets still persist to the selected env.
   app.post('/api/projects/:projectId/api-client/send-adhoc', manualSend, async (c) => {
-    const signal = c.get('manualSendSignal');
+    const signal = c.get<AbortSignal>('manualSendSignal') ?? c.req.raw.signal;
     const projectId = parseIdParam(c, 'projectId');
     const store = deps.apiClientFor(projectId);
     const body = await parseJsonBody<{ request?: ExecRequest; envId?: number; persistVars?: boolean }>(c);

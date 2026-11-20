@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import type DatabaseConstructor from 'better-sqlite3';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { sshHosts173 } from '@mcp/store/migrations/173_ssh_hosts.js';
 import { sshHostShared198 } from '@mcp/store/migrations/198_ssh_host_shared.js';
 import { SshStore } from '@mcp/store/ssh-store.js';
@@ -27,7 +27,7 @@ import type { SshHost } from '@mcp/store/ssh-store-types.js';
 type DB = InstanceType<typeof DatabaseConstructor>;
 
 interface Handle {
-  app: Hono;
+  app: HttpRouter;
   central: SshStore;
   project: SshStore;
   centralDb: DB;
@@ -45,7 +45,7 @@ function setup(): Handle {
   const central = new SshStore(centralDb);
   const project = new SshStore(projectDb);
 
-  const app = new Hono();
+  const app = new HttpRouter();
   // The routes only touch these two deps fields (see sharedOrOwnedHost).
   const deps = { sshStore: central, sshStoreFor: () => project } as unknown as ServerDeps;
   mountSshHostRoutes(app, deps);

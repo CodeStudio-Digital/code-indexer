@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
 import { resolveProjectPath } from '../workspace/paths.js';
@@ -6,7 +6,7 @@ import { listDirFiltered, listFilesRecursive, searchFiles } from './project-file
 import { resolveProjectWorktree } from '../../worktree-reads.js';
 import { resolveSafe } from '@mcp/code-agent/tools/paths.js';
 
-export function mountCoderProjectTreeRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderProjectTreeRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/coder/projects/:pid/tree', async (c) => {
     const projectId = parseIdParam(c, 'pid');
     if (!Number.isFinite(projectId)) {

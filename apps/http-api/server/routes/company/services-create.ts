@@ -8,7 +8,7 @@
  *
  * Extracted from `services.ts` to keep the file under the LOC cap.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { mkdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -33,7 +33,7 @@ import {
   type ExternalProjectRuntime,
 } from './sandbox-helpers.js';
 
-export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyServicesCreateRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
 
   // ─── Add a new owned-image microservice ─────────────────────────

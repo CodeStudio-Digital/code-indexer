@@ -14,7 +14,7 @@
  *
  * Phase 8 part 2.2: extracted from `sessions.ts` mega-file.
  */
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { ServiceRestartError } from '@mcp/services/sandbox/manager/dev-lifecycle.js';
@@ -47,8 +47,8 @@ export function rejectIfAttached(
   return null;
 }
 
-export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps): void {
-  const resolveRootId = async (c: Context) =>
+export function mountCompanyServiceLifecycleRoutes(app: HttpRouter, deps: ServerDeps): void {
+  const resolveRootId = async (c: HttpContext) =>
     (
       await resolveCompanySessionContext(
         deps.sessionStore,

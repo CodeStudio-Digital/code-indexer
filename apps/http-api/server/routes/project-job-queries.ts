@@ -1,8 +1,8 @@
-import type { Context } from 'hono';
+import type { HttpContext } from '@mcp/shared/http/router.js';
 import { ApiError } from '@mcp/api-bus';
 import type { SemanticJobQueryPort, ProjectJobScope } from '../../sse/semantic-job-query-port.js';
 
-export function readProjectJobPage(c: Context, query: SemanticJobQueryPort, namespaces: string[]) {
+export function readProjectJobPage(c: HttpContext, query: SemanticJobQueryPort, namespaces: string[]) {
   const rawLimit = c.req.query('limit'); const rawBefore = c.req.query('before_id');
   const limit = rawLimit === undefined ? 100 : Number(rawLimit);
   const beforeId = rawBefore === undefined ? undefined : Number(rawBefore);

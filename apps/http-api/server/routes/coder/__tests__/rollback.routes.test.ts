@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerDeps } from '../../../deps.js';
@@ -21,7 +21,7 @@ function setup() {
     sessionId,
     seq,
   }));
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderRollbackRoute(
     app,
     {

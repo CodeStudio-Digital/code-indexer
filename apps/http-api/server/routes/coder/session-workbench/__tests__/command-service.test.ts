@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId } from '@mcp/session-storage';
 import type { SessionWorkbenchCommand } from '@mcp/api-bus';
 import type { FsSessionEvent } from '@mcp/session-storage/fs-store/operational-types.js';
@@ -212,7 +212,7 @@ describe('Session Workbench command routes', () => {
             sessionId: command.sessionId, resource: 'navigator' as const,
           },
         }));
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSessionWorkbenchRoutes(app, {} as ServerDeps, {
       service: { listSessions: vi.fn(), bootstrap: vi.fn() } as never,
       resources: { context: vi.fn(), execution: vi.fn(), insights: vi.fn(), configuration: vi.fn() } as never,

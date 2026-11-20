@@ -5,7 +5,7 @@
  * route deliberately has no SQLite handle, compatibility query or durable
  * global index.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AgentRun } from '@mcp/agent-runtime-contracts';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import type { ControlPlaneAuthority } from '../../../file-control-plane-store.js';
@@ -397,7 +397,7 @@ export async function readPolicyDivergences(
 }
 
 export function mountWorkersDiagnosticRoute(
-  app: Hono,
+  app: HttpRouter,
   deps: { sessionStore: FsSessionStore; controlPlaneStore: Pick<ControlPlaneAuthority, 'journalEnabled'> },
 ): void {
   app.get('/api/admin/workers/control-plane/storage', async (c) => {

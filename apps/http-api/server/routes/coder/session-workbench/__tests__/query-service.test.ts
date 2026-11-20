@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type CatalogEntry } from '@mcp/session-storage';
 import type { FsCoderSession } from '@mcp/session-storage/fs-store/types.js';
 import {
@@ -287,7 +287,7 @@ describe('Session Workbench routes', () => {
       queryRevision: 'revision-1234567890',
     }));
     const bootstrap = vi.fn();
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSessionWorkbenchRoutes(app, {} as ServerDeps, { service: { listSessions, bootstrap } });
 
     const invalid = await app.request('/api/coder/session-workbench/sessions?scope=project');
@@ -382,7 +382,7 @@ describe('Session Workbench routes', () => {
       }],
       focusedProjectId: 7,
     })) as unknown as SessionWorkbenchQueryService['bootstrap'];
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSessionWorkbenchRoutes(app, {} as ServerDeps, { service: { listSessions, bootstrap } });
 
     const invalid = await app.request('/api/coder/session-workbench/sessions/not-a-uuid/bootstrap');
@@ -403,7 +403,7 @@ describe('Session Workbench routes', () => {
   it('fails closed when an internal service violates the public response contract', async () => {
     const listSessions = vi.fn(async () => ({ contractVersion: 1 as const }));
     const bootstrap = vi.fn();
-    const app = new Hono();
+    const app = new HttpRouter();
     mountSessionWorkbenchRoutes(app, {} as ServerDeps, {
       service: { listSessions, bootstrap } as unknown as NonNullable<Parameters<typeof mountSessionWorkbenchRoutes>[2]>['service'],
     });

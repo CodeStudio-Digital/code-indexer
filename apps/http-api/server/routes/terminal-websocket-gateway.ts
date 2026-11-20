@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { asCompanySessionId, type CompanySessionId } from '@mcp/session-storage';
 import type { Server as HttpServer } from 'node:http';
 import { type TerminalUpgradeDeps, type SpawnSpec } from './terminal-websocket-types.js';
@@ -16,7 +16,7 @@ import { handleConnection } from './terminal-websocket-session.js';
  *
  * Mounted at `GET /api/terminal/diagnose?sessionId=N&target=sandbox|host`.
  */
-export function mountTerminalDiagnoseRoute(app: Hono, deps: TerminalUpgradeDeps): void {
+export function mountTerminalDiagnoseRoute(app: HttpRouter, deps: TerminalUpgradeDeps): void {
   app.get('/api/terminal/diagnose', async (c) => {
     const sessionIdRaw = c.req.query('sessionId') ?? '';
     const targetRaw = c.req.query('target') ?? 'sandbox';

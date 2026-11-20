@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountApiCollectionRoutes } from './collections.routes.js';
 import { mountApiEnvironmentRoutes } from './environments.routes.js';
@@ -14,7 +14,7 @@ import { mountApiDocRoutes } from './docs.routes.js';
  * the CORS-free "send" proxy, OpenAPI import + the non-LLM regression runner,
  * code generation (curl/…) and curl import + collection export.
  */
-export function mountApiClientRoutes(app: Hono, deps: ServerDeps): void {
+export function mountApiClientRoutes(app: HttpRouter, deps: ServerDeps): void {
   mountApiCollectionRoutes(app, deps);
   mountApiEnvironmentRoutes(app, deps);
   mountApiSendRoute(app, deps);

@@ -1,10 +1,10 @@
 /**
- * Hono adapter for the project-local git surface
+ * HttpRouter adapter for the project-local git surface
  * (apps/http-api/server/routes/project-git.ts → @mcp/api-handlers/projectGit).
  * Distinct from /api/workspace/git which targets sandbox containers.
  */
 
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import { createProjectGitHandlers } from '@mcp/api-handlers/projectGit/index.js';
 import { createContext } from '@mcp/api-handlers/context.js';
 import { PROJECT_GIT_RPC_METHODS } from '@mcp/api-handlers/projectGit/guard.js';
@@ -13,14 +13,14 @@ import type { ServerDeps } from '../deps.js';
 import { parseIdParam } from './_helpers.js';
 import { requireLocalRequest } from '../middleware/local-origin.js';
 
-function mapApiError(c: Context, err: unknown) {
+function mapApiError(c: HttpContext, err: unknown) {
   if (err instanceof ApiError) {
     return c.json({ error: err.message, code: err.code }, err.status as never);
   }
   throw err;
 }
 
-export function mountProjectGitRoutes(app: Hono, deps: ServerDeps): void {
+export function mountProjectGitRoutes(app: HttpRouter, deps: ServerDeps): void {
   const h = createProjectGitHandlers(deps);
   const rpcMethods = new Set<string>(PROJECT_GIT_RPC_METHODS);
 

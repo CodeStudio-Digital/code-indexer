@@ -38,7 +38,7 @@ Conclusão: a existência de `package.json` não significa que a pasta já seja 
 - O build Electron compila o TypeScript raiz, dashboard, preload, plugins e runtime Rust (`scripts/build-electron.mjs:109-160`).
 - O instalador inclui Electron, HTTP API, MCP Server, dashboard, todos os packages, plugins e runtime nativo (`apps/electron/electron-builder.json:9-55`).
 - O main process importa diretamente HTTP API, handlers e code-agent (`apps/electron/main.ts:32-68`).
-- `BackendHandle.local` ainda expõe `ServerDeps`, Hono e handlers; esses acessos precisam virar operações do host (`apps/electron/src/backend/handle.ts:14-39`).
+- `BackendHandle.local` ainda expõe `ServerDeps` e handlers; esses acessos precisam virar operações do host (`apps/electron/src/backend/handle.ts:14-39`).
 - O modo `utilityProcess` está reservado, mas não implementado (`apps/electron/src/backend/create.ts:12-20`).
 - O release valida o fechamento real do ASAR a partir de Electron e HTTP API (`scripts/release/verify.mjs:14-16`, `scripts/release/verify.mjs:54-77`).
 

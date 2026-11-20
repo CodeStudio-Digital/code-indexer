@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam } from './_helpers.js';
 
@@ -9,7 +9,7 @@ interface CreateWebhookBody {
   secret?: string;
 }
 
-export function mountWebhooksRoutes(app: Hono, deps: ServerDeps): void {
+export function mountWebhooksRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { db, webhookDispatcher } = deps;
 
   app.get('/api/webhooks', (c) => c.json(db.listWebhooks()));

@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../deps.js';
 import { createProjectsHandlers } from '@mcp/api-handlers/projects/index.js';
 import { createContext } from '@mcp/api-handlers/context.js';
@@ -6,7 +6,7 @@ import { parseJsonBody } from './_helpers.js';
 import { BulkProjectDeleteError, executeBulkProjectDelete, type BulkProjectDeleteInput } from './project-bulk-delete.js';
 import { mapApiError } from './project-route-errors.js';
 
-export function mountProjectCollectionRoutes(app: Hono, deps: ServerDeps, h: ReturnType<typeof createProjectsHandlers>): void {
+export function mountProjectCollectionRoutes(app: HttpRouter, deps: ServerDeps, h: ReturnType<typeof createProjectsHandlers>): void {
 
 
 

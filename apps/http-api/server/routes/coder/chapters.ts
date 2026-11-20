@@ -1,5 +1,5 @@
-import type { Context, Hono } from 'hono';
-import { HTTPException } from 'hono/http-exception';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
+import { HttpError } from '@mcp/shared/http/context.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import { reconstructMissingToolResults, type ToolResultLookup } from './session-message-preview.js';
 import {
@@ -81,7 +81,7 @@ interface CoderChapterRoutesOptions {
 }
 
 function chapterCursor(
-  c: Context,
+  c: HttpContext,
   prefix: 'chapter' | 'search' | 'message',
 ): string | undefined {
   const raw = c.req.query('cursor');
@@ -89,7 +89,7 @@ function chapterCursor(
   const match = new RegExp(`^${prefix}:(0|[1-9][0-9]*)$`).exec(raw);
   const seq = match ? Number(match[1]) : Number.NaN;
   if (!Number.isSafeInteger(seq)) {
-    throw new HTTPException(400, {
+    throw new HttpError(400, {
       message: `cursor must be a ${prefix} sequence cursor`,
     });
   }
@@ -100,13 +100,13 @@ interface CoderChapterRouteDeps {
   readonly sessionStore: ConversationChapterStore;
 }
 
-function unavailable(c: Context) {
+function unavailable(c: HttpContext) {
   return c.json({ error: 'conversation chapters are not available' }, 501);
 }
 
 /** Mount the append-only conversation chapter read/rebuild API. */
 export function mountCoderChapterRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: CoderChapterRouteDeps,
   options: CoderChapterRoutesOptions = {},
 ): void {

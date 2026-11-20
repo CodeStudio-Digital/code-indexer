@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import { createSnapshotsHandlers, createContext } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { SnapshotCategory } from '@mcp/shared/types.js';
@@ -7,14 +7,14 @@ import { parseIdParam } from './_helpers.js';
 import { getMemoryConsolidator } from '../../sse/memory-consolidator.js';
 import { memoryCurationTotals } from '@mcp/store/db/agent-memory-curation.js';
 
-function mapApiError(c: Context, err: unknown) {
+function mapApiError(c: HttpContext, err: unknown) {
   if (err instanceof ApiError) {
     return c.json({ error: err.message, code: err.code }, err.status as never);
   }
   throw err;
 }
 
-export function mountSnapshotsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountSnapshotsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const h = createSnapshotsHandlers(deps);
 
   app.get('/api/projects/:id/snapshots', async (c) => {

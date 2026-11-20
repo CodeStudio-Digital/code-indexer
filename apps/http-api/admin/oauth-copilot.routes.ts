@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { createCopilotSession, startCopilotClient, stopCopilotClient } from '@mcp/code-agent/providers/copilot-sdk-client.js';
 import { mapCopilotModel } from '@mcp/provider-engine/discovery/copilot-models.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
@@ -16,8 +16,8 @@ type Flow = {
   accounts?: AccountChoice[];
 };
 
-export function copilotOAuthRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function copilotOAuthRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
   const flows = new Map<string, Flow>();
   const starting = new Set<string>();
 

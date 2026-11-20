@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
@@ -13,7 +13,7 @@ function setup(running: boolean, ended: boolean) {
   pool.isRunning.mockReturnValue(running);
   pool.snapshot.mockReturnValue([{ sessionId: id }]);
   const list = vi.fn(async () => [{ id, status: 'in_progress' }]);
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderSessionsRoutes(app, { sessionStore: { listSessions: list, listGlobalSessions: list }, providerStore: {} } as unknown as ServerDeps, {} as CoderRuntime);
   return { app, list };
 }

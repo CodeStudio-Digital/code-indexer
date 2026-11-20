@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { composeMcpClientAuth } from '@mcp/services/mcp-client/auth/composition.js';
 import { mcpServers015 } from '@mcp/store/migrations/015_mcp_servers.js';
@@ -74,7 +74,7 @@ async function fixture(transport: 'streamable_http' | 'sse' = 'streamable_http')
   endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   store.upsertServer({ id: 'fixture', name: 'Fixture', transport, url: endpoint + '/mcp', auth_type: 'oauth2', enabled: true });
   const bundle = composeMcpClientAuth(dbPath);
-  const app = new Hono().route('/api/admin', createMcpServersOauthRouter(bundle, () => 'http://localhost:7333'))
+  const app = new HttpRouter().route('/api/admin', createMcpServersOauthRouter(bundle, () => 'http://localhost:7333'))
     .route('/api/admin', mcpServersRouter({ dbPath, bearerResolver: bundle.resolveBearer }));
   const pool = new McpExternalPool({ dbPath, bearerResolver: bundle.resolveBearer });
   setGlobalMcpExternalPool(pool);

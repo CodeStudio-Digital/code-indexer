@@ -7,7 +7,7 @@
 import type { HostTemplate, TemplateId } from './types.js';
 import { reactViteTemplate, vueTemplate } from './vite.js';
 import { angularTemplate } from './angular.js';
-import { honoApiTemplate } from './hono.js';
+import { nodeApiTemplate } from './node-api.js';
 import { cfWorkerTemplate, openNextCfTemplate, viteReactCfTemplate } from './cloudflare.js';
 import { nextjsTemplate } from './nextjs.js';
 import { gitCloneTemplate } from './git-clone.js';
@@ -17,7 +17,7 @@ const TEMPLATES: Record<TemplateId, HostTemplate> = {
   'react-vite': reactViteTemplate,
   vue: vueTemplate,
   angular: angularTemplate,
-  'vite-api': honoApiTemplate,
+  'vite-api': nodeApiTemplate,
   'cf-worker': cfWorkerTemplate,
   nextjs: nextjsTemplate,
   'opennext-cf': openNextCfTemplate,

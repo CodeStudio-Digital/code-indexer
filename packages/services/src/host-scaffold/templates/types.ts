@@ -56,6 +56,7 @@ export interface HostTemplate {
   requiresRepoUrl?: boolean;
   /** Whether the runner must `mkdir` the target before the first step. */
   createsTargetDir: boolean;
+  files?(ctx: BuildStepsContext): Record<string, string>;
   build(ctx: BuildStepsContext): HostStep[];
 }
 

@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AgentMessage } from "@mcp/provider-sdk";
 import { formatSpecResult, SPEC_APPROVAL_REMINDER } from '@mcp/code-agent/tools/spec/index.js';
 import type { ServerDeps } from '../../deps.js';
@@ -24,7 +24,7 @@ interface SpecResponseBody {
  * Kept as a sibling route file instead of inflating `interaction.ts`.
  */
 export function mountCoderSpecResponseRoute(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   runtime: CoderRuntime,
 ): void {

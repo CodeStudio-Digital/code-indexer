@@ -1,6 +1,6 @@
 import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { SessionFilesystemAccess } from '@mcp/session-storage/session-state-types.js';
 import type { ServerDeps } from '../../deps.js';
 import {
@@ -19,7 +19,7 @@ function contains(root: string, candidate: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-export function mountCoderFilesystemRootRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderFilesystemRootRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
 
   app.get('/api/coder/sessions/:id/filesystem-roots', async (c) => {

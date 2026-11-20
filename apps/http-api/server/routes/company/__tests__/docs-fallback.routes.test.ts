@@ -8,7 +8,7 @@
  * persisted in a temporary project bundle.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,7 +45,7 @@ import { mountCompanyDocsRoutes } from '../docs.js';
 import type { ServerDeps } from '../../../deps.js';
 
 interface Handle {
-  app: Hono;
+  app: HttpRouter;
   sessionStore: FsSessionStore;
   sessionId: string;
   dir: string;
@@ -94,7 +94,7 @@ async function setup(): Promise<Handle> {
   });
   await sessionStore.refresh();
 
-  const app = new Hono();
+  const app = new HttpRouter();
   const deps = { sessionStore } as unknown as ServerDeps;
   mountCompanyDocsRoutes(app, deps);
   return {

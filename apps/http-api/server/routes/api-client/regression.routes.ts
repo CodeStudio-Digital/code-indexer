@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody } from '../_helpers.js';
 import { collectionInProject, resolveScopedEnv } from './_ownership.js';
@@ -9,7 +9,7 @@ import { runCollection } from '@mcp/services/api-client/regression-runner.js';
 import { importOpenApiInto, importOpenApiContent } from '@mcp/services/api-client/import-openapi.js';
 import { apiClientReadCap } from '@mcp/services/api-client/read-cap.js';
 
-export function mountApiRegressionRoutes(app: Hono, deps: ServerDeps): void {
+export function mountApiRegressionRoutes(app: HttpRouter, deps: ServerDeps): void {
   // R1 — `store` is resolved per-request via deps.apiClientFor(projectId).
   const base = '/api/projects/:projectId/api-client';
 

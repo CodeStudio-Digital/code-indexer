@@ -67,7 +67,7 @@ export const KNOWN_STACKS: Array<{ value: string; label: string }> = [
   { value: 'react-ts', label: 'React + Vite (TS)' },
   { value: 'vue-ts', label: 'Vue + Vite (TS)' },
   { value: 'angular', label: 'Angular' },
-  { value: 'vite-api', label: 'API — Hono + Vite (TS)' },
+  { value: 'vite-api', label: 'API Node.js' },
   { value: 'cf-worker', label: 'API — Cloudflare Worker (wrangler)' },
 ];
 

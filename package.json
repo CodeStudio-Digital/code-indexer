@@ -1,6 +1,6 @@
 {
   "name": "mcp-code-indexer",
-  "version": "3.16.56",
+  "version": "3.16.58",
   "packageManager": "pnpm@10.22.0",
   "description": "Codebase indexing platform powered by LLMs with hybrid search, MCP Server, and web dashboard",
   "repository": {
@@ -75,7 +75,6 @@
     "@aws-sdk/client-bedrock-runtime": "3.1172.0",
     "@babel/parser": "^7.29.7",
     "@google/genai": "^1.48.0",
-    "@hono/node-server": "^1.19.12",
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@monaco-editor/react": "^4.7.0",
@@ -111,7 +110,6 @@
     "hast-util-to-jsx-runtime": "2.3.6",
     "html-url-attributes": "3.0.1",
     "google-auth-library": "^10.6.2",
-    "hono": "^4.7.5",
     "https-proxy-agent": "^7.0.1",
     "i18next": "^26.0.4",
     "i18next-browser-languagedetector": "^8.2.1",
@@ -230,6 +228,8 @@
       "node-pty"
     ],
     "overrides": {
+      "@modelcontextprotocol/sdk@1.29.0>@hono/node-server": "-",
+      "@modelcontextprotocol/sdk@1.29.0>hono": "-",
       "electron-builder-squirrel-windows": "26.15.3",
       "@tanstack/react-virtual>@tanstack/virtual-core": "3.17.0",
       "shell-quote": "1.11.0",

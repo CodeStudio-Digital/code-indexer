@@ -6,7 +6,7 @@
  * which nudges browsers to download instead of executing.
  *
  * Exported standalone (not inlined in the route) so unit tests don't
- * need a Hono context to verify the mapping.
+ * need a request context to verify the mapping.
  */
 
 const TABLE: Readonly<Record<string, string>> = {

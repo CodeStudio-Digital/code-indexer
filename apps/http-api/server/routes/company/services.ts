@@ -16,13 +16,13 @@
  * Phase 8 part 2 (continuation): extracted from the 2346-LOC
  * `sessions.ts` mega-file. Each sub-module stays under the 500-LOC cap.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountCompanyServicesListRoute } from './services-list.js';
 import { mountCompanyServicesCreateRoutes } from './services-create.js';
 import { mountCompanyServicesRuntimeRoutes } from './services-runtime.js';
 
-export function mountCompanyServicesRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyServicesRoutes(app: HttpRouter, deps: ServerDeps): void {
   mountCompanyServicesListRoute(app, deps);
   mountCompanyServicesCreateRoutes(app, deps);
   mountCompanyServicesRuntimeRoutes(app, deps);

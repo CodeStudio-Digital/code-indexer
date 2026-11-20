@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionWorkbenchCommand } from '@mcp/api-bus';
 import { asSessionId } from '@mcp/session-storage';
@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 function guardedApp() {
-  const app = new Hono();
+  const app = new HttpRouter();
   const handler = vi.fn(() => undefined);
   mountConversationFormatGuard(app, deps);
   app.all('/api/coder/*', (c) => { handler(); return c.json({ ok: true }); });
@@ -37,7 +37,7 @@ function guardedApp() {
 }
 
 function commandApp() {
-  const app = new Hono();
+  const app = new HttpRouter();
   const execute = vi.fn(async (command: SessionWorkbenchCommand) => ({
     commandId: command.commandId, sessionId: command.sessionId, ok: true as const, revision: 1,
   }));

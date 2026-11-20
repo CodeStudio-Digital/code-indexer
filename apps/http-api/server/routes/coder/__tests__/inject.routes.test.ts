@@ -8,7 +8,7 @@
  * and the empty-content 400.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -105,7 +105,7 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
     findDanglingToolUse: async () => null,
   } as unknown as CoderRuntime;
 
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCoderInteractionRoutes(app, deps, runtime);
 
   const inject = (id: SessionId, body: unknown) =>

@@ -80,8 +80,6 @@ RUN printf '{"name":"primer","version":"0.0.0","private":true}\n' > package.json
       react-dom@^19 \
       vue@^3 \
       typescript@^5.9 \
-      hono@^4.12 \
-      @hono/vite-dev-server@^0.25 \
       wrangler@^4.83 \
       @cloudflare/workers-types@^4.2026 \
  && rm -rf /tmp/primer

@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CoderRunBus } from '../../coder-bus.js';
+import { CoderWorkerBootError, CoderWorkerStoppingError } from '../coder-runtime-errors.js';
 import {
   asAgentRunAttemptId,
   asAgentRunId,
@@ -270,6 +271,7 @@ describe('CoderWorkerPool', () => {
     await expect(p.readAgentTranscript(sid(99), 'retained-group', 1, 2000)).resolves.toMatchObject({ ok: true, text: 'Retained result' });
     const first = mockWorker.state.hosts[0];
     expect(first.bridge.requests.map(request => request.type)).not.toContain('runFresh');
+    expect(p.getBus(sid(99))).toBeNull();
     expect(first.opts).not.toHaveProperty('workerData.nativeChildHistory');
     await p.evict(sid(99));
     await expect(p.readAgentTranscript(sid(99), 'retained-group')).resolves.toMatchObject({ ok: true });
@@ -537,6 +539,76 @@ describe('CoderWorkerPool', () => {
     expect(host.evictCalls).toBe(1);
   });
 
+  it('starts the next message exactly once on a replacement after a failed idle drain', async () => {
+    const p = createPool(), session = sid(96);
+    const first = await p.runFresh(session, { userMessage: 'first' });
+    const old = mockWorker.state.hosts[0];
+    old.bridge.emitToPool('bus.end', { runId: getRunId(first), event: 'done', data: { reason: 'completed' } });
+    mockWorker.state.releaseWriterImpl = vi.fn()
+      .mockRejectedValueOnce(new Error('writer drain timed out'))
+      .mockResolvedValue({ ok: true });
+    await expect(p.evict(session)).rejects.toThrow('writer drain timed out');
+    // The worker fenced itself before acknowledging release, like the installed worker.
+    mockWorker.state.requestImpl = async () => {
+      if (!old.evictCalls) throw new Error('coder-worker: worker is stopping');
+      return { ok: true };
+    };
+    const next = await p.runFresh(session, { userMessage: 'second' });
+    expect(next.ended).toBe(false);
+    expect(mockWorker.state.hosts).toHaveLength(2);
+    expect(old.bridge.requests.filter(x => x.type === 'runFresh')).toHaveLength(1);
+    expect(mockWorker.state.hosts[1].bridge.requests.filter(x => x.type === 'runFresh')).toHaveLength(1);
+  });
+
+  it('preserves the command and input across one explicit pre-dispatch refusal', async () => {
+    const store = { terminalizeRun: vi.fn(), interruptRun: vi.fn(), renewAttemptLease: vi.fn() };
+    const p = createPool(store as unknown as ControlPlaneAuthority);
+    const session = sid(44);
+    const context = makeRunContext(44, 'same-command');
+    mockWorker.state.requestImpl = vi.fn().mockRejectedValueOnce(new CoderWorkerStoppingError()).mockResolvedValue({ ok: true });
+    const bus = await p.runFresh(session, { userMessage: 'keep this input', controlPlaneRunContext: context });
+    expect(bus.ended).toBe(false);
+    expect(p.getControlPlaneRunContext(session)).toEqual(context);
+    expect(store.interruptRun).not.toHaveBeenCalled();
+    expect(mockWorker.state.hosts).toHaveLength(2);
+    for (const host of mockWorker.state.hosts) {
+      const requests = host.bridge.requests.filter(request => request.type === 'runFresh');
+      expect(requests).toHaveLength(1);
+      expect(requests[0].payload).toMatchObject({ userMessage: 'keep this input', controlPlaneParentAgentRunId: context.agentRunId });
+    }
+    expect(mockWorker.state.hosts[0].evictCalls).toBe(1);
+  });
+
+  it('bounds replacement when both workers explicitly refuse to start', async () => {
+    const p = createPool();
+    mockWorker.state.requestImpl = vi.fn().mockRejectedValue(new CoderWorkerStoppingError());
+    await expect(p.runFresh(sid(45), { userMessage: 'only one replacement' })).rejects.toHaveProperty('code', 'CODER_WORKER_STOPPING');
+    expect(mockWorker.state.hosts).toHaveLength(2);
+    expect(p.getBus(sid(45), true)).toBeNull();
+  });
+
+  it('keeps the owner fence until an exited worker lease can be read again', async () => {
+    const p = createPool();
+    const session = sid(46);
+    await p.runFresh(session, { userMessage: 'first' });
+    const old = mockWorker.state.hosts[0];
+    const { bundlePath, writerOwnerId } = (old.opts as {
+      workerData: { sessionContext: { bundlePath: string; writerOwnerId: string } };
+    }).workerData.sessionContext;
+    const lease = join(bundlePath, 'events', 'writer.lease');
+    mkdirSync(join(bundlePath, 'events'), { recursive: true });
+    writeFileSync(lease, 'invalid');
+    await expect(p.evict(session)).rejects.toThrow();
+    await expect(p.runFresh(session, { userMessage: 'blocked' })).rejects.toHaveProperty('code', 'CODER_WORKER_DRAINING');
+    expect(mockWorker.state.hosts).toHaveLength(1);
+    writeFileSync(lease, JSON.stringify({ token: randomUUID(), owner_id: writerOwnerId,
+      pid: process.pid, fence: 1, owner_host: 'test', schema_version: 1,
+      acquired_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString() }));
+    await p.runFresh(session, { userMessage: 'second' });
+    expect(existsSync(lease)).toBe(false);
+    expect(mockWorker.state.hosts).toHaveLength(2);
+  });
+
   it('keeps attempt authority valid until the worker has acknowledged its drain', async () => {
     const storeSpies = { terminalizeRun: vi.fn(), interruptRun: vi.fn(), renewAttemptLease: vi.fn() };
     const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
@@ -557,6 +629,77 @@ describe('CoderWorkerPool', () => {
     release(); await eviction;
     expect(p.getControlPlaneRunContext(sid(95))).toBeNull();
     expect(storeSpies.interruptRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes an attached stream when a parked worker is evicted without sending bus.end', async () => {
+    let finishWrite!: () => void;
+    const interruptRun = vi.fn(() => new Promise<void>(resolve => { finishWrite = resolve; }));
+    const p = createPool({ interruptRun, renewAttemptLease: vi.fn() } as unknown as ControlPlaneAuthority);
+    const id = sid(63);
+    const bus = await p.runFresh(id, { userMessage: 'park at approval', controlPlaneRunContext: makeRunContext(63, 'parked') });
+    const evicted = p.evict(id);
+    await vi.waitFor(() => expect(interruptRun).toHaveBeenCalledOnce());
+    try {
+      expect(bus.endReason).toMatchObject({ event: 'error', data: { reason: 'worker-evicted' } });
+      expect(p.has(id)).toBe(true);
+      expect(mockWorker.state.hosts[0].evictCalls).toBe(0);
+    } finally { finishWrite(); }
+    await evicted;
+    expect((await p.runFresh(id, { userMessage: 'continue here' })).ended).toBe(false);
+  });
+
+  it('does not reopen a finished run if a follow-up races its terminal event', async () => {
+    const p = createPool();
+    const id = sid(64);
+    const bus = await p.runFresh(id, { userMessage: 'first' });
+    mockWorker.state.hosts[0].bridge.emitToPool('bus.end', { runId: getRunId(bus), event: 'done', data: { reason: 'completed' } });
+    await expect(p.pushUserMessage(id, 'late')).rejects.toThrow();
+    expect(p.isRunning(id)).toBe(false);
+    expect(mockWorker.state.hosts[0].bridge.requests.filter(request => request.type === 'pushUserMessage')).toHaveLength(0);
+  });
+
+  it('resumes shutdown after a confirmed drain even if the old bridge is gone', async () => {
+    const p = createPool();
+    const id = sid(66);
+    await p.runFresh(id, { userMessage: 'first' });
+    const drain = vi.fn().mockResolvedValueOnce({ ok: true }).mockRejectedValue(new Error('old bridge closed'));
+    mockWorker.state.releaseWriterImpl = drain;
+    mockWorker.state.evictImpl = vi.fn().mockRejectedValueOnce(new Error('termination unavailable'));
+    await expect(p.evict(id)).rejects.toThrow('termination unavailable');
+    await p.runFresh(id, { userMessage: 'replacement' });
+    expect(drain).toHaveBeenCalledOnce();
+    expect(mockWorker.state.hosts).toHaveLength(2);
+    mockWorker.state.releaseWriterImpl = null;
+  });
+
+  it('retries a transient terminal reconciliation before using the same warm worker again', async () => {
+    const store = { terminalizeRun: vi.fn(), interruptRun: vi.fn(), getCommand: vi.fn(), getRun: vi.fn() };
+    const log = vi.fn();
+    const authority = vi.fn(() => store as unknown as ControlPlaneAuthority);
+    pool = new CoderWorkerPool({ workerFile: 'mock-worker.js', dbPath: ':memory:',
+      resolveSessionRuntimeContext: resolveTestSessionRuntimeContext, getControlPlaneStore: authority, log });
+    const id = sid(67), context = makeRunContext(67, 'finished');
+    const first = await pool.runFresh(id, { userMessage: 'first', controlPlaneRunContext: context });
+    authority.mockImplementationOnce(() => { throw new Error('temporary authority lookup failure'); });
+    mockWorker.state.hosts[0].bridge.emitToPool('bus.end', { runId: getRunId(first), event: 'done', data: { reason: 'completed' } });
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('error', expect.stringContaining('reconciliation failed')));
+    await pool.runFresh(id, { userMessage: 'new input' });
+    expect(store.terminalizeRun).toHaveBeenCalledWith(expect.objectContaining({ context, status: 'completed', commandStatus: 'succeeded' }));
+    expect(mockWorker.state.hosts).toHaveLength(1);
+  });
+
+  it('fences an unpublished worker whose writer acquisition and shutdown both failed', async () => {
+    const p = createPool();
+    const id = sid(65);
+    mockWorker.state.acquireWriterImpl = vi.fn().mockRejectedValueOnce(new Error('writer acknowledgement lost')).mockResolvedValue({ ok: true });
+    mockWorker.state.evictImpl = async () => { throw new Error('physical exit unconfirmed'); };
+    await expect(p.runFresh(id, { userMessage: 'first' })).rejects.toBeInstanceOf(CoderWorkerBootError);
+    await expect(p.runFresh(id, { userMessage: 'waiting' })).rejects.toThrow();
+    expect(mockWorker.state.hosts).toHaveLength(1);
+    mockWorker.state.evictImpl = null;
+    await p.runFresh(id, { userMessage: 'safe replacement' });
+    expect(mockWorker.state.hosts).toHaveLength(2);
+    expect(mockWorker.state.hosts[0].state).toBe('idle');
   });
 
   it('routes host session diagnostics through the active worker writer', async () => {
@@ -905,6 +1048,12 @@ describe('CoderWorkerPool', () => {
     expect(p.isRunning(sid(91))).toBe(true);
     expect(store.interruptRun).not.toHaveBeenCalled();
     await expect(p.runFresh(sid(91), { userMessage: 'second' })).rejects.toMatchObject({ code: 'CODER_STARTUP_UNCERTAIN' });
+    const different = makeRunContext(91, 'not-dispatched');
+    await expect(p.runFresh(sid(91), { userMessage: 'new command', controlPlaneRunContext: different }))
+      .rejects.toHaveProperty('code', 'CODER_WORKER_DRAINING');
+    await expect(p.runFresh(sid(91), { userMessage: 'original', controlPlaneRunContext: context }))
+      .rejects.toHaveProperty('code', 'CODER_STARTUP_UNCERTAIN');
+    expect(p.getControlPlaneRunContext(sid(91))).toEqual(context);
     expect(mockWorker.state.hosts).toHaveLength(1);
     expect(mockWorker.state.hosts[0].evictCalls).toBe(0);
     mockWorker.state.releaseWriterImpl = null;

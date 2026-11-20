@@ -11,7 +11,7 @@
  * the operator can see what the agents can reach — metadata only:
  * NEVER the `enc_*` columns, and there is no `?reveal` variant.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   parseCompanySessionIdParam,
@@ -33,7 +33,7 @@ interface CompanyDbConnectionView {
   kind: 'relational' | 'document' | 'keyvalue';
 }
 
-export function mountCompanyDbConnectionsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyDbConnectionsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, dbClientFor, db } = deps;
 
   app.get('/api/company/sessions/:id/db-connections', async (c) => {

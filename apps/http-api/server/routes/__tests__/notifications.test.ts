@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -137,7 +137,7 @@ describe('notification route context', () => {
   });
 
   it('does not replay the ring on a cold connection but replays after Last-Event-ID', async () => {
-    const app = new Hono();
+    const app = new HttpRouter();
     mountNotificationRoutes(
       app,
       deps({ coder: { id: CODER_ID, project_id: 7, is_global: false, title: 'Fix' } }),

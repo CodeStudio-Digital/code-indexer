@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import {
   buildDeterministicImportSummary,
   detectExternalSessionSource,
@@ -44,7 +44,7 @@ function cwdMatches(source: string | null, project: string | null | undefined): 
   return Boolean(source && project && normalizedPath(source) === normalizedPath(project));
 }
 
-function errorResponse(c: Context, error: unknown) {
+function errorResponse(c: HttpContext, error: unknown) {
   if (error instanceof ExternalSessionError) {
     const status = error.code === 'source_not_found' ? 404
       : error.code === 'source_too_large' ? 413
@@ -102,7 +102,7 @@ async function summaryProviders(deps: ServerDeps, provider: string, model: strin
   return { providers, options, errors };
 }
 
-export function mountCoderSessionImportRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderSessionImportRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/coder/session-imports/discover', async (c) => {
     try {
       const sourceRaw = c.req.query('source');

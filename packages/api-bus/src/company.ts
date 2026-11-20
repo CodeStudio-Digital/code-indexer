@@ -39,7 +39,7 @@ export interface CompanyApi {
   /**
    * Real-time stream of company events (agent status, kanban changes,
    * sandbox events, etc.). In Electron this is a MessagePort; on
-   * Hono it's WebSocket (`/api/company/ws`) or SSE fallback.
+   * the HTTP API it's WebSocket (`/api/company/ws`) or SSE fallback.
    */
   stream(input: { sessionId: string; since?: number }, ctx: ApiContext): AsyncStream<{ event: string; data: unknown }>;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../../deps.js';
 
 const calls = vi.hoisted(() => ({ diff: vi.fn(), accept: vi.fn(), revert: vi.fn(), acceptHunk: vi.fn(), revertHunk: vi.fn() }));
@@ -21,7 +21,7 @@ const baseline = '00000000-0000-4000-8000-000000000004';
 function setup() {
   vi.clearAllMocks();
   for (const call of Object.values(calls)) call.mockResolvedValue({ ok: true });
-  const app = new Hono();
+  const app = new HttpRouter();
   mountCompanySnapshotRoutes(app, {
     db: {}, sessionStore: {
       refresh: vi.fn(async () => undefined),

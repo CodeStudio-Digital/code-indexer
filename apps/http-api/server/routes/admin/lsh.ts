@@ -12,7 +12,7 @@
  *   DELETE /api/admin/lsh/entry?project_id=X&entity_type=file&entity_id=42
  *     → removes one entity's LSH state. Called when a file is deleted.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 
 type LshEntityType = 'file' | 'symbol';
@@ -23,7 +23,7 @@ function isEntityType(s: unknown): s is LshEntityType {
   return typeof s === 'string' && VALID_ENTITY_TYPES.includes(s as LshEntityType);
 }
 
-export function mountAdminLshRoutes(app: Hono, deps: ServerDeps): void {
+export function mountAdminLshRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { lshIndex, lshIndexStore } = deps;
 
   app.get('/api/admin/lsh/stats', (c) => {

@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
@@ -19,10 +19,10 @@ interface EnvRouteContext {
   appOwned: boolean;
 }
 
-export function mountCompanyEnvsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCompanyEnvsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore, companySessionEnvStore } = deps;
 
-  const resolveEnv = async (c: Context): Promise<EnvRouteContext | null> => {
+  const resolveEnv = async (c: HttpContext): Promise<EnvRouteContext | null> => {
     const requestedId = parseCompanySessionIdParam(c);
     await sessionStore.ensureCatalog();
     let requestedFiles: CompanySessionFiles;

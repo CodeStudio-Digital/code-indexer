@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { guardWorkspaceRequest } from './guards.js';
 import {
@@ -52,7 +52,7 @@ function truncateForAi(text: string, limit = MAX_AI_DIFF_CHARS): string {
   return text.slice(0, limit) + `\n\n[... truncated, ${text.length - limit} more chars]`;
 }
 
-export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
+export function mountGitRoutes(app: HttpRouter, deps: ServerDeps): void {
   app.get('/api/company/sessions/:sid/projects/:pid/git/status', async (c) => {
     const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;

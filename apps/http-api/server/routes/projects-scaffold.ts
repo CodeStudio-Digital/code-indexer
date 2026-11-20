@@ -1,5 +1,5 @@
-import type { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { streamSSE } from '@mcp/shared/http/sse.js';
 import { runScaffoldStream } from '@mcp/api-handlers';
 import type { ScaffoldProjectInput } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
@@ -17,7 +17,7 @@ import { pumpScaffoldSSE } from './scaffold-sse-pump.js';
  * Electron transport pumps the same `runScaffoldStream` over a MessagePort
  * via `projects.scaffold`.
  */
-export function mountProjectScaffoldRoute(app: Hono, deps: ServerDeps): void {
+export function mountProjectScaffoldRoute(app: HttpRouter, deps: ServerDeps): void {
   app.post('/api/projects/scaffold/stream', async (c) => {
     // Shape is re-validated inside runScaffoldStream (validateScaffoldInput),
     // so a partial/raw body is fine here.

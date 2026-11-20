@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountAgentMemoryRoutes } from '../agent-memory.js';
 
@@ -16,7 +16,7 @@ describe('agent-memory semantic RPC route', () => {
       importance: 0.8,
       score: 0.03,
     }]);
-    const app = new Hono();
+    const app = new HttpRouter();
     mountAgentMemoryRoutes(app, {
       db: { getProject: (id: number) => id === 7 ? { id, name: 'demo' } : null },
       agentMemoryService: { search },
@@ -36,7 +36,7 @@ describe('agent-memory semantic RPC route', () => {
 
   it('does not invoke retrieval for an empty query', async () => {
     const search = vi.fn();
-    const app = new Hono();
+    const app = new HttpRouter();
     mountAgentMemoryRoutes(app, {
       db: { getProject: () => ({ id: 7, name: 'demo' }) },
       agentMemoryService: { search },

@@ -12,7 +12,7 @@
  * mode (`pnpm dev`) and external tooling.
  */
 
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { createLspHandlers, createContext } from '@mcp/api-handlers';
 import { type CodeActionDTO, type DocChange, type Position } from '@mcp/api-bus';
 import type { ServerDeps } from '../../deps.js';
@@ -27,7 +27,7 @@ interface PositionBody {
   context?: { triggerKind: number; triggerCharacter?: string };
 }
 
-export function mountLspRoutes(app: Hono, deps: ServerDeps): void {
+export function mountLspRoutes(app: HttpRouter, deps: ServerDeps): void {
   const h = createLspHandlers(deps);
   mountLspServerRoutes(app, deps, h);
 

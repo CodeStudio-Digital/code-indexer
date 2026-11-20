@@ -10,7 +10,7 @@
  * collections first); they never affect ingestion. Mounted from
  * `mountDocsRoutes` so the surface stays under /api/docs.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import { existsSync, readFileSync } from 'node:fs';
@@ -20,7 +20,7 @@ interface LinkBody {
   origin?: 'manual' | 'auto';
 }
 
-export function mountDocsProjectLinkRoutes(app: Hono, deps: ServerDeps): void {
+export function mountDocsProjectLinkRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { docStore, db } = deps;
 
   app.get('/api/docs/projects/:projectId/collections', (c) => {

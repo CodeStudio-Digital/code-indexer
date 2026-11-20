@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { TaskProposal, ScheduledTrigger, ScheduledOccurrence } from '@mcp/agent-runtime-contracts';
 import { CollaborationFollowups } from '@mcp/session-storage/collaboration/followups.js';
 import type { SessionNetwork } from '@mcp/code-agent/runtime/session-network.js';
@@ -11,7 +11,7 @@ import { asSessionId } from '@mcp/agent-runtime-contracts';
 import type { ChatNetworkPolicySnapshot } from '@mcp/agent-runtime-contracts/chat-network.js';
 interface UltraSettings { maxParallel?: number; maxStarts?: number }
 
-export function mountUltraFollowupRoutes(app: Hono, network: SessionNetwork, scheduler: ChatScheduler, ready: Promise<void>) {
+export function mountUltraFollowupRoutes(app: HttpRouter, network: SessionNetwork, scheduler: ChatScheduler, ready: Promise<void>) {
   const records = new CollaborationFollowups(network.mailbox.files);
   const base = '/api/coder/sessions/:id/collaboration';
   app.get(`${base}/policy`, async c => {

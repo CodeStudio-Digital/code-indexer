@@ -4,7 +4,7 @@
  *
  * The bug: `getCompanyOrchestrator` returns a `WorkerBackedOrchestrator` RPC
  * proxy whose every method returns a Promise. The route used to do
- * `orchestrator.driveStore.list()` synchronously → got a Promise → Hono
+ * `orchestrator.driveStore.list()` synchronously → got a Promise → HttpRouter
  * serialized it as `{}` → the dashboard saw `files: {}` and threw
  * "Unexpected drive response shape" for any running session. The fix always
  * uses a fresh in-process `CompanyDriveStore` over the session bundle and
@@ -13,7 +13,7 @@
  * The fixture is filesystem-only and never opens SQLite.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,7 +34,7 @@ import { mountCompanyDriveRoutes } from '../drive.js';
 import type { ServerDeps } from '../../../deps.js';
 
 interface Handle {
-  app: Hono;
+  app: HttpRouter;
   sessionStore: FsSessionStore;
   sessionId: string;
   dir: string;
@@ -83,7 +83,7 @@ async function setup(): Promise<Handle> {
   });
   await sessionStore.refresh();
 
-  const app = new Hono();
+  const app = new HttpRouter();
   const deps = { sessionStore } as unknown as ServerDeps;
   mountCompanyDriveRoutes(app, deps);
   return {

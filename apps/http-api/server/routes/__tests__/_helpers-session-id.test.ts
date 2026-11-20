@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { describe, expect, it } from 'vitest';
 import {
   parseIdParam,
@@ -11,8 +11,8 @@ import {
 
 const SESSION_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ab';
 
-function parserApp(): Hono {
-  const app = new Hono();
+function parserApp(): HttpRouter {
+  const app = new HttpRouter();
   app.get('/session/:id', (c) => c.json({ id: parseSessionIdParam(c) }));
   app.get('/session/:id/message/:seq', (c) =>
     c.json({

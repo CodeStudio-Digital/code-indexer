@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AuthBundle } from '../auth/composition.js';
 import { presentAuthError } from '../auth/error-presenter.js';
 
@@ -10,8 +10,8 @@ import { presentAuthError } from '../auth/error-presenter.js';
  * Production deployments behind multi-user scenarios should add login
  * middleware BEFORE this router.
  */
-export function createAuthorizeRouter(bundle: AuthBundle): Hono {
-  const app = new Hono();
+export function createAuthorizeRouter(bundle: AuthBundle): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/authorize', (c) => {
     const q = c.req.query();

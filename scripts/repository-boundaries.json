@@ -148,6 +148,8 @@
     "desktop": [
       "@mcp/shared/utils/serializable-stream.js",
       "@mcp/shared/assets/drawio-vendor.js",
+      "@mcp/shared/http/node-server.js",
+      "@mcp/shared/http/router.js",
       "@mcp/session-storage/run-limits.js",
       "@mcp/code-agent/tools/diagram/render-port.js",
       "@mcp/code-agent/tools/preview/contracts.js",

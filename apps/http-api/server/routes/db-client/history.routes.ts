@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam, parseIntQuery, parseJsonBody } from '../_helpers.js';
 import { connectionInProject } from './_ownership.js';
@@ -8,7 +8,7 @@ import type { CreateDbQueryHistoryInput } from '@mcp/store/db-client-store-types
  * Query-history CRUD (migration 174), project-scoped. The renderer writes a row
  * after each run (keeps the live-plane handlers free of the metadata store).
  */
-export function mountDbHistoryRoutes(app: Hono, deps: ServerDeps): void {
+export function mountDbHistoryRoutes(app: HttpRouter, deps: ServerDeps): void {
   const base = '/api/projects/:projectId/db-client';
 
   app.get(`${base}/connections/:cid/history`, (c) => {

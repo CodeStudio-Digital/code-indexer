@@ -4,7 +4,7 @@ import { DbConnectionManager } from '../manager.js';
 /**
  * Regression: engine/read-only metadata must live on the SHARED manager, not in
  * a handler closure — otherwise editRow/ddl landing on a different handler
- * instance (IPC vs Hono-fallback) wrongly report "not connected". A pg pool is
+ * instance (IPC vs HTTP route fallback) wrongly report "not connected". A pg pool is
  * created lazily (no socket on construction), so this needs no live DB.
  */
 describe('DbConnectionManager meta', () => {

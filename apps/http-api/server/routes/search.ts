@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import { createSearchHandlers, createContext } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
@@ -7,7 +7,7 @@ import { resolveSessionProjectAuthority } from '@mcp/session-storage/fs-store/in
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseIntQuery } from './_helpers.js';
 
-function mapApiError(c: Context, err: unknown) {
+function mapApiError(c: HttpContext, err: unknown) {
   if (err instanceof ApiError) {
     return c.json({ error: err.message, code: err.code }, err.status as never);
   }
@@ -32,7 +32,7 @@ function searchConsumer(value: string | undefined): SearchConsumer {
 }
 
 async function validatedTelemetryScope(
-  c: Context,
+  c: HttpContext,
   deps: ServerDeps,
   projectId: number,
 ): Promise<{ sessionId?: string; companySessionId?: string } | undefined> {
@@ -62,7 +62,7 @@ async function validatedTelemetryScope(
   return scope.sessionId || scope.companySessionId ? scope : undefined;
 }
 
-export function mountSearchRoutes(app: Hono, deps: ServerDeps): void {
+export function mountSearchRoutes(app: HttpRouter, deps: ServerDeps): void {
   const h = createSearchHandlers(deps);
 
   app.get('/api/projects/:id/search', async (c) => {

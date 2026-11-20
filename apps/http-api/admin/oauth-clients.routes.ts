@@ -1,12 +1,12 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { AuthBundle } from '../auth/composition.js';
 
 /**
  * Admin list/revoke for OAuth clients (registered via DCR or manually).
  * Revocation is idempotent; `revoked_at` guards double-revoke.
  */
-export function createOAuthClientsRouter(bundle: AuthBundle): Hono {
-  const app = new Hono();
+export function createOAuthClientsRouter(bundle: AuthBundle): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/oauth-clients', (c) => {
     const clients = bundle.listOAuthClients.execute().map((cli) => ({

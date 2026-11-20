@@ -5,7 +5,7 @@
  * Why mcp:// instead of http://127.0.0.1:7333:
  *   - Zero socket / zero port — Electron's `protocol.handle('mcp', …)`
  *     intercepts the request in the main process and dispatches it
- *     directly to `honoApp.fetch(Request)` in-process.
+ *     directly to `httpRouter.fetch(Request)` in-process.
  *   - Streaming responses (SSE for the coder chat, indexer progress)
  *     work because we registered the scheme with `stream: true`, so
  *     `response.body` arrives as a ReadableStream the existing

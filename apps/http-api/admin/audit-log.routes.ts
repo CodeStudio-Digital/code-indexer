@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { SqliteAuditLogRepo } from '@mcp/store/auth/sqlite-audit-log-repo.js';
 import type { AuditEventKind } from '@mcp/services/auth/domain/audit-event.js';
 import type { IndexerConfig } from '@mcp/shared/utils/config.js';
@@ -7,8 +7,8 @@ import type { IndexerConfig } from '@mcp/shared/utils/config.js';
  * Read-only window into the auth audit log.
  * Query params: since, until, principal, event, limit.
  */
-export function createAuditLogRouter(config: IndexerConfig): Hono {
-  const app = new Hono();
+export function createAuditLogRouter(config: IndexerConfig): HttpRouter {
+  const app = new HttpRouter();
   const repo = new SqliteAuditLogRepo(config.dbPath);
 
   app.get('/audit-log', (c) => {

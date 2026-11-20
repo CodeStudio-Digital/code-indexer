@@ -1,10 +1,10 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import type { SessionId } from '@mcp/session-storage';
 import { toolSnapshotDiff, toolSnapshotSummary } from '@mcp/services/services/tool-session-snapshots.js';
 import { notFound, parseSessionIdParam } from '../_helpers.js';
 
-export function mountToolSnapshotRoutes(app: Hono, store: ServerDeps['sessionStore'],
+export function mountToolSnapshotRoutes(app: HttpRouter, store: ServerDeps['sessionStore'],
   companyChildren?: (id: string) => Promise<SessionId[]>): void {
   const scope = companyChildren ? 'company' : 'coder';
   const base = `/api/${scope}/sessions/:id/snapshot/tool/:toolUseId`;

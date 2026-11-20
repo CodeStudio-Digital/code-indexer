@@ -1,5 +1,5 @@
 /**
- * Thin fetch wrappers over the api-client Hono routes. Uses direct fetch
+ * Thin fetch wrappers over the api-client HTTP routes. Uses direct fetch
  * against `apiBaseUrl()` (resolves to `mcp://app` in Electron, relative in
  * browser dev) — same pattern as SessionDrivePanel — so no IPC/api-bus
  * mapping is required.

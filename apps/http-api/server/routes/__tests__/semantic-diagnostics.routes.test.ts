@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountStatsRoutes } from '../stats.js';
@@ -30,7 +30,7 @@ describe('semantic diagnostic routes', () => {
       getVectorIdStats: vi.fn(() => ({ total: 1, byType: { file: 1 } })),
       getProjectEmbeddingFingerprint: vi.fn(() => 'legacy-fingerprint'),
     };
-    const app = new Hono();
+    const app = new HttpRouter();
     mountStatsRoutes(app, {
       db,
       semanticStore: {
@@ -79,7 +79,7 @@ describe('semantic diagnostic routes', () => {
         id === 4 && projectId === 7 ? { id, path: 'src/demo.ts' } : null,
       getSymbolById: () => null,
     };
-    const app = new Hono();
+    const app = new HttpRouter();
     mountStatsRoutes(app, {
       db,
       embeddingService: { fingerprint: () => 'desired-profile' },
@@ -136,7 +136,7 @@ describe('semantic diagnostic routes', () => {
       getCollectionByName: (name: string) => collections.find((collection) => collection.name === name) ?? null,
       countIndexedVectorsByCollection: (id: number) => id === 2 ? 7 : 11,
     };
-    const app = new Hono();
+    const app = new HttpRouter();
     mountDocsRoutes(app, {
       db: {},
       docStore,
@@ -200,7 +200,7 @@ describe('semantic diagnostic routes', () => {
       _vector: number[],
       _options: { namespace: string; generationId: number; filter?: Record<string, string> },
     ) => []);
-    const app = new Hono();
+    const app = new HttpRouter();
     mountDocsRoutes(app, {
       db: {},
       docStore: {

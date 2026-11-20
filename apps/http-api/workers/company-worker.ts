@@ -700,6 +700,7 @@ bridge.handle('stop', async () => {
   // exits: another worker shares this PID, so PID liveness cannot recover them.
   await sessionStore.close();
   try { companyStore.close(); } catch { /* best-effort */ }
+  setImmediate(() => process.exit(0));
   return { ok: true };
 });
 

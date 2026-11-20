@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
 import { mountSessionTrashRoutes } from '../session-trash.js';
 
@@ -10,7 +10,7 @@ let root: string;
 let dataDir: string;
 let projectRoot: string;
 let store: FsSessionStore;
-let app: Hono;
+let app: HttpRouter;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'mcp-session-trash-route-'));
@@ -24,7 +24,7 @@ beforeEach(async () => {
       listProjectRoots: () => [{ project_id: 7, root_path: projectRoot }],
     },
   });
-  app = new Hono();
+  app = new HttpRouter();
   mountSessionTrashRoutes(app, { sessionStore: store });
 });
 

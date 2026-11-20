@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { mountAgentMemoryEvolutionRoutes } from '../agent-memory-evolution.js';
 
@@ -15,7 +15,7 @@ beforeAll(() => {
 afterAll(() => { db.close(); rmSync(root, { recursive: true, force: true }); });
 function fixture(enabled = true) {
   const evolution = { status: vi.fn(() => ({ enabled, pending: 1, running: false })), enabled: () => enabled, runOnce: vi.fn(async () => undefined) };
-  const app = new Hono(); mountAgentMemoryEvolutionRoutes(app, { db, memoryEvolution: evolution } as any);
+  const app = new HttpRouter(); mountAgentMemoryEvolutionRoutes(app, { db, memoryEvolution: evolution } as any);
   return { app, evolution };
 }
 it('serves one consistent overview from the live store without starting learning or reading chat histories', async () => {

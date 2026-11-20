@@ -2,7 +2,7 @@
  * Session-level skill routes — resolve active skills per session,
  * toggle skills on/off per session, and the slash command list.
  */
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import { resolveActiveWorkspaceSkills } from '@mcp/code-agent/skills/workspace-skills.js';
@@ -60,7 +60,7 @@ function availableSkills(
 }
 
 export function mountCoderSkillsRoutes(
-  app: Hono,
+  app: HttpRouter,
   deps: ServerDeps,
   _runtime: CoderRuntime,
 ): void {

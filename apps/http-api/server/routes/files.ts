@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import { createFilesHandlers, createContext, resolveSafe } from '@mcp/api-handlers';
 import { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '../deps.js';
@@ -6,19 +6,19 @@ import { parseIdParam, notFound } from './_helpers.js';
 import { createMediaFileResponse, createProjectPreviewResponse } from './media-file-response.js';
 
 /**
- * Hono adapters for /api/projects/:id/files/* and /api/symbols/*.
+ * HttpRouter adapters for /api/projects/:id/files/* and /api/symbols/*.
  *
  * Read/write/tree (new for the IDE workspace) and the legacy listing
  * routes all share the same handler in @mcp/api-handlers/files.
  */
-function mapApiError(c: Context, err: unknown) {
+function mapApiError(c: HttpContext, err: unknown) {
   if (err instanceof ApiError) {
     return c.json({ error: err.message, code: err.code }, err.status as never);
   }
   throw err;
 }
 
-export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
+export function mountFilesRoutes(app: HttpRouter, deps: ServerDeps): void {
   const h = createFilesHandlers(deps);
   const touchIndexedFile = (projectId: number, filePath: string, kind: 'view' | 'edit'): void => {
     try {
@@ -292,7 +292,7 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
 
   // Legacy detail endpoint — kept for backwards compat with the dashboard's
   // FileViewer. The wildcard route MUST be registered AFTER `/file-tree`
-  // and `/file` above so Hono doesn't capture them as wildcard paths.
+  // and `/file` above so HttpRouter doesn't capture them as wildcard paths.
   app.get('/api/projects/:id/files/*', async (c) => {
     try {
       const projectId = parseIdParam(c);

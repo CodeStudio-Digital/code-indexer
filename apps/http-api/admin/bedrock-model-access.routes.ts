@@ -6,7 +6,7 @@
  *   GET  /bedrock/model-access/:modelId  — check current access status
  *   POST /bedrock/model-access/:modelId  — subscribe (create agreement)
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 import {
   checkModelAccess,
@@ -14,8 +14,8 @@ import {
   type UseCaseFormData,
 } from './bedrock-model-access.js';
 
-export function bedrockModelAccessRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function bedrockModelAccessRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   function getBedrockCfg(providerId?: string) {
     const id = providerId ?? 'bedrock';

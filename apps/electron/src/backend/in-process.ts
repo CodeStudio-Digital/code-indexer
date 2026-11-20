@@ -25,16 +25,15 @@ import type {
 } from './handle.js';
 
 export function createInProcessBackend(): BackendHandle {
-  // The Hono app is built but not served unless MCP_DEV_HTTP=1 — that flag
+  // The HTTP router is built but not served unless MCP_DEV_HTTP=1 — that flag
   // exists so an operator can curl the same backend from outside the window.
   const browser = createElectronBrowserHost();
-  const { app: honoApp, deps, mcpPool, chromeService } = createApp(browser);
+  const { app: httpRouter, deps, mcpPool, chromeService } = createApp(browser);
   let handlers: LocalBackendAccess['handlers'] | null = null;
   let readyPromise: Promise<void> | null = null;
 
   const local: LocalBackendAccess = {
     deps,
-    honoApp,
     // `attachRenderer` builds these; reading before that is a wiring bug.
     get handlers() {
       if (!handlers) throw new Error('[backend] attachRenderer() must run before handlers are read');
@@ -44,14 +43,14 @@ export function createInProcessBackend(): BackendHandle {
 
   return {
     ready() {
-      readyPromise ??= startOptionalDevHttp(honoApp);
+      readyPromise ??= startOptionalDevHttp(httpRouter);
       return readyPromise;
     },
 
     async fetch(req) {
       // Instrumented here rather than at each call site so the `mcp://`
       // protocol handler and the OAuth loopback are measured identically.
-      // For a JSON route `honoApp.fetch` resolves only after the (synchronous)
+      // For a JSON route `httpRouter.fetch` resolves only after the (synchronous)
       // SQLite handler + serialization complete, so this wall-time ≈ the
       // main-thread block — cross-check loopP99/loopMax in perf-sampler to
       // separate true blocking from awaited async (e.g. git spawns).
@@ -60,14 +59,14 @@ export function createInProcessBackend(): BackendHandle {
       // IN_PROCESS_ENV is what lets `requireTrustedLocalRequest` (SSH CRUD)
       // tell this socket-less path apart from a real off-loopback client.
       // It has to ride in `env` — a renderer can forge headers, not this.
-      return await timeCall(channel, () => honoApp.fetch(req, IN_PROCESS_ENV));
+      return await timeCall(channel, () => httpRouter.fetch(req, IN_PROCESS_ENV));
     },
 
     attachRenderer(_contents?: WebContents) {
       // Global and idempotent: `ipcMain` channels are process-wide, so every
       // renderer already reaches them. The per-renderer argument exists for
       // the out-of-process host, which brokers one port per WebContents.
-      handlers ??= mountIpcHandlers(deps, honoApp);
+      handlers ??= mountIpcHandlers(deps, httpRouter);
     },
 
     setProcessMetricsProvider(fn: ProcessMetricsProvider) {

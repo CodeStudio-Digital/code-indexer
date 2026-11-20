@@ -6,7 +6,7 @@
  * upserts the provider row, and seeds a model list (live first, falling
  * back to CHATGPT_SEED_MODELS).
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { discoverModels } from './model-discovery/index.js';
 import {
@@ -26,8 +26,8 @@ const CHATGPT_SEED_MODEL_IDS = [
   'gpt-4o',
 ];
 
-export function openaiOAuthRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function openaiOAuthRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   /**
    * Start the OpenAI PKCE flow. Boots the loopback server on :1455 and

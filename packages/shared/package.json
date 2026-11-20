@@ -9,6 +9,11 @@
     "./utils/abortable.js": "./src/utils/abortable.ts",
     "./utils/serializable-stream.js": "./src/utils/serializable-stream.ts",
     "./assets/drawio-vendor.js": "./src/assets/drawio-vendor.ts",
+    "./http/context.js": "./src/http/context.ts",
+    "./http/middleware.js": "./src/http/middleware.ts",
+    "./http/node-server.js": "./src/http/node-server.ts",
+    "./http/router.js": "./src/http/router.ts",
+    "./http/sse.js": "./src/http/sse.ts",
     "./attachments/policy.js": "./src/attachments/policy.ts"
   },
   "dependencies": {

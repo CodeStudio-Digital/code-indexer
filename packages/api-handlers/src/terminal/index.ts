@@ -8,7 +8,7 @@
  * upgrade and will be folded into this handler in Dia 3.
  *
  * Streaming via AsyncIterable — handler returns `output()` as an iterable
- * of `{type:'data'|'exit', ...}` frames. Hono adapts to SSE (or keeps
+ * of `{type:'data'|'exit', ...}` frames. The HTTP layer adapts to SSE (or keeps
  * the existing WS path for now); Electron pumps onto a MessagePort.
  *
  * The PTY registry itself lives in `./pty-manager.ts` as a shared

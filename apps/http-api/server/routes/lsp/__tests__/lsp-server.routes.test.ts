@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { LspApi } from '@mcp/api-bus';
 import type { ServerDeps } from '../../../deps.js';
 import { mountLspServerRoutes } from '../lsp-server.routes.js';
@@ -31,12 +31,12 @@ function setup() {
       return { ok: true as const };
     },
   } as unknown as LspApi;
-  const app = new Hono();
+  const app = new HttpRouter();
   mountLspServerRoutes(app, {} as ServerDeps, handlers);
   return { app, overrides, restarts };
 }
 
-async function put(app: Hono, body: string): Promise<Response> {
+async function put(app: HttpRouter, body: string): Promise<Response> {
   return app.request('/api/lsp/7/angular-profile-overrides', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

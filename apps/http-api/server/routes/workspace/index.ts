@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountTreeRoutes } from './tree.routes.js';
 import { mountFileRoutes } from './file.routes.js';
@@ -10,7 +10,7 @@ import { mountGitRoutes } from './git.routes.js';
  * a company session. Enables the in-session IDE-lite UI (Files + Git
  * tabs) in BuilderView without granting write access to files.
  */
-export function mountWorkspaceRoutes(app: Hono, deps: ServerDeps): void {
+export function mountWorkspaceRoutes(app: HttpRouter, deps: ServerDeps): void {
   mountTreeRoutes(app, deps);
   mountFileRoutes(app, deps);
   mountGitRoutes(app, deps);

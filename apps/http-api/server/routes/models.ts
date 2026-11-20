@@ -1,8 +1,8 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderName } from '@mcp/shared/types.js';
 import type { ServerDeps } from '../deps.js';
 
-export function mountModelsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountModelsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { modelDiscovery } = deps;
 
   app.get('/api/models', async (c) => {

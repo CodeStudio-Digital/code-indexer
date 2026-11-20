@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   notFound,
@@ -27,7 +27,7 @@ interface UpdateGroupBody {
  * numeric project id is only the essential catalog key used to locate the
  * project root.
  */
-export function mountCoderGroupsRoutes(app: Hono, deps: ServerDeps): void {
+export function mountCoderGroupsRoutes(app: HttpRouter, deps: ServerDeps): void {
   const { sessionStore } = deps;
 
   app.get('/api/coder/groups', async (c) => {

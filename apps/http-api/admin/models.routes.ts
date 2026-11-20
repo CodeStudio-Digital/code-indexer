@@ -4,7 +4,7 @@
  * Manual upserts are tagged `source='manual'` so the next live refresh
  * doesn't wipe them. Live refresh replaces only `source='live'` rows.
  */
-import { Hono } from 'hono';
+import { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { discoverModels } from './model-discovery/index.js';
 import {
@@ -15,8 +15,8 @@ import {
 import { SUBAGENT_PROFILE_IDS } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { getOpenAIApiModelMetadata, isPublicOpenAIApi } from '@mcp/shared/providers/openai-api-models.js';
 
-export function modelsRouter(store: ProviderStore): Hono {
-  const app = new Hono();
+export function modelsRouter(store: ProviderStore): HttpRouter {
+  const app = new HttpRouter();
 
   app.get('/providers/:id/models', (c) => {
     const id = c.req.param('id');

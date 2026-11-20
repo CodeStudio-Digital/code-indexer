@@ -1,4 +1,11 @@
 {
+  "failure.worker-unavailable-before-input": "The worker stopped before processing your message. You can send it again in this conversation.",
+  "failure.turn-ended-before-input": "The previous turn finished before this message could be queued. Send it again in this conversation.",
+  "failure.worker-evicted": "The session worker stopped. You can continue in this conversation.",
+  "failure.worker-draining": "The previous worker is still releasing this conversation. Try sending the message again in this chat.",
+  "failure.session-writer-busy": "Another process is writing to this conversation. Wait for it to finish and try again.",
+  "failure.request-setup-failed": "The message could not be prepared. Check the worker log for the original error.",
+  "failure.continue-setup-failed": "The continuation could not be prepared. Check the worker log for the original error.",
   "linkedFile.loading": "Opening file…",
   "linkedFile.missing": "The file was not found at this path. It may have been moved or deleted.",
   "linkedFile.workspace": "The project folder or worktree for this chat is unavailable.",
