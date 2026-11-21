@@ -7,6 +7,7 @@
  * the long child wait (CHILD_AGENT_WAIT_TOOL_TIMEOUT_MS).
  */
 import { err, ok, type CoderTool, type ToolContext, type ToolResult } from '../core/tool.js';
+import { nativeReasoningLevel } from '@mcp/provider-sdk';
 import { rootChatId, type ChatCollaborationStore } from '@mcp/session-storage/collaboration/store.js';
 import { CHILD_AGENT_WAIT_MAX_MS, CHILD_AGENT_WAIT_TOOL_TIMEOUT_MS } from '../runtime/child-agent-wait.js';
 import { CHILD_CHAT_PROFILES, chatCaller, chatIdOf, delegationPosture, receivedResult, text, waitBudgetMs } from './child-chat-common.js';
@@ -36,8 +37,9 @@ const createChat: CoderTool = {
     profile: { type: 'string', enum: [...CHILD_CHAT_PROFILES] },
     wait: { type: 'boolean' },
     project_id: { type: 'integer', description: "Default: this chat's project." },
-    provider: { type: 'string' },
-    model: { type: 'string', description: "Default: the profile's configured model, else yours." },
+    provider: { type: 'string', description: "Configured provider ID, e.g. 'openai-chatgpt' for ChatGPT." },
+    model: { type: 'string', description: "Model ID, e.g. 'gpt-6.2-astra'. Defaults to the profile's configured model, then yours." },
+    effort: { type: 'string', description: "Reasoning effort for the child model, such as 'max'. Set only when requested. Omit to inherit the profile or parent setting." },
   }, required: ['title', 'prompt', 'profile'], additionalProperties: false },
   handler: async (args, ctx) => {
     const chat = chatCaller(ctx);
@@ -46,6 +48,9 @@ const createChat: CoderTool = {
     if (!title || !prompt) return err('create_chat needs a title and a prompt');
     if (!(CHILD_CHAT_PROFILES as readonly string[]).includes(profile)) return err(`profile must be one of ${CHILD_CHAT_PROFILES.join(', ')}`);
     if (!ctx.currentToolUseId) return err('create_chat needs a tracked tool call');
+    if (args.effort != null && typeof args.effort !== 'string') return err("The reasoning effort must be a level name such as 'max'.");
+    const effort = text(args.effort);
+    if (effort && !nativeReasoningLevel(effort)) return err(`'${effort}' is a session mode. Choose a reasoning effort supported by the child model.`);
     const posture = delegationPosture(ctx);
     const wait = args.wait !== false;
     try {
@@ -54,6 +59,7 @@ const createChat: CoderTool = {
         ...(typeof args.project_id === 'number' ? { projectId: args.project_id } : {}),
         ...(text(args.provider) ? { provider: text(args.provider) } : {}),
         ...(text(args.model) ? { model: text(args.model) } : {}),
+        ...(effort ? { effort } : {}),
         // Planning (before approval) or read-only: the child is read-only whatever its profile.
         parentReadOnly: posture.readOnly || posture.planning,
       });

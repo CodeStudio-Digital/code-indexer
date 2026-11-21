@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
-import { evaluateVerificationReadinessAtFinish, maybeVerificationNudge } from '../executing-verification-gate.js';
+import { evaluateVerificationReadiness, renderVerificationReminder } from '../executing-verification-gate.js';
 import { resolveToolInvocationMetadata } from '@mcp/code-agent/core/policy.js';
 import { writeStdin } from '@mcp/code-agent/tools/exec-command.js';
 import { makeTestContext } from './test-helpers.js';
@@ -22,7 +22,7 @@ function registerTool(
   });
 }
 
-function harness(changedFiles: string[] = ['src/a.ts']) {
+function harness() {
   const ledger = new ToolCallLedger();
   const registry = new ToolRegistry();
   registerTool(registry, 'edit_file', {
@@ -46,15 +46,6 @@ function harness(changedFiles: string[] = ['src/a.ts']) {
       toolCallLedger: ledger,
     } as ToolContext,
   });
-  ctx.bridge = {
-    getSessionStateData: () => ({
-      activePlan: null,
-      todos: [],
-      notes: [],
-      filesChanged: changedFiles,
-      investigationCount: 0,
-    }),
-  };
   return { ctx, ledger };
 }
 
@@ -83,9 +74,9 @@ function validate(
   });
 }
 
-describe('evaluateVerificationReadinessAtFinish', () => {
-  it('keeps verification fresh through the final inspection/report sequence from the Ky benchmark', async () => {
-    const { ctx, ledger } = harness(['src/a.ts', 'BENCHMARK_RESULT.md']);
+describe('evaluateVerificationReadiness', () => {
+  it('keeps verification fresh through the final inspection/report sequence from the Ky benchmark', () => {
+    const { ctx, ledger } = harness();
     write(ledger);
     terminal(ledger, 'exec_command', 'running', null);
     const inspect = (args: Record<string, unknown>) => ledger.record({
@@ -100,26 +91,26 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     terminal(ledger, 'write_stdin', 'exited', 0);
     inspect({ cmd: 'node --version && git diff --check && git diff --numstat && git diff -- test/retry-timing.ts' });
     write(ledger, 'BENCHMARK_RESULT.md');
-    const readiness = await evaluateVerificationReadinessAtFinish(ctx);
+    const readiness = evaluateVerificationReadiness(ctx);
     expect(readiness).toMatchObject({ status: 'fresh', lastWriteSeq: 1, lastSuccessfulValidationSeq: 5 });
-    expect(maybeVerificationNudge(ctx, readiness)).toBeNull();
+    expect(renderVerificationReminder(readiness)).toBeNull();
     // Inspection must not weaken the execution or permission classification.
     expect(ledger.snapshot()[2]).toMatchObject({ executionClass: 'execute', mutates: true });
   });
 
-  it('recognizes structured argv checks without accepting the shell launch as a passed check', async () => {
+  it('recognizes structured argv checks without accepting the shell launch as a passed check', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     ledger.record({ name: 'exec_command', args: { command: {
       kind: 'argv', executable: 'node', args: ['node_modules/typescript/bin/tsc', '--project', 'tsconfig.test.json'],
     } }, content: 'running', isError: false, mutates: true, executionClass: 'execute',
     structuredData: { sessionId: 'terminal-a', state: 'running', exitCode: null } });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
     terminal(ledger, 'write_stdin', 'exited', 0);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('fresh');
   });
 
-  it('correlates empty inspection polls but invalidates freshness after interactive input', async () => {
+  it('correlates empty inspection polls but invalidates freshness after interactive input', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger);
@@ -127,11 +118,11 @@ describe('evaluateVerificationReadinessAtFinish', () => {
       isError: false, executionClass: 'execute', mutates: true,
       structuredData: { sessionId: 'inspection', state: 'running' } });
     terminal(ledger, 'write_stdin', 'running', null, { sessionId: 'inspection' });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('fresh');
     terminal(ledger, 'write_stdin', 'running', null, { sessionId: 'inspection', chars: 'new command\n' });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
     terminal(ledger, 'write_stdin', 'exited', 0, { sessionId: 'inspection' });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
   });
 
   it.each(['node rewrite.js', 'git diff > src/a.ts', 'git reset --hard'])('still requires verification after %s', cmd => {
@@ -140,25 +131,16 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     validate(ledger);
     ledger.record({ name: 'exec_command', args: { cmd }, content: 'exited', isError: false,
       mutates: true, executionClass: 'execute', structuredData: { state: 'exited', exitCode: 0 } });
-    return expect(evaluateVerificationReadinessAtFinish(ctx)).resolves.toMatchObject({ status: 'stale' });
+    expect(evaluateVerificationReadiness(ctx)).toMatchObject({ status: 'stale' });
   });
 
-  it('invalidates an explicit documentation check when documentation changes', async () => {
-    const { ctx, ledger } = harness(['docs/guide.md']);
+  it('invalidates an explicit documentation check when documentation changes', () => {
+    const { ctx, ledger } = harness();
     validate(ledger, false, 'pnpm run lint:docs');
     write(ledger, 'docs/guide.md');
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
     validate(ledger, false, 'pnpm run lint:docs');
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
-  });
-
-  it.each(['pnpm test', 'pnpm run lint:docs'])('applies documentation scope to persisted checks: %s', async command => {
-    const { ctx } = harness(['src/a.ts', 'REPORT.md']);
-    ctx.opts.collectVerifyEvidence = () => ({
-      lastVerify: { command, at: '2026-11-11 01:00:00', isError: false, exitCode: 0 },
-      verifyCount: 1, filesEditedAfter: ['REPORT.md'], filesEditedAtSameTime: [],
-    });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe(command.includes('docs') ? 'stale' : 'fresh');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('fresh');
   });
 
   function terminal(ledger: ToolCallLedger, name: string, state: string, exitCode: number | null,
@@ -177,15 +159,15 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     });
   }
 
-  it('requires an exited zero receipt, correlated to the original terminal', async () => {
+  it('requires an exited zero receipt, correlated to the original terminal', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     terminal(ledger, 'exec_command', 'running', null);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
     terminal(ledger, 'write_stdin', 'exited', 0, { sessionId: 'unrelated' }); // empty poll (formerly poll_session)
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
     terminal(ledger, 'write_stdin', 'exited', 0);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('fresh');
   });
 
   it.each([
@@ -194,156 +176,147 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     { state: 'stopping', exitCode: null },
     { state: 'running', exitCode: null, isError: true, refusalKind: 'timeout' },
     { state: 'running', exitCode: null, isError: true, refusalKind: 'abort' },
-  ])('does not certify a non-successful terminal receipt: %j', async (result) => {
+  ])('does not certify a non-successful terminal receipt: %j', (result) => {
     const { ctx, ledger } = harness();
     write(ledger);
     terminal(ledger, 'exec_command', 'running', null);
     terminal(ledger, 'write_stdin', result.state, result.exitCode, result);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
   });
 
-  it('does not certify edits made while validation was running', async () => {
+  it('does not certify edits made while validation was running', () => {
     const { ctx, ledger } = harness();
     terminal(ledger, 'exec_command', 'running', null);
     write(ledger);
     terminal(ledger, 'write_stdin', 'exited', 0); // empty poll (formerly poll_session)
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
   });
 
-  it('does not count an empty write_stdin poll, recorded with its invocation metadata, as a later write', async () => {
+  it('does not count an empty write_stdin poll, recorded with its invocation metadata, as a later write', () => {
     const poll = (ledger: ToolCallLedger, meta: { mutates: boolean; executionClass: string }) => ledger.record({
       name: 'write_stdin', args: { session_id: 'idle' }, content: 'status=running', isError: false, ...meta });
     const before = harness();
     write(before.ledger);
     validate(before.ledger);
     poll(before.ledger, { mutates: true, executionClass: 'execute' }); // the old static classification
-    expect((await evaluateVerificationReadinessAtFinish(before.ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(before.ctx).status).toBe('stale');
     const after = harness();
     write(after.ledger);
     validate(after.ledger);
     poll(after.ledger, resolveToolInvocationMetadata(writeStdin, { session_id: 'idle' }));
-    expect((await evaluateVerificationReadinessAtFinish(after.ctx)).status).toBe('fresh');
+    expect(evaluateVerificationReadiness(after.ctx).status).toBe('fresh');
   });
 
-  it('invalidates correlation when interactive stdin can change the command', async () => {
+  it('invalidates correlation when interactive stdin can change the command', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     terminal(ledger, 'exec_command', 'running', null);
     terminal(ledger, 'write_stdin', 'exited', 0, { chars: 'echo success\n' });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
   });
 
-  it('keeps resumed validation without a terminal exit code ambiguous', async () => {
+  it('is not applicable when no files or writes exist', () => {
     const { ctx } = harness();
-    ctx.opts.collectVerifyEvidence = () => ({
-      lastVerify: { command: 'pnpm test', at: '2026-07-23 10:00:00', isError: false, exitCode: null },
-      verifyCount: 1, filesEditedAfter: [], filesEditedAtSameTime: [],
-    });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('ambiguous');
-  });
-
-  it('is not applicable when no files or writes exist', async () => {
-    const { ctx } = harness([]);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe(
+    expect(evaluateVerificationReadiness(ctx).status).toBe(
       'not_applicable',
     );
   });
 
-  it('reports missing after a write with no validation', async () => {
+  it('reports missing after a write with no validation', () => {
     const { ctx, ledger } = harness();
     write(ledger);
-    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(ctx)).toMatchObject({
       status: 'missing',
       source: 'ledger',
       lastWriteSeq: 1,
     });
   });
 
-  it('reports stale when validation precedes the latest write', async () => {
+  it('reports stale when validation precedes the latest write', () => {
     const { ctx, ledger } = harness();
     validate(ledger);
     write(ledger);
-    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(ctx)).toMatchObject({
       status: 'stale',
       lastValidationSeq: 1,
       lastWriteSeq: 2,
     });
   });
 
-  it('does not repeat code checks after writing a report', async () => {
-    const { ctx, ledger } = harness(['src/a.ts', 'REPORT.md']);
+  it('does not repeat code checks after writing a report', () => {
+    const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger, false, 'node node_modules/typescript/bin/tsc --project tsconfig.test.json > .types.log 2>&1');
     write(ledger, 'REPORT.md');
-    const readiness = await evaluateVerificationReadinessAtFinish(ctx);
+    const readiness = evaluateVerificationReadiness(ctx);
     expect(readiness.status).toBe('fresh');
     expect(readiness.lastWriteSeq).toBe(1);
-    expect(maybeVerificationNudge(ctx, readiness)).toBeNull();
+    expect(renderVerificationReminder(readiness)).toBeNull();
   });
 
-  it('does not request code execution for a documentation-only task', async () => {
-    const { ctx, ledger } = harness(['docs/usage.md']);
+  it('does not request code execution for a documentation-only task', () => {
+    const { ctx, ledger } = harness();
     write(ledger, 'docs/usage.md');
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('not_applicable');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('not_applicable');
   });
 
-  it.each(['src/prompts/system.md', 'docs/data.json', 'README.mdx', '../REPORT.md'])('does not exempt code or uncertain paths: %s', async (path: string) => {
-    const { ctx, ledger } = harness([path]);
+  it.each(['src/prompts/system.md', 'docs/data.json', 'README.mdx', '../REPORT.md'])('does not exempt code or uncertain paths: %s', (path: string) => {
+    const { ctx, ledger } = harness();
     validate(ledger);
     write(ledger, path);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
   });
 
-  it('keeps mixed code/documentation patches subject to validation', async () => {
-    const { ctx, ledger } = harness(['src/a.ts', 'REPORT.md']);
+  it('keeps mixed code/documentation patches subject to validation', () => {
+    const { ctx, ledger } = harness();
     validate(ledger);
     ledger.record({ name: 'apply_patch', args: { _raw: '*** Begin Patch\n*** Update File: REPORT.md\n@@\n-old\n+new\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch' }, content: 'updated', isError: false, mutates: true, executionClass: 'write' });
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
   });
 
-  it('keeps failures visible after a documentation write', async () => {
-    const { ctx, ledger } = harness(['src/a.ts', 'REPORT.md']);
+  it('keeps failures visible after a documentation write', () => {
+    const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger, true, 'pnpm test > tests.log 2>&1');
     write(ledger, 'REPORT.md');
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('stale');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('stale');
   });
 
-  it('reports stale when the post-write validation failed', async () => {
+  it('reports stale when the post-write validation failed', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger, true);
-    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(ctx)).toMatchObject({
       status: 'stale',
       lastSuccessfulValidationSeq: null,
       lastValidationSeq: 2,
     });
   });
 
-  it('invalidates an earlier success when the latest validation fails', async () => {
+  it('invalidates an earlier success when the latest validation fails', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger);
     validate(ledger, true, 'pnpm run build');
-    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(ctx)).toMatchObject({
       status: 'stale', lastSuccessfulValidationSeq: 2, lastValidationSeq: 3,
     });
     validate(ledger, false, 'pnpm run build');
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('fresh');
   });
 
-  it('does not accept echoed test text as verification after a write', async () => {
+  it('does not accept echoed test text as verification after a write', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger, false, 'echo "npm test"');
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('missing');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('missing');
   });
 
-  it('reports fresh when successful validation follows the latest write', async () => {
+  it('reports fresh when successful validation follows the latest write', () => {
     const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger);
-    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(ctx)).toMatchObject({
       status: 'fresh',
       lastWriteSeq: 1,
       lastSuccessfulValidationSeq: 2,
@@ -351,7 +324,7 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     });
   });
 
-  it('reports fresh for filtered workspace validation and PHP lint', async () => {
+  it('reports fresh for filtered workspace validation and PHP lint', () => {
     const workspace = harness();
     write(workspace.ledger);
     validate(
@@ -359,24 +332,24 @@ describe('evaluateVerificationReadinessAtFinish', () => {
       false,
       'pnpm --filter @migrator/core test -- siger.mapper.spec.ts',
     );
-    expect(await evaluateVerificationReadinessAtFinish(workspace.ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(workspace.ctx)).toMatchObject({
       status: 'fresh',
       validationSignals: ['pnpm test'],
     });
 
-    const php = harness(['sync-service/handlers/UserHandler.php']);
+    const php = harness();
     write(php.ledger, 'sync-service/handlers/UserHandler.php');
     validate(php.ledger, false, 'php -l sync-service/handlers/UserHandler.php');
-    expect(await evaluateVerificationReadinessAtFinish(php.ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(php.ctx)).toMatchObject({
       status: 'fresh',
       validationSignals: ['php -l'],
     });
   });
 
-  it('accepts a successful current-run validation for resumed changed files', async () => {
+  it('accepts a successful current-run validation for resumed changed files', () => {
     const { ctx, ledger } = harness();
     validate(ledger);
-    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(evaluateVerificationReadiness(ctx)).toMatchObject({
       status: 'fresh',
       source: 'ledger',
       lastWriteSeq: null,
@@ -384,45 +357,28 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     });
   });
 
-  it('uses persisted evidence on a resumed run with no current-run write', async () => {
-    const { ctx } = harness();
-    ctx.opts.collectVerifyEvidence = () => ({
-      lastVerify: {
-        command: 'pnpm test',
-        at: '2026-07-23 10:00:00',
-        isError: false,
-        exitCode: 0,
-      },
-      verifyCount: 1,
-      filesEditedAfter: [],
-      filesEditedAtSameTime: ['src/a.ts'],
-    });
-    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
-      status: 'ambiguous',
-      source: 'persisted',
-    });
-  });
-
-  it('nudges exactly once after a write without fresh validation', async () => {
+  it('ignores writes from earlier runs when suggesting a check', () => {
     const { ctx, ledger } = harness();
     write(ledger);
-    const readiness = await evaluateVerificationReadinessAtFinish(ctx);
-
-    expect(maybeVerificationNudge(ctx, readiness)).toContain('[verification-required]');
-    expect(maybeVerificationNudge(ctx, readiness)).toBeNull();
-    expect(ctx.verification.nudges).toBe(1);
+    ctx.verification.ledgerStartSeq = ledger.lastSeq;
+    expect(evaluateVerificationReadiness(ctx).status).toBe('not_applicable');
   });
 
-  it('does not nudge read-only work or a write with fresh validation', async () => {
-    const readOnly = harness([]);
-    const readOnlyReadiness = await evaluateVerificationReadinessAtFinish(readOnly.ctx);
-    expect(maybeVerificationNudge(readOnly.ctx, readOnlyReadiness)).toBeNull();
+  it('suggests a check only if verification is relevant to the request', () => {
+    const { ctx, ledger } = harness();
+    write(ledger);
+    expect(renderVerificationReminder(evaluateVerificationReadiness(ctx))).toContain('If verification is relevant to the request');
+  });
+
+  it('does not nudge read-only work or a write with fresh validation', () => {
+    const readOnly = harness();
+    const readOnlyReadiness = evaluateVerificationReadiness(readOnly.ctx);
+    expect(renderVerificationReminder(readOnlyReadiness)).toBeNull();
 
     const verified = harness();
     write(verified.ledger);
     validate(verified.ledger);
-    const verifiedReadiness = await evaluateVerificationReadinessAtFinish(verified.ctx);
-    expect(maybeVerificationNudge(verified.ctx, verifiedReadiness)).toBeNull();
-    expect(verified.ctx.verification.nudges).toBe(0);
+    const verifiedReadiness = evaluateVerificationReadiness(verified.ctx);
+    expect(renderVerificationReminder(verifiedReadiness)).toBeNull();
   });
 });

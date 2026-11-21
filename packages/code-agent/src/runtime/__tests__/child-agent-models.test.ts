@@ -53,4 +53,18 @@ describe('child-agent model and effort', () => {
       { key: 'pinned', title: 'Pinned', profile: 'implement', provider: 'own', model: 'own-m', effort: 'minimal' });
     expect(await sessions.getSession(child.id)).toMatchObject({ provider: 'own', model: 'own-m', reasoning_effort_override: 'minimal' });
   });
+
+  it('keeps the profile model when only the effort is specified', async () => {
+    const { child } = await createChildAgentSession(options(), parentId, {
+      key: 'effort-only', title: 'Review', profile: 'review', effort: 'max',
+    });
+    expect(await sessions.getSession(child.id)).toMatchObject({ provider: 'strong', model: 'review-3', reasoning_effort_override: 'max' });
+  });
+
+  it.each([['review', 'xhigh'], ['full', 'medium']])('inherits effort for %s even when the model is explicitly selected', async (profile, expected) => {
+    const { child } = await createChildAgentSession(options(), parentId, {
+      key: 'model-only', title: 'Review', profile, provider: 'own', model: 'own-m',
+    });
+    expect((await sessions.getSession(child.id))?.reasoning_effort_override).toBe(expected);
+  });
 });

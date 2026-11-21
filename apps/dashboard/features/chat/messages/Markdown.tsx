@@ -21,6 +21,7 @@ interface MarkdownProps {
   className?: string;
   showDocumentCopy?: boolean;
   initialAnchor?: string;
+  scrollWithTranscript?: boolean;
 }
 
 const baseClasses =
@@ -75,7 +76,7 @@ export function MarkdownLink({ href, children, node: _node, ...props }: Componen
     onClick={event => scope.open(file, event.currentTarget)}>{children}</button>;
 }
 
-export const Markdown = memo(function Markdown({ text, className, showDocumentCopy = true, initialAnchor }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ text, className, showDocumentCopy = true, initialAnchor, scrollWithTranscript }: MarkdownProps) {
   const fence = text.length > LARGE_MARKDOWN_CHARS ? singleFence(text) : null;
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -86,6 +87,7 @@ export const Markdown = memo(function Markdown({ text, className, showDocumentCo
       {fence ? <CodeBlock><code className={`language-${fence.lang}`}>{fence.code}</code></CodeBlock>
         : text.length > LARGE_MARKDOWN_CHARS
         ? <LargeMarkdown text={text} showCopy={showDocumentCopy} renderNode={renderMarkdownNode} initialAnchor={initialAnchor}
+          scrollWithTranscript={scrollWithTranscript}
           preview={<pre className="whitespace-pre-wrap break-words">{text.slice(0, 4_000)}</pre>} />
         : <MarkdownContent text={text} />}
     </div>

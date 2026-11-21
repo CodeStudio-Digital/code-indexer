@@ -350,13 +350,8 @@ export interface RunnerOptions {
    * the stop-guard, and the auto-continue recap.
    */
   agentLoopV2?: boolean;
-  /** Enable completion-evidence collection for advisory health reporting. */
+  /** Include verification evidence in a pending request after tool results. */
   verificationEvidenceEnabled?: boolean;
-  /** Persisted cross-run verification evidence; current-run ordering uses ToolCallLedger. */
-  collectVerifyEvidence?: () =>
-    | import('@mcp/code-agent/core/review-evidence.js').VerifyEvidence
-    | null
-    | Promise<import('@mcp/code-agent/core/review-evidence.js').VerifyEvidence | null>;
   /**
    * Host-owned durability barrier at an Executing turn boundary. The runner
    * emits `turn_start` first so the host can enqueue the previous turn's

@@ -41,7 +41,20 @@ async function compare(c: ParityCase, route: ParityRoute = main) {
   const value = await runOnRoute(route, c);
   const calls = effects(route, before);
   expect(calls, `${c.id}: fake calls`).toEqual(expectedEffects(c, route.fx));
-  expect(golden.formOf(value), `${c.id}: native = golden`).toEqual(golden.expected(c.id));
+  const expected = golden.expected(c.id);
+  if (c.id === 'LM1' || c.id === 'LM2') {
+    // The retired bridge recorded these same pages as text only.
+    const page = expected as { content: string };
+    const lines = page.content.split('\n');
+    const { total, offset, next_offset, warnings } = JSON.parse(lines.pop()!);
+    const models = lines.map(line => {
+      const [, provider, id, name] = /^\[([^\]]+)\] (\S+) — (.*)$/.exec(line)!;
+      return { provider, id, name };
+    });
+    expect(golden.formOf(value)).toEqual({ ...page, structuredData: { models, total, offset, next_offset: next_offset ?? null, warnings } });
+  } else {
+    expect(golden.formOf(value), `${c.id}: native = golden`).toEqual(expected);
+  }
   return { value, calls };
 }
 

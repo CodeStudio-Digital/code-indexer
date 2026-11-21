@@ -335,7 +335,7 @@ describe('ExecutingNode', () => {
     expect(ctx.transientRetriesThisTurn).toBe(0);
   });
 
-  it('gives an unverified write one bounded chance to run validation', async () => {
+  it.each(['src/a.ts', 'analysis/atlas.md'])('finishes on the first final reply after writing %s', async (path) => {
     const registry = new ToolRegistry();
     registry.register({
       name: 'edit_file',
@@ -361,7 +361,7 @@ describe('ExecutingNode', () => {
     });
     ledger.record({
       name: 'edit_file',
-      args: { path: 'src/a.ts' },
+      args: { path },
       content: 'edited',
       isError: false,
       mutates: true,
@@ -375,25 +375,58 @@ describe('ExecutingNode', () => {
         activePlan: null,
         todos: [],
         notes: [],
-        filesChanged: ['src/a.ts'],
+        filesChanged: [path],
         investigationCount: 0,
       }),
     };
 
-    const node = new ExecutingNode();
-    const first = await node.execute(ctx, null);
-    expect(first.kind).toBe('TurnSucceeded');
-    expect(ctx.messages.at(-1)?.role).toBe('user');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('[verification-required]');
-    expect(ctx.verification.nudges).toBe(1);
-    expect(persistTurnTelemetry).toHaveBeenCalledTimes(1);
-
-    const second = await node.execute(ctx, null);
-    expect(second.kind).toBe('CleanFinish');
+    const chat = vi.spyOn(ctx.opts.provider, 'chat');
+    expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('CleanFinish');
     expect(ctx.stopReason).toBe('completed');
     expect(ctx.messages.at(-1)?.role).toBe('assistant');
-    expect(ctx.verification.nudges).toBe(1);
-    expect(persistTurnTelemetry).toHaveBeenCalledTimes(2);
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(persistTurnTelemetry).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { path: 'src/a.ts', expectsReminder: true },
+    { path: 'docs/atlas.md', expectsReminder: false },
+  ])('includes any verification reminder during the tool loop for $path', async ({ path, expectsReminder }) => {
+    const registry = new ToolRegistry();
+    const tools = [
+      { name: 'edit_file', mutates: true, riskLevel: 'write', executionClass: 'write' },
+      { name: 'read_file', mutates: false, riskLevel: 'read', executionClass: 'read' },
+    ] as const;
+    for (const tool of tools) {
+      registry.register({
+        ...tool, description: tool.name, parameters: { type: 'object', properties: {} }, source: 'native',
+        handler: async () => ({ content: 'ok' }),
+      });
+    }
+    const provider = makeSequencedProvider([
+      [{ type: 'tool_call_end', id: 'edit', name: 'edit_file', input: { path } }, { type: 'done', stop_reason: 'tool_use' }],
+      [{ type: 'tool_call_end', id: 'read', name: 'read_file', input: { path } }, { type: 'done', stop_reason: 'tool_use' }],
+      [{ type: 'text_delta', text: 'Delivered.' }, { type: 'done', stop_reason: 'end_turn' }],
+    ]);
+    const { ctx } = makeTestContext({
+      provider, registry, toolContext: { ...emptyToolContext(), toolCallLedger: new ToolCallLedger() },
+    });
+    ctx.opts.verificationEvidenceEnabled = true;
+    ctx.messages.push({ role: 'user', content: [{ type: 'text', text: 'Update the file.' }] });
+    const chat = vi.spyOn(provider, 'chat');
+    const node = new ExecutingNode();
+    const edited = await node.execute(ctx, null);
+    expect(edited).toMatchObject({ kind: 'TurnSucceeded', hasToolCalls: true });
+    const inspected = await node.execute(ctx, edited);
+    expect(inspected).toMatchObject({ kind: 'TurnSucceeded', hasToolCalls: true });
+    expect((await node.execute(ctx, inspected)).kind).toBe('CleanFinish');
+
+    const reminder = 'No validation was recorded after the latest write.';
+    expect(chat).toHaveBeenCalledTimes(3);
+    expect(chat.mock.calls.map(([request]) => JSON.stringify(request.messages).includes(reminder)))
+      .toEqual([false, expectsReminder, false]);
+    expect(JSON.stringify(ctx.messages)).not.toContain(reminder);
+    expect(ctx.messages.at(-1)?.role).toBe('assistant');
   });
 
   it('finishes after successful validation and a report without another provider round', async () => {
@@ -411,8 +444,7 @@ describe('ExecutingNode', () => {
     ledger.record({ name: 'edit_file', args: { path: 'REPORT.md' }, content: 'ok', isError: false, mutates: true, executionClass: 'write' });
     ctx.opts.verificationEvidenceEnabled = true;
     expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('CleanFinish');
-    expect(ctx.verification.nudges).toBe(0);
-    expect(JSON.stringify(ctx.messages)).not.toContain('[verification-required]');
+    expect(ctx.verification.reminderSent).toBe(false);
   });
 
   it('compacts from the tokenizer estimate when the provider omits usage (Fix B regression)', async () => {

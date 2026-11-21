@@ -43,7 +43,8 @@ const list_models = defineTool({
   access: 'read',
   description:
     'List one page of LLM models from this profile. Default listing is local, with no network or cache writes.\n' +
-    'Filter with provider; live=true requests bounded public catalog reads using environment credentials. OAuth/custom providers use their local catalog; refresh them in provider settings. Follow next_offset for more models.',
+    'Filter with provider. In code_exec, read page.models (provider, id, name) and pass page.next_offset as offset until it is null. ' +
+    'live=true requests bounded public catalog reads using environment credentials. Refresh OAuth or custom catalogs in provider settings.',
   inputSchema: {
     type: 'object',
     properties: { provider: { type: 'string' }, live: { type: 'boolean' },
@@ -58,10 +59,12 @@ const list_models = defineTool({
       (args.offset ?? 0) as number, (args.limit ?? 100) as number,
       { signal, persistCache: false, onFallback: (provider, reason) => warnings.push({ provider, reason }) });
     signal?.throwIfAborted();
-    const lines = page.models.map(m => `[${m.provider}] ${m.id} — ${m.name}`).join('\n');
+    const models = page.models.map(({ provider, id, name }) => ({ provider, id, name }));
+    const lines = models.map(m => `[${m.provider}] ${m.id} — ${m.name}`).join('\n');
     const meta = { total: page.total, offset: page.offset, next_offset: page.next_offset,
-      ...(page.total > page.models.length ? { recovery: { tool: 'list_models', args: { ...args, offset: page.next_offset ?? 0 } } } : {}), warnings };
+      ...(page.next_offset != null ? { recovery: { tool: 'list_models', args: { ...args, offset: page.next_offset } } } : {}), warnings };
     return { text: lines + '\n' + JSON.stringify(meta),
+      structuredContent: { models, total: page.total, offset: page.offset, next_offset: page.next_offset ?? null, warnings },
       ...(page.total > page.models.length ? { sourceTruncations: [{ technique: 'model-catalog-page', inputSize: page.total,
         outputSize: page.models.length, unit: 'items' as const, recoverable: true }] } : {}) };
   },

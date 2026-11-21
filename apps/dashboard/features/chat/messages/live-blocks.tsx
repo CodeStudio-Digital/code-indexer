@@ -20,7 +20,7 @@ import { cleanThinkingMarkdown } from './thinking-text.js';
  *    re-parsed 60×/s. This caps that at ~12×/s.
  *  - `useDeferredValue` lowers the render's priority so input can run first.
  *    The markdown parser and syntax tokenizer are still synchronous once
- *    entered; long documents use a worker parser and a bounded reading viewport.
+ *    entered; long answers use a worker parser and virtualize within the transcript.
  *
  * 80 ms is under the ~100 ms threshold where UI stops feeling instantaneous, and
  * the trailing commit means the settled text is identical to the unthrottled
@@ -38,7 +38,7 @@ export const LiveTextBlock = memo(function LiveTextBlock({ text }: { text: strin
   const deferred = useDeferredValue(throttled);
   return (
     <div className="text-[13px] leading-5 text-foreground/90">
-      <Markdown text={deferred} showDocumentCopy={false} />
+      <Markdown text={deferred} showDocumentCopy={false} scrollWithTranscript />
     </div>
   );
 });

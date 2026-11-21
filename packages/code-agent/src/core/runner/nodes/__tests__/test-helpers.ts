@@ -102,7 +102,7 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     planNudges: 0,
     verification: {
       ledgerStartSeq: overrides.toolContext?.toolCallLedger?.lastSeq ?? 0,
-      nudges: 0,
+      reminderSent: false,
     },
     estimateCalibration: null,
     // Perf W1 — precompute/memo slots start empty like production context.

@@ -73,7 +73,6 @@ import {
 } from '@mcp/code-agent/core/system-prompt.js';
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
-import { buildVerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import {
@@ -2352,8 +2351,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   };
 
-  const verificationEvidenceEnabled = !opts.companyContext;
-
   // ─── Context window (DB-first, registry fallback) ────────────────
   // The DB is the source of truth WHEN populated, but ZAI / new model
   // releases / hand-imported configs frequently leave it null. Fall back
@@ -2688,10 +2685,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     globalDisabledTools,
     sessionDisabledTools: sessionDisabledTools.size > 0 ? sessionDisabledTools : undefined,
     externalToolTiers: runtimeToolTiers,
-    verificationEvidenceEnabled,
-    collectVerifyEvidence: verificationEvidenceEnabled
-      ? () => buildVerifyEvidence(store, session.id)
-      : undefined,
+    verificationEvidenceEnabled: !opts.companyContext,
     hookRegistry: hookRegistry.hasHandlers ? hookRegistry : undefined,
     context_window: sessionContextWindow,
     isCompanySubordinate: opts.companyContext != null && !opts.companyContext.isMaster,

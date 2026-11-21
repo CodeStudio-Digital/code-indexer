@@ -98,7 +98,7 @@ const CODE_EXEC_DESC =
   'Execute a JS snippet that batches tool calls in one turn. Saves round-trips when you need to chain reads/searches/edits with logic, loops, or filtering.\n' +
   '\n' +
   'API inside the snippet:\n' +
-  '  - `tools["exact-name"](args)` calls any registered tool that is callable inside code_exec, including hidden non-interactive tools under the same plan-mode and scope policy. Keep punctuation in the registered name, for example `tools["ext_codestudio-figma__get_metadata"](args)`. Dot notation and bare calls work for JavaScript identifier names such as `read_file`. Returns the tool text and throws on tool error.\n' +
+  '  - `tools["exact-name"](args)` calls any registered tool that is callable inside code_exec, including hidden non-interactive tools under the same plan-mode and scope policy. Keep punctuation in the registered name, for example `tools["ext_codestudio-figma__get_metadata"](args)`. Dot notation and bare calls work for JavaScript identifier names such as `read_file`. Returns text by default or an object for tools such as `mcp__list_models`. Use `invoke({name, args})` for the original text and structured data. Tool errors throw.\n' +
   '  - `attempt(toolPromise)` — use ONLY for one probe that may legitimately fail. Returns `{ok:true,value}` or `{ok:false,error:{tool,code,kind,message,retryable,suggestedAction}}` so the rest of a `Promise.all` batch can finish. Policy refusals, permission errors, timeouts, and cancellations still throw.\n' +
   '  - `list_tools()` → `[{name, tier, params, description}]` for EVERY tool callable inside code_exec. `tool_schema(name)` introspects ANY registered tool and returns its full JSON Schema plus `callableInsideCodeExec` and `invokeAs`. When `invokeAs` is `top_level`, call that tool directly outside code_exec. Use these (or `find_tools({query})`) to discover exact names and args.\n' +
   '  - `log(...)` — appends to the captured output. JSON-friendly.\n' +
@@ -365,6 +365,7 @@ export function buildCodeExecTool(
       // leak into a later code_exec script.
       const stableCalls = new Map<string, {
         promise: Promise<string>;
+        structuredResultKey?: object;
         originToolUseId: string;
         count: number;
       }>();
@@ -869,7 +870,7 @@ export function buildCodeExecTool(
               !metadata.mutates &&
               metadata.parallelSafe &&
               !forceReread;
-            const stableKey = eligibleStableRead && !structuredRequests.has(rawArgObj)
+            const stableKey = eligibleStableRead && (t.codeExecReturnsData || !structuredRequests.has(rawArgObj))
               ? `${t.name}|epoch:${callEpoch}|${stableArgsKey(argObj)}`
               : null;
             const cached = stableKey ? stableCalls.get(stableKey) : undefined;
@@ -888,6 +889,10 @@ export function buildCodeExecTool(
               const started = Date.now();
               try {
                 const content = await cached.promise;
+                if (cached.structuredResultKey) {
+                  const result = structuredResults.get(cached.structuredResultKey);
+                  if (result) structuredResults.set(rawArgObj, result);
+                }
                 recordNestedOutcome({
                   content, isError: false, durationMs: Date.now() - started,
                   guardVerdict: reuseVerdict, affectsFailureStreak: false,
@@ -1084,6 +1089,7 @@ export function buildCodeExecTool(
             if (stableKey) {
               stableCalls.set(stableKey, {
                 promise: physical,
+                ...(t.codeExecReturnsData ? { structuredResultKey: rawArgObj } : {}),
                 originToolUseId: attemptOrigin,
                 count: 1,
               });
@@ -1490,10 +1496,14 @@ export function buildCodeExecTool(
               if (kind !== 'tool' && kind !== 'structured') throw new Error('Invalid invocation kind');
               const fn = sandbox.tools[name] as (args: unknown) => Promise<string>;
               const args = input && typeof input === 'object' ? input : {};
-              if (kind === 'structured') structuredRequests.add(args);
+              if (kind === 'tool' && !registry.get(name)?.codeExecReturnsData) return fn(args);
+              structuredRequests.add(args);
               const text = await fn(args);
-              if (kind !== 'structured') return text;
               const result = structuredResults.get(args);
+              if (kind === 'tool') {
+                if (result?.structuredData === undefined) throw new Error(`${name} returned no structured data`);
+                return result.structuredData;
+              }
               return { text: result?.content ?? text, data: result?.structuredData, evidence: result?.evidence,
                 isError: result?.isError ?? false, error: result?.error, effectOutcome: result?.effectOutcome,
                 completeness: result?.sourceTruncations?.length ? 'partial' : 'complete',

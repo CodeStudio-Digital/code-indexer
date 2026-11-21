@@ -14,7 +14,7 @@ import { ToolRegistry } from '../registry.js';
 import type { CoderTool, ToolContext } from '../tool.js';
 import type { IShellPort } from '../../ports/shell-port.js';
 import { getDiagnostics } from '../../tools/diagnostics.js';
-import { evaluateVerificationReadinessAtFinish } from '../runner/nodes/executing-verification-gate.js';
+import { evaluateVerificationReadiness } from '../runner/nodes/executing-verification-gate.js';
 import { makeTestContext } from '../runner/nodes/__tests__/test-helpers.js';
 
 const CHECKS: Array<[string, string | undefined]> = [
@@ -72,26 +72,25 @@ describe('verification gate', () => {
     for (const tool of [getDiagnostics, { ...getDiagnostics, name: 'edit_file' } as CoderTool]) registry.register(tool);
     const { ctx } = makeTestContext({ registry,
       toolContext: { cwd: process.cwd(), projectName: 'diag-gate', toolCallLedger: ledger } as ToolContext });
-    ctx.bridge = { getSessionStateData: () => ({ activePlan: null, todos: [], notes: [], filesChanged: ['src/a.ts'], investigationCount: 0 }) };
     const edit = () => ledger.record({ name: 'edit_file', args: { path: 'src/a.ts' }, content: 'edited', isError: false,
       mutates: true, executionClass: 'write' });
     return { ctx, ledger, edit };
   }
 
-  it('a passing diagnostics run after the edit certifies it, like the shell check', async () => {
+  it('a passing diagnostics run after the edit certifies it, like the shell check', () => {
     const { ctx, ledger, edit } = harness();
     edit();
     recordDiagnostics(ledger, 'tsc --noEmit --pretty false', 0);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('fresh');
   });
 
-  it('a diagnostics call without a recognized checker is not a later write', async () => {
+  it('a diagnostics call without a recognized checker is not a later write', () => {
     const { ctx, ledger, edit } = harness();
     edit();
     ledger.record({ name: 'run_command', args: { command: 'pnpm test' }, content: 'exit code 0', isError: false,
       executionClass: 'execute' });
     recordDiagnostics(ledger, undefined, 0); // e.g. "No diagnostics checker configured for .md"
     recordDiagnostics(ledger, 'python -I -B -c', 0);
-    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe('fresh');
+    expect(evaluateVerificationReadiness(ctx).status).toBe('fresh');
   });
 });

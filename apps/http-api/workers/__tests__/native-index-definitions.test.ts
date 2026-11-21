@@ -3,9 +3,8 @@
  * opened): what the port publishes, the access map, and the definitions the
  * model sees, primary and prefixed. Moved from apps/mcp-server when the
  * server was deleted; the server's tools/list is no longer a reference, so
- * the definitions are pinned by the fingerprint taken before E6. Since E7b
- * only `source` and the provenance kind differ from it; since E8d the four
- * agent-run reads are gone, so 25 remain.
+ * the definitions are pinned by a fingerprint. The current fingerprint
+ * includes the 25 tools after E8d and the structured list_models contract.
  */
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -76,11 +75,8 @@ describe('native index tools: definitions over the real port', () => {
     expect(viaNative).toHaveLength(25);
   });
 
-  it('apart from source and provenance kind (E7b), the definitions are byte for byte the ones fingerprinted before E6, without the four agent-run reads (E8d)', () => {
-    // Put back the two values E7b changed; every other byte must match the old
-    // fingerprint with the four agent-run reads taken out of it. The pre-E6
-    // snapshot of 29 gave 58a304b1e5e67317babe59719e62bd0e35431926; the same
-    // snapshot without those four gives the value below.
+  it('pins the native definitions including structured model pages, primary and prefixed', () => {
+    // Keep the historical normalization of source and provenance for comparability.
     const asBefore = (tool: CoderTool): CoderTool => {
       expect([tool.source, tool.capabilityProvenance?.kind], tool.name).toEqual(['native', 'native']);
       return { ...tool, source: 'mcp', capabilityProvenance: { ...tool.capabilityProvenance!, kind: 'mcp_internal' } };
@@ -90,7 +86,7 @@ describe('native index tools: definitions over the real port', () => {
       primary: strip(native()),
       prefixed: strip(prefixedBridgeTools(native({ projectName: 'parity-second', projectRoot: 'D:/second' }), 'parity_second')),
     };
-    expect(createHash('sha1').update(JSON.stringify(snapshot, null, 2)).digest('hex')).toBe('6fad55cf484b29587491fcec61cbfbd1bad16e52');
+    expect(createHash('sha1').update(JSON.stringify(snapshot, null, 2)).digest('hex')).toBe('d119a6427e532aeae75a8a06c601eff5136ed454');
   });
 
   it('without the documentation readers the port publishes no rag_ tools, and neither does the native route', () => {

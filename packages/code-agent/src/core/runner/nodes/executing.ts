@@ -76,7 +76,7 @@ import {
   buildConversationTail,
 } from '../memory-query.js';
 import { maybePlanNudge } from './executing-plan-gate.js';
-import { evaluateVerificationReadinessAtFinish, maybeVerificationNudge } from './executing-verification-gate.js';
+import { evaluateVerificationReadiness, renderVerificationReminder } from './executing-verification-gate.js';
 import { consumeStream } from './executing-stream.js';
 import { dispatchTools, buildToolMessage, type DispatchedToolResult } from './executing-dispatch.js';
 import { drainBackgroundNotices } from '../../background-notices.js';
@@ -316,6 +316,13 @@ export class ExecutingNode implements BehaviorNode {
       }
     }
 
+    const lastMessage = ctx.messages.at(-1);
+    const verificationReminder = ctx.opts.verificationEvidenceEnabled
+      && !ctx.verification.reminderSent
+      && lastMessage?.content.some(block => block.type === 'tool_result')
+      ? renderVerificationReminder(evaluateVerificationReadiness(ctx))
+      : null;
+
     // PR-F dynamic injection — invoke the provider once per assembly so
     // the post-injection state updates are coherent. The pure
     // `computeDynamicInjection` decides whether anything fresh is worth
@@ -418,7 +425,8 @@ export class ExecutingNode implements BehaviorNode {
         !conversationChapterIndex &&
         !userMemoryIndex &&
         !preflightHint &&
-        !correctionHint
+        !correctionHint &&
+        !verificationReminder
       )
         return null;
       const result = computeDynamicInjection({
@@ -451,6 +459,7 @@ export class ExecutingNode implements BehaviorNode {
         preflightHint,
         lastInjectedPreflightHash: ctx.injectionState.lastInjectedPreflightHash,
         correctionHint,
+        verificationReminder,
       });
       // Stash for post-assembly commit so we don't double-update state
       // when the same injection is consulted (e.g. by tests).
@@ -708,6 +717,7 @@ export class ExecutingNode implements BehaviorNode {
     // enough room, so reset the consecutive-pre-emit counter. A future runaway
     // starts counting fresh.
     ctx.preEmitCompactions = 0;
+    if (verificationReminder) ctx.verification.reminderSent = true;
 
     const tempResolution = ctx.bridge?.resolveTemperature?.();
     const prevResponse = ctx.bridge?.getPreviousResponseId?.();
@@ -1211,22 +1221,6 @@ export class ExecutingNode implements BehaviorNode {
         runPersistTelemetry([]);
         ctx.messages.push({ role: 'user', content: [{ type: 'text', text: planNudge }] });
         return events.turnSucceeded({ hasToolCalls: false });
-      }
-      // A successful current-run write needs one chance to collect objective
-      // validation before a text-only finish. This is deliberately bounded to
-      // one short nudge: agents can still finish by accurately reporting why
-      // validation was unavailable, but cannot silently claim it already ran.
-      if (ctx.opts.verificationEvidenceEnabled) {
-        const readiness = await evaluateVerificationReadinessAtFinish(ctx);
-        const verificationNudge = maybeVerificationNudge(ctx, readiness);
-        if (verificationNudge) {
-          runPersistTelemetry([]);
-          ctx.messages.push({
-            role: 'user',
-            content: [{ type: 'text', text: verificationNudge }],
-          });
-          return events.turnSucceeded({ hasToolCalls: false });
-        }
       }
       // Text-only assistant turn ends the run — no tool_use means the model is
       // delivering its final reply.

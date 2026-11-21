@@ -18,6 +18,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import type { ChatDelta } from '../../core/messages.js';
 import type { ChatProvider, ChatRequest } from '../../providers/adapter.js';
 import { REPLACED_BY_CHILD_CHATS } from '../../tools/child-chat-surface.js';
@@ -31,8 +33,22 @@ process.env.MCP_DATA_DIR = join(tmp, 'data');
 process.env.MCP_RUNTIME_COORDINATION_DIR = join(tmp, 'coordination');
 
 const CHILD_USAGE = { input_tokens: 13, output_tokens: 4 };
+const CHILD_MODEL = 'gpt-6.2-sol';
 const toolResults: string[] = [];
-let childRuns = 0;
+const childRequests: Array<{ model: string; reasoning?: { effort: string } }> = [];
+let selection: { provider: string; model: string; offsets: number[]; total: number; next_offset: number | null } | undefined;
+const searchCatalog = `
+  let offset = 0;
+  const offsets = [];
+  do {
+    const page = await tools.mcp__list_models({ offset, limit: 100 });
+    offsets.push(page.offset);
+    const match = page.models.find(m => m.provider.includes('chatgpt') && m.name === 'GPT-6.2-Sol');
+    if (match) return { provider: match.provider, model: match.id, offsets, total: page.total, next_offset: page.next_offset };
+    offset = page.next_offset;
+  } while (offset != null);
+  return null;
+`;
 const firstCall: Record<string, { system: string; tools: string[] }> = {};
 // runCoder always sets a multi-agent mode (standard: explicit request only), so the prompt
 // carries that section, never the subagents one. On failure, list the sections that came.
@@ -43,28 +59,38 @@ const retiredIn = (system: string) => [...new Set(system.match(RETIRED) ?? [])];
 
 const lastToolResult = (request: ChatRequest): string => {
   const last = [...(request.messages ?? [])].reverse().find((message) => message.role === 'tool');
-  return JSON.stringify(last?.content ?? '');
+  const block = last?.content.find(item => item.type === 'tool_result');
+  return typeof block?.content === 'string' ? block.content : JSON.stringify(block?.content ?? '');
 };
 
-/** 'parent' delegates, then continues the same child; 'child' answers with usage. */
-function scripted(model: string): ChatProvider {
+/** The parent can only delegate with the provider and ID it actually found through code_exec. */
+function scripted(provider: string, model: string): ChatProvider {
   let call = 0;
-  return { name: 'fixture', model, setModel() {}, async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
+  return { name: provider, model, setModel() {}, async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
     if (call++ === 0) firstCall[model] = { system: request.system ?? '', tools: (request.tools ?? []).map((tool) => tool.name) };
-    if (model === 'child') {
-      childRuns++;
-      yield { type: 'text_delta', text: `Child run ${childRuns}.` };
-      yield { type: 'usage', usage: CHILD_USAGE };
-      yield { type: 'done', stop_reason: 'end_turn' };
-      return;
-    }
     if (call === 1) {
-      yield { type: 'tool_call_start', id: 'c1', name: 'create_chat' };
-      yield { type: 'tool_call_end', id: 'c1', name: 'create_chat', input: { title: 'Probe', prompt: 'Report.', profile: 'explore', model: 'child' } };
+      yield { type: 'tool_call_start', id: 'lookup', name: 'code_exec' };
+      yield { type: 'tool_call_end', id: 'lookup', name: 'code_exec', input: { code: searchCatalog } };
       yield { type: 'done', stop_reason: 'tool_use' };
       return;
     }
     if (call === 2) {
+      const lookup = lastToolResult(request);
+      const returned = lookup.split('[return]\n')[1];
+      selection = returned ? JSON.parse(returned) : undefined;
+      if (!selection?.provider || !selection.model) {
+        yield { type: 'text_delta', text: `Lookup failed: ${lookup}` };
+        yield { type: 'done', stop_reason: 'end_turn' };
+        return;
+      }
+      yield { type: 'tool_call_start', id: 'c1', name: 'create_chat' };
+      yield { type: 'tool_call_end', id: 'c1', name: 'create_chat', input: {
+        title: 'Probe', prompt: 'Report.', profile: 'explore', provider: selection.provider, model: selection.model, effort: 'max',
+      } };
+      yield { type: 'done', stop_reason: 'tool_use' };
+      return;
+    }
+    if (call === 3) {
       const result = lastToolResult(request);
       toolResults.push(result);
       const chatId = /Chat ([0-9a-f-]{36})/.exec(result)?.[1] ?? 'missing';
@@ -79,41 +105,79 @@ function scripted(model: string): ChatProvider {
   } };
 }
 
-vi.mock('@mcp/services/providers/factory.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  createCoderProvider: vi.fn(async (_provider: string, model: string) => scripted(model)),
-}));
+vi.mock('@mcp/services/providers/factory.js', async (importOriginal) => {
+  const factory = await importOriginal<typeof import('@mcp/services/providers/factory.js')>();
+  return { ...factory, createCoderProvider: (...args: Parameters<typeof factory.createCoderProvider>) =>
+    args[0] === 'fixture' ? scripted('fixture', args[1]!) : factory.createCoderProvider(...args) };
+});
 
 let rootId: string;
 let projectId: number;
 let closeApp: () => Promise<void>;
+const chatgpt = createServer(async (req, res) => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk);
+  childRequests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: `Child run ${childRequests.length}.` })}\n\n`);
+  res.end(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', usage: CHILD_USAGE } })}\n\n`);
+});
 
 beforeAll(async () => {
   const { CodeIndexDB } = await import('@mcp/store/db.js');
   const { ProviderStore } = await import('@mcp/store/provider-store.js');
+  const { __setStoreForTests } = await import('@mcp/services/providers/shared/store.js');
   const { FsSessionStore } = await import('@mcp/session-storage/fs-store/index.js');
   const { ChatCollaborationStore } = await import('@mcp/session-storage/collaboration/store.js');
   const { buildInProcessChildChats } = await import('./in-process-child-chats.js');
+  const { createIndexToolsPort } = await import('@mcp/indexer/agent-tools/port.js');
+  const { setGlobalIndexTools } = await import('../../ports/index-tools-port.js');
+  setGlobalIndexTools(createIndexToolsPort());
+  chatgpt.listen(0, '127.0.0.1');
+  await once(chatgpt, 'listening');
+  const addr = chatgpt.address();
+  if (!addr || typeof addr === 'string') throw new Error('Missing HTTP test address');
   const db = new CodeIndexDB(process.env.MCP_INDEX_DB!);
   projectId = db.createProject('fixture', projectRoot).id;
   db.close();
   const providers = new ProviderStore(process.env.MCP_INDEX_DB!);
   providers.upsertProvider({ id: 'fixture', name: 'Fixture', kind: 'openai', enabled: true, use_for_coder: true });
-  providers.close();
+  providers.upsertProvider({ id: 'bedrock', name: 'Amazon Bedrock', kind: 'bedrock', enabled: true });
+  providers.replaceModelsFromSource('bedrock', 'manual', [
+    { model_id: 'global.openai.gpt-6.2-sol', name: 'GPT-6.2-Sol' },
+    ...Array.from({ length: 199 }, (_, i) => ({ model_id: `model-${i}`, name: `Other ${i}` })),
+  ]);
+  providers.upsertProvider({ id: 'openai-chatgpt', name: 'ChatGPT (Codex)', kind: 'chatgpt', enabled: true,
+    use_for_coder: true, api_key: 'loopback-fixture', base_url: `http://127.0.0.1:${addr.port}` });
+  providers.replaceModelsFromSource('openai-chatgpt', 'manual', ['Astra', 'Sol'].map(name => ({
+    model_id: `gpt-6.2-${name.toLowerCase()}`, name: `GPT-6.2-${name}`, enabled: true, can_reason: true,
+    default_reasoning_level: 'low', supported_reasoning_levels: ['low', 'max'],
+  })));
+  __setStoreForTests(providers);
   const app = FsSessionStore.fromRoots({ dataDir: process.env.MCP_DATA_DIR!, projectRootResolver: {
     resolveProjectRoot: (id) => (id === projectId ? projectRoot : undefined),
     listProjectRoots: () => [{ project_id: projectId, root_path: projectRoot }] } });
-  rootId = (await app.createSession({ project_id: projectId, title: 'Root', provider: 'fixture', model: 'parent', agent: 'build' })).id;
+  rootId = (await app.createSession({
+    project_id: projectId, title: 'Root', provider: 'fixture', model: 'parent', agent: 'build', reasoning_effort_override: 'low',
+  })).id;
   const mailbox = new ChatCollaborationStore(process.env.MCP_DATA_DIR!);
   await mailbox.init();
   const { runCoder } = await import('../../index.js');
   // The app's side; the launcher runs the child's runCoder as its worker would.
   buildInProcessChildChats({ app, mailbox, project: (id) => (id === projectId ? { id, name: 'fixture', root_path: projectRoot } : null),
     run: async (childId, task) => (await runCoder({ session: { id: childId as never }, userMessage: task })).done });
-  closeApp = () => app.close();
+  closeApp = async () => {
+    await app.close();
+    __setStoreForTests(null);
+    providers.close();
+  };
 }, 60_000);
 
 afterAll(async () => {
+  const { setGlobalIndexTools } = await import('../../ports/index-tools-port.js');
+  setGlobalIndexTools(null);
+  chatgpt.closeAllConnections();
+  await new Promise<void>(resolve => chatgpt.close(() => resolve()));
   const { setChildChatPort } = await import('../../ports/child-chat-port.js');
   setChildChatPort(null);
   await closeApp?.();
@@ -135,19 +199,21 @@ function rootTurnMetrics(): Array<{ subagent_runs?: string[]; subagent_usage?: {
 }
 
 describe('runCoder with child chats (the default)', () => {
-  it('delegates with create_chat, gets the answer in the same run, records its usage in the turn, and continues the child', async () => {
+  it('finds Sol on page three, delegates to ChatGPT at max, receives the answer and continues the same child', async () => {
     const { runCoder } = await import('../../index.js');
-    const handle = await runCoder({ session: { id: rootId as never }, userMessage: 'Delegate it.' });
+    const handle = await runCoder({ session: { id: rootId as never }, userMessage: 'Find Sol 6.2 in the ChatGPT catalog and delegate at max effort.' });
     const outcome = await handle.done;
     expect(outcome.reason).toBe('completed');
-    expect(firstCall.parent!.tools).toEqual(expect.arrayContaining(['create_chat', 'send_chat_message']));
+    expect(firstCall.parent!.tools).toEqual(expect.arrayContaining(['code_exec', 'create_chat', 'send_chat_message']));
+    expect(selection, JSON.stringify(outcome)).toEqual({ provider: 'openai-chatgpt', model: CHILD_MODEL, offsets: [0, 100, 200], total: 202, next_offset: null });
     expect(firstCall.parent!.tools).not.toContain('spawn_agent');
     expect(firstCall.parent!.system.includes(EXPLICIT_ONLY), headers(firstCall.parent!.system)).toBe(true);
     expect(retiredIn(firstCall.parent!.system), headers(firstCall.parent!.system)).toEqual([]);
     expect(toolResults[0]).toMatch(/Chat [0-9a-f-]{36}: completed/);
     expect(toolResults[0]).toContain('Child run 1.');
     expect(toolResults[1]).toContain('Child run 2.');
-    expect(childRuns).toBe(2);
+    expect(childRequests).toHaveLength(2);
+    for (const request of childRequests) expect(request).toMatchObject({ model: CHILD_MODEL, reasoning: { effort: 'max' } });
     const keyed = rootTurnMetrics().filter((metric) => metric.subagent_runs?.length);
     expect(keyed).toHaveLength(2);
     for (const metric of keyed) {
@@ -158,6 +224,13 @@ describe('runCoder with child chats (the default)', () => {
     const reader = FsSessionStore.fromRoots({ dataDir: process.env.MCP_DATA_DIR!, projectRootResolver: {
       resolveProjectRoot: (id) => (id === projectId ? projectRoot : undefined), listProjectRoots: () => [{ project_id: projectId, root_path: projectRoot }] } });
     try {
+      const children = await reader.listChildAgentSessions(rootId);
+      expect(children).toHaveLength(1);
+      const [child] = children;
+      expect(await reader.getSession(child!.id)).toMatchObject({
+        provider: 'openai-chatgpt', model: CHILD_MODEL, reasoning_effort_override: 'max',
+      });
+      expect(await reader.getSession(rootId)).toMatchObject({ provider: 'fixture', model: 'parent', reasoning_effort_override: 'low' });
       const recorded = (await reader.listInvestigations(rootId, 10)).filter((row) => row.topic === 'Probe').map((row) => row.summary).sort();
       expect(recorded).toEqual(['Child run 1.', 'Child run 2.']);
     } finally { await reader.close(); }

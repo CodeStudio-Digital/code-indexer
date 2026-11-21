@@ -1,6 +1,6 @@
 {
   "name": "mcp-code-indexer",
-  "version": "3.16.58",
+  "version": "3.16.60",
   "packageManager": "pnpm@10.22.0",
   "description": "Codebase indexing platform powered by LLMs with hybrid search, MCP Server, and web dashboard",
   "repository": {

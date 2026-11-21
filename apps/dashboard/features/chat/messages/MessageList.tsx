@@ -55,6 +55,8 @@ import { TurnFooter } from './TurnFooter.js';
 import { prependRoundMarkdown, type ReadMarkdown } from './round-markdown.js';
 import { ChapterSourcePager, CHAPTER_SOURCE_PAGE_SIZE, MAX_OPEN_CHAPTER_SOURCES, type ChapterSourceState } from './chapter-source-pager.js';
 import { useTranscriptSelection } from './transcript-selection.js';
+import { findMarkdownLayout, TranscriptScrollContext, type MarkdownScrollLayout } from './transcript-scroll-context.js';
+import { LARGE_MARKDOWN_CHARS } from './Markdown.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
@@ -609,6 +611,7 @@ export const MessageList = React.memo(function MessageList({
   ]);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
+  const markdownLayouts = useMemo(() => new Map<symbol, MarkdownScrollLayout>(), [sessionId]);
   const rangeExtractor = useTranscriptSelection(scrollRef, rows);
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -621,6 +624,19 @@ export const MessageList = React.memo(function MessageList({
       if (row?.kind === 'chapter') return expandedSummaries.has(row.chapter.id) ? 300 : 68;
       if (row?.kind === 'tail') return 24;
       if (row?.kind === 'live-block') return 40;
+      if (row?.kind === 'message' && row.group.kind === 'assistant' && markdownLayouts.size) {
+        // Live rows use different keys from saved rows. Reserve their measured
+        // Markdown height before the saved row mounts so scrollTop cannot clamp.
+        let height = 88;
+        for (const message of row.group.messages) {
+          for (const block of message.content) {
+            if (block.type === 'text' && block.text && block.text.length > LARGE_MARKDOWN_CHARS) {
+              height += findMarkdownLayout(markdownLayouts, block.text)?.height ?? 0;
+            }
+          }
+        }
+        return height;
+      }
       return 88;
     },
     // `followOnAppend` is intentionally absent: its guard requires the last item
@@ -643,9 +659,18 @@ export const MessageList = React.memo(function MessageList({
       }
     },
   });
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    if (instance.scrollDirection === 'backward') return false;
+    const top = instance.scrollElement?.scrollTop ?? 0;
+    const row = instance.elementsCache.get(item.key);
+    // An inline Markdown virtualizer anchors individual paragraphs while the
+    // reader is inside this row. The transcript anchors the whole row above it.
+    return row?.querySelector('[data-markdown-viewport="transcript"]') ? item.end <= top : item.start < top;
+  };
 
   // Declared after the virtualizer so its pin runs on the committed spacer height.
   const { following, jumpToEnd, disengage } = useFollowOutput({ scrollRef, resetKey: sessionId });
+  const transcriptScroll = useMemo(() => ({ disengage, markdownLayouts }), [disengage, markdownLayouts]);
 
   const chapterRowIndexes = useMemo(() => {
     const indexes = new Map<string, number>();
@@ -816,6 +841,7 @@ export const MessageList = React.memo(function MessageList({
             {chapters.length > 0 && (
               <span className="pointer-events-none absolute bottom-0 left-[22px] top-0 w-px bg-gradient-to-b from-primary/35 via-border/70 to-border/15 sm:left-[34px] lg:left-[42px]" />
             )}
+            <TranscriptScrollContext value={transcriptScroll}>
             <TurnInfoScope>{virtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index];
               if (!row) return null;
@@ -917,6 +943,7 @@ export const MessageList = React.memo(function MessageList({
                 </div>
               );
             })}</TurnInfoScope>
+            </TranscriptScrollContext>
           </div>
         </SnapshotFilesProvider>
       </div>

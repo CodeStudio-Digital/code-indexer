@@ -74,7 +74,7 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     planNudges: 0,
     verification: {
       ledgerStartSeq: args.opts.toolContext.toolCallLedger?.lastSeq ?? 0,
-      nudges: 0,
+      reminderSent: false,
     },
     // Perf W1 — background summary precompute + buildTools memo start empty.
     summaryPrecompute: null,

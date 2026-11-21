@@ -120,6 +120,8 @@ export interface DynamicInjectionContext {
    * capped per session); non-null means "include this turn".
    */
   correctionHint?: string | null;
+  /** Verification evidence for an already scheduled request after tool results. */
+  verificationReminder?: string | null;
   /**
    * Test-mode escape hatch — when true, the provider always returns
    * null so snapshot tests don't see non-deterministic injections.
@@ -250,7 +252,8 @@ export function computeDynamicInjection(
     !showUserMemory &&
     !showPreflight &&
     !recentCompaction &&
-    !ctx.correctionHint
+    !ctx.correctionHint &&
+    !ctx.verificationReminder
   ) {
     return null;
   }
@@ -273,6 +276,9 @@ export function computeDynamicInjection(
   }
   if (ctx.correctionHint) {
     lines.push(ctx.correctionHint);
+  }
+  if (ctx.verificationReminder) {
+    lines.push(ctx.verificationReminder);
   }
   if (includedSkillIds.length > 0) {
     lines.push(`skills registered this session and worth consulting: ${includedSkillIds.join(', ')}`);

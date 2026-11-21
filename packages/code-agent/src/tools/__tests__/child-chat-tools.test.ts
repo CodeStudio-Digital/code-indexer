@@ -38,9 +38,30 @@ describe('create_chat', () => {
   it('creates as this session, keyed by the call, waits and returns the answer with its usage for this turn', async () => {
     const result = await run('create_chat', { title: 'Find it', prompt: 'Find the bug.', profile: 'explore' }, ctx);
     expect(port.create).toHaveBeenCalledWith('p', expect.objectContaining({ key: 'call-1', title: 'Find it', task: 'Find the bug.', profile: 'explore', wait: true, parentReadOnly: false }));
+    expect(port.create.mock.calls[0]![1]).not.toHaveProperty('effort');
     expect(port.wait).toHaveBeenCalledWith('p', expect.objectContaining({ chatIds: ['c1'], mode: 'all' }), undefined);
     expect(result).toMatchObject({ subUsage: { input_tokens: 9, output_tokens: 2 }, subUsageRuns: ['child-run:r1'] });
     expect(result.content).toBe('Chat c1: completed\nChanged files: src/a.ts\nAnswer:\nChild answer.');
+  });
+
+  it('advertises optional effort and forwards the requested level to the child', async () => {
+    const schema = tools.get('create_chat')!.parameters;
+    expect(schema.properties.effort).toMatchObject({ type: 'string' });
+    expect(schema.required).not.toContain('effort');
+    await run('create_chat', {
+      title: 'Review', prompt: 'Review the cache.', profile: 'review',
+      provider: 'openai-chatgpt', model: 'gpt-6.2-astra', effort: ' max ', wait: false,
+    }, ctx);
+    expect(port.create).toHaveBeenCalledWith('p', expect.objectContaining({
+      provider: 'openai-chatgpt', model: 'gpt-6.2-astra', effort: 'max',
+    }));
+  });
+
+  it.each(['Ultra', 3])('rejects a session mode or malformed effort (%j) before creating the child', async (effort) => {
+    const result = await run('create_chat', { title: 'Review', prompt: 'Review the cache.', profile: 'review', effort }, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/reasoning effort/i);
+    expect(port.create).not.toHaveBeenCalled();
   });
 
   it('makes read-only children while planning or read-only, and returns at once without waiting', async () => {

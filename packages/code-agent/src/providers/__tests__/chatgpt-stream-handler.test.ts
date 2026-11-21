@@ -41,6 +41,16 @@ async function collect(events: Array<Record<string, unknown>>): Promise<ChatDelt
 describe('ChatGPTCodexProvider reasoning stream', () => {
   beforeEach(() => mockCreate.mockReset());
 
+  it('sends the requested Astra effort even when the model default is low', async () => {
+    mockCreate.mockResolvedValueOnce((async function* () { yield { type: 'response.completed' }; })());
+    const provider = new ChatGPTCodexProvider({
+      apiKey: 'test', baseURL: 'https://example.test', model: 'gpt-6.2-astra',
+      reasoning: { supportedLevels: ['low', 'max'], defaultLevel: 'low' },
+    });
+    for await (const _delta of provider.chat({ ...request(), reasoningEffort: 'max' })) { /* consume */ }
+    expect(mockCreate.mock.calls[0][0]).toMatchObject({ model: 'gpt-6.2-astra', reasoning: { effort: 'max' } });
+  });
+
   it('captures ordered encrypted continuation only after successful completion and records timing', async () => {
     const reasoning = { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque', summary: [] };
     const message = { type: 'message', id: 'msg_1', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] };

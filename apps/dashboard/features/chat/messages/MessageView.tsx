@@ -314,7 +314,7 @@ export function renderAssistantBlock(
   if (b.type === 'text') {
     return (
       <div key={i} className="text-[13px] leading-5 text-foreground/90">
-        <Markdown text={b.text ?? ''} showDocumentCopy={false} />
+        <Markdown text={b.text ?? ''} showDocumentCopy={false} scrollWithTranscript />
       </div>
     );
   }

@@ -1,29 +1,21 @@
-import type { VerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
 import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
-import { isPlainDocumentationPath, validationTargetsDocumentation } from '@mcp/code-agent/core/documentation-write.js';
+import { validationTargetsDocumentation } from '@mcp/code-agent/core/documentation-write.js';
 import type { RunContext } from '../machine/types.js';
 
 export type VerificationReadinessStatus =
   | 'not_applicable'
   | 'fresh'
   | 'missing'
-  | 'stale'
-  | 'ambiguous';
+  | 'stale';
 
 export interface VerificationReadiness {
   status: VerificationReadinessStatus;
-  changedFiles: string[];
   lastWriteSeq: number | null;
   lastValidationSeq: number | null;
   lastSuccessfulValidationSeq: number | null;
   validationSignals: string[];
-  persisted: VerifyEvidence | null;
-  source: 'none' | 'ledger' | 'persisted';
-}
-
-export interface VerificationGateOptions {
-  maxNudges?: number;
+  source: 'none' | 'ledger';
 }
 
 function currentRunEntries(ctx: RunContext): ToolCallLedgerEntry[] {
@@ -55,119 +47,44 @@ function uniqueSignals(entries: ToolCallLedgerEntry[]): string[] {
     .filter((signal): signal is string => !!signal))];
 }
 
-function persistedReadiness(
-  changedFiles: string[],
-  persisted: VerifyEvidence | null,
-): VerificationReadiness {
-  const base = {
-    changedFiles,
-    lastWriteSeq: null,
-    lastValidationSeq: null,
-    lastSuccessfulValidationSeq: null,
-    validationSignals: [],
-    persisted,
-    source: 'persisted' as const,
-  };
-  if (!persisted?.lastVerify) return { ...base, status: 'missing' };
-  if (persisted.lastVerify.isError || (persisted.lastVerify.exitCode != null && persisted.lastVerify.exitCode !== 0)) {
-    return { ...base, status: 'stale' };
-  }
-  if (persisted.lastVerify.exitCode == null) return { ...base, status: 'ambiguous' };
-  const affectsCheck = (file: string) => persisted.lastVerify!.includesDocumentation
-    || validationTargetsDocumentation(persisted.lastVerify!.command) || !isPlainDocumentationPath(file);
-  if (persisted.filesEditedAfter.some(affectsCheck)) return { ...base, status: 'stale' };
-  if (persisted.filesEditedAtSameTime?.some(affectsCheck)) return { ...base, status: 'ambiguous' };
-  return { ...base, status: 'fresh' };
-}
-
-export async function evaluateVerificationReadinessAtFinish(
-  ctx: RunContext,
-): Promise<VerificationReadiness> {
+export function evaluateVerificationReadiness(ctx: RunContext): VerificationReadiness {
   const entries = currentRunEntries(ctx);
   const validations = entries.filter((entry) => !!entry.validationSignal);
   const checksDocumentation = validations.some(entry => validationTargetsDocumentation(entry.validationSignal!));
   const writes = entries.filter((entry) => isWriteEntry(ctx, entry, checksDocumentation));
   const successfulValidations = validations.filter((entry) => entry.outcome === 'success' && entry.validationOutcome === 'passed');
-  const changedFiles = (() => {
-    try {
-      return [...(ctx.bridge?.getSessionStateData?.()?.filesChanged ?? [])];
-    } catch {
-      return [];
-    }
-  })();
   const lastWriteSeq = maxSeq(writes);
   const lastValidationSeq = maxSeq(validations);
   const lastSuccessfulValidationSeq = maxSeq(successfulValidations);
   const lastSuccessfulValidationStartSeq = successfulValidations.at(-1)?.validationStartedSeq ?? null;
   const validationSignals = uniqueSignals(validations);
 
-  if (!changedFiles.some(file => !isPlainDocumentationPath(file)) && lastWriteSeq == null && lastValidationSeq == null) {
-    return {
-      status: 'not_applicable',
-      changedFiles,
-      lastWriteSeq,
-      lastValidationSeq,
-      lastSuccessfulValidationSeq,
-      validationSignals,
-      persisted: null,
-      source: 'none',
-    };
+  let status: VerificationReadinessStatus = 'not_applicable';
+  if (lastWriteSeq != null) {
+    if (lastValidationSeq == null) status = 'missing';
+    else if (lastSuccessfulValidationStartSeq != null && lastSuccessfulValidationStartSeq > lastWriteSeq
+      && lastSuccessfulValidationSeq === lastValidationSeq) status = 'fresh';
+    else status = 'stale';
+  } else if (lastValidationSeq != null) {
+    status = lastSuccessfulValidationSeq === lastValidationSeq ? 'fresh' : 'stale';
   }
-
-  if (lastWriteSeq != null || lastValidationSeq != null) {
-    const status: VerificationReadinessStatus = lastWriteSeq != null
-      ? lastSuccessfulValidationStartSeq != null && lastSuccessfulValidationStartSeq > lastWriteSeq
-        && lastSuccessfulValidationSeq === lastValidationSeq
-        ? 'fresh'
-        : lastValidationSeq != null
-          ? 'stale'
-          : 'missing'
-      : lastSuccessfulValidationSeq === lastValidationSeq
-        ? 'fresh'
-        : 'stale';
-    return {
-      status,
-      changedFiles,
-      lastWriteSeq,
-      lastValidationSeq,
-      lastSuccessfulValidationSeq,
-      validationSignals,
-      persisted: null,
-      source: 'ledger',
-    };
-  }
-
-  let persisted: VerifyEvidence | null = null;
-  try {
-    persisted = (await ctx.opts.collectVerifyEvidence?.()) ?? null;
-  } catch {
-    persisted = null;
-  }
-  return persistedReadiness(changedFiles, persisted);
+  return {
+    status,
+    lastWriteSeq,
+    lastValidationSeq,
+    lastSuccessfulValidationSeq,
+    validationSignals,
+    source: status === 'not_applicable' ? 'none' : 'ledger',
+  };
 }
 
-export function maybeVerificationNudge(
-  ctx: RunContext,
-  readiness: VerificationReadiness,
-  options: VerificationGateOptions = {},
-): string | null {
-  const maxNudges = Math.max(0, options.maxNudges ?? 1);
-  if (
-    ctx.verification.nudges >= maxNudges
-    || readiness.lastWriteSeq == null
-    || readiness.status === 'fresh'
-    || readiness.status === 'not_applicable'
-  ) {
+export function renderVerificationReminder(readiness: VerificationReadiness): string | null {
+  if (readiness.lastWriteSeq == null || (readiness.status !== 'missing' && readiness.status !== 'stale')) {
     return null;
   }
-
-  ctx.verification.nudges += 1;
-  const instruction = readiness.status === 'missing'
+  const evidence = readiness.status === 'missing'
     ? 'No validation was recorded after the latest write.'
     : 'The recorded validation failed, is stale, or does not clearly cover the latest write.';
-  return (
-    `[verification-required] ${instruction} ` +
-    'Run the smallest relevant test, typecheck, lint, or build now. ' +
-    'If validation is impossible, say why and do not claim that it passed.'
-  );
+  return `${evidence} If verification is relevant to the request, run the smallest relevant check before the final reply. `
+    + 'Report only checks actually run.';
 }

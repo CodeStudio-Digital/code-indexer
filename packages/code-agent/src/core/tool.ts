@@ -173,6 +173,8 @@ export interface CoderTool {
    * Such a tool is therefore part of the direct catalog.
    */
   topLevelOnly?: boolean;
+  /** Return this tool's structuredData from tools[name]() in code_exec. The default is text. */
+  codeExecReturnsData?: boolean;
   /**
    * Continuation control: names of the tools that open the work this one
    * finishes (`task_complete` closes the scope `execute_tasks` opens). A

@@ -42,6 +42,19 @@ it('pages the active profile in SQL with recovery, without loading credentials o
   expect(prepare.mock.calls.some(([sql]) => /SELECT \*|api_key/.test(sql))).toBe(false);
 });
 
+it('returns model IDs and a numeric cursor until the last page, including empty pages', async () => {
+  const { ctx } = fixture(3);
+  const read = (offset: number) => tool.handler({ provider: 'openai', offset, limit: 2 }, ctx);
+  const row = (n: string) => ({ provider: 'profile-provider', id: `model-${n}`, name: `Model ${n}` });
+  expect(await read(0)).toMatchObject({ structuredContent: {
+    models: [row('0000'), row('0001')], offset: 0, next_offset: 2, total: 3, warnings: [],
+  } });
+  expect(await read(2)).toMatchObject({ structuredContent: {
+    models: [row('0002')], offset: 2, next_offset: null, total: 3,
+  } });
+  expect(await read(3)).toMatchObject({ structuredContent: { models: [], offset: 3, next_offset: null, total: 3 } });
+});
+
 it('keeps default discovery offline even when a provider environment key is present', async () => {
   const { db, modelDiscovery } = fixture(); vi.stubEnv('OPENAI_API_KEY', 'test-only');
   const fetch = vi.fn(), write = vi.spyOn(db, 'setCachedModels'); vi.stubGlobal('fetch', fetch);

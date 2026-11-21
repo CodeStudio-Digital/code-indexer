@@ -57,7 +57,10 @@ test('message links open beside the conversation, including virtual Markdown and
       + (long ? '\n\n' + 'Parágrafo do relatório.\n\n'.repeat(900) : '');
     await showTranscript(page, [{ role: 'assistant', content: [{ type: 'text', text }] }],
       [{ id: 'links', seq: 1, input_tokens: 1, output_tokens: 1 }]);
-    if (long) await expect(page.locator('[data-large-markdown]')).toHaveAttribute('data-markdown-ready', 'true', { timeout: 15_000 });
+    if (long) {
+      await expect(page.locator('[data-large-markdown]')).toHaveAttribute('data-markdown-ready', 'true', { timeout: 15_000 });
+      await page.locator('[data-markdown-viewport]').press('Home');
+    }
     const link = page.getByRole('link', { name: 'Abrir relatório' });
     await link.focus();
     await page.keyboard.press('Enter');
@@ -337,6 +340,47 @@ test('short user messages and image-only turns retain their compact size', async
     await expect(article).toBeVisible();
     expect((await article.boundingBox())!.width).toBeLessThan(imageCount ? 135 : 90);
   }
+});
+
+test('a long streamed answer uses the transcript scrollbar through completion', async ({ page }) => {
+  const paragraphs = Array.from({ length: 350 }, (_, index) =>
+    `Trecho ${index + 1}: explicação da estrutura e dos resultados encontrados ao analisar o projeto.`);
+  const answer = '## Começo da resposta\n\n' + paragraphs.join('\n\n');
+  const turn: AssistantTurn = { blocks: [{ type: 'text', id: 'long-answer', text: answer }] };
+  await showTranscript(page, [], [], turn);
+
+  const transcript = page.locator('.chat-transcript');
+  const markdown = transcript.locator('[data-large-markdown]');
+  const body = markdown.locator('[data-markdown-viewport]');
+  const last = body.getByText(paragraphs.at(-1)!, { exact: true });
+  await expect(body).toHaveCSS('overflow-y', 'visible');
+  await expect(markdown).toHaveAttribute('data-markdown-ready', 'true', { timeout: 15_000 });
+  await expect(last).toBeInViewport();
+  expect(await body.locator('[data-transcript-row-key]').count()).toBeLessThan(65);
+
+  const { x, y, width, height } = (await transcript.boundingBox())!;
+  await page.mouse.move(x + width / 2, y + height / 2);
+  const before = await transcript.evaluate(el => el.scrollTop);
+  await page.mouse.wheel(0, -480);
+  await expect.poll(() => transcript.evaluate(el => el.scrollTop)).toBeLessThan(before - 250);
+  const reading = await transcript.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight }));
+  const stayedAtReadingPosition = () => transcript.evaluate((el, top) => Math.abs(el.scrollTop - top), reading.top);
+  const completed = answer + '\n\n' + 'O stream continua com novas informações.\n\n'.repeat(20)
+    + '[Ir para o começo](#começo-da-resposta)';
+  await showTranscript(page, [], [], { blocks: [{ type: 'text', id: 'long-answer', text: completed }] });
+  await expect.poll(() => transcript.evaluate(el => el.scrollHeight)).toBeGreaterThan(reading.height + 200);
+  await expect.poll(stayedAtReadingPosition).toBeLessThan(100);
+
+  await showTranscript(page, [{ role: 'assistant', content: [{ type: 'text', text: completed }] }],
+    [{ id: 'saved-answer', seq: 1, input_tokens: 1, output_tokens: 1 }], null, { doneReason: 'completed' });
+  await expect(markdown).toHaveAttribute('data-markdown-ready', 'true');
+  await expect(body).toHaveCSS('overflow-y', 'visible');
+  await expect.poll(stayedAtReadingPosition).toBeLessThan(100);
+  await page.getByRole('button', { name: /latest|últim|fim|recent/i }).click();
+  const jumpToStart = body.getByRole('link', { name: 'Ir para o começo' });
+  await expect(jumpToStart).toBeInViewport();
+  await jumpToStart.click();
+  await expect(body.getByRole('heading', { name: 'Começo da resposta' })).toBeInViewport();
 });
 
 test('long replies keep copy below the edits and token details behind each turn icon on wide and narrow screens', async ({ page }) => {

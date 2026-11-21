@@ -121,7 +121,7 @@ export interface RunContext {
    */
   verification: {
     ledgerStartSeq: number;
-    nudges: number;
+    reminderSent: boolean;
   };
   /**
    * Perf W1 — background compaction-summary precompute. Kicked by the

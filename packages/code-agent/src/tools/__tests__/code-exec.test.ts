@@ -243,6 +243,24 @@ describe('code_exec console output limits', () => {
 });
 
 describe('code_exec structured tool compatibility', () => {
+  it('shares one structured catalog page between tools, a bare call and invoke', async () => {
+    const registry = new ToolRegistry();
+    const page = { models: [{ provider: 'chatgpt', id: 'sol', name: 'Sol' }], next_offset: null };
+    const handler = vi.fn(async () => ({ content: 'Catalog page', structuredData: page }));
+    registry.register({ ...slowTool('mcp__project__list_models', 0), codeExecReturnsData: true,
+      parallelSafe: true, repeatPolicy: 'stable', executionClass: 'read', handler });
+    const result = await buildCodeExecTool(registry).handler({ code: `
+      const [direct, bare, full] = await Promise.all([
+        tools.mcp__project__list_models({}), mcp__project__list_models({}),
+        invoke({ name: 'mcp__project__list_models', args: {} }),
+      ]);
+      return [direct.models[0].id, bare.next_offset, full.data.models[0].provider, full.text];
+    ` }, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content.split('[return]\n')[1]!)).toEqual(['sol', null, 'chatgpt', 'Catalog page']);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
   it('returns compact JSON from structuredData while direct callers receive markdown', async () => {
     const registry = new ToolRegistry();
     registry.register({
