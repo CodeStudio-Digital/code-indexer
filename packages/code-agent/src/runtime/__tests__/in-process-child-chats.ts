@@ -18,7 +18,7 @@ export function buildInProcessChildChats(input: {
   mailbox: ChatCollaborationStore;
   project(id: number): { id: number; name: string; root_path: string } | null;
   run(childId: string, task: string): Promise<{ reason: string }>;
-}): ChildChatPort {
+}): ChildChatPort & { drain(): Promise<void> } {
   const { app, mailbox } = input;
   const queue = fileChildAgentQueue(mailbox.files);
   const reads = {
@@ -28,25 +28,27 @@ export function buildInProcessChildChats(input: {
     refreshSession: (id: string) => app.refreshSession(id),
   };
   const live = new Set<string>();
+  const runs: Promise<void>[] = [];
   const isRunning = (id: string) => live.has(id);
   const service: ChildAgentRunService = new ChildAgentRunService({ sessions: reads, admission: new ChildAgentAdmission({ sessions: reads, queue, isRunning }),
     launcher: { isRunning, async start({ childId, task }) {
       live.add(childId);
       // A run that rejects is logged and its reason reaches the waiting parent, as the app does.
-      void input.run(childId, task).then((outcome) => ({ reason: outcome.reason, detail: undefined as string | undefined }), (error: unknown) => {
+      const run = input.run(childId, task).then((outcome) => ({ reason: outcome.reason, detail: undefined as string | undefined }), (error: unknown) => {
         console.error(`[test child-agent] run of ${childId} rejected:`, error);
         return { reason: 'failed', detail: failureReason('run_failed', error) };
       }).then(({ reason, detail }) => { live.delete(childId); return service.ended(childId, reason, detail); });
+      runs.push(run);
     } } });
   const port: ChildChatPort = {
     async create(callerId, request) {
-      const { child, created } = await createChildAgentSession({ sessions: app, project: input.project }, callerId, request);
+      const { child, created, target } = await createChildAgentSession({ sessions: app, project: input.project }, callerId, request);
       for (const [id, title] of [[callerId, callerId], [child.id, request.title]] as const) {
         if (!await mailbox.participant(rootChatId(id))) await mailbox.registerRoot(id, title);
       }
       await mailbox.linkSessions(callerId, child.id, true);
       await service.request(child.id, request.task, { background: request.wait === false });
-      return { chatId: child.id, title: request.title, profile: child.profile ?? request.profile, readOnly: child.read_only, created };
+      return { chatId: child.id, title: request.title, profile: child.profile ?? request.profile, readOnly: child.read_only, created, target };
     },
     wait: (_callerId, request, signal) => waitForChildAgents({ sessions: reads, queue, refresh: (id) => app.refreshSession(id) },
       { ...request, pollMs: 50, signal }),
@@ -59,5 +61,5 @@ export function buildInProcessChildChats(input: {
     list: async () => [],
   };
   setChildChatPort(port);
-  return port;
+  return { ...port, async drain() { for (const run of runs) await run; } };
 }

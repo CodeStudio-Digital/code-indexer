@@ -9,8 +9,11 @@ import Database from 'better-sqlite3';
 const profile = process.env.CODESTUDIO_LIVE_CHATGPT_DB;
 const provider = 'openai-chatgpt';
 const model = 'gpt-6.2-sol';
+const natural = process.env.CODESTUDIO_LIVE_CHILD_ROUTING === 'natural';
+const effort = natural ? 'xhigh' : 'max';
 
-it.skipIf(!profile)('discovers Sol on page three and receives a response from a real ChatGPT child at max', async ({ onTestFinished }) => {
+it.skipIf(!profile)(natural ? 'delegates the natural Portuguese instruction to a real ChatGPT child at xhigh' :
+  'discovers Sol on page three and receives a response from a real ChatGPT child at max', async ({ onTestFinished }) => {
   const tmp = mkdtempSync(join(tmpdir(), 'codestudio-model-delegation-'));
   onTestFinished(() => {
     vi.unstubAllEnvs();
@@ -40,6 +43,7 @@ it.skipIf(!profile)('discovers Sol on page three and receives a response from a 
   const app = FsSessionStore.fromRoots({ dataDir: data, projectRootResolver: {
     resolveProjectRoot: n => n === id ? root : undefined, listProjectRoots: () => [{ project_id: id, root_path: root }],
   } });
+  let host: ReturnType<typeof buildInProcessChildChats> | undefined;
   try {
     const local = new ProviderStore(db.raw());
     const configurations = source.prepare('SELECT id, name, kind FROM provider_configs WHERE enabled=1').all() as
@@ -71,30 +75,34 @@ it.skipIf(!profile)('discovers Sol on page three and receives a response from a 
     const mailbox = new ChatCollaborationStore(data);
     await mailbox.init();
     const signal = AbortSignal.timeout(165_000);
-    buildInProcessChildChats({ app, mailbox, project: n => n === id ? project : null, run: async (childId, task) => {
+    host = buildInProcessChildChats({ app, mailbox, project: n => n === id ? project : null, run: async (childId, task) => {
       const child = await app.getSession(childId);
-      expect(child).toMatchObject({ provider, model, reasoning_effort_override: 'max' });
+      expect(child).toMatchObject({ provider, model, reasoning_effort_override: effort });
       return (await runCoder({ session: { id: child!.id }, userMessage: task, allowedToolNames: ['task_complete'],
         maxTurns: 2, maxAutoContinues: 0, signal })).done;
     } });
-    const parent = await app.createSession({ project_id: id, title: 'Catalog smoke', provider, model, agent: 'build', reasoning_effort_override: 'low' });
+    const parentModel = natural ? 'gpt-6.2-astra' : model;
+    const parent = await app.createSession({ project_id: id, title: 'Catalog smoke', provider, model: parentModel, agent: 'build', reasoning_effort_override: 'low' });
     const outcome = await (await runCoder({ session: { id: parent.id }, maxTurns: 5, maxAutoContinues: 0, signal,
       allowedToolNames: ['code_exec', 'mcp__list_models', 'create_chat'],
-      userMessage: 'Teste de paginação. Em code_exec percorra o catálogo inteiro sem filtro, em páginas de 100 começando no offset 0. '
+      userMessage: natural ? 'Abra um chat filho com provider chatgpt codex, modelo sol 6.2 no xhigth. '
+        + 'Peça a ele que calcule 17 + 25 e responda somente com SOL- seguido do resultado. Traga a resposta dele aqui.' :
+        'Teste de paginação. Em code_exec percorra o catálogo inteiro sem filtro, em páginas de 100 começando no offset 0. '
         + 'Use tools.mcp__list_models, leia page.models e continue com page.next_offset até achar o Sol 6.2 do ChatGPT. '
         + 'Retorne apenas o provider e o id dessa linha. Chame create_chat uma vez com os valores encontrados, perfil explore, esforço max e wait=true. '
         + 'Peça ao filho que calcule 17 + 25 e responda somente com SOL- seguido do resultado, sem ferramentas. Retransmita a resposta e encerre.',
     })).done;
     expect(outcome.reason, outcome.error).toBe('completed');
-    expect(pages).toEqual([{ offset: 0, found: false }, { offset: 100, found: false }, { offset: 200, found: true }]);
+    if (!natural) expect(pages).toEqual([{ offset: 0, found: false }, { offset: 100, found: false }, { offset: 200, found: true }]);
     const children = await app.listChildAgentSessions(parent.id);
     expect(children).toHaveLength(1);
     const assistantText = async (sid: string) => (await app.listMessagesAfter(sid, 0)).messages
       .filter(m => m.role === 'assistant').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)).join('\n');
     expect(await assistantText(children[0]!.id)).toContain('SOL-42');
     expect(await assistantText(parent.id)).toContain('SOL-42');
-    expect((await app.getSession(parent.id))?.reasoning_effort_override).toBe('low');
+    expect(await app.getSession(parent.id)).toMatchObject({ provider, model: parentModel, reasoning_effort_override: 'low' });
   } finally {
+    await host?.drain();
     setGlobalIndexTools(null);
     setChildChatPort(null);
     await closeSharedCentral();

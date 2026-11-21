@@ -16,6 +16,7 @@ import { isReadOnlyAgent } from '../agents/index.js';
 import { resolveMicroAgentProfile } from '../tools/micro-agent-profiles.js';
 import type { NetworkProject } from './session-network.js';
 import { assertTreeCanCreateChild, childAgentRoot } from './child-agent-tree.js';
+import type { ChildChatTarget } from '../ports/child-agent-port.js';
 
 export type ChildAgentSessionStore = Pick<FsSessionStore,
   'getSession' | 'createSession' | 'getSessionDisabledTools' | 'getChildAgentSession' | 'listChildAgentSessions'>;
@@ -23,7 +24,7 @@ export type ChildAgentSessionStore = Pick<FsSessionStore,
 export interface ChildAgentSessionOptions {
   sessions: ChildAgentSessionStore;
   project(id: number): NetworkProject | null | undefined;
-  validateModel?(provider: string, model: string): void;
+  validateModel?(provider: string, model: string, effort?: string): void;
   /**
    * The profile's configured model and effort (subagent.ts, keyed by the
    * creator's provider, as the in-process resolver does). Used when the
@@ -90,7 +91,7 @@ export async function createChildAgentSession(
   options: ChildAgentSessionOptions,
   parentId: string,
   request: ChildAgentRequest,
-): Promise<{ child: FsChildAgentSession; created: boolean }> {
+): Promise<{ child: FsChildAgentSession; created: boolean; target: ChildChatTarget }> {
   const { sessions } = options;
   if (typeof request.key !== 'string' || !request.key || request.key.length > 200) throw new Error('A child agent needs a creation key');
   const title = typeof request.title === 'string' ? request.title.trim() : '';
@@ -118,7 +119,7 @@ export async function createChildAgentSession(
   const provider = request.provider || fromProfile?.provider || parent.provider;
   const model = request.model || fromProfile?.model || parent.model;
   const effort = request.effort?.trim() || target?.effort || parent.reasoning_effort_override;
-  options.validateModel?.(provider, model);
+  options.validateModel?.(provider, model, request.effort?.trim() || undefined);
 
   // A child agent never creates a more capable descendant. A seedless
   // relation has no recorded profile and counts as read-level.
@@ -136,7 +137,8 @@ export async function createChildAgentSession(
   const fingerprint = keyOf(JSON.stringify({ title, profile: profile.id, projectId, provider, model, effort, readOnly }));
   const childId = childSessionId(parent.id, request.key);
   const existing = await adopt(sessions, childId, fingerprint);
-  if (existing) return { child: existing, created: false };
+  const resolvedTarget = { provider, model, effort };
+  if (existing) return { child: existing, created: false, target: resolvedTarget };
   // A retried creation adopts above; only a new child counts against the tree.
   await assertTreeCanCreateChild(sessions, await childAgentRoot(sessions, parent.id), options.now?.());
 
@@ -168,5 +170,5 @@ export async function createChildAgentSession(
   });
   const child = await sessions.getChildAgentSession(childId);
   if (!child) throw new Error('Child-agent session was not published');
-  return { child, created: true };
+  return { child, created: true, target: resolvedTarget };
 }

@@ -42,6 +42,17 @@ it('pages the active profile in SQL with recovery, without loading credentials o
   expect(prepare.mock.calls.some(([sql]) => /SELECT \*|api_key/.test(sql))).toBe(false);
 });
 
+it('returns selectable IDs for two modes of the same provider model', async () => {
+  const { ctx, store } = fixture(1);
+  store.replaceModelsFromSource('profile-provider', 'manual', ['coding', 'normal'].map(mode => ({
+    model_id: 'glm', name: 'GLM', mode, enabled: true,
+  })));
+  expect(await tool.handler({ provider: 'profile-provider' }, ctx)).toMatchObject({ structuredContent: {
+    total: 2, models: expect.arrayContaining([{ provider: 'profile-provider', id: 'glm::coding', name: 'GLM' },
+      { provider: 'profile-provider', id: 'glm::normal', name: 'GLM' }]),
+  } });
+});
+
 it('returns model IDs and a numeric cursor until the last page, including empty pages', async () => {
   const { ctx } = fixture(3);
   const read = (offset: number) => tool.handler({ provider: 'openai', offset, limit: 2 }, ctx);

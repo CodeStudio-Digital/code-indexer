@@ -45,7 +45,7 @@ export function createChildAgentHost(input: {
   deps: ServerDeps;
   mailbox: ChatCollaborationStore;
   project(id: number): { id: number; name: string; root_path: string; is_synthetic?: boolean | number } | null | undefined;
-  validateModel?(provider: string, model: string): void;
+  validateModel?(provider: string, model: string, effort?: string): void;
   pool?: ChildAgentPool;
   /** Overridable for tests; the real local command admission otherwise. */
   accept?: typeof acceptLocalCoderCommand;
@@ -171,7 +171,7 @@ export function createChildAgentHost(input: {
       await mailbox.linkSessions(parentId, created.child.id, true);
       // Asking again for an existing child is the parent's explicit new start, also after a stop.
       if (request.start !== false) await service.request(created.child.id, request.task, { background: request.wait === false, restart: !created.created });
-      return { child: (await deps.sessionStore.getChildAgentSession(created.child.id)) ?? created.child, created: created.created };
+      return { ...created, child: (await deps.sessionStore.getChildAgentSession(created.child.id)) ?? created.child };
     },
     async stop(callerId, chatIds) {
       const stopped = await stops.stopByAncestor(callerId, chatIds);

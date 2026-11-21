@@ -66,6 +66,11 @@ export class ProviderStore {
 
   // ─── Providers ─────────────────────────────────────────────────
   listProviders(filter?: providers.ListProvidersFilter): ProviderConfig[] { return providers.list(this.db, filter); }
+  listProviderIdentities(): Pick<ProviderConfig, 'id' | 'name' | 'kind' | 'enabled'>[] {
+    const rows = this.db.prepare('SELECT id, name, kind, enabled FROM provider_configs ORDER BY name, id').all() as
+      Array<{ id: string; name: string; kind: string; enabled: number }>;
+    return rows.map(row => ({ ...row, enabled: Boolean(row.enabled) }));
+  }
   getDefaultProvider(): ProviderConfig | null { return providers.getDefault(this.db); }
   getDefaultProviderAndModel(): { kind: string; model: string | undefined } { return providers.getDefaultAndModel(this.db); }
   getProvider(id: string): ProviderConfig | null { return providers.get(this.db, id); }

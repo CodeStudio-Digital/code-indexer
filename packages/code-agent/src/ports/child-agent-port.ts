@@ -37,7 +37,7 @@ export interface ChildAgentWaitRequest {
 
 export interface ChildAgentPort {
   /** Creates the child, or finds it by key; a stopped child found this way is started again explicitly. */
-  create(parentId: string, request: ChildAgentCreateRequest): Promise<{ child: FsChildAgentSession; created: boolean }>;
+  create(parentId: string, request: ChildAgentCreateRequest): Promise<{ child: FsChildAgentSession; created: boolean; target?: ChildChatTarget }>;
   wait(request: ChildAgentWaitRequest): Promise<ChildAgentWaitResult>;
   /**
    * Stops `chatIds` and all their descendants for `callerId`, which must be an
@@ -46,3 +46,5 @@ export interface ChildAgentPort {
    */
   stop(callerId: string, chatIds: readonly string[]): Promise<{ stopped: string[] }>;
 }
+
+export interface ChildChatTarget { provider: string; model: string; effort: string | null }

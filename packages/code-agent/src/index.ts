@@ -221,6 +221,7 @@ import {
 } from '@mcp/session-storage/fs-store/index.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { loadChildAgentRun } from '@mcp/code-agent/runtime/child-agent-run.js';
+import { routeChildChats } from '@mcp/code-agent/runtime/child-chat-routing.js';
 import { profileLimitsFromProviderStore, startChildAgentRunGuards, type ChildAgentRunGuards } from '@mcp/code-agent/runtime/child-agent-session-run.js';
 import { ChildAgentUsageLedger } from '@mcp/code-agent/runtime/child-agent-usage.js';
 import { failureReason } from '@mcp/code-agent/runtime/child-agent-runs.js';
@@ -1404,6 +1405,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const collaboration = !opts.companyContext
     ? await createRootCollaboration(store.locator.dataDir, session.id, session.title || 'Chat')
     : undefined;
+  const childChatDelegate = childChats ? childChatPort() : null;
   const sessionNetwork = collaboration ? new SessionNetwork({ sessions: store, mailbox: collaboration.store,
     project: id => db.getProject(id),
     onChatCreated: opts.onChatCreated,
@@ -1439,7 +1441,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     fileKnowledge: sessionFileKnowledge(String(session.id)),
     agenticChat: budgetNetwork?.enabled === true && budgetRoot?.enabled === true,
     collaboration,
-    ...(childChats && childChatPort() ? { childChats: childChatPort()! } : {}),
+    ...(childChatDelegate ? { childChats: routeChildChats(childChatDelegate, new ProviderStore(db.raw()), session,
+      async () => await store.getLatestNonMetaUserMessageText(session.id) ?? opts.userMessage ?? '') } : {}),
     ...(childAgentRun ? { childAgentSelf: { depth: childAgentRun.depth, readOnly: childAgentRun.readOnly } } : {}),
     ultraPolicy: ultraPreset,
     ultraBudget: sharedBudget ? new UltraAgentBudget(ultraPreset.effective.parallelism.maxAgents, 24, sharedBudget) : undefined,

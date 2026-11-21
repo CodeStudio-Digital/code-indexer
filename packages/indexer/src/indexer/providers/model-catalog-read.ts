@@ -12,7 +12,7 @@ export function readModelPage(db: CodeIndexDB, provider: string | undefined, off
       + 'WHERE p.enabled=1 AND m.enabled=1' + (provider ? ' AND (p.id=? OR p.kind=?)' : '');
     const args = provider ? [provider, provider] : [];
     const total = (raw.prepare('SELECT COUNT(*) AS n ' + where).get(...args) as { n: number }).n;
-    const models = raw.prepare('SELECT m.model_id AS id, p.id AS provider, m.name, m.updated_at AS cached_at '
+    const models = raw.prepare("SELECT m.model_id || CASE WHEN m.mode != '' THEN '::' || m.mode ELSE '' END AS id, p.id AS provider, m.name, m.updated_at AS cached_at "
       + where + ' ORDER BY p.name, p.id, m.name, m.mode, m.model_id LIMIT ? OFFSET ?')
       .all(...args, limit, offset) as Array<Omit<DiscoveredModel, 'capabilities'>>;
     return { models: models.map(m => ({ ...m, provider: m.provider as ProviderName, capabilities: ['text'] })),

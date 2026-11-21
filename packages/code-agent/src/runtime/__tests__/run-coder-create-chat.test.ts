@@ -105,13 +105,49 @@ function scripted(provider: string, model: string): ChatProvider {
   } };
 }
 
+const incidentResults: string[] = [];
+const guesses = [
+  { provider: 'openai-chatgpt', model: 'gpt-5-codex', effort: 'xhigh' },
+  { provider: 'codex', model: 'gpt-5.2-codex', effort: 'xhigh' },
+  { provider: 'chatgpt-codex', model: 'gpt-5.2', effort: 'xhigh' }, {},
+  { model: 'gpt-5.2-codex', effort: 'xhigh' },
+];
+/** Replay the original parent's bad calls. Recovery can only use the target returned by the harness. */
+function incidentParent(model: string): ChatProvider {
+  let step = 0;
+  let recovered: Record<string, string> | undefined;
+  return { name: 'meridian', model, setModel() {}, async *chat(request): AsyncIterable<ChatDelta> {
+    if (step) {
+      const result = lastToolResult(request);
+      incidentResults.push(result);
+      const hint = /\{"provider":"openai-chatgpt","model":"[^"]+","effort":"[^"]+"\}/.exec(result)?.[0];
+      if (hint) recovered = JSON.parse(hint);
+    }
+    const index = step++;
+    if (index >= guesses.length + 3 || (index >= guesses.length && !recovered)) {
+      yield { type: 'text_delta', text: 'Finished.' };
+      yield { type: 'done', stop_reason: 'end_turn' };
+      return;
+    }
+    const id = 'incident-' + index;
+    yield { type: 'tool_call_start', name: 'create_chat', id };
+    yield { type: 'tool_call_end', name: 'create_chat', id, input: {
+      title: index < guesses.length ? 'Ping' : 'Task ' + index, profile: 'implement', prompt: 'Report.', wait: false,
+      ...(index < guesses.length ? guesses[index] : recovered),
+    } };
+    yield { type: 'done', stop_reason: 'tool_use' };
+  } };
+}
+
 vi.mock('@mcp/services/providers/factory.js', async (importOriginal) => {
   const factory = await importOriginal<typeof import('@mcp/services/providers/factory.js')>();
   return { ...factory, createCoderProvider: (...args: Parameters<typeof factory.createCoderProvider>) =>
-    args[0] === 'fixture' ? scripted('fixture', args[1]!) : factory.createCoderProvider(...args) };
+    args[0] === 'fixture' ? scripted('fixture', args[1]!) :
+      args[0] === 'meridian' ? incidentParent(args[1]!) : factory.createCoderProvider(...args) };
 });
 
 let rootId: string;
+let incidentId: string;
 let projectId: number;
 let closeApp: () => Promise<void>;
 const chatgpt = createServer(async (req, res) => {
@@ -151,7 +187,7 @@ beforeAll(async () => {
     use_for_coder: true, api_key: 'loopback-fixture', base_url: `http://127.0.0.1:${addr.port}` });
   providers.replaceModelsFromSource('openai-chatgpt', 'manual', ['Astra', 'Sol'].map(name => ({
     model_id: `gpt-6.2-${name.toLowerCase()}`, name: `GPT-6.2-${name}`, enabled: true, can_reason: true,
-    default_reasoning_level: 'low', supported_reasoning_levels: ['low', 'max'],
+    default_reasoning_level: 'low', supported_reasoning_levels: ['low', 'xhigh', 'max'],
   })));
   __setStoreForTests(providers);
   const app = FsSessionStore.fromRoots({ dataDir: process.env.MCP_DATA_DIR!, projectRootResolver: {
@@ -160,13 +196,16 @@ beforeAll(async () => {
   rootId = (await app.createSession({
     project_id: projectId, title: 'Root', provider: 'fixture', model: 'parent', agent: 'build', reasoning_effort_override: 'low',
   })).id;
+  incidentId = (await app.createSession({ project_id: projectId, title: 'Incident', provider: 'meridian',
+    model: 'claude-opus-4-7-medium', agent: 'build', reasoning_effort_override: 'low' })).id;
   const mailbox = new ChatCollaborationStore(process.env.MCP_DATA_DIR!);
   await mailbox.init();
   const { runCoder } = await import('../../index.js');
   // The app's side; the launcher runs the child's runCoder as its worker would.
-  buildInProcessChildChats({ app, mailbox, project: (id) => (id === projectId ? { id, name: 'fixture', root_path: projectRoot } : null),
+  const host = buildInProcessChildChats({ app, mailbox, project: (id) => (id === projectId ? { id, name: 'fixture', root_path: projectRoot } : null),
     run: async (childId, task) => (await runCoder({ session: { id: childId as never }, userMessage: task })).done });
   closeApp = async () => {
+    await host.drain();
     await app.close();
     __setStoreForTests(null);
     providers.close();
@@ -235,4 +274,38 @@ describe('runCoder with child chats (the default)', () => {
       expect(recorded).toEqual(['Child run 1.', 'Child run 2.']);
     } finally { await reader.close(); }
   }, 180_000);
+
+  it('blocks the guessed targets and anonymous ping, then runs exactly three background children on ChatGPT at xhigh', async () => {
+    const { runCoder } = await import('../../index.js');
+    const { childChatPort } = await import('../../ports/child-chat-port.js');
+    const { FsSessionStore } = await import('@mcp/session-storage/fs-store/index.js');
+    const initial = childRequests.length;
+    const handle = await runCoder({ session: { id: incidentId as never }, maxTurns: 12, maxAutoContinues: 0,
+      userMessage: 'Agora vc vai coordenar uns 2 3 agentes (um chat para cada) com provider chatgpt codex, modelo sol 6.2 no xhigth' });
+    const outcome = await handle.done;
+    expect(outcome.reason, outcome.error).toBe('completed');
+    expect(incidentResults).toHaveLength(guesses.length + 3);
+    for (const error of incidentResults.slice(0, guesses.length)) {
+      expect(error).toContain('No child started');
+      expect(error).toContain('"model":"gpt-6.2-sol","effort":"xhigh"');
+    }
+    for (const receipt of incidentResults.slice(guesses.length)) {
+      expect(receipt).toContain('started in the background');
+      expect(receipt).toContain('openai-chatgpt / gpt-6.2-sol (effort=xhigh)');
+    }
+    const reader = FsSessionStore.fromRoots({ dataDir: process.env.MCP_DATA_DIR!, projectRootResolver: {
+      resolveProjectRoot: id => id === projectId ? projectRoot : undefined, listProjectRoots: () => [{ project_id: projectId, root_path: projectRoot }] } });
+    try {
+      const ids = (await reader.listChildAgentSessions(incidentId)).map(child => child.id);
+      expect(ids).toHaveLength(3);
+      const result = await childChatPort()!.wait(incidentId, { chatIds: ids, mode: 'all', timeoutMs: 45_000 });
+      expect(result.items.map(item => item.status)).toEqual(['completed', 'completed', 'completed']);
+      for (const id of ids) expect(await reader.getSession(id)).toMatchObject({
+        provider: 'openai-chatgpt', model: CHILD_MODEL, reasoning_effort_override: 'xhigh',
+      });
+      expect(await reader.getSession(incidentId)).toMatchObject({ provider: 'meridian', model: 'claude-opus-4-7-medium', reasoning_effort_override: 'low' });
+      expect(childRequests.slice(initial)).toHaveLength(3);
+      for (const request of childRequests.slice(initial)) expect(request).toMatchObject({ model: CHILD_MODEL, reasoning: { effort: 'xhigh' } });
+    } finally { await reader.close(); }
+  }, 120_000);
 });

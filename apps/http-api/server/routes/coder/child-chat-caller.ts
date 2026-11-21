@@ -32,8 +32,8 @@ export function createChildChatPort(host: ChildAgentHost, input: { sessions: Ses
 
   return {
     async create(callerId, request) {
-      const { child, created } = await host.create(callerId, request);
-      return { chatId: child.id, title: request.title, profile: child.profile ?? request.profile, readOnly: child.read_only, created };
+      const { child, created, target } = await host.create(callerId, request);
+      return { chatId: child.id, title: request.title, profile: child.profile ?? request.profile, readOnly: child.read_only, created, target };
     },
     async wait(callerId, request, signal) {
       for (const id of request.chatIds) {

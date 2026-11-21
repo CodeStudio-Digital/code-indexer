@@ -15,7 +15,8 @@ import { CHILD_CHAT_PROFILES, chatCaller, chatIdOf, delegationPosture, receivedR
 const CREATE_CHAT_DESC = 'Delegate a task to a child agent: a new chat under this one that runs `prompt` with the `profile` tools and never more than your permissions. '
   + 'Profiles: explore reads and searches; review reads and judges a change; verify also runs commands and tests; implement also edits files; full has every tool. '
   + 'wait:true (default) blocks until it finishes and returns its final answer, changed files and chat id; wait:false returns the chat id at once and you are told when it ends. '
-  + 'Continue it with send_chat_message.';
+  + 'When the user names a provider, model or effort, use that selection for each requested child. Find configured IDs with tools.mcp__list_models in code_exec. '
+  + 'If unavailable, report the requested target to the user. Use catalog reads for discovery and create_chat only for an actual task. Continue it with send_chat_message.';
 
 const SEND_CHAT_MESSAGE_DESC = 'Message a chat you created or are linked to. '
   + "kind 'task' (default) gives a child new work and starts its next run; 'question' asks for an answer; 'notify' only informs. "
@@ -38,7 +39,7 @@ const createChat: CoderTool = {
     wait: { type: 'boolean' },
     project_id: { type: 'integer', description: "Default: this chat's project." },
     provider: { type: 'string', description: "Configured provider ID, e.g. 'openai-chatgpt' for ChatGPT." },
-    model: { type: 'string', description: "Model ID, e.g. 'gpt-6.2-astra'. Defaults to the profile's configured model, then yours." },
+    model: { type: 'string', description: "Use the model ID from the requested provider's catalog, e.g. 'gpt-6.2-sol'. Inherit when the user leaves the target open." },
     effort: { type: 'string', description: "Reasoning effort for the child model, such as 'max'. Set only when requested. Omit to inherit the profile or parent setting." },
   }, required: ['title', 'prompt', 'profile'], additionalProperties: false },
   handler: async (args, ctx) => {
@@ -64,9 +65,12 @@ const createChat: CoderTool = {
         parentReadOnly: posture.readOnly || posture.planning,
       });
       const label = `${created.profile}${created.readOnly ? ', read-only' : ''}`;
-      if (!wait) return ok(`Chat ${created.chatId} (${label}) started in the background; you will be told when it ends.`);
+      const route = created.target;
+      const receipt = route ? `\nModel: ${route.provider} / ${route.model} (effort=${route.effort ?? 'auto'})` : '';
+      if (!wait) return ok(`Chat ${created.chatId} (${label}) started in the background; you will be told when it ends.${receipt}`);
       const result = await chat.port.wait(chat.callerId, { chatIds: [created.chatId], mode: 'all', timeoutMs: waitBudgetMs(ctx) }, ctx.signal);
-      return receivedResult(ctx, result);
+      const answer = await receivedResult(ctx, result);
+      return receipt ? { ...answer, content: answer.content + receipt } : answer;
     } catch (error) { return err(error instanceof Error ? error.message : String(error)); }
   },
 };

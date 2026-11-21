@@ -7,7 +7,7 @@
  * (child-chat-bridge-client.ts). Calls that wait use
  * CHILD_AGENT_WAIT_TOOL_TIMEOUT_MS, the others a short deadline.
  */
-import type { ChildAgentCreateRequest, ChildAgentWaitRequest } from './child-agent-port.js';
+import type { ChildAgentCreateRequest, ChildAgentWaitRequest, ChildChatTarget } from './child-agent-port.js';
 import type { ChildAgentWaitResult, ChildAgentWaitStatus } from '../runtime/child-agent-wait.js';
 
 export interface ChildChatCreated {
@@ -16,6 +16,7 @@ export interface ChildChatCreated {
   profile: string;
   readOnly: boolean;
   created: boolean;
+  target?: ChildChatTarget;
 }
 
 export interface ChildChatMessageInput {
