@@ -126,7 +126,7 @@ export class SemanticVectorWorkerClient implements VectorStore {
    * queries fall back to FTS instead of loading weights in Electron main. */
   embeddingService(
     target: Extract<EmbeddingTarget, { kind: 'onnx' }>,
-  ): EmbeddingService {
+  ): EmbeddingService & { fingerprint(): string } {
     return {
       embed: (texts) => texts.length === 0
         ? Promise.resolve({ vectors: [], tokens: 0 })
@@ -156,7 +156,7 @@ export class SemanticVectorWorkerClient implements VectorStore {
       // The runtime caches several proxies over one worker. Disposing one
       // profile must not evict sessions still serving the other profile.
       dispose: async () => undefined,
-    } as EmbeddingService;
+    } as EmbeddingService & { fingerprint(): string };
   }
 
   rerankerService(

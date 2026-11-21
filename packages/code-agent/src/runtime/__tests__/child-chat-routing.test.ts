@@ -25,10 +25,39 @@ function fixture(text = original) {
     ? models : [model(parent.model, 'Claude Opus 4.7 Medium'), model(configured.model, 'GPT-6.2-Sol')] };
   const create = vi.fn<ChildChatPort['create']>().mockResolvedValue({ chatId: 'child', title: 'A', readOnly: false, created: true, profile: 'implement' });
   const port = routeChildChats({ create, wait: vi.fn(), stop: vi.fn(), message: vi.fn(), list: vi.fn() }, catalog, parent, async () => text);
-  return { create, catalog, models, identities, send: (fields = {}) => port.create('parent', { ...task, ...fields }), next: (value: string) => { text = value; } };
+  return { create, catalog, models, identities, catalogSelection: port.catalogSelection,
+    send: (fields = {}) => port.create('parent', { ...task, ...fields }), next: (value: string) => { text = value; } };
 }
 
 describe('child chat target selection', () => {
+  it('binds the original reviewer instruction to ChatGPT before checking the effort on a different provider', async () => {
+    const f = fixture('Inicie um agente revisor com chatgpt modelo sol 6.2 no max, e peça para ele ver onde paramos, se não achar o modelo pare e me avise!');
+    f.identities.push({ id: 'bedrock', name: 'Amazon Bedrock', kind: 'bedrock', enabled: true });
+    expect(await f.catalogSelection()).toEqual({ provider: 'chatgpt', query: 'sol 6.2' });
+    for (const effort of ['max', 'high', undefined]) {
+      await expect(f.send({ provider: 'bedrock', model: 'global.openai.gpt-6.2-sol', effort })).rejects.toThrow(/Provider "bedrock" conflicts.*"openai-chatgpt".*"max"/);
+    }
+    await expect(f.send({})).rejects.toThrow('openai-chatgpt');
+    expect(f.create).not.toHaveBeenCalled();
+    await f.send({ provider: 'Codex', model: 'Sol 6.2' });
+    expect(f.create.mock.lastCall?.[1]).toMatchObject({ ...configured, effort: 'max' });
+    f.next('Liste todos os modelos disponíveis.');
+    expect(await f.catalogSelection()).toBeUndefined();
+  });
+
+  it('keeps a provider-only correction and refuses substitution when the requested model is missing', async () => {
+    const f = fixture('oq eu pedi foi chatgpt e não bedrock');
+    f.identities.push({ id: 'bedrock', name: 'Amazon Bedrock', kind: 'bedrock', enabled: true });
+    expect(await f.catalogSelection()).toMatchObject({ provider: 'chatgpt' });
+    await expect(f.send({ provider: 'bedrock', model: configured.model, effort: 'max' })).rejects.toThrow('conflicts with the requested provider');
+    await f.send({ model: configured.model, effort: 'max' });
+    expect(f.create.mock.lastCall?.[1]).toMatchObject({ provider: configured.provider, model: configured.model, effort: 'max' });
+    f.next('Pesquise pelo nome do provedor Codex. Dentro dele pesquise o modelo. Inicie um revisor com ChatGPT modelo Sol 6.2 no max.');
+    expect(await f.catalogSelection()).toEqual({ provider: 'ChatGPT', query: 'Sol 6.2' });
+    f.models.splice(0, 1);
+    await expect(f.send({ provider: 'bedrock', model: configured.model })).rejects.toThrow(/Model "Sol 6.2" is unknown or disabled for "openai-chatgpt"/);
+    expect(f.create).toHaveBeenCalledTimes(1);
+  });
   it('refuses even an enabled older guess, the same model on another provider, wrong effort and omitted targets before dispatch', async () => {
     const f = fixture();
     for (const fields of [
@@ -55,10 +84,25 @@ describe('child chat target selection', () => {
     await f.send({ model: 'gpt-6.2-astra' });
     expect(f.create.mock.lastCall?.[1]).toMatchObject({ provider: 'openai-chatgpt', model: 'gpt-6.2-astra', effort: 'max' });
   });
+  it('lets a capability search choose the model while enforcing the configured account', async () => {
+    const f = fixture('Abra um agente revisor no Work Lab com um modelo que analise documentos.');
+    f.identities.push({ id: 'work-lab-2', name: 'Work Lab', kind: 'mistral', enabled: true });
+    expect(await f.catalogSelection()).toEqual({ provider: 'Work Lab', query: undefined });
+    await expect(f.send({ provider: 'meridian', model: configured.model })).rejects.toThrow('conflicts with the requested provider');
+    await f.send({ provider: 'work-lab-2', model: configured.model, effort: 'max' });
+    expect(f.create).toHaveBeenCalledTimes(1);
+    f.next('Abra um agente revisor no Work Lab com esforço máximo.');
+    await expect(f.send({provider:'work-lab-2',model:configured.model,effort:'low'})).rejects.toThrow('conflict');
+    await f.send({provider:'work-lab-2',model:configured.model});
+    expect(f.create.mock.lastCall?.[1].effort).toBe('max');
+  });
 
   it.each([
     ['Usa o provider chatgpt/ modelo Astra 6.2 no max para tal tarefa.', 'max'],
     ['Use o ChatGPT com o modelo Astra 6.2. Revise o arquivo.', undefined],
+    ['Abra um revisor com o modelo Astra 6.2 do ChatGPT no max.', 'max'],
+    ['Use o Astra 6.2 do ChatGPT no max.', 'max'],
+    ['Abra um revisor com **ChatGPT** modelo "Astra 6.2" no max.', 'max'],
   ])('recognizes a selection in "%s"', async (message, effort) => {
     const f = fixture(message!);
     await expect(f.send()).rejects.toThrow('gpt-6.2-astra');

@@ -1,0 +1,2630 @@
+{
+  "models": 1077,
+  "providers": 18,
+  "withDescription": 496,
+  "method": "Public metadata copied to isolated SQLite; known IDs and description-based labels in Portuguese and English. First lookup plus four warm repetitions per query. Absence probes count as correct only with zero results.",
+  "embeddedDescriptions": 414,
+  "buildMs": 6644,
+  "restoreMs": 17,
+  "reencodedOnRestart": 0,
+  "incrementalMs": 88,
+  "reencodedOnEdit": 1,
+  "encoder": {
+    "model": "onnx-community/granite-embedding-97m-multilingual-r2-ONNX",
+    "dtype": "q8",
+    "dimension": 384,
+    "loaded": true,
+    "executionProvider": "dml"
+  },
+  "summary": {
+    "name-only": {
+      "probes": 42,
+      "top1": 20,
+      "wrongProvider": 0,
+      "byGroup": {
+        "name": {
+          "n": 19,
+          "top1": 18,
+          "top5": 19
+        },
+        "task": {
+          "n": 9,
+          "top1": 0,
+          "top5": 0
+        },
+        "validation": {
+          "n": 7,
+          "top1": 0,
+          "top5": 0
+        },
+        "constraint": {
+          "n": 3,
+          "top1": 0,
+          "top5": 0
+        },
+        "absence": {
+          "n": 4,
+          "top1": 2,
+          "top5": 2
+        }
+      },
+      "firstLookupP95Ms": 1.39,
+      "firstTaskP95Ms": 8.19,
+      "warmP50Ms": 0.27,
+      "warmP95Ms": 1.45,
+      "warmNameP95Ms": 0.69,
+      "warmOtherP95Ms": 1.74
+    },
+    "metadata": {
+      "probes": 42,
+      "top1": 35,
+      "wrongProvider": 0,
+      "byGroup": {
+        "name": {
+          "n": 19,
+          "top1": 19,
+          "top5": 19
+        },
+        "task": {
+          "n": 9,
+          "top1": 9,
+          "top5": 9
+        },
+        "validation": {
+          "n": 7,
+          "top1": 0,
+          "top5": 1
+        },
+        "constraint": {
+          "n": 3,
+          "top1": 3,
+          "top5": 3
+        },
+        "absence": {
+          "n": 4,
+          "top1": 4,
+          "top5": 4
+        }
+      },
+      "firstLookupP95Ms": 2.51,
+      "firstTaskP95Ms": 25.95,
+      "warmP50Ms": 0.22,
+      "warmP95Ms": 1.95,
+      "warmNameP95Ms": 0.25,
+      "warmOtherP95Ms": 2.06
+    },
+    "hybrid": {
+      "probes": 42,
+      "top1": 40,
+      "wrongProvider": 0,
+      "byGroup": {
+        "name": {
+          "n": 19,
+          "top1": 19,
+          "top5": 19
+        },
+        "task": {
+          "n": 9,
+          "top1": 9,
+          "top5": 9
+        },
+        "validation": {
+          "n": 7,
+          "top1": 5,
+          "top5": 6
+        },
+        "constraint": {
+          "n": 3,
+          "top1": 3,
+          "top5": 3
+        },
+        "absence": {
+          "n": 4,
+          "top1": 4,
+          "top5": 4
+        }
+      },
+      "firstLookupP95Ms": 91.69,
+      "firstTaskP95Ms": 98.46,
+      "warmP50Ms": 0.18,
+      "warmP95Ms": 2.6,
+      "warmNameP95Ms": 0.23,
+      "warmOtherP95Ms": 2.89
+    }
+  },
+  "cases": [
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "claude-opus-4-7",
+      "provider": "anthropic",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "anthropic",
+          "claude-opus-4-7"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "nvidia.nemotron-nano-9b-v2",
+      "provider": "aws",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "aws",
+          "nvidia.nemotron-nano-9b-v2"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "qwen.qwen3-32b-v1:0",
+      "provider": "bedrock",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "bedrock",
+          "qwen.qwen3-32b-v1:0"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "opus-4-7",
+      "provider": "claude-code",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "claude-code",
+          "opus-4-7"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "provider": "cloudflare",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "cloudflare",
+          "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "gpt-4o-2024-11-20",
+      "provider": "copilot",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "copilot",
+          "gpt-4o-2024-11-20"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "deepseek",
+          "deepseek-v4-pro"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "gemini-3.5-flash-lite",
+      "provider": "gemini",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "gemini",
+          "gemini-3.5-flash-lite"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "gemini-3-flash-preview",
+      "provider": "google-oauth",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 2,
+      "top": [
+        [
+          "google-oauth",
+          "gemini-3-flash-preview"
+        ],
+        [
+          "google-oauth",
+          "gemini-3.1-flash-lite-preview"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "k3.1-pro-highspeed",
+      "provider": "kimi-code",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "kimi-code",
+          "k3.1-pro-highspeed"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "claude-opus-4-5-20251101-high",
+      "provider": "meridian",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "meridian",
+          "claude-opus-4-5-20251101-high"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "mistral-medium",
+      "provider": "mistral",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 6,
+      "top": [
+        [
+          "mistral",
+          "mistral-medium"
+        ],
+        [
+          "mistral",
+          "mistral-medium-2604"
+        ],
+        [
+          "mistral",
+          "mistral-medium-3"
+        ],
+        [
+          "mistral",
+          "mistral-medium-3-5"
+        ],
+        [
+          "mistral",
+          "mistral-medium-3.5"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "mistral-medium",
+      "provider": "mistral-codestral",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 6,
+      "top": [
+        [
+          "mistral-codestral",
+          "mistral-medium"
+        ],
+        [
+          "mistral-codestral",
+          "mistral-medium-2604"
+        ],
+        [
+          "mistral-codestral",
+          "mistral-medium-3"
+        ],
+        [
+          "mistral-codestral",
+          "mistral-medium-3-5"
+        ],
+        [
+          "mistral-codestral",
+          "mistral-medium-3.5"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "gpt-5.6-sol",
+      "provider": "openai-api",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-api",
+          "gpt-5.6-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "gpt-6-sol",
+      "provider": "openai-chatgpt",
+      "rank": 2,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 4,
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-5.6-sol"
+        ],
+        [
+          "openai-chatgpt",
+          "gpt-6-sol"
+        ],
+        [
+          "openai-chatgpt",
+          "gpt-6.1-sol"
+        ],
+        [
+          "openai-chatgpt",
+          "gpt-6.2-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "openai/gpt-5-nano:batch",
+      "provider": "openrouter",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openrouter",
+          "openai/gpt-5-nano:batch"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "fugu-ultra-20260615",
+      "provider": "sakana",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "sakana",
+          "fugu-ultra-20260615"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "glm-5-turbo",
+      "provider": "zai",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "zai",
+          "glm-5-turbo"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "traduzir documentos de um idioma para outro",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "translate between languages while following a glossary",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "transcrever uma gravação de voz em texto",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "turn a meeting recording into a written transcript",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "ler as letras minúsculas numa foto de um documento",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "extract the printed words visible in a photograph",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "representar frases como vetores para busca por similaridade",
+      "provider": "cloudflare",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "fill in missing source code between a prefix and a suffix",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "task",
+      "query": "completar um trecho de código entre o prefixo e o sufixo",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "constraint",
+      "query": "quero analisar prints com contexto longo",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "constraint",
+      "query": "read screenshots with at least 500k tokens",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "constraint",
+      "query": "",
+      "requires": {
+        "input_modalities": [
+          "audio",
+          "video"
+        ],
+        "min_context": 100000
+      },
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 1077,
+      "top": [
+        [
+          "aws",
+          "anthropic.claude-fable-5"
+        ],
+        [
+          "aws",
+          "anthropic.claude-haiku-4-5"
+        ],
+        [
+          "aws",
+          "anthropic.claude-opus-4-7"
+        ],
+        [
+          "aws",
+          "anthropic.claude-opus-4-8"
+        ],
+        [
+          "aws",
+          "anthropic.claude-opus-5"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "name",
+      "query": "Sol 6.2",
+      "provider": "ChatGPT",
+      "requires": {
+        "effort": "max"
+      },
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-6.2-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "absence",
+      "query": "Sol 64.93",
+      "provider": "ChatGPT",
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "absence",
+      "query": "read photographs",
+      "provider": "missing-account-xyz",
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "absence",
+      "query": "",
+      "requires": {
+        "min_context": 100000000
+      },
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 1077,
+      "top": [
+        [
+          "aws",
+          "anthropic.claude-fable-5"
+        ],
+        [
+          "aws",
+          "anthropic.claude-haiku-4-5"
+        ],
+        [
+          "aws",
+          "anthropic.claude-opus-4-7"
+        ],
+        [
+          "aws",
+          "anthropic.claude-opus-4-8"
+        ],
+        [
+          "aws",
+          "anthropic.claude-opus-5"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "absence",
+      "query": "Sol 6.2",
+      "provider": "ChatGPT",
+      "requires": {
+        "input_modalities": [
+          "video"
+        ]
+      },
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-6.2-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "name-only",
+      "group": "validation",
+      "query": "condense a lengthy report into a short overview",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "validation",
+      "query": "responder perguntas sobre o conteúdo visível de uma fotografia",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "validation",
+      "query": "operate a desktop by looking at the screen",
+      "provider": "ChatGPT",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "validation",
+      "query": "devolver dados obedecendo aos campos de um esquema JSON",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "validation",
+      "query": "make German instructions readable for a French speaker",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "validation",
+      "query": "criar uma representação numérica de sentenças semanticamente parecidas",
+      "provider": "cloudflare",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "name-only",
+      "group": "validation",
+      "query": "colocar no papel o que as pessoas disseram durante a reunião gravada",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "claude-opus-4-7",
+      "provider": "anthropic",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "anthropic",
+          "claude-opus-4-7"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "nvidia.nemotron-nano-9b-v2",
+      "provider": "aws",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "aws",
+          "nvidia.nemotron-nano-9b-v2"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "qwen.qwen3-32b-v1:0",
+      "provider": "bedrock",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "bedrock",
+          "qwen.qwen3-32b-v1:0"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "opus-4-7",
+      "provider": "claude-code",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "claude-code",
+          "opus-4-7"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "provider": "cloudflare",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "cloudflare",
+          "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "gpt-4o-2024-11-20",
+      "provider": "copilot",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "copilot",
+          "gpt-4o-2024-11-20"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "deepseek",
+          "deepseek-v4-pro"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "gemini-3.5-flash-lite",
+      "provider": "gemini",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "gemini",
+          "gemini-3.5-flash-lite"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "gemini-3-flash-preview",
+      "provider": "google-oauth",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "google-oauth",
+          "gemini-3-flash-preview"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "k3.1-pro-highspeed",
+      "provider": "kimi-code",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "kimi-code",
+          "k3.1-pro-highspeed"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "claude-opus-4-5-20251101-high",
+      "provider": "meridian",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "meridian",
+          "claude-opus-4-5-20251101-high"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "mistral-medium",
+      "provider": "mistral",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "mistral",
+          "mistral-medium"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "mistral-medium",
+      "provider": "mistral-codestral",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "mistral-codestral",
+          "mistral-medium"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "gpt-5.6-sol",
+      "provider": "openai-api",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-api",
+          "gpt-5.6-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "gpt-6-sol",
+      "provider": "openai-chatgpt",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-6-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "openai/gpt-5-nano:batch",
+      "provider": "openrouter",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openrouter",
+          "openai/gpt-5-nano:batch"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "fugu-ultra-20260615",
+      "provider": "sakana",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "sakana",
+          "fugu-ultra-20260615"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "glm-5-turbo",
+      "provider": "zai",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "zai",
+          "glm-5-turbo"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "traduzir documentos de um idioma para outro",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 5,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "tencent/hy-mt2-1.8b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-30b-a3b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-7b"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3-preview"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3.1-9b-a2b"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "translate between languages while following a glossary",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 68,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "tencent/hy-mt2-1.8b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-30b-a3b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-7b"
+        ],
+        [
+          "cloudflare",
+          "@cf/zai-org/glm-4.7-flash"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-5-image"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "transcrever uma gravação de voz em texto",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 97,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/voxtral-small-24b-2507"
+        ],
+        [
+          "bedrock",
+          "amazon.nova-2-5-sonic"
+        ],
+        [
+          "bedrock",
+          "amazon.nova-2-sonic-v1:0"
+        ],
+        [
+          "bedrock",
+          "mistral.voxtral-mini-3b-2507"
+        ],
+        [
+          "bedrock",
+          "mistral.voxtral-small-24b-2507"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "turn a meeting recording into a written transcript",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 97,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/voxtral-small-24b-2507"
+        ],
+        [
+          "openrouter",
+          "google/gemini-3-flash-preview"
+        ],
+        [
+          "openrouter",
+          "google/gemini-3-flash-preview:batch"
+        ],
+        [
+          "bedrock",
+          "amazon.nova-2-5-sonic"
+        ],
+        [
+          "bedrock",
+          "amazon.nova-2-sonic-v1:0"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "ler as letras minúsculas numa foto de um documento",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 519,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "moondream/moondream3-preview"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3.1-9b-a2b"
+        ],
+        [
+          "bedrock",
+          "amazon.nova-lite-v1:0"
+        ],
+        [
+          "bedrock",
+          "amazon.nova-pro-v1:0"
+        ],
+        [
+          "bedrock",
+          "global.amazon.nova-2-lite-v1:0"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "extract the printed words visible in a photograph",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 5,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "moondream/moondream3-preview"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3.1-9b-a2b"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clairic"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clairic-flash"
+        ],
+        [
+          "openrouter",
+          "scaledown/extract"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "representar frases como vetores para busca por similaridade",
+      "provider": "cloudflare",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 2,
+      "search": "metadata",
+      "top": [
+        [
+          "cloudflare",
+          "@cf/pfnet/plamo-embedding-1b"
+        ],
+        [
+          "cloudflare",
+          "@cf/qwen/qwen3-embedding-0.6b"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "fill in missing source code between a prefix and a suffix",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 66,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/codestral-2508"
+        ],
+        [
+          "openrouter",
+          "nvidia/switchyard"
+        ],
+        [
+          "openrouter",
+          "relace/relace-apply-3"
+        ],
+        [
+          "openrouter",
+          "openrouter/pareto-code"
+        ],
+        [
+          "cloudflare",
+          "@cf/swiss-ai/apertus-v1.5-8b"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "task",
+      "query": "completar um trecho de código entre o prefixo e o sufixo",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/codestral-2508"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "constraint",
+      "query": "quero analisar prints com contexto longo",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 478,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "openrouter/auto"
+        ],
+        [
+          "openrouter",
+          "openrouter/auto-beta"
+        ],
+        [
+          "openrouter",
+          "openrouter/auto-code"
+        ],
+        [
+          "openrouter",
+          "x-ai/grok-4.20"
+        ],
+        [
+          "openrouter",
+          "x-ai/grok-4.20-multi-agent"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "constraint",
+      "query": "read screenshots with at least 500k tokens",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 265,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "nvidia/nemotron-3.5-super-vl"
+        ],
+        [
+          "openrouter",
+          "nvidia/nemotron-3.5-super-vl:free"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-6.1-terra"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-6.1-terra:batch"
+        ],
+        [
+          "openrouter",
+          "z-ai/glm-5.3-flashx"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "constraint",
+      "query": "",
+      "requires": {
+        "input_modalities": [
+          "audio",
+          "video"
+        ],
+        "min_context": 100000
+      },
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 79,
+      "search": "metadata",
+      "top": [
+        [
+          "gemini",
+          "antigravity-preview-05-2026"
+        ],
+        [
+          "gemini",
+          "antigravity-preview-09-2026"
+        ],
+        [
+          "gemini",
+          "antigravity-preview-latest"
+        ],
+        [
+          "gemini",
+          "deep-research-max-preview-04-2026"
+        ],
+        [
+          "gemini",
+          "deep-research-preview-04-2026"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "name",
+      "query": "Sol 6.2",
+      "provider": "ChatGPT",
+      "requires": {
+        "effort": "max"
+      },
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-6.2-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "absence",
+      "query": "Sol 64.93",
+      "provider": "ChatGPT",
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "absence",
+      "query": "read photographs",
+      "provider": "missing-account-xyz",
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "absence",
+      "query": "",
+      "requires": {
+        "min_context": 100000000
+      },
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "absence",
+      "query": "Sol 6.2",
+      "provider": "ChatGPT",
+      "requires": {
+        "input_modalities": [
+          "video"
+        ]
+      },
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "validation",
+      "query": "condense a lengthy report into a short overview",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 19,
+      "search": "metadata",
+      "top": [
+        [
+          "cloudflare",
+          "@cf/baai/bge-base-en-v1.5"
+        ],
+        [
+          "cloudflare",
+          "@cf/baai/bge-large-en-v1.5"
+        ],
+        [
+          "cloudflare",
+          "@cf/baai/bge-small-en-v1.5"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef-flash"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "validation",
+      "query": "responder perguntas sobre o conteúdo visível de uma fotografia",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "search": "metadata",
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "validation",
+      "query": "operate a desktop by looking at the screen",
+      "provider": "ChatGPT",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "search": "metadata",
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "validation",
+      "query": "devolver dados obedecendo aos campos de um esquema JSON",
+      "rank": 4,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 8,
+      "search": "metadata",
+      "top": [
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef-flash"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef-omni"
+        ],
+        [
+          "openrouter",
+          "inference-net/schematron-v2-small"
+        ],
+        [
+          "openrouter",
+          "inference-net/schematron-v2-turbo"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "validation",
+      "query": "make German instructions readable for a French speaker",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 5,
+      "search": "metadata",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/mistral-nemo"
+        ],
+        [
+          "cloudflare",
+          "@cf/ibm-granite/granite-4.0-h-micro"
+        ],
+        [
+          "openrouter",
+          "fireworks/ember-1"
+        ],
+        [
+          "openrouter",
+          "inference-net/schematron-v2-small"
+        ],
+        [
+          "openrouter",
+          "inference-net/schematron-v2-turbo"
+        ]
+      ]
+    },
+    {
+      "mode": "metadata",
+      "group": "validation",
+      "query": "criar uma representação numérica de sentenças semanticamente parecidas",
+      "provider": "cloudflare",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "search": "metadata",
+      "top": []
+    },
+    {
+      "mode": "metadata",
+      "group": "validation",
+      "query": "colocar no papel o que as pessoas disseram durante a reunião gravada",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 0,
+      "search": "metadata",
+      "top": []
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "claude-opus-4-7",
+      "provider": "anthropic",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "anthropic",
+          "claude-opus-4-7"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "nvidia.nemotron-nano-9b-v2",
+      "provider": "aws",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "aws",
+          "nvidia.nemotron-nano-9b-v2"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "qwen.qwen3-32b-v1:0",
+      "provider": "bedrock",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "bedrock",
+          "qwen.qwen3-32b-v1:0"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "opus-4-7",
+      "provider": "claude-code",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "claude-code",
+          "opus-4-7"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "provider": "cloudflare",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "cloudflare",
+          "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "gpt-4o-2024-11-20",
+      "provider": "copilot",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "copilot",
+          "gpt-4o-2024-11-20"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "deepseek",
+          "deepseek-v4-pro"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "gemini-3.5-flash-lite",
+      "provider": "gemini",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "gemini",
+          "gemini-3.5-flash-lite"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "gemini-3-flash-preview",
+      "provider": "google-oauth",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "google-oauth",
+          "gemini-3-flash-preview"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "k3.1-pro-highspeed",
+      "provider": "kimi-code",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "kimi-code",
+          "k3.1-pro-highspeed"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "claude-opus-4-5-20251101-high",
+      "provider": "meridian",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "meridian",
+          "claude-opus-4-5-20251101-high"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "mistral-medium",
+      "provider": "mistral",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "mistral",
+          "mistral-medium"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "mistral-medium",
+      "provider": "mistral-codestral",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "mistral-codestral",
+          "mistral-medium"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "gpt-5.6-sol",
+      "provider": "openai-api",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-api",
+          "gpt-5.6-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "gpt-6-sol",
+      "provider": "openai-chatgpt",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-6-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "openai/gpt-5-nano:batch",
+      "provider": "openrouter",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openrouter",
+          "openai/gpt-5-nano:batch"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "fugu-ultra-20260615",
+      "provider": "sakana",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "sakana",
+          "fugu-ultra-20260615"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "glm-5-turbo",
+      "provider": "zai",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "zai",
+          "glm-5-turbo"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "traduzir documentos de um idioma para outro",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "tencent/hy-mt2-1.8b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-30b-a3b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-7b"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3.1-9b-a2b"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3-preview"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "translate between languages while following a glossary",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 497,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "tencent/hy-mt2-1.8b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-30b-a3b"
+        ],
+        [
+          "openrouter",
+          "tencent/hy-mt2-7b"
+        ],
+        [
+          "cloudflare",
+          "@cf/zai-org/glm-4.7-flash"
+        ],
+        [
+          "cloudflare",
+          "@cf/aisingapore/gemma-sea-lion-v4-27b-it"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "transcrever uma gravação de voz em texto",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 97,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/voxtral-small-24b-2507"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-audio"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-audio-mini"
+        ],
+        [
+          "openrouter",
+          "thinkingmachines/inkling"
+        ],
+        [
+          "openrouter",
+          "perceptron/perceptron-mk1.5"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "turn a meeting recording into a written transcript",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 97,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/voxtral-small-24b-2507"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-audio"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-audio-mini"
+        ],
+        [
+          "openrouter",
+          "google/gemini-3-flash-preview"
+        ],
+        [
+          "openrouter",
+          "google/gemini-3-flash-preview:batch"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "ler as letras minúsculas numa foto de um documento",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 519,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "moondream/moondream3-preview"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3.1-9b-a2b"
+        ],
+        [
+          "openrouter",
+          "qwen/qwen2.5-vl-72b-instruct"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-5-image-mini"
+        ],
+        [
+          "openrouter",
+          "qwen/qwen3-vl-235b-a22b-instruct"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "extract the printed words visible in a photograph",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "moondream/moondream3-preview"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3.1-9b-a2b"
+        ],
+        [
+          "openrouter",
+          "scaledown/extract"
+        ],
+        [
+          "openrouter",
+          "qwen/qwen2.5-vl-72b-instruct"
+        ],
+        [
+          "openrouter",
+          "qwen/qwen3.5-plus-20260420"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "representar frases como vetores para busca por similaridade",
+      "provider": "cloudflare",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 31,
+      "search": "hybrid",
+      "top": [
+        [
+          "cloudflare",
+          "@cf/pfnet/plamo-embedding-1b"
+        ],
+        [
+          "cloudflare",
+          "@cf/qwen/qwen3-embedding-0.6b"
+        ],
+        [
+          "cloudflare",
+          "@cf/baai/bge-m3"
+        ],
+        [
+          "cloudflare",
+          "@cf/baai/bge-base-en-v1.5"
+        ],
+        [
+          "cloudflare",
+          "@cf/baai/bge-large-en-v1.5"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "fill in missing source code between a prefix and a suffix",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 503,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/codestral-2508"
+        ],
+        [
+          "openrouter",
+          "relace/relace-apply-3"
+        ],
+        [
+          "openrouter",
+          "openrouter/pareto-code"
+        ],
+        [
+          "openrouter",
+          "nvidia/switchyard"
+        ],
+        [
+          "cloudflare",
+          "@cf/utter-project/eurollm-9b-it"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "task",
+      "query": "completar um trecho de código entre o prefixo e o sufixo",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/codestral-2508"
+        ],
+        [
+          "claude-code",
+          "sonnet"
+        ],
+        [
+          "claude-code",
+          "opus-4-8"
+        ],
+        [
+          "openrouter",
+          "morph/morph-v3-fast"
+        ],
+        [
+          "openrouter",
+          "morph/morph-v3-fast:batch"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "constraint",
+      "query": "quero analisar prints com contexto longo",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 478,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "scaledown/summarize"
+        ],
+        [
+          "openrouter",
+          "anthropic/claude-haiku-5.5"
+        ],
+        [
+          "openrouter",
+          "anthropic/claude-haiku-5.5:batch"
+        ],
+        [
+          "openrouter",
+          "anthropic/claude-sonnet-5"
+        ],
+        [
+          "openrouter",
+          "anthropic/claude-sonnet-5.5"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "constraint",
+      "query": "read screenshots with at least 500k tokens",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 265,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "openai/gpt-6.1-terra"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-6.1-terra:batch"
+        ],
+        [
+          "openrouter",
+          "z-ai/glm-5.3-flashx"
+        ],
+        [
+          "openrouter",
+          "nvidia/nemotron-3.5-super-vl"
+        ],
+        [
+          "openrouter",
+          "nvidia/nemotron-3.5-super-vl:free"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "constraint",
+      "query": "",
+      "requires": {
+        "input_modalities": [
+          "audio",
+          "video"
+        ],
+        "min_context": 100000
+      },
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 79,
+      "search": "metadata",
+      "top": [
+        [
+          "gemini",
+          "antigravity-preview-05-2026"
+        ],
+        [
+          "gemini",
+          "antigravity-preview-09-2026"
+        ],
+        [
+          "gemini",
+          "antigravity-preview-latest"
+        ],
+        [
+          "gemini",
+          "deep-research-max-preview-04-2026"
+        ],
+        [
+          "gemini",
+          "deep-research-preview-04-2026"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "name",
+      "query": "Sol 6.2",
+      "provider": "ChatGPT",
+      "requires": {
+        "effort": "max"
+      },
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 1,
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-6.2-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "absence",
+      "query": "Sol 64.93",
+      "provider": "ChatGPT",
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "hybrid",
+      "group": "absence",
+      "query": "read photographs",
+      "provider": "missing-account-xyz",
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "hybrid",
+      "group": "absence",
+      "query": "",
+      "requires": {
+        "min_context": 100000000
+      },
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "hybrid",
+      "group": "absence",
+      "query": "Sol 6.2",
+      "provider": "ChatGPT",
+      "requires": {
+        "input_modalities": [
+          "video"
+        ]
+      },
+      "rank": 0,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 0,
+      "top": []
+    },
+    {
+      "mode": "hybrid",
+      "group": "validation",
+      "query": "condense a lengthy report into a short overview",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "scaledown/summarize"
+        ],
+        [
+          "openrouter",
+          "openrouter/fusion"
+        ],
+        [
+          "openrouter",
+          "prism-ml/ternary-bonsai-2-9b"
+        ],
+        [
+          "openrouter",
+          "aion-labs/aion-2.0"
+        ],
+        [
+          "openrouter",
+          "nex-agi/nex-n2.5-mini"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "validation",
+      "query": "responder perguntas sobre o conteúdo visível de uma fotografia",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "moondream/moondream3-preview"
+        ],
+        [
+          "openrouter",
+          "moondream/moondream3.1-9b-a2b"
+        ],
+        [
+          "openrouter",
+          "rekaai/reka-edge"
+        ],
+        [
+          "openrouter",
+          "perceptron/perceptron-mk1"
+        ],
+        [
+          "cloudflare",
+          "@cf/meta/llama-3.2-11b-vision-instruct"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "validation",
+      "query": "operate a desktop by looking at the screen",
+      "provider": "ChatGPT",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 10,
+      "search": "hybrid",
+      "top": [
+        [
+          "openai-chatgpt",
+          "gpt-6.1-terra"
+        ],
+        [
+          "openai-chatgpt",
+          "gpt-6-luna"
+        ],
+        [
+          "openai-chatgpt",
+          "gpt-6.2-sol"
+        ],
+        [
+          "openai-chatgpt",
+          "gpt-5.6-luna"
+        ],
+        [
+          "openai-chatgpt",
+          "gpt-5.6-sol"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "validation",
+      "query": "devolver dados obedecendo aos campos de um esquema JSON",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "inference-net/schematron-v2-turbo"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef"
+        ],
+        [
+          "openrouter",
+          "inference-net/schematron-v2-small"
+        ],
+        [
+          "openrouter",
+          "openai/gpt-4o-2024-08-06"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef-flash"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "validation",
+      "query": "make German instructions readable for a French speaker",
+      "rank": 0,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "mistralai/mistral-nemo"
+        ],
+        [
+          "openrouter",
+          "mancer/weaver"
+        ],
+        [
+          "cloudflare",
+          "@cf/ibm-granite/granite-4.0-h-micro"
+        ],
+        [
+          "openrouter",
+          "qwen/qwen3-235b-a22b-2507"
+        ],
+        [
+          "openrouter",
+          "mistralai/voxtral-small-24b-2507"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "validation",
+      "query": "criar uma representação numérica de sentenças semanticamente parecidas",
+      "provider": "cloudflare",
+      "rank": 1,
+      "correct": true,
+      "wrongProvider": false,
+      "returned": 31,
+      "search": "hybrid",
+      "top": [
+        [
+          "cloudflare",
+          "@cf/qwen/qwen3-embedding-0.6b"
+        ],
+        [
+          "cloudflare",
+          "@cf/baai/bge-m3"
+        ],
+        [
+          "cloudflare",
+          "@cf/pfnet/plamo-embedding-1b"
+        ],
+        [
+          "cloudflare",
+          "@cf/utter-project/eurollm-9b-it"
+        ],
+        [
+          "cloudflare",
+          "@cf/cloudflare/clef-omni"
+        ]
+      ]
+    },
+    {
+      "mode": "hybrid",
+      "group": "validation",
+      "query": "colocar no papel o que as pessoas disseram durante a reunião gravada",
+      "rank": 4,
+      "correct": false,
+      "wrongProvider": false,
+      "returned": 496,
+      "search": "hybrid",
+      "top": [
+        [
+          "openrouter",
+          "mancer/weaver"
+        ],
+        [
+          "cloudflare",
+          "@cf/thinkingmachines/inkling-2-small"
+        ],
+        [
+          "openrouter",
+          "thinkingmachines/inkling"
+        ],
+        [
+          "openrouter",
+          "mistralai/voxtral-small-24b-2507"
+        ],
+        [
+          "openrouter",
+          "elorian/glimpse"
+        ]
+      ]
+    }
+  ]
+}

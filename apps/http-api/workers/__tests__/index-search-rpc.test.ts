@@ -42,6 +42,17 @@ it('answers memory searches with the ids projection', async () => {
   expect(memorySearch).toHaveBeenCalledWith(7, 'tests', 5, expect.any(AbortSignal));
 });
 
+it('scopes catalog intent over the real bridge and rejects an invalid owner page', async () => {
+  const request = { query:'read screenshots', provider:'my-account', requires:{min_context:250000,input_modalities:['image']}, offset:0, limit:5 };
+  const page = { offset:0,total:1,models:[{provider:'my-account',id:'vision',name:'Vision',capabilities:['text'],cached_at:''}] };
+  const catalogSearch = vi.fn(async()=>page as never);
+  const {client}=fixture({catalogSearch});
+  expect(await client.searchCatalog!(request)).toEqual({ ok:true,value:page,error:null });
+  expect(catalogSearch).toHaveBeenCalledWith(request,expect.any(AbortSignal));
+  catalogSearch.mockResolvedValueOnce({...page,offset:10} as never);
+  expect((await client.searchCatalog!(request)).ok).toBe(false);
+});
+
 it('degrades like an unavailable owner on a host error, a missing handler or an invalid payload', async () => {
   const failing = fixture({ projectSearch: async () => { throw new Error('project not found'); } });
   expect(await failing.client.searchProject(7, 'q')).toEqual({ ok: false, value: null, error: 'project not found' });

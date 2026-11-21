@@ -1,6 +1,8 @@
 import type { SearchDiagnostics } from '@mcp/indexer/search/hybrid.js';
 import type { AgentMemoryHit } from '@mcp/services/memory/agent-memory-service.js';
 import type { HybridSearchResult, SearchMode, SearchType } from '@mcp/shared/types.js';
+import type { CatalogIntentRequest } from '../indexer/providers/catalog-intent.js';
+import type { ModelPage } from '../indexer/providers/model-catalog-read.js';
 
 /**
  * What every semantic owner client answers, whatever carries it (host RPC
@@ -23,6 +25,7 @@ export interface MemorySemanticSearchResponse {
 }
 
 export interface McpSemanticSearchClient {
+  searchCatalog?(request: CatalogIntentRequest, signal?: AbortSignal): Promise<SemanticClientResult<ModelPage>>;
   searchProject(
     projectId: number,
     query: string,

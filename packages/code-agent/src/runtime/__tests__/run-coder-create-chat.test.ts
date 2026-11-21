@@ -106,6 +106,39 @@ function scripted(provider: string, model: string): ChatProvider {
 }
 
 const incidentResults: string[] = [];
+type ReviewModel = { id: string; provider: string; supported_reasoning_levels: string[] };
+let reviewPage: { total: number; next_offset: number | null; models: ReviewModel[] } | undefined;
+const reviewResults: string[] = [];
+
+/** Same empty catalog read and same Bedrock attempts as the screenshot, followed by the returned ChatGPT row. */
+function reviewParent(model: string): ChatProvider {
+  let step = 0;
+  return { name: 'fixture', model, setModel() {}, async *chat(request): AsyncIterable<ChatDelta> {
+    if (step === 1) reviewPage = JSON.parse(lastToolResult(request).split('[return]\n')[1]);
+    if (step >= 2) reviewResults.push(lastToolResult(request));
+    const review = { title: 'Reviewer', prompt: 'Report.', profile: 'review', wait: true };
+    const wrong = { ...review, provider: 'bedrock', model: 'global.openai.gpt-6.2-sol' };
+    const row = reviewPage?.models[0];
+    const calls = [
+      { name: 'code_exec', input: { code: 'return await tools.mcp__list_models({});' } },
+      { name: 'create_chat', input: { ...wrong, effort: 'max' } },
+      { name: 'create_chat', input: { ...wrong, effort: 'high' } },
+      { name: 'create_chat', input: wrong },
+      { name: 'create_chat', input: { ...review, provider: row?.provider, model: row?.id, effort: 'max' } },
+    ];
+    const call = calls[step++];
+    if (!call) {
+      yield { type: 'text_delta', text: 'Review received.' };
+      yield { type: 'done', stop_reason: 'end_turn' };
+      return;
+    }
+    const id = 'review-' + step;
+    yield { type: 'tool_call_start', id, name: call.name };
+    yield { type: 'tool_call_end', id, name: call.name, input: call.input };
+    yield { type: 'done', stop_reason: 'tool_use' };
+  } };
+}
+
 const guesses = [
   { provider: 'openai-chatgpt', model: 'gpt-5-codex', effort: 'xhigh' },
   { provider: 'codex', model: 'gpt-5.2-codex', effort: 'xhigh' },
@@ -142,12 +175,14 @@ function incidentParent(model: string): ChatProvider {
 vi.mock('@mcp/services/providers/factory.js', async (importOriginal) => {
   const factory = await importOriginal<typeof import('@mcp/services/providers/factory.js')>();
   return { ...factory, createCoderProvider: (...args: Parameters<typeof factory.createCoderProvider>) =>
+    args[0] === 'fixture' && args[1] === 'review-coordinator' ? reviewParent(args[1]) :
     args[0] === 'fixture' ? scripted('fixture', args[1]!) :
       args[0] === 'meridian' ? incidentParent(args[1]!) : factory.createCoderProvider(...args) };
 });
 
 let rootId: string;
 let incidentId: string;
+let reviewId: string;
 let projectId: number;
 let closeApp: () => Promise<void>;
 const chatgpt = createServer(async (req, res) => {
@@ -180,7 +215,7 @@ beforeAll(async () => {
   providers.upsertProvider({ id: 'fixture', name: 'Fixture', kind: 'openai', enabled: true, use_for_coder: true });
   providers.upsertProvider({ id: 'bedrock', name: 'Amazon Bedrock', kind: 'bedrock', enabled: true });
   providers.replaceModelsFromSource('bedrock', 'manual', [
-    { model_id: 'global.openai.gpt-6.2-sol', name: 'GPT-6.2-Sol' },
+    { model_id: 'global.openai.gpt-6.2-sol', name: 'GPT-6.2-Sol', can_reason: true, supported_reasoning_levels: ['high', 'max'] },
     ...Array.from({ length: 199 }, (_, i) => ({ model_id: `model-${i}`, name: `Other ${i}` })),
   ]);
   providers.upsertProvider({ id: 'openai-chatgpt', name: 'ChatGPT (Codex)', kind: 'chatgpt', enabled: true,
@@ -198,6 +233,8 @@ beforeAll(async () => {
   })).id;
   incidentId = (await app.createSession({ project_id: projectId, title: 'Incident', provider: 'meridian',
     model: 'claude-opus-4-7-medium', agent: 'build', reasoning_effort_override: 'low' })).id;
+  reviewId = (await app.createSession({ project_id: projectId, title: 'Review', provider: 'fixture',
+    model: 'review-coordinator', agent: 'build', reasoning_effort_override: 'low' })).id;
   const mailbox = new ChatCollaborationStore(process.env.MCP_DATA_DIR!);
   await mailbox.init();
   const { runCoder } = await import('../../index.js');
@@ -307,5 +344,20 @@ describe('runCoder with child chats (the default)', () => {
       expect(childRequests.slice(initial)).toHaveLength(3);
       for (const request of childRequests.slice(initial)) expect(request).toMatchObject({ model: CHILD_MODEL, reasoning: { effort: 'xhigh' } });
     } finally { await reader.close(); }
+  }, 120_000);
+
+  it('scopes the original empty lookup and refuses Bedrock even when its catalog also supports max', async () => {
+    const { runCoder } = await import('../../index.js');
+    const initial = childRequests.length;
+    const outcome = await (await runCoder({ session: { id: reviewId as never }, maxTurns: 9, maxAutoContinues: 0,
+      userMessage: 'Inicie um agente revisor com chatgpt modelo sol 6.2 no max, e peça para ele ver onde paramos, se não achar o modelo pare e me avise!' })).done;
+    expect(outcome.reason, outcome.error).toBe('completed');
+    expect(reviewPage).toMatchObject({ total: 1, next_offset: null, models: [{ provider: 'openai-chatgpt', id: CHILD_MODEL,
+      supported_reasoning_levels: ['low', 'xhigh', 'max'] }] });
+    expect(reviewResults).toHaveLength(4);
+    for (const error of reviewResults.slice(0, 3)) expect(error).toMatch(/Provider "bedrock" conflicts.*"openai-chatgpt".*No child started/);
+    expect(reviewResults[3]).toContain('openai-chatgpt / gpt-6.2-sol (effort=max)');
+    expect(childRequests.slice(initial)).toHaveLength(1);
+    expect(childRequests[initial]).toMatchObject({ model: CHILD_MODEL, reasoning: { effort: 'max' } });
   }, 120_000);
 });

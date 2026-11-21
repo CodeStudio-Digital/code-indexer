@@ -1,6 +1,7 @@
 import { defineTool, type IndexTool } from '../tool.js';
 import { resolveProject } from '../utils.js';
 import type { ProviderName } from '@mcp/shared/types.js';
+import { readRequirements } from '../../indexer/providers/catalog-intent.js';
 
 const get_costs = defineTool({
   name: 'get_costs',
@@ -42,29 +43,54 @@ const list_models = defineTool({
   tier: 'admin',
   access: 'read',
   description:
-    'List one page of LLM models from this profile. Default listing is local, with no network or cache writes.\n' +
-    'Filter with provider. In code_exec, read page.models (provider, id, name) and pass page.next_offset as offset until it is null. ' +
+    'Find enabled models and providers in the local profile. Search accounts with {view:"providers",query:"Codex"}; read page.providers. ' +
+    'For a named model pass provider, query and match:"name". For a task describe it in query with match:"intent"; optionally require input modalities, context or reasoning effort. ' +
+    'Use the requested provider as a filter. Read page.models for IDs, capabilities and evidence; pass page.next_offset as offset until null. A bare delegation lookup uses the requested target. Set view:"models" to browse explicitly. ' +
     'live=true requests bounded public catalog reads using environment credentials. Refresh OAuth or custom catalogs in provider settings.',
   inputSchema: {
     type: 'object',
-    properties: { provider: { type: 'string' }, live: { type: 'boolean' },
+    properties: { view: { type: 'string', enum: ['providers', 'models'] }, query: { type: 'string', description: 'Provider name, model name or a natural-language task.' },
+      match: { type: 'string', enum: ['name', 'intent'], description: 'Auto-detect by default. Name searches preserve exact versions; intent searches rank task descriptions locally.' },
+      requires: { type: 'object', additionalProperties: false, properties: {
+        input_modalities: { type: 'array', items: { type: 'string' }, description: 'All required input types, e.g. ["image"].' },
+        min_context: { type: 'integer', minimum: 1, description: 'Minimum context window in tokens.' }, effort: { type: 'string' } } },
+      provider: { type: 'string', description: 'Configured ID, display name, kind or alias such as Codex.' }, live: { type: 'boolean' },
       offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 500 } },
   },
   handler: async (args, { modelDiscovery, signal }) => {
     signal?.throwIfAborted();
     if (args.provider != null && (typeof args.provider !== 'string' || !args.provider.trim() || args.provider.length > 256)) throw new Error('Invalid provider');
+    if (args.query != null && (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 256)) throw new Error('Invalid catalog search query');
+    if (args.view != null && args.view !== 'providers' && args.view !== 'models') throw new Error('Invalid catalog view');
     if (args.live != null && typeof args.live !== 'boolean') throw new Error('live must be boolean');
+    if (args.match != null && args.match !== 'name' && args.match !== 'intent') throw new Error('Invalid catalog match');
+    const requires = args.requires == null ? undefined : readRequirements(args.requires);
+    if ((args.live || args.view === 'providers') && (args.match === 'intent' || requires)) throw new Error('Intent and capability search use configured local models');
+    if (args.match === 'intent' && !args.query && !requires) throw new Error('Provide a task or model requirements');
+    const offset = (args.offset ?? 0) as number, limit = (args.limit ?? ((args.query || requires) && args.view !== 'providers' ? 5 : 100)) as number;
+    const query = (args.query as string | undefined)?.trim(), provider = (args.provider as string | undefined)?.trim();
+    if (args.view === 'providers') {
+      if (args.live) throw new Error('Provider search reads the configured local accounts. Use the models view for live catalogs.');
+      const data = modelDiscovery.providerPage(query ?? provider, offset, limit);
+      return { text: JSON.stringify(data), structuredContent: { ...data } };
+    }
     const warnings: Array<{ provider: string; reason: string }> = [];
-    const page = await modelDiscovery.discoverPage(args.provider as ProviderName | undefined, args.live === true,
-      (args.offset ?? 0) as number, (args.limit ?? 100) as number,
-      { signal, persistCache: false, onFallback: (provider, reason) => warnings.push({ provider, reason }) });
+    const page = await modelDiscovery.discoverPage(provider as ProviderName | undefined, args.live === true, offset, limit,
+      { query, requires, match: args.match as 'name' | 'intent' | undefined, signal, persistCache: false, onFallback: (provider, reason) => warnings.push({ provider, reason }) });
     signal?.throwIfAborted();
-    const models = page.models.map(({ provider, id, name }) => ({ provider, id, name }));
-    const lines = models.map(m => `[${m.provider}] ${m.id} — ${m.name}`).join('\n');
+    const models = page.models.map(({ provider, id, name, can_reason, supported_reasoning_levels, input_modalities, context_window, evidence }) => ({ provider, id, name,
+      ...(input_modalities !== undefined ? { input_modalities, context_window } : {}), ...(evidence ? {evidence} : {}),
+      ...(can_reason !== undefined ? { can_reason, supported_reasoning_levels } : {}) }));
+    const lines = models.map(m => `[${m.provider}] ${m.id} — ${m.name}` +
+      (m.supported_reasoning_levels?.length ? ' (effort: ' + m.supported_reasoning_levels.join(', ') + ')' : '') +
+      (m.evidence ? ' — ' + m.evidence : '')).join('\n');
     const meta = { total: page.total, offset: page.offset, next_offset: page.next_offset,
+      ...(page.search ? { search: page.search } : {}),
       ...(page.next_offset != null ? { recovery: { tool: 'list_models', args: { ...args, offset: page.next_offset } } } : {}), warnings };
     return { text: lines + '\n' + JSON.stringify(meta),
-      structuredContent: { models, total: page.total, offset: page.offset, next_offset: page.next_offset ?? null, warnings },
+      structuredContent: { models, total: page.total, offset: page.offset, next_offset: page.next_offset ?? null, warnings,
+        ...(page.search ? { search: page.search } : {}),
+        ...(query ? { filters: { ...(provider ? { provider } : {}), query } } : {}) },
       ...(page.total > page.models.length ? { sourceTruncations: [{ technique: 'model-catalog-page', inputSize: page.total,
         outputSize: page.models.length, unit: 'items' as const, recoverable: true }] } : {}) };
   },

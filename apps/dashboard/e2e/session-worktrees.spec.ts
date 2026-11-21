@@ -122,6 +122,24 @@ test('worktree toolbar scopes sessions, creates multiple sessions and preserves 
   await expect(rows).toHaveCount(1);
   await rows.first().getByRole('button', { name: 'Expandir chats derivados de Implementar feature isolada' }).press('Enter');
   await expect(rows).toHaveCount(3);
+
+  const treeTitles = [
+    rows.nth(0).getByRole('button', { name: 'Implementar feature isolada', exact: true }),
+    rows.nth(1).getByRole('button', { name: child.title, exact: true }),
+    rows.nth(2).getByRole('button', { name: fork.title, exact: true }),
+  ];
+  const [rootTitle, childTitle, grandchildTitle] = await Promise.all(treeTitles.map(title => title.boundingBox()));
+  expect(rootTitle!.height).toBeLessThanOrEqual(30);
+  expect(childTitle!.x - rootTitle!.x).toBeGreaterThanOrEqual(9);
+  expect(grandchildTitle!.x - childTitle!.x).toBeCloseTo(childTitle!.x - rootTitle!.x);
+  await expect(treeTitles[1]).toHaveAccessibleDescription(/gpt-test.*0 tokens/);
+  await treeTitles[1]!.focus();
+  const childActions = rows.nth(1).getByRole('button', { name: 'Ações da sessão', exact: true });
+  await expect(childActions.locator('..')).toHaveCSS('opacity', '1');
+  expect((await childActions.boundingBox())!.x).toBeGreaterThan(childTitle!.x + childTitle!.width);
+  await childActions.press('Enter');
+  await expect(page.getByRole('menuitem', { name: 'Renomear', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
   await rows.nth(2).getByRole('button', { name: 'Revisar hipóteses', exact: true }).click();
   await expect(page.locator('main')).toContainText('Revisar hipóteses');
   await page.getByRole('complementary').screenshot({ path: test.info().outputPath('session-tree.png') });

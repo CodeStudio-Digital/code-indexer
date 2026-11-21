@@ -4,12 +4,14 @@ import type { SearchMode, SearchType } from '@mcp/shared/types.js';
 import { resolveSessionProjectAuthority } from '@mcp/session-storage/fs-store/index.js';
 import type { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
 import type { SemanticStore } from '@mcp/store/semantic-store.js';
+import type { ModelDiscovery } from '@mcp/indexer/indexer/providers/model-discovery.js';
 
 /**
  * The slice of the server dependencies these functions use. Structural, so
  * this module (reached by the worker pools) never imports server/deps.ts.
  */
 type IndexSearchDeps = Parameters<typeof createSearchHandlers>[0] & {
+  modelDiscovery: Pick<ModelDiscovery, 'searchIntent'>;
   sessionStore: { getSession(id: string): Promise<Parameters<typeof resolveSessionProjectAuthority>[0] | null> };
   agentMemoryService: Pick<AgentMemoryService, 'search'>;
   semanticStore: Pick<SemanticStore, 'listNamespaceGenerations'>;
@@ -137,6 +139,7 @@ export interface ProjectSearchInput {
 
 /** What agent workers reach over RPC: the same functions the HTTP routes call. */
 export interface IndexSearchService {
+  catalogSearch: ModelDiscovery['searchIntent'];
   projectSearch(input: ProjectSearchInput, ids: TelemetryIds, signal: AbortSignal): Promise<unknown>;
   memorySearch(projectId: number, query: string, limit: number, signal: AbortSignal): Promise<MemorySearchOutcome>;
   reconcile(namespace: unknown): NamespaceReconcileOutcome;
@@ -145,6 +148,7 @@ export interface IndexSearchService {
 export function createIndexSearchService(deps: IndexSearchDeps): IndexSearchService {
   const search = createSearchHandlers(deps);
   return {
+    catalogSearch: (request, signal) => deps.modelDiscovery.searchIntent(request, signal),
     async projectSearch(input, ids, signal) {
       const telemetryScope = await validateTelemetryScope(deps, input.projectId, ids);
       return search.project({ ...input, limit: input.limit ?? 20, bypassCache: false },

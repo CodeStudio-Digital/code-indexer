@@ -70,7 +70,8 @@ export function createIndexToolContext(
       null,
       semanticMutationSink,
     ),
-    modelDiscovery: new ModelDiscovery(db),
+    modelDiscovery: new ModelDiscovery(db, async (request, signal) =>
+      (await overrides.semanticSearchClient?.searchCatalog?.(request, signal))?.value ?? null),
     semanticSearchClient: overrides.semanticSearchClient ?? UNAVAILABLE_SEMANTIC_SEARCH_CLIENT,
     hybridSearch,
   };

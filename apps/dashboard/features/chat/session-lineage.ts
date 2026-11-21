@@ -5,6 +5,8 @@ export interface SessionBranch {
   children: SessionBranch[];
 }
 
+export const SESSION_TREE_INDENT_LIMIT = 4;
+
 export function groupSessionBranches(
   sessions: readonly CoderSession[],
   explicitGroup: (session: CoderSession) => string | undefined,
@@ -50,13 +52,24 @@ export function groupSessionBranches(
 }
 
 export function visibleSessionBranches(roots: SessionBranch[], collapsed: ReadonlySet<string>) {
-  const rows: { branch: SessionBranch; depth: number }[] = [];
-  const visit = (branches: SessionBranch[], depth: number) => {
-    for (const branch of branches) {
-      rows.push({ branch, depth });
-      if (!collapsed.has(branch.session.id)) visit(branch.children, depth + 1);
-    }
+  const rows: {
+    branch: SessionBranch;
+    depth: number;
+    ancestorGuides: readonly number[];
+    hasNextSibling: boolean;
+  }[] = [];
+  const visit = (branches: SessionBranch[], depth: number, ancestorGuides: readonly number[]) => {
+    branches.forEach((branch, index) => {
+      const hasNextSibling = index < branches.length - 1;
+      rows.push({ branch, depth, ancestorGuides, hasNextSibling });
+      if (collapsed.has(branch.session.id) || !branch.children.length) return;
+      // Keep the parent's guide through descendants when another sibling follows.
+      const childGuides = hasNextSibling && depth > 0 && depth < SESSION_TREE_INDENT_LIMIT
+        ? [...ancestorGuides, depth - 1]
+        : ancestorGuides;
+      visit(branch.children, depth + 1, childGuides);
+    });
   };
-  visit(roots, 0);
+  visit(roots, 0, []);
   return rows;
 }

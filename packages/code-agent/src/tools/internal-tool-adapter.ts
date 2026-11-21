@@ -164,6 +164,13 @@ export function internalToolDefinition(
         let mcpAttachments: ToolResult['extraUserBlocks'];
         let mcpSourceTruncations: ToolSourceTruncation[] = [];
         try {
+          if (t.name === 'list_models' && args.view == null && args.provider == null && args.live !== true) {
+            const selected = await toolCtx.childChats?.catalogSelection?.();
+            if (selected) {
+              finalArgs.provider = selected.provider;
+              if (args.query == null && selected.query) { finalArgs.query = selected.query; finalArgs.match = 'name'; }
+            }
+          }
           const result = await dispatch(finalArgs, signal);
           const adapted = mcpResultToToolResult(result, t.name);
           const text = adapted.content;

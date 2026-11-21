@@ -15,7 +15,7 @@ import { CHILD_CHAT_PROFILES, chatCaller, chatIdOf, delegationPosture, receivedR
 const CREATE_CHAT_DESC = 'Delegate a task to a child agent: a new chat under this one that runs `prompt` with the `profile` tools and never more than your permissions. '
   + 'Profiles: explore reads and searches; review reads and judges a change; verify also runs commands and tests; implement also edits files; full has every tool. '
   + 'wait:true (default) blocks until it finishes and returns its final answer, changed files and chat id; wait:false returns the chat id at once and you are told when it ends. '
-  + 'When the user names a provider, model or effort, use that selection for each requested child. Find configured IDs with tools.mcp__list_models in code_exec. '
+  + 'When the user names a provider, model or effort, keep that selection for each child. In code_exec call tools.mcp__list_models({provider, query}) with the requested provider and model name; read its ID and supported_reasoning_levels. Use view:"providers" to find provider IDs. '
   + 'If unavailable, report the requested target to the user. Use catalog reads for discovery and create_chat only for an actual task. Continue it with send_chat_message.';
 
 const SEND_CHAT_MESSAGE_DESC = 'Message a chat you created or are linked to. '

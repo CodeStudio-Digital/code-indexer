@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { MessageBridge } from '@mcp/orchestrator-host';
+import type { ModelPage } from '@mcp/indexer/indexer/providers/model-catalog-read.js';
 import {
   failed,
   parseMemoryResponse,
@@ -62,6 +63,17 @@ export function createRpcSemanticSearchClient(
 ): McpSemanticSearchClient {
   const deadlineMs = options.deadlineMs ?? DEADLINE_MS;
   return {
+    async searchCatalog(request, signal) {
+      const reply = await call(bridge, 'indexCatalogSearch', { ...request }, signal, deadlineMs);
+      if (!reply.ok) return failed(reply.error);
+      const page = reply.body as Partial<ModelPage> | null;
+      if (!page || !Array.isArray(page.models) || page.models.length > request.limit || page.offset !== request.offset ||
+        !Number.isSafeInteger(page.total) || page.total! < 0 ||
+        !page.models.every(m => m && typeof m.provider === 'string' && typeof m.id === 'string' && typeof m.name === 'string')) {
+        return failed('semantic server returned an invalid catalog page');
+      }
+      return { ok: true, value: page as ModelPage, error: null };
+    },
     async searchProject(projectId, query, options = {}) {
       const reply = await call(bridge, 'indexProjectSearch', {
         projectId, query, mode: options.mode, type: options.type, limit: options.limit, consumer: options.consumer ?? 'agent',

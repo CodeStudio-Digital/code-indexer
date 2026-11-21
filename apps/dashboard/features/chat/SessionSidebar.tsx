@@ -41,9 +41,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/too
 import { cn, formatRelativeTime } from '../../lib/utils.js';
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
 import { useSessionActivity } from './useSessionActivity.js';
-import { groupSessionBranches, visibleSessionBranches, type SessionBranch } from './session-lineage.js';
+import { groupSessionBranches, SESSION_TREE_INDENT_LIMIT, visibleSessionBranches, type SessionBranch } from './session-lineage.js';
 export { isExecutingSessionStatus } from './session-activity.js';
-import { providerAccent, workspaceColor, type AccentColor } from './constants.js';
+import { providerAccent, providerLabel, workspaceColor, type AccentColor } from './constants.js';
 import type {
   CoderSession,
   CoderSessionGroup,
@@ -267,6 +267,15 @@ export const SessionSidebar = memo(function SessionSidebar({
     return { grouped: ordered, parents: tree.parents };
   }, [sessions, groups, groupBy, runningOnly, executingSessionIds]);
 
+  const visibleGroups = useMemo(() => grouped.map(entry => {
+    const collapsed = collapsedGroups.has(entry.key);
+    return {
+      ...entry,
+      collapsed,
+      rows: collapsed ? [] : visibleSessionBranches(entry.roots, collapsedBranches),
+    };
+  }), [grouped, collapsedGroups, collapsedBranches]);
+
   const selectedAncestorIds: string[] = [];
   for (let parent = parents.get(selectedId ?? ''); parent; parent = parents.get(parent)) {
     selectedAncestorIds.push(parent);
@@ -292,13 +301,19 @@ export const SessionSidebar = memo(function SessionSidebar({
   const rowGroups = useMemo(() => groups ?? [], [groups]);
 
   const actions = (
-      <div className={cn("flex items-center gap-2 px-2", actionsHost ? "h-7" : "h-9 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)]")}>
-        <div className="flex min-w-0 items-center gap-1.5">
+      <div className={cn(
+        'flex items-center gap-2 px-2',
+        actionsHost ? 'h-7' : 'min-h-9 border-b border-[var(--workbench-border)] bg-[var(--workbench-raised)] @max-[240px]:px-1 @max-[240px]:py-1',
+      )}>
+        <div className={cn('flex min-w-0 items-center gap-1.5', !actionsHost && '@max-[240px]:hidden')}>
           <MessageSquareCode className="h-4 w-4 text-primary shrink-0" />
           {/* Some quando a barra aperta — sobra o ícone + as ações. */}
           <span className="text-xs font-semibold truncate @max-[180px]:hidden">{t('chat:sidebar.sessions')}</span>
         </div>
-        <div className="ml-auto flex items-center gap-0.5 shrink-0">
+        <div className={cn(
+          'ml-auto flex shrink-0 items-center gap-0.5',
+          !actionsHost && '@max-[240px]:min-w-0 @max-[240px]:shrink @max-[240px]:flex-wrap @max-[240px]:justify-end @max-[240px]:gap-0 @max-[240px]:[&>button]:h-6 @max-[240px]:[&>button]:px-1 @max-[240px]:[&>button:not(.w-auto)]:w-6',
+        )}>
           {!isArchivedView && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -560,7 +575,7 @@ export const SessionSidebar = memo(function SessionSidebar({
       )}
 
       <ScrollArea className="flex-1 w-full chat-scroll">
-        <div className="px-1.5 py-2 space-y-3">
+        <div className="space-y-2 px-1.5 py-1.5 [--session-indent:12px] @max-[210px]:[--session-indent:9px]">
           {((sessions?.length === 0) || (runningOnly && runningCount === 0)) && (
             <div className="p-4 text-xs text-muted-foreground text-center">
               {runningOnly
@@ -571,21 +586,21 @@ export const SessionSidebar = memo(function SessionSidebar({
             </div>
           )}
 
-          {grouped.map(({ key, group, roots, count, label, accent }) => {
-            const collapsed = collapsedGroups.has(key);
+          {visibleGroups.map(({ key, group, rows, count, label, accent, collapsed }) => {
             const headerLabel = label ?? (group ? group.name : t('chat:sidebar.ungrouped'));
             return (
-              <div key={key} className="space-y-0.5">
-                <div className="group/hdr flex items-center gap-1.5 px-1.5 h-6 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/70">
+              <div key={key}>
+                <div className="group/hdr mb-0.5 flex h-[22px] items-center gap-1 px-1 text-[11px] leading-none text-muted-foreground">
                   <button
                     type="button"
                     onClick={() => toggleGroupCollapse(key)}
-                    className="flex min-w-0 items-center gap-1.5"
+                    aria-expanded={!collapsed}
+                    className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm text-start focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-ring"
                   >
                     {collapsed ? (
-                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                      <ChevronRight className="mx-0.5 size-3 shrink-0" aria-hidden="true" />
                     ) : (
-                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                      <ChevronDown className="mx-0.5 size-3 shrink-0" aria-hidden="true" />
                     )}
                     {accent && (
                       <span
@@ -595,17 +610,17 @@ export const SessionSidebar = memo(function SessionSidebar({
                       />
                     )}
                     <span
-                      className="font-semibold truncate normal-case tracking-normal text-muted-foreground/90 group-hover/hdr:text-foreground transition-colors"
+                      className="truncate font-medium transition-colors group-hover/hdr:text-foreground"
                       title={headerLabel}
                     >
                       {headerLabel}
                     </span>
-                    <span className="shrink-0 ml-1 font-mono tabular-nums text-muted-foreground/45">
+                    <span className="ml-1 shrink-0 text-[10px] tabular-nums text-muted-foreground">
                       {count}
                     </span>
                   </button>
                   {group && (
-                    <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover/hdr:opacity-100 transition-opacity">
+                    <div className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-hover/hdr:opacity-100 group-focus-within/hdr:opacity-100 pointer-coarse:opacity-100">
                       <button
                         type="button"
                         onClick={() => onRenameGroup(group)}
@@ -625,8 +640,7 @@ export const SessionSidebar = memo(function SessionSidebar({
                     </div>
                   )}
                 </div>
-                {!collapsed &&
-                  visibleSessionBranches(roots, collapsedBranches).map(({ branch: { session: s, children }, depth }) => (
+                {rows.map(({ branch: { session: s, children }, depth, ancestorGuides, hasNextSibling }) => (
                     <SessionRow
                       key={s.id}
                       session={s}
@@ -649,6 +663,8 @@ export const SessionSidebar = memo(function SessionSidebar({
                       accent={accent}
                       running={executingSessionIds.has(s.id)}
                       depth={depth}
+                      ancestorGuides={ancestorGuides}
+                      hasNextSibling={hasNextSibling}
                       expanded={children.length > 0 ? !collapsedBranches.has(s.id) : undefined}
                       onToggleBranch={toggleBranch}
                     />
@@ -696,6 +712,8 @@ const SessionRow = memo(function SessionRow({
   accent,
   running,
   depth,
+  ancestorGuides,
+  hasNextSibling,
   expanded,
   onToggleBranch,
 }: {
@@ -719,19 +737,29 @@ const SessionRow = memo(function SessionRow({
   onMoveToGroup: (id: string, groupId: string | null) => Promise<void> | void;
   /** Per-project named groups don't apply in global (workspace) mode. */
   showGroups: boolean;
-  /** Workspace accent — paints a ring on the avatar so a session visually ties
-   *  to its group header (and the chat header bar). Undefined = no ring. */
+  /** Workspace accent shared with the group and chat headers. */
   accent?: AccentColor;
   /** Authoritative persisted status combined with the renderer's live transport registry. */
   running: boolean;
   depth: number;
+  ancestorGuides: readonly number[];
+  hasNextSibling: boolean;
   expanded?: boolean;
   onToggleBranch: (id: string) => void;
 }) {
-  const { t } = useTranslation(['chat', 'common']);
+  const { t, i18n } = useTranslation(['chat', 'common']);
   const pinId = sessionPinId?.(s.id);
   const pinned = usePinnedTabs((st) => (pinId ? st.pins.some((p) => p.id === pinId) : false));
   const tokens = s.total_input_tokens + s.total_output_tokens;
+  const updated = formatRelativeTime(s.updated_at);
+  const tokenDetails = `${tokens.toLocaleString(i18n.resolvedLanguage)} tokens`;
+  const details = [
+    `${providerLabel(s.provider)} · ${s.model}`,
+    running && t('chat:sidebar.running'),
+    s.import_source && t(s.import_source === 'claude-code' ? 'chat:sessionImport.claudeCode' : 'chat:sessionImport.codex'),
+    `${updated} · ${tokenDetails}`,
+  ].filter(Boolean);
+  const indent = Math.min(depth, SESSION_TREE_INDENT_LIMIT);
   const handleClick = () => {
     if (selectMode) onToggle(s.id);
     else onSelect(s.id);
@@ -747,23 +775,41 @@ const SessionRow = memo(function SessionRow({
       data-session-depth={depth}
       data-session-running={running ? 'true' : 'false'}
       onClick={handleClick}
-      style={depth > 0 ? { marginInlineStart: Math.min(depth, 4) * 12 } : undefined}
+      style={{ paddingInlineStart: `calc(4px + ${indent} * var(--session-indent))` }}
       className={cn(
-        // Two-line row. The 2px left accent rule is a `before:` pseudo-element
-        // (transparent at rest) — a quiet edge marker instead of a heavy fill,
-        // and GPU-cheap (no per-row shadow) across a long list.
-        'group relative flex items-center gap-2 min-w-0 rounded-md pl-3 pr-2 py-1.5 cursor-pointer transition-colors',
-        "before:content-[''] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors",
-        !isActive && !isChecked && 'hover:bg-muted/50',
+        'group/session relative flex h-[calc(var(--ide-tree-row)+2px)] min-w-0 cursor-pointer items-center gap-1.5 rounded-sm pe-1.5 transition-colors pointer-coarse:min-h-8',
+        'before:pointer-events-none before:absolute before:inset-y-1 before:start-0 before:w-0.5 before:rounded-full',
+        !isActive && !isChecked && 'hover:bg-[var(--workbench-hover)]',
         isActive && 'bg-[var(--workbench-active)] before:bg-[var(--workbench-focus)] hover:bg-[var(--workbench-active)]',
         isChecked && 'bg-[var(--workbench-active)] before:bg-[var(--workbench-focus)] ring-1 ring-inset ring-[var(--workbench-focus)]/40',
-        depth > 0 && 'border-s border-[var(--workbench-border)]',
       )}
     >
-      {expanded !== undefined && (
+      {indent > 0 && (
+        <span className="pointer-events-none absolute inset-y-0 start-3 flex" aria-hidden="true">
+          {Array.from({ length: indent }, (_, lane) => {
+            const parentLane = lane === indent - 1;
+            const continues = parentLane ? hasNextSibling : ancestorGuides.includes(lane);
+            return (
+              <span key={lane} className="relative w-[var(--session-indent)]">
+                {continues && <span className="absolute inset-y-0 start-0 w-px bg-muted-foreground/25" />}
+                {parentLane && (
+                  <span className={cn(
+                    'absolute inset-x-0 top-0 h-[calc(50%+1px)] border-b border-muted-foreground/25',
+                    !continues && 'rounded-es-[3px] border-s',
+                  )} />
+                )}
+              </span>
+            );
+          })}
+        </span>
+      )}
+      {expanded === undefined ? <span className="w-4 shrink-0" aria-hidden="true" /> : (
         <button
           type="button"
-          className="-ml-1 grid h-6 w-4 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className={cn(
+            'relative grid w-4 shrink-0 place-items-center self-stretch rounded-sm text-muted-foreground hover:bg-background/50 hover:text-foreground focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-ring',
+            expanded && depth < SESSION_TREE_INDENT_LIMIT && 'after:pointer-events-none after:absolute after:bottom-0 after:start-1/2 after:top-[calc(50%+6px)] after:w-px after:bg-muted-foreground/25',
+          )}
           aria-expanded={expanded}
           aria-label={t(expanded ? 'chat:sidebar.collapseChildren' : 'chat:sidebar.expandChildren', { title: s.title })}
           onClick={event => { event.stopPropagation(); onToggleBranch(s.id); }}
@@ -772,185 +818,138 @@ const SessionRow = memo(function SessionRow({
         </button>
       )}
       {selectMode ? (
-        <div className="h-6 w-6 flex items-center justify-center shrink-0">
+        <span className="grid size-4 shrink-0 place-items-center" aria-hidden="true">
           {checked ? (
             <CheckSquare className="h-3.5 w-3.5 text-primary" />
           ) : (
             <Square className="h-3.5 w-3.5 text-muted-foreground" />
           )}
-        </div>
+        </span>
       ) : (
-        <div className="relative shrink-0">
-          <div
-            className={cn(
-              // Lit-from-above avatar: inner hairline ring + 1px top highlight.
-              'h-6 w-6 rounded-[5px] flex items-center justify-center text-white text-[9px] font-bold uppercase tracking-tight tabular-nums ring-1 ring-inset ring-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)]',
-              providerAccent(s.provider),
-            )}
-          >
+        <span className="relative grid size-4 shrink-0 place-items-center" aria-hidden="true">
+          <span className={cn('absolute inset-0 rounded-[3px] opacity-25', providerAccent(s.provider))} />
+          <span className="relative text-[8px] font-semibold uppercase leading-none text-foreground">
             {s.provider.slice(0, 2)}
-          </div>
-          {/* Workspace presence dot — ties the session to its group/header
-              without the old chunky 2px ring stealing avatar width. */}
+          </span>
           {accent && (
             <span
-              className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-2 ring-card"
+              className="absolute -bottom-px -end-px size-1.5 rounded-full ring-1 ring-card"
               style={{ backgroundColor: accent.solid }}
               aria-hidden="true"
             />
           )}
           {running && (
-            <span
-              className="absolute -top-0.5 -right-0.5 flex h-2 w-2 items-center justify-center"
-              aria-hidden="true"
-            >
-              <span className="absolute h-full w-full rounded-full bg-emerald-400/50 animate-ping motion-reduce:animate-none" />
-              <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-400 ring-2 ring-card" />
-            </span>
+            <span className="absolute -end-px -top-px size-1.5 animate-pulse rounded-full bg-success ring-1 ring-card motion-reduce:animate-none" />
           )}
-        </div>
+        </span>
       )}
 
-      {/* `title` no wrapper carrega model · tempo · tokens para quando a
-          barra aperta e a linha 2 / o badge somem (container queries). */}
-      <div
-        className="flex-1 min-w-0 flex flex-col"
-        title={`${running ? `${t('chat:sidebar.running')} · ` : ''}${s.model} · ${formatRelativeTime(s.updated_at)} · ${tokens.toLocaleString()} tokens`}
+      <button
+        type="button"
+        className="flex h-full min-w-0 flex-1 items-center rounded-sm text-start text-[length:var(--ide-tree-font)] font-medium text-foreground focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+        title={[s.title, ...details].join('\n')}
+        aria-description={details.join('. ')}
+        aria-current={isActive ? 'page' : undefined}
+        aria-pressed={selectMode ? checked : undefined}
       >
-        {/* Line 1: title + right-floated token figure (Linear-style numerals).
-            Native title carries the exact count; the row shows it compacted. */}
-        <div className="flex items-center gap-2 min-w-0">
-          <button
-            type="button"
-            className="min-w-0 rounded text-start font-medium text-[11px] leading-tight truncate text-foreground/95 group-hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-            title={s.title}
-            aria-current={isActive ? 'page' : undefined}
-            aria-pressed={selectMode ? checked : undefined}
-          >
-            {s.title}
-          </button>
-          {/* Tokens fade out on hover so the action cluster can take their
-              place — no overlap / bleed-through. Some quando a barra aperta
-              (< ~170px) — o número vai para o tooltip do wrapper. */}
-          <span className="ml-auto flex items-center gap-1 shrink-0 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0 @max-[170px]:hidden">
-            {!selectMode && s.is_favorite && (
-              <Star className="h-3 w-3 fill-current text-yellow-500" aria-hidden="true" />
-            )}
-            <span
-              className="font-mono text-[10px] tabular-nums text-muted-foreground/70 tracking-tight"
-              title={`${tokens.toLocaleString()} tokens`}
-            >
-              {formatTokenCount(tokens)}
-              <span className="text-muted-foreground/40"> tok</span>
-            </span>
-          </span>
-        </div>
-        {/* Line 2: model · relative time, all mono so it reads as metadata.
-            Colapsa a barra para 1 linha (título só) abaixo de ~210px. */}
-        <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground tabular-nums min-w-0 @max-[210px]:hidden">
-          {running && (
-            <span className="inline-flex shrink-0 items-center gap-1 font-sans font-medium text-emerald-400">
-              <Loader2 className="h-2.5 w-2.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              {t('chat:sidebar.running')}
-            </span>
-          )}
-          {s.import_source && (
-            <span className="shrink-0 rounded border px-1 text-[9px] uppercase tracking-wide text-primary/80">
-              {s.import_source === 'claude-code' ? 'Claude' : 'Codex'}
-            </span>
-          )}
-          {running && <span className="text-muted-foreground/40 shrink-0">·</span>}
-          <span className="text-muted-foreground/80 truncate min-w-0">{s.model}</span>
-          <span className="text-muted-foreground/40 shrink-0">·</span>
-          <span className="shrink-0">{formatRelativeTime(s.updated_at)}</span>
-        </div>
-      </div>
+        <span className="truncate">{s.title}</span>
+      </button>
 
-      {/* Hover actions sit where the (now hidden) token figure was — no
-          gradient/overlay, so nothing bleeds through behind the icons. */}
-      {!selectMode && (
-        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-          <button
-            type="button"
-            aria-label={s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
-            onClick={(e) => {
-              e.stopPropagation();
-              onFavorite(s.id, !s.is_favorite);
-            }}
-            className={cn(
-              'inline-flex h-5 w-5 items-center justify-center rounded transition-colors',
-              s.is_favorite
-                ? 'text-yellow-500 hover:text-yellow-600'
-                : 'text-muted-foreground hover:text-foreground hover:bg-background/60',
-            )}
-          >
-            <Star className={cn('h-3.5 w-3.5', s.is_favorite && 'fill-current')} />
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-              <button
-                aria-label={t('chat:sidebar.sessionActions')}
-                className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-background/60 transition-colors"
-              >
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-              <DropdownMenuItem onClick={() => onRename(s.id, s.title)}>
-                <Pencil className="h-3.5 w-3.5" /> {t('chat:sidebar.rename')}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onFavorite(s.id, !s.is_favorite)}>
-                <Star
-                  className={cn('h-3.5 w-3.5', s.is_favorite && 'fill-current text-yellow-500')}
-                />
-                {s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
-              </DropdownMenuItem>
-              {onTogglePin && (
-                <DropdownMenuItem onClick={() => onTogglePin(s.id)}>
-                  <Pin className="h-3.5 w-3.5" />
-                  {pinned ? t('pins:unpin') : t('pins:pin')}
+      {/* Metadata and actions share a grid cell so buttons never cover the title. */}
+      <div className="grid shrink-0 items-center justify-items-end">
+        <span className={cn(
+          'col-start-1 row-start-1 flex items-center gap-1.5 text-[10px] tabular-nums text-muted-foreground',
+          !selectMode && 'group-hover/session:opacity-0 group-focus-within/session:opacity-0 pointer-coarse:opacity-0',
+        )} aria-hidden="true">
+          {!selectMode && s.is_favorite && <Star className="size-2.5 fill-current text-yellow-600 dark:text-yellow-500" />}
+          {tokens > 0 && <span className="hidden @min-[210px]:inline" title={tokenDetails}>{formatTokenCount(tokens)}</span>}
+          <span className="hidden @min-[340px]:inline">{updated}</span>
+        </span>
+        {!selectMode && (
+          <div className="pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-focus-within/session:pointer-events-auto group-focus-within/session:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
+            <button
+              type="button"
+              aria-label={s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
+              onClick={(e) => {
+                e.stopPropagation();
+                onFavorite(s.id, !s.is_favorite);
+              }}
+              className={cn(
+                'inline-flex size-[22px] items-center justify-center rounded-sm transition-colors @max-[205px]:hidden pointer-coarse:size-6',
+                s.is_favorite
+                  ? 'text-yellow-500 hover:text-yellow-600'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/60',
+              )}
+            >
+              <Star className={cn('size-3', s.is_favorite && 'fill-current')} />
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  aria-label={t('chat:sidebar.sessionActions')}
+                  className="inline-flex size-[22px] items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-background/60 hover:text-foreground pointer-coarse:size-6"
+                >
+                  <MoreHorizontal className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenuItem onClick={() => onRename(s.id, s.title)}>
+                  <Pencil className="h-3.5 w-3.5" /> {t('chat:sidebar.rename')}
                 </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => onArchive(s.id, !isArchivedView)}>
-                {isArchivedView ? (
-                  <>
-                    <ArchiveRestore className="h-3.5 w-3.5" /> {t('chat:sidebar.unarchive')}
-                  </>
-                ) : (
-                  <>
-                    <Archive className="h-3.5 w-3.5" /> {t('chat:sidebar.archive')}
-                  </>
+                <DropdownMenuItem onClick={() => onFavorite(s.id, !s.is_favorite)}>
+                  <Star
+                    className={cn('h-3.5 w-3.5', s.is_favorite && 'fill-current text-yellow-500')}
+                  />
+                  {s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}
+                </DropdownMenuItem>
+                {onTogglePin && (
+                  <DropdownMenuItem onClick={() => onTogglePin(s.id)}>
+                    <Pin className="h-3.5 w-3.5" />
+                    {pinned ? t('pins:unpin') : t('pins:pin')}
+                  </DropdownMenuItem>
                 )}
-              </DropdownMenuItem>
-              {showGroups && (
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
-                    <FolderPlus className="h-3.5 w-3.5" /> {t('chat:sidebar.moveToGroup')}
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem onClick={() => onMoveToGroup(s.id, null)}>
-                      {t('chat:sidebar.noGroup')}
-                    </DropdownMenuItem>
-                    {groups.length > 0 && <DropdownMenuSeparator />}
-                    {groups.map((g) => (
-                      <DropdownMenuItem key={g.id} onClick={() => onMoveToGroup(s.id, g.id)}>
-                        {g.name}
+                <DropdownMenuItem onClick={() => onArchive(s.id, !isArchivedView)}>
+                  {isArchivedView ? (
+                    <>
+                      <ArchiveRestore className="h-3.5 w-3.5" /> {t('chat:sidebar.unarchive')}
+                    </>
+                  ) : (
+                    <>
+                      <Archive className="h-3.5 w-3.5" /> {t('chat:sidebar.archive')}
+                    </>
+                  )}
+                </DropdownMenuItem>
+                {showGroups && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <FolderPlus className="h-3.5 w-3.5" /> {t('chat:sidebar.moveToGroup')}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuItem onClick={() => onMoveToGroup(s.id, null)}>
+                        {t('chat:sidebar.noGroup')}
                       </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              )}
-              <DropdownMenuItem onClick={() => onDuplicate(s.id)}>
-                <Copy className="h-3.5 w-3.5" /> {t('chat:sidebar.duplicate')}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onDelete(s.id)} className="text-destructive">
-                <Trash2 className="h-3.5 w-3.5" /> {t('common:actions.delete')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      )}
+                      {groups.length > 0 && <DropdownMenuSeparator />}
+                      {groups.map((g) => (
+                        <DropdownMenuItem key={g.id} onClick={() => onMoveToGroup(s.id, g.id)}>
+                          {g.name}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                <DropdownMenuItem onClick={() => onDuplicate(s.id)}>
+                  <Copy className="h-3.5 w-3.5" /> {t('chat:sidebar.duplicate')}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => onDelete(s.id)} className="text-destructive">
+                  <Trash2 className="h-3.5 w-3.5" /> {t('common:actions.delete')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+      </div>
     </div>
   );
 });

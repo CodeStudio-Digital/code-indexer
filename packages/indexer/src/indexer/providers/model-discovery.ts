@@ -1,14 +1,24 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { DiscoveredModel, ProviderName } from '@mcp/shared/types.js';
 import { listDefinitions } from '@mcp/services/providers/registry.js';
-import { readModelPage, type ModelPage } from './model-catalog-read.js';
+import { readModelPage, readProviderPage, type ModelPage } from './model-catalog-read.js';
+import { catalogTerms } from '@mcp/shared/providers/catalog-match.js';
 import { fetchDiscoveryModels } from './model-discovery-fetch.js';
+import { catalogSelection, looksLikeModelName, readRequirements, type CatalogIntentRequest, type CatalogRequirements } from './catalog-intent.js';
+import { ProviderStore } from '@mcp/store/provider-store.js';
+import { ModelCatalogIndex } from './model-catalog-index.js';
 
 export interface ModelDiscoveryOptions {
   signal?: AbortSignal;
   /** Tool reads never mutate the shared cache. Admin/CLI callers retain it. */
   persistCache?: boolean;
   onFallback?: (provider: string, reason: string) => void;
+}
+
+function checkPage(offset: number, limit: number) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error('Invalid model catalog page');
+  }
 }
 
 function defaults(kind: string): DiscoveredModel[] {
@@ -18,20 +28,57 @@ function defaults(kind: string): DiscoveredModel[] {
 }
 
 export class ModelDiscovery {
-  constructor(private db: CodeIndexDB) {}
+  private readonly metadata: ModelCatalogIndex;
+  constructor(private db: CodeIndexDB, private readonly catalogOwner?: (request: CatalogIntentRequest, signal?: AbortSignal) => Promise<ModelPage | null>) {
+    this.metadata = new ModelCatalogIndex(db);
+  }
+
+  async searchIntent(request: CatalogIntentRequest, signal?: AbortSignal): Promise<ModelPage> {
+    checkPage(request.offset, request.limit);
+    if (typeof request.query !== 'string' || request.query.length > 256 || (request.provider !== undefined &&
+      (typeof request.provider !== 'string' || !request.provider.trim() || request.provider.length > 256))) throw new Error('Invalid catalog intent');
+    const checked = { ...request, requires: readRequirements(request.requires) };
+    signal?.throwIfAborted();
+    return await this.catalogOwner?.(checked, signal) ?? this.metadata.search(checked, signal);
+  }
+
+  providerPage(query: string | undefined, offset: number, limit: number) {
+    checkPage(offset, limit);
+    return readProviderPage(this.db, query, offset, limit);
+  }
 
   /** A bounded projection for tool callers. The admin catalog is paged in SQL. */
   async discoverPage(provider: ProviderName | undefined, live: boolean, offset: number, limit: number,
-    options: ModelDiscoveryOptions = {}): Promise<ModelPage> {
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
-      throw new Error('Invalid model catalog page');
-    }
+    options: ModelDiscoveryOptions & { query?: string; match?: 'name' | 'intent'; requires?: CatalogRequirements } = {}): Promise<ModelPage> {
+    checkPage(offset, limit);
     options.signal?.throwIfAborted();
     if (!live) {
-      const page = readModelPage(this.db, provider, offset, limit);
-      if (page.total) return page;
+      const { match } = options;
+      const selection = catalogSelection(options.query ?? '', provider, options.requires, () => new ProviderStore(this.db.raw()).listProviderIdentities());
+      if (selection.conflict) return { models: [], total: 0, offset };
+      const query = selection.query || undefined, requires = selection.requires;
+      provider = selection.provider as ProviderName | undefined;
+      if (match === 'intent' || (!query && requires && Object.keys(requires).length)) {
+        return this.searchIntent({ query: query ?? '', requires, provider, offset, limit }, options.signal);
+      }
+      if (query && !/\s/.test(query)) {
+        const exact = readModelPage(this.db, provider, offset, limit, query, requires, true);
+        if (exact.total || (requires && readModelPage(this.db, provider, 0, 1, query, undefined, true).total)) return exact;
+      }
+      const page = readModelPage(this.db, provider, offset, limit, query, requires);
+      if (query && !page.total && match !== 'name' && !looksLikeModelName(query)) {
+        // An exact name failing a requirement stays unavailable even if other models satisfy it.
+        if (!requires || !Object.keys(requires).length || !readModelPage(this.db, provider, 0, 1, query).total) {
+          return this.searchIntent({ query, requires, provider, offset, limit }, options.signal);
+        }
+      }
+      // A search or configured profile must not fall back to an unconfigured public model.
+      // On a fresh installation retain the legacy provider-only browse of registry defaults.
+      if (page.total || options.query || (provider && this.db.raw().prepare('SELECT 1 FROM provider_configs LIMIT 1').get())) return page;
     }
-    const all = await this.discoverModels(provider, live, { ...options, persistCache: false });
+    const discovered = await this.discoverModels(provider, live, { ...options, persistCache: false });
+    const terms = options.query && catalogTerms(options.query);
+    const all = terms ? discovered.filter(m => terms.length && terms.every(t => (m.id + ' ' + m.name).toLowerCase().includes(t))) : discovered;
     options.signal?.throwIfAborted();
     const models = all.slice(offset, offset + limit);
     return { models, total: all.length, offset,

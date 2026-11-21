@@ -285,6 +285,7 @@ import { symbolFileLookup281 } from './281_symbol_file_lookup.js';
 import { projectSemanticFolders282 } from './282_project_semantic_folders.js';
 import { projectSemanticTargets283 } from './283_project_semantic_targets.js';
 import { projectSemanticVectorWeight284 } from './284_project_semantic_vector_weight.js';
+import { modelCatalogSearch285 } from './285_model_catalog_search.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -569,6 +570,7 @@ export const MIGRATIONS: Migration[] = [
   projectSemanticFolders282,
   projectSemanticTargets283,
   projectSemanticVectorWeight284,
+  modelCatalogSearch285,
 ];
 
 /**

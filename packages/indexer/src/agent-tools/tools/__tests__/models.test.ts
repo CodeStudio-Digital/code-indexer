@@ -28,6 +28,38 @@ function fixture(count = 0) {
 const tool = miscTools.find(t => t.name === 'list_models')!;
 const text = (r: Awaited<ReturnType<typeof tool.handler>>) => typeof r === 'string' ? r : r.text;
 
+it('finds the configured provider by ID, UI name, alias or partial name, and searches only its enabled models before pagination', async () => {
+  const { ctx, store } = fixture();
+  store.upsertProvider({ id: 'account-42', kind: 'chatgpt', name: 'ChatGPT (Codex)', enabled: true, api_key: 'SECRET' });
+  store.upsertProvider({ id: 'bedrock', kind: 'bedrock', name: 'Amazon Bedrock', enabled: true });
+  store.upsertProvider({ id: 'old', kind: 'chatgpt', name: 'Old login', enabled: false });
+  store.replaceModelsFromSource('bedrock', 'manual', [{ model_id: 'global.openai.gpt-6.2-sol', name: 'Sol 6.2' }]);
+  store.replaceModelsFromSource('account-42', 'manual', [
+    ...Array.from({ length: 228 }, (_, n) => ({ model_id: 'other-' + n, name: 'Other ' + n })),
+    { model_id: 'gpt-6.20-sol', name: 'GPT-6.20-Sol' }, { model_id: 'gpt-16.2-sol', name: 'GPT-16.2-Sol' },
+    { model_id: 'gpt-6.2-sol', name: 'GPT-6.2-Sol', supported_reasoning_levels: ['low', 'max'] },
+    { model_id: 'disabled-sol', name: 'Sol 6.2', enabled: false },
+  ]);
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  for (const query of ['codex', 'ChatGPT', 'account-42', 'ChatGPT (Codex)', 'chatg']) {
+    const result = await tool.handler({ view: 'providers', query }, ctx);
+    expect(result).toMatchObject({ structuredContent: { providers: [{ id: 'account-42', name: 'ChatGPT (Codex)', kind: 'chatgpt', model_count: 231 }], total: 1 } });
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+  }
+  for (const provider of ['Codex', 'ChatGPT (Codex)', 'account-42', 'chatgpt-codex']) {
+    expect(await tool.handler({ provider, query: 'Sol 6.2', limit: 1 }, ctx)).toMatchObject({ structuredContent: {
+      total: 1, next_offset: null, models: [{ provider: 'account-42', id: 'gpt-6.2-sol', can_reason: true, supported_reasoning_levels: ['low', 'max'] }],
+    } });
+  }
+  for (const args of [{ provider: 'old', query: 'Sol 6.2' }, { provider: 'not-configured', query: 'Sol' },
+    { provider: 'Codex', query: '6.3 Sol' }, { provider: 'Codex', query: '%_' }]) {
+    expect(await tool.handler(args, ctx)).toMatchObject({ structuredContent: { models: [], total: 0, next_offset: null } });
+  }
+  expect(await tool.handler({ view: 'providers', limit: 1 }, ctx)).toMatchObject({ structuredContent: { total: 2, offset: 0, next_offset: 1 } });
+  expect(await tool.handler({ view: 'providers', limit: 1, offset: 1 }, ctx)).toMatchObject({ structuredContent: { total: 2, next_offset: null } });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 it('pages the active profile in SQL with recovery, without loading credentials or a second profile', async () => {
   const { db, ctx, store } = fixture(553);
   store.upsertProvider({ id: 'disabled', name: 'Disabled', kind: 'openai', enabled: false });
@@ -48,8 +80,8 @@ it('returns selectable IDs for two modes of the same provider model', async () =
     model_id: 'glm', name: 'GLM', mode, enabled: true,
   })));
   expect(await tool.handler({ provider: 'profile-provider' }, ctx)).toMatchObject({ structuredContent: {
-    total: 2, models: expect.arrayContaining([{ provider: 'profile-provider', id: 'glm::coding', name: 'GLM' },
-      { provider: 'profile-provider', id: 'glm::normal', name: 'GLM' }]),
+    total: 2, models: expect.arrayContaining([expect.objectContaining({ provider: 'profile-provider', id: 'glm::coding', name: 'GLM' }),
+      expect.objectContaining({ provider: 'profile-provider', id: 'glm::normal', name: 'GLM' })]),
   } });
 });
 

@@ -55,4 +55,27 @@ describe('session sidebar layout', () => {
     expect(visibleSessionBranches(groups.get('ungrouped')!.roots, new Set())
       .map(({ branch }) => branch.session.id)).toEqual(['b', 'a']);
   });
+
+  it('continues ancestor guides through descendants until the last sibling', () => {
+    const sessions = [
+      { id: 'parent' },
+      { id: 'first', parent_session_id: 'parent' },
+      { id: 'first-child', parent_session_id: 'first' },
+      { id: 'last', parent_session_id: 'parent' },
+      { id: 'last-child', parent_session_id: 'last' },
+    ] as CoderSession[];
+    const { groups } = groupSessionBranches(sessions, () => undefined, 'ungrouped');
+    const roots = groups.get('ungrouped')!.roots;
+    const guides = (collapsed: string[] = []) => visibleSessionBranches(roots, new Set(collapsed))
+      .map(({ branch, ancestorGuides, hasNextSibling }) => [branch.session.id, ancestorGuides, hasNextSibling]);
+
+    expect(guides()).toEqual([
+      ['parent', [], false],
+      ['first', [], true],
+      ['first-child', [0], false],
+      ['last', [], false],
+      ['last-child', [], false],
+    ]);
+    expect(guides(['first']).map(([id]) => id)).toEqual(['parent', 'first', 'last', 'last-child']);
+  });
 });

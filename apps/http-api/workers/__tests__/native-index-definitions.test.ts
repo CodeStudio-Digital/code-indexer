@@ -75,7 +75,7 @@ describe('native index tools: definitions over the real port', () => {
     expect(viaNative).toHaveLength(25);
   });
 
-  it('pins the native definitions including structured model pages, primary and prefixed', () => {
+  it('pins the native definitions including local model intent search and hard capability filters, primary and prefixed', () => {
     // Keep the historical normalization of source and provenance for comparability.
     const asBefore = (tool: CoderTool): CoderTool => {
       expect([tool.source, tool.capabilityProvenance?.kind], tool.name).toEqual(['native', 'native']);
@@ -86,7 +86,7 @@ describe('native index tools: definitions over the real port', () => {
       primary: strip(native()),
       prefixed: strip(prefixedBridgeTools(native({ projectName: 'parity-second', projectRoot: 'D:/second' }), 'parity_second')),
     };
-    expect(createHash('sha1').update(JSON.stringify(snapshot, null, 2)).digest('hex')).toBe('d119a6427e532aeae75a8a06c601eff5136ed454');
+    expect(createHash('sha1').update(JSON.stringify(snapshot, null, 2)).digest('hex')).toBe('ae5ae8c871e2c72929fcf689172af6e2fc9b73e0');
   });
 
   it('without the documentation readers the port publishes no rag_ tools, and neither does the native route', () => {

@@ -75,6 +75,8 @@ import { ExportService } from '@mcp/services/services/exporter.js';
 import { WebhookDispatcher } from '@mcp/services/services/webhooks.js';
 import { HybridSearch } from '@mcp/indexer/search/hybrid.js';
 import { ModelDiscovery } from '@mcp/indexer/indexer/providers/model-discovery.js';
+import { ModelCatalogIndex } from '@mcp/indexer/indexer/providers/model-catalog-index.js';
+import { BUNDLED_EMBEDDING_TARGET } from '@mcp/shared/providers/bundled-semantic-model.js';
 import { NullEmbeddingService, type EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import { NullReranker } from '@mcp/indexer/search/reranker.js';
 import { NullVectorStore, type VectorStore } from '@mcp/store/vectors.js';
@@ -631,7 +633,6 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
   const costTracker = new CostTracker(db);
   const exportService = new ExportService(db);
   const webhookDispatcher = new WebhookDispatcher(db);
-  const modelDiscovery = new ModelDiscovery(db);
 
   // Chat providers remain the inference credential source. Semantic profiles
   // select their embedding/rerank model independently below.
@@ -743,6 +744,12 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
   } catch (error) {
     console.warn(`[semantic] vector worker unavailable; semantic jobs will pause and search will use FTS: ${(error as Error).message}`);
   }
+  const catalog = new ModelCatalogIndex(db, semanticVectorWorker?.embeddingService(BUNDLED_EMBEDDING_TARGET));
+  const modelDiscovery = new ModelDiscovery(db, (request, signal) => catalog.search(request, signal));
+  const warmCatalog = setTimeout(() => { void catalog.prepare().catch(error =>
+    console.warn('[model-catalog] Offline index warmup failed:', error instanceof Error ? error.message : String(error))); }, 30_000);
+  warmCatalog.unref();
+  registerShutdownTask('model-catalog-index', async () => { clearTimeout(warmCatalog); await catalog.close(); });
 
   // The Code semantic profile resolves the reranker below and ONNX execution
   // is proxied to semantic-vector-worker. HybridSearch owns fail-open to RRF.

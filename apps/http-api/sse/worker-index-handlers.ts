@@ -1,5 +1,6 @@
 import type { MessageBridge } from '@mcp/orchestrator-host';
 import type { SearchMode, SearchType } from '@mcp/shared/types.js';
+import { readRequirements } from '@mcp/indexer/indexer/providers/catalog-intent.js';
 import {
   searchConsumer,
   type IndexSearchService,
@@ -113,6 +114,13 @@ export function registerWorkerIndexHandlers(
     return id;
   };
   const offs = [
+    bridge.handle('indexCatalogSearch', payload => run(payload as Packet, (service, signal) => {
+      const p = payload as Packet;
+      const query = text(p.query, 256), provider = text(p.provider, 256), offset = integer(p.offset), limit = integer(p.limit);
+      if (query === undefined || (p.provider !== undefined && !provider?.trim()) || offset === undefined || offset < 0 ||
+        !limit || limit < 1 || limit > 500) throw new Error('Invalid model catalog request');
+      return service.catalogSearch({ query, provider, offset, limit, requires: readRequirements(p.requires) }, signal);
+    })),
     bridge.handle('indexProjectSearch', payload => run(payload as Packet, (service, signal) => {
       const packet = payload as Packet;
       return service.projectSearch({

@@ -114,7 +114,10 @@ export interface ToolContextServices {
    */
   childAgentAccounting?: import('../runtime/child-agent-freshness.js').ChildAgentAccounting;
   /** The app's child chats, as this session (outside Company). */
-  childChats?: import('../ports/child-chat-port.js').ChildChatPort;
+  childChats?: import('../ports/child-chat-port.js').ChildChatPort & {
+    /** Scope a bare model lookup to the single target named in this delegation. */
+    catalogSelection?(): Promise<{ provider: string; query?: string } | undefined>;
+  };
   /** Set when this session is itself a child agent: its depth and whether it is read-only. */
   childAgentSelf?: { depth: number; readOnly: boolean };
   /** Host-derived unresolved history. Inherited by nested calls; never cleared by model text. */

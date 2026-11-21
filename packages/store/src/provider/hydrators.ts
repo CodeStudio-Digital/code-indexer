@@ -97,7 +97,7 @@ export function hydrateProvider(r: ProviderConfigRaw): ProviderConfig {
 }
 
 function normalizeStoredLevels(levels: unknown[] | null): string[] | null {
-  if (!levels) return null;
+  if (!Array.isArray(levels)) return null;
   const result: string[] = [];
   const seen = new Set<string>();
   for (const lv of levels) {
@@ -115,9 +115,14 @@ function normalizeStoredLevels(levels: unknown[] | null): string[] | null {
   return result.length > 0 ? result : null;
 }
 
-export function hydrateModel(r: ProviderModelRaw): ProviderModel {
-  const published = isPublicOpenAIApi(r.provider_kind, r.provider_base_url)
-    ? getOpenAIApiModelMetadata(r.model_id) : undefined;
+type ReasoningRow = Pick<ProviderModelRaw, 'provider_kind' | 'provider_base_url' | 'model_id' | 'can_reason' | 'default_reasoning_level' | 'supported_reasoning_levels'>;
+
+function publishedModel(r: ReasoningRow) {
+  return isPublicOpenAIApi(r.provider_kind, r.provider_base_url) ? getOpenAIApiModelMetadata(r.model_id) : undefined;
+}
+
+/** Shared by the model catalog and the target validator, including repairs for older profiles. */
+export function modelReasoning(r: ReasoningRow, published = publishedModel(r)) {
   const zaiReasoning = r.provider_kind === 'zai' ? getZaiModelReasoning(r.model_id) : undefined;
   const storedDefault = normalizeNativeReasoningLevel(r.default_reasoning_level);
   const defaultReasoningLevel = zaiReasoning
@@ -126,6 +131,15 @@ export function hydrateModel(r: ProviderModelRaw): ProviderModel {
   const supportedReasoningLevels = zaiReasoning?.supportedReasoningLevels ?? normalizeStoredLevels(
     parseJson<unknown[] | null>(r.supported_reasoning_levels, null),
   ) ?? published?.supportedReasoningLevels ?? null;
+  return {
+    can_reason: !!r.can_reason || defaultReasoningLevel !== null || supportedReasoningLevels !== null || published?.canReason === true,
+    default_reasoning_level: defaultReasoningLevel,
+    supported_reasoning_levels: supportedReasoningLevels ? [...supportedReasoningLevels] : null,
+  };
+}
+
+export function hydrateModel(r: ProviderModelRaw): ProviderModel {
+  const published = publishedModel(r);
   // Repair pre-fix API catalogs at the read boundary: no network, polling or
   // destructive migration. Preserve manual limits and real upstream metadata.
   const legacyWindow = r.context_window == null || r.context_window === 272_000 || r.context_window === 372_000;
@@ -142,15 +156,13 @@ export function hydrateModel(r: ProviderModelRaw): ProviderModel {
     default_max_tokens: r.default_max_tokens,
     // Infer capability from native metadata as a read-boundary repair for
     // older catalogs that persisted levels while leaving can_reason at 0.
-    can_reason: !!r.can_reason || defaultReasoningLevel !== null || supportedReasoningLevels !== null || published?.canReason === true,
+    ...modelReasoning(r, published),
     supports_attachments: !!r.supports_attachments || published?.supportsAttachments === true,
     enabled: !!r.enabled,
     source: r.source,
     updated_at: r.updated_at,
     display_name: r.display_name,
     description: r.description,
-    default_reasoning_level: defaultReasoningLevel,
-    supported_reasoning_levels: supportedReasoningLevels ? [...supportedReasoningLevels] : null,
     apply_patch_tool_type: r.apply_patch_tool_type,
     available_in_plans: parseJson<string[] | null>(r.available_in_plans, null),
     minimal_client_version: r.minimal_client_version,
