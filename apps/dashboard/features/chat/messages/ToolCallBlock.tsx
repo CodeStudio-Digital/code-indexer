@@ -52,6 +52,7 @@ export const ToolCallBlock = React.memo(ToolCallBlockInner, (prev, next) => {
     a.elapsedMs === b.elapsedMs &&
     a.idleMs === b.idleMs &&
     a.progressNote === b.progressNote &&
+    a.waitingForChildTitle === b.waitingForChildTitle &&
     // Approval requests attach/detach mid-flight (PermissionGate pauses).
     a.approvals === b.approvals
     && prev.sessionId === next.sessionId
@@ -66,7 +67,10 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
   const display = isMcp ? call.name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '') : call.name;
   const dbQuery = isDbQuery ? parseDbQueryInput(call.input) : null;
   const dbAnalysis = dbQuery ? analyzeSqlForDisplay(dbQuery.sql) : null;
-  const activityLabel = t(toolActivityLabelKey(call.name, call.status), { tool: display });
+  const waitingForChild = call.status === 'running' && call.waitingForChildTitle;
+  const activityLabel = waitingForChild
+    ? t('messages.toolActivity.waitingForChild', { title: waitingForChild })
+    : t(toolActivityLabelKey(call.name, call.status), { tool: display });
   const [fullResult, setFullResult] = useState<ToolCallEvent['result']>();
   const [loadingFullResult, setLoadingFullResult] = useState(false);
   const [fullResultError, setFullResultError] = useState<string | null>(null);
@@ -140,7 +144,7 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
         ? Math.floor(call.elapsedMs / 1000)
         : null
     : null;
-  const noRealOutput = isRunning && call.idleMs != null && call.idleMs >= 5_000
+  const noRealOutput = isRunning && !waitingForChild && call.idleMs != null && call.idleMs >= 5_000
     ? t('messages.noRealOutput', { duration: formatShortDuration(call.idleMs) })
     : null;
 

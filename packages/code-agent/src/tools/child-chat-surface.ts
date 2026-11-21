@@ -10,7 +10,7 @@
 
 /** The tool names child chats replace outside Company, and what to use instead. */
 export const REPLACED_BY_CHILD_CHATS: Readonly<Record<string, string>> = {
-  spawn_agent: 'Use create_chat with `title`, `prompt` (the complete task) and `profile`; wait:true (default) returns its final answer.',
+  spawn_agent: 'Use create_chat with `title`, `prompt` (the complete task) and `profile`. It returns a chat id. Set wait:true if you need the final answer in this call.',
   collect_agents: 'Use wait_chats with the chat ids create_chat returned, or create_chat with wait:true.',
   resume_agent: "Use send_chat_message with `to` (the child chat id) and kind:'task' to give it new work.",
   read_agent_transcript: 'Use read_chat with `chat_id` and final_only:false.',

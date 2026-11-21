@@ -16,7 +16,8 @@ import { createChildAgentSession } from '@mcp/code-agent/runtime/child-agent-ses
 import { mailboxQuestions, waitForChildAgents } from '@mcp/code-agent/runtime/child-agent-wait.js';
 import { profileTargetsFromProviderStore } from '@mcp/code-agent/runtime/child-agent-session-run.js';
 import type { ChildAgentPort } from '@mcp/code-agent/ports/child-agent-port.js';
-import { addBusEventSink } from '../../../coder-bus.js';
+import { addBusEventSink, publish } from '../../../coder-bus.js';
+import { publishNotificationRuntimeEvent } from '../../../sse/notification-event-bus.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { acceptLocalCoderCommand, bindLocalCommandBus, terminalizeLocalCoderCommand } from '../../../control-plane-shadow.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
@@ -164,13 +165,24 @@ export function createChildAgentHost(input: {
         sessions: deps.sessionStore, project: input.project, validateModel: input.validateModel,
         resolveProfileTarget: profileTargetsFromProviderStore(deps.config.dbPath),
       }, parentId, request);
+      if (created.created) {
+        // The session is already visible to catalog readers, even while its worker is starting or queued.
+        const sessionId = asSessionId(parentId);
+        const data = { sessionId: created.child.id, ...(request.wait === true ? { waitingToolUseId: request.key, title: request.title } : {}) };
+        const bus = pool.getBus(sessionId);
+        if (bus && !bus.ended) publish(bus, 'chat_session_created', data); // also mirrored to the app-wide notification stream
+        else publishNotificationRuntimeEvent({ kind: 'coder', sessionId, event: 'chat_session_created', data });
+      }
       // Parent and child share a mailbox link: the child can ask, the parent can answer.
       for (const [id, title] of [[parentId, parentId], [created.child.id, request.title]] as const) {
         if (!await mailbox.participant(rootChatId(id))) await mailbox.registerRoot(id, title);
       }
       await mailbox.linkSessions(parentId, created.child.id, true);
       // Asking again for an existing child is the parent's explicit new start, also after a stop.
-      if (request.start !== false) await service.request(created.child.id, request.task, { background: request.wait === false, restart: !created.created });
+      if (request.start !== false) {
+        if (request.wait === false) await service.requestBackground(created.child.id, request.task, !created.created);
+        else await service.request(created.child.id, request.task, { restart: !created.created });
+      }
       return { ...created, child: (await deps.sessionStore.getChildAgentSession(created.child.id)) ?? created.child };
     },
     async stop(callerId, chatIds) {

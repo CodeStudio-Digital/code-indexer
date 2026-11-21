@@ -157,17 +157,24 @@ export function dedupe<T>(key: string, producer: () => Promise<T>): Promise<T> {
   const startedInGeneration = generation;
   const p = producer()
     .then((data) => {
-      if (generation === startedInGeneration) cacheValue(key, data);
+      if (generation === startedInGeneration && inflight.get(key) === p) cacheValue(key, data);
       return data;
     })
     .finally(() => {
       // Clear whether resolved or rejected: errors are never cached, and a
       // settled success is now served from `cache`.
-      inflight.delete(key);
+      if (inflight.get(key) === p) inflight.delete(key);
     });
 
   inflight.set(key, p);
   return p as Promise<T>;
+}
+
+/** A creation event can arrive while an older catalog GET is already in flight. */
+export function invalidateSessionLists(): void {
+  const isList = (key: string) => key.startsWith('GET ') && /\/api\/coder\/sessions(?:\/global)?(?:\?|$)/.test(key);
+  for (const key of inflight.keys()) if (isList(key)) inflight.delete(key);
+  for (const key of cache.keys()) if (isList(key)) removeCached(key);
 }
 
 /**

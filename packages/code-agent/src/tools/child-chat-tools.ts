@@ -1,7 +1,7 @@
 /**
  * The two direct child-chat tools (outside Company):
- * create_chat delegates a task to a new child agent and, by default, waits
- * for its result; send_chat_message gives a child its next task, asks or
+ * create_chat delegates a task in the background by default, or explicitly
+ * waits for its result; send_chat_message gives a child its next task, asks or
  * answers a question, or notifies, in normal and Agêntico sessions alike.
  * Both run only as top-level calls (never inside code_exec) and wait up to
  * the long child wait (CHILD_AGENT_WAIT_TOOL_TIMEOUT_MS).
@@ -14,7 +14,7 @@ import { CHILD_CHAT_PROFILES, chatCaller, chatIdOf, delegationPosture, receivedR
 
 const CREATE_CHAT_DESC = 'Delegate a task to a child agent: a new chat under this one that runs `prompt` with the `profile` tools and never more than your permissions. '
   + 'Profiles: explore reads and searches; review reads and judges a change; verify also runs commands and tests; implement also edits files; full has every tool. '
-  + 'wait:true (default) blocks until it finishes and returns its final answer, changed files and chat id; wait:false returns the chat id at once and you are told when it ends. '
+  + 'For a request to start or dispatch a child, omit wait: the chat id returns once queued and its result arrives by notice. Use wait:true only when asked to wait for the answer or when your next step depends on it. '
   + 'When the user names a provider, model or effort, keep that selection for each child. In code_exec call tools.mcp__list_models({provider, query}) with the requested provider and model name; read its ID and supported_reasoning_levels. Use view:"providers" to find provider IDs. '
   + 'If unavailable, report the requested target to the user. Use catalog reads for discovery and create_chat only for an actual task. Continue it with send_chat_message.';
 
@@ -36,7 +36,7 @@ const createChat: CoderTool = {
     title: { type: 'string', description: 'Short name shown in the sidebar.' },
     prompt: { type: 'string', description: 'The complete task; the child sees nothing else from this chat.' },
     profile: { type: 'string', enum: [...CHILD_CHAT_PROFILES] },
-    wait: { type: 'boolean' },
+    wait: { type: 'boolean', description: 'Default false. Set true to wait here for the final answer and changed files.' },
     project_id: { type: 'integer', description: "Default: this chat's project." },
     provider: { type: 'string', description: "Configured provider ID, e.g. 'openai-chatgpt' for ChatGPT." },
     model: { type: 'string', description: "Use the model ID from the requested provider's catalog, e.g. 'gpt-6.2-sol'. Inherit when the user leaves the target open." },
@@ -53,7 +53,7 @@ const createChat: CoderTool = {
     const effort = text(args.effort);
     if (effort && !nativeReasoningLevel(effort)) return err(`'${effort}' is a session mode. Choose a reasoning effort supported by the child model.`);
     const posture = delegationPosture(ctx);
-    const wait = args.wait !== false;
+    const wait = args.wait === true;
     try {
       const created = await chat.port.create(chat.callerId, {
         key: ctx.currentToolUseId, title, profile, task: prompt, wait,
@@ -67,7 +67,7 @@ const createChat: CoderTool = {
       const label = `${created.profile}${created.readOnly ? ', read-only' : ''}`;
       const route = created.target;
       const receipt = route ? `\nModel: ${route.provider} / ${route.model} (effort=${route.effort ?? 'auto'})` : '';
-      if (!wait) return ok(`Chat ${created.chatId} (${label}) started in the background; you will be told when it ends.${receipt}`);
+      if (!wait) return ok(`Chat ${created.chatId} (${label}) accepted for background execution; you will be told when it ends.${receipt}`);
       const result = await chat.port.wait(chat.callerId, { chatIds: [created.chatId], mode: 'all', timeoutMs: waitBudgetMs(ctx) }, ctx.signal);
       const answer = await receivedResult(ctx, result);
       return receipt ? { ...answer, content: answer.content + receipt } : answer;

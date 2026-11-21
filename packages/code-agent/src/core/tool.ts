@@ -169,7 +169,7 @@ export interface CoderTool {
   interactive?: boolean;
   /**
    * A control boundary called only as a top-level tool call, never inside
-   * code_exec (create_chat: it delegates and waits for the whole result).
+   * code_exec (for example, create_chat delegates a task).
    * Such a tool is therefore part of the direct catalog.
    */
   topLevelOnly?: boolean;

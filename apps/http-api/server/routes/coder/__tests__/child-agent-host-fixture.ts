@@ -15,6 +15,7 @@ import { ChatCollaborationStore } from '@mcp/session-storage/collaboration/store
 import { fileChildAgentQueue } from '@mcp/code-agent/runtime/child-agent-queue-store.js';
 import { buildConclusion } from '@mcp/code-agent/runtime/child-agent-conclusion.js';
 import type { createChildAgentHost as CreateHost } from '../child-agent-host.js';
+import { createBus } from '../../../../coder-bus.js';
 
 export async function childFixture(prefix: string) {
   const root = await mkdtemp(join(tmpdir(), prefix));
@@ -82,8 +83,7 @@ export function hostHarness(createChildAgentHost: typeof CreateHost, f: () => Ch
       });
       harness.runFresh = vi.fn(async (id: string) => {
         if (harness.gate) await harness.gate;
-        const bus = { busId: `bus-${id}`, ended: false, endReason: undefined as unknown, endListeners: new Set<() => void>(),
-          eventSinks: new Set<(event: unknown) => void>(), ctrl: new AbortController() };
+        const bus = createBus(new AbortController());
         harness.buses.set(id, bus);
         return bus;
       });

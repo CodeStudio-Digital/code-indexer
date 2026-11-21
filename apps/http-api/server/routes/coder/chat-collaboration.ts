@@ -27,9 +27,7 @@ export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, 
       .some(row => `${row.model_id}${row.mode ? `::${row.mode}` : ''}` === model)) throw new Error('Unknown or disabled provider/model');
   };
   const network = new SessionNetwork({ sessions: deps.sessionStore, mailbox, project: id => deps.db.getProject(id), validateModel });
-  // Child-agent sessions: started through the tree admission, waited for in
-  // the app. No tool creates them yet (E6); resuming at boot only picks up
-  // trees left with queued or admitted children.
+  // The app owns child admission, worker startup and completion delivery.
   const childAgents = createChildAgentHost({ deps, mailbox, project: id => deps.db.getProject(id),
     validateModel: (provider, model, effort) => validateChildChatTarget(deps.providerStore, provider, model, effort) });
   // Boot: stops the app had begun finish before any tree resumes, so nothing stopped restarts.

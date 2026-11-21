@@ -11,7 +11,7 @@
  * twice, and an admitted child whose run already started is never restarted.
  */
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
-import type { ChildAgentAdmission } from './child-agent-admission.js';
+import type { ChildAgentAdmission, ChildAgentAdmitted } from './child-agent-admission.js';
 import type { ChildAgentQueueEntry } from './child-agent-queue-store.js';
 import { childAgentRoot } from './child-agent-tree.js';
 
@@ -79,7 +79,18 @@ export class ChildAgentRunService {
 
   /** Admits and starts every child the tree of `sessionId` may run now. */
   async pump(sessionId: string): Promise<void> {
-    for (const child of await this.deps.admission.admit(sessionId)) {
+    await this.#startAdmitted(await this.deps.admission.admit(sessionId));
+  }
+
+  /** Return once the task is durable and its tree has assigned slots. Worker startup can take much longer. */
+  async requestBackground(childId: string, task: string, restart: boolean): Promise<void> {
+    await this.deps.admission.request(childId, task, { background: true, restart });
+    const admitted = await this.deps.admission.admit(childId);
+    void this.#startAdmitted(admitted).catch(error => this.#log(`dispatch of ${childId} failed: ${failureReason('dispatch_failed', error)}`));
+  }
+
+  async #startAdmitted(admitted: ChildAgentAdmitted[]): Promise<void> {
+    for (const child of admitted) {
       const task = child.queue.task?.trim();
       if (!task) {
         // Nothing to run: give the slot back instead of holding it forever.

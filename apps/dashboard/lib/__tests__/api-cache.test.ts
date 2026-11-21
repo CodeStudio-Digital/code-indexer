@@ -3,7 +3,7 @@
  * Pure module — no React/DOM. Time is controlled by spying on Date.now.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getCached, dedupe, dedupeInflight, writeThrough, invalidateAll } from '../api-cache.js';
+import { getCached, dedupe, dedupeInflight, writeThrough, invalidateAll, invalidateSessionLists } from '../api-cache.js';
 
 const BASE = 1_000_000;
 let now = BASE;
@@ -22,6 +22,25 @@ afterEach(() => {
 });
 
 describe('dedupe', () => {
+  it('fetches new project and global session lists when a creation races an older GET', async () => {
+    const detail = 'GET http://app/api/coder/sessions/parent?tail=120';
+    await dedupe(detail, async () => 'transcript');
+    for (const key of ['GET http://app/api/coder/sessions?project_id=1', 'GET http://app/api/coder/sessions/global?archived=0']) {
+      let finishOld!: (value: string[]) => void, finishNew!: (value: string[]) => void;
+      const stale = dedupe(key, () => new Promise<string[]>(resolve => { finishOld = resolve; }));
+      invalidateSessionLists();
+      const fresh = dedupe(key, () => new Promise<string[]>(resolve => { finishNew = resolve; }));
+      finishOld(['parent']);
+      await stale;
+      expect(getCached(key)).toBeUndefined();
+      expect(dedupe(key, async () => [])).toBe(fresh);
+      finishNew(['parent', 'child']);
+      await fresh;
+      expect(getCached(key)).toEqual(['parent', 'child']);
+    }
+    expect(getCached(detail)).toBe('transcript');
+  });
+
   it('collapses concurrent identical calls into one producer invocation', async () => {
     let calls = 0;
     const producer = () => {

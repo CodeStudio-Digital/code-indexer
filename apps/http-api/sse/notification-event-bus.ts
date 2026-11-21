@@ -34,6 +34,7 @@ const RING_CAPACITY = 200;
 const RING_TTL_MS = 15 * 60_000;
 
 const CODER_EVENTS = new Set([
+  'chat_session_created',
   'tool_approval_request',
   'plan',
   'question',

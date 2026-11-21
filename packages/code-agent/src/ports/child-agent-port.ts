@@ -19,8 +19,8 @@ export interface ChildAgentCreateRequest extends ChildAgentRequest {
   /** Default true: queue the run right away. */
   start?: boolean;
   /**
-   * Default true: the caller waits for the result. False: the run is
-   * background and its end reaches the parent as a mailbox notice.
+   * create_chat passes false by default. Omission on this lower-level port
+   * preserves synchronous startup for existing host callers.
    */
   wait?: boolean;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TurnProjector, type TurnProjectorScheduler } from '../turn-projector.js';
 import { EMPTY_STATE, type SessionState, type UpdateSession } from '../types.js';
 
@@ -42,6 +42,27 @@ function harness() {
 }
 
 describe('TurnProjector', () => {
+  it.each([false, true])('shows an explicit child wait across delivery order and replay (host first=%s)', (hostFirst) => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal('window', { dispatchEvent });
+    const test = harness();
+    const projector = new TurnProjector({ sessionId: 'parent', updateSession: test.updateSession, scheduler: test.scheduler });
+    const receipt = { sessionId: `reviewer-${hostFirst}`, waitingToolUseId: 'call', title: 'AnimGen Reviewer' };
+    const start = () => projector.dispatch('tool_call_start', { id: 'call', name: 'create_chat', input: { wait: true } });
+    const announce = () => projector.dispatch('chat_session_created', receipt);
+    try {
+      if (hostFirst) { announce(); start(); } else { start(); announce(); }
+      projector.dispatch('tool_progress', { id: 'call', name: 'create_chat', elapsedMs: 60_000, idleMs: 60_000 });
+      test.flushFrame();
+      expect(test.state().currentTurn?.blocks).toMatchObject([{ type: 'tool', call: { status: 'running', waitingForChildTitle: 'AnimGen Reviewer' } }]);
+      projector.dispatch('tool_call_result', { id: 'call', result: { content: 'Answer' }, duration_ms: 65_000 });
+      announce();
+      test.flushFrame();
+      expect(test.state().currentTurn?.blocks).toMatchObject([{ type: 'tool', call: { status: 'done', waitingForChildTitle: undefined } }]);
+      expect(dispatchEvent.mock.calls.filter(([event]) => event.type === 'coder:sessions-changed')).toHaveLength(1);
+    } finally { projector.dispose(); vi.unstubAllGlobals(); }
+  });
+
   it('folds ordered token events into one frame publication', () => {
     const test = harness();
     const projector = new TurnProjector({

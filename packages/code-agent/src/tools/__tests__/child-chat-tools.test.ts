@@ -35,8 +35,15 @@ beforeEach(() => {
 });
 
 describe('create_chat', () => {
+  it.each([{}, { wait: false }])('returns a receipt without waiting for the child (%j)', async (options) => {
+    const result = await run('create_chat', { title: 'Review', prompt: 'Review the code.', profile: 'review', ...options }, ctx);
+    expect(port.create).toHaveBeenCalledWith('p', expect.objectContaining({ wait: false }));
+    expect(result.content).toContain('Chat c1 (review) accepted for background execution');
+    expect(port.wait).not.toHaveBeenCalled();
+  });
+
   it('creates as this session, keyed by the call, waits and returns the answer with its usage for this turn', async () => {
-    const result = await run('create_chat', { title: 'Find it', prompt: 'Find the bug.', profile: 'explore' }, ctx);
+    const result = await run('create_chat', { title: 'Find it', prompt: 'Find the bug.', profile: 'explore', wait: true }, ctx);
     expect(port.create).toHaveBeenCalledWith('p', expect.objectContaining({ key: 'call-1', title: 'Find it', task: 'Find the bug.', profile: 'explore', wait: true, parentReadOnly: false }));
     expect(port.create.mock.calls[0]![1]).not.toHaveProperty('effort');
     expect(port.wait).toHaveBeenCalledWith('p', expect.objectContaining({ chatIds: ['c1'], mode: 'all' }), undefined);
@@ -81,14 +88,14 @@ describe('create_chat', () => {
 
   it('reports a child that failed on the first line, with its reason; the tool itself did not fail', async () => {
     port.wait.mockResolvedValueOnce({ outcome: 'ready', items: [{ chatId: 'c1', status: 'failed', reason: 'start_failed: worker spawn refused' }] });
-    const result = await run('create_chat', { title: 't', prompt: 'p', profile: 'explore' }, ctx);
+    const result = await run('create_chat', { title: 't', prompt: 'p', profile: 'explore', wait: true }, ctx);
     expect(result.content.split('\n')[0]).toBe('Chat c1: failed (start_failed: worker spawn refused)');
     expect(result.isError).toBeUndefined();
   });
 
   it('spills a long answer and points at it', async () => {
     port.wait.mockResolvedValueOnce(done('c1', 'x'.repeat(SUBAGENT_TOOL_RESULT_CAP + 10)));
-    const result = await run('create_chat', { title: 't', prompt: 'p', profile: 'explore' }, ctx);
+    const result = await run('create_chat', { title: 't', prompt: 'p', profile: 'explore', wait: true }, ctx);
     expect(result.content).toContain('the full answer is tool output out-1');
     expect(result.content.length).toBeLessThan(SUBAGENT_TOOL_RESULT_CAP + 300);
   });

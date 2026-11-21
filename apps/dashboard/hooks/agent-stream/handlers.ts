@@ -1,4 +1,5 @@
 import { formatCoderTerminalError } from '../../features/chat/terminal-error.js';
+import { announceChatSessionCreated } from '../../lib/chat-session-created.js';
 import type {
   AgentStatus,
   AgentsGroup,
@@ -80,6 +81,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete, clearStartsMidTurn,
   } = ctx;
   const providerProcessIds = new Set<string>();
+  const pendingChildWaits = new Map<string, string>();
   // The callback refetches the persisted transcript. The first provider turn
   // is enough to publish the just-written user message (and generate a title).
   // Later assistant turns are not durable yet when `message_complete` fires:
@@ -239,7 +241,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         input: d.input,
         status: 'running',
         startedAt: Date.now(),
+        ...(d.name === 'create_chat' && pendingChildWaits.has(d.id) ? { waitingForChildTitle: pendingChildWaits.get(d.id) } : {}),
       };
+      pendingChildWaits.delete(d.id);
       toolIndex.set(d.id, blocks.length);
       blocks.push({ type: 'tool', call });
       upsertProcess({
@@ -286,6 +290,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
             // the "running Xs" renderer into showing it on a finished tool.
             elapsedMs: undefined,
             progressNote: undefined,
+            waitingForChildTitle: undefined,
             // The result seals the block — any stale approval card dies here.
             approvals: undefined,
           };
@@ -1008,8 +1013,20 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       updateSession(sid, (cur) => ({ snapshotTick: cur.snapshotTick + 1 }));
     },
 
-    chat_session_created: () => {
-      window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+    chat_session_created: (data) => {
+      announceChatSessionCreated(data.sessionId);
+      if (typeof data.waitingToolUseId !== 'string' || typeof data.title !== 'string') return;
+      const idx = toolIndex.get(data.waitingToolUseId);
+      if (idx === undefined) {
+        // The host publishes immediately; the worker can still be flushing tool_call_start.
+        pendingChildWaits.set(data.waitingToolUseId, data.title);
+        return;
+      }
+      const block = blocks[idx];
+      if (block?.type === 'tool' && block.call.name === 'create_chat' && block.call.status === 'running') {
+        block.call = { ...block.call, waitingForChildTitle: data.title };
+        flush();
+      }
     },
 
     todos_updated: (data) => {

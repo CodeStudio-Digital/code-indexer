@@ -588,6 +588,7 @@
   "messages.toolActivity.agents": "Trabalhou com subagentes",
   "messages.toolActivity.completed": "Executou {{tool}}",
   "messages.toolActivity.running": "Executando {{tool}}",
+  "messages.toolActivity.waitingForChild": "Aguardando resposta de {{title}}",
   "messages.toolActivity.awaitingApproval": "Aguardando aprovação",
   "messages.toolActivity.failed": "Falha em {{tool}}",
   "messages.toolCount_one": "{{count}} tool",

@@ -7,6 +7,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { childFixture, hostHarness, type ChildHostFixture } from './child-agent-host-fixture.js';
+import { addBusEventSink, createBus } from '../../../../coder-bus.js';
+import { recentNotificationRuntimeEvents } from '../../../../sse/notification-event-bus.js';
+import { createChildChatPort } from '../child-chat-caller.js';
+import { createChildChatBridgeClient } from '@mcp/code-agent/ports/child-chat-bridge-client.js';
+import { installChildChatBridge } from '../../../../sse/child-chat-bridge.js';
 
 vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({ getCoderWorkerPool: () => { throw new Error('the test passes its own pool'); } }));
 vi.mock('../../../../control-plane-shadow.js', () => ({
@@ -28,6 +33,53 @@ beforeEach(async () => {
 afterEach(async () => { vi.restoreAllMocks(); await f.close(); });
 
 describe('child-agent host', () => {
+  it.each([false, true])('publishes a listable child before worker startup and honors wait=%s across the bridge', async (wait) => {
+    const host = h.makeHost();
+    const port = createChildChatPort(host, { sessions: f.app, mailbox: f.mailbox });
+    const handlers = new Map<string, (payload: unknown) => unknown>();
+    const off = installChildChatBridge({ handle: (key, fn) => { handlers.set(key, fn); return () => handlers.delete(key); } }, f.rootId, () => port);
+    const client = createChildChatBridgeClient({ request: async <T>(key: string, payload: unknown) => await handlers.get(key)!(payload) as T });
+    const parentBus = createBus(new AbortController());
+    h.buses.set(f.rootId, parentBus);
+    let start!: () => void;
+    h.gate = new Promise(resolve => { start = resolve; });
+    const announced = new Promise<string>(resolve => addBusEventSink(parentBus, event => {
+      if (event.event === 'chat_session_created') resolve((event.data as { sessionId: string }).sessionId);
+    }));
+    const request = { key: 'call', title: 'Reviewer', profile: 'review', task: 'Review.', wait };
+    const pending = client.create(f.rootId, request);
+    try {
+      const childId = await Promise.race([announced, pending.then(() => announced)]);
+      const announcements = () => parentBus.buffer.filter(event => event.event === 'chat_session_created');
+      expect(announcements().map(event => event.data)).toEqual([
+        { sessionId: childId, ...(wait ? { waitingToolUseId: 'call', title: 'Reviewer' } : {}) },
+      ]);
+      expect((await f.app.listSessions(1)).map(session => session.id)).toContain(childId);
+      if (!wait) expect((await pending).chatId).toBe(childId); // Worker startup is still gated.
+      start();
+      await pending;
+      await vi.waitFor(() => expect(h.buses.has(childId)).toBe(true), { timeout: 5_000 });
+      expect(await f.queue.get(childId)).toMatchObject({ state: 'admitted', background: !wait });
+      await client.create(f.rootId, request);
+      expect(announcements()).toHaveLength(1);
+      expect(h.runFresh).toHaveBeenCalledTimes(1);
+      await f.holdLease(childId);
+      await f.conclude(childId, 'All done.');
+      h.endRun(childId);
+      expect((await client.wait(f.rootId, { chatIds: [childId], timeoutMs: 2_000 })).items[0]).toMatchObject({ status: 'completed', finalText: 'All done.' });
+      await vi.waitFor(async () => expect((await f.queue.get(childId)).state).toBe('released'), { timeout: 5_000 });
+      if (!wait) await vi.waitFor(async () => expect((await f.queue.get(childId)).notified_release_at).toBeTruthy(), { timeout: 5_000 });
+    } finally { start(); off(); await pending.catch(() => {}); }
+  }, 15_000);
+
+  it('announces a new child to all views when the parent has no live bus', async () => {
+    const host = h.makeHost();
+    const { child } = await host.create(f.rootId, { key: 'k', title: 'Queued reviewer', profile: 'review', task: 'Review', start: false });
+    expect(recentNotificationRuntimeEvents(0)).toContainEqual(expect.objectContaining({
+      event: 'chat_session_created', sessionId: f.rootId, data: { sessionId: child.id },
+    }));
+  });
+
   it('starts what the tree admits with its task and the next one when a run ends', async () => {
     const host = h.makeHost();
     const ids: string[] = [];

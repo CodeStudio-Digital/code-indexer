@@ -42,7 +42,8 @@ describe('child-agent creation retries', () => {
     const options = { sessions, project };
     const first = await createChildAgentSession(options, parentId, request);
     const again = await createChildAgentSession(options, parentId, request);
-    expect(again).toEqual({ child: first.child, created: false });
+    expect(first.target).toEqual({ provider: 'p1', model: 'm1', effort: null });
+    expect(again).toEqual({ ...first, created: false });
     await expect(createChildAgentSession(options, parentId, { ...request, title: 'Something else' })).rejects.toThrow(/key reused/);
     await expect(createChildAgentSession(options, parentId, { ...request, profile: 'explore' })).rejects.toThrow(/key reused/);
     expect(await sessions.listChildAgentSessions(parentId)).toHaveLength(1);

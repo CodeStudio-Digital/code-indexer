@@ -24,10 +24,18 @@ test('worktree toolbar scopes sessions, creates multiple sessions and preserves 
   const createdBodies: Array<Record<string, unknown>> = [];
   const deletedBodies: Array<{ ids: string[] }> = [];
   const removals: Array<{ path: string; confirmed: boolean; deleteBranch: boolean; discardChanges: boolean }> = [];
+  let publishCreation!: (childId: string) => void;
+  const creation = new Promise<string>(resolve => { publishCreation = resolve; });
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     const method = route.request().method();
+    if (path === '/api/notifications/stream') {
+      const childId = await creation;
+      const envelope = { id: 1, ts: Date.now(), kind: 'coder', sessionId: featureId, event: 'chat_session_created',
+        data: { sessionId: childId }, context: { target: { kind: 'project', scopeId: 7, sessionId: featureId } } };
+      return route.fulfill({ contentType: 'text/event-stream', body: `id: 1\nevent: notification\ndata: ${JSON.stringify(envelope)}\n\n` });
+    }
     if (path.endsWith('/db-client/connections')) return route.fulfill({ json: { connections: [] } });
     if (path.includes('/skills')) return route.fulfill({ json: { skills: [] } });
     if (path.endsWith('/tree')) return route.fulfill({ json: { entries: [], files: [] } });
@@ -105,16 +113,14 @@ test('worktree toolbar scopes sessions, creates multiple sessions and preserves 
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText('Implementar feature isolada');
   await expect(picker).toContainText('codex/feature');
+  await rows.first().getByRole('button', { name: 'Implementar feature isolada', exact: true }).click();
+  await expect(page.locator('main')).toContainText('Implementar feature isolada');
   const child = makeSession('44444444-4444-4444-8444-444444444444', 'Investigar evidências', worktrees[1]!.path, featureId);
   const fork = makeSession('55555555-5555-4555-8555-555555555555', 'Revisar hipóteses', worktrees[1]!.path, child.id);
   sessions.unshift(fork, child);
-  await page.evaluate(async ({ modulePath, parent, childId }) => {
-    const { TurnProjector } = await import(modulePath);
-    const stream = new TurnProjector({ sessionId: parent, updateSession: () => {} });
-    stream.dispatch('chat_session_created', { sessionId: childId });
-    stream.dispose();
-  }, { modulePath: '/hooks/agent-stream/turn-projector.ts', parent: featureId, childId: child.id });
+  publishCreation(child.id);
   await expect(rows).toHaveCount(3);
+  await expect(page.locator('main')).toContainText('Implementar feature isolada');
   await expect(rows.nth(0)).toHaveAttribute('data-session-id', featureId);
   await expect(rows.nth(1)).toHaveAttribute('data-session-depth', '1');
   await expect(rows.nth(2)).toHaveAttribute('data-session-depth', '2');

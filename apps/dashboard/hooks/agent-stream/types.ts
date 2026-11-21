@@ -32,6 +32,8 @@ export interface ToolCallEvent {
    *  `ctx.reportProgress` (e.g. "fetched 3/10 docs"). Trimmed to ~200
    *  chars on the runner side. */
   progressNote?: string;
+  /** The host confirmed creation and this tool explicitly waits for the child's answer. */
+  waitingForChildTitle?: string;
   /**
    * Pending PermissionGate approvals anchored to this block. An array —
    * one code_exec block can stack several nested tool requests. Cleared

@@ -1,4 +1,5 @@
 import type { ToolLoopIntervention } from '../../../hooks/agent-stream/types.js';
+import { announceChatSessionCreated } from '../../../lib/chat-session-created.js';
 import { pushNotification, resolveChildAgentApproval } from './session-notifications-store.js';
 
 interface RuntimeEvent {
@@ -13,6 +14,11 @@ interface RuntimeEvent {
 export function recordCoderRuntimeNotification(source: RuntimeEvent): void {
   const data = asRecord(source.data);
   const options = { sourceKey: `runtime:${source.ts}:${source.id}`, receivedAt: source.ts };
+
+  if (source.event === 'chat_session_created') {
+    announceChatSessionCreated(data.sessionId);
+    return;
+  }
 
   if (source.event === 'child_agent_attention') {
     const childId = readString(data, 'childId');

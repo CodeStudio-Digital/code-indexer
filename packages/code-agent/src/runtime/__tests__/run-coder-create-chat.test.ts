@@ -85,7 +85,7 @@ function scripted(provider: string, model: string): ChatProvider {
       }
       yield { type: 'tool_call_start', id: 'c1', name: 'create_chat' };
       yield { type: 'tool_call_end', id: 'c1', name: 'create_chat', input: {
-        title: 'Probe', prompt: 'Report.', profile: 'explore', provider: selection.provider, model: selection.model, effort: 'max',
+        title: 'Probe', prompt: 'Report.', profile: 'explore', provider: selection.provider, model: selection.model, effort: 'max', wait: true,
       } };
       yield { type: 'done', stop_reason: 'tool_use' };
       return;
@@ -327,7 +327,7 @@ describe('runCoder with child chats (the default)', () => {
       expect(error).toContain('"model":"gpt-6.2-sol","effort":"xhigh"');
     }
     for (const receipt of incidentResults.slice(guesses.length)) {
-      expect(receipt).toContain('started in the background');
+      expect(receipt).toContain('accepted for background execution');
       expect(receipt).toContain('openai-chatgpt / gpt-6.2-sol (effort=xhigh)');
     }
     const reader = FsSessionStore.fromRoots({ dataDir: process.env.MCP_DATA_DIR!, projectRootResolver: {

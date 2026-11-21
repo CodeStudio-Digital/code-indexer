@@ -48,6 +48,7 @@ describe('child-agent host: background completion, approvals and wakes', () => {
     const woken = vi.fn(async (_message: ChatMessage) => true);
     await wakeService(host, woken);
     const { child } = await host.create(f.rootId, { key: 'bg', title: 'bg', profile: 'explore', task: 'do bg', wait: false });
+    await vi.waitFor(() => expect(h.buses.has(child.id)).toBe(true));
     await f.holdLease(child.id);
     await f.conclude(child.id, 'Background done.');
     h.endRun(child.id);
@@ -61,6 +62,7 @@ describe('child-agent host: background completion, approvals and wakes', () => {
   it('wakes the parent after an app restart when the run ended while the app was down', async () => {
     const host = h.makeHost();
     const { child } = await host.create(f.rootId, { key: 'bg', title: 'bg', profile: 'explore', task: 'do bg', wait: false });
+    await vi.waitFor(() => expect(h.buses.has(child.id)).toBe(true));
     await f.holdLease(child.id);
     await f.conclude(child.id, 'Done while down.');
     await f.restart(); // the app went down before the end of the run reached it

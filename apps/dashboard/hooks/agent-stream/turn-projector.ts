@@ -33,7 +33,6 @@ const NON_STRUCTURAL_EVENTS = new Set([
   'thinking',
   'task_run_task_progress',
   'agent_progress',
-  'chat_session_created',
   'operation_started',
   'operation_finished',
 ]);
