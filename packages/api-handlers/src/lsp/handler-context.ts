@@ -35,14 +35,14 @@ export interface LspHandlerContext {
     languageId: string,
     position: { line: number; column: number },
     providedContent?: string,
-  ): AngularProfileTarget | undefined;
+  ): Promise<AngularProfileTarget | undefined>;
   angularOverlayForRange(
     projectId: number,
     root: string,
     file: string,
     languageId: string,
     range: { start: { line: number; column: number }; end: { line: number; column: number } },
-  ): AngularProfileTarget | undefined;
+  ): Promise<AngularProfileTarget | undefined>;
   opCtx(
     projectId: number,
     root: string,
@@ -88,10 +88,10 @@ export function createLspHandlerContext(deps: HandlerDeps): LspHandlerContext {
     try { return readFileSync(relToAbsCanonical(root, file), 'utf-8'); } catch { return null; }
   };
 
-  const angularOverlayForPosition: LspHandlerContext['angularOverlayForPosition'] = (
+  const angularOverlayForPosition: LspHandlerContext['angularOverlayForPosition'] = async (
     projectId, root, file, languageId, position, providedContent,
   ) => {
-    const overlay = angularProfileTarget(db, projectId, root, file, languageId);
+    const overlay = await angularProfileTarget(db, projectId, root, file, languageId);
     if (!overlay) return undefined;
     return shouldUseAngularInteractiveOverlay({
       projectId,
@@ -102,10 +102,10 @@ export function createLspHandlerContext(deps: HandlerDeps): LspHandlerContext {
     }) ? overlay : undefined;
   };
 
-  const angularOverlayForRange: LspHandlerContext['angularOverlayForRange'] = (
+  const angularOverlayForRange: LspHandlerContext['angularOverlayForRange'] = async (
     projectId, root, file, languageId, range,
   ) => {
-    const overlay = angularProfileTarget(db, projectId, root, file, languageId);
+    const overlay = await angularProfileTarget(db, projectId, root, file, languageId);
     if (!overlay) return undefined;
     return shouldUseAngularInteractiveOverlayRange({
       projectId,
@@ -169,8 +169,12 @@ export function createLspHandlerContext(deps: HandlerDeps): LspHandlerContext {
     const previous = syntaxDiagTimers.get(key);
     if (previous) clearTimeout(previous);
     const timer = setTimeout(() => {
+      void run().catch(() => undefined);
+    }, TS_DIAG_DEBOUNCE_MS);
+    async function run(): Promise<void> {
+      const angular = await angularProfileTarget(db, projectId, root, file, languageId).catch(() => undefined);
+      if (syntaxDiagTimers.get(key) !== timer) return;
       syntaxDiagTimers.delete(key);
-      const angular = angularProfileTarget(db, projectId, root, file, languageId);
       const primary = serverForLanguage(languageId);
       const status = angular
         ? lspManager.statusById(projectId, angular.def.id, languageId, angular.identity)
@@ -190,7 +194,7 @@ export function createLspHandlerContext(deps: HandlerDeps): LspHandlerContext {
           diagnostics: diagnostics.map((diagnostic) => ({ ...diagnostic, file })),
         }))
         .catch(() => publishDiagnostics(projectId, { file, source: 'syntax', diagnostics: [] }));
-    }, TS_DIAG_DEBOUNCE_MS);
+    }
     timer.unref?.();
     syntaxDiagTimers.set(key, timer);
   };

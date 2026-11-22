@@ -13,6 +13,8 @@ import {
   type ProjectIgnoreRules,
 } from '@mcp/shared/utils/project-ignore.js';
 import { invalidateAngularWorkspaceForPath } from '../lsp/angular-workspace-index.js';
+import { watchWindowsProject } from './windows-project-watch.js';
+import { isBinaryIndexPath } from '@mcp/shared/utils/index-binaries.js';
 
 export interface WatcherFileEvent {
   /** Absolute path as emitted by chokidar (backslashes on win32 — callers normalize). */
@@ -25,6 +27,8 @@ export interface WatcherFileEvent {
 
 export interface WatcherEvents {
   onFileChanged(events: WatcherFileEvent[]): void | Promise<void>;
+  onCoverageLost?(): void;
+  indexedDescendants?(absolutePath: string): boolean;
 }
 
 export interface WatcherOptions {
@@ -36,6 +40,7 @@ export interface WatcherOptions {
    * {@link countWatchedEntries}). 0/undefined disables the guard.
    */
   maxWatchedFiles?: number;
+  knownFileCount?: number;
 }
 
 /**
@@ -188,6 +193,7 @@ export async function countWatchedEntries(
 
 export class FileWatcherService {
   private watchers = new Map<number, FSWatcher>();
+  private native = new Map<number, ReturnType<typeof watchWindowsProject>>();
   private ready = new Map<number, Promise<void>>();
   private resolveReady = new Map<number, () => void>();
   private events = new Map<number, WatcherEvents>();
@@ -250,6 +256,11 @@ export class FileWatcherService {
     // immediately so concurrent lifecycle calls cannot start a duplicate.
     const token = {};
     this.arming.set(projectId, token);
+    if (process.platform === 'win32' && options.maxWatchedFiles && (options.knownFileCount ?? 0) > options.maxWatchedFiles) {
+      this.arming.delete(projectId);
+      this.armOverBudget(projectId, options, events, settleReady);
+      return;
+    }
     void getProjectIgnoreRulesAsync(options.rootPath).then((projectIgnore) => {
       if (this.arming.get(projectId) !== token) return;
       // `ignored` is a FUNCTION (not a glob) so chokidar prunes heavy dirs
@@ -274,13 +285,7 @@ export class FileWatcherService {
           if (this.arming.get(projectId) !== token) return;
           this.arming.delete(projectId);
           if (count > maxFiles) {
-            this.skipped.add(projectId);
-            console.warn(
-              `[watcher] project ${projectId} exceeds the ${maxFiles}-entry watch budget ` +
-              `(${options.rootPath}); skipping live file-watching — git-meta events + ` +
-              `structural reconcile remain authoritative for freshness.`,
-            );
-            settleReady();
+            this.armOverBudget(projectId, options, events, settleReady);
             return;
           }
           this.armFileWatcher(projectId, options, ignored, events, settleReady);
@@ -296,6 +301,59 @@ export class FileWatcherService {
       settleReady();
     });
   }
+
+  private armOverBudget(projectId: number, options: WatcherOptions, events: WatcherEvents, ready: () => void): void {
+    if (process.platform === 'win32') {
+      try {
+        const extra = ignore().add(normalizeIndexIgnorePatterns(options.ignorePatterns ?? []));
+        let rules: ProjectIgnoreRules | undefined;
+        let version = 0;
+        const refreshRules = () => {
+          rules = undefined;
+          const current = ++version;
+          void getProjectIgnoreRulesAsync(options.rootPath).then(value => {
+            if (current === version) rules = value;
+          }).catch(() => { /* worker filtering stays authoritative */ });
+        };
+        const handle = watchWindowsProject({
+          root: options.rootPath,
+          debounce: options.debounce,
+          indexedDescendants: path => events.indexedDescendants?.(path) ?? true,
+          ignores: (path, directory) => (!directory && isBinaryIndexPath(path)) || extra.ignores(directory ? path + '/' : path)
+            || (!!rules && shouldIgnoreProjectPath(rules, path, directory)),
+          fileChanged: event => {
+            if (!event.isDir) invalidateAngularWorkspaceForPath(options.rootPath, event.path);
+            this.noteChange(projectId, event.path, event.kind, !!event.isDir, 0);
+          },
+          coverageLost: () => {
+            invalidateProjectDiscoveryCache(options.rootPath);
+            refreshRules();
+            events.onCoverageLost?.();
+          },
+          failed: error => {
+            if (this.native.get(projectId) !== handle) return;
+            handle.close();
+            this.native.delete(projectId);
+            this.skipped.add(projectId);
+            console.warn(`[watcher] switching project ${projectId} to polling:`, error.message);
+            events.onCoverageLost?.();
+          },
+        });
+        this.native.set(projectId, handle);
+        this.pendingChanges.set(projectId, new Map());
+        this.events.set(projectId, events);
+        refreshRules();
+        ready();
+        return;
+      } catch (error) {
+        console.warn(`[watcher] recursive Windows watch unavailable for project ${projectId}:`, error);
+      }
+    }
+    this.skipped.add(projectId);
+    ready();
+  }
+
+  nativeCoverage(projectId: number): object | undefined { return this.native.get(projectId)?.coverage; }
 
   /** Create the chokidar watcher for a project that passed the budget probe. */
   private armFileWatcher(
@@ -396,6 +454,7 @@ export class FileWatcherService {
 
   /** Deliver the current debounce buffer immediately (used at scan barriers). */
   async flushPending(projectId: number): Promise<void> {
+    await this.native.get(projectId)?.flush();
     const timer = this.debounceTimers.get(projectId);
     if (timer) {
       clearTimeout(timer);
@@ -426,6 +485,8 @@ export class FileWatcherService {
   }
 
   async stopWatching(projectId: number): Promise<void> {
+    this.native.get(projectId)?.close();
+    this.native.delete(projectId);
     // Cancel an in-flight budget probe (its `.then` bails when arming is gone)
     // and clear a prior skip so a later arm re-probes (the tree may have shrunk).
     this.arming.delete(projectId);
@@ -454,7 +515,7 @@ export class FileWatcherService {
 
   async stopAll(): Promise<void> {
     const ids = new Set([
-      ...this.watchers.keys(), ...this.arming.keys(), ...this.skipped, ...this.suspendedProjects,
+      ...this.watchers.keys(), ...this.native.keys(), ...this.arming.keys(), ...this.skipped, ...this.suspendedProjects,
     ]);
     await Promise.all(Array.from(ids, (id) => this.stopWatching(id)));
   }
@@ -462,7 +523,7 @@ export class FileWatcherService {
   isWatching(projectId: number): boolean {
     // `arming`/`skipped` count as "watching" so the lifecycle doesn't re-arm a
     // project whose probe is still running or that was intentionally skipped.
-    return this.watchers.has(projectId) || this.arming.has(projectId) || this.skipped.has(projectId);
+    return this.watchers.has(projectId) || this.native.has(projectId) || this.arming.has(projectId) || this.skipped.has(projectId);
   }
 
   /** Live watching skipped by the budget guard — the open-files fallback poll's hook. */
@@ -471,6 +532,6 @@ export class FileWatcherService {
   }
 
   listWatching(): number[] {
-    return Array.from(this.watchers.keys());
+    return [...this.watchers.keys(), ...this.native.keys()];
   }
 }

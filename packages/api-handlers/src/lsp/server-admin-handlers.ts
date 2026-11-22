@@ -85,7 +85,7 @@ export function createServerAdminHandlers(context: LspHandlerContext): ServerAdm
       const targetFile = typeof file === 'string' && file ? file : undefined;
       const languageId = targetFile ? languageIdForPath(targetFile) : boundRoute?.languageId;
       const angular = targetFile && languageId
-        ? angularProfileTarget(db, projectId, projectRoot, targetFile, languageId)
+        ? await angularProfileTarget(db, projectId, projectRoot, targetFile, languageId)
         : undefined;
       const target = validateRestartServerTarget({
         projectRoot,

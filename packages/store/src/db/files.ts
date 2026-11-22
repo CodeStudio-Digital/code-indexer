@@ -186,6 +186,13 @@ export function listScanMeta(db: DB, projectId: number): FileScanMeta[] {
   ).all(projectId) as FileScanMeta[];
 }
 
+/** The binary range covers all children of the exact directory, including
+ * names containing LIKE/GLOB metacharacters, using the project/path index. */
+export function hasDescendants(db: DB, projectId: number, path: string): boolean {
+  return !!db.prepare('SELECT 1 FROM files WHERE project_id = ? AND path >= ? AND path < ? LIMIT 1')
+    .get(projectId, path + '/', path + '0');
+}
+
 /**
  * Stamp a fresh mtime on an unchanged file (hash matched after a read) so
  * the NEXT scan takes the stat-only shortcut. Also the automatic backfill

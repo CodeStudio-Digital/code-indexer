@@ -11,7 +11,7 @@ import { Database, type DB, type PathAlias } from './db/types.js';
 import { applyTuningPragmas, DEFAULT_BUSY_TIMEOUT_MS } from './db/pragmas.js';
 import { installSqlTiming } from './db/sql-timing.js';
 import { existsSync, rmSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { abortableRead } from '@mcp/shared/utils/abortable.js';
 import { projectDbFlags, type ProjectDbFlags } from '@mcp/shared/utils/config.js';
@@ -27,6 +27,7 @@ import { initSchema } from './db/schema/index.js';
 import { repairCodeFtsIndexes, createDocChunksFtsIfReady } from './db/schema/fts.js';
 import * as projects from './db/projects.js';
 import * as files from './db/files.js';
+import * as embeddingFiles from './db/embedding-files.js';
 import * as agentIndexReads from './db/agent-index-reads.js';
 import * as agentSymbolReads from './db/agent-symbol-reads.js';
 import * as agentTypeReads from './db/agent-type-reads.js';
@@ -113,6 +114,7 @@ export class CodeIndexDB {
   /** Per-project DB pool (tiered-hybrid split). Lazily opens project DBs. */
   private readonly projectPool: ProjectDbPool;
   private readonly readSettingsOffThread?: ReadProjectSettings;
+  private readonly readEmbeddingPageOffThread?: (path: string, projectId: number, query: embeddingFiles.EmbeddingFileQuery) => Promise<embeddingFiles.EmbeddingFileResult | null>;
   private configReader?: { id: number; path: string; db: DB; settings?: ProjectSettings };
   /** Cache of the routing decision per project id (avoids a SELECT per call). */
   private readonly routeCache = new Map<number, boolean>();
@@ -137,6 +139,7 @@ export class CodeIndexDB {
       projectDbCheckpoint?: (dbPath: string) => void;
       /** Read committed partition settings without opening a SQLite handle on the caller's thread. */
       readProjectSettings?: ReadProjectSettings;
+      readEmbeddingPage?: CodeIndexDB['readEmbeddingPageOffThread'];
       /**
        * Busy-wait ceiling for this connection, ms. Defaults to the shared 5s.
        * The Electron-main handle passes a small value: better-sqlite3 waits for
@@ -158,6 +161,7 @@ export class CodeIndexDB {
     this.centralDbPath = dbPath;
     this.checkpointOwner = !!opts.checkpointOwner;
     this.readSettingsOffThread = opts.readProjectSettings;
+    this.readEmbeddingPageOffThread = opts.readEmbeddingPage;
     this.db = new Database(dbPath);
     try {
       assertSessionStorageLayoutReady(this.db, { allowFreshBootstrap });
@@ -418,6 +422,17 @@ export class CodeIndexDB {
    * (e.g. collections→requests) lives in one DB — no per-method bare-id routing.
    */
   projectScopedDb(projectId: number): DB { return this.idx(projectId); }
+
+  readEmbeddingFiles(projectId: number, query: embeddingFiles.EmbeddingBoundsQuery): Promise<embeddingFiles.EmbeddingFileBounds>;
+  readEmbeddingFiles(projectId: number, query: embeddingFiles.EmbeddingPageQuery): Promise<embeddingFiles.EmbeddingFile[]>;
+  async readEmbeddingFiles(projectId: number, query: embeddingFiles.EmbeddingFileQuery): Promise<embeddingFiles.EmbeddingFileResult> {
+    const db = this.idx(projectId);
+    if (!db.memory && !db.inTransaction && this.readEmbeddingPageOffThread) {
+      const result = await this.readEmbeddingPageOffThread(resolve(db.name), projectId, query);
+      if (result !== null) return result;
+    }
+    return embeddingFiles.readEmbeddingFiles(db, projectId, query);
+  }
 
   /** Project ids whose project-DB `projects` row has been seeded this session. */
   private readonly seededRows = new Set<number>();
@@ -904,6 +919,13 @@ export class CodeIndexDB {
   countFiles(projectId: number): number {
     return this.countFilesInFolders(projectId, ['.']);
   }
+  /** A single snapshot of the two indexed counts displayed in the project catalog. */
+  getStructuralCounts(projectId: number): { file_count: number; symbol_count: number } {
+    return this.idx(projectId).prepare(`
+      SELECT (SELECT COUNT(*) FROM files WHERE project_id = ?) AS file_count,
+             (SELECT COUNT(*) FROM symbols WHERE project_id = ?) AS symbol_count
+    `).get(projectId, projectId) as { file_count: number; symbol_count: number };
+  }
   countFilesInFolders(projectId: number, folders: readonly string[]): number {
     return files.countInFolders(this.idx(projectId), projectId, folders);
   }
@@ -911,6 +933,7 @@ export class CodeIndexDB {
     return files.searchPaths(this.idx(projectId), projectId, query, limit, fuzzy);
   }
   listFileScanMeta(projectId: number): files.FileScanMeta[] { return files.listScanMeta(this.idx(projectId), projectId); }
+  hasIndexedDescendants(projectId: number, path: string): boolean { return files.hasDescendants(this.idx(projectId), projectId, path); }
   touchFileMtime(projectId: number, path: string, mtimeMs: number): void { files.touchMtime(this.idx(projectId), projectId, path, mtimeMs); }
   deleteFile(projectId: number, path: string): void { files.del(this.idx(projectId), projectId, path); }
   deleteFilesByProject(projectId: number): void { files.delByProject(this.idx(projectId), projectId); }

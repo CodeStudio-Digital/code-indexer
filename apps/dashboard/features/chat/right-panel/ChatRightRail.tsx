@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, ChartNoAxesCombined, Compass, Ellipsis, Gauge, GitCompare, Library, MonitorPlay, Network, ScrollText, Settings, Workflow } from 'lucide-react';
+import { Bot, ChartNoAxesCombined, Compass, Ellipsis, Gauge, GitCompare, Library, MessagesSquare, MonitorPlay, Network, ScrollText, Settings, Workflow } from 'lucide-react';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
@@ -48,7 +48,7 @@ export const ChatRightRail = memo(function ChatRightRail({
   const contextActive = activePanelId === 'drive' || activePanelId === 'chapters';
   const showSubagents = subagentsAvailable || activePanelId === 'subagents';
   const moreActive = activePanelId != null && !stateActive && !contextActive
-    && !['config', 'notifications', 'subagents', 'collaboration', 'usage-quota'].includes(activePanelId);
+    && !['config', 'notifications', 'subagents', 'collaboration', 'side-chat', 'usage-quota'].includes(activePanelId);
   const toggle = (id: RightPanelId, active = activePanelId === id) => onSelectPanel(active ? null : id);
   const advanced = [
     { id: 'insights' as const, icon: ChartNoAxesCombined, label: t('rightRail.insights') },
@@ -64,6 +64,8 @@ export const ChatRightRail = memo(function ChatRightRail({
         active={stateActive} onClick={() => toggle('meta', stateActive)} />
       <RailButton icon={Library} label={t('rightRail.context')} side="right" role="toggle"
         active={contextActive} onClick={() => toggle('drive', contextActive)} />
+      <RailButton icon={MessagesSquare} label={t('side.title')} side="right" role="toggle"
+        active={activePanelId === 'side-chat'} onClick={() => toggle('side-chat')} />
       <RailButton icon={Network} label={t('collaboration.title')} side="right" role="toggle"
         active={activePanelId === 'collaboration'} onClick={() => toggle('collaboration')} />
       <RailButton icon={GitCompare} label={pendingSnapshots > 0

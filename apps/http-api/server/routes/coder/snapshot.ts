@@ -82,16 +82,9 @@ export function mountCoderSnapshotRoutes(app: HttpRouter, deps: ServerDeps): voi
   };
 
   const roundContextRows = async (sessionId: SessionId, roundSeq: number) => {
-    const [rows, baselines] = await Promise.all([
-      snapshotStore.listRoundSnapshots('coder', sessionId, roundSeq, {
-        includeClosed: true,
-      }),
-      snapshotStore.listBaselines('coder', sessionId, {
-        includeClosed: true,
-      }),
-    ]);
+    const rows = await snapshotStore.listRoundSnapshots('coder', sessionId, roundSeq, { includeClosed: true });
     if (rows.length === 0) return null;
-    const baselineById = new Map(baselines.map((row) => [row.id, row]));
+    const baselineById = await snapshotStore.baselineIdentities(sessionId, rows.map(row => row.global_baseline_id));
     return rows.every((row) => {
       const global = baselineById.get(row.global_baseline_id);
       return (
@@ -137,7 +130,7 @@ export function mountCoderSnapshotRoutes(app: HttpRouter, deps: ServerDeps): voi
       return notFound(c, 'round not found');
     }
     const files = await service.listRoundFiles('coder', id, roundSeq, rows);
-    const reviews = await snapshotStore.listRoundReviewFindings('coder', id, roundSeq);
+    const reviews = await snapshotStore.listRoundReviewFindings('coder', id, roundSeq, rows);
     return c.json({ roundSeq, files, reviews });
   });
 

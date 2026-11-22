@@ -46,6 +46,19 @@ function statefulClient(model = 'acme-model'): ChatProvider {
 }
 
 describe('plugin provider client lifecycle', () => {
+  it('resolves the real text-only capability without sending a chat request', async () => {
+    const adapter = statefulClient();
+    const chat = vi.spyOn(adapter, 'chat');
+    const create = vi.fn().mockResolvedValue(adapter);
+    const definition = fixture({ sdkVersion: 2, kind: 'acme', createCoder: create });
+    const provider = definition.createCoder!({ apiKey: 'fixture' }, 'selected', { textOnly: true });
+    expect(provider.inferenceOnly).toBeUndefined();
+    await Promise.all([provider.prepare!(), provider.prepare!()]);
+    expect(provider.inferenceOnly).toBe(true);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(chat).not.toHaveBeenCalled();
+  });
+
   it('keeps Responses continuation through the plugin and wrappers across completed runner requests', async () => {
     const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
     await once(server, 'listening');

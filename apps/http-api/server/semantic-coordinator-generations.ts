@@ -16,7 +16,7 @@ type SemanticPurpose
 import {
 generationMatchesEmbeddingFingerprint
 } from '@mcp/store/vectors.js';
-import { errorMessage,projectIdFromSemanticNamespace,SemanticVectorWorkerUnavailableError,type ReindexResult } from './semantic-coordinator-shared.js';
+import { errorMessage,projectIdFromSemanticNamespace,SemanticVectorWorkerUnavailableError, StructuralWorkPendingError, type ReindexResult } from './semantic-coordinator-shared.js';
 
 import type { SemanticCoordinatorContext } from './semantic-coordinator-context.js';
 
@@ -37,6 +37,7 @@ async runPurpose(this: SemanticCoordinatorContext, purpose: SemanticPurpose, for
         await this.serial(namespace, build);
         if (this.allowsNamespaceMutation(namespace)) completed.push(namespace);
       } catch (error) {
+        if (error instanceof StructuralWorkPendingError) throw error;
         failed.push({ namespace, error: errorMessage(error) });
       }
     };
@@ -47,8 +48,7 @@ async runPurpose(this: SemanticCoordinatorContext, purpose: SemanticPurpose, for
           codeNamespace(project.id),
           () => this.runCodeProjectBuild(project.id, generation, force),
         );
-        if (this.deps.withProjectLock) await this.deps.withProjectLock(project.id, build);
-        else await build();
+        await this.scheduleCodeBuild(project.id, build);
       }
     } else if (purpose === 'docs') {
       for (const collection of this.deps.docStore.listCollections()) {

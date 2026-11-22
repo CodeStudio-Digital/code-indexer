@@ -30,6 +30,11 @@ export function isStructurallyReady(status: ProjectIndexStatus): boolean {
     || (status.phase === 'semantic_indexing' && status.fileCount > 0);
 }
 
+function hasSearchableIndex(status: ProjectIndexStatus): boolean {
+  return isStructurallyReady(status) || ((status.phase === 'scanning' || status.phase === 'structural_indexing')
+    && status.fileCount > 0 && !!(status.lastStructuralAt || status.lastSemanticAt));
+}
+
 function terminalResult(status: ProjectIndexStatus): StructuralReadinessResult | null {
   if (status.phase === 'error') return { status: 'error', phase: status.phase, error: status.error };
   if (status.phase === 'too_large') return { status: 'too_large', phase: status.phase };
@@ -44,7 +49,7 @@ export function waitForStructuralReadiness(
   if (deps.signal?.aborted) return Promise.resolve({ status: 'aborted', phase: initial.phase });
   const terminal = terminalResult(initial);
   if (terminal) return Promise.resolve(terminal);
-  if (!deps.waitForNextReady && isStructurallyReady(initial)) {
+  if (!deps.waitForNextReady && hasSearchableIndex(initial)) {
     return Promise.resolve({ status: 'ready', phase: initial.phase });
   }
 

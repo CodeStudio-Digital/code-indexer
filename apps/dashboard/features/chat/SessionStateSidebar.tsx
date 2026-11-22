@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useSessionStateSummary, type TaskRow } from './useSessionStateSummary.js';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, Check, Circle, ListChecks, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
@@ -8,28 +8,6 @@ import type {
 } from '../../hooks/agent-stream/types.js';
 import { ActiveProcessesSection } from './sidebar/ActiveProcessesSection.js';
 import { CollapsibleSection } from './sidebar/CollapsibleSection.js';
-
-interface TaskRow {
-  id: string;
-  title: string;
-  status: string;
-  files: string[];
-}
-
-interface TasksSummary {
-  summary: string;
-  approved: boolean;
-  execution_mode: string | null;
-  current_task_id: string | null;
-  tasks: TaskRow[];
-}
-
-interface StateSummary {
-  tasks: TasksSummary | null;
-  /** Persisted todos rehydrated from the bundle state projection, used as a fallback
-   *  on session mount before any todos_updated SSE event arrives. */
-  todos?: TodoItem[];
-}
 
 interface SessionStateSidebarProps {
   sessionId: string;
@@ -59,26 +37,7 @@ export function SessionStateSidebar({
   embedded,
 }: SessionStateSidebarProps) {
   const { t } = useTranslation(['chat', 'common']);
-  const [data, setData] = useState<StateSummary | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setData(null);
-    fetch(`/api/coder/sessions/${sessionId}/state-summary`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-      .then((d: StateSummary) => {
-        if (!cancelled) {
-          setData(d);
-          if (onActiveTaskChange) onActiveTaskChange(d.tasks?.current_task_id ?? null);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setData(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId, refreshKey, onActiveTaskChange]);
+  const data = useSessionStateSummary(sessionId, refreshKey, onActiveTaskChange);
   const tasks = data?.tasks ?? null;
 
   // Prefer the live SSE-driven prop. Fall back to the snapshot returned by

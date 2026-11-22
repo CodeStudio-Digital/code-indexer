@@ -19,6 +19,7 @@
  */
 import { WorkerHost } from '@mcp/orchestrator-host';
 import type { ProjectSettingsRows } from '@mcp/store/db/projects.js';
+import type { EmbeddingFileQuery, EmbeddingFileResult } from '@mcp/store/db/embedding-files.js';
 import { resolveWorkerFile } from './workerFileResolution.js';
 
 let cached: WorkerHost | null = null;
@@ -102,6 +103,14 @@ export async function readProjectSettingsInWorker(
   );
   if (result.busy) throw Object.assign(new Error('Project settings database is busy'), { code: 'SQLITE_BUSY' });
   return result.rows;
+}
+
+export async function readEmbeddingFilesInWorker(dbPath: string, projectId: number, query: EmbeddingFileQuery): Promise<EmbeddingFileResult | null> {
+  const host = cached;
+  if (!host) return null;
+  await cachedStart;
+  if (cached !== host || !host.isRunning()) return null;
+  return host.requireBridge().request<EmbeddingFileResult>('project.embedding-files', { dbPath, projectId, query }, { timeoutMs: 30_000 });
 }
 
 /**

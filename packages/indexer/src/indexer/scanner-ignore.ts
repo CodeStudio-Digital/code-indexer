@@ -12,19 +12,7 @@ import {
   type ProjectIgnoreRules,
 } from '@mcp/shared/utils/project-ignore.js';
 
-const BINARY_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.bmp', '.webp', '.svg',
-  '.woff', '.woff2', '.ttf', '.eot', '.otf',
-  '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac', '.ogg', '.webm',
-  '.fbx', '.psd', '.psb', '.exr', '.tga', '.tif', '.tiff', '.dds',
-  '.blend', '.max', '.ma', '.mb', '.aif', '.aiff', '.unitypackage',
-  '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.xz',
-  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-  '.exe', '.dll', '.so', '.dylib', '.bin', '.o', '.a', '.lib',
-  '.pyc', '.pyo', '.class', '.jar', '.war',
-  '.sqlite', '.db', '.sqlite3',
-  '.lock',
-]);
+import { isBinaryIndexPath } from '@mcp/shared/utils/index-binaries.js';
 
 const DEFAULT_IGNORE_PATTERNS = [
   'node_modules',
@@ -61,15 +49,11 @@ export const GLOB_PRUNE_DIRS = [
 ];
 
 export interface ScannerIgnore {
+  ignoresDirectory(relPath: string): boolean;
   /** True when the relative path must be skipped (binary, ignored, hard-excluded). */
   ignores(relPath: string): boolean;
 }
 
-function getExtension(filePath: string): string {
-  const lastDot = filePath.lastIndexOf('.');
-  if (lastDot === -1) return '';
-  return filePath.slice(lastDot).toLowerCase();
-}
 
 /**
  * Build the composite ignore filter for a project root: defaults + caller
@@ -96,8 +80,11 @@ export function buildScannerIgnore(
   }
 
   return {
+    ignoresDirectory(relPath: string): boolean {
+      return shouldIgnoreProjectPath(projectRules, relPath, true) || ig.ignores(relPath + '/');
+    },
     ignores(relPath: string): boolean {
-      if (BINARY_EXTENSIONS.has(getExtension(relPath))) return true;
+      if (isBinaryIndexPath(relPath)) return true;
       if (shouldIgnoreProjectPath(projectRules, relPath)) return true;
       if (ig.ignores(relPath)) return true;
       if (isHardExcluded(relPath)) return true;

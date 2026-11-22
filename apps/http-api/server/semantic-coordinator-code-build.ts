@@ -121,7 +121,7 @@ async buildCodeNamespace(this: SemanticCoordinatorContext,
       await this.cleanupGenerationIfUnreferenced(namespace, before?.active_generation_id ?? null);
     } catch (error) {
       if (error instanceof EmbeddingPauseRequestedError || error instanceof CodeScopeChangedError) {
-        const message = error instanceof CodeScopeChangedError ? error.message : 'paused because project is not active';
+        const message = error.message;
         for (const deltaJob of deltaJobs) {
           const current = this.deps.semanticStore.getJob(deltaJob.id);
           if (current?.status !== 'completed') {
@@ -277,7 +277,7 @@ async drainActiveCodeDeltas(this: SemanticCoordinatorContext,
             this.deps.semanticStore.updateJob(job.id, {
               status: 'paused',
               failed_items: paused ? 0 : 1,
-              error: paused ? 'paused because project is not active' : message,
+              error: message,
             });
           }
         }

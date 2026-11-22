@@ -11,7 +11,7 @@
  * position or partial state per panel, this is the place to add
  * mounting that respects an `mounted: Set<RightPanelId>` cache.
  */
-import { Bell, Bot, ChartNoAxesCombined, Compass, Gauge, Library, ScrollText, Settings, Workflow } from 'lucide-react';
+import { Bell, Bot, ChartNoAxesCombined, Compass, Gauge, Library, MessagesSquare, ScrollText, Settings, Workflow } from 'lucide-react';
 import { lazy, memo, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
@@ -83,7 +83,12 @@ import type { AgentChatPreviewConfig, CoderSession, CoderSessionStats, SessionDa
 import type { ActiveProcess, TodoItem } from '../../../hooks/agent-stream/types.js';
 import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
 
+import type { OpenSideChat } from './side-chat-command.js';
+const SideChatPanel = lazy(() => import('./SideChatPanel.js').then(m => ({ default: m.SideChatPanel })));
+
 interface RightPanelHostProps {
+  sideLaunch?: OpenSideChat;
+  onSideConsumed?: (key: string) => void;
   activeId: RightPanelId;
   sessionId: string;
   session: CoderSession | null;
@@ -133,6 +138,10 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
   }
 
   switch (activeId) {
+    case 'side-chat':
+      return <PanelChrome title={t('chat:side.title')} icon={MessagesSquare} onClose={onClose} bodyClassName="overflow-hidden">
+        <PanelBody><SideChatPanel key={sessionId} sessionId={sessionId} launch={props.sideLaunch} onConsumed={props.onSideConsumed}/></PanelBody>
+      </PanelChrome>;
     case 'meta':
     case 'plans':
       return (

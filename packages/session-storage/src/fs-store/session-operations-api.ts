@@ -18,6 +18,7 @@ import { FsSessionDirectory } from './session-directory.js';
 import { FsSessionEntityFiles } from './entity-files.js';
 import { FsSessionRollbackRepository } from './session-rollback-api.js';
 import { FsToolOutputReader } from './tool-output-reader.js';
+import { ConversationStatsReader, type ReadConversationStats } from './conversation-stats.js';
 import type {
   FsAppendMessageUsage,
   FsCoderSession,
@@ -77,7 +78,10 @@ export class FsSessionOperations {
   readonly #outputs: FsToolOutputReader;
   readonly #chapters: FsConversationChapterRepository;
 
-  constructor(private readonly directory: FsSessionDirectory) {
+  constructor(
+    private readonly directory: FsSessionDirectory,
+    private readonly readStats: ReadConversationStats = new ConversationStatsReader().read,
+  ) {
     this.#writer = new FsConversationWriter(directory);
     this.#outputs = new FsToolOutputReader(directory);
     this.#chapters = new FsConversationChapterRepository(
@@ -91,21 +95,11 @@ export class FsSessionOperations {
   ): Promise<CoderSessionStats | null> {
     const entry = await this.directory.entry(id);
     if (!entry) return null;
-    const projection = projectConversation(
-      this.directory.repository.readConversationSync(entry.location),
-    );
+    this.directory.repository.assertLocationMatchesResolver(entry.location);
+    const { latest, ...counts } = await this.readStats(entry.location);
     const session = this.directory.map(entry);
-    let latest: FsStoredMessage['usage'] | undefined;
-    let assistantTurns = 0;
-    for (const { role, usage } of projection.storedMessages) {
-      if (role !== 'assistant') continue;
-      assistantTurns++;
-      if (usage.context || usage.input_tokens > 0 || usage.cache_read_tokens > 0 || usage.cache_creation_tokens > 0) {
-        latest = usage;
-      }
-    }
-    const tools = projection.toolCalls;
     return {
+      ...counts,
       total_input_tokens: session.total_input_tokens,
       total_output_tokens: session.total_output_tokens,
       total_cache_read_tokens: session.total_cache_read_tokens,
@@ -116,20 +110,6 @@ export class FsSessionOperations {
         provider: session.provider, inputTokens: latest.input_tokens,
         cacheReadTokens: latest.cache_read_tokens, cacheCreationTokens: latest.cache_creation_tokens,
       }) : null),
-      message_count: projection.storedMessages.length,
-      assistant_turns: assistantTurns,
-      tool_call_count: tools.length,
-      tool_error_count: tools.filter((tool) => tool.is_error).length,
-      distinct_tools: new Set(tools.map((tool) => tool.tool_name)).size,
-      subagent_call_count: tools.filter((tool) =>
-        ['spawn_agent', 'spawn_subagent', 'spawn_agents'].includes(
-          tool.tool_name,
-        ),
-      ).length,
-      total_tool_duration_ms: tools.reduce(
-        (total, tool) => total + tool.duration_ms,
-        0,
-      ),
       duration_ms: Math.max(
         0,
         Date.parse(session.updated_at) - Date.parse(session.created_at),
@@ -450,8 +430,9 @@ export type FsSessionOperationsApi = Pick<
 export function installSessionOperationsApi(
   target: object,
   directory: FsSessionDirectory,
+  readStats?: ReadConversationStats,
 ): void {
-  const operations = new FsSessionOperations(directory);
+  const operations = new FsSessionOperations(directory, readStats);
   for (const name of [
     'getSessionStats',
     'duplicateSession',

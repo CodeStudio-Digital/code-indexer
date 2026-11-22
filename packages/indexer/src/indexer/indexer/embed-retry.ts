@@ -12,8 +12,10 @@
  * which is exactly what waves avoid. Consumers only render
  * current/total/percent, which keep their meaning.
  */
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { CodeIndexDB } from '@mcp/store/db.js';
+import { EMBEDDING_PAGE_SIZE, type EmbeddingFile } from '@mcp/store/db/embedding-files.js';
 import { NullEmbeddingService } from '@mcp/indexer/search/embeddings.js';
 
 import {
@@ -37,8 +39,8 @@ export interface EmbeddingRetryResult {
 }
 
 export class EmbeddingPauseRequestedError extends Error {
-  constructor() {
-    super('semantic backfill paused because the project is no longer active');
+  constructor(message = 'semantic backfill paused because the project is no longer active') {
+    super(message);
     this.name = 'EmbeddingPauseRequestedError';
   }
 }
@@ -54,6 +56,46 @@ function clampWaveFiles(value: number, fallback = FALLBACK_WAVE_FILES): number {
 
 function configuredWaveFiles(): number {
   return clampWaveFiles(Number(process.env.MCP_EMBED_WAVE_FILES));
+}
+
+async function embeddingManifest(db: CodeIndexDB, projectId: number, folders: string[], paths?: readonly string[]) {
+  if (paths) {
+    const selected = [...new Set(paths.map(path => path.replace(/\\/g, '/')))].filter(path => isSemanticPath(folders, path));
+    const files: EmbeddingFile[] = [];
+    for (let start = 0; start < selected.length; start += EMBEDDING_PAGE_SIZE) {
+      const batch = selected.slice(start, start + EMBEDDING_PAGE_SIZE);
+      const rows = await db.readEmbeddingFiles(projectId, { kind: 'paths', paths: batch });
+      const byPath = new Map(rows.map(row => [row.path, row]));
+      for (const path of batch) { const row = byPath.get(path); if (row) files.push(row); }
+    }
+    return { total: files.length, pages: [files] };
+  }
+  const { total, maxId } = await db.readEmbeddingFiles(projectId, { kind: 'bounds', folders });
+  async function* pages() {
+    if (!total) return;
+    for (const folder of folders) {
+      let after = '';
+      for (;;) {
+        const rows = await db.readEmbeddingFiles(projectId, { kind: 'page', folder, after, maxId });
+        if (!rows.length) break;
+        yield rows;
+        if (rows.length < EMBEDDING_PAGE_SIZE) break;
+        after = rows.at(-1)!.path;
+      }
+    }
+  }
+  return { total, pages: pages() };
+}
+
+async function* embeddingWaves(pages: Iterable<EmbeddingFile[]> | AsyncIterable<EmbeddingFile[]>, size: number) {
+  let wave: EmbeddingFile[] = [];
+  for await (const page of pages) {
+    for (const file of page) {
+      wave.push(file);
+      if (wave.length === size) { yield wave; wave = []; }
+    }
+  }
+  if (wave.length) yield wave;
 }
 
 export async function retryEmbeddings(
@@ -83,15 +125,8 @@ export async function retryEmbeddings(
 
   const project = deps.db.resolveProject(undefined, projectNameOrPath) ?? deps.db.resolveProject(projectNameOrPath);
   const folders = projectSemanticFolders(project);
-  const requestedPaths = options?.paths
-    ? [...new Set(options.paths.map((path) => path.replace(/\\/g, '/')))]
-    : null;
-  const dbFiles = requestedPaths
-    ? requestedPaths.filter((path) => isSemanticPath(folders, path)).flatMap((path) => {
-        const file = deps.db.getFile(project.id, path);
-        return file ? [file] : [];
-      })
-    : folders.includes('.') ? deps.db.listFiles(project.id) : deps.db.listFilesInFolders(project.id, folders);
+  if (options?.shouldPause?.()) throw new EmbeddingPauseRequestedError();
+  const manifest = await embeddingManifest(deps.db, project.id, folders, options?.paths);
   const requestedWaveFiles = options?.waveFiles ?? configuredWaveFiles();
   const waveFiles = clampWaveFiles(requestedWaveFiles);
   const concurrency = resolveEmbedConcurrency(deps.embeddingService);
@@ -102,7 +137,7 @@ export async function retryEmbeddings(
   let tokens = 0;
   let lshFailed = 0;
   let failedBatches = 0;
-  const total = dbFiles.length;
+  let total = manifest.total;
 
   const reportProgress = (): void => {
     options?.onProgress?.({
@@ -114,13 +149,12 @@ export async function retryEmbeddings(
 
   console.error(`[indexer] Retry embedding: ${total} file(s) in waves of ${waveFiles}`);
 
-  for (let start = 0; start < dbFiles.length; start += waveFiles) {
+  for await (const waveRows of embeddingWaves(manifest.pages, waveFiles)) {
     if (options?.shouldPause?.()) throw new EmbeddingPauseRequestedError();
-    const waveRows = dbFiles.slice(start, start + waveFiles);
     const files: CandidateFile[] = [];
     for (const dbFile of waveRows) {
       let content: string;
-      try { content = readFileSync(join(project.root_path, dbFile.path), 'utf-8'); }
+      try { content = await readFile(join(project.root_path, dbFile.path), 'utf-8'); }
       catch { filesMissing++; filesDone++; continue; }  // removed from disk — skip
 
       const dbSymbols = deps.db.getSymbolsByFile(project.id, dbFile.path);
@@ -179,6 +213,8 @@ export async function retryEmbeddings(
   if (lshFailed > 0) {
     console.warn(`[indexer] LSH sink failed for ${lshFailed} record(s) during retry`);
   }
+  // A file removed during a sweep can disappear before its keyset page is read.
+  total = filesDone;
   reportProgress();
 
   return { embedded, skipped: filesMissing, tokens, failedBatches };

@@ -17,6 +17,7 @@
     "@mcp/store": "workspace:*",
     "web-tree-sitter": "^0.24.7",
     "glob": "^11.0.1",
+    "koffi": "3.3.6",
     "minimatch": "^10.0.1"
   },
   "devDependencies": {

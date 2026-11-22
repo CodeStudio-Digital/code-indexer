@@ -9,7 +9,6 @@ import { defineLspRoute } from '@mcp/services/lsp/lsp-route.js';
 import type { LspServerHandle } from '@mcp/services/lsp/lsp-server-handle.js';
 import {
   getLspServerManager,
-  type LspRouteIdentity,
   type LspServerManager,
 } from '@mcp/services/lsp/lsp-server-manager.js';
 import {
@@ -19,14 +18,14 @@ import {
 } from '@mcp/services/lsp/server-registry.js';
 import { resolveProjectNodeBinDir } from '../runtime/node-manager.js';
 import { loadedExtensionsForRuntimeId } from '../runtime/php-manager.js';
-import { angularProfileTarget } from './angular-profile-routing.js';
+import { angularProfileTarget, projectAngularDiscovery } from './angular-profile-routing.js';
 import { wireAngularWorkspaceRetirement } from './angular-workspace-retirement.js';
 import { clearDiagnosticsSource } from './diagnostics-hub.js';
 import {
   createServerDiagnosticsBatcher,
   type ServerDiagnosticsBatcher,
 } from './diagnostics-batcher.js';
-import { docsForProject, getDoc, onDocEvent } from './document-store.js';
+import { docsForProject, getDoc, onDocEvent, type StoredDoc } from './document-store.js';
 import { detectLanguageLevel } from './language-level-detect.js';
 import { resolveLspRuntime } from './lsp-runtime.js';
 import { serverInfo } from './server-backend-mappers.js';
@@ -57,27 +56,13 @@ function projectPhpExtensions(db: CodeIndexDB, projectId: number): string[] {
 
 function wireDocumentEvents(db: CodeIndexDB, manager: LspServerManager): void {
   wireAngularWorkspaceRetirement(db, manager);
+  const overlayRoutes = new WeakMap<StoredDoc, string>();
+  const resolving = new WeakSet<StoredDoc>();
   onDocEvent(({ projectId, file, doc, kind, changes }) => {
     const root = db.getProject(projectId)?.root_path;
     if (!root) return;
     const primary = serverForLanguage(doc.languageId);
-    const angular = angularProfileTarget(db, projectId, root, file, doc.languageId);
-    if (!primary && !angular) return;
     const abs = relToAbs(root, file);
-    if (kind === 'open') {
-      const targets = [
-        primary ? { def: primary } : undefined,
-        angular ? { def: angular.def, identity: angular.identity } : undefined,
-      ].filter((target): target is { def: LspServerDef; identity?: LspRouteIdentity } => !!target);
-      for (const target of targets) {
-        void manager.acquireById(projectId, target.def.id, 'open', target.identity).then((acquired) => {
-          if (acquired?.handle.state === 'ready') {
-            acquired.handle.ensureOpen(abs, doc.languageId, doc.version, doc.content);
-          }
-        }).catch(() => undefined);
-      }
-      return;
-    }
     const forward = (handle: LspServerHandle, def: LspServerDef) => {
       if (!def.languages.includes(doc.languageId)) return;
       if (kind === 'change') {
@@ -90,13 +75,38 @@ function wireDocumentEvents(db: CodeIndexDB, manager: LspServerManager): void {
         handle.didClose(abs);
       }
     };
-    manager.forEachReady(projectId, (handle, def, _workspaceRoot, routeId) => {
-      if (!routeId) forward(handle, def);
-    });
-    if (angular?.identity) {
-      const routeId = defineLspRoute(angular.identity).routeId;
-      manager.forEachReady(projectId, (handle, def) => forward(handle, def), routeId);
+    if (kind === 'open') {
+      if (primary) void manager.acquireById(projectId, primary.id, 'open').then(acquired => {
+        if (acquired?.handle.state === 'ready' && getDoc(projectId, file) === doc) {
+          acquired.handle.ensureOpen(abs, doc.languageId, doc.version, doc.content);
+        }
+      }).catch(() => undefined);
+    } else {
+      const bound = overlayRoutes.get(doc);
+      manager.forEachReady(projectId, (handle, def, _workspaceRoot, routeId) => {
+        if (!routeId || routeId === bound) forward(handle, def);
+      });
     }
+
+    if (kind === 'close' || resolving.has(doc)) return;
+    resolving.add(doc);
+    void angularProfileTarget(db, projectId, root, file, doc.languageId).then(async target => {
+      if (getDoc(projectId, file) !== doc) return;
+      const next = target?.identity && defineLspRoute(target.identity).routeId;
+      const previous = overlayRoutes.get(doc);
+      if (previous === next) return;
+      if (previous) {
+        manager.forEachReady(projectId, handle => handle.didClose(abs), previous);
+        overlayRoutes.delete(doc);
+      }
+      if (!next || !target) return;
+      overlayRoutes.set(doc, next);
+      const acquired = await manager.acquireById(projectId, target.def.id, 'open', target.identity);
+      if (acquired?.handle.state === 'ready' && getDoc(projectId, file) === doc) {
+        // Edits received during discovery are already in this live buffer.
+        acquired.handle.ensureOpen(abs, doc.languageId, doc.version, doc.content);
+      }
+    }).catch(() => undefined).finally(() => resolving.delete(doc));
   });
 }
 
@@ -104,6 +114,7 @@ function wireDocumentEvents(db: CodeIndexDB, manager: LspServerManager): void {
 export function ensureLspManager(db: CodeIndexDB): LspServerManager {
   const levelsFor = (projectId: number) => projectLanguageLevels(db, projectId);
   const manager = getLspServerManager({
+    angularWorkspaces: projectAngularDiscovery(db),
     resolveNodeBin: (projectId) => {
       try {
         return resolveProjectNodeBinDir(db, projectId, mcpDataDir());

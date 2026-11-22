@@ -72,16 +72,16 @@ export function createEditorOpsHandlers(
     root: string,
     file: string,
     languageId: string,
-  ): AngularProfileTarget | undefined => angularProfileTarget(db, projectId, root, file, languageId);
+  ) => angularProfileTarget(db, projectId, root, file, languageId);
 
-  const angularOverlayAt = (
+  const angularOverlayAt = async (
     projectId: number,
     root: string,
     file: string,
     languageId: string,
     position: { line: number; column: number },
-  ): AngularProfileTarget | undefined => {
-    const overlay = angularOverlay(projectId, root, file, languageId);
+  ): Promise<AngularProfileTarget | undefined> => {
+    const overlay = await angularOverlay(projectId, root, file, languageId);
     if (!overlay) return undefined;
     return shouldUseAngularInteractiveOverlay({
       projectId,
@@ -96,7 +96,7 @@ export function createEditorOpsHandlers(
     async signatureHelp({ projectId, file, position }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayAt(projectId, root, file, lang, position);
+      const angular = await angularOverlayAt(projectId, root, file, lang, position);
       if (angular) {
         const viaAngular = await serverSignatureHelp(
           db, projectId, root, file, lang, position, ctx.signal, angular.target,
@@ -119,7 +119,7 @@ export function createEditorOpsHandlers(
     async documentSymbols({ projectId, file }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlay(projectId, root, file, lang);
+      const angular = await angularOverlay(projectId, root, file, lang);
       if (angular) {
         const viaAngular = await serverDocumentSymbols(
           db, projectId, root, file, lang, ctx.signal, angular.target,
@@ -149,7 +149,7 @@ export function createEditorOpsHandlers(
       const root = helpers.requireProjectRoot(projectId);
 
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayAt(projectId, root, file, lang, position);
+      const angular = await angularOverlayAt(projectId, root, file, lang, position);
       if (angular) {
         const edit = await serverRename(
           db, projectId, root, file, lang, position, trimmed, ctx.signal, angular.target,
@@ -261,7 +261,7 @@ export function createEditorOpsHandlers(
     async implementation({ projectId, file, position }, ctx) {
       const root = helpers.requireProjectRoot(projectId);
       const lang = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayAt(projectId, root, file, lang, position);
+      const angular = await angularOverlayAt(projectId, root, file, lang, position);
       if (angular) {
         const viaAngular = await serverImplementation(
           db, projectId, root, file, lang, position, ctx.signal, angular.target,

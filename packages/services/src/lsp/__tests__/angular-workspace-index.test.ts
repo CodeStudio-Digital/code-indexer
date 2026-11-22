@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getAngularWorkspaceIndex,
+  buildAngularWorkspaceIndex,
+  loadAngularWorkspaceIndex,
   invalidateAngularWorkspaceForPath,
   invalidateAngularWorkspaceIndex,
   resolveAngularWorkspace,
@@ -36,6 +38,42 @@ afterEach(() => {
 });
 
 describe('Angular workspace index', () => {
+  it('shares a background scan and starts its TTL after the worker completes', async () => {
+    const projectRoot = root();
+    let now = 0;
+    let calls = 0;
+    const options = { now: () => now, ttlMs: 30 };
+    const scan = async () => {
+      calls++;
+      await Promise.resolve();
+      now += 50;
+      return buildAngularWorkspaceIndex(projectRoot, options, now);
+    };
+    const first = loadAngularWorkspaceIndex(projectRoot, options, scan);
+    const second = loadAngularWorkspaceIndex(projectRoot, options, scan);
+    expect(await first).toBe(await second);
+    now += 29;
+    expect(await loadAngularWorkspaceIndex(projectRoot, options, scan)).toBe(await first);
+    expect(calls).toBe(1);
+    now += 1;
+    expect(await loadAngularWorkspaceIndex(projectRoot, options, scan)).not.toBe(await first);
+    expect(calls).toBe(2);
+  });
+
+  it('discards in-flight metadata after invalidation and retries failed discovery', async () => {
+    const projectRoot = root();
+    const old = buildAngularWorkspaceIndex(projectRoot, {}, 0);
+    let release!: (value: typeof old) => void;
+    const first = loadAngularWorkspaceIndex(projectRoot, {}, () => new Promise(resolve => { release = resolve; }));
+    invalidateAngularWorkspaceIndex(projectRoot);
+    await expect(loadAngularWorkspaceIndex(projectRoot, {}, async () => { throw new Error('scan failed'); })).rejects.toThrow('scan failed');
+    packageJson(projectRoot, { '@angular/core': '19.0.0' });
+    const fresh = await loadAngularWorkspaceIndex(projectRoot, {}, async () => buildAngularWorkspaceIndex(projectRoot, {}, 1));
+    release(old);
+    expect(await first).toBe(fresh);
+    expect(fresh.facets[0]?.major).toBe(19);
+  });
+
   it('maps Angular CLI multi-project files by the longest source-root prefix', () => {
     const projectRoot = root();
     packageJson(projectRoot, { '@angular/core': '^17.0.0' });

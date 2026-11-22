@@ -14,6 +14,7 @@ import {
   toJsonValue,
 } from './conversation-codec.js';
 import { FsSessionDirectory } from './session-directory.js';
+import { SnapshotEntityIndex } from './snapshot-entity-index.js';
 
 export interface FsEntityEnvelope<T extends JsonValue = JsonValue> {
   schema_version: 1;
@@ -131,6 +132,7 @@ function isLegacyControlPlaneEnvelope(value: unknown): boolean {
 }
 
 export class FsSessionEntityFiles {
+  private readonly snapshots = new SnapshotEntityIndex();
   constructor(private readonly directory: FsSessionDirectory) {}
 
   async *scan<T extends JsonValue>(sessionId: SessionId | string, entityDirectory: SessionEntityDirectory,
@@ -191,6 +193,7 @@ export class FsSessionEntityFiles {
     entityDirectory: SessionEntityDirectory,
     kind?: string,
     includeDeleted = false,
+    roundMessageId?: number,
   ): Promise<FsEntityEnvelope<T>[]> {
     const entry = await this.directory.requireEntry(sessionId);
     const root = join(
@@ -198,9 +201,19 @@ export class FsSessionEntityFiles {
       ...entityDirectory.split('/'),
     );
     await assertPathHasNoLinks(entry.location.bundle_path, root);
-    const names = (await readdir(root))
-      .filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name));
+    const allNames = async () => (await readdir(root)).filter(name => /^[0-9a-f-]{36}\.json$/i.test(name));
+    const names = entityDirectory === 'snapshots' && kind
+      ? await this.snapshots.select(root, kind, roundMessageId, async visit => this.readNames(root, await allNames(), visit))
+      : await allNames();
     const records: FsEntityEnvelope<T>[] = [];
+    await this.readNames<T>(root, names, (_name, record) => {
+      if ((kind == null || record.kind === kind) && (includeDeleted || record.deleted_at == null)) records.push(record);
+    });
+    return records.sort((left, right) => left.seq - right.seq);
+  }
+
+  private async readNames<T extends JsonValue>(root: string, names: readonly string[],
+    visit: (name: string, record: FsEntityEnvelope<T>) => void): Promise<void> {
     // Bound I/O so one large session cannot flood libuv, while keeping every
     // filesystem syscall off Electron's main event loop.
     for (let offset = 0; offset < names.length; offset += 16) {
@@ -208,14 +221,8 @@ export class FsSessionEntityFiles {
         names.slice(offset, offset + 16).map((name) =>
           this.readListedEnvelope<T>(root, name)),
       );
-      records.push(...batch.filter(
-        (record): record is FsEntityEnvelope<T> => record != null,
-      ));
+      batch.forEach((record, i) => { if (record) visit(names[offset + i]!, record); });
     }
-    return records
-      .filter((record) => (kind == null || record.kind === kind))
-      .filter((record) => includeDeleted || record.deleted_at == null)
-      .sort((left, right) => left.seq - right.seq);
   }
 
   async get<T extends JsonValue>(
@@ -334,6 +341,7 @@ export class FsSessionEntityFiles {
       toJsonValue(record),
       input.beforePublish,
     );
+    if (entityDirectory === 'snapshots') this.snapshots.invalidate(join(entry.location.bundle_path, 'snapshots'));
     return record;
   }
 
@@ -390,6 +398,7 @@ export class FsSessionEntityFiles {
       toJsonValue(prepared.record),
       options.beforePublish,
     );
+    if (entityDirectory === 'snapshots') this.snapshots.invalidate(join(entry.location.bundle_path, 'snapshots'));
     return prepared.record;
   }
 

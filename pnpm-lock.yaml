@@ -157,6 +157,9 @@ importers:
       jsonpath-plus:
         specifier: ^10.4.0
         version: 10.4.0
+      koffi:
+        specifier: 3.3.6
+        version: 3.3.6
       lucide-react:
         specifier: ^1.7.0
         version: 1.8.0(react@19.2.5)
@@ -677,6 +680,9 @@ importers:
       glob:
         specifier: ^11.0.1
         version: 11.1.0
+      koffi:
+        specifier: 3.3.6
+        version: 3.3.6
       minimatch:
         specifier: ^10.0.1
         version: 10.2.5

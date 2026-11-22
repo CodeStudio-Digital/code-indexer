@@ -54,6 +54,7 @@ import { TurnFrame, TurnInfoScope } from './TurnFrame.js';
 import { TurnFooter } from './TurnFooter.js';
 import { prependRoundMarkdown, type ReadMarkdown } from './round-markdown.js';
 import { ChapterSourcePager, CHAPTER_SOURCE_PAGE_SIZE, MAX_OPEN_CHAPTER_SOURCES, type ChapterSourceState } from './chapter-source-pager.js';
+import { SideChatSelectionButton } from './SideChatSelectionButton.js';
 import { useTranscriptSelection } from './transcript-selection.js';
 import { findMarkdownLayout, TranscriptScrollContext, type MarkdownScrollLayout } from './transcript-scroll-context.js';
 import { LARGE_MARKDOWN_CHARS } from './Markdown.js';
@@ -799,6 +800,7 @@ export const MessageList = React.memo(function MessageList({
   return (
     <ChatFileLinks endpoint={sessionId ? '/api/coder/sessions/' + encodeURIComponent(sessionId) + '/linked-file' : null}>
     <div className="relative min-h-0 flex-1">
+      {sessionId && <SideChatSelectionButton root={scrollRef} sessionId={sessionId}/>}
       {chapters.length > 1 && (
         <nav
           aria-label={t('messages.chapterQuickNav')}
@@ -855,6 +857,8 @@ export const MessageList = React.memo(function MessageList({
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
                   data-transcript-row-key={row.key}
+                  data-side-source={row.kind === 'live-block' ? 'live' : row.kind === 'message'
+                    ? row.group.kind === 'user' ? row.group.messageId : row.group.messageIds[0] : undefined}
                   className={`absolute left-0 top-0 w-full px-3 sm:px-6 lg:px-8${assistantRow ? '' : ' pb-1'}`}
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >

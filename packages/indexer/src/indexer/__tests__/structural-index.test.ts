@@ -275,11 +275,13 @@ describe('structural index pipeline', () => {
     const added = await indexFilesStructural(h.db, h.projectId, ['gamma.ts']);
     expect(added.indexed).toBe(1);
     expect(h.db.getFile(h.projectId, 'gamma.ts')).toBeTruthy();
+    expect(h.db.getProjectCatalogEntry(h.projectId)).toMatchObject(h.db.getStructuralCounts(h.projectId));
 
     // Deleted on disk → row + symbols + content index all cleared.
     h.deleteFile('beta.ts');
     const removedViaIndex = await indexFilesStructural(h.db, h.projectId, ['beta.ts']);
     expect(removedViaIndex.removed).toBe(1);
+    expect(h.db.getProjectCatalogEntry(h.projectId)).toMatchObject(h.db.getStructuralCounts(h.projectId));
     expect(h.db.getFile(h.projectId, 'beta.ts')).toBeUndefined();
     expect(h.db.getSymbolsByFile(h.projectId, 'beta.ts')).toHaveLength(0);
     expect(h.db.searchFileContents(h.projectId, 'betaFn')).toHaveLength(0);

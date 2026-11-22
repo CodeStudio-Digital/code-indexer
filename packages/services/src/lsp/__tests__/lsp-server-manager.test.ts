@@ -207,6 +207,57 @@ describe('LspServerManager plugin route refresh', () => {
     sizeLabel: '~13 MB',
   });
 
+  it('uses completed discovery for synchronous notifications and awaits nested Angular for a project status request', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lsp-nested-status-'));
+    tmps.push(root);
+    mkdirSync(join(root, 'frontend'));
+    writeFileSync(join(root, 'frontend', 'angular.json'), '{}');
+    replacePluginLanguageServers([{ namespace: 'angular', contribution: angularContribution('21.2.18') }]);
+    let markers: { angularJson: boolean; angularPackage: boolean } | undefined;
+    const load = vi.fn(async () => { markers = { angularJson: true, angularPackage: false }; });
+    const manager = new LspServerManager({
+      baseDir: root, resolveRoot: () => root, resolveNodeBin: () => null,
+      resolveRuntime: (_id, requirement) => ({ ...requirement, satisfied: true }),
+      docsForReplay: () => [], onDiagnostics: () => undefined,
+      angularWorkspaces: { cached: () => markers, load },
+    });
+    try {
+      expect(manager.status(1, 'typescript').server?.id).not.toBe('angular-language-server');
+      expect(load).not.toHaveBeenCalled();
+      expect((await manager.resolveStatus(1, 'typescript')).server?.id).toBe('angular-language-server');
+      expect((await manager.resolveStatus(1, 'html')).server?.id).toBe('angular-language-server');
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      replacePluginLanguageServers([]);
+    }
+  });
+
+  it('retires an Angular route while its workspace discovery is still running', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lsp-angular-retire-'));
+    tmps.push(root);
+    replacePluginLanguageServers([{ namespace: 'angular', contribution: angularContribution('21.2.18') }]);
+    let finish!: () => void;
+    const discovery = new Promise<void>(resolve => { finish = resolve; });
+    const manager = new LspServerManager({
+      baseDir: root, resolveRoot: () => root, resolveNodeBin: () => null,
+      resolveRuntime: (_id, requirement) => ({ ...requirement, satisfied: true }),
+      docsForReplay: () => [], onDiagnostics: () => undefined,
+      angularWorkspaces: { cached: () => undefined, load: () => discovery },
+    });
+    try {
+      const pending = manager.acquireById(1, 'angular-language-server', 'manual', {
+        familyId: 'angular', profileId: 'ng21', workspaceFingerprint: 'root',
+      });
+      expect(await manager.retireRoutes(1, 'angular')).toBe(1);
+      finish();
+      await expect(pending).resolves.toBeNull();
+      expect(await manager.retireRoutes(1, 'angular')).toBe(0);
+    } finally {
+      finish();
+      replacePluginLanguageServers([]);
+    }
+  });
+
   it('refreshes cached routes after a plugin server changes and disappears, even without a live instance', async () => {
     const baseDir = mkdtempSync(join(tmpdir(), 'mcp-lsp-manager-'));
     const root = mkdtempSync(join(tmpdir(), 'mcp-angular-project-'));

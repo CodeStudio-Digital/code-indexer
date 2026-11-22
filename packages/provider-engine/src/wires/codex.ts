@@ -54,7 +54,7 @@ export function buildCodex(spec: ProviderSpec): WireParts {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      const imageGenerationEnabled = imageGenOptIn && imageAllow.includes(wireModel);
+      const imageGenerationEnabled = !opts?.textOnly && imageGenOptIn && imageAllow.includes(wireModel);
 
       return new ChatGPTCodexProvider({
         apiKey: creds.apiKey ?? '',
@@ -66,7 +66,7 @@ export function buildCodex(spec: ProviderSpec): WireParts {
         reasoningSummaryFromThinking: true,
         parallelToolCalls: supportsCodexSessionCapabilities(wireModel),
         textVerbosity: supportsCodexSessionCapabilities(wireModel) ? 'low' : null,
-        websocketMode: process.env.CODEX_WEBSOCKET_MODE !== '0'
+        websocketMode: !opts?.textOnly && process.env.CODEX_WEBSOCKET_MODE !== '0'
           && (creds.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, '') === DEFAULT_BASE_URL,
         applyPatchToolType,
         imageGenerationEnabled,

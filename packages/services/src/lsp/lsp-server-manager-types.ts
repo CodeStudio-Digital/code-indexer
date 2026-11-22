@@ -1,4 +1,5 @@
 import type { LspServerHandle } from './lsp-server-handle.js';
+import type { AngularWorkspaceMarkers } from './angular-workspace-scanner.js';
 import type { LspDiagnostic } from './lsp-protocol.js';
 import type { LspRouteDescriptor } from './lsp-route.js';
 import type { LspRuntimeResolution, LspServerDef } from './server-registry.js';
@@ -31,6 +32,10 @@ export interface LspReplayDocument {
 }
 
 export interface LspManagerDeps {
+  angularWorkspaces?: {
+    cached(projectId: number, root: string): AngularWorkspaceMarkers | undefined;
+    load(projectId: number, root: string): Promise<unknown>;
+  };
   baseDir?: string;
   resolveNodeBin: (projectId: number) => string | null;
   resolveRoot: (projectId: number) => string | null;

@@ -24,6 +24,7 @@ import {
 import { Input } from '../../components/ui/input.js';
 import { ChatHeader } from './ChatHeader.js';
 import { LiveChatRightRail as ChatRightRail } from './right-panel/ChatRightRail.js';
+import type { OpenSideChat } from './right-panel/side-chat-command.js';
 import { RightPanelHost } from './right-panel/RightPanelHost.js';
 import {
   SESSION_INSIGHTS_TAB_EVENT,
@@ -259,6 +260,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
    *
    * Persisted so the user's preferred default panel survives reloads.
    */
+  const [sideLaunch, setSideLaunch] = useState<OpenSideChat>();
   const [activeRightPanelId, setActiveRightPanelId] = useState<RightPanelId | null>(() => {
     if (typeof window === 'undefined') return 'meta';
     const saved = localStorage.getItem('chatRightPanelId');
@@ -287,6 +289,21 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
     return saved as RightPanelId;
   });
+  const openSide = useCallback((question: string) => {
+    if (!selectedId) return;
+    setSideLaunch({ key: crypto.randomUUID(), parentId: selectedId, question });
+    setActiveRightPanelId('side-chat');
+  }, [selectedId]);
+  const sideConsumed = useCallback((key: string) => setSideLaunch(old => old?.key === key ? undefined : old), []);
+  useEffect(() => {
+    const select = (event: Event) => {
+      const detail = (event as CustomEvent<OpenSideChat>).detail;
+      if (detail.parentId !== selectedId) return;
+      setSideLaunch(detail); setActiveRightPanelId('side-chat');
+    };
+    window.addEventListener('coder:ask-in-side-chat', select);
+    return () => window.removeEventListener('coder:ask-in-side-chat', select);
+  }, [selectedId]);
   useEffect(() => {
     const open = (event: Event) => { if ((event as CustomEvent).detail?.sessionId === selectedId) setActiveRightPanelId('collaboration'); };
     window.addEventListener('coder:open-collaboration', open);
@@ -1796,6 +1813,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               <IndexingOverlay projectId={projectIndexId} />
               <ProviderSelectionNotice state={providerChange} onRetry={retryProviderChange} />
               <Composer
+                onSideChat={selectedId ? openSide : undefined}
                     sessionCollaboration
                 ref={composerRef}
                 filePicks={filePicks}
@@ -1864,19 +1882,20 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 Other (narrow tool-window) panels keep the gate. */}
             <PanelResizeHandle
               className={`w-px bg-border hover:bg-primary/40 transition-colors ${
-                activeRightPanelId === 'diagram' ? 'block' : 'hidden lg:block'
+                activeRightPanelId === 'diagram' || activeRightPanelId === 'side-chat' ? 'block' : 'hidden lg:block'
               }`}
             />
             <Panel
               id="right-panel"
               order={3}
-              defaultSize={activeRightPanelId === 'diagram' ? 52 : 22}
+              defaultSize={activeRightPanelId === 'diagram' ? 52 : activeRightPanelId === 'side-chat' ? 34 : 22}
               minSize={activeRightPanelId === 'diagram' ? 32 : 16}
               maxSize={activeRightPanelId === 'diagram' ? 72 : 38}
               collapsible
-              className={activeRightPanelId === 'diagram' ? 'block min-w-0' : 'hidden lg:block min-w-0'}
+              className={activeRightPanelId === 'diagram' || activeRightPanelId === 'side-chat' ? 'block min-w-0' : 'hidden lg:block min-w-0'}
             >
               <RightPanelHost
+                sideLaunch={sideLaunch} onSideConsumed={sideConsumed}
                 activeId={activeRightPanelId}
                 onSelectPanel={setActiveRightPanelId}
                 sessionId={selectedId}
@@ -1957,6 +1976,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       )}
       {workbenchSlots?.rightPanelHost && selectedId && activeRightPanelId && createPortal(
         <RightPanelHost
+          sideLaunch={sideLaunch} onSideConsumed={sideConsumed}
           activeId={activeRightPanelId}
           onSelectPanel={setActiveRightPanelId}
           sessionId={selectedId}

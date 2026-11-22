@@ -52,7 +52,10 @@ export interface ComposerHandle {
   setAttachments: (a: AgentAttachment[]) => void;
 }
 
+import { sideChatQuestion } from '../right-panel/side-chat-command.js';
+
 interface ComposerProps {
+  onSideChat?: (question: string) => void;
   sessionCollaboration?: boolean;
   onSend: (text: string, attachments: AgentAttachment[], selectedSkillIds?: string[]) => void;
   onAbort: () => void;
@@ -297,7 +300,16 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
 
     const hasInput = input.trim().length > 0 || attachments.length > 0 || picker.picks.length > 0 || !!props.skillPicks?.length;
 
+    const sideQuestion = props.onSideChat && sideChatQuestion(input);
+    const openSide = useCallback(() => {
+      if (sideQuestion === undefined || !props.onSideChat) return false;
+      props.onSideChat(sideQuestion);
+      setInput('');
+      return true;
+    }, [props.onSideChat, sideQuestion]);
+
     const handleSend = useCallback(async () => {
+      if (openSide()) return;
       if (props.sendBlocked || (!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length)) return;
 
       // Admin send-gate (friction-only). Real safety is the runner's
@@ -357,13 +369,14 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, picker.picks, resolveTypedSkill, references.commit, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.sendBlocked, confirm, clearDraft, t]);
+    }, [openSide, input, attachments, picker.picks, resolveTypedSkill, references.commit, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.sendBlocked, confirm, clearDraft, t]);
 
     // Enqueue the composed message while the agent is streaming. Same
     // file_refs prefixing + clears as `handleSend`, but the delivery timing
     // (next turn vs end of session) is decided by the queue. Attachments travel
     // with the queued item so they cannot bleed into a later immediate send.
     const handleQueue = useCallback(async (mode: QueueMode) => {
+      if (openSide()) return;
       if (queueSubmission.current || props.sendBlocked || (!input.trim() && attachments.length === 0 && picker.picks.length === 0 && !props.skillPicks?.length) || !props.onQueue) return;
       queueSubmission.current = true;
       try {
@@ -401,7 +414,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
         props.onClearPicks?.();
         props.onClearSkillPicks?.();
       } finally { queueSubmission.current = false; }
-    }, [input, attachments, picker.picks, resolveTypedSkill, references.commit, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, props.sendBlocked, clearDraft, t]);
+    }, [openSide, input, attachments, picker.picks, resolveTypedSkill, references.commit, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, props.sendBlocked, clearDraft, t]);
 
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;
@@ -546,7 +559,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               <span className="block font-medium">{item.kind === 'chat' ? '@' : '$'}{item.label}</span><span className="block truncate text-muted-foreground">{item.detail}</span>
             </button>)}
           </div>}
-          {picker.open && (
+          {picker.open && sideQuestion === undefined && (
             <div role="listbox" aria-label={t('composer.skills')} className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-lg border bg-popover text-popover-foreground shadow-md max-h-56 overflow-auto">
               {picker.loading && <p className="p-3 text-xs text-muted-foreground">{t('composer.skillsLoading')}</p>}
               {!picker.loading && picker.visible.length === 0 && <p className="p-3 text-xs text-muted-foreground">{t(picker.error ? 'composer.skillsError' : 'composer.skillsEmpty')}</p>}
@@ -568,6 +581,9 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             onSelect={(e) => picker.setCaret(e.currentTarget.selectionStart)}
             onPaste={onPaste}
             onKeyDown={(e) => {
+              if (sideQuestion !== undefined && e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault(); openSide(); return;
+              }
               if (e.nativeEvent.isComposing) return;
               if (references.open) {
                 if (e.key === 'Escape') { e.preventDefault(); references.dismiss(); return; }
@@ -656,7 +672,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               toolPermissionMode={props.toolPermissionMode}
               setToolPermissionMode={props.setToolPermissionMode}
               queueable={!!props.queueable}
-              sendBlocked={props.sendBlocked}
+              sendBlocked={props.sendBlocked && sideQuestion === undefined}
               onQueueSend={handleQueue}
               onTranscript={appendTranscript}
             />
@@ -730,7 +746,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             setReasoningEffort={props.setReasoningEffort}
             reasoningLevels={props.reasoningLevels ?? []}
             executionMode={props.executionMode ?? 'standard'}
-            sendBlocked={props.sendBlocked}
+            sendBlocked={props.sendBlocked && sideQuestion === undefined}
             planDepth={props.planDepth ?? null}
             setPlanDepth={props.setPlanDepth}
             queueable={!!props.queueable}

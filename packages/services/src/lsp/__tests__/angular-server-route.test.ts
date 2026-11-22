@@ -45,6 +45,13 @@ afterEach(() => {
 });
 
 describe('resolveAngularServerRoute', () => {
+  it('skips discovery for languages with no Angular profile, even inside an Angular project', () => {
+    const { root } = project('^21.0.0');
+    const now = () => { throw new Error('unexpected workspace scan'); };
+    expect(resolveAngularServerRoute(root, 'README.md', [], { now })).toEqual({ state: 'not-angular' });
+    expect(resolveAngularServerRoute(root, 'README.md', [], { enabled: false, now })).toEqual({ state: 'not-angular' });
+  });
+
   it('selects the profile matching the file workspace major', () => {
     const { root, file } = project('^12.2.0');
     const route = resolveAngularServerRoute(root, file, [profile(12, 'best-effort'), profile(21)]);

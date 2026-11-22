@@ -65,6 +65,7 @@ setCodeProjectFolders(projectId: number, folders: readonly string[], targets?: i
 enqueueCodeProjectReindex(projectId: number, force?: boolean, reason?: string, expectedFiles?: number): SemanticJobRow;
 dispatchCodeProjectReindex(projectId: number, jobId: number): void;
 coalesceCodeCatchup(projectId: number, operation: () => Promise<void>): Promise<void>;
+scheduleCodeBuild(projectId: number, operation: () => Promise<void>): Promise<void>;
 runCodeProjectBuild(projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void>;
 shouldPauseCodeProject(projectId: number): boolean;
 codeProjectIdForJob(job: SemanticJobRow): number | null;

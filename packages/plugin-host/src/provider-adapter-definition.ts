@@ -135,6 +135,11 @@ class PluginChatProvider implements ChatProvider {
     return slot.pending;
   }
 
+  async prepare(): Promise<void> {
+    const client = await this.getClient();
+    await client.prepare?.();
+  }
+
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
     const client = await this.getClient();
     yield* client.chat(req);

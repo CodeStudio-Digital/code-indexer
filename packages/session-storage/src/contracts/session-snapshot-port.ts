@@ -214,6 +214,7 @@ export interface SessionSnapshotStorePort<
     kind: SessionKind,
     sessionId: SessionKey,
     roundMessageId: number,
+    knownRows?: readonly RoundSnapshotRow<SessionKey, RecordId>[],
   ): Awaitable<RoundReviewFindingRow<RecordId>[]>;
   replaceRoundReviewFindings(
     roundSnapshotIds: RecordId[],

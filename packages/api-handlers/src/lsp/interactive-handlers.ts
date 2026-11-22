@@ -71,7 +71,7 @@ export function createInteractiveHandlers(context: LspHandlerContext): Interacti
     async completion({ projectId, file, position, content, context: completionContext }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForPosition(projectId, root, file, languageId, position, content);
+      const angular = await angularOverlayForPosition(projectId, root, file, languageId, position, content);
 
       if (!isTsFile(file)) {
         const serverState = lspManager.status(projectId, languageId).state;
@@ -188,7 +188,7 @@ export function createInteractiveHandlers(context: LspHandlerContext): Interacti
     async hover({ projectId, file, position, content }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForPosition(projectId, root, file, languageId, position, content);
+      const angular = await angularOverlayForPosition(projectId, root, file, languageId, position, content);
       if (angular) {
         const viaAngular = await serverHover(
           db, projectId, root, file, languageId, position, ctx.signal, angular.target,
@@ -214,7 +214,7 @@ export function createInteractiveHandlers(context: LspHandlerContext): Interacti
     async definition({ projectId, file, position, content }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForPosition(projectId, root, file, languageId, position, content);
+      const angular = await angularOverlayForPosition(projectId, root, file, languageId, position, content);
       if (angular) {
         const viaAngular = await serverDefinition(
           db, projectId, root, file, languageId, position, ctx.signal, angular.target,
@@ -241,7 +241,7 @@ export function createInteractiveHandlers(context: LspHandlerContext): Interacti
     async references({ projectId, file, position, content }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForPosition(projectId, root, file, languageId, position, content);
+      const angular = await angularOverlayForPosition(projectId, root, file, languageId, position, content);
       if (angular) {
         const viaAngular = await serverReferences(
           db, projectId, root, file, languageId, position, ctx.signal, angular.target,

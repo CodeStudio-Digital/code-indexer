@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { setSqlCallSink, sqlLabel } from '@mcp/store/db/sql-timing.js';
 import { noteSyncLeaf } from './perf/stall-evidence.js';
 import { recordSlowCall } from './perf/slow-ipc.js';
+import { readSessionStatsInWorker } from '../workers/session-stats-client.js';
 
 /** Statements at or above this land in the slow-call table (matches slow-ipc). */
 const SLOW_SQL_MS = 50;
@@ -39,6 +40,7 @@ import {
 import { registerShutdownTask } from './shutdown-tasks.js';
 import {
   canResolveDbMaintenanceWorker,
+  readEmbeddingFilesInWorker,
   readProjectSettingsInWorker,
   recoverSemanticMutationFences,
   scheduleProjectDbCheckpoint,
@@ -610,6 +612,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     externalCheckpointer: dbMaintenanceEnabled,
     projectDbCheckpoint: dbMaintenanceEnabled ? scheduleProjectDbCheckpoint : undefined,
     readProjectSettings: dbMaintenanceEnabled ? readProjectSettingsInWorker : undefined,
+    readEmbeddingPage: dbMaintenanceEnabled ? readEmbeddingFilesInWorker : undefined,
     busyTimeoutMs: mainBusyTimeoutMs(),
   });
   if (dbMaintenanceEnabled) {
@@ -972,6 +975,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
   // used by the injected locator; it never stores or resolves session rows.
   const sessionStore = SessionStore.fromRoots({
     dataDir: mcpDataDir(),
+    readConversationStats: readSessionStatsInWorker,
     projectRootResolver: {
       resolveProjectRoot: (projectId) => {
         const project = db.getProjectCatalogEntry(projectId);
@@ -1482,6 +1486,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     indexProfile: config.indexProfile,
     withProjectLock: (projectId, operation) =>
       projectIndexService.withProjectLock(projectId, operation),
+    hasPendingStructuralWork: projectId => projectIndexService.hasPendingStructuralWork(projectId),
     mutationFenceOwner: semanticMutationOwner,
     ...(dbMaintenanceEnabled
       ? { recoverMutationFences: recoverSemanticMutationFences }

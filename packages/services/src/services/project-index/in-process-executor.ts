@@ -35,6 +35,7 @@ export function createInProcessStructuralExecutor(
         maxFiles: opts.maxFiles,
         allowEmptyWipe: opts.allowEmptyWipe,
         forceReparse: opts.forceReparse,
+        verifyPaths: opts.verifyPaths,
         onProgress: opts.onProgress,
         onChanges: opts.onChanges,
         waitForInteractivePriority: () => priorityGate.wait(projectId),

@@ -37,11 +37,11 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     last_error: null,
     updated_at: '2026-07-15 00:00:01',
   });
+  const catalogEntry = (id: number) => id === 7 ? { id, name: 'demo', root_path: 'D:/demo', is_synthetic: 0 } : null;
   const deps = {
     db: {
-      getProject: (id: number) => id === 7
-        ? { id, name: 'demo', root_path: 'D:/demo', is_synthetic: 0 }
-        : null,
+      getProject: catalogEntry,
+      getProjectCatalogEntry: catalogEntry,
       listProjects: () => [{ id: 7, name: 'demo', root_path: 'D:/demo', is_synthetic: 0 }],
       listFiles: () => [{ id: 1 }],
     },
@@ -53,6 +53,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     projectIndexService: {
       ensureFresh: vi.fn(),
       reconcileStructural: vi.fn(async () => ({ status: 'ready', phase: 'ready' })),
+      refreshStructural: vi.fn(async () => ({ status: 'ready', phase: 'ready' })),
       getStatus: vi.fn(() => ({ projectId: 7, phase: 'ready' })),
     },
     semanticJobs: {
@@ -238,14 +239,15 @@ describe('project indexing routes', () => {
     expect(deps.semanticJobs.currentProjectJobs).toHaveBeenCalledWith([{ projectId: 7, generationIds: [8] }], expect.any(AbortSignal));
   });
 
-  it('runs the explicit structural reconciliation without a provider', async () => {
+  it.each(['refresh', 'reconcile'] as const)('routes structural %s to its own operation without a provider', async action => {
     const deps = makeDeps();
-    const response = await appWith(deps).request('/api/projects/7/index/structural/reconcile', {
+    const response = await appWith(deps).request(`/api/projects/7/index/structural/${action}`, {
       method: 'POST',
     });
     expect(response.status).toBe(200);
     expect(deps.projectIndexService.ensureFresh).not.toHaveBeenCalled();
-    expect(deps.projectIndexService.reconcileStructural).toHaveBeenCalledWith(
+    const method = action === 'refresh' ? 'refreshStructural' : 'reconcileStructural';
+    expect(deps.projectIndexService[method]).toHaveBeenCalledWith(
       7, 180_000, expect.any(AbortSignal),
     );
   });

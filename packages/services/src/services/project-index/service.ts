@@ -12,11 +12,19 @@ export type { EnsureFreshReason, SemanticCatchupHooks } from './service-support.
 /** Coordinates structural indexing and semantic catch-up for active projects. */
 export class ProjectIndexService extends ProjectIndexWatchers {
   private readonly structuralRuns = new Map<number, Promise<StructuralReadinessResult>>();
+  private readonly verifiedWatches = new WeakSet<object>();
+  private readonly structuralWaiters = new Map<number, number>();
 
-  /** Explicit repair waits for its own pass, not a previously usable baseline.
-   * Cancellation/timeout stops this caller's wait and any queued request; an
-   * already running shared index publication is allowed to finish atomically. */
+  /** Explicit repair waits for its own publication, including derived rows for unchanged files. */
   reconcileStructural(projectId: number, timeoutMs: number, signal?: AbortSignal, beforeStart?: () => void): Promise<StructuralReadinessResult> {
+    return this.requestStructural(projectId, 'manual', timeoutMs, signal, beforeStart);
+  }
+
+  refreshStructural(projectId: number, timeoutMs: number, signal?: AbortSignal): Promise<StructuralReadinessResult> {
+    return this.requestStructural(projectId, 'refresh', timeoutMs, signal);
+  }
+
+  private requestStructural(projectId: number, reason: 'manual' | 'refresh', timeoutMs: number, signal?: AbortSignal, beforeStart?: () => void): Promise<StructuralReadinessResult> {
     return new Promise((resolve) => {
       let settled = false;
       const finish = (result: StructuralReadinessResult) => {
@@ -35,13 +43,13 @@ export class ProjectIndexService extends ProjectIndexWatchers {
       if (signal?.aborted) { onAbort(); return; }
       void (async () => {
         // A pass already scanning may have visited the changed file before
-        // this request. Wait for it, then request a new repair pass.
+        // this request. Wait for it, then establish the requested freshness.
         while (!settled && this.structuralRuns.has(projectId)) {
           await this.structuralRuns.get(projectId);
         }
         if (settled) return;
         if (this.disposed) { finish(current('disabled')); return; }
-        this.startStructuralRun(projectId, this.settings(), true, 'manual', () => {
+        this.startStructuralRun(projectId, this.settings(), reason === 'manual', reason, () => {
           if (settled) return false;
           beforeStart?.();
           return true;
@@ -112,7 +120,8 @@ export class ProjectIndexService extends ProjectIndexWatchers {
       return { scheduled: this.pendingActivation.has(projectId), delayMs: null, largeProject };
     }
 
-    const delayMs = largeProject
+    const published = (project?.file_count ?? 0) > 0 && !!(project?.structural_indexed_at || project?.last_indexed);
+    const delayMs = published ? 0 : largeProject
       ? envDelay('MCP_INDEX_LARGE_OPEN_DELAY_MS', 30_000)
       : s.openDelayMs;
     if (delayMs <= 0) {
@@ -257,7 +266,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     projectId: number,
     s: ProjectIndexSettings,
     manual: boolean,
-    reason: EnsureFreshReason = manual ? 'manual' : 'open',
+    reason: EnsureFreshReason | 'refresh' = manual ? 'manual' : 'open',
     beforeStart?: () => boolean | void,
   ): void {
     const pending = this.pendingOpen.get(projectId);
@@ -283,14 +292,19 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     this.ensureFileWatching(projectId, 0, true);
     let reconciled = false;
     let run: Promise<StructuralReadinessResult>;
-    run = this.mutex
-      .withLock(projectId, async () => {
+    run = this.withStructuralLock(projectId, async () => {
         await this.waitForFileWatcherReady(projectId);
         // Semantic jobs can own this mutex too. Recheck the requesting owner
         // after every queue/barrier, immediately before the worker starts.
         if (beforeStart?.() === false) return;
-        const completed = await this.runStructural(projectId, s, manual);
-        if (!completed) return;
+        // Only a continuous native watch following a successful lifecycle scan
+        // can cover a refresh using just the queued paths. Offline projects and
+        // interrupted watches must compare their saved manifest with the disk.
+        const watch = this.watcher.nativeCoverage?.(projectId);
+        const covered = reason === 'refresh' && watch && this.verifiedWatches.has(watch)
+          && this.activations.has(projectId) && this.reconciledLifecycle.has(projectId)
+          && !this.db.getProjectCatalogEntry(projectId)?.is_synthetic;
+        if (!covered && !await this.runStructural(projectId, s, manual)) return;
         // Give watcher callbacks queued in the same event-loop turn a chance
         // to enter their debounce buffer, then flush it at the scan barrier.
         await yieldToEventLoop();
@@ -299,6 +313,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
         await this.drainDirtyLocked(projectId);
         this.status.refreshFromDb(projectId);
         reconciled = true;
+        if (watch && watch === this.watcher.nativeCoverage?.(projectId)) this.verifiedWatches.add(watch);
         if ((this.activations.get(projectId)?.size ?? 0) > 0) this.notifyProjectReady(projectId);
         void this.semanticCatchup?.ensureProject(projectId).catch((error) =>
           console.warn(`[project-index] semantic project catch-up paused for ${projectId}: ${msg(error)}`));
@@ -384,6 +399,21 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     return this.mutex.withLock(projectId, fn);
   }
 
+  /** A vector backfill holding the project lock yields at its next batch boundary. */
+  hasPendingStructuralWork(projectId: number): boolean {
+    return this.structuralWaiters.has(projectId);
+  }
+
+  private withStructuralLock<T>(projectId: number, operation: () => Promise<T>): Promise<T> {
+    this.structuralWaiters.set(projectId, (this.structuralWaiters.get(projectId) ?? 0) + 1);
+    return this.mutex.withLock(projectId, () => {
+      const remaining = this.structuralWaiters.get(projectId)! - 1;
+      if (remaining) this.structuralWaiters.set(projectId, remaining);
+      else this.structuralWaiters.delete(projectId);
+      return operation();
+    });
+  }
+
   /**
    * Give a user-triggered filesystem mutation priority over background
    * structural scanning/writes. Nested/concurrent operations share one lease;
@@ -427,9 +457,10 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     const beforeScan = this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER);
     this.status.setPhase(projectId, 'scanning');
     const result = await this.executor.runStructuralIndex(projectId, {
-      maxFiles: manual ? undefined : s.maxFiles,
+      maxFiles: manual || this.runReason.get(projectId) === 'refresh' ? undefined : s.maxFiles,
       allowEmptyWipe: manual,
       forceReparse: manual,
+      verifyPaths: !manual && beforeScan.total ? beforeScan.entries.map(entry => entry.path) : undefined,
       onProgress: (p) => this.publishStructuralProgress(projectId, p),
       onChanges: async (events, previousItemKeys) => {
         // A cold scan also owns durable deltas: watcher history may not include
@@ -516,8 +547,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     if (this.disposed || this.running.has(projectId) || this.draining.has(projectId) || this.drainRetries.has(projectId)
       || (this.drainFailures.get(projectId) ?? 0) >= 5 || this.dirty.size(projectId) === 0) return;
     this.draining.add(projectId);
-    void this.mutex
-      .withLock(projectId, async () => {
+    void this.withStructuralLock(projectId, async () => {
         if (this.disposed || this.running.has(projectId)) return;
         await this.drainDirtyLocked(projectId);
         this.drainFailures.delete(projectId);

@@ -73,11 +73,13 @@ export class FsRoundSnapshotRepository {
     });
   }
 
-  async #list(sessionId: SessionId, kind?: string): Promise<Entity[]> {
+  async #list(sessionId: SessionId, kind?: string, roundMessageId?: number): Promise<Entity[]> {
     const records = await this.entities.list<JsonValue>(
       sessionId,
       'snapshots',
       kind,
+      false,
+      roundMessageId,
     );
     for (const record of records) this.#recordOwners.set(record.id, sessionId);
     return records;
@@ -208,7 +210,7 @@ export class FsRoundSnapshotRepository {
     roundMessageId: number,
     opts: { includeClosed?: boolean } = {},
   ): Promise<Round[]> {
-    const records = (await this.#list(sessionId, 'round_snapshot')).filter((record) => {
+    const records = (await this.#list(sessionId, 'round_snapshot', roundMessageId)).filter((record) => {
       const data = parseRound(record.data);
       return (
         data.session_kind === kind &&
@@ -350,11 +352,12 @@ export class FsRoundSnapshotRepository {
     kind: SessionKind,
     sessionId: SessionId,
     roundMessageId: number,
+    knownRows?: readonly Round[],
   ): Promise<RoundReviewFindingRow<string>[]> {
     const roundIds = new Set(
-      (await this.listRoundSnapshots(kind, sessionId, roundMessageId, {
+      (knownRows ?? await this.listRoundSnapshots(kind, sessionId, roundMessageId, {
         includeClosed: true,
-      })).map((row) => row.id),
+      })).filter(row => row.session_kind === kind && row.session_id === sessionId && row.round_message_id === roundMessageId).map(row => row.id),
     );
     if (roundIds.size === 0) return [];
     const reviews = (await this.#list(sessionId, 'round_review'))

@@ -135,8 +135,7 @@ export function persistPreparedFileStructural(
     });
 
     if (supported) {
-      // Empty array still upserts — an edit that removed every symbol must
-      // clear the stale ones (upsertSymbols is delete+insert per file).
+      // An edit that removes the last declaration must also clear its stored symbol.
       db.upsertSymbols(projectId, id, file.relativePath, symbols);
       db.upsertFileDependencies(
         projectId, id, file.relativePath,

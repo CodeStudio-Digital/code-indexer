@@ -1,6 +1,6 @@
 {
   "name": "mcp-code-indexer",
-  "version": "3.16.63",
+  "version": "3.16.65",
   "packageManager": "pnpm@10.22.0",
   "description": "Codebase indexing platform powered by LLMs with hybrid search, MCP Server, and web dashboard",
   "repository": {
@@ -113,6 +113,7 @@
     "i18next-browser-languagedetector": "^8.2.1",
     "ignore": "^7.0.4",
     "jsonpath-plus": "^10.4.0",
+    "koffi": "3.3.6",
     "lucide-react": "^1.7.0",
     "magic-string": "^0.30.21",
     "minimatch": "^10.0.1",

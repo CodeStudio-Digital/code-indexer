@@ -1,4 +1,5 @@
 import { mountChatCollaborationRoutes } from './chat-collaboration.js';
+import { mountSideChatRoutes } from './side-chat.js';
 import type { HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
 import { createCoderRuntime } from './state.js';
@@ -33,6 +34,7 @@ import { mountCompanyRoutes } from '../company/index.js';
 export function mountCoderRoutes(app: HttpRouter, deps: ServerDeps): void {
   mountConversationFormatGuard(app, deps);
   const runtime = createCoderRuntime(deps.sessionStore);
+  mountSideChatRoutes(app, deps, runtime);
   mountChatCollaborationRoutes(app, deps, runtime);
   mountCoderProvidersRoutes(app, deps);
   mountSessionWorkbenchRoutes(app, deps);

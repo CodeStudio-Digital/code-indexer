@@ -77,6 +77,10 @@ export class LspServerManager {
     return this.sessions.status(projectId, languageId, identity);
   }
 
+  resolveStatus(projectId: number, languageId: string): Promise<LspManagerStatus> {
+    return this.sessions.resolveStatus(projectId, languageId);
+  }
+
   statusById(
     projectId: number,
     serverId: string,

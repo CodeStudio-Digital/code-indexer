@@ -351,15 +351,15 @@ describe('ProjectIndexService', () => {
     await svc.dispose();
   });
 
-  it('uses the large-project delay and never schedules a second run for another view', async () => {
+  it.each([false, true])('uses the large-project delay only until a baseline exists (published: %s)', async published => {
     const previous = process.env.MCP_INDEX_LARGE_OPEN_DELAY_MS;
     process.env.MCP_INDEX_LARGE_OPEN_DELAY_MS = '40';
     const exec = new FakeExecutor();
-    const db = fakeDb({ structural_indexed_at: '2026-07-14T00:00:00Z', last_indexed: null }, false, 15_000);
+    const db = fakeDb({ structural_indexed_at: published ? '2026-07-14T00:00:00Z' : null, last_indexed: null }, false, 15_000);
     const svc = makeService(exec, db, { ...SETTINGS, openDelayMs: 0 });
     try {
-      expect(svc.activate(1, 'view-a')).toMatchObject({ scheduled: true, delayMs: 40, largeProject: true });
-      expect(svc.activate(1, 'view-b')).toMatchObject({ scheduled: true, delayMs: null, largeProject: true });
+      expect(svc.activate(1, 'view-a')).toMatchObject({ scheduled: !published, delayMs: published ? 0 : 40, largeProject: true });
+      expect(svc.activate(1, 'view-b')).toMatchObject({ scheduled: !published, delayMs: null, largeProject: true });
       await sleep(60);
       expect(exec.runs).toBe(1);
     } finally {

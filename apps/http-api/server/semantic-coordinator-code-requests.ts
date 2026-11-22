@@ -9,7 +9,7 @@ import {
 type SemanticGenerationRow,
 type SemanticJobRow
 } from '@mcp/store';
-import { CodeScopeChangedError,errorMessage,readCodeDeltaCursor,type ProjectSemanticTargets,type ReindexResult } from './semantic-coordinator-shared.js';
+import { CodeScopeChangedError, StructuralWorkPendingError, errorMessage,readCodeDeltaCursor,type ProjectSemanticTargets,type ReindexResult } from './semantic-coordinator-shared.js';
 
 import type { SemanticCoordinatorContext } from './semantic-coordinator-context.js';
 
@@ -209,7 +209,7 @@ dispatchCodeProjectReindex(this: SemanticCoordinatorContext, projectId: number, 
         this.deps.semanticStore.updateJob(jobId, {
           status: 'paused',
           failed_items: paused ? current.failed_items : current.failed_items + 1,
-          error: paused ? 'paused because project is not active' : errorMessage(error),
+          error: errorMessage(error),
         });
       }
     })();
@@ -231,9 +231,7 @@ coalesceCodeCatchup(this: SemanticCoordinatorContext, projectId: number, operati
       if (this.embeddingDisabled('code') || !this.allowsNamespaceMutation(namespace)) return;
       await operation();
     });
-    const run = this.deps.withProjectLock
-      ? this.deps.withProjectLock(projectId, build)
-      : build();
+    const run = this.scheduleCodeBuild(projectId, build);
     const tracked = run.finally(() => {
       if (this.codeCatchupRuns.get(namespace) === tracked) this.codeCatchupRuns.delete(namespace);
     });
@@ -241,33 +239,51 @@ coalesceCodeCatchup(this: SemanticCoordinatorContext, projectId: number, operati
     return tracked;
   },
 
-async runCodeProjectBuild(this: SemanticCoordinatorContext,
-    projectId: number,
-    generation: SemanticGenerationRow,
-    force: boolean,
-  ): Promise<void> {
+scheduleCodeBuild(this: SemanticCoordinatorContext, projectId: number, operation: () => Promise<void>): Promise<void> {
+    // Queue for the shared embedding runtime before taking a project lock.
+    // A different project's long build must never hold up this project's editor.
     const run = this.codeBuildTail.catch(() => undefined).then(async () => {
-      try {
-        while (this.allowsNamespaceMutation(codeNamespace(projectId))) {
-          if (this.shouldPauseCodeProject(projectId)) throw new EmbeddingPauseRequestedError();
-          const scope = this.deps.db.getProjectCatalogEntry(projectId)?.semantic_index_folders;
-          try {
-            await this.buildCodeNamespace(projectId, generation, force);
-          } catch (error) {
-            if (!(error instanceof CodeScopeChangedError)) throw error;
-            continue;
-          }
-          if (this.deps.db.getProjectCatalogEntry(projectId)?.semantic_index_folders === scope) return;
+      if (!this.deps.withProjectLock) return operation();
+      for (;;) {
+        try {
+          return await this.deps.withProjectLock(projectId, operation);
+        } catch (error) {
+          // The structural writer is already queued. Reacquiring the FIFO lock
+          // resumes the same request after publication, including explicit jobs.
+          if (!(error instanceof StructuralWorkPendingError)) throw error;
         }
-      } finally {
-        this.refreshGenerationProgress(generation.id);
       }
     });
     this.codeBuildTail = run;
     return run;
   },
 
+async runCodeProjectBuild(this: SemanticCoordinatorContext,
+    projectId: number,
+    generation: SemanticGenerationRow,
+    force: boolean,
+  ): Promise<void> {
+    try {
+      while (this.allowsNamespaceMutation(codeNamespace(projectId))) {
+        if (this.shouldPauseCodeProject(projectId)) throw new EmbeddingPauseRequestedError();
+        const scope = this.deps.db.getProjectCatalogEntry(projectId)?.semantic_index_folders;
+        try {
+          await this.buildCodeNamespace(projectId, generation, force);
+        } catch (error) {
+          if (!(error instanceof CodeScopeChangedError)) throw error;
+          continue;
+        }
+        if (this.deps.db.getProjectCatalogEntry(projectId)?.semantic_index_folders === scope) return;
+      }
+    } finally {
+      this.refreshGenerationProgress(generation.id);
+    }
+  },
+
 shouldPauseCodeProject(this: SemanticCoordinatorContext, projectId: number): boolean {
+    if (this.deps.hasPendingStructuralWork?.(projectId)) {
+      throw new StructuralWorkPendingError();
+    }
     return this.disposed || this.codePauseRequested.has(projectId)
       && (this.codeProjectLeases.get(projectId)?.size ?? 0) === 0;
   },

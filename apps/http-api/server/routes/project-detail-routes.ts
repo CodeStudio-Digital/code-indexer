@@ -177,21 +177,18 @@ export function mountProjectsRoutes(app: HttpRouter, deps: ServerDeps): void {
     }
   });
 
-  /** Explicit structural reconciliation. Opening a project already schedules
-   * one coalesced pass; this endpoint is the recovery/admin action and never
-   * resolves an LLM or embedding provider. */
-  app.post('/api/projects/:id/index/structural/reconcile', async (c) => {
-    const id = parseIdParam(c);
-    if (!deps.db.getProjectCatalogEntry(id)) return notFound(c);
-    const readiness = await deps.projectIndexService.reconcileStructural(
-      id,
-      180_000,
-      c.req.raw.signal,
-    );
-    const status = deps.projectIndexService.getStatus(id);
-    const httpStatus = readiness.status === 'ready' ? 200 : 202;
-    return c.json({ ok: readiness.status === 'ready', readiness, status }, httpStatus);
-  });
+  for (const action of ['refresh', 'reconcile'] as const) {
+    app.post(`/api/projects/:id/index/structural/${action}`, async (c) => {
+      const id = parseIdParam(c);
+      if (!deps.db.getProjectCatalogEntry(id)) return notFound(c);
+      const service = deps.projectIndexService;
+      const readiness = action === 'refresh'
+        ? await service.refreshStructural(id, 180_000, c.req.raw.signal)
+        : await service.reconcileStructural(id, 180_000, c.req.raw.signal);
+      const ok = readiness.status === 'ready';
+      return c.json({ ok, readiness, status: service.getStatus(id) }, ok ? 200 : 202);
+    });
+  }
 
   app.get('/api/projects/:id/indexing/jobs', async (c) => {
     const id = parseIdParam(c);

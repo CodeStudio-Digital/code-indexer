@@ -916,7 +916,9 @@ describe('idempotency and crash recovery', () => {
     await repository.closeSession(created.location);
     const conversationPath = join(created.location.bundle_path, 'conversation.jsonl');
     await appendFile(conversationPath, '{"schema_version":1,"seq":2,"operation_id":"partial"');
-    expect(repository.readConversationSync(created.location)).toHaveLength(1);
+    const committed = repository.readConversationSync(created.location);
+    expect(committed).toHaveLength(1);
+    expect(await repository.readConversation(created.location)).toEqual(committed);
 
     const reopened = new FileSessionRepository({ locator });
     const next = await reopened.commitTurn(created.location, {
@@ -928,6 +930,18 @@ describe('idempotency and crash recovery', () => {
     expect(bytes.endsWith('\n')).toBe(true);
     expect(bytes).not.toContain('"operation_id":"partial"');
     await reopened.close();
+  });
+
+  it('rejects a modified committed record on both asynchronous and synchronous reads', async () => {
+    const { repository } = await fixture();
+    const { location } = await repository.createSession({ kind: 'coder', scope: { kind: 'project', project_id: 1 } });
+    await repository.commitTurn(location, { operation_id: 'record', payload: { text: 'original' } });
+    await repository.closeSession(location);
+    const path = join(location.bundle_path, 'conversation.jsonl');
+    const original = await readFile(path, 'utf8');
+    await writeFile(path, original.replace('original', 'modified'));
+    await expect(repository.readConversation(location)).rejects.toThrow('hash mismatch at seq 1');
+    expect(() => repository.readConversationSync(location)).toThrow('hash mismatch at seq 1');
   });
 
   it('persists artifacts before exposing their conversation commit', async () => {

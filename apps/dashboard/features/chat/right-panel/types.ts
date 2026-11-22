@@ -15,6 +15,7 @@ export type BuiltinRightPanelId =
   | 'chapters'    // Navigable context/milestone/rebuild chapter history
   | 'config'      // Per-session Skills + Tools enable/disable, tabbed (was 'skills' + 'tools')
   | 'collaboration'
+  | 'side-chat'
   | 'subagents'   // Live + persisted spawned-agent groups with inline detail
   | 'insights'    // Summary + token/cost metrics + tool stats + captured inputs
   | 'usage-quota' // Account usage from the provider

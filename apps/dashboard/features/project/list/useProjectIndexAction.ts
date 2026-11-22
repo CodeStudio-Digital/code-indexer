@@ -8,13 +8,13 @@ export function useProjectIndexAction(refetch: () => void) {
   const [indexingIds, setIndexingIds] = useState<Set<number>>(new Set());
   const indexingIdsRef = useRef<Set<number>>(new Set());
   const handleIndexProject = useCallback(
-    async (p: Project) => {
+    async (p: Project, action: 'refresh' | 'reconcile' = 'refresh') => {
       if (indexingIdsRef.current.has(p.id)) return;
       indexingIdsRef.current.add(p.id);
       setIndexingIds((current) => new Set(current).add(p.id));
       try {
         const result = await apiPost<{ ok: boolean }>(
-          `/projects/${encodeURIComponent(p.id)}/index/structural/reconcile`,
+          `/projects/${encodeURIComponent(p.id)}/index/structural/${action}`,
           {},
         );
         refetch();

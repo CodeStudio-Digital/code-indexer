@@ -168,8 +168,20 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
         debounce: s.watchDebounceMs,
         ignorePatterns: projectIndexIgnorePatterns(owner),
         maxWatchedFiles: s.watchMaxFiles,
+        knownFileCount: project.file_count ?? 0,
       },
-      { onFileChanged: (events) => this.onWatcherEvents(projectId, root, events) },
+      {
+        onFileChanged: (events) => this.onWatcherEvents(projectId, root, events),
+        indexedDescendants: path => {
+          const rel = toRelPath(root, path);
+          return !!rel && this.db.hasIndexedDescendants(projectId, rel);
+        },
+        onCoverageLost: () => {
+          if (this.disposed || !this.settings().autoIndex) return;
+          if (this.running.has(projectId)) this.queuedReconcile.set(projectId, 'workspace');
+          else this.ensureFresh(projectId, 'workspace');
+        },
+      },
     );
     this.status.setWatcher(projectId, true);
   }

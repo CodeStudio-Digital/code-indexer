@@ -1,26 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useSessionStateSummary, type TaskRow } from './useSessionStateSummary.js';
 import { useTranslation } from 'react-i18next';
 import { ListChecks } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
-
-interface TaskRow {
-  id: string;
-  title: string;
-  status: string;
-  files: string[];
-}
-
-interface TasksSummary {
-  summary: string;
-  approved: boolean;
-  execution_mode: string | null;
-  current_task_id: string | null;
-  tasks: TaskRow[];
-}
-
-interface StateSummary {
-  tasks: TasksSummary | null;
-}
 
 interface SessionStateBannerProps {
   sessionId: string;
@@ -30,21 +11,7 @@ interface SessionStateBannerProps {
 
 export function SessionStateBanner({ sessionId, refreshKey, onActiveTaskChange }: SessionStateBannerProps) {
   const { t } = useTranslation(['chat', 'common']);
-  const [data, setData] = useState<StateSummary | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/coder/sessions/${sessionId}/state-summary`)
-      .then((r) => r.ok ? r.json() : Promise.reject(r.status))
-      .then((d: StateSummary) => {
-        if (!cancelled) {
-          setData(d);
-          if (onActiveTaskChange) onActiveTaskChange(d.tasks?.current_task_id ?? null);
-        }
-      })
-      .catch(() => { if (!cancelled) setData(null); });
-    return () => { cancelled = true; };
-  }, [sessionId, refreshKey, onActiveTaskChange]);
+  const data = useSessionStateSummary(sessionId, refreshKey, onActiveTaskChange);
 
   if (!data) return null;
   const { tasks } = data;

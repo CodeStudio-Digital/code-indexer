@@ -17,7 +17,7 @@ export abstract class ProjectIndexState {
   protected dirty = new DirtyQueue();
   protected status: ProjectIndexStatusStore;
   protected running = new Set<number>();
-  protected runReason = new Map<number, EnsureFreshReason>();
+  protected runReason = new Map<number, EnsureFreshReason | 'refresh'>();
   protected draining = new Set<number>();
   protected drainFailures = new Map<number, number>();
   protected drainRetries = new Map<number, ReturnType<typeof setTimeout>>();
@@ -81,7 +81,7 @@ export abstract class ProjectIndexState {
 
   /**
    * Over-budget freshness fallback (the counterpart of the watch-budget guard):
-   * projects whose tree exceeds MCP_WATCH_MAX_FILES get NO chokidar handle, so
+   * projects over MCP_WATCH_MAX_FILES without a native recursive handle skip chokidar, so
    * external edits to the files the user actually has open would go stale until
    * the next reconcile. With a provider wired (LSP document store), a light
    * mtime poll over those open files feeds markDirty — bounded work (open docs

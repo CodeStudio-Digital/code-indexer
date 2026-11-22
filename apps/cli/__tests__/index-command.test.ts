@@ -42,21 +42,22 @@ describe('CLI index command', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
   });
 
-  it('uses the new structural and semantic APIs without provider/model/concurrency options', async () => {
+  it.each([false, true])('selects the structural operation independently of semantic reindexing (rebuild: %s)', async rebuild => {
     const program = new Command();
     program.exitOverride();
     register(program);
     const command = program.commands.find((candidate) => candidate.name() === 'index')!;
 
-    await program.parseAsync(['node', 'test', 'index', 'D:/demo']);
+    await program.parseAsync(['node', 'test', 'index', 'D:/demo', ...(rebuild ? ['--rebuild-structural'] : [])]);
 
     expect(command.options.map((option) => option.long)).toEqual([
       '--structural-only',
+      '--rebuild-structural',
       '--rebuild-semantic',
     ]);
     expect(state.request).toHaveBeenNthCalledWith(
       1,
-      '/api/projects/7/index/structural/reconcile',
+      `/api/projects/7/index/structural/${rebuild ? 'reconcile' : 'refresh'}`,
       { method: 'POST' },
       expect.objectContaining({ timeoutMs: 190_000 }),
     );

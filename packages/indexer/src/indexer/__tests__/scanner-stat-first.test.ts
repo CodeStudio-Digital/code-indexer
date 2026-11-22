@@ -79,6 +79,15 @@ describe('FileScanner stat-first', () => {
     }
   });
 
+  it('defers the fingerprint of every file explicitly selected for a full repair', async () => {
+    const scanner = new FileScanner(root);
+    await scanAndPersist(scanner);
+    const plan = await scanner.scan(db, projectId, { deferNewFileReads: true, forceReparse: true });
+    expect(plan.toIndex).toHaveLength(FILES.length);
+    expect(plan.stats).toMatchObject({ hashed: 0, statOnly: 0 });
+    expect(plan.toIndex.every(file => 'deferred' in file)).toBe(true);
+  });
+
   it('second scan is stat-only (zero reads) when nothing changed', async () => {
     const scanner = new FileScanner(root);
     await scanAndPersist(scanner);
@@ -148,6 +157,21 @@ describe('FileScanner stat-first', () => {
     rmSync(join(root, 'c.ts'));
     const res = await scanner.scan(db, projectId);
     expect(res.toRemove).toEqual(['c.ts']);
+  });
+
+  it('checks journaled edits of equal size and modification time', async () => {
+    const file = join(root, 'a.ts');
+    const stamp = new Date('2026-01-01T00:00:00.000Z');
+    utimesSync(file, stamp, stamp);
+    await runStructuralIndex(db, projectId);
+    const old = db.listFileScanMeta(projectId).find(entry => entry.path === 'a.ts')!;
+    writeFileSync(file, "export const a = 'z.ts';\n");
+    utimesSync(file, stamp, stamp);
+    expect(statSync(file).size).toBe(old.size);
+    expect(Math.trunc(statSync(file).mtimeMs)).toBe(old.mtime_ms);
+    const result = await runStructuralIndex(db, projectId, { verifyPaths: ['a.ts'] });
+    expect(result).toMatchObject({ indexed: 1, skipped: 2, errorCount: 0 });
+    expect(db.getFile(projectId, 'a.ts')!.content_hash).not.toBe(old.content_hash);
   });
 
   it('retains the published revision and retries a watcher event when its root returns', async () => {

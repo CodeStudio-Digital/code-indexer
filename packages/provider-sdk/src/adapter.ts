@@ -99,6 +99,8 @@ export interface ChatRequest {
  * A provider-agnostic streaming chat interface with tool-calling.
  */
 export interface ChatProvider {
+  /** Initialize a lazy client so its capabilities are known before the first request. */
+  prepare?(): Promise<void>;
   /** True only when chat generates output and cannot execute server-side tools. */
   readonly inferenceOnly?: boolean;
   /** Same capabilities used by the final wire guard, exposed for truthful UI/policy. */

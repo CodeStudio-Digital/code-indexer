@@ -12,6 +12,7 @@ import {
   type TrashResult,
 } from '@mcp/session-storage';
 import { FsConversationReader } from './conversation-reader.js';
+import type { ReadConversationStats } from './conversation-stats.js';
 import { FsConversationWriter } from './conversation-writer.js';
 import { installExternalImportApi, type FsExternalImportApi } from './external-import-repository.js';
 import { FsSessionDirectory, type FsSessionDirectoryOptions } from './session-directory.js';
@@ -64,8 +65,9 @@ import type {
   FsToolOutputRead,
 } from './types.js';
 
-export type FsSessionStoreOptions = FsSessionDirectoryOptions;
+export type FsSessionStoreOptions = FsSessionDirectoryOptions & { readConversationStats?: ReadConversationStats };
 export interface FsSessionStoreFromRootsOptions {
+  readConversationStats?: ReadConversationStats;
   dataDir: string;
   projectRootResolver: ProjectRootResolver;
   writerOwnerId?: string;
@@ -96,7 +98,7 @@ export class FsSessionStore {
     installOperationalSessionApi(this, new FsOperationalSessionStore(this.#directory));
     installHistoryMetricsApi(this, this.#directory, this.#reader);
     installSnapshotReviewApi(this, this.#directory);
-    installSessionOperationsApi(this, this.#directory);
+    installSessionOperationsApi(this, this.#directory, options.readConversationStats);
     installSessionRollbackApi(this, this.#directory);
     installExternalImportApi(this, this.#directory);
   }
@@ -107,6 +109,7 @@ export class FsSessionStore {
     });
     return new FsSessionStore({
       locator,
+      readConversationStats: options.readConversationStats,
       ...(options.writerOwnerId ? { writerOwnerId: options.writerOwnerId } : {}),
       ...(options.projectInfoResolver ? { projectInfoResolver: options.projectInfoResolver } : {}),
     });
@@ -304,6 +307,10 @@ export class FsSessionStore {
       limit,
       includeArchived,
     );
+  }
+
+  readSideChatContext(id: SessionId | string, budget: number, selectedSeq?: number) {
+    return this.#reader.sideContext(id, budget, selectedSeq);
   }
 
   listMessagesAfter(

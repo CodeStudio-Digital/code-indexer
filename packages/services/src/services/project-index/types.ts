@@ -138,6 +138,7 @@ export interface StructuralExecutor {
       /** Manual reindex bypasses the empty-scan anti-wipe guard. */
       allowEmptyWipe?: boolean;
       forceReparse?: boolean;
+      verifyPaths?: string[];
       onProgress?: (p: StructuralProgressFrame) => void;
       /** Exact scanner delta, acknowledged before structural rows mutate. */
       onChanges?: StructuralChangeHandler;
@@ -182,8 +183,9 @@ export interface ProjectIndexSettings {
    * per directory and re-reads a whole directory on every change inside it, so a
    * giant tree (e.g. a Unity project whose `Assets/` holds tens of thousands of
    * imported asset files) turns routine editor/tool activity into a sustained
-   * CPU drain. Over budget, freshness falls back to the git-meta watcher +
-   * structural reconcile (both authoritative). 0 disables the guard.
+   * CPU drain. Over budget Windows uses one recursive directory handle.
+   * Where that is unavailable, polling and structural reconciliation take over.
+   * 0 disables the guard.
    */
   watchMaxFiles: number;
   /**

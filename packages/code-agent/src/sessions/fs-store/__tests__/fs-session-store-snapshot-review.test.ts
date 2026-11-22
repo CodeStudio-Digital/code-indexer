@@ -268,6 +268,16 @@ describe('FsSessionStore snapshot and review repositories', () => {
           raw_response: '{"findings":[]}',
         }),
       );
+      expect(await reader.listRoundSnapshots('coder', session.id, 2)).toEqual([]);
+      const nextRound = await store.recordRoundSnapshotMutation({
+        session_kind: 'coder', session_id: session.id, round_message_id: 2,
+        global_baseline_id: baseline.id, project_id: 7, file_path: 'src/concurrent.ts',
+        content_before: 'previous', content_after: 'latest', existed_before: true, existed_after: true, oversized: false,
+      });
+      expect(await reader.listRoundSnapshots('coder', session.id, 2)).toMatchObject([{ id: nextRound.id, content_after: 'latest' }]);
+      await store.closeRoundSnapshot(nextRound.id, 'closed_kept');
+      expect(await reader.listRoundSnapshots('coder', session.id, 2)).toEqual([]);
+      expect(await reader.listRoundSnapshots('coder', session.id, 2, { includeClosed: true })).toMatchObject([{ id: nextRound.id, status: 'closed_kept' }]);
     } finally {
       await reader.close();
     }

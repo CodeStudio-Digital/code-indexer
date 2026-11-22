@@ -276,6 +276,7 @@ describe('filesystem session operations', () => {
     const location = (await store.getSessionLocation(session.id))!;
     const beforeCommits =
       store.repository.readConversationSync(location).length;
+    expect((await store.getSessionStats(session.id))?.message_count).toBe(4);
 
     const rolledBack = await store.rollbackSessionToSeq(
       session.id,

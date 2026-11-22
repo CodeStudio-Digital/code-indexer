@@ -31,11 +31,14 @@ import { applyGraphPromotion, classifyPath, isHardExcluded, type FileIndexTier }
 import { buildScannerIgnore, GLOB_PRUNE_DIRS, type ScannerIgnore } from '@mcp/indexer/indexer/scanner-ignore.js';
 import { hashContent, countLines } from '@mcp/indexer/indexer/content-hash.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
+import { listWindowsFiles, windowsDirectorySearch, type ListedFile } from './windows-directory-listing.js';
 
 export interface ScanOptions {
   maxFiles?: number;
   /** Rebuild derived structure even when source bytes have not changed. */
   forceReparse?: boolean;
+  /** A durable change hint takes precedence over a matching size and timestamp. */
+  verifyPaths?: ReadonlySet<string>;
   /** Yield background disk work while an interactive operation has priority. */
   waitForInteractivePriority?: () => Promise<void>;
   /**
@@ -61,7 +64,7 @@ const SCAN_STEP = 500;
 const PRIORITY_YIELD_STEP = 100;
 
 function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 export function canEnumerate(root: string): boolean {
@@ -101,7 +104,8 @@ export class FileScanner {
     const sourceByPrefix = new Map(sources.map(source => [source.prefix, source.rootPath]));
     const ignoresByPrefix = new Map<string, ScannerIgnore>();
     const unavailable = new Set<string>();
-    const validFiles: Array<{ absolutePath: string; relativePath: string; root: string }> = [];
+    const validFiles: Array<ListedFile & { absolutePath: string; root: string }> = [];
+    const native = windowsDirectorySearch();
     let ignoredCount = 0;
     for (const source of sources) {
       await opts.waitForInteractivePriority?.();
@@ -121,7 +125,9 @@ export class FileScanner {
       );
       const projectPrunes = projectGlobPrunePatterns(projectRules);
       ignoresByPrefix.set(source.prefix, sourceIgnore);
-      for await (const rawRelPath of globIterate('**/*', {
+      const listing = native ? listWindowsFiles(native, source.rootPath,
+        dir => GLOB_PRUNE_DIRS.includes(dir.slice(dir.lastIndexOf('/') + 1)) || sourceIgnore.ignoresDirectory(dir),
+        () => unavailable.add(source.rootPath), opts.waitForInteractivePriority) : globIterate('**/*', {
         cwd: source.rootPath,
         nodir: true,
         dot: false,
@@ -131,8 +137,9 @@ export class FileScanner {
           ...projectPrunes,
           ...globPrunesForIndexIgnore(this.ignorePatterns),
         ],
-      })) {
-        const sourceRel = String(rawRelPath).replace(/\\/g, '/');
+      });
+      for await (const entry of listing) {
+        const sourceRel = typeof entry === 'string' ? entry.replace(/\\/g, '/') : entry.relativePath;
         if (sourceIgnore.ignores(sourceRel)) {
           ignoredCount++;
           continue;
@@ -141,6 +148,7 @@ export class FileScanner {
           root: source.rootPath,
           absolutePath: join(source.rootPath, sourceRel),
           relativePath: source.prefix ? `${source.prefix}/${sourceRel}` : sourceRel,
+          metadata: typeof entry === 'string' ? undefined : entry.metadata,
         });
         // Discovery liveness — total unknown (0) until the walk finishes. The
         // for-await already yields to the loop on each async tick.
@@ -195,14 +203,17 @@ export class FileScanner {
       const absPath = file.absolutePath;
       const normalizedPath = file.relativePath;
 
-      let st;
-      try {
-        st = statSync(absPath, { throwIfNoEntry: false });
-      } catch {
-        unavailable.add(file.root);
-        continue;
+      let st = file.metadata;
+      if (!st) {
+        try {
+          const info = statSync(absPath, { throwIfNoEntry: false });
+          if (!info?.isFile()) continue;
+          st = info;
+        } catch {
+          unavailable.add(file.root);
+          continue;
+        }
       }
-      if (!st?.isFile()) continue;
       if (st.size > this.maxFileSizeBytes) { stats.skippedTooLarge++; continue; }
 
       const meta = existingMeta.get(normalizedPath);
@@ -210,7 +221,7 @@ export class FileScanner {
       const mtimeMs = Math.trunc(st.mtimeMs);
 
       // Stat-first shortcut: stored mtime+size match → unchanged, zero reads.
-      if (!opts.forceReparse && !paranoid && meta && meta.content_hash
+      if (!opts.forceReparse && !paranoid && !opts.verifyPaths?.has(normalizedPath) && meta && meta.content_hash
           && meta.mtime_ms === mtimeMs && meta.size === st.size) {
         stats.statOnly++;
         unchanged.push(normalizedPath);
@@ -218,7 +229,9 @@ export class FileScanner {
       }
 
       let fingerprint: Pick<ScannedFile, 'hash' | 'lineCount'> | undefined;
-      if (meta || !opts.deferNewFileReads) {
+      // A forced repair already selected this file. The bounded preparation
+      // stage can hash the same snapshot it parses instead of reading it twice.
+      if (!opts.deferNewFileReads || (meta && !opts.forceReparse)) {
         let content: string;
         try {
           content = readFileSync(absPath, 'utf-8');

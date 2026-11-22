@@ -10,16 +10,16 @@ import { ensureLspManager } from './server-backend-manager.js';
 import { serverInfo } from './server-backend-mappers.js';
 
 /** Language status for the editor CTA and status-bar chip. */
-export function serverStatusFor(
+export async function serverStatusFor(
   db: CodeIndexDB,
   projectId: number,
   languageId: string,
   file?: string,
-): LspServerStatus {
+): Promise<LspServerStatus> {
   const manager = ensureLspManager(db);
   const root = db.getProject(projectId)?.root_path;
   const angular = root && file
-    ? resolveAngularProfileRoute(db, projectId, root, file, languageId)
+    ? await resolveAngularProfileRoute(db, projectId, root, file, languageId)
     : undefined;
   if (angular && angular.selection.state !== 'selected' && angular.selection.state !== 'not-angular') {
     const state = angular.selection.state === 'needs-profile'
@@ -43,7 +43,7 @@ export function serverStatusFor(
     ? manager.statusById(projectId, selected.id, languageId, angular?.identity)
     : file
       ? { state: 'no-server' as const }
-      : manager.status(projectId, languageId);
+      : await manager.resolveStatus(projectId, languageId);
   if (shouldWarmLspStatus(file, status) && status.server) {
     void manager.acquireById(
       projectId,

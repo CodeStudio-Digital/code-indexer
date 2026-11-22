@@ -1,6 +1,7 @@
 /** Selects one pinned Angular Language Server profile for one editor file. */
 import {
   resolveAngularWorkspace,
+  type AngularWorkspaceIndex,
   type AngularWorkspaceIndexOptions,
   type AngularWorkspaceResolution,
 } from './angular-workspace-index.js';
@@ -52,10 +53,12 @@ export function resolveAngularServerRoute(
   file: string,
   profiles: readonly LspServerDef[],
   options: AngularServerRouteOptions = {},
+  index?: AngularWorkspaceIndex,
 ): AngularServerRoute {
+  if (!profiles.length) return { state: 'not-angular' };
   const enabled = options.enabled ?? process.env.MCP_ANGULAR_LSP_ENABLED !== '0';
   if (!enabled) return { state: 'disabled', reason: 'Angular language support is disabled' };
-  const workspace = resolveAngularWorkspace(projectRoot, file, options);
+  const workspace = resolveAngularWorkspace(projectRoot, file, options, index);
   if (!workspace) return { state: 'not-angular' };
   const familyId = profiles[0]?.familyId ?? profiles[0]?.id;
   if (workspace.major == null) {

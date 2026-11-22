@@ -59,7 +59,7 @@ export function createLanguageFeatureHandlers(
     async typeDefinition({ projectId, file, position }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForPosition(projectId, root, file, languageId, position);
+      const angular = await angularOverlayForPosition(projectId, root, file, languageId, position);
       if (angular) {
         const viaAngular = await serverTypeDefinition(
           db, projectId, root, file, languageId, position, ctx.signal, angular.target,
@@ -78,7 +78,7 @@ export function createLanguageFeatureHandlers(
     async foldingRanges({ projectId, file }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularProfileTarget(db, projectId, root, file, languageId);
+      const angular = await angularProfileTarget(db, projectId, root, file, languageId);
       if (angular) {
         const viaAngular = await serverFoldingRanges(
           db, projectId, root, file, languageId, ctx.signal, angular.target,
@@ -96,7 +96,7 @@ export function createLanguageFeatureHandlers(
     async inlayHints({ projectId, file, range }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForRange(projectId, root, file, languageId, range);
+      const angular = await angularOverlayForRange(projectId, root, file, languageId, range);
       if (angular) {
         const viaAngular = await serverInlayHints(
           db, projectId, root, file, languageId, range, ctx.signal, angular.target,
@@ -115,7 +115,7 @@ export function createLanguageFeatureHandlers(
     async linkedEditingRanges({ projectId, file, position }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForPosition(projectId, root, file, languageId, position);
+      const angular = await angularOverlayForPosition(projectId, root, file, languageId, position);
       if (angular) {
         const viaAngular = await serverLinkedEditingRanges(
           db, projectId, root, file, languageId, position, ctx.signal, angular.target,
@@ -162,7 +162,7 @@ export function createLanguageFeatureHandlers(
     async codeActions({ projectId, file, range, trigger }, ctx) {
       const root = requireProjectRoot(projectId);
       const languageId = getDoc(projectId, file)?.languageId ?? languageIdForPath(file);
-      const angular = angularOverlayForRange(projectId, root, file, languageId, range);
+      const angular = await angularOverlayForRange(projectId, root, file, languageId, range);
       const angularPending = angular
         ? serverCodeActions(
           db, projectId, root, file, languageId, range, trigger ?? 'invoke', ctx.signal, angular.target,

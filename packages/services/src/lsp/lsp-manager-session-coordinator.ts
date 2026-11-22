@@ -11,8 +11,10 @@ import type {
   LspManagerStatus,
 } from './lsp-server-manager-types.js';
 import {
+  allLspServers,
   isInstalled,
   isLspServerActive,
+  needsNestedAngularMarkers,
   overlayServersForLanguage,
   serverById,
   serverForLanguage,
@@ -42,11 +44,32 @@ export class LspManagerSessionCoordinator {
     private hooks: SessionCoordinatorHooks,
   ) {}
 
+  private cachedMarkers(projectId: number) {
+    const discovery = this.deps.angularWorkspaces;
+    return discovery && ((root: string) => discovery.cached(projectId, root));
+  }
+
+  private async prepareOverlays(projectId: number, root: string, languages: readonly string[], explicit?: LspServerDef): Promise<void> {
+    const discovery = this.deps.angularWorkspaces;
+    if (!discovery) return;
+    const candidates = explicit ? [explicit] : allLspServers().filter(def =>
+      def.role === 'overlay' && (!def.profileId || def.defaultProfile) && def.languages.some(id => languages.includes(id)));
+    if (candidates.some(def => needsNestedAngularMarkers(def, root)) && !discovery.cached(projectId, root)) {
+      await discovery.load(projectId, root);
+    }
+  }
+
+  async resolveStatus(projectId: number, languageId: string): Promise<LspManagerStatus> {
+    const root = this.deps.resolveRoot(projectId);
+    if (root && process.env.MCP_LSP_ENABLED !== '0') await this.prepareOverlays(projectId, root, [languageId]);
+    return this.status(projectId, languageId);
+  }
+
   status(projectId: number, languageId: string, identity?: LspRouteIdentity): LspManagerStatus {
     if (process.env.MCP_LSP_ENABLED === '0') return { state: 'disabled' };
     const scope = this.routes.scope(projectId, identity, this.deps.resolveRoot);
     if (!scope) return this.invalidScopeStatus(identity);
-    const def = overlayServersForLanguage(languageId, scope.workspaceRoot)[0]
+    const def = overlayServersForLanguage(languageId, scope.workspaceRoot, this.cachedMarkers(projectId))[0]
       ?? serverForLanguage(languageId);
     this.routes.select(projectId, languageId, def?.id, scope.route);
     if (!def) return { state: 'no-server', ...this.routes.info(scope.route) };
@@ -101,7 +124,7 @@ export class LspManagerSessionCoordinator {
     scope: LspRouteScope,
   ): LspManagerStatus {
     const routeInfo = this.routes.info(scope.route);
-    if (!isLspServerActive(def, scope.workspaceRoot)) return { state: 'no-server', ...routeInfo };
+    if (!isLspServerActive(def, scope.workspaceRoot, this.cachedMarkers(projectId))) return { state: 'no-server', ...routeInfo };
     const runtime = def.runtime ? this.deps.resolveRuntime(projectId, def.runtime) : undefined;
     const nodeRuntime = def.serverNodeRange
       ? lspNodeRuntimeStatus(this.deps, projectId, def)
@@ -187,10 +210,17 @@ export class LspManagerSessionCoordinator {
     const { projectRoot, workspaceRoot, route } = scope;
     if (route && this.routes.isRouteRetiring(projectId, route.routeId)) return null;
     if (route) this.routes.bind(projectId, def.id, languageId, route, workspaceRoot);
+    if (this.deps.angularWorkspaces) {
+      const epoch = route && this.routes.routeEpoch(projectId, route.routeId);
+      if (!route) await this.prepareOverlays(projectId, projectRoot, def.languages);
+      if (def.launchKind === 'angular') await this.prepareOverlays(projectId, workspaceRoot, [], def);
+      if (!this.hooks.canAcquire(projectId, def.id)) return null;
+      if (route && epoch !== this.routes.routeEpoch(projectId, route.routeId)) return null;
+    }
     for (const routedLanguageId of def.languages) {
       const effective = route
         ? def
-        : overlayServersForLanguage(routedLanguageId, projectRoot)[0]
+        : overlayServersForLanguage(routedLanguageId, projectRoot, this.cachedMarkers(projectId))[0]
           ?? serverForLanguage(routedLanguageId);
       this.routes.select(projectId, routedLanguageId, effective?.id, route);
     }
@@ -205,7 +235,7 @@ export class LspManagerSessionCoordinator {
       && intent !== 'interactive' && intent !== 'manual') return null;
 
     const baseDir = this.deps.baseDir ?? lspServersBaseDir();
-    if (!isInstalled(baseDir, def) || !isLspServerActive(def, workspaceRoot)) return null;
+    if (!isInstalled(baseDir, def) || !isLspServerActive(def, workspaceRoot, this.cachedMarkers(projectId))) return null;
     const runtime = def.runtime ? this.deps.resolveRuntime(projectId, def.runtime) : undefined;
     if (runtime && !runtime.satisfied) return null;
     if (!entry) {

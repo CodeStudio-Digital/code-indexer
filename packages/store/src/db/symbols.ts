@@ -19,14 +19,31 @@ export interface SearchByPrefixOptions {
 
 export function upsert(db: DB, projectId: number, fileId: number, filePath: string, symbols: LLMSymbol[]): void {
   const tx = db.transaction(() => {
+    // Vector metadata and incoming references address symbols by this row id.
+    // Keep matching identities during a reparse, including repeated declarations
+    // with the same signature. The lowest line/id is consumed first.
+    const old = db.prepare('SELECT id, stable_id FROM symbols WHERE file_id = ? ORDER BY line DESC, id DESC')
+      .all(fileId) as Array<{ id: number; stable_id: string | null }>;
+    const reusable = new Map<string, number[]>();
+    for (const row of old) {
+      if (!row.stable_id) continue;
+      const ids = reusable.get(row.stable_id);
+      if (ids) ids.push(row.id);
+      else reusable.set(row.stable_id, [row.id]);
+    }
+    const retained = new Set<number>();
     db.prepare('DELETE FROM symbol_relations WHERE symbol_id IN (SELECT id FROM symbols WHERE file_id = ?)').run(fileId);
-    db.prepare('DELETE FROM symbols WHERE file_id = ?').run(fileId);
 
     const insert = db.prepare(`
-      INSERT INTO symbols (project_id, file_id, file_path, name, kind, signature,
+      INSERT INTO symbols (id, project_id, file_id, file_path, name, kind, signature,
         parent, namespace, modifiers, return_type, parameters, line, col, end_line, exported,
         comment, tags, stable_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name, kind=excluded.kind, signature=excluded.signature, parent=excluded.parent,
+        namespace=excluded.namespace, modifiers=excluded.modifiers, return_type=excluded.return_type,
+        parameters=excluded.parameters, line=excluded.line, col=excluded.col, end_line=excluded.end_line,
+        exported=excluded.exported, comment=excluded.comment, tags=excluded.tags, stable_id=excluded.stable_id
     `);
 
     const insertRelation = db.prepare(`
@@ -43,15 +60,17 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
         name: sym.name,
         signature: sym.signature,
       });
+      const existingId = reusable.get(stableId)?.pop();
+      if (existingId !== undefined) retained.add(existingId);
       const result = insert.run(
-        projectId, fileId, filePath, sym.name, sym.kind, sym.signature,
+        existingId ?? null, projectId, fileId, filePath, sym.name, sym.kind, sym.signature,
         sym.parent, sym.namespace ?? null, JSON.stringify(sym.modifiers), sym.return_type,
         sym.parameters, sym.line, sym.col ?? null, sym.end_line ?? null,
         sym.exported ? 1 : 0, sym.comment, JSON.stringify(sym.tags),
         stableId
       );
 
-      const symId = result.lastInsertRowid as number;
+      const symId = existingId ?? Number(result.lastInsertRowid);
 
       for (const parent of new Set([...(sym.extends_list ?? []), ...(sym.extends_from ? [sym.extends_from] : [])])) {
         insertRelation.run(projectId, symId, parent, 'extends');
@@ -68,6 +87,8 @@ export function upsert(db: DB, projectId: number, fileId: number, filePath: stri
         }
       }
     }
+    const remove = db.prepare('DELETE FROM symbols WHERE id = ?');
+    for (const row of old) if (!retained.has(row.id)) remove.run(row.id);
   });
 
   tx();

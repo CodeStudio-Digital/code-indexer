@@ -1,4 +1,5 @@
 import type { LshIndexingSink } from '@mcp/indexer/indexer/lsh-indexing-sink.js';
+import { EmbeddingPauseRequestedError } from '@mcp/indexer/indexer/indexer/embed-retry.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import {
 type AgentMemoryService
@@ -63,6 +64,7 @@ export interface CoordinatorDeps {
   docsIndexer: IndexDocumentationUseCase;
   indexProfile?: 'aggressive' | 'balanced' | 'conservative';
   withProjectLock?<T>(projectId: number, operation: () => Promise<T>): Promise<T>;
+  hasPendingStructuralWork?(projectId: number): boolean;
   /** Owner id used by Snapshot/AgentMemory durable fences in this process. */
   mutationFenceOwner?: string;
   /** Optional worker-owned startup recovery for stale durable fences. */
@@ -106,6 +108,10 @@ export function projectRemovalKind(options: ProjectRemovalOptions): ProjectRemov
 }
 
 export class CodeScopeChangedError extends Error {}
+
+export class StructuralWorkPendingError extends EmbeddingPauseRequestedError {
+  constructor() { super('semantic backfill paused to publish structural changes'); }
+}
 
 export class DeltaBuildPendingError extends Error {
   constructor(namespace: string) {

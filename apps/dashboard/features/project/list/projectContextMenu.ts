@@ -29,6 +29,7 @@ interface BuildProjectMenuArgs {
   onSelect: () => void;
   onEdit: () => void;
   onIndex?: () => void;
+  onRebuild?: () => void;
   indexing?: boolean;
   /**
    * Labels (i18n-resolved). Passed in so the builder stays a pure
@@ -42,6 +43,7 @@ interface BuildProjectMenuArgs {
     edit: string;
     copied: string;
     index?: string;
+    rebuild?: string;
   };
 }
 
@@ -50,6 +52,7 @@ export function buildProjectContextMenuItems({
   onSelect,
   onEdit,
   onIndex,
+  onRebuild,
   indexing = false,
   labels,
 }: BuildProjectMenuArgs): ContextMenuItem[] {
@@ -111,6 +114,10 @@ export function buildProjectContextMenuItems({
       disabled: indexing,
       onSelect: onIndex,
     });
+  }
+
+  if (onRebuild && labels.rebuild) {
+    items.push({ id: 'rebuild', label: labels.rebuild, icon: RefreshCw, disabled: indexing, onSelect: onRebuild });
   }
 
   items.push({

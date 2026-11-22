@@ -13,8 +13,8 @@ const retryEmbeddingsMock = vi.hoisted(() => vi.fn());
 vi.mock('@mcp/indexer/indexer/indexer/embed-retry.js', () => ({
   retryEmbeddings: retryEmbeddingsMock,
   EmbeddingPauseRequestedError: class EmbeddingPauseRequestedError extends Error {
-    constructor() {
-      super('semantic backfill paused because the project is no longer active');
+    constructor(message = 'semantic backfill paused because the project is no longer active') {
+      super(message);
     }
   },
 }));
@@ -629,6 +629,7 @@ function makeHarness(options: {
     docStore,
     docsIndexer,
     withProjectLock: vi.fn(async (_projectId: number, operation: () => Promise<unknown>) => operation()),
+    hasPendingStructuralWork: vi.fn((_projectId: number) => false),
     ...(options.recoverMutationFences
       ? { recoverMutationFences: options.recoverMutationFences }
       : {}),
@@ -1032,6 +1033,24 @@ describe('SemanticIndexCoordinator code generations', () => {
     expect(h.namespaces.get('code:p1')).toMatchObject({ delta_items: 0, failed_items: 0 });
   });
 
+  it('preserves an unfinished vector build when structural work needs the project lock and resumes it', async () => {
+    const h = makeHarness({ fileCounts: { 1: 1 }, vectorItems: { 'code:p1': 1 } });
+    const structural = deferred<void>();
+    h.deps.withProjectLock.mockImplementationOnce(async (_id, operation) => operation())
+      .mockImplementationOnce(async (_id, operation) => { await structural.promise; return operation(); });
+    retryEmbeddingsMock.mockImplementationOnce(async (_deps, _root, options) => {
+      h.deps.hasPendingStructuralWork.mockReturnValueOnce(true);
+      options.shouldPause();
+    });
+    const run = h.coordinator.ensureCodeProject(1);
+    await vi.waitFor(() => expect(h.deps.withProjectLock).toHaveBeenCalledTimes(2));
+    expect(h.namespaces.get('code:p1')?.active_generation_id).toBeNull();
+    expect([...h.jobs.values()].some(job => job.status === 'paused' && job.failed_items === 0)).toBe(true);
+    structural.resolve();
+    await run;
+    expect(h.namespaces.get('code:p1')?.active_generation_id).toBeTruthy();
+  });
+
   it('waits for the project structural mutex before consuming a code delta', async () => {
     const h = makeHarness({ fileCounts: { 1: 1 }, vectorItems: { 'code:p1': 1 } });
     const structural = deferred<void>();
@@ -1050,6 +1069,20 @@ describe('SemanticIndexCoordinator code generations', () => {
     structural.resolve();
     await run;
     expect(retryEmbeddingsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the next project free for structural work while another project uses the embedding runtime', async () => {
+    const h = makeHarness({ projects: [1, 2], fileCounts: { 1: 1, 2: 1 }, vectorItems: { 'code:p1': 1, 'code:p2': 1 } });
+    const embedding = deferred<{ embedded: number; skipped: number; tokens: number; failedBatches: number }>();
+    retryEmbeddingsMock.mockImplementationOnce(() => embedding.promise);
+    const first = h.coordinator.ensureCodeProject(1);
+    await vi.waitFor(() => expect(retryEmbeddingsMock).toHaveBeenCalledOnce());
+    const second = h.coordinator.ensureCodeProject(2);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(h.deps.withProjectLock.mock.calls.map(([id]) => id)).toEqual([1]);
+    embedding.resolve({ embedded: 1, skipped: 0, tokens: 0, failedBatches: 0 });
+    await Promise.all([first, second]);
+    expect(h.deps.withProjectLock.mock.calls.map(([id]) => id)).toEqual([1, 2]);
   });
 
   it('keeps the old active generation serving and pauses the job when a batch fails', async () => {

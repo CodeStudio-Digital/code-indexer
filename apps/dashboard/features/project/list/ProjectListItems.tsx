@@ -8,7 +8,7 @@ interface Props {
   searchQuery: string;
   handleSelectProject: (project: ProjectCardData) => void;
   handleEditProject: (project: ProjectCardData) => void;
-  handleIndexProject: (project: ProjectCardData) => Promise<void>;
+  handleIndexProject: (project: ProjectCardData, action?: 'refresh' | 'reconcile') => Promise<void>;
   handleToggleSelected: (project: ProjectCardData) => void;
   indexingIds: Set<number>;
   selectionMode: boolean;
@@ -53,6 +53,7 @@ export function ProjectListItems({ list, layout, searchQuery, handleSelectProjec
             onSelect={() => handleSelectProject(p)}
             onEdit={() => handleEditProject(p)}
             onIndex={() => void handleIndexProject(p)}
+            onRebuild={() => void handleIndexProject(p, 'reconcile')}
             onToggleSelected={() => handleToggleSelected(p)}
             indexing={indexingIds.has(p.id)}
             selecting={selectionMode}

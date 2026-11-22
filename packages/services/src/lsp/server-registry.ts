@@ -9,6 +9,8 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { getAngularWorkspaceIndex } from './angular-workspace-index.js';
+import type { AngularWorkspaceMarkers } from './angular-workspace-scanner.js';
 import { LSP_SERVER_REGISTRY } from './built-in-server-catalog.js';
 import {
   pluginLanguageServers,
@@ -91,136 +93,38 @@ function projectDependencies(root: string): Set<string> {
   }
 }
 
-const ANGULAR_SCAN_MAX_DEPTH = 6;
-const ANGULAR_SCAN_MAX_DIRECTORIES = 4_096;
-const ANGULAR_SCAN_CACHE_TTL_MS = 30_000;
-const ANGULAR_SCAN_CACHE_MAX_ENTRIES = 256;
-const ANGULAR_SCAN_BLOCKED_DIRECTORIES = new Set([
-  '.angular',
-  '.cache',
-  '.git',
-  '.gradle',
-  '.hg',
-  '.next',
-  '.nuxt',
-  '.nx',
-  '.pnpm-store',
-  '.svn',
-  '.svelte-kit',
-  '.turbo',
-  '.vite',
-  '.yarn',
-  'bower_components',
-  'build',
-  'cache',
-  'coverage',
-  'dist',
-  'node_modules',
-  'out',
-  'target',
-  'temp',
-  'tmp',
-  'vendor',
-]);
+type NestedMarkers = (root: string) => AngularWorkspaceMarkers | undefined;
 
-interface AngularScanCacheEntry {
-  value: boolean;
-  expiresAt: number;
+function ruleMatchesRoot(root: string, rule: LspActivationRule): boolean {
+  if (rule.whenFiles?.some(pattern => fileMatches(root, pattern))) return true;
+  if (!rule.whenPackageDep?.length) return false;
+  const dependencies = projectDependencies(root);
+  return rule.whenPackageDep.some(name => dependencies.has(name));
 }
 
-const angularScanCache = new Map<string, AngularScanCacheEntry>();
-
-function isAngularWorkspaceMarker(pattern: string): boolean {
-  return pattern.replace(/\\/g, '/').replace(/^\.\//, '') === 'angular.json';
+function usesAngularJson(rule: LspActivationRule): boolean {
+  return rule.whenFiles?.some(pattern => pattern.replace(/\\/g, '/').replace(/^\.\//, '') === 'angular.json') ?? false;
 }
 
-function angularScanRule(rule: LspActivationRule): { matchAngularJson: boolean; matchAngularPackage: boolean } {
-  return {
-    matchAngularJson: rule.whenFiles?.some(isAngularWorkspaceMarker) ?? false,
-    matchAngularPackage: rule.whenPackageDep?.includes('@angular/core') ?? false,
-  };
+export function needsNestedAngularMarkers(def: LspServerDef, root: string): boolean {
+  const rule = def.projectActivation;
+  return def.launchKind === 'angular' && !!rule
+    && (usesAngularJson(rule) || !!rule.whenPackageDep?.includes('@angular/core'))
+    && !ruleMatchesRoot(root, rule);
 }
 
-/**
- * Finds Angular workspaces in monorepos without an unbounded recursive glob.
- * Root markers are handled by the fast path in isLspServerActive; this scan
- * only considers descendants and does not follow symlinked directories.
- */
-function scanNestedAngularProject(
-  root: string,
-  matchAngularJson: boolean,
-  matchAngularPackage: boolean,
+export function isLspServerActive(
+  def: LspServerDef, projectRoot: string | null,
+  nested: NestedMarkers = root => getAngularWorkspaceIndex(root).nestedMarkers,
 ): boolean {
-  if (!matchAngularJson && !matchAngularPackage) return false;
-
-  const pending: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
-  let scannedDirectories = 0;
-
-  for (let index = 0; index < pending.length && scannedDirectories < ANGULAR_SCAN_MAX_DIRECTORIES; index += 1) {
-    const current = pending[index]!;
-    scannedDirectories += 1;
-
-    let entries;
-    try {
-      entries = readdirSync(current.dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    if (current.depth > 0) {
-      if (matchAngularJson && entries.some((entry) => entry.isFile() && entry.name === 'angular.json')) {
-        return true;
-      }
-      if (matchAngularPackage
-        && entries.some((entry) => entry.isFile() && entry.name === 'package.json')
-        && projectDependencies(current.dir).has('@angular/core')) {
-        return true;
-      }
-    }
-
-    if (current.depth >= ANGULAR_SCAN_MAX_DEPTH) continue;
-    for (const entry of entries) {
-      if (!entry.isDirectory() || ANGULAR_SCAN_BLOCKED_DIRECTORIES.has(entry.name.toLowerCase())) continue;
-      if (pending.length >= ANGULAR_SCAN_MAX_DIRECTORIES) break;
-      pending.push({ dir: join(current.dir, entry.name), depth: current.depth + 1 });
-    }
-  }
-
-  return false;
-}
-
-function hasNestedAngularProject(root: string, rule: LspActivationRule): boolean {
-  const { matchAngularJson, matchAngularPackage } = angularScanRule(rule);
-  if (!matchAngularJson && !matchAngularPackage) return false;
-
-  const cacheKey = `${root}\0${matchAngularJson ? 'json' : ''}\0${matchAngularPackage ? 'package' : ''}`;
-  const now = Date.now();
-  const cached = angularScanCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    // Map insertion order doubles as a small LRU: refresh recency on every hit.
-    angularScanCache.delete(cacheKey);
-    angularScanCache.set(cacheKey, cached);
-    return cached.value;
-  }
-  if (cached) angularScanCache.delete(cacheKey);
-
-  const value = scanNestedAngularProject(root, matchAngularJson, matchAngularPackage);
-  if (angularScanCache.size >= ANGULAR_SCAN_CACHE_MAX_ENTRIES) {
-    const oldestKey = angularScanCache.keys().next().value;
-    if (oldestKey !== undefined) angularScanCache.delete(oldestKey);
-  }
-  angularScanCache.set(cacheKey, { value, expiresAt: now + ANGULAR_SCAN_CACHE_TTL_MS });
-  return value;
-}
-
-export function isLspServerActive(def: LspServerDef, projectRoot: string | null): boolean {
   const rule = def.projectActivation;
   if (!rule || (!rule.whenFiles?.length && !rule.whenPackageDep?.length)) return true;
   if (!projectRoot) return false;
-  if (rule.whenFiles?.some((pattern) => fileMatches(projectRoot, pattern))) return true;
-  const deps = rule.whenPackageDep?.length ? projectDependencies(projectRoot) : null;
-  if (deps && rule.whenPackageDep!.some((name) => deps.has(name))) return true;
-  return def.launchKind === 'angular' && hasNestedAngularProject(projectRoot, rule);
+  if (ruleMatchesRoot(projectRoot, rule)) return true;
+  if (def.launchKind !== 'angular') return false;
+  const markers = nested(projectRoot);
+  return !!markers && ((markers.angularJson && usesAngularJson(rule))
+    || (markers.angularPackage && !!rule.whenPackageDep?.includes('@angular/core')));
 }
 
 export function serverForLanguage(languageId: string): LspServerDef | undefined {
@@ -234,13 +138,15 @@ export function serverForLanguage(languageId: string): LspServerDef | undefined 
 export function overlayServersForLanguage(
   languageId: string,
   projectRoot: string | null,
+  nested?: NestedMarkers,
 ): LspServerDef[] {
   return allLspServers()
-    .filter((s) => s.role === 'overlay' && s.languages.includes(languageId) && isLspServerActive(s, projectRoot))
+    .filter((s) => s.role === 'overlay' && s.languages.includes(languageId))
     // This route has no file/facet version context. A compatibility family
     // must therefore expose only its declared fallback, never the first
     // profile in manifest order (which is commonly the oldest Angular).
     .filter((s) => !s.profileId || s.defaultProfile === true)
+    .filter((s) => isLspServerActive(s, projectRoot, nested))
     .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 

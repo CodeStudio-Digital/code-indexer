@@ -141,6 +141,21 @@ export class FsSessionSnapshotRepository
     return located ? this.#baselineRow(located.sessionId, located.record) : null;
   }
 
+  /** Scope checks need the original session, project and path, without reading artifact contents. */
+  async baselineIdentities(sessionId: SessionId, ids: readonly string[]) {
+    const result = new Map<string, Pick<StoredBaseline, 'session_kind' | 'session_id' | 'project_id' | 'file_path'>>();
+    const unique = [...new Set(ids)];
+    for (let i = 0; i < unique.length; i += 16) {
+      await Promise.all(unique.slice(i, i + 16).map(async id => {
+        const record = await this.entities.get(sessionId, 'snapshots', id);
+        if (record?.kind !== 'file_baseline') return;
+        const { session_kind, session_id, project_id, file_path } = parseBaseline(record.data);
+        result.set(id, { session_kind, session_id, project_id, file_path });
+      }));
+    }
+    return result;
+  }
+
   async #baselineRow(sessionId: SessionId, record: Entity): Promise<Baseline> {
     const entry = await this.directory.requireEntry(sessionId);
     const artifacts = this.directory.repository.artifactReader(
@@ -430,11 +445,13 @@ export class FsSessionSnapshotRepository
     kind: SessionKind,
     sessionId: SessionId,
     roundMessageId: number,
+    knownRows?: readonly RoundSnapshotRow<SessionId, string>[],
   ): Promise<RoundReviewFindingRow<string>[]> {
     return this.#rounds.listRoundReviewFindings(
       kind,
       sessionId,
       roundMessageId,
+      knownRows,
     );
   }
 }

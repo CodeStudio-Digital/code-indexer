@@ -9,10 +9,11 @@ export function register(program: Command): void {
     .command('index [path]')
     .description('Reconcile structural data and start semantic indexing for one project')
     .option('--structural-only', 'Stop after files, symbols, references, dependencies and FTS are ready')
+    .option('--rebuild-structural', 'Reparse all files and repair their derived index data')
     .option('--rebuild-semantic', 'Build a replacement semantic generation instead of starting/catching up')
     .action(async (
       path: string | undefined,
-      opts: { structuralOnly?: boolean; rebuildSemantic?: boolean },
+      opts: { structuralOnly?: boolean; rebuildStructural?: boolean; rebuildSemantic?: boolean },
     ) => {
       const config = loadConfig();
       const db = new CodeIndexDB(config.dbPath);
@@ -35,7 +36,7 @@ export function register(program: Command): void {
 
         console.log(`Reconciling structural index for ${project.name}...`);
         const structuralResponse = await requestLocalServer(
-          `/api/projects/${project.id}/index/structural/reconcile`,
+          `/api/projects/${project.id}/index/structural/${opts.rebuildStructural ? 'reconcile' : 'refresh'}`,
           { method: 'POST' },
           { config, timeoutMs: 190_000 },
         );

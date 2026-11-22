@@ -8,7 +8,7 @@ const deferred = () => {
   let resolve!: () => void;
   return { promise: new Promise<void>(r => { resolve = r; }), release: () => resolve() };
 };
-function fixture(options: { gates?: ReturnType<typeof deferred>[]; failure?: 'too_large' | 'error'; autoIndex?: boolean; flushGate?: ReturnType<typeof deferred> } = {}) {
+function fixture(options: { gates?: ReturnType<typeof deferred>[]; failure?: 'too_large' | 'error'; autoIndex?: boolean; flushGate?: ReturnType<typeof deferred>; coverage?: () => object } = {}) {
   const gates = options.gates ?? [deferred()];
   let completed = 0;
   let started = 0;
@@ -28,7 +28,8 @@ function fixture(options: { gates?: ReturnType<typeof deferred>[]; failure?: 'to
     structural_indexed_at: '2026-01-01T00:00:00Z', last_indexed: null };
   const db = { getProjectCatalogEntry: () => project, getProject: () => project, countSemanticStale: () => 1 };
   const watcher = { startWatching() {}, async waitUntilReady() {}, async flushPending() { await options.flushGate?.promise; },
-    async stopWatching() {}, async stopAll() {}, isWatching: () => Boolean(options.flushGate) };
+    async stopWatching() {}, async stopAll() {}, isWatching: () => Boolean(options.flushGate || options.coverage),
+    nativeCoverage: options.coverage };
   const svc = new ProjectIndexService(db as never, executor, watcher as never, () => ({
     autoIndex: options.autoIndex ?? true, autoWatch: false, maxFiles: 20000, maxWatchedProjects: 3,
     watchDebounceMs: 50, watchOpenDelayMs: 0, watchIdleMs: 0, watchMaxFiles: 0, openDelayMs: 0,
@@ -38,6 +39,42 @@ function fixture(options: { gates?: ReturnType<typeof deferred>[]; failure?: 'to
 }
 
 describe('explicit structural reconciliation', () => {
+  it('skips the tree only after a reconciliation under the same native watch', async () => {
+    let coverage = {};
+    const h = fixture({ coverage: () => coverage, gates: [] });
+    h.svc.activate(1, 'editor');
+    await expect(h.svc.refreshStructural(1, 1000)).resolves.toMatchObject({ status: 'ready' });
+    expect(h.executor.runStructuralIndex).toHaveBeenCalledTimes(1);
+    coverage = {};
+    await expect(h.svc.refreshStructural(1, 1000)).resolves.toMatchObject({ status: 'ready' });
+    expect(h.executor.runStructuralIndex).toHaveBeenCalledTimes(2);
+    await h.svc.refreshStructural(1, 1000);
+    expect(h.executor.runStructuralIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it('signals structural demand to a vector job only until the writer gets its turn', async () => {
+    const h = fixture({ gates: [] });
+    const gate = deferred();
+    const embeddings = h.svc.withProjectLock(1, () => gate.promise);
+    const refresh = h.svc.refreshStructural(1, 1000);
+    expect(h.svc.hasPendingStructuralWork(1)).toBe(true);
+    expect(h.svc.hasPendingStructuralWork(2)).toBe(false);
+    gate.release();
+    await embeddings;
+    await expect(refresh).resolves.toMatchObject({ status: 'ready' });
+    expect(h.svc.hasPendingStructuralWork(1)).toBe(false);
+  });
+
+  it('refreshes incrementally while searches can use the published baseline', async () => {
+    const h = fixture();
+    const requested = h.svc.refreshStructural(1, 1000);
+    await vi.waitFor(() => expect(h.executor.runStructuralIndex).toHaveBeenCalledOnce());
+    expect(h.executor.runStructuralIndex.mock.calls[0][1]).toMatchObject({ forceReparse: false, allowEmptyWipe: false });
+    await expect(h.svc.ensureStructuralReady(1, 50)).resolves.toMatchObject({ status: 'ready', phase: 'scanning' });
+    h.gates[0].release();
+    await expect(requested).resolves.toMatchObject({ status: 'ready', phase: 'structural_ready' });
+  });
+
   it('keeps baseline readiness fast but awaits the requested repair pass', async () => {
     const h = fixture({ autoIndex: false });
     await expect(h.svc.ensureStructuralReady(1, 100)).resolves.toMatchObject({ status: 'ready' });

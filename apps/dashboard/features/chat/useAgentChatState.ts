@@ -36,7 +36,8 @@ export function useAgentChatState({
   provider,
 }: UseAgentChatStateArgs) {
   const [enrichedProviders, setEnrichedProviders] = useState<EnrichedProvider[]>([]);
-  const [tasksState, setTasksState] = useState<PersistedTasksState | null>(null);
+  const [tasksResult, setTasksResult] = useState<{ sessionId: SessionId; state: PersistedTasksState } | null>(null);
+  const tasksState = tasksResult?.sessionId === selectedId ? tasksResult.state : null;
   const [statsResult, setStatsResult] = useState<{ sessionId: SessionId; stats: CoderSessionStats } | null>(null);
   const stats = statsResult?.sessionId === selectedId ? statsResult.stats : null;
 
@@ -65,20 +66,20 @@ export function useAgentChatState({
   // lingering Approve buttons after the user approves a fresh proposal.
   useEffect(() => {
     if (!selectedId) {
-      setTasksState(null);
+      setTasksResult(null);
       return;
     }
-    let cancelled = false;
-    fetch(`/api/coder/sessions/${selectedId}/tasks`)
+    const controller = new AbortController();
+    fetch(`/api/coder/sessions/${selectedId}/tasks`, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!cancelled) setTasksState(d);
+        if (!controller.signal.aborted) setTasksResult(d ? { sessionId: selectedId, state: d } : null);
       })
       .catch(() => {
-        if (!cancelled) setTasksState(null);
+        if (!controller.signal.aborted) setTasksResult(null);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [selectedId, doneReason, tasksRefreshTick]);
 
@@ -88,17 +89,17 @@ export function useAgentChatState({
       setStatsResult(null);
       return;
     }
-    let cancelled = false;
-    fetch(`/api/coder/sessions/${selectedId}/stats`)
+    const controller = new AbortController();
+    fetch(`/api/coder/sessions/${selectedId}/stats`, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!cancelled) setStatsResult(d ? { sessionId: selectedId, stats: d } : null);
+        if (!controller.signal.aborted) setStatsResult(d ? { sessionId: selectedId, stats: d } : null);
       })
       .catch(() => {
-        if (!cancelled) setStatsResult(null);
+        if (!controller.signal.aborted) setStatsResult(null);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [selectedId, doneReason]);
 

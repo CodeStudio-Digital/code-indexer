@@ -5,7 +5,8 @@ import { angularFingerprint } from './angular-version-utils.js';
 
 const BLOCKED_DIRECTORIES = new Set([
   ...[...TREE_BLOCK].map((name) => name.toLowerCase()),
-  '.angular', '.nx', '.pnpm-store', '.yarn', 'bower_components', 'coverage', 'out', 'temp', 'tmp', 'vendor',
+  '.angular', '.gradle', '.hg', '.nuxt', '.nx', '.pnpm-store', '.svn', '.svelte-kit', '.vite', '.yarn',
+  'bower_components', 'cache', 'coverage', 'out', 'temp', 'tmp', 'vendor',
 ]);
 
 export interface AngularWorkspaceDraft {
@@ -19,6 +20,12 @@ export interface AngularWorkspaceDraft {
 export interface AngularWorkspaceDiscovery {
   drafts: AngularWorkspaceDraft[];
   scannedDirectories: number;
+  nestedMarkers: AngularWorkspaceMarkers;
+}
+
+export interface AngularWorkspaceMarkers {
+  angularJson: boolean;
+  angularPackage: boolean;
 }
 
 interface ScanResult {
@@ -188,6 +195,12 @@ export function discoverAngularWorkspaces(
       metadataFingerprint: angularFingerprint(['package-json', packageRoot, scan.angularPackages.get(packageRoot)!.raw]),
     });
   }
-  return { drafts, scannedDirectories: scan.scannedDirectories };
+  return {
+    drafts, scannedDirectories: scan.scannedDirectories,
+    nestedMarkers: {
+      angularJson: scan.angularJson.some(item => dirname(item.path) !== native(projectRoot)),
+      angularPackage: [...scan.angularPackages.keys()].some(dir => dir !== native(projectRoot)),
+    },
+  };
 }
 

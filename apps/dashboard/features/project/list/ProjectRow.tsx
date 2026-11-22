@@ -25,7 +25,7 @@ interface ProjectRowProps {
   /** Stable handlers from the parent (the row passes its own project back). */
   onSelect: (project: ProjectCardData) => void;
   onEdit: (project: ProjectCardData) => void;
-  onIndex: (project: ProjectCardData) => void;
+  onIndex: (project: ProjectCardData, action?: 'refresh' | 'reconcile') => void;
   onToggleSelected?: (project: ProjectCardData) => void;
   indexing?: boolean;
   selecting?: boolean;
@@ -56,6 +56,7 @@ export const ProjectRow = memo(function ProjectRow({
       copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
       edit: t('projects:contextMenu.edit', 'Edit'),
       copied: t('projects:contextMenu.copied', 'Copied'),
+      rebuild: t('projects:indexAction.rebuild'),
       index: indexing
         ? t('projects:indexAction.indexing')
         : t('projects:indexAction.run'),
@@ -68,11 +69,12 @@ export const ProjectRow = memo(function ProjectRow({
         project: p,
         onSelect: () => onSelect(p),
         onEdit: () => onEdit(p),
-        onIndex: indexed ? undefined : () => onIndex(p),
+        onIndex: () => onIndex(p),
+        onRebuild: () => onIndex(p, 'reconcile'),
         indexing,
         labels,
       }),
-    [p, onSelect, onEdit, onIndex, indexed, indexing, labels],
+    [p, onSelect, onEdit, onIndex, indexing, labels],
   );
   const { triggerProps, openAt, Menu } = useContextMenu(menuItems);
 
@@ -158,7 +160,7 @@ export const ProjectRow = memo(function ProjectRow({
         </Badge>
       </div>
 
-      {!selecting && !indexed && (
+      {!selecting && (
         <Button
           variant="ghost"
           size="sm"

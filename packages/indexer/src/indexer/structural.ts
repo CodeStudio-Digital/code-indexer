@@ -63,6 +63,7 @@ export interface StructuralIndexOptions {
   maxFiles?: number;
   /** Explicit repair of derived rows from older indexer versions. */
   forceReparse?: boolean;
+  verifyPaths?: string[];
   /**
    * Escape hatch for the empty-scan anti-wipe guard (manual reindex only):
    * a scan that finds ZERO files but would remove existing rows is treated
@@ -136,6 +137,7 @@ export async function runStructuralIndex(
     deferNewFileReads: true,
     maxFiles: opts.maxFiles,
     forceReparse: opts.forceReparse,
+    verifyPaths: opts.verifyPaths?.length ? new Set(opts.verifyPaths) : undefined,
     waitForInteractivePriority: opts.waitForInteractivePriority,
     // Keep the "Scanning…" chip alive during the walk (total unknown → 0).
     onScanProgress: (scanned, total) =>
@@ -199,7 +201,7 @@ export async function runStructuralIndex(
         phaseTimings, peakRssMb, aborted: 'signal',
       };
     }
-    const stats = db.getStats(projectId, { fresh: true });
+    const stats = db.getStructuralCounts(projectId);
     const checkedAt = new Date().toISOString();
     const needsMetadataRepair = stats.file_count !== project.file_count
       || stats.symbol_count !== project.symbol_count
@@ -314,6 +316,9 @@ export async function runStructuralIndex(
               }
               if (outcome.unavailable) {
                 unavailable++;
+                // A previously indexed file that disappeared or became unreadable
+                // during repair must keep its rows and cannot certify a full repair.
+                if (opts.forceReparse && db.getFile(projectId, outcome.file.relativePath)) waveErrors++;
                 continue;
               }
               if (outcome.error || !outcome.prepared) {
@@ -416,9 +421,8 @@ export async function runStructuralIndex(
 
   // Counters always reflect reality; the READY stamp only lands when the run
   // actually succeeded over a non-empty project — a failed/empty run must
-  // never flip the status chip to "Symbols ready". `fresh` bypasses the stats
-  // read cache so the PERSISTED counts are never a stale cached value.
-  const stats = db.getStats(projectId, { fresh: true });
+  // never flip the status chip to "Symbols ready".
+  const stats = db.getStructuralCounts(projectId);
   const checkedAt = new Date().toISOString();
   db.updateProject(projectId, {
     file_count: stats.file_count,

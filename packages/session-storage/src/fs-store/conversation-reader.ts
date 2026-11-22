@@ -19,6 +19,7 @@ import { readChapterBoundarySync } from './conversation-chapter-codec.js';
 import { compactionBoundary, finiteNumber } from './session-projection.js';
 import { FsSessionDirectory } from './session-directory.js';
 import { attachmentPage, readAttachment } from './session-attachments.js';
+import { sideMessageText } from './side-chat-context.js';
 import type { FsCoderMessageRow, FsMessagePage, FsSessionWithMessages } from './types.js';
 import type { FsToolOutcomeState } from './tool-outcome-types.js';
 import type { FsConversationChapterSourcePage } from './history-metrics-types.js';
@@ -38,6 +39,7 @@ interface HydratedConversation {
 
 interface StoredConversation extends HydratedConversation {
   stored: Map<number, ProjectedStoredMessage>;
+  revision: string;
 }
 
 const CONVERSATION_TAIL_CHUNK_BYTES = 64 * 1024;
@@ -260,6 +262,7 @@ export class FsConversationReader {
       rows,
       messages: [],
       stored: new Map(projection.storedMessages.map(message => [message.seq, message])),
+      revision: projection.commits.at(-1)?.hash ?? 'empty',
       unresolved_tool_outcomes: projection.toolOutcomes.unresolvedToolUseIds,
       resolved_tool_outcomes: projection.toolOutcomes.resolvedToolUseIds,
       tool_outcome_state: projection.toolOutcomes,
@@ -279,6 +282,43 @@ export class FsConversationReader {
       messages: result.messages,
       message_rows: result.rows,
     };
+  }
+
+  async sideContext(id: SessionId | string, budget: number, selectedSeq?: number) {
+    const view = await this.projection(id);
+    const boundary = compactionBoundary(view.session.state);
+    const summary = (view.session.compaction_summary ?? '').slice(0, Math.floor(budget / 4));
+    let remaining = budget - summary.length;
+    let truncated = Boolean(boundary) || summary.length < (view.session.compaction_summary?.length ?? 0);
+    const recent: string[] = [];
+    const completedTools = new Set<string>();
+    const uncertainTools = new Set(view.unresolved_tool_outcomes);
+    for (let index = view.rows.length - 1; index >= 0; index--) {
+      const row = view.rows[index]!;
+      if (row.seq <= boundary) break;
+      if (remaining < 100 || recent.length >= 64) { truncated = true; break; }
+      const stored = view.stored.get(row.seq)!;
+      if (stored.is_meta || !Array.isArray(stored.content)) continue;
+      for (const block of stored.content) {
+        if (block && typeof block === 'object' && !Array.isArray(block)
+          && (block.type === 'tool_result' || block.type === 'tool_result_ref')
+          && typeof block.tool_use_id === 'string') completedTools.add(block.tool_use_id);
+      }
+      // A committed request can be waiting for permission or its tool result.
+      if (stored.role === 'assistant' && stored.content.some(block =>
+        block && typeof block === 'object' && !Array.isArray(block) && block.type === 'tool_use'
+        && typeof block.id === 'string' && (!completedTools.has(block.id) || uncertainTools.has(block.id)))) continue;
+      const result = await sideMessageText(view.entry.location, stored, Math.min(6_000, remaining - 40));
+      if (!result.text) continue;
+      const line = '[' + row.seq + ' ' + row.role + '] ' + result.text;
+      recent.push(line);
+      truncated ||= result.truncated;
+      remaining -= line.length + 1;
+    }
+    const selected = selectedSeq == null ? undefined : view.stored.get(selectedSeq);
+    const anchor = selected ? await sideMessageText(view.entry.location, selected, 128_000) : undefined;
+    return { revision: view.revision, throughSeq: view.rows.at(-1)?.seq ?? 0, truncated,
+      text: [summary, ...recent.reverse()].filter(Boolean).join('\n'), selectedText: anchor?.text };
   }
 
   async loadAll(

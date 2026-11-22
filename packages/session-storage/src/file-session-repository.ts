@@ -24,6 +24,7 @@ import {
   UnsafeSessionPathError,
 } from './path-safety.js';
 import { SessionLocator } from './session-locator.js';
+import { removeSideChatFile } from './side-chat-file.js';
 import { readSessionProjection } from './read-session-projection.js';
 import {
   emptySessionMetricsSummary,
@@ -422,7 +423,7 @@ export class FileSessionRepository {
     this.#emit({ type: 'updated', location: target });
   }
 
-  #assertReadableLocation(location: SessionLocation): void {
+  assertLocationMatchesResolver(location: SessionLocation): void {
     const expected = this.#locator.locate(location.scope, location.session_id);
     if (
       resolve(expected.bundle_path) !== resolve(location.bundle_path) ||
@@ -431,6 +432,10 @@ export class FileSessionRepository {
       throw new UnsafeSessionPathError(`Session location does not match resolver: ${location.bundle_path}`);
     }
     assertContainedPath(location.session_root, location.bundle_path);
+  }
+
+  #assertReadableLocation(location: SessionLocation): void {
+    this.assertLocationMatchesResolver(location);
     assertPathHasNoLinksSync(location.session_root, location.bundle_path);
     const stat = lstatSync(location.bundle_path);
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
@@ -1139,6 +1144,7 @@ export class FileSessionRepository {
     const sessionRoot = this.#locator.sessionRoot(scope);
     const trashRoot = join(sessionRoot, '.trash');
     assertContainedPath(trashRoot, trashed.trash_path);
+    await removeSideChatFile(sessionRoot, trashed.metadata.id);
     await removeTreeNoLinks(trashRoot, trashed.trash_path);
   }
 

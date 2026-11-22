@@ -159,7 +159,7 @@ export function createPool<Req, Res>(opts: PoolOptions): Pool<Req, Res> {
     w.on('exit', (code) => {
       slot.ready = false;
       rejectInflight(slot, new Error(`worker exited with code ${code}`));
-      slots[idx] = null;
+      if (slots[idx] === slot) slots[idx] = null;
       afterPendingShrunk();
       if (closed || slot.expected) return;
       const decision = policy.onCrash();

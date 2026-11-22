@@ -27,6 +27,7 @@ interface ProjectCardProps {
   onSelect: () => void;
   onEdit: () => void;
   onIndex: () => void;
+  onRebuild?: () => void;
   onToggleSelected?: () => void;
   indexing?: boolean;
   selecting?: boolean;
@@ -38,6 +39,7 @@ export function ProjectCard({
   onSelect,
   onEdit,
   onIndex,
+  onRebuild,
   onToggleSelected,
   indexing = false,
   selecting = false,
@@ -49,7 +51,8 @@ export function ProjectCard({
       project: p,
       onSelect,
       onEdit,
-      onIndex: p.last_indexed ? undefined : onIndex,
+      onIndex,
+      onRebuild,
       indexing,
       labels: {
         open: t('projects:contextMenu.open', 'Open'),
@@ -58,6 +61,7 @@ export function ProjectCard({
         copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
         edit: t('projects:contextMenu.edit', 'Edit'),
         copied: t('projects:contextMenu.copied', 'Copied'),
+        rebuild: t('projects:indexAction.rebuild'),
         index: indexing
           ? t('projects:indexAction.indexing')
           : t('projects:indexAction.run'),
@@ -149,7 +153,7 @@ export function ProjectCard({
                 })
               : t('projects:neverIndexed')}
           </span>
-          {!selecting && !p.last_indexed && (
+          {!selecting && (
             <Button
               variant="ghost"
               size="sm"

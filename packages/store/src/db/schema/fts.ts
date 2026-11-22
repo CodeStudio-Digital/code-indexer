@@ -1,6 +1,22 @@
 import type { DB } from '../types.js';
 import { createFileContentsFts, repairFileContentsFts } from './content-fts.js';
 
+/** FTS5 external-content tables need the old terms removed before replacement. */
+export function createSymbolFtsUpdateTrigger(db: DB): void {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols
+    WHEN old.name IS NOT new.name OR old.kind IS NOT new.kind OR old.signature IS NOT new.signature
+      OR old.comment IS NOT new.comment OR old.tags IS NOT new.tags OR old.file_path IS NOT new.file_path
+      OR old.parent IS NOT new.parent
+    BEGIN
+      INSERT INTO symbols_fts(symbols_fts, rowid, name, kind, signature, comment, tags, file_path, parent)
+      VALUES ('delete', old.id, old.name, old.kind, old.signature, COALESCE(old.comment,''), old.tags, old.file_path, COALESCE(old.parent,''));
+      INSERT INTO symbols_fts(rowid, name, kind, signature, comment, tags, file_path, parent)
+      VALUES (new.id, new.name, new.kind, new.signature, COALESCE(new.comment,''), new.tags, new.file_path, COALESCE(new.parent,''));
+    END
+  `);
+}
+
 export function createFtsTables(db: DB): void {
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
@@ -70,11 +86,12 @@ export function createFtsTables(db: DB): void {
     END;
   `);
 
+  createSymbolFtsUpdateTrigger(db);
   createFileContentsFts(db);
 }
 
 const CODE_FTS_TRIGGERS = [
-  'files_ai', 'files_ad', 'symbols_ai', 'symbols_ad', 'snapshots_ai', 'snapshots_ad',
+  'files_ai', 'files_ad', 'symbols_ai', 'symbols_ad', 'symbols_au', 'snapshots_ai', 'snapshots_ad',
   'agent_memory_ai', 'agent_memory_ad',
 ] as const;
 const CODE_FTS_TABLES = ['files_fts', 'symbols_fts', 'snapshots_fts', 'agent_memory_fts'] as const;

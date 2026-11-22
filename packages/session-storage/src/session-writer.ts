@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { Stats } from 'node:fs';
 import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { measureStorage, measureStorageSync, recordStorageElapsed } from './storage-timing.js';
 import { dirname, join } from 'node:path';
 import {
@@ -86,12 +87,6 @@ export interface WriterCommitInput {
   readonly prepare_artifacts?: () => Promise<readonly ArtifactRef[]>;
 }
 
-interface ParsedConversation {
-  readonly records: ConversationCommit[];
-  readonly committedBytes: number;
-  readonly discardedBytes: number;
-}
-
 function sha256Text(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
@@ -128,42 +123,36 @@ function validateRecord(record: ConversationCommit, expectedSeq: number, expecte
   }
 }
 
-function parseConversationBytes(bytes: Uint8Array): ParsedConversation {
-  const buffer = Buffer.from(bytes);
-  const finalNewline = buffer.lastIndexOf(0x0a);
-  const committedBytes = finalNewline < 0 ? 0 : finalNewline + 1;
-  const discardedBytes = buffer.byteLength - committedBytes;
-  const committedText = buffer.subarray(0, committedBytes).toString('utf8');
-  const lines = committedText.length === 0 ? [] : committedText.split('\n').slice(0, -1);
-  const records: ConversationCommit[] = [];
+function* committedRecords(buffer: Buffer): Generator<ConversationCommit> {
   let previousHash: string | null = null;
   const operationIds = new Set<string>();
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line) throw new ConversationCorruptionError(`Blank conversation line at seq ${index + 1}`);
+  let start = 0;
+  for (let seq = 1; start < buffer.length; seq++) {
+    const newline = buffer.indexOf(0x0a, start);
+    if (newline < 0) return; // An unterminated crash suffix is uncommitted.
+    if (newline === start) throw new ConversationCorruptionError(`Blank conversation line at seq ${seq}`);
     let record: ConversationCommit;
     try {
-      record = JSON.parse(line) as ConversationCommit;
+      record = JSON.parse(buffer.toString('utf8', start, newline)) as ConversationCommit;
     } catch (error) {
       throw new ConversationCorruptionError(
-        `Invalid committed JSON at conversation seq ${index + 1}: ${(error as Error).message}`,
+        `Invalid committed JSON at conversation seq ${seq}: ${(error as Error).message}`,
       );
     }
-    validateRecord(record, index + 1, previousHash);
+    validateRecord(record, seq, previousHash);
     if (operationIds.has(record.operation_id)) {
       throw new ConversationCorruptionError(`Duplicate operation_id at conversation seq ${record.seq}`);
     }
     operationIds.add(record.operation_id);
     previousHash = record.hash;
-    records.push(record);
+    start = newline + 1;
+    yield record;
   }
-  return { records, committedBytes, discardedBytes };
 }
 
 export function readConversationSync(conversationPath: string): readonly ConversationCommit[] {
   if (!existsSync(conversationPath)) return [];
-  return parseConversationBytes(readFileSync(conversationPath)).records;
+  return Array.from(committedRecords(readFileSync(conversationPath)));
 }
 
 /**
@@ -175,7 +164,19 @@ export async function readConversation(
   conversationPath: string,
 ): Promise<readonly ConversationCommit[]> {
   try {
-    return parseConversationBytes(await readFile(conversationPath)).records;
+    const buffer = await readFile(conversationPath);
+    const records: ConversationCommit[] = [];
+    // Each commit must be verified in order. Leave time for IPC between batches.
+    const sliceMs = 6;
+    let deadline = performance.now() + sliceMs;
+    for (const record of committedRecords(buffer)) {
+      records.push(record);
+      if (performance.now() >= deadline) {
+        await yieldToEventLoop();
+        deadline = performance.now() + sliceMs;
+      }
+    }
+    return records;
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
     throw error;
@@ -194,17 +195,18 @@ export async function recoverConversation(conversationPath: string): Promise<rea
     return [];
   }
 
-  const parsed = parseConversationBytes(bytes);
-  if (parsed.discardedBytes > 0) {
+  const records = Array.from(committedRecords(bytes));
+  const committedBytes = bytes.lastIndexOf(0x0a) + 1;
+  if (bytes.length > committedBytes) {
     const handle = await open(conversationPath, 'r+');
     try {
-      await handle.truncate(parsed.committedBytes);
+      await handle.truncate(committedBytes);
       await handle.sync();
     } finally {
       await handle.close();
     }
   }
-  return parsed.records;
+  return records;
 }
 
 function parseJson<T>(text: string, label: string): T {

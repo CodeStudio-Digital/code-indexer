@@ -234,6 +234,12 @@ export async function indexFilesStructural(
     treeSitter.dispose();
   }
   result.failedPaths = [...new Set(result.failedPaths)];
+  if (result.indexed || result.removed) {
+    const counts = db.getStructuralCounts(projectId);
+    if (counts.file_count !== project.file_count || counts.symbol_count !== project.symbol_count) {
+      db.updateProject(projectId, counts);
+    }
+  }
   return result;
 }
 

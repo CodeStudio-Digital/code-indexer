@@ -18,7 +18,9 @@ export interface FsSnapshotReviewApi
   extends SessionSnapshotStorePort<SessionId, string>,
     SessionReviewStorePort<SessionId, string>,
     ReviewIntelPort<SessionId, string>,
-    FsReviewEvidenceSource {}
+    FsReviewEvidenceSource {
+  baselineIdentities: FsSessionSnapshotRepository['baselineIdentities'];
+}
 
 function installMethods(target: object, source: object): void {
   const prototype = Object.getPrototypeOf(source) as object;

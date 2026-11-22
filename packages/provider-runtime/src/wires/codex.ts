@@ -45,7 +45,7 @@ export function buildCodex(spec: ProviderSpec): WireParts {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      const imageGenerationEnabled = imageGenOptIn && imageAllow.includes(wireModel);
+      const imageGenerationEnabled = !opts?.textOnly && imageGenOptIn && imageAllow.includes(wireModel);
 
       return new ChatGPTCodexProvider({
         apiKey: creds.apiKey ?? '',

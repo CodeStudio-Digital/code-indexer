@@ -61,7 +61,8 @@ export function createDocumentSyncHandlers(context: LspHandlerContext): Document
       publishDiagnostics(projectId, { file, source: 'ts', diagnostics: [] });
       publishDiagnostics(projectId, { file, source: 'syntax', diagnostics: [] });
 
-      const angular = angularProfileTarget(db, projectId, root, file, languageId);
+      const angular = await angularProfileTarget(db, projectId, root, file, languageId);
+      if (getDoc(projectId, file)) return { ok: true };
       const servers = [serverForLanguage(languageId), angular?.def];
       const cleared = new Set<string>();
       for (const server of servers) {

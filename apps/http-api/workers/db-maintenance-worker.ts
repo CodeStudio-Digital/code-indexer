@@ -125,6 +125,15 @@ async function bootWorker(port: MessagePort, dbPath: string): Promise<void> {
   registerPerfStatsHandler(bridge);
 
   const { Database } = await import('@mcp/store/db/types.js');
+  const { readEmbeddingFiles } = await import('@mcp/store/db/embedding-files.js');
+  bridge.handle('project.embedding-files', (payload: unknown) => {
+    const input = payload as { dbPath: string; projectId: number; query: import('@mcp/store/db/embedding-files.js').EmbeddingFileQuery };
+    if (!input || !isAbsolute(input.dbPath) || !Number.isSafeInteger(input.projectId)) throw new Error('Invalid embedding file request');
+    if (input.dbPath === dbPath) return readEmbeddingFiles(conn.handle, input.projectId, input.query);
+    const project = new Database(input.dbPath, { readonly: true, fileMustExist: true });
+    try { return readEmbeddingFiles(project, input.projectId, input.query); }
+    finally { project.close(); }
+  });
   const { readProjectSettingsRows, isProjectSettingsBusy } = await import('@mcp/store/db/projects.js');
   bridge.handle('project.read-settings', (payload: unknown) => {
     const input = payload as { dbPath?: string; projectId?: number };

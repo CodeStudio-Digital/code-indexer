@@ -186,6 +186,8 @@ export interface ProviderResolveCredentialsContext {
  * Kept as an interface so new fields are additive without breaking definitions.
  */
 export interface CreateCoderOpts {
+  /** Utility conversations only consume generated text, including on hosted-tool-capable wires. */
+  textOnly?: boolean;
   /**
    * Gemini CloudCode session id — when set, the Google OAuth backend reuses
    * server-side context cache across requests, cutting token cost.

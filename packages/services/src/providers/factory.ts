@@ -116,9 +116,11 @@ export async function createCoderProvider(
   // of the OpenAI SDK — throw `ERR_STREAM_PREMATURE_CLOSE` on the benign trailing
   // socket teardown AFTER a stream already completed. withStreamResilience
   // swallows that post-`done` close and re-throws genuine mid-stream truncations.
+  const provider = def.createCoder(creds, model, { ...opts, providerId, providerModels });
+  if (opts?.textOnly) await provider.prepare?.();
   return withStreamResilience(
     withReasoningCapabilities(
-      def.createCoder(creds, model, { ...opts, providerId, providerModels }),
+      provider,
       providerModels,
       model,
       { useModelDefault: def.kind === 'zai' },
