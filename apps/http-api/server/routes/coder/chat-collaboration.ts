@@ -26,9 +26,10 @@ export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, 
     if (!deps.providerStore.getProvider(provider)?.enabled || !deps.providerStore.listModels(provider, true)
       .some(row => `${row.model_id}${row.mode ? `::${row.mode}` : ''}` === model)) throw new Error('Unknown or disabled provider/model');
   };
-  const network = new SessionNetwork({ sessions: deps.sessionStore, mailbox, project: id => deps.db.getProject(id), validateModel });
+  const project = (id: number) => deps.db.getProjectCatalogEntry(id);
+  const network = new SessionNetwork({ sessions: deps.sessionStore, mailbox, project, validateModel });
   // The app owns child admission, worker startup and completion delivery.
-  const childAgents = createChildAgentHost({ deps, mailbox, project: id => deps.db.getProject(id),
+  const childAgents = createChildAgentHost({ deps, mailbox, project,
     validateModel: (provider, model, effort) => validateChildChatTarget(deps.providerStore, provider, model, effort) });
   // Boot: stops the app had begun finish before any tree resumes, so nothing stopped restarts.
   void ready.then(() => childAgents.resumeStops())
@@ -72,23 +73,21 @@ export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, 
     if (!session) return notFound(c);
     const actor = rootChatId(id);
     if (!await mailbox.participant(actor)) await mailbox.registerRoot(id, session.title);
-    const peers = await mailbox.peers(actor);
+    const { candidates, config, root, directory } = await network.discoverDirectory(id);
+    const { peers } = directory;
     const members = new Set([actor, ...peers.map(peer => peer.id)]);
     const messages = (await mailbox.messages(undefined, 500)).filter(row => members.has(row.from) && members.has(row.to));
-    const candidates = await network.discover(id);
-    const config = await network.config(id);
-    const root = await network.config(config.rootId);
     const visible = new Set([id, ...peers.map(peer => peer.sessionId)]);
-    const links = (await mailbox.files.list<{ sessions: string[]; enabled: boolean }>('links')).filter(link => link.enabled && link.sessions.every(sid => visible.has(sid)));
+    const links = directory.links.filter(link => link.enabled && link.sessions.every(sid => visible.has(sid)));
     const triggers = (await mailbox.files.list<ChatTrigger>('triggers')).filter(trigger => visible.has(trigger.ownerSessionId) && visible.has(trigger.sourceSessionId) && visible.has(trigger.targetSessionId));
     const wakeCount = (await mailbox.files.list<{ rootId: string; budgetId: string }>('wake-slots')).filter(slot => slot.rootId === root.rootId && slot.budgetId === root.budgetId).length;
     const chats = (await Promise.all([...visible].slice(0, 33).map(chatId => network.session(chatId).catch(() => null)))).filter(chat => chat != null)
       .map(chat => ({ id: chat.id, title: chat.title, projectId: chat.project_id, provider: chat.provider, model: chat.model }));
     const projects = [...new Set([...config.projectIds, ...root.projectIds])].flatMap(pid => {
-      const project = deps.db.getProject(pid);
-      return project && !project.is_synthetic ? [{ id: pid, name: project.name }] : [];
+      const entry = project(pid);
+      return entry && !entry.is_synthetic ? [{ id: pid, name: entry.name }] : [];
     });
-    return c.json({ self: actor, stopped: (await mailbox.participant(actor))?.state === 'stopped', peers, messages: messages.slice(0, 100),
+    return c.json({ self: actor, stopped: directory.self.state === 'stopped', peers, messages: messages.slice(0, 100),
       candidates: candidates.filter(candidate => candidate.id !== id).map(candidate => ({ id: candidate.id, title: candidate.title })),
       config, links, triggers, wakeCount, rootBudget: root.maxWakeups, chats, projects,
       policy: await mailbox.files.get<ChatNetworkSnapshot['policy']>('policies', id),

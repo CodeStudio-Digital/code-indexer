@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { asSessionId, type SessionId } from '@mcp/session-storage';
 import type { FsSessionStore, FsCoderSession } from '@mcp/session-storage/fs-store/index.js';
-import { ChatCollaborationStore, rootChatId, type ChatParticipant } from '@mcp/session-storage/collaboration/store.js';
+import { ChatCollaborationStore, rootChatId } from '@mcp/session-storage/collaboration/store.js';
 import { keyOf } from '@mcp/session-storage/collaboration/files.js';
 import type { ChatNetworkConfig, ChatSpawnInput, ChatTrigger, ChatCompletion } from '@mcp/session-storage/collaboration/network-types.js';
 
@@ -90,18 +90,25 @@ export class SessionNetwork {
     await this.settings(id, { projectIds: [...new Set([...current.projectIds, ...projectIds])] });
   }
   async discover(id: string, query = '', activeOnly = false, projectId?: number) {
+    return (await this.discoverDirectory(id, query, activeOnly, projectId)).candidates;
+  }
+  async discoverDirectory(id: string, query = '', activeOnly = false, projectId?: number) {
     const config = await this.config(id);
     const root = config.rootId === id ? config : await this.config(config.rootId);
     const allowed = new Set([...config.projectIds, ...root.projectIds]);
     if (projectId != null && !allowed.has(projectId)) throw new Error('Mention this project with $ before discovering its chats');
-    const rows = (await Promise.all([...allowed].filter(pid => projectId == null || pid === projectId).map(pid => this.options.sessions.listSessions(pid)))).flat();
-    for (const peer of await this.mailbox.peers(rootChatId(id))) {
+    const [projectRows, directory] = await Promise.all([
+      Promise.all([...allowed].filter(pid => projectId == null || pid === projectId).map(pid => this.options.sessions.listSessions(pid))),
+      this.mailbox.directory(rootChatId(id)),
+    ]);
+    const rows = projectRows.flat();
+    for (const peer of directory.peers) {
       if (peer.parentId) continue;
       try { rows.push(await this.session(peer.sessionId)); } catch { /* Deleted/archived peer. */ }
     }
-    const activity = new Map((await this.mailbox.files.list<ChatParticipant>('participants')).filter(peer => !peer.parentId).map(peer => [peer.sessionId, peer]));
+    const activity = new Map(directory.participants.filter(peer => !peer.parentId).map(peer => [peer.sessionId, peer]));
     const needle = query.toLowerCase().slice(0, 100);
-    return [...new Map(rows.map(row => [row.id, row])).values()].map(row => {
+    const candidates = [...new Map(rows.map(row => [row.id, row])).values()].map(row => {
       const live = activity.get(row.id);
       return live && live.updatedAt >= Date.parse(row.updated_at)
         ? { ...row, status: live.state === 'running' ? 'running' as const : row.status === 'running' ? 'idle' as const : row.status } : row;
@@ -109,6 +116,7 @@ export class SessionNetwork {
       && (!activeOnly || row.status === 'running') && (!needle || row.title.toLowerCase().includes(needle)))
       .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.updated_at.localeCompare(a.updated_at))
       .slice(0, 50).map(row => ({ id: row.id, chatId: rootChatId(row.id), title: row.title, projectId: row.project_id, provider: row.provider, model: row.model, status: row.status }));
+    return { candidates, config, root, directory };
   }
   async read(id: string, targetId: string, finalOnly = true, beforeSeq?: number) {
     const session = await this.session(targetId);

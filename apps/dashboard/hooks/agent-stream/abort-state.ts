@@ -15,6 +15,7 @@ export function createAbortedSessionPatch(
     : null;
   return {
     streaming: false,
+    reconnecting: false,
     currentTurn,
     doneReason: 'aborted',
     interactionPending: null,

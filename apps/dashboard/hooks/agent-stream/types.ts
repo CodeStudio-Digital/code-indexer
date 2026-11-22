@@ -525,6 +525,7 @@ export interface SessionState {
   /** Bounded confirmation of follow-ups consumed at a runner turn boundary. */
   consumedMessageIds?: number[];
   streaming: boolean;
+  reconnecting: boolean;
   currentTurn: AssistantTurn | null;
   doneReason: string | null;
   error: string | null;
@@ -640,6 +641,7 @@ export const ZERO_DELTA: RunDelta = {
 
 export const EMPTY_STATE: SessionState = {
   streaming: false,
+  reconnecting: false,
   currentTurn: null,
   doneReason: null,
   error: null,

@@ -9,6 +9,12 @@ import { rootChatId, type ChatMessage, type ChatMessageStatus, type ChatParticip
 export * from './types.js';
 
 interface Link { sessions: string[]; enabled: boolean }
+export interface ChatDirectory {
+  self: ChatParticipant;
+  participants: ChatParticipant[];
+  peers: ChatParticipant[];
+  links: Link[];
+}
 interface Receipt { id: string; status: ChatMessageStatus; at: number }
 
 /** Cross-worker mailbox; separate from each conversation's exclusive writer. */
@@ -77,10 +83,27 @@ export class ChatCollaborationStore {
     return left === right || (await this.files.get<Link>('links', [left, right].sort().join('\n')))?.enabled === true;
   }
   async peers(actor: string): Promise<ChatParticipant[]> {
-    const self = await this.requireParticipant(actor);
-    const peers = await this.files.list<ChatParticipant>('participants');
-    const allowed = await Promise.all(peers.map(async peer => peer.id !== actor && await this.connected(self.sessionId, peer.sessionId)));
-    return peers.filter((_, index) => allowed[index]).sort((a, b) => a.id.localeCompare(b.id));
+    return (await this.directory(actor)).peers;
+  }
+  /** One request-local view of membership. Writes still check the exact link
+   * with connected() at delivery time. */
+  async directory(actor: string): Promise<ChatDirectory> {
+    const [participants, links] = await Promise.all([
+      this.files.list<ChatParticipant>('participants'),
+      this.files.list<Link>('links'),
+    ]);
+    const self = participants.find(p => p.id === actor);
+    if (!self) throw new Error(`Unknown chat '${actor}'. Use list_chats to discover connected chats.`);
+    const sessions = new Set([self.sessionId]);
+    for (const link of links) {
+      if (link.enabled !== true || !Array.isArray(link.sessions) || link.sessions.length !== 2) continue;
+      const [left, right] = link.sessions;
+      if (left === self.sessionId) sessions.add(right);
+      if (right === self.sessionId) sessions.add(left);
+    }
+    const peers = participants.filter(p => p.id !== actor && sessions.has(p.sessionId))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    return { self, participants, peers, links };
   }
   async requireParticipant(id: string): Promise<ChatParticipant> {
     const peer = await this.participant(id);

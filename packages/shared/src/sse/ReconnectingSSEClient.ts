@@ -52,6 +52,10 @@ export interface ReconnectingSSEOpts {
   onHeartbeat?: (receivedAt: number) => void;
   /** Invoked before each reconnect attempt (attempt >= 1). */
   onReconnect?: (attempt: number) => void | Promise<void>;
+  /** After normal retries, let a session owner reconcile with its server.
+   * Return a delay to keep following, 'complete' for a confirmed outcome,
+   * or undefined to propagate the original failure. */
+  recover?: (error: unknown) => Promise<number | 'complete' | undefined>;
   /**
    * Fired on every phase transition. Use to drive a "Reconnecting…
    * replaying events" UI strip. Calls are best-effort — exceptions
@@ -141,8 +145,7 @@ export class ReconnectingSSEClient {
       } catch (err) {
         if (this.opts.signal.aborted) return;
         if (this.terminalSeen) return;
-        if (isAbortError(err)) return;
-        if ((err as { nonRetryable?: boolean }).nonRetryable) throw err;
+        const nonRetryable = (err as { nonRetryable?: boolean }).nonRetryable;
 
         // Retry budgets describe consecutive failures without progress, not
         // the entire lifetime of a long-running stream. A strictly newer
@@ -162,14 +165,16 @@ export class ReconnectingSSEClient {
         // Phase: connection broke mid-stream. The next iteration of the
         // loop will re-emit `connecting`/`replaying` once the backoff
         // has elapsed.
-        this.emitPhase('disconnected');
-
-        const budgetDelay = this.backoff.nextDelay(attempt);
-        if (budgetDelay === null) throw err;
+        if (!nonRetryable) this.emitPhase('disconnected');
+        const budgetDelay = nonRetryable ? null : this.backoff.nextDelay(attempt);
+        const retry = budgetDelay ?? await this.opts.recover?.(err);
+        if (this.opts.signal.aborted || retry === 'complete') return;
+        if (retry == null) throw err;
+        if (nonRetryable) this.emitPhase('disconnected');
         const serverDelay = (err as { retryAfterMs?: unknown }).retryAfterMs;
         const delay = typeof serverDelay === 'number' && serverDelay >= 0
-          ? serverDelay
-          : budgetDelay;
+          ? (budgetDelay === null ? Math.max(retry, serverDelay) : serverDelay)
+          : retry;
         try {
           await sleep(delay, this.opts.signal);
         } catch {
@@ -234,7 +239,7 @@ export class ReconnectingSSEClient {
     const checkIdle = () => {
       const remaining = idleMs! - (Date.now() - lastBytesAt);
       if (remaining > 0) idleTimer = setTimeout(checkIdle, remaining);
-      else interrupt(new Error('SSE transport heartbeat timed out; reconnecting'));
+      else interrupt(new SSETransportError('SSE transport heartbeat timed out'));
     };
     if (idleMs && idleMs > 0) idleTimer = setTimeout(checkIdle, idleMs);
     try {
@@ -329,21 +334,22 @@ function withConnectionAbort<T>(pending: Promise<T>, signal: AbortSignal): Promi
     const onAbort = () => reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
     if (signal.aborted) onAbort();
-    void pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    void pending.then(resolve, (cause: unknown) => {
+      reject(new SSETransportError(cause instanceof Error ? cause.message : String(cause), { cause }));
+    }).finally(() => signal.removeEventListener('abort', onAbort));
   });
 }
 
-export class SSEStreamEndedWithoutTerminalError extends Error {
+/** The fetch or body reader lost its connection without an application outcome. */
+export class SSETransportError extends Error {}
+
+export class SSEStreamEndedWithoutTerminalError extends SSETransportError {
   readonly code = 'SSE_STREAM_ENDED_WITHOUT_TERMINAL';
 
   constructor() {
     super('SSE stream ended without a terminal event');
     this.name = 'SSEStreamEndedWithoutTerminalError';
   }
-}
-
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && err.name === 'AbortError';
 }
 
 function normalizedBusId(value: string | null | undefined): string | null {

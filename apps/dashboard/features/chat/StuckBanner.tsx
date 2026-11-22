@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next';
 interface StuckBannerProps {
   /** When false, the banner never renders (no stream → no stall to flag). */
   streaming: boolean;
+  reconnecting?: boolean;
   /** `Date.now()` of last SSE event. Null = no event yet → no stall (we're still booting). */
   lastEventAt: number | null;
   /** How many ms of silence trigger the banner. Default 30 000. */
@@ -34,6 +35,7 @@ interface StuckBannerProps {
 
 export const StuckBanner = memo(function StuckBanner({
   streaming,
+  reconnecting = false,
   lastEventAt,
   thresholdMs = 30_000,
   onOpenLog,
@@ -44,17 +46,16 @@ export const StuckBanner = memo(function StuckBanner({
   // an idle session at zero timers, and a hidden window at zero wakeups.
   const now = useNow(streaming);
 
-  if (!streaming || !lastEventAt) return null;
-  const elapsed = now - lastEventAt;
-  if (elapsed < thresholdMs) return null;
+  const elapsed = lastEventAt == null ? 0 : now - lastEventAt;
+  if (!streaming || (!reconnecting && elapsed < thresholdMs)) return null;
 
   const seconds = Math.floor(elapsed / 1000);
   return (
     <div className="border-b border-amber-500/40 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
       <div className="flex items-center gap-2">
         <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-        <span className="flex-1">
-          {t('connectionSilent', { seconds })}
+        <span className="flex-1" role={reconnecting ? 'status' : undefined}>
+          {reconnecting ? t('connectionReconnecting') : t('connectionSilent', { seconds })}
         </span>
         {onOpenLog && (
           <button

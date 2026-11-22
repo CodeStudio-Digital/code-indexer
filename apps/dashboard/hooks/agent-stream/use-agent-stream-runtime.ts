@@ -462,6 +462,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
 
   return {
     streaming: active.streaming,
+    reconnecting: active.reconnecting,
     doneReason: active.doneReason,
     error: active.error,
     lastUsage: active.lastUsage,

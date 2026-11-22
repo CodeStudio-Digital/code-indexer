@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +16,21 @@ describe('durable collaboration across independent workers', () => {
     await first.linkSessions('a', 'b', true);
   });
   afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+
+  it('reads one directory per snapshot and reflects link revocation on the next request', async () => {
+    await first.registerRoot('c', 'Unrelated');
+    await first.register({ id: 'child:a', sessionId: 'a', parentId: 'chat:a', label: 'Child', profile: 'review', state: 'idle' });
+    await second.linkSessions('b', 'c', true);
+    const list = vi.spyOn(first.files, 'list');
+    const get = vi.spyOn(first.files, 'get');
+    const snapshot = await first.directory('chat:a');
+    expect(snapshot.peers.map(p => p.id)).toEqual(['chat:b', 'child:a']);
+    expect(list.mock.calls.map(([kind]) => kind).sort()).toEqual(['links', 'participants']);
+    expect(get).not.toHaveBeenCalled();
+    await second.linkSessions('a', 'b', false);
+    expect((await first.directory('chat:a')).peers.map(p => p.id)).toEqual(['child:a']);
+    expect(await first.connected('a', 'b')).toBe(false);
+  });
 
   it('delivers a correlated reply through filesystem events and retains it after reopening', async () => {
     const request = await first.send({ from: 'chat:a', to: 'chat:b', kind: 'question', body: 'What is the response type?', idempotencyKey: 'ask' });

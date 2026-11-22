@@ -2,7 +2,7 @@ import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { sessionRecoveryFailure } from '../../../control-plane-recovery-error.js';
 import { bodyLimit } from '@mcp/shared/http/middleware.js';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
+import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
 import {
   resolveSessionProjectAuthority,
@@ -177,7 +177,7 @@ export function mountCoderStreamRoutes(
 
   function currentProjectAuthority(session: FsCoderSession) {
     return resolveSessionProjectAuthority(session, (projectId) => {
-      const project = deps.db.getProject(projectId);
+      const project = deps.db.getProjectCatalogEntry(projectId);
       return project && !project.is_synthetic
         ? {
             project_id: project.id,
@@ -709,36 +709,13 @@ export function mountCoderStreamRoutes(
       if (liveBus && !liveBus.ended) return undefined;
 
       const authority = currentProjectAuthority(session);
-      const workspaceProjects = session.is_global
-        ? assignWorkspaceSlugs(
-            (authority?.projects ?? []).map((project) => ({
-              project_id: project.project_id,
-              name: project.name,
-              root_path: project.root_path,
-              is_primary: project.is_primary,
-            })),
-          ).map((project) => ({
-            projectId: project.project_id,
-            name: project.name,
-            slug: project.slug,
-            rootPath: project.root_path,
-            isPrimary: project.is_primary,
-          }))
-        : (() => {
-            const primary = authority?.primary;
-            const project = primary
-              ? deps.db.getProject(primary.project_id)
-              : null;
-            return project
-              ? [{
-                  projectId: project.id,
-                  name: project.name,
-                  slug: workspaceSlug(project.name),
-                  rootPath: project.root_path,
-                  isPrimary: true,
-                }]
-              : [];
-          })();
+      const workspaceProjects = assignWorkspaceSlugs(authority?.projects ?? []).map(project => ({
+        projectId: project.project_id,
+        name: project.name,
+        slug: project.slug,
+        rootPath: project.root_path,
+        isPrimary: project.is_primary,
+      }));
       const preflightInput = {
         sessionId: id,
         projectId: authority?.primary.project_id ?? null,
@@ -900,6 +877,7 @@ export function mountCoderStreamRoutes(
       sessionId: id,
       status: session.status,
       alive,
+      hasReplay: !!bus,
       updatedAt: session.updated_at,
     });
   });

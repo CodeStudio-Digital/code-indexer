@@ -8,6 +8,7 @@ import { isAlreadyAppliedDelta } from './stream-seq-dedup.js';
 import { buildLogEntry, createWorkerLogCapturePolicy } from './worker-log-policy.js';
 import type { NotificationSourceContext } from '../../features/notifications/index.js';
 import { TurnProjector } from './turn-projector.js';
+import { createSessionStreamRecovery } from './session-stream-recovery.js';
 
 /**
  * Events processed per drain batch before yielding the main thread back to
@@ -78,6 +79,8 @@ export async function openStream(
 
   updateSession(sid, {
     streaming: true,
+    reconnecting: false,
+    lastEventAt: null,
     doneReason: null,
     error: null,
     runDelta: ZERO_DELTA,
@@ -262,6 +265,9 @@ export async function openStream(
     }
     projector.dispatch(ev.event, data);
     commitCursor();
+    // A durable command receipt can outlive the replay bus. Its terminal
+    // frame has no text deltas: fetch the transcript that owns the answer.
+    if ((ev.event === 'done' || ev.event === 'error') && data.duplicate === true) onMessageComplete?.();
     if ((ev.event === 'done' || ev.event === 'error') && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
     }
@@ -317,6 +323,29 @@ export async function openStream(
     }
   };
 
+  let reconnecting = false;
+  function setReconnecting(value: boolean) {
+    if (ctrl.signal.aborted || abortMap.get(sid) !== ctrl || reconnecting === value) return;
+    reconnecting = value;
+    updateSession(sid, { reconnecting: value });
+  }
+
+  const recover = createSessionStreamRecovery({
+    signal: ctrl.signal,
+    stateUrl: opts.reattach ? absoluteUrl.replace(/\/attach(?:\?.*)?$/, '/state') : undefined,
+    onReconnecting: () => setReconnecting(true),
+    onDetached: (outcome) => {
+      if (outcome === 'finished') {
+        projector.dispose();
+        lastSeenSeqMap.delete(sid);
+        deps.lastSeenBusIdMap.delete(sid);
+        updateSession(sid, { error: null, currentTurn: null });
+      } else {
+        projector.dispatch('error', { reason: `session-${outcome}` });
+      }
+      onMessageComplete?.();
+    },
+  });
   const client = new ReconnectingSSEClient({
     url: absoluteUrl,
     method: opts.method,
@@ -333,6 +362,14 @@ export async function openStream(
     // into the handlers). The backoff sleep normally outlasts the drain;
     // awaiting it here makes that a guarantee.
     onReconnect: async () => { await drainDone; },
+    recover: async (error) => { await drainDone; return recover(error); },
+    onPhase: (phase) => {
+      if (phase === 'disconnected') setReconnecting(true);
+      if (phase === 'live') {
+        setReconnecting(false);
+        commitLiveness(Date.now());
+      }
+    },
     onEvent: (ev) => {
       eventQueue.push(ev);
       if (!draining) drainDone = drainEventQueue();
@@ -372,42 +409,6 @@ export async function openStream(
             pendingContent,
           },
         });
-      } else if (err.status === 404 && opts.reattach) {
-        // /attach 404 collapses three states into one HTTP status:
-        // "session never had a run", "worker died silently", "run
-        // completed and the bus was evicted". The /state endpoint
-        // disambiguates so the UI shows a useful message instead of
-        // a generic "HTTP 404: no active run".
-        const stateUrl = absoluteUrl.replace(/\/attach(?:\?.*)?$/, '/state');
-        try {
-          const res = await fetch(stateUrl);
-          if (res.ok) {
-            const body = (await res.json()) as {
-              status?: string;
-              alive?: boolean;
-            };
-            if (body.alive === false && (body.status === 'in_progress' || body.status === 'running' || body.status === 'working')) {
-              // Worker died mid-run, session row is still stale.
-              updateSession(sid, {
-                error: 'Session was interrupted by a server / worker crash. Send a new message to resume.',
-              });
-            } else {
-              // status=idle/completed/terminal → the run actually finished or
-              // never started. A process-owned live turn may have survived the
-              // React surface that originally consumed it; once the bus is
-              // gone it can no longer contribute new events and must not be
-              // resurrected as a duplicate on every remount.
-              lastSeenSeqMap.delete(sid);
-              deps.lastSeenBusIdMap.delete(sid);
-              updateSession(sid, { error: null, currentTurn: null });
-              onMessageComplete?.();
-            }
-          } else {
-            updateSession(sid, { error: 'No active run on this session.' });
-          }
-        } catch {
-          updateSession(sid, { error: 'No active run on this session.' });
-        }
       } else {
         let msg: string;
         if (e instanceof Error) {
@@ -434,7 +435,7 @@ export async function openStream(
     if (ownsSession) {
       // Clear streaming + the preflight indicator (safety net for an error
       // before any event arrived — the per-event clear above handles the happy path).
-      updateSession(sid, { streaming: false, preflight: null });
+      updateSession(sid, { streaming: false, reconnecting: false, preflight: null });
       abortMap.delete(sid);
     }
   }

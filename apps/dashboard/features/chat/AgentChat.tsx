@@ -453,6 +453,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     snapshotInventoryTick,
     pendingApprovals,
     lastEventAt,
+    reconnecting,
     preflight,
     sendMessage,
     reattach,
@@ -1786,9 +1787,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 <ApprovalBanner approvals={pendingApprovals} onRespond={respondToToolApproval} />
                 {/* A paused PermissionGate is silence by design — suppress the
                     stall heuristic while approvals are pending. */}
-                {pendingApprovals.length === 0 && (
+                {(reconnecting || pendingApprovals.length === 0) && (
                   <StuckBanner
                     streaming={streaming}
+                    reconnecting={reconnecting}
                     lastEventAt={lastEventAt ?? null}
                     onOpenLog={() => setActiveRightPanelId('worker-log')}
                   />

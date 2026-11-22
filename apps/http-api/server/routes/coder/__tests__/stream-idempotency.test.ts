@@ -159,7 +159,7 @@ function setup(
         : null,
     },
     db: {
-      getProject: () => projectId == null
+      getProjectCatalogEntry: () => projectId == null
         ? null
         : ({ id: projectId, name: 'Fake project', root_path: 'D:/fake' }),
     },
@@ -317,6 +317,18 @@ afterEach(() => {
 });
 
 describe('POST /messages idempotency', () => {
+  it('resumes the dashboard past the heartbeat retry budget with one worker and an exact transcript', async () => {
+    // Load the renderer fixture through Vitest so the backend production
+    // compiler does not pull browser-only modules into the server bundle.
+    const { exerciseHeartbeatOutage } = await vi.importActual<{
+      exerciseHeartbeatOutage: (id: string, request: HttpRouter['request'], getBus: () => CoderRunBus) => Promise<void>;
+    }>('@apps/dashboard/hooks/agent-stream/__tests__/heartbeat-outage-scenario.js');
+    const h = setup();
+    await exerciseHeartbeatOutage(SESSION_ID, (url, init) => h.app.request(url, init), () => h.activeRuns.get(SESSION_ID)!);
+    expect(poolMock.runFresh).toHaveBeenCalledOnce();
+    expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
+  });
+
   it('acknowledges live messages as JSON without opening another stream or restarting the worker', async () => {
     const h = setup();
     const { bus, pushCalls } = seedLiveRun(h.activeRuns, SESSION_ID);
