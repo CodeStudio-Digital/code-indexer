@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openRawProjectDb, initProjectSchema } from '../project-db/index.js';
-import { splitProject, backupPathFor } from '../db-split/index.js';
+import { splitProject, backupPathFor, copyProjectData } from '../db-split/index.js';
 import type { DB } from '../db/types.js';
 
 const dirs: string[] = [];
@@ -50,6 +50,107 @@ function seedCentral(path: string): DB {
 }
 
 describe('splitProject (INDEX backfill)', () => {
+  it('upgrades an empty legacy files table before copying classification flags', () => {
+    const dir = freshDir();
+    const centralPath = join(dir, 'catalog.db');
+    const target = join(dir, 'legacy.db');
+    const central = seedCentral(centralPath);
+    try {
+      central.prepare('UPDATE files SET is_test=1,is_generated=1 WHERE id=10').run();
+      const stub = openRawProjectDb(target);
+      stub.exec(`CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id),
+        path TEXT NOT NULL, language TEXT NOT NULL DEFAULT 'unknown', size INTEGER NOT NULL DEFAULT 0,
+        line_count INTEGER NOT NULL DEFAULT 0, content_hash TEXT NOT NULL, dependencies TEXT DEFAULT '[]',
+        internal_deps TEXT DEFAULT '[]', external_deps TEXT DEFAULT '[]', created_at TEXT, updated_at TEXT,
+        UNIQUE(project_id,path))`);
+      stub.close();
+      const result = splitProject({central,centralDbPath:centralPath,projectDbPath:target,projectId:1,openFreshProjectDb:openFresh});
+      expect(result.status, result.reason).toBe('done');
+      const check = openRawProjectDb(target);
+      try {
+        expect(check.prepare('SELECT is_test,is_generated FROM files WHERE id=10').get()).toEqual({is_test:1,is_generated:1});
+        expect(check.prepare("SELECT 1 FROM sqlite_schema WHERE name='idx_files_tier'").get()).toBeTruthy();
+      } finally { check.close(); }
+    } finally { central.close(); }
+  });
+
+  it('rolls back imported rows when a concurrent catalog write invalidates the snapshot', () => {
+    const dir = freshDir();
+    const centralPath = join(dir, 'catalog.db');
+    const central = seedCentral(centralPath);
+    const other = openRawProjectDb(centralPath);
+    const target = openFresh(join(dir, 'target.db'));
+    try {
+      expect(() => central.transaction(() => {
+        central.prepare('SELECT content_hash FROM files WHERE id=10').get();
+        copyProjectData(target, centralPath, 1, ['INDEX'], () => {
+          other.prepare("UPDATE files SET content_hash='new' WHERE id=10").run();
+          central.prepare("UPDATE projects SET db_split_status='verified' WHERE id=1").run();
+        });
+      })()).toThrow(/locked|busy/i);
+      expect(target.prepare('SELECT id FROM files').all()).toEqual([]);
+      copyProjectData(target, centralPath, 1);
+      expect(target.prepare('SELECT content_hash FROM files WHERE id=10').pluck().get()).toBe('new');
+    } finally { target.close(); other.close(); central.close(); }
+  });
+
+  it('repairs an exhausted worktree, keeps its ancestor chain and restores the content index', () => {
+    const dir = freshDir();
+    const centralPath = join(dir, 'central.db');
+    const target = join(dir, 'worktree.db');
+    const central = seedCentral(centralPath);
+    try {
+      central.exec(`
+        INSERT INTO projects(id,name,root_path,worktree_parent_id) VALUES (3,'nested','/nested',2);
+        UPDATE projects SET worktree_parent_id=1 WHERE id=2;
+        UPDATE projects SET db_split_status='failed',db_split_attempts=3 WHERE id=3;
+        INSERT INTO files(id,project_id,path,content_hash) VALUES (30,3,'x','x'),(31,3,'y','y');
+        INSERT INTO file_contents_fts(rowid,content) VALUES
+          (10,'parentonly'),(30,'Café café cache'),(31,'');
+      `);
+      const deps = {central, centralDbPath:centralPath, projectDbPath:target, projectId:3, openFreshProjectDb:openFresh};
+      expect(splitProject(deps).reason).toBe('max attempts reached');
+      const result = splitProject({...deps, retryFailed:true});
+      expect(result.status, result.reason).toBe('done');
+      const db = openRawProjectDb(target);
+      try {
+        expect(db.prepare('SELECT id FROM projects WHERE id>0 ORDER BY id').pluck().all()).toEqual([1,2,3]);
+        expect(db.prepare('SELECT id FROM files ORDER BY id').pluck().all()).toEqual([30,31]);
+        expect(db.prepare("SELECT rowid FROM file_contents_fts WHERE file_contents_fts MATCH 'cafe'").pluck().all()).toEqual([30]);
+        expect(db.prepare("SELECT rowid FROM file_contents_fts WHERE file_contents_fts MATCH 'parentonly'").all()).toEqual([]);
+        expect(db.prepare('SELECT id,sz FROM file_contents_fts_docsize ORDER BY id').all()).toEqual(
+          central.prepare('SELECT id,sz FROM file_contents_fts_docsize WHERE id>=30 ORDER BY id').all());
+        expect(db.pragma('foreign_key_check')).toEqual([]);
+      } finally { db.close(); }
+    } finally { central.close(); }
+  });
+
+  it('keeps a populated unversioned target and a conflicting versioned target intact', () => {
+    const dir = freshDir();
+    const centralPath = join(dir,'central.db');
+    const central = seedCentral(centralPath);
+    const target = join(dir,'existing.db');
+    const deps = { central, centralDbPath:centralPath, projectDbPath:target, projectId:1, openFreshProjectDb:openFresh };
+    try {
+      const legacy = openRawProjectDb(target);
+      legacy.exec("CREATE TABLE notes(text); INSERT INTO notes VALUES ('local')");
+      legacy.close();
+      expect(splitProject(deps).reason).toMatch(/contains data/);
+      const preserved = openRawProjectDb(target);
+      expect(preserved.prepare('SELECT text FROM notes').pluck().get()).toBe('local');
+      preserved.close();
+      const other = join(dir,'partial.db');
+      const partial = openFresh(other);
+      partial.exec("INSERT INTO projects(id,name,root_path) VALUES (1,'p1','/p1'); INSERT INTO files(id,project_id,path,content_hash) VALUES (10,1,'src/a.ts','local')");
+      partial.close();
+      expect(splitProject({...deps, projectDbPath:other}).reason).toMatch(/Row values differ/);
+      const check = openRawProjectDb(other);
+      try { expect(check.prepare('SELECT content_hash FROM files').pluck().all()).toEqual(['local']); }
+      finally { check.close(); }
+    } finally { central.close(); }
+  });
+
   it('copies one project into its own DB with parity, preserved ids, FTS, and isolation', () => {
     const dir = freshDir();
     const centralPath = join(dir, 'index.db');

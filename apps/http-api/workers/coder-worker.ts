@@ -145,6 +145,7 @@ interface CoderWorkerData {
   sessionId: SessionId;
   dbPath: string;
   sessionContext: {
+    storageScope?: import('../../../packages/session-storage/src/index.js').SessionStorageScope;
     sessionId: SessionId;
     projectId: ProjectId | null;
     projectRoot: string | null;
@@ -375,7 +376,13 @@ const operationalSessionStore = getSharedSessionStore(
   dbPath,
   sessionContext.writerOwnerId,
 );
-await operationalSessionStore.ensureCatalog();
+if (sessionContext.storageScope) {
+  const location = operationalSessionStore.locator.locate(sessionContext.storageScope, sessionId);
+  if (location.bundle_path !== sessionContext.bundlePath) throw new Error('Worker session location differs from host');
+  await operationalSessionStore.bindRuntimeLocation(location);
+} else {
+  await operationalSessionStore.ensureCatalog();
+}
 const pipelineDiagnostics = new FsPipelineTelemetrySink(operationalSessionStore);
 // API client store for the `api_*` agent tools (auto-test/auto-fix). Single
 // `api`-agent sessions run in this worker, so the main-thread binding is null

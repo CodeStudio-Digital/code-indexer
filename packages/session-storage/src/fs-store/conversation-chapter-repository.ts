@@ -2,6 +2,7 @@ import {
   asSessionId,
   type JsonValue,
   type SessionId,
+  type SessionLocation,
 } from '@mcp/session-storage';
 import {
   activeBoundary,
@@ -15,11 +16,7 @@ import {
   searchableChapterText,
   type ChapterData,
 } from './conversation-chapter-codec.js';
-import {
-  hydrateMessage,
-  messageRow,
-  projectConversation,
-} from './conversation-codec.js';
+import { projectConversation } from './conversation-codec.js';
 import { FsSessionEntityFiles } from './entity-files.js';
 import { FsConversationChapterRebuildRepository } from './conversation-chapter-rebuild-repository.js';
 import type {
@@ -33,7 +30,7 @@ import type {
   FsRebuiltConversationChapterInput,
 } from './history-metrics-types.js';
 import { FsSessionDirectory } from './session-directory.js';
-import type { FsConversationReader } from './conversation-reader.js';
+import { FsConversationReader } from './conversation-reader.js';
 
 export class FsConversationChapterRepository {
   private readonly rebuilds: FsConversationChapterRebuildRepository;
@@ -41,7 +38,7 @@ export class FsConversationChapterRepository {
   constructor(
     private readonly directory: FsSessionDirectory,
     private readonly entities: FsSessionEntityFiles,
-    private readonly sourceReader?: Pick<FsConversationReader, 'loadRange'>,
+    private readonly sourceReader: Pick<FsConversationReader, 'loadRange'> = new FsConversationReader(directory),
   ) {
     this.rebuilds = new FsConversationChapterRebuildRepository(
       directory,
@@ -175,6 +172,7 @@ export class FsConversationChapterRepository {
           end,
           duplicate.id,
         );
+        await this.archiveCommittedChapters(entry.location, chapters);
         return {
           status: 'noop',
           reason: 'already_committed',
@@ -196,7 +194,7 @@ export class FsConversationChapterRepository {
       }
 
       const conversation = projectConversation(
-        this.directory.repository.readConversationSync(entry.location),
+        await this.directory.repository.readConversation(entry.location, 'metadata'),
       );
       const span = conversation.storedMessages
         .map((stored) => ({ stored, seq: stored.seq }))
@@ -244,6 +242,7 @@ export class FsConversationChapterRepository {
         end,
         chapter.id,
       );
+      await this.archiveCommittedChapters(entry.location, [...chapters, chapter]);
       return {
         status: 'committed',
         chapter,
@@ -258,6 +257,11 @@ export class FsConversationChapterRepository {
     input: readonly FsRebuiltConversationChapterInput[],
   ): Promise<FsInsertRebuiltConversationChaptersResult> {
     return this.rebuilds.insert(sessionId, input);
+  }
+
+  private archiveCommittedChapters(location: SessionLocation, chapters: FsConversationChapterRow[]) {
+    return this.directory.repository.archiveConversationChapters(location,
+      chapters.filter(chapter => chapter.superseded_at == null && chapter.advances_context_boundary === 1));
   }
 
   private async repairBoundary(
@@ -454,42 +458,6 @@ export class FsConversationChapterRepository {
     if (!chapter) return { items: [], next_cursor: null };
     const afterSeq = parseChapterCursor(options.cursor, 'message') ?? 0;
     const limit = pageLimit(options.limit);
-    if (this.sourceReader) {
-      return this.sourceReader.loadRange(
-        sessionId,
-        chapter.start_message_seq,
-        chapter.end_message_seq,
-        afterSeq,
-        limit,
-      );
-    }
-    const entry = await this.directory.requireEntry(sessionId);
-    const conversation = projectConversation(
-      this.directory.repository.readConversationSync(entry.location),
-    );
-    const messages = conversation.storedMessages.map((stored) =>
-      hydrateMessage(entry.location, stored),
-    );
-    const rows = conversation.storedMessages.map((stored, index) =>
-      messageRow(
-        entry.session.id,
-        stored,
-        messages[index],
-      ),
-    );
-    const selected = rows.filter(
-      (row) =>
-        row.seq >= chapter.start_message_seq &&
-        row.seq <= chapter.end_message_seq &&
-        row.seq > afterSeq,
-    );
-    const items = selected.slice(0, limit);
-    return {
-      items,
-      next_cursor:
-        selected.length > limit && items.length > 0
-          ? chapterCursor('message', items.at(-1)!.seq)
-          : null,
-    };
+    return this.sourceReader.loadRange(sessionId, chapter.start_message_seq, chapter.end_message_seq, afterSeq, limit);
   }
 }

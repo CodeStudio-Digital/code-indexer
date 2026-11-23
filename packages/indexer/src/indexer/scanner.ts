@@ -34,6 +34,7 @@ import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { listWindowsFiles, windowsDirectorySearch, type ListedFile } from './windows-directory-listing.js';
 
 export interface ScanOptions {
+  signal?: AbortSignal;
   maxFiles?: number;
   /** Rebuild derived structure even when source bytes have not changed. */
   forceReparse?: boolean;
@@ -94,6 +95,7 @@ export class FileScanner {
     projectId: number,
     opts: ScanOptions & { deferNewFileReads?: true } = {},
   ): Promise<StructuralScanResult> {
+    opts.signal?.throwIfAborted();
     const project = db.getProject(projectId);
     const sources = project?.is_synthetic
       ? assignWorkspaceSlugs(db.listUnionProjectIds(projectId)).map((p) => ({
@@ -109,6 +111,7 @@ export class FileScanner {
     let ignoredCount = 0;
     for (const source of sources) {
       await opts.waitForInteractivePriority?.();
+      opts.signal?.throwIfAborted();
       if (!canEnumerate(source.rootPath)) {
         unavailable.add(source.rootPath);
         continue;
@@ -127,7 +130,8 @@ export class FileScanner {
       ignoresByPrefix.set(source.prefix, sourceIgnore);
       const listing = native ? listWindowsFiles(native, source.rootPath,
         dir => GLOB_PRUNE_DIRS.includes(dir.slice(dir.lastIndexOf('/') + 1)) || sourceIgnore.ignoresDirectory(dir),
-        () => unavailable.add(source.rootPath), opts.waitForInteractivePriority) : globIterate('**/*', {
+        () => unavailable.add(source.rootPath), opts.waitForInteractivePriority, opts.signal) : globIterate('**/*', {
+        signal: opts.signal,
         cwd: source.rootPath,
         nodir: true,
         dot: false,
@@ -139,6 +143,7 @@ export class FileScanner {
         ],
       });
       for await (const entry of listing) {
+        opts.signal?.throwIfAborted();
         const sourceRel = typeof entry === 'string' ? entry.replace(/\\/g, '/') : entry.relativePath;
         if (sourceIgnore.ignores(sourceRel)) {
           ignoredCount++;
@@ -172,6 +177,7 @@ export class FileScanner {
     }
 
     // Slim metadata (4 columns), not full rows with summaries/concepts.
+    opts.signal?.throwIfAborted();
     const existingMeta = new Map(
       db.listFileScanMeta(projectId).map((m) => [m.path, m]),
     );
@@ -197,6 +203,7 @@ export class FileScanner {
         }
         await yieldToEventLoop();
         await opts.waitForInteractivePriority?.();
+        opts.signal?.throwIfAborted();
       }
       processed++;
 

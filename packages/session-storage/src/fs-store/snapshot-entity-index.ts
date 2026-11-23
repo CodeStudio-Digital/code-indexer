@@ -19,7 +19,7 @@ export class SnapshotEntityIndex {
 
   invalidate(root: string): void { this.sessions.delete(root); }
 
-  async select(root: string, kind: string, round: number | undefined,
+  async listNames(root: string, kind: string, round: number | undefined,
     scan: (visit: (name: string, record: FsEntityEnvelope) => void) => Promise<void>): Promise<string[]> {
     const stat = await lstat(root, { bigint: true });
     const stamp = [stat.dev, stat.ino, stat.mtimeNs, stat.ctimeNs].join('/');

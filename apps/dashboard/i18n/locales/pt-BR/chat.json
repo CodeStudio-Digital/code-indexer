@@ -1,5 +1,8 @@
 {
   "side": {
+    "model": "Modelo do chat secundário",
+    "effort": "Esforço de raciocínio do chat secundário",
+    "reasoning": "Raciocinando…",
     "title": "Chat secundário",
     "context": "Contexto até a mensagem {{seq}}",
     "excerpt": "histórico resumido",

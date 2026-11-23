@@ -16,6 +16,7 @@ export function createBaseTables(db: DB): void {
       file_count INTEGER NOT NULL DEFAULT 0,
       symbol_count INTEGER NOT NULL DEFAULT 0,
       index_ignore_patterns TEXT NOT NULL DEFAULT '[]',
+      auto_index_enabled INTEGER NOT NULL DEFAULT 1 CHECK (auto_index_enabled IN (0,1)),
       git_remote TEXT,
       default_branch TEXT
     );
@@ -197,7 +198,6 @@ export function createBaseTables(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
     CREATE INDEX IF NOT EXISTS idx_files_project_path ON files(project_id, path);
     CREATE INDEX IF NOT EXISTS idx_files_hash ON files(content_hash);
-    CREATE INDEX IF NOT EXISTS idx_files_tier ON files(project_id, index_tier);
     CREATE INDEX IF NOT EXISTS idx_symbols_project ON symbols(project_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_project_file_line ON symbols(project_id, file_path, line);
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);

@@ -389,7 +389,7 @@ export interface FsCoderTurnPayload {
   request_key: string;
   /**
    * Append-only rollback marker. Projection hides this message sequence and
-   * every later message/tool call without rewriting conversation.jsonl.
+   * every later message/tool call from the active transcript. The journal retains them.
    */
   truncate_from_seq?: number;
   messages: readonly FsStoredMessage[];

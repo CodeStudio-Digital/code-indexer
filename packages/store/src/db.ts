@@ -10,6 +10,7 @@ import type {
 import { Database, type DB, type PathAlias } from './db/types.js';
 import { applyTuningPragmas, DEFAULT_BUSY_TIMEOUT_MS } from './db/pragmas.js';
 import { installSqlTiming } from './db/sql-timing.js';
+import { canRouteNewProject } from './project-db/routed-path.js';
 import { existsSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -470,7 +471,7 @@ export class CodeIndexDB {
     if (!this.pdbFlags.enabled || !this.pdbFlags.splitIndex || projectId === 0) return null;
     let outcome: SplitOutcome | null = null;
     if (this.getProjectSplitStatus(projectId) !== 'done') {
-      // Release any open handle on the file we may delete + recreate.
+      // Release the pool's handle while the split upgrades the project schema.
       this.evictProject(projectId);
       outcome = splitProject({
         central: this.db,
@@ -479,8 +480,13 @@ export class CodeIndexDB {
         projectId,
         openFreshProjectDb: (path) => {
           const d = openRawProjectDb(path);
-          initProjectSchema(d);
-          return d;
+          try {
+            initProjectSchema(d);
+            return d;
+          } catch (error) {
+            d.close();
+            throw error;
+          }
         },
         classes: ['INDEX', 'FEATURE'],
         purgeMode: this.pdbFlags.purgeMode,
@@ -537,7 +543,8 @@ export class CodeIndexDB {
         const loc = resolveProjectDbLocation(project.id, rootPath, {
           forceFallback: this.pdbFlags.fallbackAll,
         });
-        const status = this.pdbFlags.newProjects ? 'done' : 'pending';
+        const status = this.pdbFlags.newProjects && canRouteNewProject(loc.dbPath, project.id, rootPath)
+          ? 'done' : 'pending';
         this.db.prepare('UPDATE projects SET db_path = ?, db_split_status = ? WHERE id = ?')
           .run(loc.dbPath, status, project.id);
         this.routeCache.delete(project.id);
@@ -607,6 +614,7 @@ export class CodeIndexDB {
       provider: owner.provider,
       model: owner.model,
       index_ignore_patterns: owner.index_ignore_patterns,
+      auto_index_enabled: owner.auto_index_enabled,
       editor_settings: owner.editor_settings,
       language_levels: owner.language_levels,
       node_version: owner.node_version,

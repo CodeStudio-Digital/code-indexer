@@ -1,4 +1,5 @@
 import type { AgentMessage, ContentBlock } from '@mcp/provider-sdk';
+import { storedProviderReplay } from '@mcp/provider-sdk';
 import {
   ArtifactStore,
   canonicalJson,
@@ -293,8 +294,9 @@ function hydrateContentBlock(
 }
 
 export function hydrateMessage(
-  location: SessionLocation,
+  location: Pick<SessionLocation, 'bundle_path' | 'session_id'>,
   stored: FsStoredMessage,
+  forProvider = false,
 ): AgentMessage {
   const artifactStore = new ArtifactStore({
     bundlePath: location.bundle_path,
@@ -307,7 +309,7 @@ export function hydrateMessage(
   return {
     role: stored.role,
     ...(stored.phase ? { phase: stored.phase } : {}),
-    ...(stored.provider_replay ? { providerReplay: stored.provider_replay } : {}),
+    ...(forProvider && stored.provider_replay ? { [storedProviderReplay]: stored.provider_replay } : {}),
     content: content.map((block) => hydrateContentBlock(artifactStore, block)),
     ...(stored.is_meta ? { isMeta: true } : {}),
     ...(stored.selected_skill_ids.length > 0

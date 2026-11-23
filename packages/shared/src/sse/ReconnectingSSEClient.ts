@@ -70,6 +70,8 @@ export interface ReconnectingSSEOpts {
   signal: AbortSignal;
   /** Reconnect a silent transport (including missing pings), not a slow agent. */
   idleTimeoutMs?: number;
+  /** Time allowed for command admission before the server opens the stream. Defaults to idleTimeoutMs. */
+  responseTimeoutMs?: number;
   /** Backoff for reconnect attempts. Defaults to exponential 1s..16s, 5 tries. */
   backoff?: BackoffStrategy;
   /**
@@ -110,6 +112,7 @@ export class ReconnectingSSEClient {
   private readonly parseErrorHandler: SSEFrameErrorHandler;
   private readonly reconnectBudgetResetMs: number;
   private terminalSeen = false;
+  private streamOpened = false;
   private highestEventIdSeen = Number.NEGATIVE_INFINITY;
   private highestEventIdBusId: string | null = null;
   private connectionMadeProgress = false;
@@ -241,7 +244,10 @@ export class ReconnectingSSEClient {
       if (remaining > 0) idleTimer = setTimeout(checkIdle, remaining);
       else interrupt(new SSETransportError('SSE transport heartbeat timed out'));
     };
-    if (idleMs && idleMs > 0) idleTimer = setTimeout(checkIdle, idleMs);
+    const responseMs = this.streamOpened ? idleMs : this.opts.responseTimeoutMs ?? idleMs;
+    if (responseMs && responseMs > 0) {
+      idleTimer = setTimeout(() => interrupt(new SSETransportError('SSE response timed out')), responseMs);
+    }
     try {
       const res = await withConnectionAbort(fetch(this.opts.url, {
         method: this.opts.method,
@@ -249,6 +255,9 @@ export class ReconnectingSSEClient {
         body: this.opts.method === 'POST' ? JSON.stringify(this.opts.body ?? {}) : undefined,
         signal: connection.signal,
       }), connection.signal);
+      clearTimeout(idleTimer);
+      lastBytesAt = Date.now();
+      if (idleMs && idleMs > 0) idleTimer = setTimeout(checkIdle, idleMs);
       if (!res.ok || !res.body) {
         // Surface the parsed JSON body alongside the status so callers can
         // route specific 4xx flavours (e.g., 409 INTERACTION_PENDING) into
@@ -266,6 +275,7 @@ export class ReconnectingSSEClient {
           retryAfterMs: retryAfterMs(res),
         });
       }
+      this.streamOpened = true;
       reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';

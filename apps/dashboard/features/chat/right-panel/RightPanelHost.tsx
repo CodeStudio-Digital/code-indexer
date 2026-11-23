@@ -79,7 +79,7 @@ import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWin
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
-import type { AgentChatPreviewConfig, CoderSession, CoderSessionStats, SessionData } from '../types.js';
+import type { AgentChatPreviewConfig, CoderSession, CoderSessionStats, ProviderOption, SessionData } from '../types.js';
 import type { ActiveProcess, TodoItem } from '../../../hooks/agent-stream/types.js';
 import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
 
@@ -87,6 +87,7 @@ import type { OpenSideChat } from './side-chat-command.js';
 const SideChatPanel = lazy(() => import('./SideChatPanel.js').then(m => ({ default: m.SideChatPanel })));
 
 interface RightPanelHostProps {
+  providerOptions: ProviderOption[];
   sideLaunch?: OpenSideChat;
   onSideConsumed?: (key: string) => void;
   activeId: RightPanelId;
@@ -140,7 +141,7 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
   switch (activeId) {
     case 'side-chat':
       return <PanelChrome title={t('chat:side.title')} icon={MessagesSquare} onClose={onClose} bodyClassName="overflow-hidden">
-        <PanelBody><SideChatPanel key={sessionId} sessionId={sessionId} launch={props.sideLaunch} onConsumed={props.onSideConsumed}/></PanelBody>
+        <PanelBody><SideChatPanel key={sessionId} sessionId={sessionId} providerOptions={props.providerOptions} launch={props.sideLaunch} onConsumed={props.onSideConsumed}/></PanelBody>
       </PanelChrome>;
     case 'meta':
     case 'plans':

@@ -67,6 +67,8 @@ export interface Project {
    * Managed by the project settings UI; does not create files in the repo root.
    */
   index_ignore_patterns?: string | null;
+  /** A zero disables background indexing for this project and its worktrees. */
+  auto_index_enabled?: number;
   /** JSON array of project-relative roots for code embeddings. "." includes the whole project. */
   semantic_index_folders?: string;
   /** Relative dense contribution in RRF for natural-language code queries. */

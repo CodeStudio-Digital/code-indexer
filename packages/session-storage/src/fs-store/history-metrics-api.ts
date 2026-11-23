@@ -31,6 +31,7 @@ class FsHistoryMetricsServices {
       directory,
       entities,
       this.chapters,
+      reader,
     );
     this.providerAttempts = new FsProviderAttemptRepository(entities);
     this.chapterIndex = new FsConversationChapterIndex(directory, this.chapters);

@@ -60,7 +60,8 @@ function chipFor(s: ProjectIndexStatus): { label: string; tone: string; busy: bo
 export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null }) {
   const { t } = useTranslation('projects');
   if (!status) return null;
-  const chip = chipFor(status);
+  const paused = status.autoIndexEnabled === false && !status.activeRun && status.phase !== 'scanning' && status.phase !== 'semantic_indexing';
+  const chip = paused ? { label: t('index.status.autoPaused'), tone: 'text-muted-foreground', busy: false, warn: false } : chipFor(status);
 
   return (
     <Tooltip>
@@ -84,7 +85,8 @@ export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null 
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-[300px]">
         <div className="text-[11px] leading-snug space-y-0.5">
-          {status.phase === 'structural_ready' && (
+          {paused && <div>{t('edit.autoIndexHint')}</div>}
+          {!paused && status.phase === 'structural_ready' && (
             <div>
               Symbols, references and text search are live (tree-sitter, $0).
               {status.semanticStaleCount > 0
@@ -92,7 +94,7 @@ export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null 
                 : ' Semantic vectors build in the background when the configured target permits it.'}
             </div>
           )}
-          {status.phase === 'semantic_ready' && (
+          {!paused && status.phase === 'semantic_ready' && (
             <div>
               Full index ready.
               {status.semanticStaleCount > 0
@@ -108,7 +110,7 @@ export function IndexStatusChip({ status }: { status: ProjectIndexStatus | null 
             <div>Building the structural index (symbols + word index). Search improves as it completes.</div>
           )}
           {status.phase === 'semantic_indexing' && <div>{t('index.status.semanticBuilding')}</div>}
-          {status.phase === 'none' && <div>No index yet — it builds automatically when the project opens.</div>}
+          {!paused && status.phase === 'none' && <div>No index yet — it builds automatically when the project opens.</div>}
           <div className="text-muted-foreground/70 pt-1">
             {status.watcherActive ? 'Watching files — edits index live.' : 'File watcher off.'}
             {status.dirtyPending > 0 ? ` ${status.dirtyPending} change(s) queued.` : ''}

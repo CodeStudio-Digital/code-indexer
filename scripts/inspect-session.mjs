@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { require as loadTypeScript } from 'tsx/cjs/api';
 
 const input = process.argv[2];
 if (!input) {
@@ -52,21 +53,9 @@ if (!UUID.test(session.id) || basename(bundle).toLowerCase() !== session.id.toLo
   throw new Error('session.json identity does not match its bundle directory');
 }
 
-const conversationPath = join(bundle, 'conversation.jsonl');
-const commits = existsSync(conversationPath)
-  ? readFileSync(conversationPath, 'utf8')
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line, index) => {
-        try {
-          return JSON.parse(line);
-        } catch (error) {
-          throw new Error(
-            `Invalid conversation.jsonl line ${index + 1}: ${error.message}`,
-          );
-        }
-      })
-  : [];
+const { sessionJournalPath } = loadTypeScript('../packages/session-storage/src/session-journal-path.ts', import.meta.url);
+const { readConversationSync } = loadTypeScript('../packages/session-storage/src/session-writer.ts', import.meta.url);
+const commits = readConversationSync(sessionJournalPath(bundle));
 
 const messages = new Map();
 let calls = [];

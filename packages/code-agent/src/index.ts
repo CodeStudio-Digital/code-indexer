@@ -318,7 +318,7 @@ function getSharedCentral(dbPath: string, writerOwnerId?: string): {
     const db = new CodeIndexDB(dbPath);
     const projectRootResolver = {
       resolveProjectRoot: (projectId: number) => {
-        const project = db.getProject(projectId);
+        const project = db.getProjectCatalogEntry(projectId);
         return project && !project.is_synthetic
           ? project.root_path
           : undefined;
@@ -337,7 +337,7 @@ function getSharedCentral(dbPath: string, writerOwnerId?: string): {
       projectRootResolver,
       ...(writerOwnerId ? { writerOwnerId } : {}),
       projectInfoResolver: (projectId) => {
-        const project = db.getProject(projectId);
+        const project = db.getProjectCatalogEntry(projectId);
         return project && !project.is_synthetic
           ? {
               project_id: project.id,
@@ -1744,7 +1744,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Load existing history FIRST so we can detect fresh vs resumed sessions
   // without a duplicate DB call. The block below (previously here) is now
   // merged into this one.
-  const existingEarly = await store.loadSessionWithMessages(session.id);
+  const existingEarly = await store.loadSessionWithMessages(session.id, { forProvider: true });
   const outcomeRecovery = await createSessionOutcomeRecovery({ store, sessionId: session.id,
     initialState: existingEarly?.tool_outcome_state });
   toolContext.outcomeRecovery = outcomeRecovery.state;

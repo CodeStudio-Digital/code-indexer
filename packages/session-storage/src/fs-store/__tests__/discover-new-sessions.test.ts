@@ -4,7 +4,7 @@
  * until it rescans. discoverNewSessions adds the new bundles without a full
  * rescan, and leaves the known ones alone.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,6 +31,21 @@ afterEach(async () => {
 });
 
 describe('discoverNewSessions', () => {
+  it('opens the host-resolved conversation without walking unrelated projects, keeping global discovery lazy', async () => {
+    const app = open();
+    const create = (title: string) => app.createSession({ project_id: 1, title, provider: 'p', model: 'm', agent: 'build' });
+    const parent = await create('Parent');
+    const sibling = await create('Sibling');
+    const worker = open();
+    const roots = vi.spyOn(worker.locator, 'allKnownSessionRoots');
+    const location = (await app.getSessionLocation(parent.id))!;
+    await worker.bindRuntimeLocation(location);
+    expect((await worker.getSession(parent.id))?.title).toBe('Parent');
+    expect(roots).not.toHaveBeenCalled();
+    expect((await worker.getSession(sibling.id))?.title).toBe('Sibling');
+    expect(roots).toHaveBeenCalled();
+    await expect(worker.bindRuntimeLocation({ ...location, bundle_path: join(root, 'wrong') })).rejects.toThrow();
+  });
   it('finds sessions another instance created after this one scanned, without rereading known ones', async () => {
     const app = open();
     const parent = (await app.createSession({ project_id: 1, title: 'Parent', provider: 'p', model: 'm', agent: 'build' })).id;

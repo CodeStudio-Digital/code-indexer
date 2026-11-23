@@ -1,3 +1,4 @@
+import { sessionJournalPath } from '../session-journal-path.js';
 import type {
   CatalogEntry,
   ProjectId,
@@ -41,9 +42,9 @@ interface KpiCache {
 const caches = new WeakMap<object, KpiCache>();
 
 async function bundleSignature(entry: CatalogEntry): Promise<string> {
-  const paths = ['events', 'conversation.jsonl'];
+  const paths = [join(entry.location.bundle_path, 'events'), sessionJournalPath(entry.location.bundle_path)];
   const signatures = await Promise.all(paths.map(async path => {
-    try { const info = await stat(join(entry.location.bundle_path, path)); return `${info.dev}:${info.ino}:${info.birthtimeMs}:${info.mtimeMs}:${info.ctimeMs}:${info.size}`; }
+    try { const info = await stat(path); return `${info.dev}:${info.ino}:${info.birthtimeMs}:${info.mtimeMs}:${info.ctimeMs}:${info.size}`; }
     catch { return 'unavailable'; }
   }));
   return `${entry.session.updated_at}:${signatures.join('|')}`;

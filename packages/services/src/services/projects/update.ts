@@ -17,6 +17,7 @@ export interface UpdateProjectInput {
   search_mode?: SearchMode;
   /** Per-project index ignore rules, stored as a JSON string array. */
   index_ignore_patterns?: string | null;
+  auto_index_enabled?: number;
   node_version?: string | null;
   runner_shell?: string | null;
   memory_enabled?: boolean;
@@ -131,6 +132,13 @@ export class UpdateProjectService {
         throw new ProjectError('invalid_input', 'search_mode must be one of: fts, vector, hybrid');
       }
       updates.search_mode = patch.search_mode;
+    }
+
+    if (patch.auto_index_enabled !== undefined) {
+      if (patch.auto_index_enabled !== 0 && patch.auto_index_enabled !== 1) {
+        throw new ProjectError('invalid_input', 'auto_index_enabled must be 0 or 1');
+      }
+      updates.auto_index_enabled = patch.auto_index_enabled;
     }
 
     if (patch.index_ignore_patterns !== undefined) {

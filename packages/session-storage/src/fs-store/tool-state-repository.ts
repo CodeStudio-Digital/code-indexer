@@ -2,6 +2,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { join } from 'node:path';
+import { sessionJournalPath } from '../session-journal-path.js';
 import {
   type JsonValue,
   type SessionId,
@@ -256,7 +257,7 @@ export class FsToolStateRepository {
   /** Small async projection for memory KPIs; never hydrates the full transcript. */
   async listMemoryCalls(id: SessionId | string): Promise<Array<{ tool_name: string; created_at: string }>> {
     const entry = await this.directory.requireEntry(id);
-    return (await this.memoryCalls.read(join(entry.location.bundle_path, 'conversation.jsonl'))).calls;
+    return (await this.memoryCalls.read(sessionJournalPath(entry.location.bundle_path))).calls;
   }
 
   /**
@@ -270,12 +271,12 @@ export class FsToolStateRepository {
     limit: number,
   ): Promise<FsToolCallSummaryPage> {
     const entry = await this.directory.requireEntry(id);
-    const conversationPath = join(entry.location.bundle_path, 'conversation.jsonl');
+    const conversationPath = sessionJournalPath(entry.location.bundle_path);
     const byName = new Map<string, FsToolCallStats['byName'][number]>();
     let visibleBeforeSeq = Number.POSITIVE_INFINITY;
     let newestCommitAt: string | null = null;
 
-    for await (const commit of reverseCommittedConversationCommits(conversationPath)) {
+    for await (const commit of reverseCommittedConversationCommits(conversationPath, 'metadata')) {
       newestCommitAt ??= commit.committed_at;
       const payload = parseCoderTurnPayload(commit);
       for (const call of payload.tool_calls) {

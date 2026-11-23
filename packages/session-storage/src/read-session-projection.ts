@@ -37,5 +37,9 @@ export async function readSessionProjection(locator: SessionLocator, location: S
   if (session.id !== location.session_id || session.schema_version !== 1 || state.schema_version !== 1) {
     throw new Error('Session projection identity or schema differs');
   }
+  if (session.storage_scope?.kind !== location.scope.kind || (location.scope.kind === 'project'
+    && (session.storage_scope.kind !== 'project' || String(session.storage_scope.project_id) !== String(location.scope.project_id)))) {
+    throw new Error('Session projection storage scope differs');
+  }
   return { session, state };
 }

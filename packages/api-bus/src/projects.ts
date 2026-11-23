@@ -15,6 +15,7 @@ export interface Project {
   root_path: string;
   created_at: string;
   index_ignore_patterns?: string | null;
+  auto_index_enabled?: number;
   /** Owner — added by the Freemium gating layer (migration 104). */
   user_id?: string;
   /** Per-project agent-memory toggle (migration 115; default 1 = on). */
@@ -69,6 +70,7 @@ export interface ScheduledIndexRun {
 }
 
 export interface ProjectIndexStatus {
+  autoIndexEnabled?: boolean;
   projectId: number;
   phase: ProjectIndexPhase;
   watcherActive: boolean;
@@ -124,6 +126,7 @@ export interface UpdateProjectInput {
   node_version?: string | null;
   runner_shell?: string | null;
   index_ignore_patterns?: string | null;
+  auto_index_enabled?: number;
   /** Per-project agent-memory toggle (Mem C write-back + retrieval). */
   memory_enabled?: boolean;
   /** Persisted in the routed project DB, not in repository files. */

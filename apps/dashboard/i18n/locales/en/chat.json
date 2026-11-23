@@ -1,5 +1,8 @@
 {
   "side": {
+    "model": "Side chat model",
+    "effort": "Side chat reasoning effort",
+    "reasoning": "Thinking…",
     "title": "Side chat",
     "context": "Context through message {{seq}}",
     "excerpt": "history excerpt",

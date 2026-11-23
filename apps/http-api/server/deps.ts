@@ -997,7 +997,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
           })),
     },
     projectInfoResolver: (projectId) => {
-      const project = db.getProject(projectId);
+      const project = db.getProjectCatalogEntry(projectId);
       return project && !project.is_synthetic
         ? {
             project_id: project.id,
@@ -1028,7 +1028,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     const projectAuthority = requireSessionProjectAuthority(
       session,
       (projectId) => {
-        const project = db.getProject(projectId);
+        const project = db.getProjectCatalogEntry(projectId);
         return project && !project.is_synthetic
           ? {
               project_id: project.id,
@@ -1040,6 +1040,7 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
     );
     return {
       sessionId: session.id,
+      storageScope: location.scope,
       projectId: projectAuthority.primary.project_id,
       projectRoot: projectAuthority.primary.root_path,
       bundlePath: location.bundle_path,

@@ -31,12 +31,38 @@ Each bundle contains `session.json`, `state.json`, `conversation.jsonl`,
 and directories for attachments, tool outputs, snapshots, metrics, events,
 checkpoints, chapters, plans, tasks, inputs, memory, subagents and Company data.
 
-The conversation journal is append-only and hash-chained. A commit includes
+Logical conversation commits form an append-only hash chain. A commit includes
 its sequence, operation identity, request hash, payload and artifact references.
 Artifacts are committed before the records that reference them. An operation
 cannot be replayed with conflicting content. Recovery validates the journal
 and can discard an incomplete final record; it rejects sequence or hash
 corruption.
+
+In coder sessions, `conversation.jsonl` has one row per active chat message.
+Each row contains its role, content blocks and optional assistant phase.
+Attachment and tool-result blocks refer to their existing payload files.
+The writer appends new messages and rebuilds this projection after a content
+patch, rollback, boundary change or interrupted write.
+
+`journal.jsonl` preserves operation identities, checksums and audit data.
+When a summary advances the boundary, its chapter directory receives
+`messages-<sha256>.ndjson` for original messages and patches and
+`records-<sha256>.ndjson` for the corresponding operational records. The
+journal points to checked byte ranges in those files. A late edit to an
+archived message belongs to its chapter. Opening a chapter reads the requested source rows.
+
+The ChatGPT adapter loads `provider_replay/<sha256>.json` only for assistant
+messages included in a continuation for the same account and model whose
+visible contents still match. File length, digest and scope are verified.
+If an optional continuation file is damaged, the adapter uses the visible
+message to continue the conversation and logs the read failure.
+Ordinary chat reads expose only the conversation. Session duplication copies
+the continuation files alongside the other durable artifacts.
+
+A writer upgrades a legacy bundle under its lease. It persists the new files
+before publishing the journal and can regenerate the active transcript after a
+crash. A read-only client can still open an older bundle. Backups and moves
+should include the entire bundle.
 
 Mutable projections use same-directory temporary files and atomic rename.
 The writer lease and persisted fencing counter prevent stale owners from

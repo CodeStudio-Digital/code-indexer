@@ -65,10 +65,11 @@ export class FsToolOutputReader {
     id: SessionId | string,
     toolUseIds: readonly string[],
   ): Promise<FsToolCallResult[]> {
+    if (!toolUseIds.length) return [];
     const entry = await this.directory.requireEntry(id);
     const wanted = new Set(toolUseIds);
     const projection = projectConversation(
-      this.directory.repository.readConversationSync(entry.location),
+      await this.directory.repository.readConversation(entry.location, 'metadata'),
     );
     const artifacts = new ArtifactStore({
       bundlePath: entry.location.bundle_path,

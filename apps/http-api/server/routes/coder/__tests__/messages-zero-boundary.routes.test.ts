@@ -93,4 +93,22 @@ describe('coder archived message pagination', () => {
     expect(response.status).toBe(200);
     expect((await response.json()).preceding_user_seq).toBe(11);
   });
+
+  it('omits opaque provider replay on preview pages and preserves it for full reads', async () => {
+    const message = { role: 'assistant', content: [{ type: 'text', text: 'Answer' }],
+      providerReplay: { format: 'openai-responses-v1', items: [{ type: 'reasoning', encrypted_content: 'provider-only' }] } };
+    const detail = { session: { id: SESSION_ID }, messages: [message], message_rows: [{ seq: 1 }] };
+    const app = new HttpRouter();
+    mountCoderSessionsRoutes(app, { sessionStore: {
+      getSession: () => detail.session, loadSessionMessagesTail: () => detail, loadMessagesBefore: () => detail,
+      getMessageCount: () => 1, getArchivedMessageCount: () => 0, previousUserMessageSeq: () => null,
+    }, providerStore: {} } as unknown as ServerDeps, { activeRuns: new Map() } as unknown as CoderRuntime);
+    for (const suffix of ['?tail=40&detail=preview', '/messages?before_seq=2&detail=preview']) {
+      const response = await app.request(`/api/coder/sessions/${SESSION_ID}${suffix}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).messages).toEqual([{ role: 'assistant', content: message.content }]);
+    }
+    const full = await app.request(`/api/coder/sessions/${SESSION_ID}?tail=40&full=1`);
+    expect((await full.json()).messages).toEqual([message]);
+  });
 });

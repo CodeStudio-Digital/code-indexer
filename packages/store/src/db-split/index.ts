@@ -1,18 +1,5 @@
-/**
- * Lazy backfill driver — splits one project's data out of the central DB into
- * its own project DB, crash-safe (plan §8.3 state machine).
- *
- * State machine (marker = projects.db_split_status):
- *   pending → copying → copied → verified → done    (purge deferred by default)
- *   any failure → failed (retried up to MAX_ATTEMPTS, then sticks)
- *
- * Safety: copy → verify → flip → (deferred) purge. The central rows are the
- * durable copy; nothing is destroyed here (purge lives in a later pass). A
- * crash mid-copy leaves status 'copying' over a partial file → recovery deletes
- * the file and restarts from scratch (idempotent).
- */
-import { existsSync, rmSync } from 'node:fs';
-import type { DB } from '../db/types.js';
+import { existsSync, statSync } from 'node:fs';
+import { Database, type DB } from '../db/types.js';
 import { copyProjectData } from './copy-engine.js';
 import { verifySplit } from './verify.js';
 import { ensureCentralBackup } from './backup.js';
@@ -32,6 +19,8 @@ export interface SplitDeps {
   /** Opens a fresh project DB at `path` with the full schema applied. */
   openFreshProjectDb: (path: string) => DB;
   classes?: SplitClass[];
+  /** An explicit repair can retry one exhausted project after its cause is corrected. */
+  retryFailed?: boolean;
   /** When 'immediate', purge central rows after verify. Default: defer (no purge). */
   purgeMode?: 'defer' | 'immediate';
 }
@@ -42,12 +31,12 @@ export interface SplitOutcome {
   copied?: number;
 }
 
-function readStatus(central: DB, projectId: number): { status: string; attempts: number; synthetic: boolean } {
+function readStatus(central: DB, projectId: number): { status: string; attempts: number; synthetic: boolean } | undefined {
   const row = central.prepare(
     `SELECT db_split_status AS s, db_split_attempts AS a, COALESCE(is_synthetic,0) AS syn
        FROM projects WHERE id = ?`,
   ).get(projectId) as { s?: string; a?: number; syn?: number } | undefined;
-  return { status: row?.s ?? 'pending', attempts: row?.a ?? 0, synthetic: row?.syn === 1 };
+  return row && { status: row.s ?? 'pending', attempts: row.a ?? 0, synthetic: row.syn === 1 };
 }
 
 function setStatus(central: DB, projectId: number, status: string, err?: string | null): void {
@@ -62,77 +51,80 @@ function bumpAttempts(central: DB, projectId: number): void {
     .run(projectId);
 }
 
-function removeDbFiles(path: string): void {
-  for (const suffix of ['', '-wal', '-shm']) {
-    try {
-      if (existsSync(path + suffix)) rmSync(path + suffix, { force: true });
-    } catch {
-      /* best-effort */
-    }
+/** Old unfinished bootstraps can be upgraded in place when entirely empty.
+ * Preserve an unrecognized populated database for explicit reconciliation. */
+function protectExistingData(path: string, centralPath: string, projectId: number): void {
+  if (!existsSync(path)) return;
+  const centralFile = statSync(centralPath, { bigint: true });
+  const target = statSync(path, { bigint: true });
+  if (target.dev === centralFile.dev && target.ino === centralFile.ino) {
+    throw new Error('Project index resolves to the central database');
   }
+  const db = new Database(path, { readonly: true });
+  try {
+    const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").pluck().all() as string[];
+    if (tables.includes('schema_version') && db.prepare('SELECT 1 FROM schema_version LIMIT 1').get()) {
+      if (tables.includes('files') && db.prepare('SELECT 1 FROM files WHERE project_id <> ? LIMIT 1').get(projectId)) {
+        throw new Error('Existing index contains files owned by another project');
+      }
+      return;
+    }
+    for (const table of tables) {
+      if (db.prepare(`SELECT 1 FROM "${table.replaceAll('"', '""')}" LIMIT 1`).get()) {
+        throw new Error('Unversioned project database contains data; reconciliation required');
+      }
+    }
+  } finally { db.close(); }
 }
 
-/**
- * Run (or resume) the split for one project. Safe to call repeatedly: it
- * no-ops once 'done', and recovers a crashed 'copying' by restarting clean.
- */
 export function splitProject(deps: SplitDeps): SplitOutcome {
   const { central, centralDbPath, projectDbPath, projectId } = deps;
   const classes = deps.classes ?? ['INDEX'];
-  const { status, attempts, synthetic } = readStatus(central, projectId);
-
+  const initial = readStatus(central, projectId);
+  if (!initial) return { status: 'skipped', reason: 'unknown project' };
+  const { status, attempts, synthetic } = initial;
   if (projectId === 0 || synthetic) return { status: 'skipped', reason: 'sentinel/synthetic' };
   if (TERMINAL.has(status)) return { status: 'done' };
-  if (status === 'failed' && attempts >= MAX_ATTEMPTS) {
+  if (status === 'failed' && attempts >= MAX_ATTEMPTS && !deps.retryFailed) {
     return { status: 'failed', reason: 'max attempts reached' };
   }
-
-  // One-time backup before we ever write a project DB in this session.
+  let proj: DB | undefined;
   try {
-    const schemaVersion = (central.prepare(`SELECT MAX(version) v FROM schema_version`).get() as { v: number }).v;
-    ensureCentralBackup(central, centralDbPath, schemaVersion);
-  } catch {
-    /* backup is best-effort safety; do not block the split if disk is tight */
-  }
-
-  // Fresh start: discard any partial project DB from a prior crash.
-  removeDbFiles(projectDbPath);
-  bumpAttempts(central, projectId);
-  setStatus(central, projectId, 'copying');
-
-  let proj: DB | null = null;
-  try {
+    const version = central.prepare('SELECT MAX(version) FROM schema_version').pluck().get() as number;
+    ensureCentralBackup(central, centralDbPath, version);
+    const claimed = central.transaction(() => {
+      if (readStatus(central, projectId)?.status === 'done') return false;
+      bumpAttempts(central, projectId);
+      setStatus(central, projectId, 'copying');
+      return true;
+    }).immediate();
+    if (!claimed) return { status: 'done' };
+    protectExistingData(projectDbPath, centralDbPath, projectId);
     proj = deps.openFreshProjectDb(projectDbPath);
-    const copy = copyProjectData(proj, centralDbPath, projectId, classes);
-    setStatus(central, projectId, 'copied');
-
-    const verdict = verifySplit(proj, central, projectId, classes);
-    if (!verdict.ok) {
-      proj.close();
-      proj = null;
-      removeDbFiles(projectDbPath);
-      setStatus(central, projectId, 'failed', verdict.reason);
-      return { status: 'failed', reason: verdict.reason };
-    }
-
-    setStatus(central, projectId, 'verified');
-    // Purge is deferred by default (reversible soak window). 'immediate' mode
-    // would delete central rows here in a later iteration (P5+); kept inert now.
-    setStatus(central, projectId, 'done');
-    return { status: 'done', copied: copy.total };
-  } catch (e) {
-    if (proj) {
-      try { proj.close(); } catch { /* ignore */ }
-      proj = null;
-    }
-    removeDbFiles(projectDbPath);
-    const reason = (e as Error).message;
-    setStatus(central, projectId, 'failed', reason);
+    const target = proj;
+    // Pin a central read snapshot. Only take the central write lock for publishing;
+    // SQLite rejects the upgrade if a different writer committed during the copy.
+    return central.transaction((): SplitOutcome => {
+      if (readStatus(central, projectId)?.status === 'done') return { status: 'done' };
+      const copy = copyProjectData(target, centralDbPath, projectId, classes, () => {
+        const verdict = verifySplit(target, central, projectId, classes);
+        if (!verdict.ok) throw new Error(verdict.reason);
+        // Reserve publication before the target commits. A stale central snapshot
+        // then rolls back the target too; a retry can import the newer rows.
+        setStatus(central, projectId, 'verified');
+      });
+      central.prepare(`UPDATE projects SET db_split_status='done', db_split_at=datetime('now'),
+        db_split_err=NULL, db_path=? WHERE id=?`).run(projectDbPath, projectId);
+      return { status: 'done', copied: copy.total };
+    })();
+  } catch (error) {
+    const reason = (error as Error).message;
+    if (readStatus(central, projectId)?.status === 'done') return { status: 'done' };
+    central.prepare(`UPDATE projects SET db_split_status='failed', db_split_at=datetime('now'),
+      db_split_err=? WHERE id=? AND db_split_status <> 'done'`).run(reason, projectId);
     return { status: 'failed', reason };
   } finally {
-    if (proj) {
-      try { proj.close(); } catch { /* ignore */ }
-    }
+    proj?.close();
   }
 }
 

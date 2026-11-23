@@ -23,20 +23,25 @@ async function liveHeaders(providerId) {
   } finally { db.close(); }
 }
 
-function syntheticResponse(answer) {
+function syntheticResponse(answer, staged) {
   const id = 'resp_' + randomUUID();
   const events = [
     { type: 'response.created', response: { id, status: 'in_progress' } },
+    ...(staged ? [
+      { type: 'response.reasoning_summary_text.delta', delta: 'probe-private-reasoning' },
+      { type: 'response.output_text.delta', delta: 'Trecho parcial. ', item_id: 'msg1', output_index: 0 },
+    ] : []),
     { type: 'response.output_text.delta', delta: answer, item_id: 'msg1', output_index: 0 },
     { type: 'response.completed', response: { id, status: 'completed', usage: { input_tokens: 30, output_tokens: 8 } } },
   ];
   return new Response(events.map(e => 'event: ' + e.type + '\ndata: ' + JSON.stringify(e) + '\n\n').join(''));
 }
 
-export async function startSideChatProbe({ live, providerId, model, primaryKey, sideKey, finalWord }) {
+export async function startSideChatProbe({ live, providerId, model, sideModel, primaryKey, sideKey, finalWord }) {
   const secret = randomUUID();
   const credentials = live ? await liveHeaders(providerId) : null;
   const main = Promise.withResolvers(), cancel = Promise.withResolvers();
+  const reasoning = Promise.withResolvers(), firstText = Promise.withResolvers();
   const reached = new Set();
   const records = [];
   const server = createServer(async (req, res) => {
@@ -49,12 +54,12 @@ export async function startSideChatProbe({ live, providerId, model, primaryKey, 
       let body = '';
       for await (const chunk of req) body += chunk;
       const payload = JSON.parse(body);
-      assert.equal(payload.model, model);
       const input = JSON.stringify(payload.input);
       const side = payload.instructions?.includes('Only questions from this side chat are active');
       const last = JSON.stringify(payload.input.at(-1));
       const scenario = side ? (last.includes('CANCELAR_AMOSTRA') ? 'cancel' : last.includes('SEGUNDA_AMOSTRA') ? 'followup' : 'first')
         : input.includes(primaryKey) && (payload.tools?.length ?? 0) > 0 ? 'main' : 'auxiliary';
+      assert.equal(payload.model, ['followup', 'cancel'].includes(scenario) ? sideModel : model);
       const record = { scenario, model: payload.model, effort: payload.reasoning?.effort ?? null,
         toolCount: payload.tools?.length ?? 0, session: req.headers.session_id, status: 0, publicText: false };
       records.push(record);
@@ -71,7 +76,7 @@ export async function startSideChatProbe({ live, providerId, model, primaryKey, 
       const answer = { main: finalWord, first: primaryKey, followup: sideKey, cancel: 'Cancelamento', auxiliary: '{}' }[scenario];
       const upstream = liveCall ? await fetch('https://chatgpt.com/backend-api/codex/responses', {
         method: 'POST', headers, body, signal: controller.signal, redirect: 'error',
-      }) : syntheticResponse(answer);
+      }) : syntheticResponse(answer, scenario === 'first');
       record.status = upstream.status;
       if (!upstream.ok || !upstream.body) {
         await upstream.body?.cancel(); res.writeHead(upstream.status); res.end('Provider returned HTTP ' + upstream.status); return;
@@ -86,13 +91,16 @@ export async function startSideChatProbe({ live, providerId, model, primaryKey, 
           const frame = pending.slice(0, boundary.index);
           pending = pending.slice(boundary.index + boundary[0].length);
           res.write(frame + '\n\n');
+          if (!live && scenario === 'first' && frame.includes('response.reasoning_summary_text.delta')) {
+            await reasoning.promise;
+          }
           if (!record.publicText && frame.includes('response.output_text.delta')) {
             record.publicText = true;
-            if (scenario === 'main' || scenario === 'cancel') {
+            if (scenario === 'main' || scenario === 'cancel' || (!live && scenario === 'first')) {
               reached.add(scenario);
               const heartbeat = setInterval(() => res.write(': probe waiting\n\n'), 3_000);
               try {
-                const gate = scenario === 'main' ? main : cancel;
+                const gate = scenario === 'main' ? main : scenario === 'cancel' ? cancel : firstText;
                 await Promise.race([gate.promise, once(res, 'close', { signal: AbortSignal.timeout(120_000) }).catch(() => {})]);
               } finally { clearInterval(heartbeat); }
             }
@@ -108,5 +116,6 @@ export async function startSideChatProbe({ live, providerId, model, primaryKey, 
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   return { url: 'http://127.0.0.1:' + server.address().port, secret, records, reached,
-    releaseMain: () => main.resolve(), close() { main.resolve(); cancel.resolve(); server.closeAllConnections(); server.close(); } };
+    releaseReasoning: () => reasoning.resolve(), releaseFirstText: () => firstText.resolve(), releaseMain: () => main.resolve(),
+    close() { reasoning.resolve(); firstText.resolve(); main.resolve(); cancel.resolve(); server.closeAllConnections(); server.close(); } };
 }

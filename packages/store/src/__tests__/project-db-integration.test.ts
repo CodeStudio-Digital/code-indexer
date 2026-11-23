@@ -8,7 +8,7 @@
  * ABI: needs `pnpm node:rebuild`.
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from '../db/types.js';
@@ -56,6 +56,21 @@ function seedProjectWithFiles(db: any, name: string, root: string): number {
 }
 
 describe('CodeIndexDB tiered-hybrid integration', () => {
+  it('keeps an imported folder on central until its portable project id is reconciled', async () => {
+    process.env.MCP_PROJECT_DB = process.env.MCP_PROJECT_DB_NEW = process.env.MCP_PROJECT_DB_ROUTE = '1';
+    const dir = freshDir();
+    const root = join(dir, 'portable');
+    mkdirSync(join(root, '.mcp-indexer'), { recursive: true });
+    const local = new Database(join(root, '.mcp-indexer', 'index.db'));
+    const catalog = await freshDb(join(dir, 'catalog.db'));
+    try {
+      local.exec('CREATE TABLE projects(id INTEGER PRIMARY KEY, root_path TEXT)');
+      local.prepare('INSERT INTO projects VALUES (?,?)').run(900, root);
+      const project = catalog.createProject('portable', root);
+      expect(catalog.useProjectDb(project.id)).toBe(false);
+      expect(local.prepare('SELECT id FROM projects').pluck().all()).toEqual([900]);
+    } finally { catalog.close(); local.close(); }
+  });
   it('waits for exclusive settings locks between ticks and cancels a superseded checkout read', async () => {
     process.env.MCP_PROJECT_DB = process.env.MCP_PROJECT_DB_NEW = process.env.MCP_PROJECT_DB_ROUTE = '1';
     const dir = freshDir();

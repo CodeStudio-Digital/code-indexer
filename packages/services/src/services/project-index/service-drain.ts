@@ -5,8 +5,9 @@ import { DRAIN_BATCH, yieldToEventLoop } from './service-support.js';
 
 /** Reconcile durable dirty hints under the caller's project lock. */
 export async function drainDirtyQueue(projectId: number, dirty: DirtyQueue, getExecutor: () => StructuralExecutor,
-  status: ProjectIndexStatusStore, noteDelta: (events: readonly DirtyEvent[], previousItemKeys: readonly string[]) => void): Promise<void> {
-    while (dirty.size(projectId) > 0) {
+  status: ProjectIndexStatusStore, noteDelta: (events: readonly DirtyEvent[], previousItemKeys: readonly string[]) => void,
+  enabled: () => boolean): Promise<void> {
+    while (enabled() && dirty.size(projectId) > 0) {
       const batch = dirty.takeBatch(projectId, DRAIN_BATCH);
       if (batch.total === 0) break;
       const capturePreviousItems = (

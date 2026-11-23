@@ -8,7 +8,8 @@
  * Only touches files under the central data dir (git-ignored) — never the
  * user's working tree, never git (see memory feedback_git_stash_disaster).
  */
-import { copyFileSync, existsSync, writeFileSync } from 'node:fs';
+import { existsSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import type { DB } from '../db/types.js';
 
 export function backupPathFor(centralDbPath: string): string {
@@ -22,13 +23,14 @@ export function backupPathFor(centralDbPath: string): string {
 export function ensureCentralBackup(central: DB, centralDbPath: string, schemaVersion: number): string {
   const bak = backupPathFor(centralDbPath);
   if (existsSync(bak)) return bak;
-  // Checkpoint so the .db file is self-contained (no pages stuck in -wal).
+  const temporary = `${bak}.${randomUUID()}.tmp`;
   try {
-    central.pragma('wal_checkpoint(TRUNCATE)');
-  } catch {
-    /* best-effort */
+    // SQLite includes committed WAL frames even when another reader holds a snapshot.
+    central.prepare('VACUUM INTO ?').run(temporary);
+    if (!existsSync(bak)) renameSync(temporary, bak);
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary);
   }
-  copyFileSync(centralDbPath, bak);
   try {
     writeFileSync(
       `${bak}.meta.json`,

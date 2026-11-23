@@ -6,6 +6,38 @@ const frame = (event: string) => enc.encode(`event: ${event}\ndata: {}\n\n`);
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('SSE terminal and silence lifecycle', () => {
+  it.each(['done', 'error'])('delivers %s from slow command admission with one POST', async event => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(() => new Promise<Response>(resolve => {
+      setTimeout(() => resolve(new Response(frame(event))), 155_000);
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const seen = vi.fn();
+    const pending = new ReconnectingSSEClient({
+      url: 'http://fixture/messages', method: 'POST', body: { client_msg_id: 'same-command' },
+      signal: new AbortController().signal, idleTimeoutMs: 45_000, responseTimeoutMs: 180_000,
+      onEvent: seen, isTerminal: ev => ev.event === event,
+    }).run();
+    await vi.advanceTimersByTimeAsync(155_001);
+    await pending;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(seen).toHaveBeenCalledWith(expect.objectContaining({ event }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('times out command admission even if fetch never settles', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    const pending = new ReconnectingSSEClient({
+      url: 'http://fixture/messages', method: 'POST', signal: new AbortController().signal,
+      idleTimeoutMs: 45_000, responseTimeoutMs: 180_000, onEvent: vi.fn(),
+      backoff: { nextDelay: () => null },
+    }).run();
+    const failed = expect(pending).rejects.toThrow('SSE response timed out');
+    await vi.advanceTimersByTimeAsync(180_001);
+    await failed;
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it.each(['done', 'error'])('finishes %s even if transport cancellation never settles', async event => {
     vi.useFakeTimers();
     const cancel = vi.fn(() => new Promise<void>(() => {}));
@@ -50,7 +82,7 @@ describe('SSE terminal and silence lifecycle', () => {
     const pending = new ReconnectingSSEClient({ url: 'http://fixture/messages', method: 'POST',
       body: { content: 'hi', client_msg_id: 'stable' }, signal: new AbortController().signal,
       getLastEventId: () => 12, getLastEventBusId: () => 'bus-a', onEvent: vi.fn(),
-      idleTimeoutMs: 45_000, backoff: { nextDelay: () => 0 },
+      idleTimeoutMs: 45_000, responseTimeoutMs: 180_000, backoff: { nextDelay: () => 0 },
     }).run();
     await vi.advanceTimersByTimeAsync(45_010);
     await pending;

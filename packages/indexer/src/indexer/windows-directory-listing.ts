@@ -32,13 +32,14 @@ export function windowsDirectorySearch() {
  * record. Only reparse files need a separate stat to resolve their target. */
 export async function* listWindowsFiles(
   api: ReturnType<typeof bindDirectorySearch>, root: string, prune: (directory: string) => boolean,
-  unavailable: () => void, priority?: () => Promise<void>,
+  unavailable: () => void, priority?: () => Promise<void>, signal?: AbortSignal,
 ): AsyncGenerator<ListedFile> {
   const directories = [''];
   const record = Buffer.alloc(592);
   const epoch = 116444736000000000n;
   let lastYield = performance.now();
   while (directories.length) {
+    signal?.throwIfAborted();
     const directory = directories.pop()!;
     const pattern = toNamespacedPath(join(root, directory, '*'));
     const handle: number | bigint = api.first(pattern, 1, record, 0, null, 0);
@@ -63,6 +64,7 @@ export async function* listWindowsFiles(
         if (performance.now() - lastYield >= 12) {
           await new Promise<void>(resolve => setImmediate(resolve));
           await priority?.();
+            signal?.throwIfAborted();
           lastYield = performance.now();
         }
         const end = record.indexOf('\0', 44, 'utf16le');

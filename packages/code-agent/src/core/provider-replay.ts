@@ -1,14 +1,8 @@
-import { createHash } from 'node:crypto';
+import { storedProviderReplay } from '@mcp/provider-sdk';
+import { matchesReplayMessage, replayMessageDigest } from '@mcp/provider-sdk/replay-binding.js';
 import type { AgentMessage, ProviderReplayState } from './messages.js';
 
-/** Context reduction must never resurrect removed text or calls through an opaque replay. */
-function messageDigest(message: AgentMessage): string {
-  return createHash('sha256').update(JSON.stringify({
-    role: message.role,
-    phase: message.phase,
-    content: message.content.filter((block) => block.type !== 'thinking'),
-  })).digest('hex');
-}
+const unreadableReplays = new WeakSet<ProviderReplayState>();
 
 export function bindProviderReplay(message: AgentMessage, state: ProviderReplayState): void {
   // A backend may omit some final items. Replaying an incomplete output would
@@ -29,15 +23,23 @@ export function bindProviderReplay(message: AgentMessage, state: ProviderReplayS
   const canonicalCalls = message.content.filter((block) => block.type === 'tool_use');
   if (text !== canonicalText || JSON.stringify(calls) !== JSON.stringify(canonicalCalls)
     || message.content.some((block) => !['text', 'thinking', 'tool_use'].includes(block.type))) return;
-  message.providerReplay = { ...state, messageDigest: messageDigest(message) };
+  message.providerReplay = { ...state, messageDigest: replayMessageDigest(message) };
 }
 
 export function providerReplayItems(message: AgentMessage, scope: string): Record<string, unknown>[] | null {
-  const state = message.providerReplay;
+  const state = message.providerReplay ?? message[storedProviderReplay];
   if (message.role !== 'assistant' || state?.format !== 'openai-responses-v1'
-    || state.scope !== scope || !Array.isArray(state.items)
-    || state.messageDigest !== messageDigest(message)) return null;
-  return state.items;
+    || state.scope !== scope || !matchesReplayMessage(message, state)) return null;
+  if (unreadableReplays.has(state)) return null;
+  try {
+    const items = state.items;
+    return Array.isArray(items) ? items : null;
+  } catch (error) {
+    if (state !== message[storedProviderReplay]) throw error;
+    unreadableReplays.add(state);
+    console.warn('[chatgpt] Stored continuation is unreadable. Resuming from the chat message.');
+    return null;
+  }
 }
 
 /** A bounded, complete output only. Failed streams and server-managed tools aren't replayed. */

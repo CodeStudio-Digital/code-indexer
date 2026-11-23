@@ -5,6 +5,9 @@ import { lstat, open, readFile, rename, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { measureStorage, measureStorageSync, recordStorageElapsed } from './storage-timing.js';
+import { archiveChapterMessages, ChapterArchiveReader, decodeChapterCommit, detachCommitReplay, type ChapterSpan } from './chapter-transcript.js';
+import { ActiveChatTranscript } from './active-chat-transcript.js';
+import { CHAT_TRANSCRIPT, CODER_JOURNAL, sessionJournalPath } from './session-journal-path.js';
 import { dirname, join } from 'node:path';
 import {
   atomicWriteFile,
@@ -73,6 +76,7 @@ export class ConversationCorruptionError extends Error {
 }
 
 export interface SessionWriterOptions {
+  readonly coderTranscript?: boolean;
   readonly bundlePath: string;
   readonly sessionId: SessionId;
   readonly ownerId?: string;
@@ -105,7 +109,7 @@ function validateOperationId(value: string): void {
   }
 }
 
-function validateRecord(record: ConversationCommit, expectedSeq: number, expectedPreviousHash: string | null): void {
+function validateRecord(record: ConversationCommit, expectedSeq: number, expectedPreviousHash: string | null, metadataOnly: boolean): void {
   if (record.schema_version !== 1) {
     throw new ConversationCorruptionError(`Unsupported conversation schema at seq ${expectedSeq}`);
   }
@@ -117,29 +121,31 @@ function validateRecord(record: ConversationCommit, expectedSeq: number, expecte
     throw new ConversationCorruptionError(`Conversation hash chain mismatch at seq ${record.seq}`);
   }
   const { hash, ...unsigned } = record;
-  const expectedHash = commitHash(unsigned);
-  if (hash !== expectedHash) {
+  if (!/^[0-9a-f]{64}$/.test(hash) || (!metadataOnly && hash !== commitHash(unsigned))) {
     throw new ConversationCorruptionError(`Conversation commit hash mismatch at seq ${record.seq}`);
   }
 }
 
-function* committedRecords(buffer: Buffer): Generator<ConversationCommit> {
+export function parseJournalRecord(line: string, bundle: string, seq: number, previousHash: string | null,
+  mode: 'full' | 'metadata', reader: ChapterArchiveReader): ConversationCommit {
+  let raw: ConversationCommit;
+  try { raw = JSON.parse(line) as ConversationCommit; }
+  catch (error) { throw new ConversationCorruptionError(`Invalid committed JSON at conversation seq ${seq}: ${(error as Error).message}`); }
+  const { commit, metadataOnly } = decodeChapterCommit(raw, bundle, mode, reader);
+  validateRecord(commit, seq, previousHash, metadataOnly);
+  return commit;
+}
+
+function* committedRecords(buffer: Buffer, path: string, mode: 'full' | 'metadata' = 'full'): Generator<ConversationCommit> {
   let previousHash: string | null = null;
   const operationIds = new Set<string>();
+  const reader = new ChapterArchiveReader();
   let start = 0;
   for (let seq = 1; start < buffer.length; seq++) {
     const newline = buffer.indexOf(0x0a, start);
     if (newline < 0) return; // An unterminated crash suffix is uncommitted.
     if (newline === start) throw new ConversationCorruptionError(`Blank conversation line at seq ${seq}`);
-    let record: ConversationCommit;
-    try {
-      record = JSON.parse(buffer.toString('utf8', start, newline)) as ConversationCommit;
-    } catch (error) {
-      throw new ConversationCorruptionError(
-        `Invalid committed JSON at conversation seq ${seq}: ${(error as Error).message}`,
-      );
-    }
-    validateRecord(record, seq, previousHash);
+    const record = parseJournalRecord(buffer.toString('utf8', start, newline), dirname(path), seq, previousHash, mode, reader);
     if (operationIds.has(record.operation_id)) {
       throw new ConversationCorruptionError(`Duplicate operation_id at conversation seq ${record.seq}`);
     }
@@ -150,9 +156,16 @@ function* committedRecords(buffer: Buffer): Generator<ConversationCommit> {
   }
 }
 
-export function readConversationSync(conversationPath: string): readonly ConversationCommit[] {
+export function readConversationSync(conversationPath: string, mode: 'full' | 'metadata' = 'full'): readonly ConversationCommit[] {
   if (!existsSync(conversationPath)) return [];
-  return Array.from(committedRecords(readFileSync(conversationPath)));
+  return Array.from(committedRecords(readFileSync(conversationPath), conversationPath, mode));
+}
+
+/** The binary snapshot and its logical commits must describe the same instant, even if a worker appends during a fork. */
+export function readConversationSnapshotSync(path: string) {
+  const file = readFileSync(path);
+  const bytes = file.subarray(0, file.lastIndexOf(0x0a) + 1);
+  return { bytes, commits: Array.from(committedRecords(bytes, path)), detached: path === join(dirname(path), CODER_JOURNAL) };
 }
 
 /**
@@ -162,25 +175,28 @@ export function readConversationSync(conversationPath: string): readonly Convers
  */
 export async function readConversation(
   conversationPath: string,
+  mode: 'full' | 'metadata' = 'full',
 ): Promise<readonly ConversationCommit[]> {
+  let buffer: Buffer;
   try {
-    const buffer = await readFile(conversationPath);
-    const records: ConversationCommit[] = [];
-    // Each commit must be verified in order. Leave time for IPC between batches.
-    const sliceMs = 6;
-    let deadline = performance.now() + sliceMs;
-    for (const record of committedRecords(buffer)) {
-      records.push(record);
-      if (performance.now() >= deadline) {
-        await yieldToEventLoop();
-        deadline = performance.now() + sliceMs;
-      }
-    }
-    return records;
+    buffer = await readFile(conversationPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
     throw error;
   }
+  const records: ConversationCommit[] = [];
+  // Only a missing journal can mean an empty conversation. A missing chapter
+  // referenced by a committed record must reach the caller as a read error.
+  const sliceMs = 6;
+  let deadline = performance.now() + sliceMs;
+  for (const record of committedRecords(buffer, conversationPath, mode)) {
+    records.push(record);
+    if (performance.now() >= deadline) {
+      await yieldToEventLoop();
+      deadline = performance.now() + sliceMs;
+    }
+  }
+  return records;
 }
 
 export async function recoverConversation(conversationPath: string): Promise<readonly ConversationCommit[]> {
@@ -195,7 +211,7 @@ export async function recoverConversation(conversationPath: string): Promise<rea
     return [];
   }
 
-  const records = Array.from(committedRecords(bytes));
+  const records = Array.from(committedRecords(bytes, conversationPath));
   const committedBytes = bytes.lastIndexOf(0x0a) + 1;
   if (bytes.length > committedBytes) {
     const handle = await open(conversationPath, 'r+');
@@ -313,7 +329,9 @@ export interface WriterProjection<T> {
 export class SessionWriter {
   readonly #bundlePath: string;
   readonly #sessionId: SessionId;
-  readonly #conversationPath: string;
+  #conversationPath: string;
+  readonly #chat?: ActiveChatTranscript;
+  #chatNeedsRepair = false;
   readonly #leasePath: string;
   readonly #fencePath: string;
   readonly #leaseTtlMs: number;
@@ -338,7 +356,12 @@ export class SessionWriter {
   private constructor(options: SessionWriterOptions) {
     this.#bundlePath = options.bundlePath;
     this.#sessionId = options.sessionId;
-    this.#conversationPath = join(options.bundlePath, 'conversation.jsonl');
+    this.#conversationPath = sessionJournalPath(options.bundlePath);
+    if (options.coderTranscript || this.#conversationPath === join(options.bundlePath, CODER_JOURNAL)) {
+      this.#chat = new ActiveChatTranscript(options.bundlePath, {
+        faultInjector: options.faultInjector, context: { session_id: options.sessionId }, beforePublish: () => this.#assertLease(),
+      });
+    }
     this.#leasePath = join(options.bundlePath, 'events', 'writer.lease');
     this.#fencePath = join(options.bundlePath, 'events', 'writer.fence.json');
     this.#leaseTtlMs = Math.max(1_000, options.leaseTtlMs ?? 30_000);
@@ -377,6 +400,7 @@ export class SessionWriter {
     return this.#enqueue(async () => {
       await this.#assertLease();
       await this.#assertConversationUnchanged();
+      if (this.#chatNeedsRepair) await this.refreshChatTranscript();
       const cached = this.#projections.get(projection);
       if (cached) return cached.state as T;
       const state = projection.create();
@@ -408,8 +432,24 @@ export class SessionWriter {
     await assertPathHasNoLinks(this.#bundlePath, this.#conversationPath);
     await this.#acquireLease();
     try {
+      this.#conversationPath = sessionJournalPath(this.#bundlePath);
       await collectSessionTransientFiles(this.#bundlePath);
       await this.#reloadConversation();
+      if (this.#chat) {
+        const spans = this.#chat.checkpoints();
+        if (this.#conversationPath === join(this.#bundlePath, CHAT_TRANSCRIPT)) {
+          const journal = join(this.#bundlePath, CODER_JOURNAL);
+          await archiveChapterMessages(journal, spans, {
+            faultInjector: this.#faultInjector, context: { session_id: this.#sessionId },
+          }, async () => { await this.#assertLease(); await this.#assertConversationUnchanged(); }, this.#records);
+          this.#conversationPath = journal;
+          await this.#reloadConversation();
+        } else if (spans.length) {
+          // A previous process may have committed the checkpoint and exited before moving the records.
+          await this.#archive(spans);
+        }
+        await this.#chat.rebuild(this.#records);
+      }
       const heartbeatMs = Math.max(500, Math.floor(this.#leaseTtlMs / 3));
       this.#heartbeat = setInterval(() => {
         void this.#refreshLease().catch((error) => {
@@ -650,10 +690,44 @@ export class SessionWriter {
   runExclusive<T>(task: () => Promise<T>): Promise<T> {
     return this.#enqueue(async () => {
       await this.#refreshLease();
+      if (this.#chatNeedsRepair) await this.refreshChatTranscript();
       const result = await task();
       await this.#assertLease();
       return result;
     });
+  }
+
+  archiveChapters(spans: readonly ChapterSpan[]): Promise<void> {
+    return this.#enqueue(async () => {
+      await this.#assertLease();
+      await this.#assertConversationUnchanged();
+      await this.#archive(spans);
+      await this.refreshChatTranscript();
+    });
+  }
+
+  /** Called inside the existing writer queue after changing chapter/state boundaries. */
+  async refreshChatTranscript(): Promise<void> {
+    if (!this.#chat) return;
+    this.#chatNeedsRepair = true;
+    this.#chat.checkpoints();
+    await this.#chat.rebuild(this.#records);
+    this.#chatNeedsRepair = false;
+  }
+
+  async #archive(spans: readonly ChapterSpan[]): Promise<void> {
+    try {
+      if (await archiveChapterMessages(this.#conversationPath, spans, {
+        faultInjector: this.#faultInjector, context: { session_id: this.#sessionId },
+      }, async () => { await this.#assertLease(); await this.#assertConversationUnchanged(); })) {
+        this.#journalStamp = await lstat(this.#conversationPath);
+      }
+    } catch (error) {
+      // The rename may already have succeeded when a later fsync fails.
+      await this.#assertLease();
+      await this.#reloadConversation();
+      throw error;
+    }
   }
 
   /**
@@ -685,6 +759,7 @@ export class SessionWriter {
     return this.#enqueue(async () => {
       await this.#assertLease();
       await this.#assertConversationUnchanged();
+      if (this.#chatNeedsRepair) await this.refreshChatTranscript();
       const previous = this.#operations.get(input.operation_id);
       if (previous) {
         if (previous.request_hash !== input.request_hash) {
@@ -710,7 +785,13 @@ export class SessionWriter {
         artifacts,
       };
       const record: ConversationCommit = { ...unsigned, hash: measureStorageSync('journal.hash', () => commitHash(unsigned)) };
-      const line = measureStorageSync('journal.serialize', () => `${JSON.stringify(record)}\n`);
+      const physical = this.#chat ? await detachCommitReplay(this.#bundlePath, record, {
+        faultInjector: this.#faultInjector, context: { session_id: this.#sessionId },
+      }) : record;
+      const line = this.#chat ? await this.#chat.encode(physical) : measureStorageSync('journal.serialize', () => `${JSON.stringify(physical)}\n`);
+      // Retain only the replay reference in the writer's long-lived operation
+      // and projection caches, including for turns committed in this process.
+      const committed = physical === record ? record : decodeChapterCommit(physical, this.#bundlePath, 'full', new ChapterArchiveReader()).commit;
 
       await this.#faultInjector?.({
         point: 'conversation:before-append',
@@ -738,19 +819,26 @@ export class SessionWriter {
         await this.#assertLease();
       } catch (error) {
         await handle.close().catch(() => undefined);
+        this.#chatNeedsRepair = !!this.#chat;
         await this.#reloadConversation();
         throw error;
       }
       await handle.close();
 
-      this.#records.push(record);
-      this.#operations.set(record.operation_id, record);
+      this.#records.push(committed);
+      this.#operations.set(committed.operation_id, committed);
       this.#journalStamp = await lstat(this.#conversationPath);
+      if (this.#chat) {
+        this.#chatNeedsRepair = true;
+        try { await this.#chat.appended(committed, this.#records); }
+        catch (error) { this.#projections.clear(); throw error; }
+        this.#chatNeedsRepair = false;
+      }
       if (this.#records.length > 100_000 || this.#journalStamp.size > 32 * 1024 * 1024) {
         this.#projections.clear();
       } else {
         for (const [projection, cached] of this.#projections) {
-          try { projection.apply(cached.state, record); }
+          try { projection.apply(cached.state, committed); }
           catch { this.#projections.delete(projection); }
         }
       }
@@ -760,7 +848,7 @@ export class SessionWriter {
         path: this.#conversationPath,
         operation_id: input.operation_id,
       });
-      return record;
+      return committed;
     });
   }
 

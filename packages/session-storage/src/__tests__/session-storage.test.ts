@@ -170,7 +170,7 @@ describe('filesystem session bundle', () => {
     expect(await repository.readWriterProjection(created.location, projection)).toEqual({ count: 2 });
     expect(projection.create).toHaveBeenCalledTimes(1);
     expect(projection.apply).toHaveBeenCalledTimes(2);
-    await appendFile(join(created.location.bundle_path, 'conversation.jsonl'), 'unexpected\n');
+    await appendFile(join(created.location.bundle_path, 'journal.jsonl'), 'unexpected\n');
     await expect(repository.readWriterProjection(created.location, projection)).rejects.toThrow('Journal changed');
     await expect(repository.commitTurn(created.location, { operation_id: 'three', payload: {} })).rejects.toThrow('Journal changed');
   });
@@ -288,6 +288,7 @@ describe('filesystem session bundle', () => {
     await expect(stat(join(created.location.bundle_path, 'session.json'))).resolves.toMatchObject({ size: expect.any(Number) });
     await expect(stat(join(created.location.bundle_path, 'state.json'))).resolves.toMatchObject({ size: expect.any(Number) });
     await expect(stat(join(created.location.bundle_path, 'conversation.jsonl'))).resolves.toMatchObject({ size: 0 });
+    await expect(stat(join(created.location.bundle_path, 'journal.jsonl'))).resolves.toMatchObject({ size: 0 });
     await expect(stat(join(created.location.bundle_path, 'migration.json'))).resolves.toMatchObject({ size: expect.any(Number) });
     for (const directory of SESSION_BUNDLE_DIRECTORIES) {
       await expect(stat(join(created.location.bundle_path, ...directory.split('/')))).resolves.toMatchObject({
@@ -348,7 +349,7 @@ describe('filesystem session bundle', () => {
       faultInjector: async ({ point, session_id }) => {
         if (point !== 'atomic:before-temp-write' || session_id === undefined) return;
         arrivals += 1;
-        if (arrivals === 5) {
+        if (arrivals === 6) {
           arrivalsWhenReleased = arrivals;
           release();
         }
@@ -366,8 +367,8 @@ describe('filesystem session bundle', () => {
     });
     clearTimeout(watchdog);
 
-    expect(arrivals).toBe(5);
-    expect(arrivalsWhenReleased).toBe(5);
+    expect(arrivals).toBe(6);
+    expect(arrivalsWhenReleased).toBe(6);
   });
 
   it('catalog scans project and global roots without creating a persistent index', async () => {
@@ -914,7 +915,7 @@ describe('idempotency and crash recovery', () => {
       payload: { complete: true },
     });
     await repository.closeSession(created.location);
-    const conversationPath = join(created.location.bundle_path, 'conversation.jsonl');
+    const conversationPath = join(created.location.bundle_path, 'journal.jsonl');
     await appendFile(conversationPath, '{"schema_version":1,"seq":2,"operation_id":"partial"');
     const committed = repository.readConversationSync(created.location);
     expect(committed).toHaveLength(1);
@@ -937,7 +938,7 @@ describe('idempotency and crash recovery', () => {
     const { location } = await repository.createSession({ kind: 'coder', scope: { kind: 'project', project_id: 1 } });
     await repository.commitTurn(location, { operation_id: 'record', payload: { text: 'original' } });
     await repository.closeSession(location);
-    const path = join(location.bundle_path, 'conversation.jsonl');
+    const path = join(location.bundle_path, 'journal.jsonl');
     const original = await readFile(path, 'utf8');
     await writeFile(path, original.replace('original', 'modified'));
     await expect(repository.readConversation(location)).rejects.toThrow('hash mismatch at seq 1');

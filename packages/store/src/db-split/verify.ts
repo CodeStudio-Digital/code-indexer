@@ -1,10 +1,10 @@
 /**
  * Verification gates for a project split (plan §8.9). ALL must pass before the
  * read path is allowed to flip to the project DB. Any failure → the caller
- * drops the project DB and marks the project 'failed' (central stays intact).
+ * keeps the project DB for recovery and leaves the read path on central.
  */
 import type { DB } from '../db/types.js';
-import { manifestFor, type SplitClass } from './manifest.js';
+import { entryWhere, manifestFor, type SplitClass } from './manifest.js';
 
 export interface VerifyResult {
   ok: boolean;
@@ -38,16 +38,13 @@ export function verifySplit(
 ): VerifyResult {
   const counts: Record<string, { proj: number; central: number }> = {};
 
-  // 1) Row-count parity — for DIRECT project_id tables only. Tables with a
-  //    custom `where` (child/filtered/hybrid + the shared blob pool) use a
-  //    legacy-qualified subquery that isn't expressible against the central
-  //    handle here; they are trusted to the copy and covered by the FK +
-  //    quick_check gates below.
+  // Each connection reads its own copy of the project, including indirect children.
   for (const entry of manifestFor(classes)) {
-    if (entry.where) continue;
-    if (!tableExists(proj, entry.table) || !tableExists(central, entry.table)) continue;
-    const p = count(proj, `SELECT COUNT(*) n FROM "${entry.table}"`);
-    const c = count(central, `SELECT COUNT(*) n FROM "${entry.table}" WHERE project_id = ?`, projectId);
+    if (!tableExists(central, entry.table)) continue;
+    if (!tableExists(proj, entry.table)) return { ok: false, reason: `Missing ${entry.table}`, counts };
+    const sql = `SELECT COUNT(*) n FROM "${entry.table}" WHERE ${entryWhere(entry).replaceAll('legacy.', 'main.')}`;
+    const p = count(proj, sql, { pid: projectId });
+    const c = count(central, sql, { pid: projectId });
     counts[entry.table] = { proj: p, central: c };
     if (p !== c) {
       return { ok: false, reason: `parity ${entry.table}: proj=${p} central=${c}`, counts };

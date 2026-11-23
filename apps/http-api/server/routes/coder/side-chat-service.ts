@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { HttpError } from '@mcp/shared/http/context.js';
-import type { SideChatContextInfo, SideChatSelection, SideChatTarget, SideChatTurn, SideChatView } from '@mcp/shared/side-chat.js';
+import type { SideChatContextInfo, SideChatModelChoice, SideChatProgress, SideChatSelection, SideChatTarget, SideChatTurn, SideChatView } from '@mcp/shared/side-chat.js';
 import type { AgentMessage, ChatProvider } from '@mcp/provider-sdk';
 import type { SessionId, SessionLocation } from '@mcp/session-storage';
 import type { FsCoderSession, FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
@@ -37,9 +37,10 @@ function questionText(turn: SideChatTurn) {
     + JSON.stringify(turn.selection.text) + '\n\n' : '') + turn.question;
 }
 function messagesFor(chat: StoredChat, turn: SideChatTurn): AgentMessage[] {
-  const reference = chat.references[turn.context.revision] ?? '';
+  const budget = contextBudget(turn.target ?? chat.target);
+  const reference = (chat.references[turn.context.revision] ?? '').slice(-budget);
   const history: AgentMessage[] = [];
-  let left = contextBudget(chat.target);
+  let left = budget;
   for (let i = chat.turns.length - 2; i >= 0; i--) {
     const earlier = chat.turns[i]!;
     if (earlier.status !== 'completed') continue;
@@ -52,10 +53,37 @@ function messagesFor(chat: StoredChat, turn: SideChatTurn): AgentMessage[] {
     ...history, message('user', questionText(turn))];
 }
 
+async function* streamTurn(turn: SideChatTurn, run: Running | undefined, offset: number, signal: AbortSignal): AsyncGenerator<SideChatProgress | null> {
+  let cursor = offset <= turn.answer.length ? offset : 0;
+  let reasoning: boolean | undefined;
+  let first = true;
+  while (!signal.aborted) {
+    if (first || turn.answer.length !== cursor || turn.reasoning !== reasoning || turn.status !== 'running') {
+      const from = cursor;
+      cursor = turn.answer.length;
+      reasoning = turn.reasoning;
+      first = false;
+      const { status, firstTextMs, usage, error } = turn;
+      yield { offset: from, answer: turn.answer.slice(from), status, reasoning, firstTextMs, usage, error };
+      if (status !== 'running' || !run) return;
+      // The provider can produce more text while the consumer is writing the frame.
+      continue;
+    }
+    if (!run) return;
+    const heartbeat = new AbortController();
+    const timer = setTimeout(() => heartbeat.abort(), 12_000);
+    const wake = AbortSignal.any([signal, heartbeat.signal]);
+    try { await once(run.changes, 'update', { signal: wake }); }
+    catch (error) { if (!wake.aborted) throw error; }
+    finally { clearTimeout(timer); }
+    if (heartbeat.signal.aborted && !signal.aborted) yield null;
+  }
+}
+
 export class SideChatService {
   private readonly running = new Map<string, Running>();
   constructor(private readonly sessions: Sessions,
-    private readonly targetFor: (session: FsCoderSession) => SideChatTarget,
+    private readonly targetFor: (session: FsCoderSession, choice?: SideChatModelChoice) => SideChatTarget,
     private readonly providerFor: (target: SideChatTarget, id: string) => Promise<ChatProvider>,
     private readonly liveText: (id: SessionId) => string = () => '') {}
 
@@ -98,6 +126,20 @@ export class SideChatService {
     return withSessionLock('side:' + parent, async () => view(await this.load(parent, await this.location(parent))));
   }
 
+  setTarget(parent: SessionId, choice: SideChatModelChoice) {
+    return withSessionLock('side:' + parent, async () => {
+      if (this.running.has(parent)) throw conflict('Wait for the current side answer before changing its model.');
+      const location = await this.location(parent);
+      const session = await this.sessions.getSession(parent);
+      if (!session) throw new HttpError(404, { message: 'Session not found' });
+      const target = this.targetFor(session, choice);
+      const chat = await this.load(parent, location);
+      chat.target = target;
+      await writeSideChatFile(location, chat);
+      return view(chat);
+    });
+  }
+
   update(parent: SessionId, action: 'refresh' | 'select', selection?: SideChatSelection | null) {
     return withSessionLock('side:' + parent, async () => {
       const location = await this.location(parent);
@@ -133,7 +175,9 @@ export class SideChatService {
       }
       if (this.running.has(parent)) throw conflict('Another side question is still running.');
       if (question.length > Math.min(12_000, contextBudget(chat.target))) throw new HttpError(400, { message: 'Question exceeds the model context budget.' });
-      const turn: SideChatTurn = { id, question, context: chat.context, answer: '', status: 'running',
+      const clipped = (chat.references[chat.context.revision]?.length ?? 0) > contextBudget(chat.target);
+      const context = clipped ? { ...chat.context, truncated: true } : chat.context;
+      const turn: SideChatTurn = { id, question, context, target: chat.target, answer: '', status: 'running',
         ...(chat.selection && { selection: chat.selection }) };
       chat.selection = null;
       chat.turns.push(turn);
@@ -149,18 +193,24 @@ export class SideChatService {
     const { chat, turn, abort } = run;
     const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(300_000)]);
     const start = Date.now();
+    let status: SideChatTurn['status'] = 'completed';
     try {
-      const provider = await this.providerFor(chat.target, chat.id);
+      const target = turn.target ?? chat.target;
+      const provider = await this.providerFor(target, chat.id);
       if (provider.inferenceOnly !== true) throw new Error('This provider cannot guarantee text-only inference.');
       signal.throwIfAborted();
       let complete = false;
       for await (const delta of provider.chat({ system: instructions, messages: messagesFor(chat, turn), tools: [],
-        thinking: chat.target.thinking, reasoningEffort: chat.target.effort, sessionId: chat.id, signal })) {
+        thinking: target.thinking, reasoningEffort: target.effort, sessionId: chat.id, signal })) {
         signal.throwIfAborted();
         if (delta.type === 'text_delta' && delta.text) {
           turn.firstTextMs ??= Date.now() - start;
           if (turn.answer.length + delta.text.length > 128_000) throw new Error('Side answer exceeded its output limit.');
           turn.answer += delta.text;
+          delete turn.reasoning;
+          run.changes.emit('update');
+        } else if (delta.type === 'thinking_delta' && delta.text && !turn.answer && !turn.reasoning) {
+          turn.reasoning = true;
           run.changes.emit('update');
         } else if (delta.type === 'usage') {
           turn.usage = { input: delta.usage.input_tokens, output: delta.usage.output_tokens, cached: delta.usage.cache_read_input_tokens ?? 0 };
@@ -170,18 +220,41 @@ export class SideChatService {
       }
       signal.throwIfAborted();
       if (!complete || !turn.answer.trim()) throw new Error('The provider ended without a complete text answer.');
-      turn.status = 'completed';
     } catch (error) {
-      turn.status = abort.signal.aborted ? 'cancelled' : 'failed';
-      if (turn.status === 'failed') turn.error = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+      status = abort.signal.aborted ? 'cancelled' : 'failed';
+      if (status === 'failed') turn.error = (error instanceof Error ? error.message : String(error)).slice(0, 500);
     } finally {
       // Persist before publishing the terminal update. A disconnected viewer
       // can reattach without restarting the request or holding the parent lock.
       await withSessionLock('side:' + parent, async () => {
-        try { if (await this.sessions.getSessionLocation(parent)) await writeSideChatFile(location, chat); }
-        finally { this.running.delete(parent); run.changes.emit('update'); }
+        try {
+          const finished = { ...turn, reasoning: undefined, status };
+          if (await this.sessions.getSessionLocation(parent)) {
+            await writeSideChatFile(location, { ...chat, turns: chat.turns.map(row => row === turn ? finished : row) });
+          }
+        } catch (error) {
+          status = 'failed';
+          turn.error = 'Could not save the side answer.';
+          throw error;
+        } finally {
+          turn.status = status;
+          delete turn.reasoning;
+          this.running.delete(parent);
+          run.changes.emit('update');
+        }
       });
     }
+  }
+
+  async stream(parent: SessionId, id: string, offset: number, signal: AbortSignal) {
+    const location = await this.location(parent);
+    return withSessionLock('side:' + parent, async () => {
+      const run = this.running.get(parent);
+      const active = run?.turn.id === id ? run : undefined;
+      const turn = active?.turn ?? (await this.load(parent, location)).turns.find(t => t.id === id);
+      if (!turn) throw new HttpError(404, { message: 'Side turn not found' });
+      return streamTurn(turn, active, offset, signal);
+    });
   }
 
   async progress(parent: SessionId, id: string, offset: number, signal: AbortSignal) {

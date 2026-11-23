@@ -1,10 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Copy, RefreshCw, Send, Square, Trash2, X } from 'lucide-react';
-import type { SideChatTurn, SideChatView } from '@mcp/shared/side-chat.js';
+import type { SideChatModelChoice, SideChatProgress, SideChatTurn, SideChatView } from '@mcp/shared/side-chat.js';
+import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import { apiBaseUrl } from '../../../lib/api-client-transport.js';
 import { Button } from '../../../components/ui/button.js';
 import { Markdown } from '../messages/Markdown.js';
+import { LiveTextBlock } from '../messages/live-blocks.js';
+import { resolveReasoningLevels } from '../composer/provider-caps.js';
+import { selectedProviderModel } from '../execution-mode-state.js';
+import type { ProviderOption } from '../types.js';
 import type { OpenSideChat } from './side-chat-command.js';
 
 async function request<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -16,8 +21,8 @@ async function request<T>(path: string, method: string, body?: unknown, signal?:
   return response.json() as Promise<T>;
 }
 
-export function SideChatPanel({ sessionId, launch, onConsumed }: {
-  sessionId: string; launch?: OpenSideChat; onConsumed?: (key: string) => void;
+export function SideChatPanel({ sessionId, providerOptions, launch, onConsumed }: {
+  sessionId: string; providerOptions: ProviderOption[]; launch?: OpenSideChat; onConsumed?: (key: string) => void;
 }) {
   const { t } = useTranslation('chat');
   const base = encodeURIComponent(sessionId) + '/side';
@@ -33,24 +38,40 @@ export function SideChatPanel({ sessionId, launch, onConsumed }: {
   const input = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
-  const running = chat?.turns.find(turn => turn.status === 'running')?.id;
+  const activeTurn = chat?.turns.find(turn => turn.status === 'running');
+  const running = activeTurn?.id;
+  const initialTurn = useRef(activeTurn);
+  useEffect(() => { initialTurn.current = activeTurn; }, [activeTurn]);
+  const model = selectedProviderModel(chat?.target.provider, providerOptions, chat?.target.model);
+  const efforts = model?.can_reason === false ? [] : resolveReasoningLevels(chat?.target.provider, providerOptions, chat?.target.model);
+  const selectedEffort = chat?.target.effortOverride === undefined ? chat?.target.effort : chat.target.effortOverride;
+  const modelGroups = useMemo(() => providerOptions.filter(p => p.models.length).map(p =>
+    <optgroup key={p.id} label={p.label}>{p.models.map(m => {
+      const id = m.mode ? m.id + '::' + m.mode : m.id;
+      return <option key={id} value={JSON.stringify([p.id, id])}>{m.name || m.id}{m.mode && ' · ' + m.mode}</option>;
+    })}</optgroup>), [providerOptions]);
   const action = launch?.parentId === sessionId ? launch : undefined;
   const consumed = useRef<string | undefined>(undefined);
+  const loaded = useRef(-1);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => { if (draft) localStorage.setItem(key, draft); else localStorage.removeItem(key); }, [draft, key]);
 
   useEffect(() => {
+    if (loaded.current === retry && (!action || consumed.current === action.key)) return;
     const controller = new AbortController();
     const load = async () => {
       setError('');
       let current = await request<SideChatView>(base + '/open', 'POST', {}, controller.signal);
-      if (!controller.signal.aborted) setChat(current);
+      if (!controller.signal.aborted && action && loaded.current < 0) setChat(current);
       if (action && consumed.current !== action.key) {
         if (action.selection) current = await request(base + '/selection', 'POST', { selection: action.selection }, controller.signal);
         if (action.question) current = await request(base + '/turns', 'POST', { id: action.key, question: action.question }, controller.signal);
-        if (!controller.signal.aborted) { consumed.current = action.key; onConsumed?.(action.key); }
       }
-      if (!controller.signal.aborted) setChat(current);
+      if (!controller.signal.aborted) {
+        loaded.current = retry;
+        setChat(current);
+        if (action && consumed.current !== action.key) { consumed.current = action.key; onConsumed?.(action.key); }
+      }
     };
     void load().catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     input.current?.focus();
@@ -60,31 +81,29 @@ export function SideChatPanel({ sessionId, launch, onConsumed }: {
   useEffect(() => {
     if (!running) return;
     const controller = new AbortController();
-    const { signal } = controller;
-    const watch = async () => {
-      let answer = '';
-      let failures = 0;
-      while (!signal.aborted) {
-        try {
-          const turn = await request<SideChatTurn & { offset: number }>(base + '/turns/' + running + '?offset=' + answer.length, 'GET', undefined, signal);
-          if (signal.aborted) return;
-          failures = 0;
-          setError('');
-          answer = answer.slice(0, turn.offset) + turn.answer;
-          const updated = { ...turn, answer };
-          setChat(value => value && ({ ...value, turns: value.turns.map(row => row.id === running ? updated : row) }));
-          if (turn.status !== 'running') return;
-          await new Promise(resolve => setTimeout(resolve, 100));
-        } catch (e) {
-          if (signal.aborted) return;
-          setError(e instanceof Error ? e.message : String(e));
-          if (++failures >= 4) return;
-          await new Promise(resolve => setTimeout(resolve, 400 * failures));
-        }
-      }
+    let answer = initialTurn.current?.answer ?? '';
+    let frame = 0;
+    let pending: Partial<SideChatTurn>;
+    const publish = () => {
+      frame = 0;
+      const update = pending;
+      setChat(value => value && ({ ...value, turns: value.turns.map(row =>
+        row.id === running && row.status === 'running' ? { ...row, ...update } : row) }));
     };
-    void watch();
-    return () => controller.abort();
+    const stream = new ReconnectingSSEClient({
+      url: apiBaseUrl() + '/api/coder/sessions/' + base + '/turns/' + running + '/stream',
+      method: 'GET', signal: controller.signal, getLastEventId: () => answer.length, idleTimeoutMs: 35_000,
+      onEvent(event) {
+        const { offset, answer: delta, ...state } = JSON.parse(event.data) as SideChatProgress;
+        if (offset > answer.length) throw new Error('Invalid side chat stream offset');
+        answer = answer.slice(0, offset) + delta;
+        pending = { ...state, answer, reasoning: state.reasoning ?? false };
+        if (state.status !== 'running') { cancelAnimationFrame(frame); publish(); }
+        else if (!frame) frame = requestAnimationFrame(publish);
+      },
+    });
+    void stream.run().catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { controller.abort(); cancelAnimationFrame(frame); };
   }, [base, running, retry]);
 
   useEffect(() => {
@@ -109,12 +128,35 @@ export function SideChatPanel({ sessionId, launch, onConsumed }: {
       setDraft(value => value.trim() === question ? '' : value);
     });
   };
+  const choose = (choice: SideChatModelChoice) => void perform(async () => {
+    const next = await request<SideChatView>(base + '/target', 'POST', choice);
+    if (alive.current) setChat(next);
+  });
+  const selectStyle = 'min-w-0 rounded border border-border bg-background px-1.5 py-1 text-xs text-foreground disabled:opacity-60';
   return <section aria-label={t('side.title')} className="flex h-full min-h-0 flex-col text-sm">
-    {chat && <div className="flex flex-wrap items-center gap-1.5 border-b border-border p-2 text-xs text-muted-foreground">
-      <span className="min-w-0 flex-1 break-words">{chat.target.provider} · {chat.target.model}{chat.target.effort && ' · ' + chat.target.effort}<br/>
+    {chat && <div className="flex flex-wrap items-center gap-1 border-b border-border p-2 text-xs text-muted-foreground">
+      <div className="flex w-full min-w-0 gap-1">
+        <select className={selectStyle + ' flex-1'} aria-label={t('side.model')} title={chat.target.provider + ' · ' + chat.target.model}
+          disabled={busy || !!running || !modelGroups.length}
+          value={JSON.stringify([chat.target.provider, chat.target.model])}
+          onChange={e => { const [provider, model] = JSON.parse(e.target.value) as [string, string]; choose({ provider, model, effort: null }); }}>
+          {!model && <option value={JSON.stringify([chat.target.provider, chat.target.model])}>{chat.target.model}</option>}
+          {modelGroups}
+        </select>
+        {efforts.length > 0 && <select className={selectStyle + ' max-w-[45%]'} aria-label={t('side.effort')} title={t('side.effort')}
+          disabled={busy || !!running} value={efforts.includes(selectedEffort ?? '') ? selectedEffort! : ''}
+          onChange={e => choose({ provider: chat.target.provider, model: chat.target.model, effort: e.target.value || null })}>
+          <option value="">{t('toolbar.effortAuto')}{model?.default_reasoning_level && ' · ' + model.default_reasoning_level}</option>
+          {efforts.map(level => <option key={level} value={level}>{level}</option>)}
+        </select>}
+      </div>
+      <span className="min-w-0 flex-1 break-words">
         {t('side.context', { seq: chat.context.throughSeq })}{chat.context.truncated && ' · ' + t('side.excerpt')}</span>
       <Button size="icon" variant="ghost" aria-label={t('side.refresh')} title={t('side.refresh')} disabled={busy}
-        onClick={() => void perform(async () => setChat(await request(base + '/context', 'POST', {})))}><RefreshCw size={15}/></Button>
+        onClick={() => void perform(async () => {
+          const next = await request<SideChatView>(base + '/context', 'POST', {});
+          setChat(value => value && { ...value, context: next.context });
+        })}><RefreshCw size={15}/></Button>
       <Button size="icon" variant="ghost" aria-label={t('side.clear')} title={t('side.clear')} disabled={busy || !!running}
         onClick={() => setConfirmClear(true)}><Trash2 size={15}/></Button>
     </div>}
@@ -131,9 +173,9 @@ export function SideChatPanel({ sessionId, launch, onConsumed }: {
           {turn.selection && <blockquote className="mb-1 border-l-2 pl-2 text-xs text-muted-foreground">{turn.selection.text}</blockquote>}
           <p className="whitespace-pre-wrap break-words">{turn.question}</p>
         </div>
-        {turn.answer && <Markdown text={turn.answer}/>}
+        {turn.answer && (turn.status === 'running' ? <LiveTextBlock text={turn.answer}/> : <Markdown text={turn.answer} showDocumentCopy={false} scrollWithTranscript/>)}
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>{t('side.context', { seq: turn.context.throughSeq })}{turn.status !== 'completed' && ' · ' + t('side.' + turn.status)}</span>
+          <span>{t('side.context', { seq: turn.context.throughSeq })}{turn.status !== 'completed' && ' · ' + t(turn.status === 'running' && turn.reasoning ? 'side.reasoning' : 'side.' + turn.status)}</span>
           {turn.answer && <Button size="icon" variant="ghost" title={t('side.copy')} aria-label={t('side.copy')}
             onClick={() => void perform(() => navigator.clipboard.writeText(turn.answer))}><Copy size={14}/></Button>}
         </div>

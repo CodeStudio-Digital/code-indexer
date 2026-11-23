@@ -58,7 +58,7 @@ describe('global filesystem session lifecycle', () => {
     const createGlobalSession = vi.fn(async () => globalSession(CREATED_ID));
     const deps = {
       db: {
-        getProject: (id: number) => ({
+        getProjectCatalogEntry: (id: number) => ({
           id,
           name: id === 7 ? 'Alpha' : 'Beta',
           root_path: id === 7 ? 'D:\\alpha' : 'D:\\beta',
@@ -120,7 +120,7 @@ describe('global filesystem session lifecycle', () => {
     ]);
     const deps = {
       db: {
-        getProject: () => ({
+        getProjectCatalogEntry: () => ({
           id: 8,
           name: 'Beta',
           root_path: 'D:\\beta',

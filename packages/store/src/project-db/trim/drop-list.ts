@@ -84,6 +84,7 @@ export const CENTRAL_DROP_TABLES: readonly string[] = [
   'sub_agent_result_cache',
   // providers / auth / mcp / models (global config)
   'provider_configs', 'provider_models', 'oauth_clients', 'oauth_auth_codes', 'oauth_tokens',
+  'model_catalog_revision', 'model_catalog_embeddings',
   'oauth_refresh_tokens', 'mcp_server_configs', 'mcp_server_tools', 'mcp_oauth_registrations',
   'mcp_oauth_tokens', 'mcp_oauth_pending', 'embedding_configs', 'embedding_store_configs',
   'vector_store_configs', 'reranker_configs', 'model_prices', 'models_cache', 'api_tokens',

@@ -203,7 +203,7 @@ export class FsSessionEntityFiles {
     await assertPathHasNoLinks(entry.location.bundle_path, root);
     const allNames = async () => (await readdir(root)).filter(name => /^[0-9a-f-]{36}\.json$/i.test(name));
     const names = entityDirectory === 'snapshots' && kind
-      ? await this.snapshots.select(root, kind, roundMessageId, async visit => this.readNames(root, await allNames(), visit))
+      ? await this.snapshots.listNames(root, kind, roundMessageId, async visit => this.readNames(root, await allNames(), visit))
       : await allNames();
     const records: FsEntityEnvelope<T>[] = [];
     await this.readNames<T>(root, names, (_name, record) => {

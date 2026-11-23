@@ -36,6 +36,7 @@ function hasSearchableIndex(status: ProjectIndexStatus): boolean {
 }
 
 function terminalResult(status: ProjectIndexStatus): StructuralReadinessResult | null {
+  if (status.autoIndexEnabled === false) return { status: hasSearchableIndex(status) ? 'ready' : 'disabled', phase: status.phase };
   if (status.phase === 'error') return { status: 'error', phase: status.phase, error: status.error };
   if (status.phase === 'too_large') return { status: 'too_large', phase: status.phase };
   return null;

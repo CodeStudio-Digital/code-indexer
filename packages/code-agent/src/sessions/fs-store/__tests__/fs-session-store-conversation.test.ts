@@ -198,7 +198,7 @@ describe('FsSessionStore conversation journal', () => {
       },
     });
     await appendFile(
-      join(location!.bundle_path, 'conversation.jsonl'),
+      join(location!.bundle_path, 'journal.jsonl'),
       '{"uncommitted":true',
       'utf8',
     );
@@ -346,7 +346,7 @@ describe('FsSessionStore conversation journal', () => {
         '.mcp-indexer',
         'session',
         session.id,
-        'conversation.jsonl',
+        'journal.jsonl',
       ),
       'utf8',
     );
@@ -500,7 +500,7 @@ describe('FsSessionStore conversation journal', () => {
       join(bundle, 'conversation.jsonl'),
       'utf8',
     );
-    expect(transcript.trim().split('\n')).toHaveLength(2);
+    expect(transcript.trim().split('\n').map(line => JSON.parse(line).role)).toEqual(['user', 'assistant', 'tool']);
     expect(transcript).not.toContain(imageBase64);
     expect(transcript).not.toContain(documentText);
     expect(transcript).not.toContain(rawResult);

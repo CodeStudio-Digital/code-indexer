@@ -1897,6 +1897,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               className={activeRightPanelId === 'diagram' || activeRightPanelId === 'side-chat' ? 'block min-w-0' : 'hidden lg:block min-w-0'}
             >
               <RightPanelHost
+                providerOptions={providerOptions}
                 sideLaunch={sideLaunch} onSideConsumed={sideConsumed}
                 activeId={activeRightPanelId}
                 onSelectPanel={setActiveRightPanelId}
@@ -1978,6 +1979,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       )}
       {workbenchSlots?.rightPanelHost && selectedId && activeRightPanelId && createPortal(
         <RightPanelHost
+          providerOptions={providerOptions}
           sideLaunch={sideLaunch} onSideConsumed={sideConsumed}
           activeId={activeRightPanelId}
           onSelectPanel={setActiveRightPanelId}

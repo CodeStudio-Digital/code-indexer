@@ -135,6 +135,7 @@ export class FsSessionStore {
 
   /** Lazily prime the in-memory catalog without forcing a rescan per caller. */
   ensureCatalog(): Promise<void> { return this.#directory.ensureCatalog(); }
+  bindRuntimeLocation(location: SessionLocation): Promise<void> { return this.#directory.bindRuntimeLocation(location); }
 
   async getSessionLocation(
     id: SessionId | string,
@@ -271,8 +272,8 @@ export class FsSessionStore {
     return this.#writer.persistAssistantTurn(input);
   }
 
-  loadSessionWithMessages(id: SessionId | string): Promise<FsSessionWithMessages | null> {
-    return this.#reader.loadSession(id);
+  loadSessionWithMessages(id: SessionId | string, options?: { forProvider?: boolean }): Promise<FsSessionWithMessages | null> {
+    return this.#reader.loadSession(id, options?.forProvider);
   }
   loadAllSessionMessages(id: SessionId | string): Promise<FsSessionWithMessages | null> { return this.#reader.loadAll(id); }
 

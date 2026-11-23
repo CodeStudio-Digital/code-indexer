@@ -14,6 +14,7 @@ import { apiPost } from '../../../../hooks/useApi.js';
 import { Button } from '../../../../components/ui/button.js';
 import { Combobox } from '../../../../components/ui/combobox.js';
 import { Input } from '../../../../components/ui/input.js';
+import { Switch } from '../../../../components/ui/switch.js';
 import { confirm } from '../../../../components/ui/prompt-dialog.js';
 import type { PatchFn } from '../ProjectSettingsModal.js';
 import { SemanticFolderPicker } from '../SemanticFolderPicker.js';
@@ -91,6 +92,21 @@ export function SearchPane({ project, patch }: { project: Project; patch: PatchF
 
   return (
     <div className="w-full max-w-3xl space-y-5">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <label htmlFor="project-auto-index" className="text-sm font-medium">{t('edit.autoIndexLabel')}</label>
+          <p id="project-auto-index-hint" className="text-xs text-muted-foreground">{t('edit.autoIndexHint')}</p>
+        </div>
+        <Switch id="project-auto-index" aria-describedby="project-auto-index-hint" checked={project.auto_index_enabled !== 0}
+          disabled={saving} onCheckedChange={async (enabled) => {
+            setSaving(true);
+            setLocalError(null);
+            setNotice(null);
+            try { await patch({ auto_index_enabled: enabled ? 1 : 0 }); }
+            catch (err) { setLocalError(err instanceof Error ? err.message : String(err)); }
+            finally { setSaving(false); }
+          }} />
+      </div>
 
       <div className="space-y-1.5">
         <label className="text-sm font-medium">{t('edit.searchModeLabel')}</label>

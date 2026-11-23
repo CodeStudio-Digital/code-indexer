@@ -15,6 +15,7 @@ import type {
   DirtyEvent,
   ProjectIndexSettings,
   StructuralExecutor,
+  StructuralRunSummary,
   StructuralChangeHandler,
   StructuralProgressFrame,
 } from '../types.js';
@@ -64,13 +65,8 @@ class FakeExecutor implements StructuralExecutor {
   }
   async runStructuralIndex(
     projectId: number,
-    opts: {
-      maxFiles?: number;
-      allowEmptyWipe?: boolean;
-      onProgress?: (p: StructuralProgressFrame) => void;
-      onChanges?: StructuralChangeHandler;
-    },
-  ) {
+    opts: Parameters<StructuralExecutor['runStructuralIndex']>[1],
+  ): Promise<StructuralRunSummary> {
     this.runs++;
     this.runProjectIds.push(projectId);
     this.lastRunOpts = opts;
@@ -242,6 +238,59 @@ describe('DirtyQueue', () => {
 });
 
 describe('ProjectIndexService', () => {
+  it('disables scanning and watching for the owner and its worktree, retaining manual indexing and other projects', async () => {
+    const db = fakeDb({ structural_indexed_at: null, last_indexed: null });
+    const project = db.getProjectCatalogEntry(1)!;
+    let enabled = 0;
+    db.getProjectCatalogEntry = id => ({ ...project, id, worktree_parent_id: id === 2 ? 1 : null,
+      auto_index_enabled: id === 1 ? enabled : 1 });
+    const watch = new FakeFileWatcher(), exec = new FakeExecutor();
+    const service = new ProjectIndexService(db, exec, watch as never, () => ({ ...SETTINGS, autoWatch: true }), new FakeGitMetaWatcher() as never);
+    try {
+      service.activate(1, 'main'); service.activate(2, 'checkout');
+      service.ensureFresh(1, 'session'); service.ensureFresh(2, 'branch');
+      service.markDirty(1, [{ path: 'edited.ts', kind: 'upsert' }]);
+      expect((await service.ensureStructuralReady(1, 1000)).status).toBe('disabled');
+      expect((await service.refreshStructural(2, 1000)).status).toBe('disabled');
+      expect(exec.runs).toBe(0);
+      expect(watch.started).toEqual([]);
+      expect((await service.reconcileStructural(1, 1000)).status).toBe('ready');
+      expect(watch.started).toEqual([]);
+      service.activate(3, 'other');
+      await vi.waitFor(() => expect(exec.runProjectIds).toContain(3));
+      enabled = 1;
+      await service.applyAutoIndexSetting(1);
+      await vi.waitFor(() => expect(exec.runProjectIds).toContain(2));
+      expect(watch.active).toEqual(new Set([1, 2, 3]));
+    } finally { await service.dispose(); }
+  });
+
+  it('aborts an active automatic pass and ignores queued and late work after the switch is turned off', async () => {
+    const db = fakeDb({ structural_indexed_at: null, last_indexed: null });
+    const row = { ...db.getProjectCatalogEntry(1)!, auto_index_enabled: 1 };
+    db.getProjectCatalogEntry = () => row;
+    const exec = new FakeExecutor();
+    let signal: AbortSignal | undefined;
+    const start = vi.spyOn(exec, 'runStructuralIndex').mockImplementation(async (_id, opts) => {
+      const runSignal = opts.signal;
+      if (!runSignal) throw new Error('Automatic indexing must receive an abort signal');
+      signal = runSignal;
+      await new Promise<void>(resolve => runSignal.addEventListener('abort', () => resolve(), { once: true }));
+      return { totalFiles: 0, indexed: 0, removed: 0, skipped: 0, errorCount: 0, durationMs: 1, aborted: 'signal' };
+    });
+    const svc = new ProjectIndexService(db, exec, undefined, () => SETTINGS);
+    try {
+      svc.ensureFresh(1, 'session');
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      svc.ensureFresh(1, 'workspace');
+      row.auto_index_enabled = 0;
+      await svc.applyAutoIndexSetting(1);
+      expect(signal?.aborted).toBe(true);
+      await vi.waitFor(() => expect(svc.getStatus(1).phase).not.toBe('scanning'));
+      expect(svc.getStatus(1)).toMatchObject({ autoIndexEnabled: false, watcherActive: false });
+      expect(start).toHaveBeenCalledOnce();
+    } finally { await svc.dispose(); }
+  });
   function makeService(
     executor: FakeExecutor,
     db = fakeDb({ structural_indexed_at: null, last_indexed: null }),

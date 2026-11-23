@@ -70,10 +70,17 @@ function sameDirectory(left: string, right: string): boolean {
 
 export interface AtomicFileOptions {
   /** Revalidate the caller immediately before every rename, including Windows retries. */
-  readonly beforePublish?: () => void;
+  readonly beforePublish?: () => void | Promise<void>;
   readonly mode?: number;
   readonly faultInjector?: SessionStorageFaultInjector;
   readonly context?: Omit<SessionStorageFaultContext, 'point' | 'path'>;
+}
+
+function publishRename(from: string, to: string, options: AtomicFileOptions): Promise<void> {
+  return retryTransientRename(() => {
+    const pending = options.beforePublish?.();
+    return pending && typeof pending.then === 'function' ? pending.then(() => rename(from, to)) : rename(from, to);
+  });
 }
 
 async function injectFault(
@@ -92,7 +99,7 @@ export async function durableRename(
   const sourceParent = dirname(sourcePath);
   const targetParent = dirname(targetPath);
   await injectFault(options, 'atomic:before-rename', targetPath);
-  await retryTransientRename(() => { options.beforePublish?.(); return rename(sourcePath, targetPath); });
+  await publishRename(sourcePath, targetPath, options);
   await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
   await fsyncDirectory(targetParent);
   await injectFault(options, 'atomic:after-target-directory-fsync', targetPath);
@@ -124,7 +131,7 @@ export async function atomicWriteFile(
     await injectFault(options, 'atomic:after-temp-fsync-before-rename', targetPath);
     await measureStorage('atomic.close', () => handle!.close(), targetPath);
     handle = undefined;
-    await measureStorage('atomic.rename', () => retryTransientRename(() => { options.beforePublish?.(); return rename(temporaryPath, targetPath); }), targetPath);
+    await measureStorage('atomic.rename', () => publishRename(temporaryPath, targetPath, options), targetPath);
     await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
     await measureStorage('atomic.directory-fsync', () => fsyncDirectory(parent), targetPath);
     await injectFault(options, 'atomic:after-directory-fsync', targetPath);
@@ -160,7 +167,7 @@ export async function atomicCopyFile(
     await injectFault(options, 'atomic:after-temp-fsync-before-rename', targetPath);
     await handle.close();
     handle = undefined;
-    await retryTransientRename(() => { options.beforePublish?.(); return rename(temporaryPath, targetPath); });
+    await publishRename(temporaryPath, targetPath, options);
     await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
     await fsyncDirectory(parent);
     await injectFault(options, 'atomic:after-directory-fsync', targetPath);

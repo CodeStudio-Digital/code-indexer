@@ -131,9 +131,17 @@ export function readChapterBoundarySync(
   bundlePath: string,
   state: SessionState,
 ): FsChapterBoundaryProjection {
+  const [top] = readActiveChapterSpans(bundlePath);
+  const stateBoundary = finiteInteger(state.compaction.boundary_seq);
+  return top && top.end_message_seq >= stateBoundary
+    ? { boundary_seq: top.end_message_seq, resume_text: top.resume_text }
+    : { boundary_seq: stateBoundary, resume_text: typeof state.compaction.summary === 'string' ? state.compaction.summary : null };
+}
+
+export function readActiveChapterSpans(bundlePath: string) {
   const root = join(bundlePath, 'chapters');
   assertPathHasNoLinksSync(bundlePath, root);
-  const rows = readdirSync(root)
+  return readdirSync(root)
     .filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
     .map((name) => {
       const path = join(root, name);
@@ -159,6 +167,8 @@ export function readChapterBoundarySync(
         throw new Error(`Invalid conversation chapter checkpoint ${path}`);
       }
       return {
+        id: envelope.id,
+        start_message_seq: data.start_message_seq,
         end_message_seq: data.end_message_seq,
         resume_text: data.resume_text,
         superseded_at: data.superseded_at,
@@ -175,20 +185,6 @@ export function readChapterBoundarySync(
         row.end_message_seq > 0,
     )
     .sort((left, right) => right.end_message_seq - left.end_message_seq);
-  const top = rows[0];
-  const stateBoundary = finiteInteger(state.compaction.boundary_seq);
-  return top && top.end_message_seq >= stateBoundary
-    ? {
-        boundary_seq: top.end_message_seq,
-        resume_text: top.resume_text,
-      }
-    : {
-        boundary_seq: stateBoundary,
-        resume_text:
-          typeof state.compaction.summary === 'string'
-            ? state.compaction.summary
-            : null,
-      };
 }
 
 export function normalizeSearchTerms(query: string): string[] {

@@ -360,6 +360,7 @@ interface CoderWorkerPoolOpts {
 }
 
 export interface SessionRuntimeContext {
+  storageScope?: import('@mcp/session-storage').SessionStorageScope;
   sessionId: SessionId;
   projectId: ProjectId | null;
   projectRoot: string | null;

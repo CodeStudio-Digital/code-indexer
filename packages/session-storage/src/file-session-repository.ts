@@ -7,6 +7,10 @@ import {
   type ArtifactReader,
 } from './artifact-store.js';
 import { recoverSessionArtifacts } from './artifact-recovery.js';
+import { archiveChapterMessages, type ChapterSpan } from './chapter-transcript.js';
+import { ActiveChatTranscript } from './active-chat-transcript.js';
+import { CHAT_TRANSCRIPT, CODER_JOURNAL, sessionJournalPath } from './session-journal-path.js';
+import { readActiveChapterSpans } from './fs-store/conversation-chapter-codec.js';
 import {
   atomicCopyFile,
   atomicWriteFile,
@@ -42,6 +46,7 @@ import {
   computeRequestHash,
   readConversation,
   readConversationSync,
+  readConversationSnapshotSync,
   SessionLeaseHeldError,
   SessionWriter,
   type SessionWriterOptions,
@@ -299,6 +304,7 @@ export class FileSessionRepository {
         atomicWriteJson(join(stagingPath, 'session.json'), session, atomicOptions),
         atomicWriteJson(join(stagingPath, 'state.json'), state, atomicOptions),
         atomicWriteFile(join(stagingPath, 'conversation.jsonl'), '', atomicOptions),
+        ...(session.kind === 'coder' ? [atomicWriteFile(join(stagingPath, CODER_JOURNAL), '', atomicOptions)] : []),
         atomicWriteJson(
           join(stagingPath, 'metrics', 'summary.json'),
           emptySessionMetricsSummary(now),
@@ -347,7 +353,7 @@ export class FileSessionRepository {
   async cloneConversationProjection(
     source: SessionLocation,
     target: SessionLocation,
-    commits: readonly ConversationCommit[],
+    snapshot: readonly ConversationCommit[] | ReturnType<typeof readConversationSnapshotSync>,
   ): Promise<void> {
     this.#assertReadableLocation(source);
     this.#assertReadableLocation(target);
@@ -411,14 +417,25 @@ export class FileSessionRepository {
         ),
       ),
     );
-    const conversation = commits.length === 0
-      ? ''
-      : `${commits.map((commit) => JSON.stringify(commit)).join('\n')}\n`;
-    await atomicWriteFile(
-      join(target.bundle_path, 'conversation.jsonl'),
-      conversation,
-      atomicOptions,
-    );
+    const replayDirectory = join(source.bundle_path, 'provider_replay');
+    const replayStat = await lstat(replayDirectory).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (replayStat) await copyTree(replayDirectory, join(target.bundle_path, 'provider_replay'));
+    const targetPath = sessionJournalPath(target.bundle_path);
+    if (targetPath === join(target.bundle_path, CODER_JOURNAL) && (!('bytes' in snapshot) || !snapshot.detached)) {
+      const commits = 'commits' in snapshot ? snapshot.commits : snapshot;
+      await archiveChapterMessages(targetPath, readActiveChapterSpans(target.bundle_path), atomicOptions, async () => {}, commits);
+    } else {
+      const bytes = 'bytes' in snapshot ? snapshot.bytes : snapshot.map(commit => JSON.stringify(commit) + '\n').join('');
+      await atomicWriteFile(targetPath, bytes, atomicOptions);
+    }
+    if (targetPath === join(target.bundle_path, CODER_JOURNAL)) {
+      const chat = new ActiveChatTranscript(target.bundle_path, atomicOptions);
+      chat.checkpoints();
+      await chat.rebuild('commits' in snapshot ? snapshot.commits : snapshot);
+    }
     this.#metricsCache.delete(cacheKey(target));
     this.#emit({ type: 'updated', location: target });
   }
@@ -464,21 +481,56 @@ export class FileSessionRepository {
     return state;
   }
 
-  readConversationSync(location: SessionLocation): readonly ConversationCommit[] {
+  #checkedConversationPath(location: SessionLocation): string {
     this.#assertReadableLocation(location);
-    const path = join(location.bundle_path, 'conversation.jsonl');
+    const path = sessionJournalPath(location.bundle_path);
     assertPathHasNoLinksSync(location.bundle_path, path);
-    return readConversationSync(path);
+    return path;
+  }
+
+  readConversationSync(location: SessionLocation): readonly ConversationCommit[] {
+    return this.#readCurrentJournalSync(location, readConversationSync);
+  }
+
+  readConversationSnapshotSync(location: SessionLocation) {
+    return this.#readCurrentJournalSync(location, readConversationSnapshotSync);
+  }
+
+  #readCurrentJournalSync<T>(location: SessionLocation, read: (path: string) => T): T {
+    const path = this.#checkedConversationPath(location);
+    if (path === join(location.bundle_path, CODER_JOURNAL)) return read(path);
+    let value: T;
+    try { value = read(path); }
+    catch (error) {
+      const current = this.#checkedConversationPath(location);
+      if (current === path) throw error;
+      return read(current);
+    }
+    const current = sessionJournalPath(location.bundle_path);
+    return current === path ? value : read(current);
   }
 
   async readConversation(
     location: SessionLocation,
+    mode: 'full' | 'metadata' = 'full',
   ): Promise<readonly ConversationCommit[]> {
     this.#assertReadableLocation(location);
-    const path = join(location.bundle_path, 'conversation.jsonl');
+    const path = sessionJournalPath(location.bundle_path);
     assertContainedPath(location.bundle_path, path);
     await assertPathHasNoLinks(location.bundle_path, path);
-    return readConversation(path);
+    try {
+      const records = await readConversation(path, mode);
+      if (path === join(location.bundle_path, CHAT_TRANSCRIPT)) {
+        const latest = sessionJournalPath(location.bundle_path);
+        if (latest !== path) return readConversation(latest, mode);
+      }
+      return records;
+    }
+    catch (error) {
+      const current = sessionJournalPath(location.bundle_path);
+      if (path === current) throw error;
+      return readConversation(current, mode);
+    }
   }
 
   readMetricsSummarySync(location: SessionLocation): SessionMetricsSummary {
@@ -553,7 +605,7 @@ export class FileSessionRepository {
     const opening = this.#locator
       .assertSafeLocation(location, { mustExist: true })
       .then(async () => {
-        const writer = await SessionWriter.open(writerOptions);
+        const writer = await SessionWriter.open({ ...writerOptions, coderTranscript: this.readSessionSync(location).kind === 'coder' });
         try {
           if (!this.#artifactRecoveryRegistry.has(key)) {
             await writer.runExclusive(() =>
@@ -581,6 +633,11 @@ export class FileSessionRepository {
 
   async primeSession(location: SessionLocation): Promise<void> {
     await this.#writer(location);
+  }
+
+  async archiveConversationChapters(location: SessionLocation, spans: readonly ChapterSpan[]): Promise<void> {
+    const writer = await this.#writer(location);
+    await writer.archiveChapters(spans);
   }
 
   async readWriterProjection<T>(location: SessionLocation, projection: WriterProjection<T>): Promise<T> {
@@ -714,6 +771,7 @@ export class FileSessionRepository {
         context: { session_id: location.session_id },
       });
       this.#stateCache.set(cacheKey(location), value);
+      if (current.compaction.boundary_seq !== value.compaction.boundary_seq) await writer.refreshChatTranscript();
       return value;
     }));
     this.#emit({ type: 'updated', location });
@@ -740,6 +798,7 @@ export class FileSessionRepository {
       const updatedAt = new Date().toISOString();
       let session: SessionMetadata | null = null;
       let state: SessionState | null = null;
+      let boundaryChanged = false;
 
       if (input.update_session) {
         const current = this.readSessionSync(location);
@@ -757,6 +816,7 @@ export class FileSessionRepository {
           throw new Error('State update cannot change schema_version');
         }
         state = { ...updated, updated_at: updatedAt };
+        boundaryChanged = state.compaction.boundary_seq !== current.compaction.boundary_seq;
         assertSerializable(state);
       }
 
@@ -815,6 +875,7 @@ export class FileSessionRepository {
       );
       if (session) this.#sessionCache.set(cacheKey(location), session);
       if (state) this.#stateCache.set(cacheKey(location), state);
+      if (boundaryChanged || input.entities?.some(entity => entity.directory === 'chapters')) await writer.refreshChatTranscript();
       if (input.metrics_summary) this.#metricsCache.delete(cacheKey(location));
       return { session, state };
     });

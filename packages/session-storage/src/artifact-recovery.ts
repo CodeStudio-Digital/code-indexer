@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { ChapterRecordReader, type JournalLine } from './chapter-records.js';
+import { CHAT_TRANSCRIPT, sessionJournalPath } from './session-journal-path.js';
 import {
   lstat,
   open,
@@ -535,6 +537,8 @@ function parseMetadata(
 }
 
 async function metadataFiles(bundlePath: string): Promise<string[]> {
+  const journal = sessionJournalPath(bundlePath);
+  const transcript = join(bundlePath, CHAT_TRANSCRIPT);
   const blobRoots = new Set(
     Object.values(SESSION_ARTIFACT_ROOTS).map((segments) =>
       pathKey(join(bundlePath, ...segments)),
@@ -554,7 +558,7 @@ async function metadataFiles(bundlePath: string): Promise<string[]> {
         );
       }
       if (stats.isDirectory()) {
-        if (!blobRoots.has(pathKey(child))) await visit(child);
+        if (!blobRoots.has(pathKey(child)) && child !== join(bundlePath, 'provider_replay')) await visit(child);
         continue;
       }
       if (!stats.isFile()) {
@@ -563,7 +567,7 @@ async function metadataFiles(bundlePath: string): Promise<string[]> {
         );
       }
       if (entry.name.endsWith('.json') || entry.name.endsWith('.jsonl')) {
-        output.push(child);
+        if (child !== transcript || child === journal) output.push(child);
       }
     }
   };
@@ -580,6 +584,19 @@ async function readMetadataFile(path: string): Promise<Uint8Array> {
     );
   }
   return readFile(path);
+}
+
+/** Overlap small metadata reads while preserving validation order and reading each journal on its own. */
+async function* readMetadataInOrder(files: readonly string[]) {
+  for (let i = 0; i < files.length;) {
+    const start = i++;
+    if (!files[start].endsWith('.jsonl')) {
+      while (i < files.length && i - start < 8 && !files[i].endsWith('.jsonl')) i++;
+    }
+    const paths = files.slice(start, i);
+    const bytes = await Promise.all(paths.map(readMetadataFile));
+    for (let j = 0; j < paths.length; j++) yield { file: paths[j], bytes: bytes[j] };
+  }
 }
 
 function sameOpenedFile(
@@ -660,14 +677,16 @@ export async function recoverSessionArtifacts(options: {
   const references = new Map<string, ReferencedArtifact>();
   const referencedToolCallIds = new Set<string>();
   const pendingToolOutputs: PendingToolOutputMetadata[] = [];
-  for (const file of files) {
-    const values = parseMetadata(await readMetadataFile(file), file);
+  const archive = new ChapterRecordReader();
+  const journal = sessionJournalPath(bundlePath);
+  for await (const { file, bytes } of readMetadataInOrder(files)) {
+    const values = parseMetadata(bytes, file);
     const relativeMetadataPath = posixRelative(bundlePath, file);
     for (let index = 0; index < values.length; index += 1) {
       const source = `${file}${file.endsWith('.jsonl') ? `:${index + 1}` : ''}`;
-      if (basename(file) === 'conversation.jsonl') {
+      if (file === journal) {
         collectConversationRefs(
-          values[index],
+          archive.resolve(bundlePath, values[index] as JournalLine),
           source,
           references,
           referencedToolCallIds,

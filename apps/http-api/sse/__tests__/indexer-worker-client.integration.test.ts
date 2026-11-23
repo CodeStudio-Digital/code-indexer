@@ -78,6 +78,11 @@ describe('IndexerWorkerClient nested parser pool', () => {
         .resolves.toMatchObject({ indexed: 2, skipped: 0, errorCount: 0 });
 
       writeFileSync(join(root, 'alpha.ts'), 'export const alphaRenamed = 2;\n', 'utf8');
+      const pause = new AbortController();
+      await expect(client.runStructuralIndex(project.id, {
+        signal: pause.signal,
+        onChanges: () => pause.abort(),
+      })).resolves.toMatchObject({ aborted: 'signal', indexed: 0, removed: 0 });
       const incrementalChanges: Array<{ path: string; kind: 'upsert' | 'delete' }> = [];
       const incrementalPreviousKeys: string[] = [];
       await client.indexFiles(project.id, ['alpha.ts'], {

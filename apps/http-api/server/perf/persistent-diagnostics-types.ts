@@ -20,6 +20,7 @@ export interface PersistedFreezeEvent {
   windowMs?: number;
   /** `null` where the runtime cannot report loop utilization (Electron main). */
   activeMs?: number | null;
+  mainThreadCpuMs?: number;
   busyFraction?: number | null;
   /** Measured synchronous main-thread ms in the window. */
   busyMs?: number;

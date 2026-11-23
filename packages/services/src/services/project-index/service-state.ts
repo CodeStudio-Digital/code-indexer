@@ -17,6 +17,8 @@ export abstract class ProjectIndexState {
   protected dirty = new DirtyQueue();
   protected status: ProjectIndexStatusStore;
   protected running = new Set<number>();
+  protected automaticRuns = new Map<number, AbortController>();
+  private projectPolicies = new Map<number, { owner: number; enabled: boolean }>();
   protected runReason = new Map<number, EnsureFreshReason | 'refresh'>();
   protected draining = new Set<number>();
   protected drainFailures = new Map<number, number>();
@@ -68,6 +70,26 @@ export abstract class ProjectIndexState {
     this.startFallbackPoll();
   }
 
+  protected autoEnabled(projectId: number): boolean {
+    let policy = this.projectPolicies.get(projectId);
+    if (!policy) {
+      const row = this.db.getProjectCatalogEntry(projectId);
+      const owner = row?.worktree_parent_id ?? projectId;
+      const settings = owner === projectId ? row : this.db.getProjectCatalogEntry(owner);
+      policy = { owner, enabled: settings?.auto_index_enabled !== 0 };
+      this.projectPolicies.set(projectId, policy);
+    }
+    return policy.enabled;
+  }
+
+  protected invalidateAutoSettings(owner: number): Set<number> {
+    const projects = new Set([owner]);
+    for (const [id, policy] of this.projectPolicies) {
+      if (policy.owner === owner) { projects.add(id); this.projectPolicies.delete(id); }
+    }
+    return projects;
+  }
+
   /** Late-bound upgrade: in-process fallback → indexer worker client. */
   setExecutor(executor: StructuralExecutor): void {
     for (const projectId of this.interactivePriorityDepth.keys()) {
@@ -114,7 +136,7 @@ export abstract class ProjectIndexState {
       const reconcileMs = Math.max(10_000, envDelay('MCP_WATCH_FALLBACK_RECONCILE_MS', 60_000));
       let scheduledReconcile = false;
       for (const projectId of this.activations.keys()) {
-        if (!watcher.isSkipped(projectId)) continue;
+        if (!this.autoEnabled(projectId) || !watcher.isSkipped(projectId)) continue;
         const project = this.db.getProjectCatalogEntry(projectId);
         if (!project?.root_path) continue;
         // Closed files, creations and deletions also need an authoritative scan.

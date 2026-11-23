@@ -12,6 +12,7 @@ import type {
   StructuralRunSummary,
 } from '@mcp/services/services/project-index/index.js';
 import { resolveWorkerFile } from './workerFileResolution.js';
+import { randomUUID } from 'node:crypto';
 
 interface IndexerWorkerClientOpts {
   dbPath: string;
@@ -56,6 +57,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
     projectId: number,
     opts: {
       maxFiles?: number;
+      signal?: AbortSignal;
       allowEmptyWipe?: boolean;
       forceReparse?: boolean;
       verifyPaths?: string[];
@@ -63,12 +65,14 @@ export class IndexerWorkerClient implements StructuralExecutor {
       onChanges?: StructuralChangeHandler;
     },
   ): Promise<StructuralRunSummary> {
+    const runId = randomUUID();
     if (opts.onProgress) this.progressHandlers.set(projectId, opts.onProgress);
     if (opts.onChanges) this.changeHandlers.set(projectId, opts.onChanges);
     try {
       return await this.request<StructuralRunSummary>(
         'structuralIndex',
         {
+          runId,
           projectId,
           maxFiles: opts.maxFiles,
           allowEmptyWipe: opts.allowEmptyWipe,
@@ -77,6 +81,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
           reportChanges: Boolean(opts.onChanges),
         },
         RUN_TIMEOUT_MS,
+        opts.signal && { signal: opts.signal, runId },
       );
     } finally {
       this.progressHandlers.delete(projectId);
@@ -146,11 +151,17 @@ export class IndexerWorkerClient implements StructuralExecutor {
 
   // ─── Internals ────────────────────────────────────────────────────
 
-  private async request<T>(type: string, payload: unknown, timeoutMs: number): Promise<T> {
+  private async request<T>(type: string, payload: unknown, timeoutMs: number, cancel?: { signal: AbortSignal; runId: string }): Promise<T> {
+    cancel?.signal.throwIfAborted();
     const host = await this.ensureHost();
+    const cancelRun = () => {
+      if (host.state === 'running') host.requireBridge().emit('structural.cancel', { runId: cancel!.runId });
+    };
     this.inflight++;
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
     try {
+      cancel?.signal.throwIfAborted();
+      cancel?.signal.addEventListener('abort', cancelRun, { once: true });
       return (await host.requireBridge().request(type, payload, { timeoutMs })) as T;
     } catch (error) {
       if ((error as { code?: string }).code === 'request_timeout') {
@@ -160,6 +171,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
       }
       throw error;
     } finally {
+      cancel?.signal.removeEventListener('abort', cancelRun);
       this.inflight--;
       this.scheduleIdleEvict();
     }

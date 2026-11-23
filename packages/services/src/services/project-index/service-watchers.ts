@@ -133,7 +133,7 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
   }
 
   protected ensureFileWatching(projectId: number, delayMs: number, lifecycle = false): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.autoEnabled(projectId)) return;
     const s = this.settings();
     if (!s.autoWatch || this.watcher.isWatching(projectId)) return;
     this.touchWatchOrder(projectId, s);
@@ -152,7 +152,7 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
   }
 
   protected startFileWatchingNow(projectId: number, lifecycle = false): void {
-    if (this.disposed || this.watcher.isWatching(projectId)) return;
+    if (this.disposed || !this.autoEnabled(projectId) || this.watcher.isWatching(projectId)) return;
     const s = this.settings();
     if (!s.autoWatch || (!lifecycle && !this.shouldKeepWatcher(projectId))) return;
     this.touchWatchOrder(projectId, s);
@@ -307,7 +307,7 @@ export abstract class ProjectIndexWatchers extends ProjectIndexState {
   }
 
   protected async waitForFileWatcherReady(projectId: number): Promise<void> {
-    if (!this.settings().autoWatch) return;
+    if (!this.autoEnabled(projectId) || !this.settings().autoWatch) return;
     this.startFileWatchingNow(projectId, true);
     const watcher = this.watcher as FileWatcherService & {
       waitUntilReady?: (id: number) => Promise<void>;

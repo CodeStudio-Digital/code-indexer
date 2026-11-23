@@ -64,8 +64,14 @@ bridge.on('interactivePriority', (payload) => {
   priorityGate.setBusy(projectId, busy);
 });
 
+const scanControllers = new Map<string, AbortController>();
+bridge.on('structural.cancel', (payload) => {
+  scanControllers.get((payload as { runId: string }).runId)?.abort();
+});
+
 bridge.handle('structuralIndex', async (payload) => {
-  const { projectId, maxFiles, allowEmptyWipe, forceReparse, verifyPaths, reportChanges } = payload as {
+  const { projectId, runId, maxFiles, allowEmptyWipe, forceReparse, verifyPaths, reportChanges } = payload as {
+    runId?: string;
     projectId: number;
     maxFiles?: number;
     allowEmptyWipe?: boolean;
@@ -74,7 +80,10 @@ bridge.handle('structuralIndex', async (payload) => {
     reportChanges?: boolean;
   };
   let lastEmit = 0;
+  const controller = new AbortController();
+  if (runId) scanControllers.set(runId, controller);
   return runStructuralIndex(db, projectId, {
+    signal: controller.signal,
     ignorePatterns,
     maxFileSizeKB,
     concurrency,
@@ -98,7 +107,7 @@ bridge.handle('structuralIndex', async (payload) => {
       lastEmit = now;
       bridge.emit('structural.progress', { projectId, ...p });
     },
-  });
+  }).finally(() => { if (runId) scanControllers.delete(runId); });
 });
 
 bridge.handle('indexFiles', async (payload) => {

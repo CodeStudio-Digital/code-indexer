@@ -13,6 +13,11 @@ import { SideChatService } from '../side-chat-service.js';
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 const target: SideChatTarget = { provider: 'openai-chatgpt', model: 'gpt-6.2-sol', effort: 'max', thinking: true, contextWindow: 200000 };
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'side-service-'));
   roots.push(root);
@@ -32,7 +37,9 @@ async function setup() {
       yield { type: 'text_delta', text: 'answer' };
       yield { type: 'done', stop_reason: 'end_turn' };
     } };
-  const service = () => new SideChatService(sessions, () => target, async () => adapter, () => 'in progress text');
+  const providerFor = vi.fn(async (_target: SideChatTarget) => adapter);
+  const service = () => new SideChatService(sessions, (_session, choice) =>
+    choice ? { ...target, ...choice, contextWindow: 1024 } : target, providerFor, () => 'in progress text');
   const side = service();
   async function finished(id: string) {
     let offset = 0;
@@ -42,10 +49,74 @@ async function setup() {
       offset += part.answer.length;
     }
   }
-  return { parent, location, journal, state, sessions, calls, adapter, service, side, finished };
+  return { parent, location, journal, state, sessions, calls, adapter, providerFor, service, side, finished };
 }
 
 describe('side conversation', () => {
+  it('streams reasoning status and public text before completion and resumes the same request at its character offset', async () => {
+    const f = await setup();
+    const textGate = gate(), endGate = gate();
+    const prefix = 'Já 🚀';
+    f.adapter.chat = async function* () {
+      yield { type: 'thinking_delta', text: 'private scratchpad' };
+      await textGate.promise;
+      yield { type: 'text_delta', text: prefix };
+      await endGate.promise;
+      yield { type: 'text_delta', text: ' chegou' };
+      yield { type: 'done', stop_reason: 'end_turn' };
+    };
+    const id = randomUUID();
+    const first = new AbortController();
+    await f.side.submit(f.parent, id, 'when?');
+    try {
+      const feed = await f.side.stream(f.parent, id, 0, first.signal);
+      const thinking = (await feed.next()).value;
+      expect(thinking).toMatchObject({ status: 'running', reasoning: true, offset: 0, answer: '' });
+      expect(JSON.stringify(thinking)).not.toContain('private scratchpad');
+      textGate.resolve();
+      expect((await feed.next()).value).toMatchObject({ status: 'running', offset: 0, answer: prefix });
+      first.abort();
+      expect((await feed.next()).done).toBe(true);
+      await expect(f.side.setTarget(f.parent, { provider: 'different', model: 'small', effort: null })).rejects.toThrow(/current side answer/);
+      const resumed = await f.side.stream(f.parent, id, prefix.length, AbortSignal.timeout(3000));
+      expect((await resumed.next()).value).toMatchObject({ status: 'running', offset: prefix.length, answer: '' });
+      endGate.resolve();
+      let suffix = '';
+      let status;
+      for await (const part of resumed) {
+        if (part) { suffix += part.answer; status = part.status; }
+      }
+      expect(suffix).toBe(' chegou');
+      expect(status).toBe('completed');
+      const replay = await f.service().stream(f.parent, id, 999, AbortSignal.timeout(3000));
+      expect((await replay.next()).value).toMatchObject({ status: 'completed', offset: 0, answer: prefix + suffix });
+      expect(f.providerFor).toHaveBeenCalledTimes(1);
+    } finally { textGate.resolve(); endGate.resolve(); }
+  });
+
+  it('persists the side model, applies it only to new requests, and fits the frozen reference to a smaller model', async () => {
+    const f = await setup();
+    f.state.text = 'old marker' + ' '.repeat(1000) + 'recent marker';
+    const first = randomUUID(), second = randomUUID();
+    await f.side.submit(f.parent, first, 'first');
+    await f.finished(first);
+    const choice = { provider: 'other', model: 'small::fast', effort: 'low' };
+    await f.side.setTarget(f.parent, choice);
+    f.state.text = 'new unsaved reference';
+    await f.side.submit(f.parent, second, 'second');
+    await f.finished(second);
+    const reopened = await f.service().open(f.parent);
+    expect(reopened.target).toMatchObject(choice);
+    expect(reopened.turns[0]?.target).toMatchObject(target);
+    expect(reopened.turns[1]).toMatchObject({ target: choice, context: { revision: 'first', truncated: true } });
+    expect(f.providerFor.mock.calls.map(([selected]) => selected.model)).toEqual([target.model, choice.model]);
+    expect(f.calls.map(req => req.reasoningEffort)).toEqual(['max', 'low']);
+    const input = JSON.stringify(f.calls[1]?.messages);
+    expect(input).toContain('recent marker');
+    expect(input).not.toMatch(/old marker|new unsaved reference/);
+    expect(await readFile(f.journal, 'utf8')).toBe('parent journal');
+  });
+
   it('freezes a journal revision including same-sequence replacements, replays only its own turns and refreshes explicitly', async () => {
     const f = await setup();
     const chat = await f.side.open(f.parent);

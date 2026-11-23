@@ -30,6 +30,18 @@ describe('structural index pipeline', () => {
 
   afterEach(() => h.dispose());
 
+  it('stops during a new scan and keeps the previous index searchable', async () => {
+    await runStructuralIndex(h.db, h.projectId);
+    const ctrl = new AbortController();
+    let checkpoints = 0;
+    const result = await runStructuralIndex(h.db, h.projectId, {
+      signal: ctrl.signal,
+      waitForInteractivePriority: async () => { if (++checkpoints === 2) ctrl.abort(); },
+    });
+    expect(result).toMatchObject({ aborted: 'signal', indexed: 0, removed: 0 });
+    expect(h.db.searchFileContents(h.projectId, 'betaFn').map(hit => hit.path)).toEqual(['beta.ts']);
+  });
+
   it('dumb mode: indexes symbols + content for $0 without any provider', async () => {
     const result = await runStructuralIndex(h.db, h.projectId, { concurrency: 1 });
 

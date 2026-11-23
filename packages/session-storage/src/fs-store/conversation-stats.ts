@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { join } from 'node:path';
+import { sessionJournalPath } from '../session-journal-path.js';
 import { assertPathHasNoLinksSync } from '../path-safety.js';
 import { readConversationSync } from '../session-writer.js';
 import type { SessionLocation } from '../types.js';
@@ -7,7 +7,7 @@ import { projectConversation } from './conversation-codec.js';
 import type { FsStoredMessage } from './types.js';
 
 function summarize(path: string) {
-  const { storedMessages, toolCalls } = projectConversation(readConversationSync(path));
+  const { storedMessages, toolCalls } = projectConversation(readConversationSync(path, 'metadata'));
   let latest: FsStoredMessage['usage'] | undefined;
   let assistantTurns = 0;
   for (const { role, usage } of storedMessages) {
@@ -37,7 +37,7 @@ export class ConversationStatsReader {
   private readonly cache = new Map<string, { version: string; summary: ConversationStats }>();
 
   read = (location: SessionLocation): ConversationStats => {
-    const path = join(location.bundle_path, 'conversation.jsonl');
+    const path = sessionJournalPath(location.bundle_path);
     assertPathHasNoLinksSync(location.session_root, path);
     const file = statSync(path, { bigint: true });
     const version = `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`;

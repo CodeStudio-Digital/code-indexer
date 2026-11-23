@@ -10,9 +10,24 @@
  * (`db_split_status !== 'done'`, synthetic, or the user-memory sentinel) — the
  * caller then keeps using the central path, byte-identical to today.
  */
-import type { DB } from '../db/types.js';
+import { existsSync } from 'node:fs';
+import { relative } from 'node:path';
+import { Database, type DB } from '../db/types.js';
 import { projectDbFlags } from '@mcp/shared/utils/config.js';
 import { resolveProjectDbLocation } from './paths.js';
+
+/** A portable index can belong to a different numeric id in its original catalog. */
+export function canRouteNewProject(path: string, projectId: number, root: string): boolean {
+  if (!existsSync(path)) return true;
+  let index: DB | undefined;
+  try {
+    index = new Database(path, { readonly: true, fileMustExist: true });
+    const owner = index.prepare('SELECT root_path FROM projects WHERE id=?').pluck().get(projectId);
+    return typeof owner === 'string' && relative(root, owner) === '';
+  } catch {
+    return false;
+  } finally { index?.close(); }
+}
 
 export function routedFeatureDbPath(central: DB, projectId: number): string | null {
   const flags = projectDbFlags();

@@ -159,6 +159,9 @@ export type ContentBlock =
   | SpecBlock
   | ThinkingBlock;
 
+/** An internal resume handle. Object spread retains it and JSON transport omits it. */
+export const storedProviderReplay = Symbol.for('codestudio.stored-provider-replay');
+
 export interface AgentMessage {
   role: AgentRole;
   content: ContentBlock[];
@@ -166,6 +169,7 @@ export interface AgentMessage {
   phase?: AssistantMessagePhase;
   /** Opaque provider continuation. Internal only: never render or inject as text. */
   providerReplay?: ProviderReplayState;
+  [storedProviderReplay]?: ProviderReplayState;
   /**
    * When true, the dashboard hides the message from the user-visible
    * transcript while the model still sees it in context. Used for

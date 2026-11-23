@@ -354,6 +354,8 @@ export async function openStream(
     // Server pings every 20s even during long thinking/tools. Reconnect only
     // a silent connection, preserving the request's idempotency key/cursor.
     idleTimeoutMs: 45_000,
+    // Command admission includes cold worker boot and acquisition of the session writer.
+    responseTimeoutMs: opts.method === 'POST' ? 180_000 : undefined,
     getLastEventId: () => lastSeenSeq,
     getLastEventBusId: () => lastSeenBusId,
     // Never reconnect over a stale cursor: `lastSeenSeq` advances at

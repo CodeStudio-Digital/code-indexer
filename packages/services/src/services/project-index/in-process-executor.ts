@@ -29,6 +29,7 @@ export function createInProcessStructuralExecutor(
     },
     async runStructuralIndex(projectId, opts) {
       const r = await runStructuralIndex(db, projectId, {
+        signal: opts.signal,
         ignorePatterns: config.ignorePatterns,
         maxFileSizeKB: config.maxFileSizeKB,
         concurrency: config.concurrency,

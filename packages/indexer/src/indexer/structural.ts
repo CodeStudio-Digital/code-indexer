@@ -134,6 +134,7 @@ export async function runStructuralIndex(
   );
   const scanStarted = Date.now();
   const scan = await scanner.scan(db, projectId, {
+    signal: opts.signal,
     deferNewFileReads: true,
     maxFiles: opts.maxFiles,
     forceReparse: opts.forceReparse,
@@ -142,9 +143,18 @@ export async function runStructuralIndex(
     // Keep the "Scanning…" chip alive during the walk (total unknown → 0).
     onScanProgress: (scanned, total) =>
       opts.onProgress?.({ phase: 'scanning', current: scanned, total, currentFile: '' }),
+  }).catch((error: unknown) => {
+    if (!opts.signal?.aborted) throw error;
+    return undefined;
   });
   phaseTimings.scanMs = Date.now() - scanStarted;
   sampleRss();
+  if (!scan || opts.signal?.aborted) {
+    return {
+      totalFiles: 0, indexed: 0, removed: 0, skipped: 0, errorCount: 0,
+      durationMs: Date.now() - startTime, phaseTimings, peakRssMb, aborted: 'signal',
+    };
+  }
   const totalFiles = scan.totalFiles ?? scan.toIndex.length + scan.unchanged.length;
   const partial = scan.unavailableRoots?.length ? { unavailableRoots: scan.unavailableRoots } : undefined;
 

@@ -5,8 +5,8 @@ import {
   type JsonValue,
   type SessionId,
 } from '@mcp/session-storage';
-import { projectConversation } from './conversation-codec.js';
 import { readChapterBoundarySync } from './conversation-chapter-codec.js';
+import { FsConversationReader } from './conversation-reader.js';
 import {
   FsConversationChapterRepository,
 } from './conversation-chapter-repository.js';
@@ -96,6 +96,7 @@ export class FsCompactionAttemptRepository {
     private readonly directory: FsSessionDirectory,
     private readonly entities: FsSessionEntityFiles,
     private readonly chapters: FsConversationChapterRepository,
+    private readonly reader = new FsConversationReader(directory),
   ) {}
 
   async start(
@@ -258,9 +259,7 @@ export class FsCompactionAttemptRepository {
       chapters.push(...page.items);
       chapterCursor = page.next_cursor;
     } while (chapterCursor);
-    const conversation = projectConversation(
-      this.directory.repository.readConversationSync(entry.location),
-    );
+    const unsummarized = await this.reader.count(sessionId, boundary);
     const attempts = await this.list(sessionId);
     const counters = {
       attempts: attempts.filter(
@@ -317,10 +316,7 @@ export class FsCompactionAttemptRepository {
           ? 'healthy'
           : 'empty',
       boundary_seq: boundary || null,
-      unsummarized_messages: Math.max(
-        0,
-        conversation.storedMessages.length - boundary,
-      ),
+      unsummarized_messages: unsummarized,
       chapter_count: chapters.length,
       context_chapters: chapters.filter(
         (chapter) => chapter.chapter_kind === 'context',

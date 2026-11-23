@@ -53,7 +53,7 @@ export class FsToolOutcomeRepository {
     const entry = await this.directory.requireEntry(id);
     // This is a read-only endpoint: never acquire a writer lease just to show
     // incidents while another process owns the running session.
-    return projectConversation(await this.directory.repository.readConversation(entry.location)).toolOutcomes;
+    return projectConversation(await this.directory.repository.readConversation(entry.location, 'metadata')).toolOutcomes;
   }
 
   async resolveToolOutcome(input: FsResolveToolOutcomeInput): Promise<FsResolveToolOutcomeResult> {

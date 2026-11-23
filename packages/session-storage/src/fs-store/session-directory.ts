@@ -80,6 +80,7 @@ function initialRuntimeState(
 }
 
 export class FsSessionDirectory {
+  private runtimeSession?: SessionId;
   readonly locator: SessionLocator;
   readonly repository: FileSessionRepository;
   readonly catalog: SessionCatalog;
@@ -107,6 +108,13 @@ export class FsSessionDirectory {
     await this.catalog.ensureReady();
   }
 
+  /** The host already resolved this UUID in the complete catalogue. Other lookups still use normal discovery. */
+  async bindRuntimeLocation(location: SessionLocation): Promise<void> {
+    await this.repository.refreshSessionProjectionAsync(location);
+    if (!this.catalog.get(location.session_id)) throw new Error('Runtime session location is ambiguous');
+    this.runtimeSession = location.session_id;
+  }
+
   async refresh(): Promise<void> {
     await this.catalog.refresh();
   }
@@ -118,8 +126,9 @@ export class FsSessionDirectory {
 
   async entry(id: SessionId | string): Promise<CatalogEntry | null> {
     if (!isUuid(id)) return null;
-    await this.ensureCatalog();
-    return this.catalog.get(asSessionId(String(id)));
+    const sessionId = asSessionId(String(id));
+    if (sessionId !== this.runtimeSession) await this.ensureCatalog();
+    return this.catalog.get(sessionId);
   }
 
   async requireEntry(id: SessionId | string): Promise<CatalogEntry> {

@@ -15,12 +15,44 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   private readonly verifiedWatches = new WeakSet<object>();
   private readonly structuralWaiters = new Map<number, number>();
 
+  async applyAutoIndexSetting(owner: number): Promise<void> {
+    for (const id of this.invalidateAutoSettings(owner)) {
+      if (!this.autoEnabled(id)) {
+        this.automaticRuns.get(id)?.abort();
+        for (const timers of [this.pendingOpen, this.pendingActivation, this.drainRetries]) {
+          clearTimeout(timers.get(id));
+          timers.delete(id);
+        }
+        this.queuedReconcile.delete(id);
+        this.reconciledLifecycle.delete(id);
+        this.fallbackReconcileAt.delete(id);
+        this.fallbackMtimes.delete(id);
+        if (this.semanticLifecycleActive.delete(id)) this.notifyProjectInactive(id);
+        this.status.setScheduledRun(id, undefined);
+        await this.stopFileWatching(id);
+        if (!this.running.has(id)) this.status.refreshFromDb(id);
+      } else if (this.shouldKeepWatcher(id)) {
+        this.ensureFileWatching(id, 0, true);
+        const resume = () => {
+          if (this.autoEnabled(id) && this.shouldKeepWatcher(id)) this.ensureFresh(id, 'open');
+        };
+        const previous = this.structuralRuns.get(id);
+        if (previous) void previous.then(resume);
+        else resume();
+      }
+      this.status.setWatcher(id, this.watcher.isWatching(id));
+    }
+  }
+
   /** Explicit repair waits for its own publication, including derived rows for unchanged files. */
   reconcileStructural(projectId: number, timeoutMs: number, signal?: AbortSignal, beforeStart?: () => void): Promise<StructuralReadinessResult> {
     return this.requestStructural(projectId, 'manual', timeoutMs, signal, beforeStart);
   }
 
   refreshStructural(projectId: number, timeoutMs: number, signal?: AbortSignal): Promise<StructuralReadinessResult> {
+    if (!this.autoEnabled(projectId)) {
+      return Promise.resolve({ status: 'disabled', phase: this.getStatus(projectId).phase });
+    }
     return this.requestStructural(projectId, 'refresh', timeoutMs, signal);
   }
 
@@ -114,7 +146,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     // structural baseline.
     this.ensureFileWatching(projectId, 0, true);
     const s = this.settings();
-    if (!firstView || this.disposed || !s.autoIndex || this.running.has(projectId)
+    if (!firstView || this.disposed || !s.autoIndex || !this.autoEnabled(projectId) || this.running.has(projectId)
       || this.pendingOpen.has(projectId) || this.pendingActivation.has(projectId)
       || this.reconciledLifecycle.has(projectId)) {
       return { scheduled: this.pendingActivation.has(projectId), delayMs: null, largeProject };
@@ -174,7 +206,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   ensureFresh(projectId: number, reason: EnsureFreshReason): void {
     if (this.disposed) return;
     const s = this.settings();
-    if (!s.autoIndex && reason !== 'manual') return;
+    if (reason !== 'manual' && (!s.autoIndex || !this.autoEnabled(projectId))) return;
 
     if (reason === 'branch' || reason === 'workspace') {
       if (this.running.has(projectId)) {
@@ -246,6 +278,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
     if (isStructurallyReady(current)) {
       return Promise.resolve({ status: 'ready', phase: current.phase });
     }
+    if (!this.autoEnabled(projectId)) return Promise.resolve({ status: 'disabled', phase: current.phase });
     const settings = this.settings();
     return waitForStructuralReadiness({
       getStatus: () => this.getStatus(projectId),
@@ -280,7 +313,9 @@ export class ProjectIndexService extends ProjectIndexWatchers {
       this.pendingActivation.delete(projectId);
     }
     this.status.setScheduledRun(projectId, undefined);
-    if (this.disposed || this.running.has(projectId)) return;
+    if (this.disposed || this.running.has(projectId) || (!manual && !this.autoEnabled(projectId))) return;
+    const controller = manual ? undefined : new AbortController();
+    if (controller) this.automaticRuns.set(projectId, controller);
     this.running.add(projectId);
     this.runReason.set(projectId, reason);
     // Bulk-op suppression (IntelliJ BatchFileChangeListener): a branch/workspace
@@ -296,7 +331,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
         await this.waitForFileWatcherReady(projectId);
         // Semantic jobs can own this mutex too. Recheck the requesting owner
         // after every queue/barrier, immediately before the worker starts.
-        if (beforeStart?.() === false) return;
+        if (controller?.signal.aborted || beforeStart?.() === false) return;
         // Only a continuous native watch following a successful lifecycle scan
         // can cover a refresh using just the queued paths. Offline projects and
         // interrupted watches must compare their saved manifest with the disk.
@@ -304,22 +339,27 @@ export class ProjectIndexService extends ProjectIndexWatchers {
         const covered = reason === 'refresh' && watch && this.verifiedWatches.has(watch)
           && this.activations.has(projectId) && this.reconciledLifecycle.has(projectId)
           && !this.db.getProjectCatalogEntry(projectId)?.is_synthetic;
-        if (!covered && !await this.runStructural(projectId, s, manual)) return;
+        if (!covered && !await this.runStructural(projectId, s, manual, controller?.signal)) return;
         // Give watcher callbacks queued in the same event-loop turn a chance
         // to enter their debounce buffer, then flush it at the scan barrier.
         await yieldToEventLoop();
         await this.flushWatcherEvents(projectId);
-        if (this.queuedReconcile.has(projectId)) return;
+        if (controller?.signal.aborted || this.queuedReconcile.has(projectId)) return;
         await this.drainDirtyLocked(projectId);
         this.status.refreshFromDb(projectId);
         reconciled = true;
         if (watch && watch === this.watcher.nativeCoverage?.(projectId)) this.verifiedWatches.add(watch);
+        if (!this.autoEnabled(projectId)) return;
         if ((this.activations.get(projectId)?.size ?? 0) > 0) this.notifyProjectReady(projectId);
         void this.semanticCatchup?.ensureProject(projectId).catch((error) =>
           console.warn(`[project-index] semantic project catch-up paused for ${projectId}: ${msg(error)}`));
       })
-      .catch((err) => this.status.setPhase(projectId, 'error', msg(err)))
+      .catch((err) => { if (!controller?.signal.aborted) this.status.setPhase(projectId, 'error', msg(err)); })
       .then((): StructuralReadinessResult => {
+        if (controller?.signal.aborted) {
+          this.status.refreshFromDb(projectId);
+          return { status: 'disabled', phase: this.getStatus(projectId).phase };
+        }
         const status = this.getStatus(projectId);
         return {
           status: reconciled ? 'ready' : status.phase === 'too_large' ? 'too_large' : 'error',
@@ -329,10 +369,11 @@ export class ProjectIndexService extends ProjectIndexWatchers {
       })
       .finally(() => {
         if (this.structuralRuns.get(projectId) === run) this.structuralRuns.delete(projectId);
+        this.automaticRuns.delete(projectId);
         this.fallbackReconcileAt.set(projectId, Date.now());
         this.running.delete(projectId);
         this.runReason.delete(projectId);
-        if (reconciled) this.reconciledLifecycle.add(projectId);
+        if (reconciled && this.autoEnabled(projectId)) this.reconciledLifecycle.add(projectId);
         this.lastProgressAt.delete(projectId);
         const queuedReason = this.queuedReconcile.get(projectId);
         this.queuedReconcile.delete(projectId);
@@ -354,6 +395,10 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   /** Known changes (Monaco save/rename/delete, scaffold) — index-form rel paths. */
   markDirty(projectId: number, events: DirtyEvent[]): void {
     if (this.disposed || events.length === 0) return;
+    if (!this.autoEnabled(projectId)) {
+      this.publishFsEvents(projectId, events.map(e => ({ ...e, isDir: false })));
+      return;
+    }
     this.dirty.add(projectId, events);
     this.drainFailures.delete(projectId);
     this.semanticCatchup?.noteDelta(projectId, events);
@@ -368,6 +413,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   getStatus(projectId: number): ProjectIndexStatus {
     return {
       ...this.status.get(projectId),
+      autoIndexEnabled: this.autoEnabled(projectId),
       dirtyPending: this.dirty.size(projectId),
       watcherActive: this.watcher.isWatching(projectId) && !this.watcher.isSkipped?.(projectId),
       watcherMode: this.watcher.isSkipped?.(projectId) ? 'polling'
@@ -453,16 +499,18 @@ export class ProjectIndexService extends ProjectIndexWatchers {
 
   // ─── Internals ────────────────────────────────────────────────────
 
-  protected async runStructural(projectId: number, s: ProjectIndexSettings, manual = false): Promise<boolean> {
+  protected async runStructural(projectId: number, s: ProjectIndexSettings, manual = false, signal?: AbortSignal): Promise<boolean> {
     const beforeScan = this.dirty.takeBatch(projectId, Number.MAX_SAFE_INTEGER);
     this.status.setPhase(projectId, 'scanning');
     const result = await this.executor.runStructuralIndex(projectId, {
+      signal,
       maxFiles: manual || this.runReason.get(projectId) === 'refresh' ? undefined : s.maxFiles,
       allowEmptyWipe: manual,
       forceReparse: manual,
       verifyPaths: !manual && beforeScan.total ? beforeScan.entries.map(entry => entry.path) : undefined,
-      onProgress: (p) => this.publishStructuralProgress(projectId, p),
+      onProgress: (p) => { if (!signal?.aborted) this.publishStructuralProgress(projectId, p); },
       onChanges: async (events, previousItemKeys) => {
+        signal?.throwIfAborted();
         // A cold scan also owns durable deltas: watcher history may not include
         // files that predate startup. Failed publication must leave them replayable.
         beforeScan.entries.push(...this.dirty.addMissing(projectId, events));
@@ -471,6 +519,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
         await this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys);
       },
     });
+    if (signal?.aborted) return false;
     if (result.aborted === 'too_large') {
       this.status.setPhase(projectId, 'too_large');
       return false;
@@ -526,7 +575,7 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   protected async drainDirtyLocked(projectId: number): Promise<void> {
     await drainDirtyQueue(projectId, this.dirty, () => this.executor, this.status, (events, previousItemKeys) => {
       this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys);
-    });
+    }, () => this.autoEnabled(projectId) || this.runReason.get(projectId) === 'manual');
   }
 
   protected notifyProjectReady(projectId: number): void {
@@ -544,12 +593,13 @@ export class ProjectIndexService extends ProjectIndexWatchers {
   }
 
   protected scheduleDrain(projectId: number): void {
-    if (this.disposed || this.running.has(projectId) || this.draining.has(projectId) || this.drainRetries.has(projectId)
+    if (this.disposed || !this.autoEnabled(projectId) || this.running.has(projectId) || this.draining.has(projectId) || this.drainRetries.has(projectId)
       || (this.drainFailures.get(projectId) ?? 0) >= 5 || this.dirty.size(projectId) === 0) return;
     this.draining.add(projectId);
     void this.withStructuralLock(projectId, async () => {
-        if (this.disposed || this.running.has(projectId)) return;
+        if (this.disposed || !this.autoEnabled(projectId) || this.running.has(projectId)) return;
         await this.drainDirtyLocked(projectId);
+        if (!this.autoEnabled(projectId)) return;
         this.drainFailures.delete(projectId);
         this.status.refreshFromDb(projectId);
         void this.semanticCatchup?.ensureProject(projectId).catch((error) =>

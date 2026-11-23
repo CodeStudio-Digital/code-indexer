@@ -138,8 +138,8 @@ export class FsSessionOperations {
     return this.directory.runMutation(id, async () => {
       const entry = await this.directory.requireEntry(id);
       const source = this.directory.map(entry);
-      const sourceCommits =
-        this.directory.repository.readConversationSync(entry.location);
+      const snapshot = this.directory.repository.readConversationSnapshotSync(entry.location);
+      const sourceCommits = snapshot.commits;
       const projection = projectConversation(sourceCommits);
       const targetMessage =
         mode.kind === 'fork'
@@ -202,7 +202,7 @@ export class FsSessionOperations {
         await this.directory.repository.cloneConversationProjection(
           entry.location,
           targetEntry.location,
-          sourceCommits,
+          snapshot,
         );
         await this.#copyState(entry.state, created.id, mode);
         if (mode.kind === 'fork') {
@@ -298,6 +298,9 @@ export class FsSessionOperations {
     }
     for (const stored of messages) {
       const hydrated = hydrateMessage(sourceLocation, stored);
+      // Interrupted older copies replay turns individually. Carry the original
+      // continuation into that durable copy just as the physical clone does.
+      if (stored.provider_replay) hydrated.providerReplay = stored.provider_replay;
       if (
         stored.role === 'tool' &&
         hydrated.content.every(

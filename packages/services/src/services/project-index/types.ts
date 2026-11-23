@@ -38,6 +38,7 @@ export interface ScheduledIndexRun {
 }
 
 export interface ProjectIndexStatus {
+  autoIndexEnabled?: boolean;
   projectId: number;
   phase: ProjectIndexPhase;
   watcherActive: boolean;
@@ -135,6 +136,7 @@ export interface StructuralExecutor {
     projectId: number,
     opts: {
       maxFiles?: number;
+      signal?: AbortSignal;
       /** Manual reindex bypasses the empty-scan anti-wipe guard. */
       allowEmptyWipe?: boolean;
       forceReparse?: boolean;

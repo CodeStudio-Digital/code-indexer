@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
+import { dirname } from 'node:path';
 import { open, type FileHandle } from 'node:fs/promises';
-import { canonicalJson } from '../atomic-file.js';
-import type { ConversationCommit } from '../types.js';
+import { ChapterArchiveReader } from '../chapter-transcript.js';
+import { parseJournalRecord } from '../session-writer.js';
 import { parseCoderTurnPayload } from './conversation-codec.js';
 
 export interface MemoryCallSignal { tool_name: string; created_at: string }
@@ -68,6 +68,7 @@ export class MemoryCallProjection {
         : { identity, size: 0, modified: '', offset: 0, seq: 0, hash: null, head: Buffer.alloc(0), tail: Buffer.alloc(0), calls: [] };
       let position = state.offset;
       let carry: Buffer = Buffer.alloc(0);
+      const archive = new ChapterArchiveReader();
       while (position < info.size) {
         const chunk = await read(position, Math.min(CHUNK_BYTES, info.size - position));
         if (!chunk.length) break;
@@ -76,12 +77,8 @@ export class MemoryCallProjection {
         const buffer = carry.length ? Buffer.concat([carry, chunk]) : chunk;
         let start = 0;
         for (let end = buffer.indexOf(10, start); end >= 0; end = buffer.indexOf(10, start)) {
-          const commit = JSON.parse(buffer.subarray(start, end).toString('utf8')) as ConversationCommit;
-          const { hash, ...unsigned } = commit;
-          if (commit.schema_version !== 1 || commit.seq !== state.seq + 1 || commit.prev_hash !== state.hash ||
-            hash !== createHash('sha256').update(canonicalJson(unsigned)).digest('hex')) {
-            throw new Error(`Invalid memory KPI conversation commit ${commit.seq}`);
-          }
+          const commit = parseJournalRecord(buffer.toString('utf8', start, end), dirname(path),
+            state.seq + 1, state.hash, 'metadata', archive);
           const payload = parseCoderTurnPayload(commit);
           if (payload.truncate_from_seq !== undefined) {
             state.calls = state.calls.filter(call => call.messageSeq < payload.truncate_from_seq!);
@@ -91,7 +88,7 @@ export class MemoryCallProjection {
               state.calls.push({ tool_name: call.tool_name, created_at: call.output.created_at, messageSeq: call.message_seq });
             }
           }
-          state.seq = commit.seq; state.hash = hash; state.offset = base + end + 1;
+          state.seq = commit.seq; state.hash = commit.hash; state.offset = base + end + 1;
           commitsParsed += 1; start = end + 1;
         }
         // Keep only uncommitted bytes until another chunk/newline arrives.

@@ -112,7 +112,7 @@ export async function reuseGlobalWorkspaceSession(
     throw new Error('source session has no linked projects');
   }
   const currentProjects = linked.map((project) => {
-    const registered = deps.db.getProject(project.project_id);
+    const registered = deps.db.getProjectCatalogEntry(project.project_id);
     if (
       !registered
       || registered.is_synthetic
@@ -161,7 +161,7 @@ export async function attachProjectToGlobalSession(
   if (!session.is_global) {
     throw new GlobalWorkspaceError('not a global session', 400);
   }
-  const target = deps.db.getProject(projectId);
+  const target = deps.db.getProjectCatalogEntry(projectId);
   if (!target) {
     throw new GlobalWorkspaceError(`project ${projectId} not found`, 400);
   }

@@ -64,9 +64,11 @@ function trimToolResultContent(content: string, toolName: unknown): string {
   return content.slice(0, TRIM_TOOL_RESULT);
 }
 
-export function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(messages: M[]): M[] {
+export function trimMessageBlocks<M extends { role?: string; content: unknown[]; providerReplay?: unknown }>(
+  messages: M[],
+): Omit<M, 'providerReplay'>[] {
   const toolNamesByUseId = collectToolNamesByUseId(messages);
-  return messages.map((m) => {
+  return messages.map(({ providerReplay: _providerOnly, ...m }) => {
     // Synthetic tool-image plumbing message (view_image / preview_screenshot →
     // a user/image block). The dashboard renders this image INLINE under the
     // tool call on reload, so keep its base64 (no upload endpoint to re-fetch

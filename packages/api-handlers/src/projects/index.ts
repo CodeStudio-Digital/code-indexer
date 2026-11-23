@@ -162,6 +162,9 @@ export function createProjectsHandlers(deps: HandlerDeps): ProjectsApi {
       }
       const result = wrap(() => updateService.execute(id, patch as UpdateProjectInput));
       if (!result) throw new ApiError('not_found', 404, 'project not found');
+      if (patch.auto_index_enabled !== undefined) {
+        await deps.projectIndexService.applyAutoIndexSetting(id);
+      }
       if (Object.prototype.hasOwnProperty.call(patch, 'index_ignore_patterns')) {
         deps.projectIndexService.restartFileWatching(id);
       }

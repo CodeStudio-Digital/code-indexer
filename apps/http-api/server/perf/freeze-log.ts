@@ -70,6 +70,8 @@ interface FreezeEvent {
   windowMs?: number;
   /** `null` when the runtime cannot report it — never a misleading 0. */
   activeMs?: number | null;
+  /** OS CPU time consumed by the main thread during this window, including native work. */
+  mainThreadCpuMs?: number;
   busyFraction?: number | null;
   /** Measured synchronous main-thread ms in the window (self-reported). */
   busyMs?: number;
@@ -137,6 +139,7 @@ function recordFreeze(e: Omit<FreezeEvent, 'at'> & { at?: number }): void {
     wallLateMs: e.wallLateMs,
     windowMs: e.windowMs,
     activeMs: e.activeMs,
+    mainThreadCpuMs: e.mainThreadCpuMs,
     busyFraction: e.busyFraction,
     busyMs: e.busyMs,
     gcMs: e.gcMs,
@@ -346,6 +349,10 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let expectedWall = 0;
 let lastMono = 0;
 let eluPrev: ReturnType<typeof performance.eventLoopUtilization> | undefined;
+let previousThreadCpu: NodeJS.CpuUsage | undefined;
+function readThreadCpu(): NodeJS.CpuUsage | undefined {
+  try { return process.threadCpuUsage?.(); } catch { return undefined; }
+}
 /** RSS at the last healthy tick, MB — the baseline for a freeze's `rssDeltaMB`. */
 let lastHealthyRssMB = 0;
 let rssTick = 0;
@@ -364,6 +371,7 @@ export function startFreezeWatchdog(): void {
   expectedWall = Date.now() + WATCHDOG_INTERVAL_MS;
   lastMono = performance.now();
   eluPrev = typeof performance.eventLoopUtilization === 'function' ? performance.eventLoopUtilization() : undefined;
+  previousThreadCpu = readThreadCpu();
   lastHealthyRssMB = currentRssMB();
   rssTick = 0;
   timer = setInterval(() => {
@@ -373,6 +381,11 @@ export function startFreezeWatchdog(): void {
     const wallLate = now - expectedWall;
     const windowMs = mono - lastMono;                 // true inter-tick gap
     const monoLate = windowMs - WATCHDOG_INTERVAL_MS; // overshoot beyond the intended interval
+    const cpu = previousThreadCpu && readThreadCpu();
+    const mainThreadCpuMs = cpu && previousThreadCpu
+      ? Math.max(0, Math.round((cpu.user + cpu.system - previousThreadCpu.user - previousThreadCpu.system) / 100) / 10)
+      : undefined;
+    previousThreadCpu = cpu;
     const windowStartMono = lastMono;
     lastMono = mono;
     expectedWall = now + WATCHDOG_INTERVAL_MS;
@@ -426,6 +439,7 @@ export function startFreezeWatchdog(): void {
         // `null`, not 0, when the runtime cannot report it — a 0 here is what
         // made every stall look idle and read as `starved`.
         activeMs: elu === null ? null : Math.round(elu * 10) / 10,
+        mainThreadCpuMs,
         busyFraction: elu === null ? null : Math.round((elu / Math.max(1, windowMs)) * 1000) / 1000,
         busyMs: Math.round(ev.busyMs * 10) / 10,
         gcMs: Math.round(ev.gcMs * 10) / 10,
