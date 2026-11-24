@@ -250,6 +250,18 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
   async swapMasterProvider(providerName: string, model?: string): Promise<{ provider: string; model: string }> { return this.master.swapProvider(providerName, model); }
   updateRoleConfigs(roleConfigs: RoleConfig[]): void { this.master.updateRoleConfigs(roleConfigs); }
 
+  /** Reload changes already committed by the dashboard without starting another run. */
+  refreshSessionSettings(keys: string[]): void {
+    if (keys.includes('projects')) this.ctx.refreshProjects();
+    if (keys.includes('role_assignments')) {
+      const config = JSON.parse(this.ctx.companyFiles.getSession().config_json);
+      if (Array.isArray(config.role_assignments)) this.master.updateRoleConfigs(config.role_assignments);
+    }
+    this.publisher.publish('session.config_updated', {
+      company_session_id: this.companySessionId, keys, at: Date.now(),
+    });
+  }
+
   /**
    * Apply a partial config patch to a running session and persist it.
    * `role_assignments` is the authoritative update path for running agents;

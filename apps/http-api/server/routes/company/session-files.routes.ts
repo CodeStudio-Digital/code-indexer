@@ -2,6 +2,10 @@ import type { HttpRouter } from '@mcp/shared/http/router.js';
 import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
 import { getCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
+import { notifyCompanySettingsChanged } from '../../../sse/workerPoolSingleton.js';
+import { mergeAutonomyPatch, sanitizeAutonomyPatch } from '@mcp/company/services/autonomy/autonomy-patch.js';
+import { withSessionLock } from '../coder/sessionLock.js';
+import { linkedProjectService, mountCompanyProjectRoutes } from './session-projects.js';
 import type { ServerDeps } from '../../deps.js';
 import type {
   CompanySessionFileRow,
@@ -35,6 +39,10 @@ async function enrichedFull(
 ) {
   const full = await deps.operationalSessionFiles.getCompanySessionFull(id);
   if (!full) return null;
+  const services = new Set(!full.session.parent_session_id && full.projects.some(p => p.label)
+    ? deps.companySandboxServicesStore.listBySessionAll(id).map(s => s.service_id) : []);
+  const projectIds = full.projects.map(p => p.project_id);
+  const labels = Object.fromEntries(full.projects.map(p => [String(p.project_id), p.label]));
   return {
     ...full,
     ...runtimeEnvelope(full.session),
@@ -42,6 +50,7 @@ async function enrichedFull(
       const project = deps.db.getProject(link.project_id);
       return {
         ...link,
+        is_service: !!linkedProjectService(link.project_id, projectIds, labels, services),
         project_name: project?.name ?? `project-${link.project_id}`,
         root_path: project?.root_path ?? '',
       };
@@ -59,6 +68,7 @@ export function mountCompanyFileSessionRoutes(
   options: { includeDelete?: boolean } = {},
 ): void {
   const sessions = deps.operationalSessionFiles;
+  mountCompanyProjectRoutes(app, deps);
   const visible = (row:CompanySessionFileRow) => {
     if (!row.config_json?.includes('design_pending')) return true;
     return !JSON.parse(row.config_json).design_pending;
@@ -219,17 +229,19 @@ export function mountCompanyFileSessionRoutes(
       }, 409);
     }
     const patch = await parseJsonBody<Record<string, unknown>>(c);
-    let previous: Record<string, unknown>;
-    try {
-      previous = JSON.parse(current.config_json) as Record<string, unknown>;
-    } catch {
-      previous = {};
-    }
-    const session = await sessions.updateCompanySessionConfig(
-      id,
-      JSON.stringify({ ...previous, ...patch }),
-    );
-    return c.json({ session });
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return c.json({ error: 'Expected a configuration object.' }, 400);
+    const autonomy = 'autonomy' in patch ? sanitizeAutonomyPatch(patch.autonomy) : null;
+    if (autonomy && !autonomy.ok) return c.json({ error: autonomy.error }, 400);
+    return withSessionLock(id, async () => {
+      const session = await sessions.updateCompanySessionConfig(id, (raw) => {
+        let previous: Record<string, unknown>;
+        try { previous = JSON.parse(raw) ?? {}; } catch { previous = {}; }
+        const next = { ...previous, ...patch };
+        if (autonomy?.ok) next.autonomy = mergeAutonomyPatch(previous.autonomy, autonomy.patch);
+        return JSON.stringify(next);
+      });
+      return c.json({ session, receipt: notifyCompanySettingsChanged(id, Object.keys(patch)) });
+    });
   });
 
   // The full Company router installs the richer cleanup-aware delete route

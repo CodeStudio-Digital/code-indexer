@@ -227,6 +227,8 @@
   "company.config": "Session team & configuration",
   "company.projects": "Projects",
   "company.removeProjectFailed": "Could not remove project",
+  "company.addProject": "Link project",
+  "company.addProjectFailed": "Could not link project",
   "company.renameProjectFailed": "Could not rename project",
   "company.removeServiceTitle": "Remove microservice?",
   "company.removeServiceConfirm": "The container and files for “{{name}}” will be destroyed.",

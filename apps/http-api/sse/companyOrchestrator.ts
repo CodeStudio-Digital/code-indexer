@@ -11,7 +11,7 @@
  * in-process fallback path: if the worker file can't be resolved, the
  * server refuses to boot — see `startServer()` in `apps/http-api/server.ts`.
  */
-import { getWorkerOrchestratorPool } from './workerPoolSingleton.js';
+import { getWorkerOrchestratorPool, peekWorkerOrchestratorPool } from './workerPoolSingleton.js';
 import type { CoderRunBus } from '../coder-bus.js';
 import type { WorkerBackedOrchestrator } from './WorkerOrchestratorPool.js';
 import type { CompanySessionId } from '@mcp/session-storage';
@@ -22,12 +22,12 @@ export type { WorkerBackedOrchestrator } from './WorkerOrchestratorPool.js';
  * worker is currently spawned for the id (idle / never started / evicted).
  */
 export function getCompanyOrchestrator(id: CompanySessionId): WorkerBackedOrchestrator | null {
-  return getWorkerOrchestratorPool().get(id)?.orchestrator ?? null;
+  return peekWorkerOrchestratorPool()?.get(id)?.orchestrator ?? null;
 }
 
 /** True when an active worker exists for this session id. */
 export function hasCompanyOrchestrator(id: CompanySessionId): boolean {
-  return getWorkerOrchestratorPool().has(id);
+  return peekWorkerOrchestratorPool()?.has(id) ?? false;
 }
 
 /**

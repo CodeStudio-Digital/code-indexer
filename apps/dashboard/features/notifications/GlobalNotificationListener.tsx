@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import { apiBaseUrl } from '../../lib/api-client.js';
 import { recordCoderRuntimeNotification } from '../chat/notifications/runtime-events.js';
+import type { CompanyPanelReceipt } from '@mcp/company-contracts';
+import { applyCompanyPanelReceipt } from '../../lib/company-panel-changes.js';
 import {
   notifyCoderStreamEvent,
   notifyCompanyStreamEvent,
@@ -68,6 +70,11 @@ function dispatchGlobalNotification(source: GlobalNotificationEnvelope): void {
   if (source.kind === 'coder') {
     recordCoderRuntimeNotification(source);
     notifyCoderStreamEvent(source.sessionId, source.event, data, context);
+    return;
+  }
+  if (source.event === 'company_panel_changed') {
+    const receipt = source.data as CompanyPanelReceipt | null;
+    if (receipt?.sessionId === source.sessionId) applyCompanyPanelReceipt(receipt);
     return;
   }
   notifyCompanyStreamEvent(source.sessionId, source.event, data, context);

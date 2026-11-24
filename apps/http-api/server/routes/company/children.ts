@@ -22,6 +22,7 @@ import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.j
 import { CompanyWorkspaceCoordinator } from '@mcp/company/services/workspace-coordinator.js';
 import { companyConfigRevision } from '@mcp/company/services/session-identity.js';
 import { withSessionLock } from '../coder/sessionLock.js';
+import { publishCompanyPanelChange } from '../../../sse/notification-event-bus.js';
 
 interface CreateChildBody { name: string; workspace?: 'shared' | 'isolated' }
 interface RenameChildBody { name: string }
@@ -71,7 +72,7 @@ export function mountCompanyChildRoutes(app: HttpRouter, deps: ServerDeps): void
       await coordinator.markStoppedOwnersUncertain(observed.map(owner => owner.token));
       try { await coordinator.reconcile(body.tokens!); }
       catch (error) { return c.json({ error: String(error) }, 409); }
-      return c.json({ ok: true, original_outcomes: 'unchanged' });
+      return c.json({ ok: true, original_outcomes: 'unchanged', receipt: publishCompanyPanelChange(id, { kind: 'workspace' }) });
     };
     return reconcileLocked(0);
   });
@@ -89,7 +90,7 @@ export function mountCompanyChildRoutes(app: HttpRouter, deps: ServerDeps): void
     await deps.sessionStore.ensureCatalog();
     const files = new CompanySessionFiles({ companySessionId: childId, sessionStore: deps.sessionStore });
     await files.updateSessionConfig(parent.config_json, { revision: body.expectedCompanyRevision, inherited_from: id });
-    return c.json({ session: files.getSession() });
+    return c.json({ session: files.getSession(), receipt: publishCompanyPanelChange(childId, { kind: 'settings' }) });
   });
   app.on('GET', ['/api/company/sessions/:id/children', '/api/company/companies/:id/sessions'], async (c) => {
     const id = parseCompanySessionIdParam(c);

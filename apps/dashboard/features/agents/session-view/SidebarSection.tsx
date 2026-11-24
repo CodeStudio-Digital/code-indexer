@@ -108,10 +108,8 @@ export function SidebarSection({
           )}
         </button>
         {action && (
-          // Action button (e.g. "+ add") sits outside the toggle so
-          // clicking it doesn't expand/collapse the section. Padding
-          // mirrors the header so the strip stays the same height.
-          <div className="flex items-center px-2 border-l" onClick={(e) => e.stopPropagation()}>
+          // Reveal an inline editor even when its section was collapsed.
+          <div className="flex items-center px-2 border-l" onClick={() => setOpen(true)}>
             {action}
           </div>
         )}

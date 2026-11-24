@@ -14,6 +14,9 @@
       import { TooltipProvider } from '/components/ui/tooltip.tsx';
       import { AgentsTab } from '/features/agents/AgentsTab.tsx';
       import { ZoneLayout } from '/features/agents/zones/ZoneLayout.tsx';
+      import { CompanySessionView } from '/features/agents/CompanySessionView.tsx';
+      import { ConfirmDialogHost } from '/components/ui/prompt-dialog.tsx';
+      import { GlobalNotificationListener } from '/features/notifications/GlobalNotificationListener.tsx';
       import i18n, { i18nReady } from '/i18n/index.ts';
       import '/index.css';
       const h = React.createElement;
@@ -21,6 +24,7 @@
         return h('output', {}, useLocation().pathname);
       }
       const options = new URLSearchParams(window.location.search);
+      const session = options.get('session');
       function CompanyWorkspace() {
         const direct = options.has('direct');
         const [[zone, tab], setSelection] = React.useState(direct ? ['build', 'tests'] : ['work', 'kanban']);
@@ -49,11 +53,16 @@
             {},
             h(
               MemoryRouter,
-              { initialEntries: ['/agents'] },
+              { initialEntries: [session ? '/company/sessions/' + session + '/main/work/board' : '/agents'] },
+              h(ConfirmDialogHost),
+              session && h(GlobalNotificationListener),
               h(
                 Routes,
                 {},
                 h(Route, { path: '/agents', element: h(options.has('qa') ? CompanyWorkspace : AgentsTab) }),
+                h(Route, { path: '/company/sessions/:rootId/:frontId/:zone/:tab', element: session
+                  ? h(CompanySessionView, { sessionId: session, sessionName: 'Empresa de teste', sessionStatus: 'idle' })
+                  : h(Opened) }),
                 h(Route, { path: '*', element: h(Opened) }),
               ),
             ),

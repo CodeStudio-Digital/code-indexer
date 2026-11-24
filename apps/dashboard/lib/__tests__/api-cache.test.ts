@@ -3,7 +3,7 @@
  * Pure module — no React/DOM. Time is controlled by spying on Date.now.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getCached, dedupe, dedupeInflight, writeThrough, invalidateAll, invalidateSessionLists } from '../api-cache.js';
+import { getCached, dedupe, dedupeInflight, writeThrough, invalidateAll, invalidateRead, invalidateSessionLists } from '../api-cache.js';
 
 const BASE = 1_000_000;
 let now = BASE;
@@ -22,6 +22,16 @@ afterEach(() => {
 });
 
 describe('dedupe', () => {
+  it('keeps a post-mutation detail read when a pre-mutation read finishes last', async () => {
+    const key = 'GET /api/company/sessions/company-a';
+    let finish!: (agents: string[]) => void;
+    const before = dedupe(key, () => new Promise<string[]>(resolve => { finish = resolve; }));
+    invalidateRead(key);
+    await dedupe(key, async () => []);
+    finish(['deleted-agent']);
+    await before;
+    expect(getCached(key)).toEqual([]);
+  });
   it('fetches new project and global session lists when a creation races an older GET', async () => {
     const detail = 'GET http://app/api/coder/sessions/parent?tail=120';
     await dedupe(detail, async () => 'transcript');

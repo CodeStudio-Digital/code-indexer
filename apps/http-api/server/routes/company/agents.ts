@@ -14,6 +14,16 @@ import {
 } from '../_helpers.js';
 import { appOwnedControlPlaneConflict } from './runtime-capabilities.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import { publishCompanyPanelChange } from '../../../sse/notification-event-bus.js';
+
+function agentReceipt(files: CompanySessionFiles, id: string, kind: 'agent_paused' | 'agent_resumed') {
+  const run = files.getAgentRunSync(id);
+  // Deletion can complete between the worker acknowledgement and this read.
+  if (!run) return publishCompanyPanelChange(files.companySessionId, { kind: 'agent_deleted', agentRunId: id });
+  return publishCompanyPanelChange(files.companySessionId, {
+    kind, agent: { agentRunId: run.id, role: run.role, status: run.status, message: run.status_message, coderSessionId: run.coder_session_id },
+  });
+}
 
 /**
  * Per-agent (subordinate) control: pause, resume, delete. The session-wide
@@ -67,7 +77,7 @@ export function mountCompanyAgentControlRoutes(app: HttpRouter, deps: ServerDeps
       throw error;
     }
     if (!ok) return c.json({ error: 'Agent is not running' }, 409);
-    return c.json({ ok: true });
+    return c.json({ ok: true, receipt: agentReceipt(files, agentRunId, 'agent_paused') });
   });
 
   /**
@@ -109,7 +119,7 @@ export function mountCompanyAgentControlRoutes(app: HttpRouter, deps: ServerDeps
       throw error;
     }
     if (!ok) return c.json({ error: 'Agent is not in a resumable state' }, 409);
-    return c.json({ ok: true });
+    return c.json({ ok: true, receipt: agentReceipt(files, agentRunId, 'agent_resumed') });
   });
 
   /**
@@ -145,6 +155,6 @@ export function mountCompanyAgentControlRoutes(app: HttpRouter, deps: ServerDeps
       }
     }
     await files.moveAgentRunToTrash(agentRunId);
-    return c.json({ ok: true });
+    return c.json({ ok: true, receipt: publishCompanyPanelChange(id, { kind: 'agent_deleted', agentRunId }) });
   });
 }

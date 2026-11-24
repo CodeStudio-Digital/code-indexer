@@ -5,7 +5,7 @@ import { Activity, Bot, Check, Crown, Folder, GitBranch, Plus, ScrollText, Serve
 import { Badge } from '../../../components/ui/badge.js';
 import { confirm, toast } from '../../../components/ui/prompt-dialog.js';
 import { cn } from '../../../lib/utils.js';
-import { apiPost } from '../../../hooks/useApi.js';
+import { apiDelete, apiPost, useApi } from '../../../hooks/useApi.js';
 import { AgentPane } from '../AgentPane.js';
 import ServicesSidebar from '../ServicesSidebar.js';
 import { ProjectBadge } from './ProjectBadge.js';
@@ -19,7 +19,6 @@ import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 import type { AgentStreamState } from '../../../state/company/types.js';
 import type {
   AvailableProject,
-  PersistedAgentRun,
   RoleAssignmentRaw,
   SessionProject,
 } from './types.js';
@@ -32,8 +31,6 @@ interface AgentsSidebarProps {
   open: boolean;
   config: Record<string, unknown> | null;
   projects: SessionProject[];
-  allProjects: AvailableProject[] | null;
-  persistedAgentRuns: PersistedAgentRun[];
   subordinates: AgentStreamState[];
   stream: ReturnType<typeof useCompanyStream>;
   providerOptions: UseProvidersResult['providerOptions'];
@@ -66,8 +63,6 @@ export function AgentsSidebar({
   open,
   config,
   projects,
-  allProjects,
-  persistedAgentRuns,
   subordinates,
   stream,
   providerOptions,
@@ -80,6 +75,7 @@ export function AgentsSidebar({
   readOnly = false,
 }: AgentsSidebarProps) {
   const { t } = useTranslation('agents');
+  const { data: allProjects, refetch: refreshProjects } = useApi<AvailableProject[]>(readOnly ? '' : '/projects');
   const [addingProject, setAddingProject] = useState(false);
   const [newProjectId, setNewProjectId] = useState('');
 
@@ -121,7 +117,7 @@ export function AgentsSidebar({
   }
 
   async function deleteProject(p: SessionProject) {
-    const isService = !!p.label;
+    const isService = p.is_service === true;
     const confirmMsg = isService
       ? t('company.removeServiceConfirm', { name: p.label })
       : t('company.unlinkProjectConfirm', { name: p.project_name });
@@ -131,25 +127,29 @@ export function AgentsSidebar({
       confirmLabel: isService ? t('company.removeServiceAction') : t('company.unlinkProjectAction'),
       tone: 'destructive',
     }))) return;
-    const r = await fetch(`/api/company/sessions/${sessionId}/projects/${p.project_id}`, {
-      method: 'DELETE',
-    });
-    if (!r.ok) {
-      const body = (await r.json().catch(() => ({}))) as { error?: string };
-      toast.error(t('company.removeProjectFailed'), {
-        description: body.error ?? `HTTP ${r.status}`,
-      });
-      return;
+    try {
+      await apiDelete(`/company/sessions/${sessionId}/projects/${p.project_id}`);
+      refreshProjects();
+      refetch();
+    } catch (error) {
+      toast.error(t('company.removeProjectFailed'), { description: String(error) });
     }
-    refetch();
   }
 
+  const [linkingProject, setLinkingProject] = useState(false);
   async function addProject() {
-    if (!newProjectId) return;
-    await apiPost(`/company/sessions/${sessionId}/projects`, { project_id: Number(newProjectId) });
-    setNewProjectId('');
-    setAddingProject(false);
-    refetch();
+    if (!newProjectId || linkingProject) return;
+    setLinkingProject(true);
+    try {
+      await apiPost(`/company/sessions/${sessionId}/projects`, { project_id: Number(newProjectId) });
+      setNewProjectId('');
+      setAddingProject(false);
+      refetch();
+    } catch (error) {
+      toast.error(t('company.addProjectFailed', 'Could not link project'), { description: String(error) });
+    } finally {
+      setLinkingProject(false);
+    }
   }
 
   function openNewRoleDialog() {
@@ -194,7 +194,7 @@ export function AgentsSidebar({
       </div>
 
       {/* ── Projetos ── */}
-      {!readOnly && companyId && executionFamily && <CompanyExecutionSettings companyId={companyId} sessionId={sessionId} family={executionFamily} revision={stream.teamRevision} onChanged={refetch} />}
+      {!readOnly && companyId && executionFamily && <CompanyExecutionSettings companyId={companyId} sessionId={sessionId} family={executionFamily} revision={stream.teamRevision + stream.workspaceRevision} onChanged={refetch} />}
       <SidebarSection
         storageKey="projects"
         icon={Folder}
@@ -204,7 +204,7 @@ export function AgentsSidebar({
           <button
             type="button"
             onClick={() => {
-              setAddingProject((v) => !v);
+              setAddingProject(true);
               setNewProjectId('');
             }}
             className="text-muted-foreground hover:text-foreground transition-colors"
@@ -221,8 +221,9 @@ export function AgentsSidebar({
               projectId={p.project_id}
               name={p.project_name}
               label={p.label}
-              onRenamed={refetch}
-              canDelete={!readOnly && projects.length > 1}
+              isService={p.is_service === true}
+              onRenamed={() => { refreshProjects(); refetch(); }}
+              canDelete={!readOnly && !p.is_owner && projects.length > 1}
               onDelete={() => deleteProject(p)}
             />
           ))}
@@ -231,6 +232,7 @@ export function AgentsSidebar({
           availableProjects.length > 0 ? (
             <div className="flex gap-1 mt-1.5">
               <select
+                aria-label={t('company.projects')}
                 value={newProjectId}
                 onChange={(e) => setNewProjectId(e.target.value)}
                 className="flex-1 rounded border bg-background px-1 py-0.5 text-[10px]"
@@ -242,7 +244,8 @@ export function AgentsSidebar({
               </select>
               <button
                 type="button"
-                disabled={!newProjectId}
+                disabled={!newProjectId || linkingProject}
+                aria-label={t('company.addProject', 'Add project')}
                 className="disabled:opacity-40 text-muted-foreground hover:text-foreground transition-colors"
                 onClick={() => void addProject()}
               >
@@ -274,7 +277,7 @@ export function AgentsSidebar({
       )}
 
       {/* ── Papéis Configurados (editable provider/model) ── */}
-      {hasRoles && (
+      {(hasRoles || !readOnly) && (
         <SidebarSection
           storageKey="configuredRoles"
           icon={Users}
@@ -397,8 +400,9 @@ export function AgentsSidebar({
             sessionId={sessionId}
             agent={stream.masterState}
             onClick={() => {
-              const masterRun = persistedAgentRuns.find((r) => r.role === 'master');
-              if (masterRun) onOpenAgentRun(masterRun.id, 'master', stream.masterState!.status);
+              const master = stream.masterState;
+              if (master?.coderSessionId) onOpenPersistedRun(master.coderSessionId, 'master', master.status);
+              else if (master?.agentRunId) onOpenAgentRun(master.agentRunId, 'master', master.status);
             }}
           />
         )}

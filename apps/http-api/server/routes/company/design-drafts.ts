@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { z } from 'zod';
 import { asCompanySessionId } from '@mcp/session-storage';
+import { publishCompanyPanelChange } from '../../../sse/notification-event-bus.js';
 import { CollaborationFiles } from '@mcp/session-storage/collaboration/files.js';
 import { CollaborationRevisions } from '@mcp/session-storage/collaboration/revisions.js';
 import { CompanyKanbanFiles } from '@mcp/company/services/company-kanban-files.js';
@@ -329,7 +330,9 @@ export function mountDesignRoutes(app: HttpRouter, deps: ServerDeps, generate = 
             });
           }
           if (plan.tasks.length && draft.source) cards.publishDraftBatch();
-          return c.json(await write({ ...draft, apply: { ...receipt, done: true } }, draft.revision));
+          const applied = await write({ ...draft, apply: { ...receipt, done: true } }, draft.revision);
+          publishCompanyPanelChange(asCompanySessionId(companyId), { kind: 'settings' });
+          return c.json(applied);
         });
       });
     } catch (error) {

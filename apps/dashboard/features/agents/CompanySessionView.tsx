@@ -7,6 +7,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi.js';
 import { toast } from '../../components/ui/prompt-dialog.js';
 import { useCompanyStream } from '../../hooks/useCompanyStream.js';
+import { useCompanyRevisionRefresh } from '../../hooks/useCompanyRevisionRefresh.js';
+import { onCompanyPanelChange } from '../../lib/company-panel-changes.js';
 import { useCompanySiblings } from '../../hooks/useCompanySiblings.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../chat/composer/provider-caps.js';
@@ -36,7 +38,6 @@ import { DatabaseToolWindow } from '../db-client/DatabaseToolWindow.js';
 import { useContributions, hydrateContributions } from '../../state/contribution-registry.js';
 import type { NotificationSourceContext } from '../notifications/index.js';
 import type {
-  AvailableProject,
   PersistedAgentRun,
   SessionProject,
 } from './session-view/types.js';
@@ -165,7 +166,7 @@ function CompanySessionWorkspace({
     };
   }, [activeFrontId, activeSessionId, sessionId, sessionName]);
   const stream = useCompanyStream(activeSessionId, notificationContext);
-  const { data: sessionData, refetch: refetchDetails } = useApi<SessionFullData>(
+  const { data: sessionData, loading: detailsLoading, update: updateDetails, refetch: refetchDetails } = useApi<SessionFullData>(
     `/company/sessions/${activeSessionId}`,
   );
   const refreshSiblings = siblings.refresh;
@@ -173,11 +174,13 @@ function CompanySessionWorkspace({
     refetchDetails();
     void refreshSiblings();
   }, [refetchDetails, refreshSiblings]);
-  useEffect(() => {
-    if (stream.teamRevision === 0) return;
-    const timer = setTimeout(refetch, 300);
-    return () => clearTimeout(timer);
-  }, [stream.teamRevision, refetch]);
+  useCompanyRevisionRefresh(stream.teamRevision, detailsLoading, refetch);
+  useEffect(() => onCompanyPanelChange(({ sessionId: changedId, change }) => {
+    if (changedId !== activeSessionId || change.kind !== 'agent_deleted') return;
+    updateDetails(previous => previous.session.id === changedId
+      ? { ...previous, agentRuns: previous.agentRuns.filter(run => run.id !== change.agentRunId) } : previous);
+    refetchDetails();
+  }), [activeSessionId, updateDetails, refetchDetails]);
 
   const handleZoneTabChange = (nextZone: Zone, nextTab: string) => {
     navigate(buildAgentsUrl(sessionId, activeFrontId, nextZone, nextTab));
@@ -285,7 +288,6 @@ function CompanySessionWorkspace({
   const [roleDialog, setRoleDialog] = useState<{ draft: RoleConfig; editIdx?: number } | null>(null);
 
   // Reference data for the sidebar and modals.
-  const { data: allProjects } = useApi<AvailableProject[]>('/projects');
   const { data: skillsList } = useApi<{ skills: SkillDef[] }>('/admin/skills');
   const { providerOptions, getModelsForProvider, getDefaultModel } = useProviders();
 
@@ -642,8 +644,6 @@ function CompanySessionWorkspace({
                               open={true}
                               config={config}
                               projects={sessionData?.projects ?? []}
-                              allProjects={allProjects ?? null}
-                              persistedAgentRuns={sessionData?.agentRuns ?? []}
                               subordinates={subordinates}
                               stream={stream}
                               providerOptions={providerOptions}
@@ -720,7 +720,7 @@ function CompanySessionWorkspace({
         t={t}
       />
 
-      {editingDesign && <CompanyDesigner sourceId={sessionId} onClose={() => setEditingDesign(false)} onApplied={() => {setEditingDesign(false); refetch(); void siblings.refresh();}} />}
+      {editingDesign && <CompanyDesigner sourceId={sessionId} onClose={() => setEditingDesign(false)} onApplied={() => {setEditingDesign(false); refetch();}} />}
       {modalSession && (
         <AgentSessionModal
           coderSessionId={modalSession.coderSessionId}

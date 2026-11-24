@@ -42,14 +42,14 @@ export function mountCompanyAutonomyRoutes(app: HttpRouter, deps: ServerDeps): v
     const context = await resolveCompanySessionContext(deps.sessionStore, id);
     if (!context) return c.json({ error: 'session not found' }, 404);
 
-    const config = resolveAutonomy(context.root.config_json, process.env);
+    const config = resolveAutonomy(context.requested.config_json, process.env);
     let incidents: unknown[] = [];
     try {
       const incidentStore = new FileSupervisionPersistence({
-        companySessionId: context.rootId,
-        sessionRoot: context.rootFiles.location.bundle_path,
+        companySessionId: id,
+        sessionRoot: context.requestedFiles.location.bundle_path,
       });
-      incidents = incidentStore.listRecentIncidents(context.rootId, INCIDENT_LIMIT);
+      incidents = incidentStore.listRecentIncidents(id, INCIDENT_LIMIT);
     } catch {
       incidents = [];
     }
@@ -58,7 +58,7 @@ export function mountCompanyAutonomyRoutes(app: HttpRouter, deps: ServerDeps): v
     try {
       // The filesystem projection returns the LATEST N rows in ASC order,
       // so filtering + tail-slicing keeps chronological order.
-      autoPosts = context.rootFiles
+      autoPosts = context.requestedFiles
         .listBoardEntriesSync({ limit: BOARD_SCAN_LIMIT })
         .filter(
           (entry) =>

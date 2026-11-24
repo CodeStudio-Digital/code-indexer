@@ -6,7 +6,9 @@
  * events that can notify in one app-wide sequence so the dashboard can stay
  * subscribed regardless of the active route.
  */
+import { randomUUID } from 'node:crypto';
 import type { CompanySessionId, SessionId } from '@mcp/session-storage';
+import type { CompanyPanelChange, CompanyPanelReceipt } from '@mcp/company-contracts';
 
 export type NotificationRuntimeKind = 'coder' | 'company';
 export type NotificationSessionId = SessionId | CompanySessionId;
@@ -50,6 +52,7 @@ const CODER_EVENTS = new Set([
 ]);
 
 const COMPANY_EVENTS = new Set([
+  'company_panel_changed',
   'master_plan_posted',
   'master_question_posted',
   'session_idle',
@@ -114,6 +117,12 @@ class NotificationEventBus {
 }
 
 const bus = new NotificationEventBus();
+
+export function publishCompanyPanelChange(sessionId: CompanySessionId, change: CompanyPanelChange): CompanyPanelReceipt {
+  const receipt = { id: randomUUID(), sessionId, change };
+  bus.publish({ kind: 'company', sessionId, event: 'company_panel_changed', data: receipt });
+  return receipt;
+}
 
 function isNotificationRuntimeEvent(
   kind: NotificationRuntimeKind,

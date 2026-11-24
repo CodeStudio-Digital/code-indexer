@@ -27,6 +27,7 @@ import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.j
 import type { CompanySessionId } from '@mcp/session-storage';
 
 import type { CompanyWorkerExitHandler } from './company-worker-exit.js';
+import { publishCompanyPanelChange } from './notification-event-bus.js';
 
 let onChatCreated: import('./WorkerOrchestratorPool.js').CompanyChatCreatedHandler | undefined;
 let onWorkerExit: CompanyWorkerExitHandler | undefined;
@@ -123,8 +124,18 @@ export function getWorkerOrchestratorPool(): WorkerOrchestratorPool {
   return cachedPool;
 }
 
-function peekWorkerOrchestratorPool(): WorkerOrchestratorPool | null {
+export function peekWorkerOrchestratorPool(): WorkerOrchestratorPool | null {
   return cachedPool;
+}
+
+export function notifyCompanySettingsChanged(id: CompanySessionId, keys: string[]) {
+  const worker = cachedPool?.get(id)?.orchestrator;
+  if (worker) {
+    void worker.refreshSessionSettings(keys).catch(error => {
+      console.warn('[company] Could not refresh live session settings', id, error);
+    });
+  }
+  return publishCompanyPanelChange(id, { kind: 'settings' });
 }
 
 /**

@@ -23,6 +23,7 @@ import {
 } from '../features/agents/routing.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from '../features/agents/zones/types.js';
 import { useSurfaceVisible } from '../lib/surface-visibility.js';
+import { onCompanyPanelChange } from '../lib/company-panel-changes.js';
 
 interface SubSessionsState {
   parent: CompanySession | null;
@@ -104,8 +105,10 @@ export function useCompanySiblings(rootSessionId: string | null) {
     navigateToFront(persisted);
   }, [rootSessionId, routeParams.frontId, navigateToFront]);
 
+  const requestNumber = useRef(0);
   const refresh = useCallback(async () => {
     if (rootSessionId == null) return;
+    const request = ++requestNumber.current;
     sessionEnsure(rootSessionId);
     sessionSetLoading(rootSessionId, true);
     try {
@@ -114,9 +117,11 @@ export function useCompanySiblings(rootSessionId: string | null) {
         throw new Error(`HTTP ${res.status}`);
       }
       const body = (await res.json()) as { parent: CompanySession; children: CompanySession[] };
+      if (request !== requestNumber.current) return;
       setError(null);
       sessionLoaded(body.parent.id, body.parent, body.children);
     } catch (e) {
+      if (request !== requestNumber.current) return;
       console.error('useCompanySiblings: refresh failed:', e);
       setError(e instanceof Error ? e.message : String(e));
       sessionSetLoading(rootSessionId, false);
@@ -127,8 +132,11 @@ export function useCompanySiblings(rootSessionId: string | null) {
     // Coalesce mount/replacement before starting a request; a discarded
     // StrictMode mount must not publish loading/error state for its successor.
     const timer = setTimeout(() => void refresh(), 0);
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); requestNumber.current++; };
   }, [refresh]);
+  useEffect(() => onCompanyPanelChange(({ sessionId, change }) => {
+    if (sessionId === rootSessionId && activeSessionId !== rootSessionId && change.kind === 'settings') void refresh();
+  }), [activeSessionId, rootSessionId, refresh]);
   useEffect(() => {
     if (baseState.parent && requestedSessionId !== activeSessionId) navigateToFront('main');
   }, [baseState.parent, requestedSessionId, activeSessionId, navigateToFront]);

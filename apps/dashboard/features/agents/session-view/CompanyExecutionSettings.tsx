@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useApi } from '../../../hooks/useApi.js';
+import { useCompanyRevisionRefresh } from '../../../hooks/useCompanyRevisionRefresh.js';
+import { onCompanyPanelChange } from '../../../lib/company-panel-changes.js';
 import { Button } from '../../../components/ui/button.js';
 import type { CompanySession } from '@mcp/company-contracts';
 import { parseConfig } from './types.js';
@@ -18,11 +20,10 @@ export function CompanyExecutionSettings({ companyId, sessionId, family, revisio
 }) {
   const workspace = useApi<{ owners: Owner[] }>(`/company/companies/${companyId}/workspace`);
   const refreshWorkspace = workspace.refetch;
-  useEffect(() => {
-    if (!revision) return;
-    const timer = setTimeout(refreshWorkspace, 300);
-    return () => clearTimeout(timer);
-  }, [revision, refreshWorkspace]);
+  useCompanyRevisionRefresh(revision, workspace.loading, refreshWorkspace);
+  useEffect(() => onCompanyPanelChange(({ sessionId: changed, change }) => {
+    if (changed === companyId && change.kind === 'workspace') refreshWorkspace();
+  }), [companyId, refreshWorkspace]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inspection, setInspection] = useState<{ coderSessionId: string; role: string; status: string } | null>(null);
@@ -56,6 +57,11 @@ export function CompanyExecutionSettings({ companyId, sessionId, family, revisio
     finally { setBusy(false); }
   }
   const owners = workspace.data?.owners ?? [];
+  const reviewable = owners.filter(owner => owner.reviewable);
+  function updateOwners(released: string[]) {
+    if (released.length) workspace.update(previous => ({ ...previous, owners: previous.owners.filter(o => !released.includes(o.token)) }));
+    refreshWorkspace();
+  }
   return <div className="space-y-3 border-b px-3 py-3 text-xs">
     <div className="flex items-center gap-2"><span className="font-medium">Sessões e espaço de trabalho</span><button type="button" aria-label="Atualizar coordenação" className="ml-auto text-muted-foreground" onClick={() => { void family.refresh(); workspace.refetch(); }}><RefreshCw className="size-3.5" /></button></div>
     <p className="text-muted-foreground">Conversa e agentes separados por sessão. Documentos e arquivos compartilhados; escritas entre sessões são coordenadas.</p>
@@ -68,14 +74,15 @@ export function CompanyExecutionSettings({ companyId, sessionId, family, revisio
     {owners.length > 0 && <div className="space-y-1 rounded border p-2">
       <span className="font-medium">Operações no espaço compartilhado</span>
       {owners.map(owner => <div key={owner.token} className="space-y-1 py-1 text-[11px] text-muted-foreground"><p className="break-words">{[family.parent, ...family.children].find(s => s?.id === owner.sessionId)?.name || owner.sessionId} · {owner.toolName} · {owner.phase === 'uncertain' || owner.reviewable ? 'resultado pendente' : 'em execução'}</p><p className="break-all font-mono text-[10px]">{owner.toolUseId}</p><p>{new Date(owner.startedAt).toLocaleString()}</p><button type="button" className="text-primary" onClick={() => void inspect(owner)}>Ver conversa e resultado da operação</button></div>)}
-      {owners.some(o => o.phase === 'uncertain' || o.reviewable) && <WorkspaceReview key={owners.map(o => o.token).join(':')} companyId={companyId} owners={owners.filter(o => o.phase === 'uncertain' || o.reviewable)} onChanged={workspace.refetch} />}
+      {owners.some(o => o.phase === 'uncertain' && !o.reviewable) && <p className="text-muted-foreground">Pause a sessão responsável para revisar a operação pendente.</p>}
+      {reviewable.length > 0 && <WorkspaceReview key={reviewable.map(o => o.token).sort().join(':')} companyId={companyId} owners={reviewable} onChanged={updateOwners} />}
     </div>}
     {(error || workspace.error || family.error) && <p role="alert" className="text-destructive">{error || workspace.error || family.error}</p>}
     {inspection && <AgentSessionModal {...inspection} onClose={() => setInspection(null)} />}
   </div>;
 }
 
-function WorkspaceReview({ companyId, owners, onChanged }: { companyId: string; owners: Owner[]; onChanged: () => void }) {
+function WorkspaceReview({ companyId, owners, onChanged }: { companyId: string; owners: Owner[]; onChanged: (released: string[]) => void }) {
   const [reviewed, setReviewed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,8 +91,11 @@ function WorkspaceReview({ companyId, owners, onChanged }: { companyId: string; 
     setBusy(true); setError(null);
     try {
       const response = await fetch(`/api/company/companies/${companyId}/workspace/reconcile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewed: true, tokens: owners.map(o => o.token) }) });
-      if (!response.ok) throw new Error((await response.json()).error ?? `HTTP ${response.status}`);
-      onChanged();
+      if (!response.ok) {
+        if (response.status === 409) { setReviewed(false); onChanged([]); }
+        throw new Error((await response.json()).error ?? `HTTP ${response.status}`);
+      }
+      onChanged(owners.map(o => o.token));
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }

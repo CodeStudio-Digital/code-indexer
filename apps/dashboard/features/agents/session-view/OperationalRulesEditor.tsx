@@ -29,6 +29,7 @@ export function OperationalRulesEditor({ sessionId, value, refetch, onSave }: Op
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   // Tracks the last externally-synced value so we adopt server changes
   // (initial async load, post-save refetch) WITHOUT clobbering unsaved edits.
   const syncedRef = useRef(value);
@@ -43,13 +44,14 @@ export function OperationalRulesEditor({ sessionId, value, refetch, onSave }: Op
   async function save() {
     setSaving(true);
     setSaved(false);
+    setError(null);
     try {
       if (onSave) await onSave(draft);
       else await apiPatch(`/company/sessions/${sessionId}/config`, { operational_rules: draft });
       setSaved(true);
       refetch();
     } catch (e) {
-      console.error('Failed to save operational rules:', e);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
@@ -71,6 +73,7 @@ export function OperationalRulesEditor({ sessionId, value, refetch, onSave }: Op
         className="text-[11px] font-mono resize-y min-h-[160px]"
       />
       <div className="flex items-center gap-2">
+        {error && <span role="alert" className="text-[10px] text-destructive">{error}</span>}
         <Button size="sm" onClick={save} disabled={saving || !dirty}>
           {saving ? t('company.operationalRules.saving') : t('company.operationalRules.save')}
         </Button>

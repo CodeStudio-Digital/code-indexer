@@ -42,7 +42,7 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
     // guard left the state null. Now we CREATE a minimal masterState
     // when none exists so subsequent status events can flow through and
     // CompanySessionView can derive a non-loader phase.
-    if (prev.masterState) {
+    if (prev.masterState && prev.masterState.agentRunId === d.agentRunId) {
       return {
         ...prev,
         masterState: {

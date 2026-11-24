@@ -22,6 +22,7 @@ import { submitMasterReply, type MasterReply } from './company-prompt-response.j
 
 import type { AgentAttachment } from './agent-stream/types.js';
 import { useAgentControls } from './useAgentControls.js';
+import { onCompanyPanelChange } from '../lib/company-panel-changes.js';
 import { useCompanyStore, selectStreamSummary } from '../state/company/index.js';
 import type { DriveFileMeta } from '../state/company/driveSlice.js';
 import type {
@@ -210,6 +211,8 @@ export function resolveCompanyStreamTransport(
 function invalidatesTeamOverview(eventType: string, data: unknown): boolean {
   if (
     eventType === 'agent_status'
+    || eventType === 'session.config_updated'
+    || eventType === 'session_idle'
     || eventType === 'done'
     || eventType === 'error'
     || eventType.startsWith('subordinate_')
@@ -252,6 +255,8 @@ export function useCompanyStream(
     liveOrchestrator: boolean;
   }>({ masterAlive: false, pendingMasterInboxCount: 0, liveOrchestrator: false });
   const [teamRevision, setTeamRevision] = useState(0);
+  const [workspaceRevision, setWorkspaceRevision] = useState(0);
+  const removedRuns = useMemo(() => new Set<string>(), [companySessionId]);
 
   // ─── Action dispatchers (stable refs from zustand) ───────────
   const streamReset = useCompanyStore((s) => s.streamReset);
@@ -310,10 +315,14 @@ export function useCompanyStream(
   const handleSSEEvent = useCallback(
     (eventType: string, data: unknown) => {
       if (companySessionId == null || !mountedRef.current) return;
+      const runId = (data as { agentRunId?: string } | null)?.agentRunId;
+      if (runId && removedRuns.has(runId)) return;
       if (invalidatesTeamOverview(eventType, data)) {
         setTeamRevision((revision) => revision + 1);
       }
       if (eventType === 'agent_event') {
+        const nested = (data as AgentEventEnvelope).event;
+        if (nested === 'tool_call_start' || nested === 'tool_call_result') setWorkspaceRevision(n => n + 1);
         streamApplyAgentEvent(companySessionId, data as AgentEventEnvelope);
         return;
       }
@@ -524,6 +533,7 @@ export function useCompanyStream(
     },
     [
       companySessionId,
+      removedRuns,
       streamApplyAgentEvent,
       streamApplyAgentStatus,
       streamApplySubordinateWaiting,
@@ -608,6 +618,7 @@ export function useCompanyStream(
       const subs = new Map<string, AgentStreamState>();
       let master: AgentStreamState | null = null;
       for (const run of data.agentRuns ?? []) {
+        if (removedRuns.has(run.id)) continue;
         const agentState: AgentStreamState = {
           role: run.role,
           agentRunId: run.id,
@@ -629,7 +640,7 @@ export function useCompanyStream(
       /* ignore */
     }
     await loadKanbanFromDB(isCurrent);
-  }, [companySessionId, transport, routeUrl, streamHydrateFromInitialFetch, loadKanbanFromDB]);
+  }, [companySessionId, transport, routeUrl, streamHydrateFromInitialFetch, loadKanbanFromDB, removedRuns]);
 
   // ─── Stream open helper ──────────────────────────────────────
 
@@ -1077,9 +1088,25 @@ export function useCompanyStream(
   const { pauseAgent, resumeAgent, deleteAgent } = useAgentControls(
     companySessionId,
     streamSetError,
-    streamRemoveSubordinate,
     transport?.allowDirectAgentControls === false ? null : undefined,
   );
+
+  useEffect(() => onCompanyPanelChange(({ sessionId, change }) => {
+    if (sessionId !== companySessionId || !mountedRef.current) return;
+    if (change.kind === 'agent_deleted') {
+      removedRuns.add(change.agentRunId);
+      streamRemoveSubordinate(sessionId, change.agentRunId);
+    } else if (change.kind === 'agent_paused' || change.kind === 'agent_resumed') {
+      if (removedRuns.has(change.agent.agentRunId)) return;
+      // Connected streams own event order. An offline view gets the durable
+      // status from the receipt and observes a newly resumed worker once.
+      if (!abortRef.current) {
+        streamApplyAgentStatus(sessionId, change.agent);
+        if (change.kind === 'agent_resumed') void reattach();
+      }
+    }
+    setTeamRevision(n => n + 1);
+  }), [companySessionId, removedRuns, streamRemoveSubordinate, streamApplyAgentStatus, reattach]);
 
   return {
     connected: stream.connected,
@@ -1105,6 +1132,7 @@ export function useCompanyStream(
     liveOrchestrator: masterLiveness.liveOrchestrator,
     /** Monotonic invalidation key for App agent overview/status/inbox data. */
     teamRevision,
+    workspaceRevision,
     start,
     resume,
     reattach,

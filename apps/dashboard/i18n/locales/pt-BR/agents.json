@@ -227,6 +227,8 @@
   "company.config": "Equipe e configuração da sessão",
   "company.projects": "Projetos",
   "company.removeProjectFailed": "Não foi possível remover o projeto",
+  "company.addProject": "Vincular projeto",
+  "company.addProjectFailed": "Não foi possível vincular o projeto",
   "company.renameProjectFailed": "Não foi possível renomear o projeto",
   "company.removeServiceTitle": "Remover microserviço?",
   "company.removeServiceConfirm": "O container e os arquivos de “{{name}}” serão destruídos.",

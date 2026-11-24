@@ -73,6 +73,13 @@ describe('applyAgentStatus — subordinate materialisation', () => {
     expect(s.subordinateStates.size).toBe(0);
   });
 
+  it('opens a replacement Master at the new chat with its own tool history', () => {
+    const previous = applyAgentStatus(base(), evt({ role: 'master' }));
+    previous.masterState!.toolCalls.push({ id: 'old', name: 'read_file', status: 'done' });
+    const next = applyAgentStatus(previous, evt({ role: 'master', agentRunId: MASTER_RUN_ID, coderSessionId: MASTER_SESSION_ID }));
+    expect(next.masterState).toMatchObject({ agentRunId: MASTER_RUN_ID, coderSessionId: MASTER_SESSION_ID, toolCalls: [] });
+  });
+
   it('retains App configured/effective model provenance from the live stream', () => {
     const agent = applyAgentStatus(base(), evt({
       configuredProvider: 'openai-chatgpt',

@@ -170,6 +170,12 @@ export function dedupe<T>(key: string, producer: () => Promise<T>): Promise<T> {
   return p as Promise<T>;
 }
 
+/** Detach pre-mutation reads without aborting other consumers. */
+export function invalidateRead(key: string): void {
+  inflight.delete(key);
+  removeCached(key);
+}
+
 /** A creation event can arrive while an older catalog GET is already in flight. */
 export function invalidateSessionLists(): void {
   const isList = (key: string) => key.startsWith('GET ') && /\/api\/coder\/sessions(?:\/global)?(?:\?|$)/.test(key);

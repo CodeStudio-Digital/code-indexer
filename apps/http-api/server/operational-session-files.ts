@@ -50,6 +50,7 @@ export interface CompanySessionFileRow extends CompanySessionIdentity {
 interface CompanySessionProjectFileRow {
   company_session_id: CompanySessionId;
   project_id: ProjectId;
+  is_owner: boolean;
   label: string | null;
 }
 
@@ -243,6 +244,7 @@ export class OperationalSessionFiles {
     return entry.session.linked_projects.map((project) => ({
       company_session_id: entry.session.id as unknown as CompanySessionId,
       project_id: project.project_id,
+      is_owner: project.project_id === entry.session.owner_project_id,
       label: labels[String(project.project_id)] ?? null,
     }));
   }
@@ -417,22 +419,19 @@ export class OperationalSessionFiles {
 
   async updateCompanySessionConfig(
     id: CompanySessionId | string,
-    configJson: string,
+    configJson: string | ((currentJson: string) => string),
   ): Promise<CompanySessionFileRow> {
-    JSON.parse(configJson);
     const entry = await this.#requireEntry(String(id), ['company', 'app_studio']);
     const session = await this.#repository.updateSession(
       entry.location,
-      (current) => ({
-        ...current,
-        metadata: {
-          ...current.metadata,
-          company: {
-            ...asCompanyMetadata(current),
-            config_json: configJson,
-          },
-        },
-      }) as SessionMetadata,
+      (current) => {
+        const company = asCompanyMetadata(current);
+        const next = typeof configJson === 'string' ? configJson : configJson(company.config_json);
+        JSON.parse(next);
+        return { ...current, metadata: { ...current.metadata, company: {
+          ...jsonObject(current.metadata.company), ...company, config_json: next,
+        } } } as SessionMetadata;
+      },
     );
     return this.#companyRow({
       ...entry,

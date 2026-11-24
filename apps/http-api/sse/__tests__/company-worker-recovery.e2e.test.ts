@@ -78,6 +78,15 @@ test('slow provider, worker exit and same-card recovery through the Company work
     await expect(first.orchestrator.spawnSubordinate({ ...spec, role: 'unreal' })).rejects.toThrow();
     const assigned = await first.orchestrator.spawnSubordinate({ ...spec, role: 'qa' });
     await expect.poll(() => requests.length, poll).toBe(1);
+    const extraRoot = join(root, 'review-project');
+    await mkdir(extraRoot);
+    const extra = db.createProject('Review project', extraRoot);
+    await records.addLinkedProject({ projectId: extra.id, rootPath: extraRoot });
+    await files.updateCompanySessionConfig(company.id, JSON.stringify({ ...config, role_assignments:
+      config.role_assignments.map(r => r.role === 'qa' ? { ...r, projectIds: [project.id, extra.id] } : r) }));
+    await first.orchestrator.refreshSessionSettings(['role_assignments', 'projects', 'autonomy']);
+    expect((await first.orchestrator.listProjects()).map(p => p.id)).toContain(extra.id);
+    expect(await first.orchestrator.getRolesForProject(extra.id)).toEqual(['qa']);
     await expect.poll(() => recentNotificationRuntimeEvents(0).some(e => e.sessionId === assigned.coderSessionId && e.event === 'chat_session_created'), poll).toBe(true);
     await delay(66_000); // Cross the old 60s heartbeat deadline with no HTTP headers or deltas.
     expect(requests[0].destroyed).toBe(false);

@@ -102,14 +102,14 @@ export function RoleDialog({
 
     const cleaned = isEdit || config.visual_qa !== true ? { ...draft, role: roleName } : withDefaultQaSkill({ ...draft, role: roleName });
     const updatedRoles = isEdit
-      ? existing.map((r, i) => (i === editIdx ? cleaned : r))
+      ? existing.map((r, i) => (i === editIdx ? { ...r, ...cleaned } : r))
       : [...existing, cleaned];
 
     // Hot-swap a RUNNING session when provider/model changed in edit mode —
     // mirrors the retired inline editor's applyRoleProviderChange path. The
     // PATCH below is still the source of truth; a failed swap reconciles on
     // the next spawn/refetch.
-    if (isEdit && original && (original.provider !== cleaned.provider || original.model !== cleaned.model)) {
+    if (stream.liveOrchestrator && isEdit && original && (original.provider !== cleaned.provider || original.model !== cleaned.model)) {
       const masterRow = existing.find((x) => x.role === 'master');
       try {
         await stream.switchProvider(
@@ -130,7 +130,10 @@ export function RoleDialog({
       const res = await fetch(`/api/company/sessions/${sessionId}/config`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ role_assignments: updatedRoles }),
+        body: JSON.stringify({
+          role_assignments: updatedRoles,
+          ...(isMasterEdit ? { master_provider: cleaned.provider, master_model: cleaned.model } : {}),
+        }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiBaseUrl } from '../lib/api-client.js';
-import { getCached, dedupe, writeThrough, invalidateAll } from '../lib/api-cache.js';
+import { getCached, dedupe, writeThrough, invalidateAll, invalidateRead } from '../lib/api-cache.js';
 import { useSurfaceVisible } from '../lib/surface-visibility.js';
 import {
   recordUseApiCacheHit,
@@ -30,7 +30,12 @@ export function useApi<T>(url: string, options?: RequestInit): UseApiResult<T> {
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
-  const refetch = useCallback(() => setTick(t => t + 1), []);
+  const refetch = useCallback(() => {
+    // A GET started before the write cannot acknowledge that write. Existing
+    // consumers may finish it; the next render starts or shares a fresh GET.
+    if (url) invalidateRead(getKey(url));
+    setTick(t => t + 1);
+  }, [url]);
   const update = useCallback((fn: (prev: T) => T) => {
     setData((cur) => {
       if (cur === null) return cur;

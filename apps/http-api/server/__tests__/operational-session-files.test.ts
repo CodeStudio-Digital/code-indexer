@@ -95,6 +95,7 @@ describe('OperationalSessionFiles', () => {
       {
         company_session_id: created.id,
         project_id: 11,
+        is_owner: true,
         label: null,
       },
     ]);

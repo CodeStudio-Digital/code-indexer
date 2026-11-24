@@ -19,6 +19,8 @@ export type RoleAssignmentRaw = {
 
 export interface SessionProject {
   project_id: number;
+  is_owner?: boolean;
+  is_service?: boolean;
   project_name: string;
   root_path: string;
   label: string | null;

@@ -223,7 +223,7 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
         // session), we want the slot to mirror that, not retain a
         // stale instance from a previous mount.
         next.masterState = snapshot.masterState ?? null;
-        if (snapshot.subordinateStates && snapshot.subordinateStates.size > 0) {
+        if (snapshot.subordinateStates) {
           next.subordinateStates = snapshot.subordinateStates as StreamState['subordinateStates'];
         }
         if (snapshot.masterPrompts && snapshot.masterPrompts.length > 0) {

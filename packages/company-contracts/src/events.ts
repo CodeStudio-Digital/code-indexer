@@ -69,7 +69,20 @@ export interface AgentStatusPayload {
   coderSessionId?: string;
 }
 
+/** Confirmed writes are also delivered to open dashboards when the Company worker is offline. */
+export type CompanyPanelChange =
+  | { kind: 'settings' | 'workspace' }
+  | { kind: 'agent_deleted'; agentRunId: string }
+  | { kind: 'agent_paused' | 'agent_resumed'; agent: AgentStatusPayload };
+
+export interface CompanyPanelReceipt {
+  id: string;
+  sessionId: string;
+  change: CompanyPanelChange;
+}
+
 // ─── Master prompts (ask_user / submit_plan) ──────────────────
+
 
 export interface MasterPromptPayload {
   prompt: MasterPrompt;

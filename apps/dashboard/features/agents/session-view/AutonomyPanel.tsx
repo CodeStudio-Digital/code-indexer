@@ -8,12 +8,14 @@
  * config + persisted incidents + durable [AUTO] posts); live updates ride
  * the SSE stream into the autonomy slice.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Snowflake, Sun } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { apiPatch } from '../../../hooks/useApi.js';
 import { apiBaseUrl } from '../../../lib/api-client.js';
+import { applyCompanyPanelReceipt, onCompanyPanelChange } from '../../../lib/company-panel-changes.js';
+import type { CompanyPanelReceipt } from '@mcp/company-contracts';
 import { selectAutonomy, useCompanyStore } from '../../../state/company/index.js';
 import type { AutonomyConfigLike, AutonomyEvent } from '../../../state/company/index.js';
 import { AutonomyActivityFeed } from './AutonomyActivityFeed.js';
@@ -73,6 +75,8 @@ export function AutonomyPanel({ sessionId = null }: { sessionId?: string | null 
   const hydrate = useCompanyStore((s) => s.autonomyHydrate);
   const setConfig = useCompanyStore((s) => s.autonomySetConfig);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const readVersion = useRef(0);
   const [rolesDraft, setRolesDraft] = useState<string | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<string | null>(null);
 
@@ -83,30 +87,42 @@ export function AutonomyPanel({ sessionId = null }: { sessionId?: string | null 
 
   const refetch = useCallback(async () => {
     if (sessionId == null) return;
+    const version = ++readVersion.current;
     try {
       const r = await fetch(`${apiBaseUrl()}/api/company/sessions/${sessionId}/autonomy`);
-      if (!r.ok) return;
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const body = (await r.json().catch(() => null)) as {
         config?: AutonomyConfigLike | null; incidents?: unknown[]; autoPosts?: unknown[];
       } | null;
-      if (!body) return;
+      if (!body || version !== readVersion.current) return;
       const events = [
         ...(Array.isArray(body.incidents) ? body.incidents : []).map(incidentToEvent),
         ...(Array.isArray(body.autoPosts) ? body.autoPosts : []).map(postToEvent),
       ].filter((e): e is AutonomyEvent => e != null);
       hydrate(sessionId, { config: body.config ?? null, events });
-    } catch { /* panel stays on last-known state */ }
+    } catch (e) { if (version === readVersion.current) setError(String(e)); }
   }, [sessionId, hydrate]);
 
-  useEffect(() => { void refetch(); }, [refetch]);
+  useEffect(() => {
+    void refetch();
+    const unsubscribe = onCompanyPanelChange(receipt => {
+      if (receipt.sessionId === sessionId && receipt.change.kind === 'settings') void refetch();
+    });
+    return () => { readVersion.current++; unsubscribe(); };
+  }, [refetch, sessionId]);
 
   const patch = useCallback(async (p: Partial<AutonomyConfigLike>) => {
     if (sessionId == null) return;
+    readVersion.current++;
     setSaving(true);
+    setError(null);
     setConfig(sessionId, { ...config, ...p }); // optimistic
     try {
-      await apiPatch(`/company/sessions/${sessionId}/config`, { autonomy: p });
-    } catch {
+      const response = await apiPatch<{ receipt?: CompanyPanelReceipt }>(`/company/sessions/${sessionId}/config`, { autonomy: p });
+      if (response.receipt) applyCompanyPanelReceipt(response.receipt);
+      else await refetch();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
       await refetch(); // reconcile on rejection (e.g. 400 from sanitize)
     } finally {
       setSaving(false);
@@ -130,6 +146,7 @@ export function AutonomyPanel({ sessionId = null }: { sessionId?: string | null 
 
   return (
     <div className="space-y-2">
+      {error && <p role="alert" className="text-[11px] text-destructive">{error}</p>}
       {frozen && (
         <p className="text-[10px] rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-1 text-sky-600 dark:text-sky-400">
           {t('company.autonomy.frozenBadge')}

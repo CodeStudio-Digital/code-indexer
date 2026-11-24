@@ -8,6 +8,7 @@ interface ProjectBadgeProps {
   projectId: number;
   name: string;
   label: string | null;
+  isService?: boolean;
   onRenamed: () => void;
   onDelete: () => void | Promise<void>;
   canDelete: boolean;
@@ -28,6 +29,7 @@ export function ProjectBadge({
   projectId,
   name,
   label,
+  isService,
   onRenamed,
   onDelete,
   canDelete,
@@ -63,6 +65,8 @@ export function ProjectBadge({
         });
         setValue(name);
       }
+    } catch (error) {
+      toast.error(t('company.renameProjectFailed'), { description: String(error) });
     } finally {
       setSaving(false);
     }
@@ -80,7 +84,7 @@ export function ProjectBadge({
           onChange={(e) => setValue(e.target.value)}
           onBlur={save}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void save();
+            if (e.key === 'Enter') e.currentTarget.blur();
             else if (e.key === 'Escape') {
               setValue(name);
               setEditing(false);
@@ -114,7 +118,7 @@ export function ProjectBadge({
           type="button"
           onClick={(e) => { e.stopPropagation(); void onDelete(); }}
           className="ml-0.5 opacity-0 group-hover/badge:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-          title={label ? 'Remove microservice (destroys container)' : 'Unlink project from session'}
+          title={isService ? 'Remove microservice (destroys container)' : 'Unlink project from session'}
         >
           <X className="h-2.5 w-2.5" />
         </button>

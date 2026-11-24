@@ -4,6 +4,7 @@ import { companyFixture } from '@mcp/company/services/__tests__/company-multises
 import { mountCompanyChildRoutes } from '../children.js';
 import { mountCompanyFileSessionRoutes } from '../session-files.routes.js';
 import { mountCompanyInboxRoutes } from '../inbox.js';
+import { mountCompanyAutonomyRoutes } from '../autonomy.js';
 import { CompanyWorkspaceCoordinator } from '@mcp/company/services/workspace-coordinator.js';
 const runtime = vi.hoisted(() => ({ get: vi.fn(() => null) }));
 beforeEach(() => { runtime.get.mockReset().mockReturnValue(null); });
@@ -11,6 +12,25 @@ vi.mock('../../../../sse/companyOrchestrator.js', () => ({ getCompanyOrchestrato
 vi.mock('../stream.js', () => ({ activeOrchestrators: { get: runtime.get } }));
 async function fixture() { const f = await companyFixture(); const app = new HttpRouter(); mountCompanyFileSessionRoutes(app, f as never); mountCompanyChildRoutes(app, f as never); mountCompanyInboxRoutes(app, f as never); return { ...f, app }; }
 describe('Company and session API compatibility', () => {
+  it('merges concurrent panel edits and reads the active session autonomy independently', async () => {
+    const f = await fixture();
+    mountCompanyAutonomyRoutes(f.app, f as never);
+    const path = `/api/company/sessions/${f.child.id}`;
+    const patch = (body: unknown) => f.app.request(path + '/config', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const responses = await Promise.all([patch({ autonomy: { scheduler: false } }), patch({ autonomy: { freeze: true } }), patch({ operational_rules: 'Child rule' })]);
+    for (const response of responses) {
+      expect(response.status).toBe(200);
+      expect((await response.json()).receipt).toMatchObject({ sessionId: f.child.id, change: { kind: 'settings' } });
+    }
+    expect((await patch({ autonomy: { scheduler: 'wrong' } })).status).toBe(400);
+    const saved = JSON.parse(f.files(f.child.id).getSession().config_json);
+    expect(saved).toMatchObject({ master_provider: 'synthetic', autonomy: { scheduler: false, freeze: true }, operational_rules: 'Child rule' });
+    const active = await (await f.app.request(path + '/autonomy')).json();
+    expect(active.config).toMatchObject({ scheduler: false, freeze: true });
+    expect(JSON.parse(f.files(f.company.id).getSession().config_json)).not.toHaveProperty('autonomy');
+  });
   it('aggregates child session status without changing the legacy root status', async () => {
     const f = await fixture();
     await f.files(f.child.id).updateSessionStatus('running');
