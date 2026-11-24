@@ -61,7 +61,7 @@ export interface IAgentStatusUpdater {
     role: string,
     status: AgentRunStatus,
     opts?: { message?: string; coderSessionId?: string },
-  ): void;
+  ): void | Promise<void>;
 }
 
 /** Master-side notifications — called from subordinate code paths. */

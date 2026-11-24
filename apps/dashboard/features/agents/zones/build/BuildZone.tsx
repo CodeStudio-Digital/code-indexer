@@ -23,13 +23,14 @@ import { useSessionServices } from '../../tests/shared/useSessionServices.js';
 interface BuildZoneProps {
   sessionId: string;
   tab: BuildTab;
+  qaPane?: 'history' | 'live';
 }
 
-export function BuildZone({ sessionId, tab }: BuildZoneProps) {
+export function BuildZone({ sessionId, tab, qaPane }: BuildZoneProps) {
   const { projects, loading, error } = useSessionProjects(sessionId);
   const { services } = useSessionServices(sessionId);
   if (tab === 'docs') return <DocsTab companySessionId={sessionId} services={services} />;
-  if (tab === 'tests') return <TestsTab sessionId={sessionId} />;
+  if (tab === 'tests') return <TestsTab sessionId={sessionId} initialPane={qaPane} />;
 
   // Files + Git need the project list. Render lightweight states while
   // the fetch settles so the tab doesn't flash empty.

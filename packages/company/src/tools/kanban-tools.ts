@@ -11,8 +11,23 @@ import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import type { KanbanColumn } from '@mcp/company/types.js';
+import { taskEvidence } from '@mcp/company-contracts/models/kanban.js';
 import { KANBAN_COLUMNS } from '@mcp/company/types.js';
 import { kanbanCreateCardTool, kanbanMoveCardTool } from '@mcp/company/tools/kanban-batch.js';
+
+export const cardEvidenceParameter: NonNullable<JsonSchema['properties']>[string] = {
+  type: 'array',
+  description: 'Test results, document references or artifacts for existing acceptance criteria. Read control.acceptance on the card for its current index and text.',
+  items: {
+    type: 'object',
+    properties: {
+      index: { type: 'integer', description: 'Zero-based index in control.acceptance' },
+      criterion: { type: 'string', description: 'Exact criterion at that index' },
+      evidence: { type: 'string', description: 'Result and reference that a reviewer can verify' },
+    },
+    required: ['index', 'criterion', 'evidence'],
+  },
+};
 
 export function buildKanbanTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [
@@ -204,14 +219,15 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
         },
         description: 'Checklist items to create (omit id) or update (pass id).',
       },
+      evidence: cardEvidenceParameter,
     },
-    required: ['items'],
   };
 
   return {
     name: 'kanban_update_objectives',
     description:
-      'Add or update checklist objectives on a Kanban card. Master + subordinates both use this. ' +
+      'Update checklist objectives or record evidence against acceptance criteria, or both in one call. ' +
+      'Omit items to preserve the current checklist. Subordinates can record evidence only on their assigned card. ' +
       "If you're a subordinate, omit `card_id` and your assigned card is used. " +
       "If you're the master, pass `card_id` explicitly. " +
       'Provide `id` to update an existing item, or omit `id` to create a new one.',
@@ -236,10 +252,12 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
           }
           cardId = resolved;
         }
-        const items = args.items as Array<{ id?: string; text: string; checked: boolean }>;
+        const items = args.items as Array<{ id?: string; text: string; checked: boolean }> | undefined;
+        const evidence = args.evidence === undefined ? undefined : taskEvidence.parse(args.evidence);
+        if (!items && !evidence) return err('Provide items or evidence to update the card.');
         // Defensive validation: when items reference existing IDs, ensure
         // they belong to THIS card. Prevents accidental cross-card writes.
-        if (items.some((i) => i.id != null)) {
+        if (items?.some((i) => i.id != null)) {
           const card = orchestrator.kanbanGetCard(cardId);
           if (card) {
             const cardItemIds = new Set(card.checklist.map((ci) => ci.id));
@@ -253,7 +271,8 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
             }
           }
         }
-        const result = orchestrator.kanbanUpdateChecklist(cardId, items);
+        const result = orchestrator.kanbanUpdateChecklist(cardId, items, evidence, agentRunId);
+        if (evidence) return ok(`Recorded evidence for ${evidence.length} acceptance criteria on card #${cardId}.`);
         const checked = result.filter((i) => i.checked).length;
         return ok(`Checklist updated: ${checked}/${result.length} items completed on card #${cardId}`);
       } catch (e) {
@@ -341,7 +360,8 @@ function kanbanAssignAgent(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const sub = orchestrator.getSubordinate(args.agent_run_id as string);
-        const role = sub?.role ?? 'unknown';
+        const role = sub?.role ?? orchestrator.listSubordinates().find(run => run.agentRunId === args.agent_run_id)?.role;
+        if (!role) return err('Unknown agent in this Company session.');
         orchestrator.kanbanAssignAgent(args.card_id as string, args.agent_run_id as string, role);
         return ok(`Agent run #${args.agent_run_id} (${role}) assigned to card #${args.card_id}`);
       } catch (e) {

@@ -22,7 +22,8 @@ describe('ChatRightRail navigation', () => {
     for (const name of ['state', 'context', 'changes', 'usageQuota', 'more', 'config']) {
       expect(html).toContain(`aria-label="rightRail.${name}"`);
     }
-    expect(html.match(/<button /g)).toHaveLength(7);
+    expect(html.match(/<button /g)).toHaveLength(8);
+    expect(html).toContain('aria-label="side.title"');
     expect(html).toContain('aria-label="collaboration.title"');
     expect(html).not.toContain('aria-label="rightRail.preview"');
   });

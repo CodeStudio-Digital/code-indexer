@@ -7,7 +7,7 @@
  * Routing is unchanged: `:zone/:tab` from the URL still drives the
  * active selection; this component is purely presentational.
  */
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 import type { BoardMessage } from '../../../state/company/types.js';
@@ -27,6 +27,7 @@ import {
 } from './types.js';
 
 interface ZoneLayoutProps {
+  visualQA?: boolean;
   sessionId: string;
   sessionName: string;
   zone: Zone;
@@ -62,13 +63,16 @@ export function ZoneLayout({
   workbenchSlots,
   sessions,
   runtimeKind = 'company',
+  visualQA = false,
 }: ZoneLayoutProps) {
+  const [qaPane,setQaPane]=useState<'history'|'live'>('live');
   const appTabUnavailable = runtimeKind === 'app_studio'
     && (zone !== 'work' || tab !== 'board');
   const effectiveZone: Zone = appTabUnavailable ? 'work' : zone;
   const effectiveTab = appTabUnavailable ? 'board' : tab;
   const handleChange = useCallback(
     (nextZone: Zone, nextTab: string) => {
+      setQaPane('live');
       const finalTab = isValidTab(nextZone, nextTab)
         ? nextTab
         : DEFAULT_TAB_FOR_ZONE[nextZone];
@@ -101,7 +105,7 @@ export function ZoneLayout({
         : rail}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {runtimeKind === 'company' && <CompanyNavigation tab={effectiveTab} onChange={handleChange} />}
+        {runtimeKind === 'company' && <CompanyNavigation tab={effectiveTab} onChange={handleChange} visualQA={visualQA} />}
         {effectiveZone === 'work' && (
           <WorkZone
             sessionId={sessionId}
@@ -111,10 +115,12 @@ export function ZoneLayout({
             boardMessages={boardMessages}
             composer={composer}
             readOnly={runtimeKind === 'app_studio'}
+            onValidations={() => {handleChange('build','tests');setQaPane('history');}}
           />
         )}
         {effectiveZone === 'build' && (
           <BuildZone
+            qaPane={qaPane}
             sessionId={sessionId}
             tab={(isValidTab('build', tab) ? tab : DEFAULT_TAB_FOR_ZONE.build) as BuildTab}
           />

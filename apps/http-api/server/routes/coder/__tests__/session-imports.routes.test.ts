@@ -1,9 +1,18 @@
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { HttpRouter } from '@mcp/shared/http/router.js';
-import { ExternalSessionError, type PersistExternalSessionInput } from '@mcp/code-agent/sessions/import/index.js';
+import {
+  discoverExternalSessions, ExternalSessionError, type ExternalSessionCandidate, type ExternalSessionSource, type PersistExternalSessionInput,
+} from '@mcp/code-agent/sessions/import/index.js';
 import type { ServerDeps } from '../../../deps.js';
+import { resolveProjectWorktree } from '../../../worktree-reads.js';
 import { mountCoderSessionImportRoutes } from '../session-imports.js';
+
+vi.mock('@mcp/code-agent/sessions/import/index.js', async (original: () => Promise<unknown>) => ({
+  ...(await original() as typeof import('@mcp/code-agent/sessions/import/index.js')),
+  discoverExternalSessions: vi.fn(),
+}));
+vi.mock('../../../worktree-reads.js', () => ({ resolveProjectWorktree: vi.fn() }));
 
 const codexFixture = fileURLToPath(new URL(
   '../../../../../../packages/code-agent/src/sessions/import/__fixtures__/codex-rollout.jsonl',
@@ -43,7 +52,50 @@ function post(app: HttpRouter, path: string, body: unknown): Promise<Response> {
   }));
 }
 
+function candidate(source: ExternalSessionSource, id: string, cwd: string | null): ExternalSessionCandidate {
+  const reference = { source, external_id: id, source_path: `${id}.jsonl` };
+  return { ...reference, title: `Investigate ${id}`, cwd, updated_at: null, source_model: null, size_bytes: 10, reference };
+}
+
 describe('coder external session import routes', () => {
+  it.each(['claude-code', 'codex'] as const)('filters %s by the current folder before applying the list limit', async (source: ExternalSessionSource) => {
+    const { app } = setup();
+    vi.mocked(discoverExternalSessions).mockResolvedValueOnce([
+      candidate(source, 'different', 'D:\\MCP2'),
+      candidate(source, 'unknown', null),
+      candidate(source, 'active', 'd:/mcp/'),
+    ]);
+    const response = await app.request(`/api/coder/session-imports/discover?project_id=1&source=${source}&cwd_match=match&limit=1`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      items: [{ source, external_id: 'active', matches_project: true }],
+      next_cursor: null,
+    });
+    expect(discoverExternalSessions).toHaveBeenLastCalledWith(source);
+  });
+
+  it('uses the selected worktree for discovery, preview and import', async () => {
+    const main = 'D:\\AnotherProject';
+    const worktree = 'D:\\MCP';
+    const { app, imported } = setup(main);
+    const request = { source: 'codex', source_path: codexFixture, project_id: 1, worktree_path: worktree };
+    vi.mocked(resolveProjectWorktree).mockResolvedValueOnce(worktree).mockResolvedValueOnce(worktree).mockResolvedValueOnce(worktree);
+    vi.mocked(discoverExternalSessions).mockResolvedValueOnce([
+      candidate('codex', 'main', main), candidate('codex', 'worktree', worktree),
+    ]);
+
+    const list = await app.request(`/api/coder/session-imports/discover?project_id=1&cwd_match=match&worktree_path=${encodeURIComponent(worktree)}`);
+    expect(await list.json()).toMatchObject({ items: [{ external_id: 'worktree' }] });
+    const preview = await post(app, '/api/coder/session-imports/preview', request);
+    expect(await preview.json()).toMatchObject({ matches_project: true });
+    const result = await post(app, '/api/coder/session-imports/import', {
+      ...request, provider: 'definitely-missing-provider', model: 'missing-model',
+    });
+    expect(result.status).toBe(201);
+    expect(imported[0]).toMatchObject({ worktree_path: worktree });
+    expect(resolveProjectWorktree).toHaveBeenLastCalledWith(main, worktree);
+  });
+
   it('detects and previews a manually selected JSONL', async () => {
     const { app } = setup();
     const response = await post(app, '/api/coder/session-imports/preview', {

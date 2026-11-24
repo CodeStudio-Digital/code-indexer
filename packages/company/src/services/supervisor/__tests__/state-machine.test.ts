@@ -26,6 +26,7 @@ const ALL_STATES: SupervisionState[] = [
   'RUNNING_TURN',
   'AWAITING_PROVIDER',
   'AWAITING_TOOL',
+  'AWAITING_HUMAN',
   'AWAITING_MASTER_APPROVAL',
   'AWAITING_INBOX_ANSWER',
   'IDLE',
@@ -58,7 +59,8 @@ describe('SupervisionState — tables completeness', () => {
   it('all 6 transient-with-timeout states are in STUCK_VARIANT_OF', () => {
     expect(STUCK_VARIANT_OF.BOOTING).toBe('STUCK_BOOT');
     expect(STUCK_VARIANT_OF.RUNNING_TURN).toBe('STUCK_TURN');
-    expect(STUCK_VARIANT_OF.AWAITING_PROVIDER).toBe('STUCK_PROVIDER');
+    expect(STUCK_VARIANT_OF.AWAITING_PROVIDER).toBeUndefined();
+    expect(DEFAULT_STATE_TIMEOUT_MS.AWAITING_PROVIDER).toBeNull();
     expect(STUCK_VARIANT_OF.AWAITING_TOOL).toBe('STUCK_TOOL');
     expect(STUCK_VARIANT_OF.AWAITING_MASTER_APPROVAL).toBe('STUCK_AWAITING_MASTER');
     expect(STUCK_VARIANT_OF.AWAITING_INBOX_ANSWER).toBe('INBOX_EXPIRED');
@@ -67,6 +69,7 @@ describe('SupervisionState — tables completeness', () => {
 
   it('IDLE and TERMINAL have null timeout (never go stuck)', () => {
     expect(DEFAULT_STATE_TIMEOUT_MS.IDLE).toBeNull();
+    expect(DEFAULT_STATE_TIMEOUT_MS.AWAITING_HUMAN).toBeNull();
     expect(DEFAULT_STATE_TIMEOUT_MS.TERMINAL).toBeNull();
   });
 

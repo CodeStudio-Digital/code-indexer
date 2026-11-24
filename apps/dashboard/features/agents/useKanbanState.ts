@@ -31,7 +31,7 @@ interface UseKanbanStateResult {
     tag?: KanbanTag;
     checklist?: string[];
   }) => Promise<KanbanCardFull | null>;
-  moveCard: (cardId: string, column: KanbanColumn, position?: number) => Promise<boolean>;
+  moveCard: (cardId: string, column: KanbanColumn, position?: number, reason?: string) => Promise<boolean>;
   updateCard: (
     cardId: string,
     patch: { title?: string; description?: string; tag?: KanbanTag | null },
@@ -133,13 +133,13 @@ export function useKanbanState(companySessionId: string | null): UseKanbanStateR
   );
 
   const moveCard = useCallback(
-    async (cardId: string, column: KanbanColumn, position?: number): Promise<boolean> => {
+    async (cardId: string, column: KanbanColumn, position?: number, reason?: string): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
       try {
         const res = await fetch(`${base}/${cardId}/move`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ column, position }),
+          body: JSON.stringify({ column, position, reason }),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({ error: 'Move failed' }));
@@ -147,15 +147,17 @@ export function useKanbanState(companySessionId: string | null): UseKanbanStateR
           await refreshCard(cardId);
           return false;
         }
-        // Backend broadcasts a kanban_card_moved SSE that updates the
-        // slice; no need to refetch on success.
+        // A prerequisite can unblock or re-block several cards, including in an idle company.
+        const board = await fetch(base);
+        if (board.ok) kanbanHydrate(companySessionId,await board.json() as KanbanCardFull[]);
+        else await refreshCard(cardId);
         return true;
       } catch (e) {
         kanbanSetError(companySessionId, (e as Error).message);
         return false;
       }
     },
-    [companySessionId, base, refreshCard, kanbanSetError],
+    [companySessionId, base, refreshCard, kanbanHydrate, kanbanSetError],
   );
 
   const updateCard = useCallback(

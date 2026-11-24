@@ -22,6 +22,7 @@ import { KANBAN_COLUMNS } from '@mcp/company/types.js';
 const MAX_BATCH = 15;
 
 const CARD_PROPS: NonNullable<JsonSchema['properties']> = {
+  owner: { type: 'string', description: 'Exact team role responsible for this card. Set it before automatic dispatch.' },
   title: { type: 'string', description: 'Card title — concise task name' },
   description: { type: 'string', description: 'Technical description of the task' },
   column: { type: 'string', enum: KANBAN_COLUMNS, description: 'Target column (default: backlog)' },
@@ -39,6 +40,7 @@ function createOne(orchestrator: CompanyOrchestrator, spec: Rec): string {
     tag: spec.tag as 'bug' | 'feature' | 'refactor' | 'documentation' | undefined,
     created_by: 'master',
     checklist: spec.checklist as string[] | undefined,
+    owner: typeof spec.owner === 'string' ? spec.owner.trim() : undefined,
   });
   return `#${card.id} "${card.title}" → ${card.column} (position ${card.position})`;
 }

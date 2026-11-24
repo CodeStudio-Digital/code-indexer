@@ -20,6 +20,7 @@ export type SectionId =
   | 'ai-geral'
   | 'lsp-servers'
   | 'chrome-service'
+  | 'clef'
   | 'pipeline-bindings'
   | 'perf';
 

@@ -98,7 +98,8 @@ function kanbanMoveToReview(
           );
         }
 
-        orchestrator.kanbanMoveCard(cardId, 'review');
+        const moved = orchestrator.kanbanMoveCard(cardId, 'review');
+        if (moved.column !== 'review') return err(`Card #${cardId} is still in ${moved.column}. Check its blocking dependencies.`);
         return ok(
           `Card #${cardId} "${card.title}" moved to Review. ` +
           `The Master will verify your work and move it to Done.`,

@@ -130,6 +130,7 @@ import type {
 import { CompanySessionFiles } from '../../../packages/company/src/services/CompanySessionFiles.js';
 
 interface CompanyWorkerData {
+  writerOwnerId: string;
   companySessionId: CompanySessionId;
   dbPath: string;
   sessionContext: {
@@ -284,7 +285,7 @@ registerPerfStatsHandler(bridge);
 // `CompanyStore` opened its OWN second writer on the same file, which (× the
 // per-runCoder handles) starved the WAL during multi-agent runs.
 const db = new CodeIndexDB(dbPath);
-const sessionStore = getSharedSessionStore(dbPath);
+const sessionStore = getSharedSessionStore(dbPath, (workerData as CompanyWorkerData).writerOwnerId);
 await sessionStore.ensureCatalog();
 setSandboxArchiveBundleResolver({
   resolveBundle: async (sessionId) => {

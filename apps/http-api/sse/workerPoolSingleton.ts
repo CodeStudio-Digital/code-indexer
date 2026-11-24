@@ -26,6 +26,10 @@ import type { CoderWorkerDocDeps } from './CoderWorkerPool.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
+import type { CompanyWorkerExitHandler } from './company-worker-exit.js';
+
+let onChatCreated: import('./WorkerOrchestratorPool.js').CompanyChatCreatedHandler | undefined;
+let onWorkerExit: CompanyWorkerExitHandler | undefined;
 let cachedPool: WorkerOrchestratorPool | null = null;
 /**
  * Mutable box for doc-corpus deps. Server.ts populates it during boot via
@@ -103,6 +107,8 @@ export function getWorkerOrchestratorPool(): WorkerOrchestratorPool {
       }
       return resolve(sessionId);
     },
+    onChatCreated: (...args) => onChatCreated?.(...args) ?? Promise.resolve(),
+    onWorkerExit: (...args) => onWorkerExit?.(...args) ?? Promise.resolve(),
     ttlMs: Number(process.env.CODER_COMPANY_ORCHESTRATOR_TTL_MS) || undefined,
     log: (level, msg) => {
       if (level === 'error') console.error(msg);
@@ -167,7 +173,11 @@ export function setCompanyWorkerSessionRuntimeResolver(
         sessionId: CompanySessionId,
       ) => Promise<CompanySessionRuntimeContext>)
     | null,
+  onExit?: CompanyWorkerExitHandler,
+  chatCreated?: typeof onChatCreated,
 ): void {
+  onChatCreated = chatCreated;
+  onWorkerExit = onExit;
   sessionRuntimeBox.resolve = resolve;
 }
 

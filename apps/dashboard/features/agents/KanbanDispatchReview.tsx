@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
 import { readDispatchReview, submitDispatchReview, type DispatchReview } from './kanban-dispatch-review-api.js';
@@ -8,6 +9,7 @@ export function DispatchReviewNotice({ error }: { error: string | null }) {
 }
 
 export function KanbanDispatchReview({ sessionId, cardId, onChanged }: { sessionId: string; cardId: string; onChanged: () => void }) {
+  const {t}=useTranslation('agents');
   const [data, setData] = useState<DispatchReview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,6 +28,12 @@ export function KanbanDispatchReview({ sessionId, cardId, onChanged }: { session
   const refresh = useCallback(() => {
     setError(null); setReviewed(false); setRevision(value => value + 1);
   }, []);
+  const phase=data?.claim?.phase;
+  useEffect(()=>{
+    if(!phase || !['reserved','starting','running'].includes(phase))return;
+    const timer=setTimeout(()=>setRevision(value=>value+1),3000);
+    return ()=>clearTimeout(timer);
+  },[data,phase]);
   async function release() {
     if (!reviewed || !data?.reviewable || !data.claim || busy) return;
     setBusy(true); setError(null);
@@ -35,7 +43,10 @@ export function KanbanDispatchReview({ sessionId, cardId, onChanged }: { session
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
-  if (!data?.pending && !error && !data?.claim?.review?.completedAt) return null;
+  if (!data?.pending && !error && !data?.claim?.review?.completedAt) {
+    if(!phase) return null;
+    return <p className="my-2 text-xs" role="status">{t('designer.lastRun')} · {t('designer.phase.'+phase)} {data?.owner?.role && '· @'+data.owner.role}</p>;
+  }
   return <section className="mt-4 space-y-2 rounded border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
     <div className="flex items-center justify-between gap-2"><h4 className="font-medium">{data?.pending ? 'Revisar despacho pendente' : data?.claim?.review?.completedAt ? 'Despacho revisado' : 'Verificar despacho'}</h4><Button size="sm" variant="ghost" disabled={busy} onClick={refresh}>Atualizar</Button></div>
     <DispatchReviewNotice error={error} />

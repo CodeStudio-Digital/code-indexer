@@ -92,6 +92,7 @@ export class FsExternalImportRepository {
       }
       const importedAt = new Date().toISOString();
       const metadata = toJsonValue({
+        worktree_workspace: input.worktree_path != null,
         external_import: {
           source: input.source,
           external_id: input.reference.external_id,
@@ -113,6 +114,7 @@ export class FsExternalImportRepository {
       }) as Readonly<Record<string, JsonValue>>;
       const session = await this.directory.createSession({
         project_id: input.project_id,
+        worktree_path: input.worktree_path ?? null,
         title: input.title,
         provider: input.provider,
         model: input.model,

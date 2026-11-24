@@ -20,9 +20,10 @@ interface SessionActionsMenuProps {
   /** Phase H — only a master view passes this. */
   onReestablishMaster?: () => void | Promise<void>;
   onReset?: () => void;
+  onDesign?: () => void;
 }
 
-export function SessionActionsMenu({ canReconnect, onReconnect, onReestablishMaster, onReset }: SessionActionsMenuProps) {
+export function SessionActionsMenu({ canReconnect, onReconnect, onReestablishMaster, onReset, onDesign }: SessionActionsMenuProps) {
   const { t } = useTranslation('agents');
   return (
     <DropdownMenu>
@@ -37,6 +38,7 @@ export function SessionActionsMenu({ canReconnect, onReconnect, onReestablishMas
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
+        {onDesign && <DropdownMenuItem onSelect={onDesign}>{t('designer.adjust')}</DropdownMenuItem>}
         {canReconnect && (
           <DropdownMenuItem onSelect={onReconnect}>
             <RefreshCw className="h-3.5 w-3.5 mr-2" />

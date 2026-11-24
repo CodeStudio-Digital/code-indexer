@@ -105,6 +105,7 @@ export class CompanySessionFiles extends CompanySessionFileBase {
   setInboxStatusSync = this.inbox.setInboxStatusSync.bind(this.inbox);
   private readonly masterPrompts = new CompanyMasterPromptFiles(this);
   createMasterPrompt = this.masterPrompts.createMasterPrompt.bind(this.masterPrompts);
+  getMasterPrompt = this.masterPrompts.getMasterPrompt.bind(this.masterPrompts);
   getPendingMasterPrompt = this.masterPrompts.getPendingMasterPrompt.bind(this.masterPrompts);
   claimMasterPromptDelivery = this.masterPrompts.claimMasterPromptDelivery.bind(this.masterPrompts);
   releaseMasterPromptDelivery = this.masterPrompts.releaseMasterPromptDelivery.bind(this.masterPrompts);

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="pt-BR" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>Company designer</title>
+  </head>
+  <body>
+    <div id="root" style="height:100vh"></div>
+    <script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+      import { DialogProvider } from '/components/ui/dialog-provider.tsx';
+      import { TooltipProvider } from '/components/ui/tooltip.tsx';
+      import { AgentsTab } from '/features/agents/AgentsTab.tsx';
+      import { ZoneLayout } from '/features/agents/zones/ZoneLayout.tsx';
+      import i18n, { i18nReady } from '/i18n/index.ts';
+      import '/index.css';
+      const h = React.createElement;
+      function Opened() {
+        return h('output', {}, useLocation().pathname);
+      }
+      const options = new URLSearchParams(window.location.search);
+      function CompanyWorkspace() {
+        const direct = options.has('direct');
+        const [[zone, tab], setSelection] = React.useState(direct ? ['build', 'tests'] : ['work', 'kanban']);
+        return h(ZoneLayout, {
+          sessionId: 'qa-company',
+          sessionName: 'Auditoria',
+          zone,
+          tab,
+          visualQA: options.has('visual'),
+          onZoneTabChange: (z, t) => setSelection([z, t]),
+          stream: {},
+          boardMessages: [],
+          bottomOpen: false,
+          onToggleBottom() {},
+          workbenchSlots: {},
+        });
+      }
+      await i18nReady;
+      await i18n.changeLanguage('pt-BR');
+      createRoot(document.getElementById('root')).render(
+        h(
+          TooltipProvider,
+          {},
+          h(
+            DialogProvider,
+            {},
+            h(
+              MemoryRouter,
+              { initialEntries: ['/agents'] },
+              h(
+                Routes,
+                {},
+                h(Route, { path: '/agents', element: h(options.has('qa') ? CompanyWorkspace : AgentsTab) }),
+                h(Route, { path: '*', element: h(Opened) }),
+              ),
+            ),
+          ),
+        ),
+      );
+    </script>
+  </body>
+</html>

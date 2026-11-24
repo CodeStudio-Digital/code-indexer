@@ -30,6 +30,7 @@
   "title": "Admin",
   "description": "Configure providers e o índice semântico local que alimentam a busca e o agente coder.",
   "tabs.providers": "Providers & Modelos",
+  "tabs.clef": "Decisões com Clef",
   "tabs.semanticIndexing": "Indexação semântica",
   "tabs.tools": "Ferramentas",
   "tabs.mcpServers": "Servidores MCP",

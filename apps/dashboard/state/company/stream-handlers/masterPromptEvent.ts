@@ -11,25 +11,21 @@ import type { MasterPrompt } from '@mcp/company-contracts';
 import type { StreamState } from '../types.js';
 
 export function applyMasterPrompt(prev: StreamState, prompt: MasterPrompt): StreamState {
+  const current = prev.masterPrompts.get(prompt.id);
+  if (current && current.status !== 'pending') return prev;
   const next = new Map(prev.masterPrompts);
   next.set(prompt.id, prompt);
   return { ...prev, masterPrompts: next };
 }
 
-/**
- * Merge master prompts loaded from the initial REST fetch. Existing
- * entries with the same id keep their (possibly more up-to-date) state.
- */
+/** A prompt is posted once and resolved once. Snapshots and SSE can arrive in either order. */
 export function hydrateMasterPrompts(prev: StreamState, prompts: MasterPrompt[]): StreamState {
-  if (!Array.isArray(prompts) || prompts.length === 0) return prev;
-  const next = new Map(prev.masterPrompts);
-  let added = 0;
-  for (const p of prompts) {
-    if (!next.has(p.id)) {
-      next.set(p.id, p);
-      added++;
-    }
+  let next: Map<string, MasterPrompt> | undefined;
+  for (const prompt of prompts) {
+    const current = (next ?? prev.masterPrompts).get(prompt.id);
+    if (current && (current.status !== 'pending' || prompt.status === 'pending')) continue;
+    next ??= new Map(prev.masterPrompts);
+    next.set(prompt.id, prompt);
   }
-  if (added === 0) return prev;
-  return { ...prev, masterPrompts: next };
+  return next ? { ...prev, masterPrompts: next } : prev;
 }

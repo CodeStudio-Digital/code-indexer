@@ -219,6 +219,7 @@ export function kanbanAgents(
       agent_run_id: asAgentRunId(stringValue(row.agent_run_id)),
       role: stringValue(row.role),
       assigned_at: stringValue(row.assigned_at),
+      ...(typeof row.session_id === 'string' && { session_id:row.session_id }),
       unassigned_at: nullableString(row.unassigned_at),
     };
   });

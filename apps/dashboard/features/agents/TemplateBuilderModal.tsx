@@ -14,7 +14,6 @@ import {
 import { apiPost, apiPatch, useApi } from '../../hooks/useApi.js';
 import { useProviders } from '../../hooks/useProviders.js';
 import { RoleEditModal, type RoleConfig, type SkillDef } from './RoleEditModal.js';
-import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 
 interface TemplateBuilderProps {
   onClose: () => void;
@@ -85,7 +84,7 @@ export function TemplateBuilderModal({ onClose, onSaved, existingTemplate }: Tem
       if (existingTemplate) {
         await apiPatch(`/company/templates/${existingTemplate.id}`, { name, description, roles });
       } else {
-        await apiPost('/company/templates', { name, description, roles: roles.map(withDefaultQaSkill) });
+        await apiPost('/company/templates', { name, description, roles, visual_qa: false });
       }
       onSaved();
       onClose();

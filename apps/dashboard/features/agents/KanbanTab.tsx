@@ -27,11 +27,13 @@ import {
 } from './recommendations-api.js';
 import { kanbanRecomputeFingerprint } from './kanban-card-flags.js';
 import { RecommendRoleDialog } from './RecommendRoleDialog.js';
-import { apiPatch } from '../../hooks/useApi.js';
+import { DecisionControl } from './design/DecisionControl.js';
+import { apiPatch, useApi } from '../../hooks/useApi.js';
 import { selectAutonomy, useCompanyStore } from '../../state/company/index.js';
 import type { AutonomyConfigLike } from '../../state/company/index.js';
 
 interface KanbanTabProps {
+  onValidations?: () => void;
   companySessionId: string;
 }
 
@@ -41,9 +43,21 @@ const AUTO_RECOMPUTE_DEBOUNCE_MS = 1_500;
 const autoRecomputeStorageKey = (sessionId: string): string =>
   `mcp.kanban.autoRecompute.${sessionId}`;
 
-export function KanbanTab({ companySessionId }: KanbanTabProps) {
+export function KanbanTab({ companySessionId, onValidations }: KanbanTabProps) {
   const { t } = useTranslation(['agents', 'common']);
   const kanban = useKanbanState(companySessionId);
+  const [listView,setListView] = useState(() => typeof window !== 'undefined' && window.innerWidth < 900);
+  const projectOptions=useApi<{projects:{project_id:number;project_name:string}[]}>('/company/sessions/'+companySessionId+'/task-options');
+  const projectNames=new Map(projectOptions.data?.projects.map(p=>[p.project_id,p.project_name]));
+  const [filter,setFilter] = useState('');
+  const [blockedOnly,setBlockedOnly] = useState(false);
+  const [runSession,setRunSession] = useState('');
+  const sessions = [...new Set(kanban.cards.flatMap(c => c.agents.flatMap(a => a.session_id ? [a.session_id] : [])))];
+  const completedWithOpenDependencies = useMemo(() => kanban.cards.filter(
+    card => card.column === 'done' && card.blocked_by.length > 0,
+  ), [kanban.cards]);
+  const [returnCard,setReturnCard]=useState<string|null>(null);
+  const [returnReason,setReturnReason]=useState('');
   const [selectedCard, setSelectedCard] = useState<KanbanCardFull | null>(null);
   const [createDialog, setCreateDialog] = useState<{ open: boolean; column: KanbanColumnType }>({
     open: false,
@@ -191,11 +205,23 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
   // Group cards by column
   const cardsByColumn = new Map<KanbanColumnType, KanbanCardFull[]>();
   for (const col of KANBAN_COLUMNS) cardsByColumn.set(col, []);
-  for (const card of kanban.cards) {
+  const filtered = kanban.cards.filter(c => (!blockedOnly || c.blocked_by.length > 0)
+    && (!runSession || c.agents.some(a => a.session_id === runSession))
+    && [c.title,c.control?.owner,c.control?.projectId,projectNames.get(c.control?.projectId??0)].join(' ').toLowerCase().includes(filter.toLowerCase()));
+  for (const card of filtered) {
     const list = cardsByColumn.get(card.column) ?? [];
     list.push(card);
     cardsByColumn.set(card.column, list);
   }
+
+  const releaseCounts = useMemo(() => {
+    const counts = new Map<string,number>();
+    for (const card of kanban.cards) if (card.blocked_by.length === 1) {
+      const blocker = card.blocked_by[0];
+      counts.set(blocker,(counts.get(blocker) ?? 0) + 1);
+    }
+    return counts;
+  }, [kanban.cards]);
 
   const titleById = useMemo(() => {
     const m = new Map<string, string>();
@@ -205,9 +231,12 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
 
   const handleDrop = useCallback(
     (cardId: string, column: KanbanColumnType) => {
-      kanban.moveCard(cardId, column);
+      if (column==='todo' && kanban.cards.some(c=>c.id===cardId && c.control && c.column==='review')) {
+        setReturnCard(cardId);setReturnReason('');return;
+      }
+      void kanban.moveCard(cardId, column);
     },
-    [kanban.moveCard],
+    [kanban.moveCard,kanban.cards],
   );
 
   const handleCardClick = useCallback((card: KanbanCardFull) => {
@@ -254,6 +283,17 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
 
   return (
     <div className="flex flex-col h-full">
+      {returnCard && <Dialog open onOpenChange={open=>{if(!open)setReturnCard(null);}}><DialogContent><DialogHeader><DialogTitle>{t('designer.returnTask')}</DialogTitle></DialogHeader>
+        <label className="text-sm">{t('designer.returnReason')}<textarea className="block w-full rounded border bg-background p-2" value={returnReason} onChange={e=>setReturnReason(e.target.value)}/></label>
+        <Button disabled={!returnReason.trim()} onClick={()=>void kanban.moveCard(returnCard,'todo',undefined,returnReason.trim()).then(ok=>{if(ok)setReturnCard(null);})}>{t('designer.returnTask')}</Button></DialogContent></Dialog>}
+      {completedWithOpenDependencies.length > 0 && (
+        <div role="status" className="mx-3 mt-2 rounded border border-amber-500/30 p-2 text-sm">
+          <p>{t('designer.recheckCompleted')}</p>
+          {completedWithOpenDependencies.map(card => (
+            <button key={card.id} type="button" className="mr-3 underline" onClick={() => setSelectedCard(card)}>{card.title}</button>
+          ))}
+        </div>
+      )}
       {/* Error banner */}
       {kanban.error && (
         <div className="mx-3 mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-sm text-red-400">
@@ -262,7 +302,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
       )}
       {priorityError && (
         <div className="mx-3 mt-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-sm text-amber-400">
-          Priority recompute failed: {priorityError}
+          {t('designer.priorityError')} · {priorityError}
         </div>
       )}
       {dispatchNotice && (
@@ -279,6 +319,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
 
       {/* Toolbar: priority pipeline trigger + auto toggle + clear */}
       <WorkBoardToolbar>
+        <Button size="sm" variant="outline" onClick={()=>setListView(!listView)}>{t(listView?'designer.board':'designer.list')}</Button>
         <Button
           size="sm"
           variant={priorityScores ? 'default' : 'outline'}
@@ -290,7 +331,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
           ) : (
             <Sparkles className="h-3 w-3 mr-1" />
           )}
-          {priorityScores ? 'Refresh priorities' : 'Recompute priorities'}
+          {t('designer.priority')}
         </Button>
         <Button
           size="sm"
@@ -302,12 +343,12 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
         </Button>
         {priorityScores && (
           <Button size="sm" variant="ghost" onClick={() => setPriorityDiag(null)}>
-            <X className="h-3 w-3 mr-1" /> Clear
+            <X className="h-3 w-3 mr-1" /> {t('designer.clear')}
           </Button>
         )}
         {priorityScores && (
           <span className="text-muted-foreground">
-            {priorityScores.size} cards ranked — columns sorted by score
+            {t('designer.ranked',{count:priorityScores.size})}
           </span>
         )}
         <div className="flex-1" />
@@ -319,12 +360,23 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
             setRecommendOpen(true);
           }}
         >
-          <Sparkles className="h-3 w-3 mr-1" /> Recommend role
+          <Sparkles className="h-3 w-3 mr-1" /> {t('designer.suggestOwner')}
         </Button>
       </WorkBoardToolbar>
 
       {/* Columns */}
-      <WorkBoardViewport>
+      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1.5 text-xs">
+        <input className="min-w-36 flex-1 rounded border bg-background px-2 py-1" aria-label={t('designer.filters')} placeholder={t('designer.filters')} value={filter} onChange={e=>setFilter(e.target.value)} />
+        <label><input type="checkbox" checked={blockedOnly} onChange={e=>setBlockedOnly(e.target.checked)}/> {t('designer.blocked')}</label>
+        {sessions.length>0 && <select className="rounded border bg-background" aria-label={t('designer.session')} value={runSession} onChange={e=>setRunSession(e.target.value)}><option value="">{t('designer.filtersAll')}</option>{sessions.map(id=><option key={id}>{id}</option>)}</select>}
+        <DecisionControl kind="company" id={companySessionId} text="" onChoose={()=>{}}/>
+        {onValidations && <Button size="sm" variant="ghost" onClick={onValidations}>{t('designer.history')}</Button>}
+      </div>
+      {listView ? <div className="min-h-0 flex-1 overflow-auto">{[...filtered].sort((a,b)=>(priorityScores?.get(b.id)??0)-(priorityScores?.get(a.id)??0)||a.position-b.position).map(card=>
+        <button key={card.id} className="flex w-full flex-wrap items-center justify-between gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted" onClick={()=>handleCardClick(card)}>
+          <strong>{card.title}</strong><span>{card.control?.owner??t('designer.noOwner')} · {t('kanban.columns.'+(card.column==='in_progress'?'inProgress':card.column))}</span>
+          {card.blocked_by.length>0 && <span>{card.blocked_by.map(id=>titleById.get(id)??id).join(', ')}</span>}</button>)}
+        <Button size="sm" variant="outline" onClick={()=>handleCreateCard('backlog')}>{t('designer.addTask')}</Button></div> : <WorkBoardViewport>
           {KANBAN_COLUMNS.map((col) => (
             <KanbanColumn
               key={col}
@@ -336,6 +388,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
               priorityScores={priorityScores}
               wipLimit={(wipLimits as Record<string, number>)[col] ?? null}
               onWipLimitChange={(column, limit) => void handleWipLimitChange(column, limit)}
+              releaseCounts={releaseCounts}
               roleSuggestions={roleSuggestions}
               onQuickDispatch={(cardId, role) => void handleQuickDispatch(cardId, role)}
               dispatchingCardIds={dispatchingIds}
@@ -343,13 +396,14 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
               titleForCard={(id) => titleById.get(id)}
             />
           ))}
-      </WorkBoardViewport>
+      </WorkBoardViewport>}
 
       {/* Card detail modal */}
       {activeCard && (
         <KanbanCardModal
           companySessionId={companySessionId}
           onRefresh={() => void kanban.refreshCard(activeCard.id)}
+          onValidations={onValidations}
           card={activeCard}
           allCards={kanban.cards}
           open={!!activeCard}

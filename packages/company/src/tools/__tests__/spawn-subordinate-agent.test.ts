@@ -27,7 +27,7 @@ function spawnTool(orchestrator: CompanyOrchestrator) {
 }
 
 describe('spawn_subordinate_agent — Kanban assignment ordering', () => {
-  it('does not expose an unassigned automatic card while the runner is booting', async () => {
+  it('passes the owned card to the single dispatch operation before the runner boots', async () => {
     let resolveSpawn!: (result: {
       agentRunId: string;
       coderSessionId: string;
@@ -62,7 +62,8 @@ describe('spawn_subordinate_agent — Kanban assignment ordering', () => {
     );
 
     await Promise.resolve();
-    expect(createCard).not.toHaveBeenCalled();
+    expect(createCard).toHaveBeenCalledWith(expect.objectContaining({ owner: 'backend', column: 'todo' }));
+    expect(spawnSubordinate).toHaveBeenCalledWith(expect.objectContaining({ kanbanCardId: CARD_ID, role: 'backend' }));
     expect(assignAgent).not.toHaveBeenCalled();
 
     resolveSpawn({
@@ -76,25 +77,25 @@ describe('spawn_subordinate_agent — Kanban assignment ordering', () => {
       expect.objectContaining({ wait: false }),
     );
     expect(createCard).toHaveBeenCalledOnce();
-    expect(assignAgent).toHaveBeenCalledWith(CARD_ID, AGENT_RUN_ID, 'backend');
+    expect(assignAgent).not.toHaveBeenCalled();
   });
 
   it('assigns the card before honoring wait=true and returns the terminal status', async () => {
     let assigned = false;
-    const spawnSubordinate = vi.fn(async () => ({
+    const spawnSubordinate = vi.fn(async (spec: { kanbanCardId: string; role: string }) => {
+      assigned = spec.kanbanCardId === CARD_ID && spec.role === 'backend';
+      return {
       agentRunId: AGENT_RUN_ID,
       coderSessionId: CODER_SESSION_ID,
       status: 'running' as const,
-    }));
+      };
+    });
     const orchestrator = fakeOrchestrator({
       getMasterLastUserAttachments: () => [],
       getMasterAgentRunId: () => null,
       spawnSubordinate,
       kanbanCreateCard: () => ({ id: CARD_ID }),
       kanbanAddComment: vi.fn(),
-      kanbanAssignAgent: () => {
-        assigned = true;
-      },
       kanbanGetCard: () => ({ id: CARD_ID, column: 'in_progress' }),
       listSubordinates: () => {
         expect(assigned).toBe(true);

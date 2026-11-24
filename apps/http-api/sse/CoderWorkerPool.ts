@@ -44,6 +44,7 @@ import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js'
 import { admitWorkerAttempt } from './coder-attempt-bridge.js';
 import { activateCoderRuntimeFacade } from './coder-runtime-facade.js';
 import { CoderStartupUncertainError, CoderTurnEndedError, CoderWorkerBootError, CoderWorkerDrainError, coderSetupFailure, isCoderInteractionNotPendingError, isCoderWorkerStoppingError } from './coder-runtime-errors.js';
+import { acquireCoderSessionWriter } from './coder-session-writer-startup.js';
 import { assertSupportedConversationFormat } from '../retired-conversation-format.js';
 import type { AgentRunHandleApi } from '@mcp/agent-runtime-host';
 import { readFile } from 'node:fs/promises';
@@ -380,6 +381,8 @@ interface PoolEntry {
   runtimeHandle?: AgentRunHandleApi;
   runtimeAdmission?: { hash: string; result: ReturnType<typeof admitWorkerAttempt> };
   runtimeCancellationRequested?: boolean;
+  inputReady?: Promise<void>;
+  finishInputPreparation?: () => void;
   workerClosed: Promise<void>;
   lastTouchedAt: number;
   detachCurrentBusRuntimeLog: () => void;
@@ -491,14 +494,7 @@ interface RunFreshOpts {
 const DEFAULT_CODER_WORKER_HEAP_MB = 1_024;
 /** Keep a wide safety margin below the 10-minute executor lease. */
 export const CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS = 60_000;
-/**
- * Opening a filesystem session validates the full metadata/artifact graph
- * before the worker may write. Large, long-lived sessions legitimately take
- * longer than the generic 15-second bridge budget, especially on cold disk
- * caches. Keep this bounded, but align it with the worker's long-running
- * request budget so valid recovery is not mistaken for a failed startup.
- */
-export const SESSION_WRITER_ACQUIRE_TIMEOUT_MS = 120_000;
+export { SESSION_WRITER_ACQUIRE_TIMEOUT_MS } from './coder-session-writer-startup.js';
 
 export class CoderWorkerPool {
   private readonly entries = new Map<SessionId, PoolEntry>();
@@ -669,15 +665,37 @@ export class CoderWorkerPool {
     if (controlPlaneRunContext) {
       this.startControlPlaneLeaseRenewal(entry, sessionId, runId, controlPlaneRunContext);
     }
+    const bus = entry.bus;
+    // Follow-ups must target the runner that owns this bus, including when
+    // they arrive between the worker's receipt and the runner's readiness.
+    let finishPreparation!: () => void;
+    entry.inputReady = new Promise<void>(resolve => {
+      const onEvent = (event: { event: string }) => {
+        if (event.event === 'session') finishPreparation();
+      };
+      finishPreparation = () => {
+        bus.eventSinks.delete(onEvent);
+        bus.endListeners.delete(finishPreparation);
+        bus.ctrl.signal.removeEventListener('abort', finishPreparation);
+        if (entry.finishInputPreparation === finishPreparation) entry.finishInputPreparation = undefined;
+        resolve();
+      };
+      entry.finishInputPreparation = finishPreparation;
+      bus.eventSinks.add(onEvent);
+      bus.endListeners.add(finishPreparation);
+      bus.ctrl.signal.addEventListener('abort', finishPreparation, { once: true });
+    });
     try {
-      await entry.host.requireBridge().request('runFresh', {
+      const ack = await entry.host.requireBridge().request<{ preparing?: boolean }>('runFresh', {
         ...workerOpts,
         ...(runtimePolicy ? { runtimePolicy } : {}),
         runId,
         controlPlaneParentAgentRunId: controlPlaneRunContext?.agentRunId,
         controlPlaneAdmissionRequired: controlPlaneRunContext != null,
       }, { timeoutMs: 60_000 });
+      if (!ack?.preparing) finishPreparation();
     } catch (err) {
+      finishPreparation();
       // An explicit refusal before worker preparation is the only startup RPC
       // we can repeat. Keep the original durable command and input identity.
       if (isCoderWorkerStoppingError(err)) {
@@ -723,7 +741,7 @@ export class CoderWorkerPool {
       }
       throw err;
     }
-    return entry.bus;
+    return bus;
   }
 
   /** Forward a follow-up user message to the worker's runner. */
@@ -737,6 +755,12 @@ export class CoderWorkerPool {
     await assertSupportedConversationFormat(this.opts.dbPath, sessionId);
     const entry = this.entries.get(sessionId);
     if (!entry || entry.retiring || !entry.runInProgress || entry.bus.ended) {
+      throw new CoderTurnEndedError();
+    }
+    const bus = entry.bus;
+    await entry.inputReady;
+    if (entry.bus !== bus || this.entries.get(sessionId) !== entry || bus.ended || bus.ctrl.signal.aborted
+      || entry.retiring || entry.startupUncertain || entry.runtimeCancellationRequested || !entry.runInProgress) {
       throw new CoderTurnEndedError();
     }
     entry.lastTouchedAt = Date.now();
@@ -968,9 +992,14 @@ export class CoderWorkerPool {
     }
   }
 
-  async isWaitingForInput(sessionId: SessionId): Promise<boolean> {
+  async isWaitingForInput(sessionId: SessionId, waitForPreparation = false): Promise<boolean> {
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
+    if (waitForPreparation) {
+      const bus = entry.bus;
+      await entry.inputReady;
+      if (this.entries.get(sessionId) !== entry || entry.bus !== bus || bus.ended) return false;
+    }
     return entry.host.requireBridge().request<boolean>('isWaitingForInput', {});
   }
 
@@ -1152,6 +1181,7 @@ export class CoderWorkerPool {
     if (!entry) return;
     const reason = { code: 'user_cancelled' };
     entry.runtimeCancellationRequested = true;
+    entry.finishInputPreparation?.();
     const abortWorker = () => entry.host.requireBridge().request('abort', {});
     try {
       if (entry.runtimeHandle && entry.runInProgress) {
@@ -1263,6 +1293,7 @@ export class CoderWorkerPool {
       return;
     }
     entry.retiring = true;
+    entry.finishInputPreparation?.();
     const activityId = enterBackgroundActivity(`coder-worker:evict:${sessionId}`);
     try {
       this.cancelPostRunEvict(entry);
@@ -1639,12 +1670,7 @@ export class CoderWorkerPool {
       // was acquired. Drain that repository once more, then require the worker
       // to acknowledge acquisition before any run RPC can be dispatched.
       await this.opts.handoffSessionWriter?.(sessionContext);
-      const acquired = await host.requireBridge().request<{ ok: boolean }>(
-        'acquireSessionWriter',
-        {},
-        { timeoutMs: SESSION_WRITER_ACQUIRE_TIMEOUT_MS },
-      );
-      if (acquired?.ok !== true) throw new Error('Worker did not acknowledge acquiring the session writer');
+      await acquireCoderSessionWriter(host.requireBridge());
     } catch (error) {
       try {
         const released = await this.cleanupWorkerWriter(sessionId, { host, bundlePath: sessionContext.bundlePath, ownerId: writerOwnerId });
@@ -1799,7 +1825,7 @@ export class CoderWorkerPool {
           connectedCount: 0,
         };
       }
-      return pool.getReadySnapshot();
+      return pool.getSnapshotForRun();
     });
     const offMcpCallTool = registerWorkerMcpCalls(bridge, () => this.opts.getMcpExternalPool?.() ?? null, async (request) => {
       const { runId } = request;

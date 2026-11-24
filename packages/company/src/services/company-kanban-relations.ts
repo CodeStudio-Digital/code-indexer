@@ -1,4 +1,5 @@
 
+import type { TaskEvidence } from '@mcp/company-contracts/models/kanban.js';
 import { object } from './company-session-file-values.js';
 
 import { assertUuid, asAgentRunId } from '@mcp/session-storage';
@@ -37,35 +38,39 @@ export class CompanyKanbanRelations {
 
   updateKanbanChecklistSync(
     cardId: string,
-    items: Array<{ id?: string; text: string; checked: boolean }>,
+    items: Array<{ id?: string; text: string; checked: boolean }> | undefined,
+    evidence?: TaskEvidence,
+    agentRunId?: string | null,
   ): KanbanChecklistItem[] {
-    const current = this.kanban.getKanbanCardFullSync(cardId);
-    if (!current) throw new Error(`Unknown Company kanban card ${cardId}`);
-    const byId = new Map(current.checklist.map((item) => [item.id, item]));
-    const next = items.map((item, index) => {
-      if (item.id) {
-        const normalized = assertUuid(item.id, 'Company checklist item id');
-        if (!byId.has(normalized)) {
-          throw new Error(`Unknown Company checklist item ${normalized}`);
-        }
-        return {
-          id: normalized,
-          text: item.text,
-          checked: item.checked,
-          position: index,
-        };
+    const updated = this.kanban.replaceKanbanCardSync(cardId, (card, data) => {
+      const changes: Record<string, unknown> = {};
+      if (items) {
+        const existing = new Set(card.checklist.map(item => item.id));
+        changes.checklist = items.map((item, position) => {
+          const id = item.id ? assertUuid(item.id, 'Company checklist item id') : randomUUID();
+          if (item.id && !existing.has(id)) throw new Error(`Unknown Company checklist item ${id}`);
+          return { id, text: item.text, checked: item.checked, position };
+        });
       }
-      return {
-        id: randomUUID(),
-        text: item.text,
-        checked: item.checked,
-        position: index,
-      };
+      if (evidence?.length) {
+        if (!card.control || card.column === 'done') throw new Error('Reabra o cartão e confira seus critérios de aceite.');
+        if (agentRunId && !card.agents.some(a => a.agent_run_id === agentRunId && !a.unassigned_at)) {
+          throw new Error('O agente precisa estar atribuído a esta tarefa para registrar evidências.');
+        }
+        const acceptance = [...card.control.acceptance];
+        const recorded = new Set<number>();
+        for (const entry of evidence) {
+          if (acceptance[entry.index]?.criterion !== entry.criterion || recorded.has(entry.index)) {
+            throw new Error('O critério mudou ou foi informado duas vezes. Consulte o cartão.');
+          }
+          recorded.add(entry.index);
+          acceptance[entry.index] = { criterion: entry.criterion, evidence: entry.evidence };
+        }
+        changes.control = { ...card.control, acceptance };
+      }
+      return { ...data, ...changes };
     });
-    const updated = this.kanban.replaceKanbanCardSync(cardId, (_card, data) => ({
-      ...data,
-      checklist: next,
-    }))!;
+    if (!updated) throw new Error(`Unknown Company kanban card ${cardId}`);
     return updated.checklist;
   }
 
@@ -150,14 +155,26 @@ export class CompanyKanbanRelations {
     cardId: string,
     agentRunId: string,
     role: string,
+    sessionId?: string,
   ): KanbanCardAgent {
     const normalizedAgentRunId = asAgentRunId(agentRunId);
     // Kanban belongs to the root bundle, while a dispatched subordinate may
     // belong to a child bundle. Keep the UUID as an explicit cross-bundle
     // relation; the spawning workflow validates that run before assignment.
+    const card = this.kanban.getKanbanCardFullSync(cardId);
+    if (!card) throw new Error(`Unknown Company kanban card ${cardId}`);
+    if (card.control?.owner && card.control.owner !== role) {
+      throw new Error(`Card belongs to @${card.control.owner}, requested @${role}`);
+    }
+    const current = card.agents.find(a => !a.unassigned_at);
+    if (current) {
+      if (current.agent_run_id === normalizedAgentRunId && current.role === role) return current;
+      throw new Error(`Card already assigned to @${current.role} (run=${current.agent_run_id})`);
+    }
     const assignment = {
       id: randomUUID(),
       agent_run_id: normalizedAgentRunId,
+      ...(sessionId && {session_id:sessionId}),
       role,
       assigned_at: new Date().toISOString(),
       unassigned_at: null,

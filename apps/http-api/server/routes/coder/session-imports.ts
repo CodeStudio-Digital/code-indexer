@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { posix, win32 } from 'node:path';
 import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import {
   buildDeterministicImportSummary,
@@ -14,6 +14,7 @@ import {
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
+import { resolveProjectWorktree } from '../../worktree-reads.js';
 import { parseIntQuery, parseJsonBody } from '../_helpers.js';
 import { compactionOptionsFromConfig, summarizeReliably } from './compaction-summary.js';
 
@@ -25,6 +26,7 @@ interface PreviewBody {
   external_id?: string;
   fingerprint?: string;
   project_id?: number;
+  worktree_path?: string | null;
 }
 
 interface ImportBody extends PreviewBody {
@@ -37,11 +39,24 @@ interface ImportBody extends PreviewBody {
 }
 
 function normalizedPath(value: string): string {
-  return resolve(value).replaceAll('\\', '/').replace(/\/$/, '').toLowerCase();
+  const windows = /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/])/i.test(value);
+  return windows
+    ? win32.normalize(value).replace(/\\+$/, '').toLowerCase()
+    : posix.normalize(value).replace(/\/+$/, '');
 }
 
 function cwdMatches(source: string | null, project: string | null | undefined): boolean {
   return Boolean(source && project && normalizedPath(source) === normalizedPath(project));
+}
+
+async function importWorktree(root: string | null | undefined, requested: unknown): Promise<string | null> {
+  if (requested == null) return null;
+  if (!root) throw new ExternalSessionError('project_mismatch', 'An existing project is required to select a worktree');
+  try {
+    return await resolveProjectWorktree(root, requested);
+  } catch (error) {
+    throw new ExternalSessionError('project_mismatch', error instanceof Error ? error.message : String(error));
+  }
 }
 
 function errorResponse(c: HttpContext, error: unknown) {
@@ -111,15 +126,23 @@ export function mountCoderSessionImportRoutes(app: HttpRouter, deps: ServerDeps)
       }
       const projectId = parseIntQuery(c, 'project_id', 0);
       const project = projectId > 0 ? deps.db.getProject(projectId) : null;
+      const worktree = await importWorktree(project?.root_path, c.req.query('worktree_path'));
+      const folder = worktree ?? project?.root_path;
       const search = (c.req.query('q') ?? '').trim().toLowerCase();
       const matchFilter = c.req.query('cwd_match');
       const limit = Math.max(1, Math.min(100, parseIntQuery(c, 'limit', 30)));
       const offsetMatch = /^offset:(\d+)$/.exec(c.req.query('cursor') ?? '');
       const offset = offsetMatch ? Number(offsetMatch[1]) : 0;
       let items = await discoverExternalSessions(sourceRaw as ExternalSessionSource | undefined);
-      items = await Promise.all(items.map(async (candidate) => ({
+      items = items.map((candidate) => ({
         ...candidate,
-        matches_project: project ? cwdMatches(candidate.cwd, project.root_path) : undefined,
+        matches_project: project ? cwdMatches(candidate.cwd, folder) : undefined,
+      }));
+      if (search) items = items.filter((item) => `${item.title} ${item.cwd ?? ''} ${item.external_id}`.toLowerCase().includes(search));
+      if (matchFilter === 'match') items = items.filter((item) => item.matches_project === true);
+      if (matchFilter === 'mismatch') items = items.filter((item) => item.matches_project === false);
+      const page = await Promise.all(items.slice(offset, offset + limit).map(async (candidate) => ({
+        ...candidate,
         already_imported_session_id: project
           ? await deps.sessionStore.findImportedSession(
               project.id,
@@ -128,10 +151,6 @@ export function mountCoderSessionImportRoutes(app: HttpRouter, deps: ServerDeps)
             )
           : null,
       })));
-      if (search) items = items.filter((item) => `${item.title} ${item.cwd ?? ''} ${item.external_id}`.toLowerCase().includes(search));
-      if (matchFilter === 'match') items = items.filter((item) => item.matches_project === true);
-      if (matchFilter === 'mismatch') items = items.filter((item) => item.matches_project === false);
-      const page = items.slice(offset, offset + limit);
       return c.json({ items: page, next_cursor: offset + limit < items.length ? `offset:${offset + limit}` : null });
     } catch (error) { return errorResponse(c, error); }
   });
@@ -139,13 +158,14 @@ export function mountCoderSessionImportRoutes(app: HttpRouter, deps: ServerDeps)
   app.post('/api/coder/session-imports/preview', async (c) => {
     try {
       const body = await parseJsonBody<PreviewBody>(c);
+      const project = Number.isSafeInteger(body.project_id) ? deps.db.getProject(Number(body.project_id)) : null;
+      const worktree = await importWorktree(project?.root_path, body.worktree_path);
       const reference = await referenceFromBody(body);
       const document = await readExternalSession(reference);
       const preview = previewExternalSession(document);
-      const project = Number.isSafeInteger(body.project_id) ? deps.db.getProject(Number(body.project_id)) : null;
       return c.json({
         ...preview,
-        matches_project: project ? cwdMatches(preview.cwd, project.root_path) : undefined,
+        matches_project: project ? cwdMatches(preview.cwd, worktree ?? project.root_path) : undefined,
       });
     } catch (error) { return errorResponse(c, error); }
   });
@@ -161,13 +181,15 @@ export function mountCoderSessionImportRoutes(app: HttpRouter, deps: ServerDeps)
       if (!body.provider?.trim() || !body.model?.trim()) {
         throw new ExternalSessionError('unsupported_format', 'provider and model are required');
       }
+      const worktree = await importWorktree(project.root_path, body.worktree_path);
+      const folder = worktree ?? project.root_path;
       const reference = await referenceFromBody(body);
       const document = await readExternalSession(reference);
-      const mismatch = Boolean(document.candidate.cwd && !cwdMatches(document.candidate.cwd, project.root_path));
+      const mismatch = Boolean(document.candidate.cwd && !cwdMatches(document.candidate.cwd, folder));
       if (mismatch && body.allow_project_mismatch !== true) {
         throw new ExternalSessionError('project_mismatch', 'Source cwd differs from the target project', {
           source_cwd: document.candidate.cwd,
-          project_root: project.root_path,
+          project_root: folder,
         });
       }
 
@@ -180,6 +202,7 @@ export function mountCoderSessionImportRoutes(app: HttpRouter, deps: ServerDeps)
       const summary = summarized.summary ?? buildDeterministicImportSummary(document);
       const result = await deps.sessionStore.importExternalSession({
         project_id: project.id,
+        worktree_path: worktree,
         provider: body.provider.trim(),
         model: bareModel.trim(),
         agent: body.agent?.trim() || null,

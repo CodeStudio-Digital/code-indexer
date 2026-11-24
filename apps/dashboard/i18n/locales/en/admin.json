@@ -30,6 +30,7 @@
   "title": "Admin",
   "description": "Configure providers and the local semantic index that power search and the coder agent.",
   "tabs.providers": "Providers & Models",
+  "tabs.clef": "Clef decisions",
   "tabs.semanticIndexing": "Semantic Indexing",
   "tabs.tools": "Tools",
   "tabs.mcpServers": "MCP Servers",

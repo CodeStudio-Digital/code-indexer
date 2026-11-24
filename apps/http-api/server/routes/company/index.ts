@@ -1,4 +1,6 @@
 import type { HttpRouter } from '@mcp/shared/http/router.js';
+import { mountDesignRoutes } from './design-drafts.js';
+import { mountDecisionRoutes } from './design-decisions.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountCompanyTemplateRoutes } from './templates.js';
 import { mountCompanyFileSessionRoutes } from './session-files.routes.js';
@@ -30,6 +32,8 @@ import { mountCompanyAutonomyRoutes } from './autonomy.js';
 
 export function mountCompanyRoutes(app: HttpRouter, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
+  mountDesignRoutes(app, deps);
+  mountDecisionRoutes(app, deps);
   mountCompanyFileSessionRoutes(app, deps, { includeDelete: false });
   mountCompanySessionDeleteRoutes(app, deps);
   mountCompanyChildRoutes(app, deps);

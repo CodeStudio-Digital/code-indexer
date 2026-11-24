@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><title>Master prompt</title>
+<div id="root"></div>
+<script type="module">
+  import React from 'react';
+  import { createRoot } from 'react-dom/client';
+  import { WorkZone } from '/features/agents/zones/work/WorkZone.tsx';
+  import { useCompanyStream } from '/hooks/useCompanyStream.ts';
+  import { TooltipProvider } from '/components/ui/tooltip.tsx';
+  import { ConfirmDialogHost } from '/components/ui/prompt-dialog.tsx';
+  import i18n, { i18nReady } from '/i18n/index.ts';
+  await i18nReady;
+  await i18n.changeLanguage('pt-BR');
+  function Conversation() {
+    const sessionId = '10000000-0000-4000-8000-000000000001';
+    const stream = useCompanyStream(sessionId);
+    React.useEffect(() => { void stream.reattach(); }, [stream.reattach]);
+    return React.createElement(WorkZone, { sessionId, sessionName: 'Teste', tab: 'board', stream, boardMessages: [] });
+  }
+  createRoot(document.getElementById('root')).render(React.createElement(
+    TooltipProvider, {}, React.createElement(Conversation), React.createElement(ConfirmDialogHost),
+  ));
+</script></html>

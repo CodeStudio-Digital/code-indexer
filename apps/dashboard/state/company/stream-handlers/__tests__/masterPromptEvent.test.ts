@@ -34,6 +34,16 @@ function prompt(overrides: Partial<MasterPrompt> = {}): MasterPrompt {
 }
 
 describe('masterPromptEvent UUID identity', () => {
+  it.each(['answered', 'cancelled'] as const)('keeps the persisted %s state through a stale SSE replay', (status) => {
+    const pending = prompt();
+    const terminal = prompt({ status, answer: status === 'answered' ? 'chosen' : null });
+    const live = applyMasterPrompt(state(), pending);
+    const hydrated = hydrateMasterPrompts(live, [terminal, pending]);
+    expect(hydrated.masterPrompts.get(PROMPT_ID)).toEqual(terminal);
+    expect(applyMasterPrompt(hydrated, pending)).toBe(hydrated);
+    expect(applyMasterPrompt(hydrated, terminal)).toBe(hydrated);
+  });
+
   it('upserts an SSE prompt by opaque UUID', () => {
     const pending = applyMasterPrompt(state(), prompt());
     const answered = applyMasterPrompt(

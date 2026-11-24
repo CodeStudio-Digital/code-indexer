@@ -73,6 +73,7 @@ export interface CoderSession {
   worktree_path?: string | null;
   id: SessionId;
   parent_session_id?: SessionId | null;
+  metadata?: Record<string, unknown>;
   project_id: number;
   /** Global (multi-project) session flag (migration 152). */
   is_global?: boolean;

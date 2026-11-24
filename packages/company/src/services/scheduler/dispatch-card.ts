@@ -21,6 +21,7 @@
 import type { KanbanCardFull, KanbanColumn } from '@mcp/company/types.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 import type { CompanyRecommendFn } from './recommend-shim.js';
+import type { SpawnSubordinateSpec } from '../subordinate/spec.js';
 import type { SchedulerSpawn } from './spawn-port.js';
 import type { DispatchClaims, DispatchClaim } from './dispatch-claims.js';
 
@@ -56,7 +57,8 @@ export interface DispatchCardOpts {
   /** Explicit role — skips hint + recommender entirely. */
   role?: string;
   /** Who triggered this dispatch. Default `'scheduler'`. */
-  source?: 'scheduler' | 'manual';
+  source?: 'scheduler' | 'manual' | 'company';
+  spec?: SpawnSubordinateSpec;
 }
 
 export type DispatchSkipReason =
@@ -75,6 +77,7 @@ export interface DispatchCardResult {
   cardId: string;
   role?: string;
   agentRunId?: string;
+  coderSessionId?: string;
   reason?: DispatchSkipReason;
   error?: string;
 }
@@ -113,7 +116,7 @@ export async function dispatchCard(
     return { ok: false, cardId, reason: 'card_not_found' };
   }
   const isReady = (candidate: KanbanCardFull | null): candidate is KanbanCardFull => !!candidate
-    && (candidate.column === 'todo' || candidate.column === 'backlog')
+    && (candidate.column === 'todo' || candidate.column === 'backlog' || (source === 'company' && candidate.column === 'in_progress'))
     && !(candidate.blocked_by?.length)
     && !(candidate.agents?.some(agent => !agent.unassigned_at));
   if (!isReady(card)) return { ok: false, cardId, reason: 'card_not_ready' };
@@ -122,7 +125,15 @@ export async function dispatchCard(
   // Resolve a role: explicit → hint → recommender. Never blind-guess.
   let role: string | null = opts.role?.trim() || null;
   let skipReason: DispatchSkipReason = 'no_role';
-  if (!role) role = extractRoleHint(card.comments);
+  const intendedRole = (c: KanbanCardFull) => c.control?.owner ?? extractRoleHint(c.comments);
+  const owner = intendedRole(card);
+  if (owner && role && role !== owner) {
+    return { ok: false, cardId, reason: 'card_not_ready', error: 'Atualize primeiro o responsável da tarefa.' };
+  }
+  role ??= owner;
+  if (!role && isScheduler && card.created_by === 'master') {
+    return { ok: false, cardId, reason: 'no_role' };
+  }
   if (!role && deps.recommend) {
     try {
       const rec = await deps.recommend({
@@ -159,9 +170,13 @@ export async function dispatchCard(
   try {
     // Re-read after recommendation/CAS: the priority snapshot is not authority.
     card = deps.kanban.getCard(cardId);
-    if (!isReady(card)) {
+    if (!isReady(card) || (intendedRole(card) && role !== intendedRole(card))) {
       await deps.kanban.dispatchClaims.transition(cardId, claim, 'released');
       return { ok: false, cardId, role, reason: 'card_not_ready' };
+    }
+    if (card.control?.projectId && opts.spec?.projectId && opts.spec.projectId !== card.control.projectId) {
+      await deps.kanban.dispatchClaims.transition(cardId, claim, 'released');
+      return { ok: false, cardId, role, reason: 'card_not_ready', error: 'O cartão pertence a outro projeto.' };
     }
     await deps.kanban.dispatchClaims.transition(cardId, claim, 'starting');
     // Ownership and card state must be durable BEFORE executing agent code.
@@ -171,30 +186,32 @@ export async function dispatchCard(
     recorded = true;
     spawnStarted = true;
     const spawned = await deps.subordinates.spawn({
+      ...opts.spec,
       role,
-      task: `${card.title}\n\n${card.description ?? ''}`.trim(),
+      task: opts.spec?.task ?? `${card.title}\n\n${card.description ?? ''}`.trim(),
       dispatchSource: source,
       reservedAgentRunId: claim.agentRunId,
-      // projectId omitted → spawn auto-resolves from the role's single
-      // binding; a multi-bound/unbound role throws and we skip the card.
+      ...(card.control?.projectId && { projectId: card.control.projectId }),
     });
     if (spawned.agentRunId !== claim.agentRunId) throw new Error('Spawn did not honor reserved agent identity');
     await deps.kanban.dispatchClaims.transition(cardId, claim, 'running');
     try {
       deps.kanban.addComment(
         cardId,
-        isScheduler ? 'scheduler' : 'human',
+        isScheduler ? 'scheduler' : source === 'company' ? 'master' : 'human',
         spawned.agentRunId,
         isScheduler
           ? `[AUTO] Scheduler dispatched @${role} (run=${spawned.agentRunId}) for this ready card.`
-          : `Dispatched @${role} (run=${spawned.agentRunId}) for this card via quick-dispatch.`,
+          : source === 'company'
+            ? `Master dispatched @${role} (run=${spawned.agentRunId}) for this card.`
+            : `Dispatched @${role} (run=${spawned.agentRunId}) for this card via quick-dispatch.`,
       );
     } catch { /* Commentary is optional; ownership above is not. */ }
     publish('scheduler_dispatched', { cardId, role, agentRunId: spawned.agentRunId });
     console.log(
       `[company s=${deps.sessionId}] ${source}: dispatched @${role} (run=${spawned.agentRunId}) for card ${cardId}`,
     );
-    return { ok: true, cardId, role, agentRunId: spawned.agentRunId };
+    return { ok: true, cardId, role, agentRunId: spawned.agentRunId, coderSessionId: spawned.coderSessionId };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const notStarted = e != null && typeof e === 'object' && (e as { code?: unknown }).code === 'SPAWN_NOT_STARTED';

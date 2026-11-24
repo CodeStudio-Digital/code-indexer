@@ -10,6 +10,9 @@ const rows = (value: unknown, valid: (row: Record<string, unknown>) => boolean):
 export function isNetworkSnapshot(value: unknown): value is ChatNetworkSnapshot {
   if (!object(value) || !object(value.config)) return false;
   const config = value.config;
+  const team = value.companyTeam;
+  if (team !== undefined && !(object(team) && text(team.masterId) && rows(team.members, row =>
+    ['id', 'title', 'role', 'state', 'provider', 'model'].every(key => text(row[key])) && (row.projectId === null || number(row.projectId))))) return false;
   return text(value.self) && (value.stopped === undefined || typeof value.stopped === 'boolean')
     && text(config.sessionId) && text(config.rootId) && (config.projectId === null || number(config.projectId))
     && typeof config.enabled === 'boolean' && Array.isArray(config.projectIds) && config.projectIds.every(number)

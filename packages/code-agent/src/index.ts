@@ -658,6 +658,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
 
   // Provider — async path so Copilot tokens get refreshed before the run.
+  opts.onPreparationPhase?.('provider');
   const provider = await createCoderProvider(
     session.provider,
     session.model,
@@ -955,6 +956,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   };
 
+  opts.onPreparationPhase?.('tool catalog');
   try {
     await loadExternalToolCatalogAtLaunch();
     if (isSubordinate && subordinateTierSummary && subordinateTierSummary.size > 0) {
@@ -1187,7 +1189,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           settingsDbHandle: db.raw(),
           sessionStore: store,
           getProjectRoot: (projectId: number) => db.getProject(projectId)?.root_path ?? null,
-        }),
+        }, allowCompanyKanban),
       );
       if (allowCompanyKanban) registerCompanyTools(buildKanbanTools(orchestrator));
       // Strip code-level tools from Master — it should only orchestrate, not read code
@@ -1396,6 +1398,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try { return registry.get(name)?.repeatable === true; } catch { return false; }
     },
   });
+  opts.onPreparationPhase?.('session context');
   let tasksStateCache = await store.getTasksState(session.id);
   let sessionStateDataCache = await store.getSessionStateData(session.id);
   let activePlanCache = sessionStateDataCache.activePlan;
@@ -1744,6 +1747,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Load existing history FIRST so we can detect fresh vs resumed sessions
   // without a duplicate DB call. The block below (previously here) is now
   // merged into this one.
+  opts.onPreparationPhase?.('conversation history');
   const existingEarly = await store.loadSessionWithMessages(session.id, { forProvider: true });
   const outcomeRecovery = await createSessionOutcomeRecovery({ store, sessionId: session.id,
     initialState: existingEarly?.tool_outcome_state });
@@ -1928,7 +1932,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const catalogOnlyCapabilities = resolvedSkills.map(skillAsCatalogCapability);
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
-  const projectStats = db.getStats(project.id);
+  opts.onPreparationPhase?.('project index');
   // Structural readiness is a persisted baseline, not the presence of an old
   // LLM/full-index run. The latter is being retired and no-op reconciliations
   // intentionally do not create history rows.
@@ -1937,7 +1941,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     structural_indexed_at?: string | null;
     last_indexed?: string | null;
   };
-  const indexedFileCount = projectRow.file_count ?? projectStats?.file_count ?? 0;
+  const indexedFileCount = projectRow.file_count ?? db.countFiles(project.id);
   const isIndexed = indexedFileCount > 0
     && Boolean(projectRow.structural_indexed_at || projectRow.last_indexed);
   const indexStatus: IndexStatus = { isIndexed, mcpAvailable: mcpBridgeOk };
@@ -2790,8 +2794,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           structural_indexed_at?: string | null;
           last_indexed?: string | null;
         }) | undefined;
-        const liveStats = db.getStats(project.id);
-        const liveFileCount = liveProject?.file_count ?? liveStats?.file_count ?? 0;
+        const liveFileCount = liveProject?.file_count ?? db.countFiles(project.id);
         const structurallyReady = liveFileCount > 0
           && Boolean(liveProject?.structural_indexed_at || liveProject?.last_indexed);
         if (!structurallyReady) return;
@@ -2910,6 +2913,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   });
 
+  opts.onPreparationPhase?.('transcript');
   if (!opts.resume) {
     // Prepend the send-time IDE context (active file / selections / open tabs)
     // as a structured <ide_context> block so the agent sees the editing focus.

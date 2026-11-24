@@ -1,9 +1,27 @@
+import { z } from 'zod';
+
 export type KanbanColumn = 'backlog' | 'todo' | 'in_progress' | 'review' | 'done';
 export type KanbanTag = 'bug' | 'feature' | 'refactor' | 'documentation';
 
 export const KANBAN_COLUMNS: KanbanColumn[] = ['backlog', 'todo', 'in_progress', 'review', 'done'];
 
+export const taskControl = z.object({
+  owner: z.string().trim().min(1).max(80).nullable(),
+  projectId: z.number().int().positive().nullable(),
+  acceptance: z.array(z.object({ criterion:z.string().trim().min(1).max(500), evidence:z.string().trim().max(2000) })).max(30),
+  visualQA: z.boolean(),
+});
+export type TaskControl = z.infer<typeof taskControl>;
+export type TaskAcceptance = TaskControl['acceptance'][number];
+export const taskEvidence = z.array(z.object({
+  index: z.number().int().min(0).max(29),
+  criterion: z.string().trim().min(1).max(500),
+  evidence: z.string().trim().min(1).max(2000),
+})).min(1).max(30);
+export type TaskEvidence = z.infer<typeof taskEvidence>;
 export interface KanbanCard {
+  control?: TaskControl;
+  transitions?: Array<{from:KanbanColumn;to:KanbanColumn;at:string;actor:string;reason?:string}>;
   id: string;
   seq: number;
   company_session_id: string;
@@ -37,6 +55,7 @@ export interface KanbanComment {
 }
 
 export interface KanbanCardAgent {
+  session_id?: string;
   id: string;
   card_id: string;
   agent_run_id: string;

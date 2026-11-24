@@ -39,6 +39,7 @@ import {
 } from '../../components/ui/dialog.js';
 import { TemplateBuilderModal } from './TemplateBuilderModal.js';
 import { TemplateListPanel } from './TemplateListPanel.js';
+import { CompanyDesigner } from './design/CompanyDesigner.js';
 import { NewCompanyDialog } from './NewCompanyDialog.js';
 import { buildAgentsDefaultUrl } from './routing.js';
 import { CompanySessionView } from './CompanySessionView.js';
@@ -71,6 +72,7 @@ export function AgentsTab() {
   // `/company/sessions/:rootId/...`. At `/agents` it's null.
   const selectedSessionId = routeParams.rootId?.trim() || null;
   const [showNewTemplate, setShowNewTemplate] = useState(false);
+  const [showDesigner, setShowDesigner] = useState(false);
   const [showNewCompany, setShowNewCompany] = useState(false);
   const [sidebarView, setSidebarView] = useState<CompanyCatalogView>(() => {
     if (typeof window === 'undefined') return 'sessions';
@@ -317,6 +319,7 @@ export function AgentsTab() {
                   <CompanyHome
                     sessions={sessions ?? []}
                     templateCount={templates?.length ?? 0}
+                    onDesign={() => setShowDesigner(true)}
                     onCreateCompany={() => setShowNewCompany(true)}
                     onCreateTemplate={() => {
                       setSidebarView('templates');
@@ -339,6 +342,9 @@ export function AgentsTab() {
           onSaved={() => {}}
         />
       )}
+      {showDesigner && <CompanyDesigner onClose={() => setShowDesigner(false)} onApplied={id => {
+        setShowDesigner(false); refetchSessions(); selectSession(id);
+      }} />}
       {showNewCompany && (
         <NewCompanyDialog
           onClose={() => setShowNewCompany(false)}
@@ -367,12 +373,14 @@ function CompanyHome({
   sessions,
   templateCount,
   onCreateCompany,
+  onDesign,
   onCreateTemplate,
   onOpenSession,
 }: {
   sessions: CompanySession[];
   templateCount: number;
   onCreateCompany: () => void;
+  onDesign: () => void;
   onCreateTemplate: () => void;
   onOpenSession: (id: string) => void;
 }) {
@@ -400,8 +408,9 @@ function CompanyHome({
                   {t('catalog.heroDescription')}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button size="sm" className="h-8 gap-1.5" onClick={onCreateCompany}>
-                    <Plus className="h-3.5 w-3.5" /> {t('catalog.createCompany')}
+                  <Button size="sm" className="h-8" onClick={onDesign}>{t('designer.create')}</Button>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={onCreateCompany}>
+                    <Plus className="h-3.5 w-3.5" /> {t('designer.manual')}
                   </Button>
                   <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={onCreateTemplate}>
                     <LayoutTemplate className="h-3.5 w-3.5" /> {t('catalog.createTemplate')}

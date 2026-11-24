@@ -1645,10 +1645,12 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       {!isGlobal && projectId != null && sessionImportEverOpened && (
         <Suspense fallback={null}>
           <SessionImportDialog
+            key={`${projectId}:${worktrees.path ?? ''}`}
             open={sessionImportOpen}
             onOpenChange={setSessionImportOpen}
             projectId={projectId}
             projectName={projectName ?? ''}
+            worktreePath={worktrees.path}
             provider={provider}
             model={model || PROVIDERS.find((item) => item.id === provider)?.defaultModel || ''}
             agent={agent}

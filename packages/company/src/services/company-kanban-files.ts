@@ -2,7 +2,7 @@ import { parseKanbanCardFile } from './company-session-file-codecs.js';
 import { nonNegativeSafeInteger } from './company-session-file-values.js';
 
 import { assertUuid, type EntityRecord } from '@mcp/session-storage';
-import { existsSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
@@ -10,12 +10,32 @@ import type { KanbanCard, KanbanCardFull, KanbanColumn, KanbanTag } from '@mcp/c
 import { CompanySessionFileBase } from './company-session-file-base.js';
 
 export class CompanyKanbanFiles {
-  constructor(private readonly context: CompanySessionFileBase) {}
+  constructor(private readonly context: CompanySessionFileBase, private readonly draftBatch?:string) {
+    if (draftBatch) assertUuid(draftBatch,'Company draft id');
+  }
+
+  /** A zero-length, exclusively created marker publishes every card in this batch at once. */
+  publishDraftBatch():void {
+    if (!this.draftBatch) throw new Error('Missing Company draft id');
+    const dir = this.context.ensureCompanyEntityDirectorySync('kanban-cards');
+    const marker=join(dir,'batch-'+this.draftBatch+'.published');
+    try { writeFileSync(marker,'',{flag:'wx',mode:0o600}); }
+    catch(error) {
+      if ((error as NodeJS.ErrnoException).code!=='EEXIST' || !lstatSync(marker).isFile()) throw error;
+    }
+  }
+  private isVisible(data:Record<string,unknown>,dir:string,published?:Set<string>):boolean {
+    if (data.design_batch==null || data.design_batch===this.draftBatch) return true;
+    if (typeof data.design_batch !== 'string') throw new Error('Invalid Company draft id');
+    const marker='batch-'+assertUuid(data.design_batch,'Company draft id')+'.published';
+    return published ? published.has(marker) : lstatSync(join(dir,marker),{throwIfNoEntry:false})?.isFile()===true;
+  }
 
   private nextKanbanSequence: number | null = null;
 
   private scanKanbanCardsSync(
     includeArchived = false,
+    includePending = false,
   ): Array<{
     record: EntityRecord<Record<string, unknown>>;
     card: KanbanCardFull;
@@ -32,6 +52,7 @@ export class CompanyKanbanFiles {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
     }
+    const published = new Set(entries.filter(e=>e.isFile() && e.name.endsWith('.published')).map(e=>e.name));
     const rows: Array<{
       record: EntityRecord<Record<string, unknown>>;
       card: KanbanCardFull;
@@ -50,7 +71,7 @@ export class CompanyKanbanFiles {
         continue;
       }
       const parsed = parseKanbanCardFile(this.context.companySessionId, path);
-      if (includeArchived || parsed.card.archive_id == null) rows.push(parsed);
+      if ((includeArchived || parsed.card.archive_id == null) && (includePending || this.isVisible(parsed.record.data,directory,published))) rows.push(parsed);
     }
     rows.sort(
       (left, right) =>
@@ -76,6 +97,7 @@ export class CompanyKanbanFiles {
     );
     try {
       const parsed = parseKanbanCardFile(this.context.companySessionId, path);
+      if (!this.isVisible(parsed.record.data,dirname(path))) return null;
       if (parsed.card.id !== normalized) {
         throw new Error(`Company kanban id/file-name mismatch in ${path}`);
       }
@@ -130,19 +152,19 @@ export class CompanyKanbanFiles {
     tag?: KanbanTag | null;
     createdBy?: string;
     checklist?: readonly string[];
+    id?: string;
+    control?: KanbanCardFull['control'];
   }): KanbanCardFull {
     const title = input.title.trim();
     if (!title) throw new TypeError('Company kanban card title is required');
-    const existing = this.scanKanbanCardsSync(true);
-    const seq =
-      this.nextKanbanSequence ??
-      existing.reduce((max, row) => Math.max(max, row.card.seq), 0) + 1;
+    const existing = this.scanKanbanCardsSync(true,true);
+    const seq = Math.max(this.nextKanbanSequence ?? 1, existing.reduce((max,row)=>Math.max(max,row.card.seq),0) + 1);
     const position =
       existing
         .filter((row) => row.card.column === (input.column ?? 'backlog'))
         .reduce((max, row) => Math.max(max, row.card.position), -1) + 1;
     const now = new Date().toISOString();
-    const id = randomUUID();
+    const id = input.id ? assertUuid(input.id, 'Company kanban card id') : randomUUID();
     const checklist = (input.checklist ?? []).map((text, index) => ({
       id: randomUUID(),
       text,
@@ -165,6 +187,8 @@ export class CompanyKanbanFiles {
         position,
         tag: input.tag ?? null,
         created_by: input.createdBy ?? 'master',
+        ...(input.control && { control: input.control }),
+        ...(this.draftBatch && {design_batch:this.draftBatch}),
         archive_id: null,
         checklist,
         comments: [],
@@ -214,14 +238,31 @@ export class CompanyKanbanFiles {
     id: string,
     column: KanbanColumn,
     position?: number,
+    actor = 'agent',
+    reason?: string,
   ): KanbanCard | null {
-    const updated = this.replaceKanbanCardSync(id, (_card, data) => ({
-      ...data,
-      column,
-      ...(position === undefined
-        ? {}
-        : { position: nonNegativeSafeInteger(position) }),
-    }));
+    const updated = this.replaceKanbanCardSync(id, (card, data) => {
+      if (card.control && !card.control.projectId && card.column==='backlog' && column!=='backlog') {
+        throw new Error('Selecione o projeto da tarefa antes de avançar.');
+      }
+      if (card.column !== column && ['in_progress','review','done'].includes(column)) {
+        const blockers = card.dependencies.filter(dep => {
+          const target = this.getKanbanEnvelopeSync(dep.depends_on_id)?.card;
+          return target && !target.archive_id && target.column !== 'done';
+        });
+        if (blockers.length) throw new Error('Dependências abertas: '+blockers.map(d=>d.depends_on_id).join(', '));
+      }
+      if (actor === 'human' && card.control && card.column === 'review' && column === 'todo' && !reason?.trim()) {
+        throw new Error('Informe o motivo para devolver a tarefa.');
+      }
+      if (card.column !== 'done' && column === 'done' && card.control?.acceptance.length) {
+        if (card.column !== 'review') throw new Error('Encaminhe a tarefa para revisão antes de concluir.');
+        if (card.control.acceptance.some(item => !item.evidence.trim())) throw new Error('Cada critério de aceite precisa de uma evidência.');
+      }
+      const log = card.control && card.column !== column
+        ? [...(card.transitions ?? []),{from:card.column,to:column,actor,at:new Date().toISOString(),...(reason && {reason})}] : undefined;
+      return {...data,column,...(log && {transitions:log}),...(position !== undefined && {position:nonNegativeSafeInteger(position)})};
+    });
     if (!updated) return null;
     const {
       checklist: _checklist,
@@ -236,7 +277,7 @@ export class CompanyKanbanFiles {
 
   updateKanbanCardSync(
     id: string,
-    patch: { title?: string; description?: string; tag?: KanbanTag | null },
+    patch: { title?: string; description?: string; tag?: KanbanTag | null; control?: KanbanCardFull['control'] },
   ): KanbanCard | null {
     const updated = this.replaceKanbanCardSync(id, (_card, data) => ({
       ...data,
@@ -245,6 +286,7 @@ export class CompanyKanbanFiles {
         ? {}
         : { description: patch.description }),
       ...(patch.tag === undefined ? {} : { tag: patch.tag }),
+      ...(patch.control === undefined ? {} : { control: patch.control }),
     }));
     if (!updated) return null;
     const {

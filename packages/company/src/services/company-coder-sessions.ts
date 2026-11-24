@@ -4,7 +4,13 @@ import {
   asSessionId,
   type JsonValue,
 } from '@mcp/session-storage';
+import { publish } from '@apps/http-api/coder-bus.js';
 import type { SessionContext } from './SessionContext.js';
+
+/** Called after the corresponding agent run and Master identity are durable. */
+export function announceCompanyChat(ctx: SessionContext, chat: FsCoderSession): void {
+  if (ctx.metaBus) publish(ctx.metaBus, 'chat_session_created', { sessionId: chat.id, scope: chat.storage_scope });
+}
 
 export interface CreateCompanyCoderSessionInput {
   ctx: SessionContext;
@@ -63,7 +69,9 @@ export async function createCompanyCoderSession(
   if (selectedProjects.length === 0) {
     throw new Error('Company coder session has no authorized projects');
   }
+  const masterId = input.role === 'master' ? null : input.ctx.companyFiles?.getSession().master_session_id;
   const metadata = {
+    ...(masterId && { company_master_chat_id: masterId }),
     company_session_id: input.ctx.companySessionId,
     companySessionId: input.ctx.companySessionId,
     company_role: input.role,

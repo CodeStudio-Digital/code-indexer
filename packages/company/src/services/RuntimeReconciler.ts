@@ -97,13 +97,12 @@ export class RuntimeReconciler {
 
   /** Exposed for tests — runs one reconcile pass synchronously. */
   async tick(): Promise<void> {
+    if (this.running) return;
     this.running = true;
     try {
       await this.reconcileMaster();
       await this.reconcileSubordinates();
-      // Orphaned-card sweep runs AFTER reconcileSubordinates so it reads DB
-      // statuses already flipped to idle for ghost runs — avoids a false reset
-      // during a transient in-memory gap.
+      // Check card ownership after repairing missing runners so resumable assignments stay intact.
       await this.reconcileOrphanedCards();
       await this.heartbeatMasterInbox();
     } catch (e) {
@@ -123,7 +122,9 @@ export class RuntimeReconciler {
     // doesn't match the runtime. We use listAgentRuns + filter rather
     // than a custom query because the row count per session is small.
     const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
-    const masterRow = runs.find((r) => r.role === 'master');
+    const masters = runs.filter(r => r.role === 'master' && !r.archive_id);
+    const masterId = masters.length > 1 ? this.deps.ctx.companyFiles.getSession().master_session_id : null;
+    const masterRow = masterId ? masters.find(r => r.coder_session_id === masterId) : masters.at(-1);
     if (!masterRow) return;
     const persistedSaysRunning =
       masterRow.status === 'running' ||
@@ -131,7 +132,7 @@ export class RuntimeReconciler {
       masterRow.status === 'waiting_question' ||
       masterRow.status === 'waiting_tasks';
     if (!persistedSaysRunning) return;
-    if (this.deps.master.isAlive) return;
+    if (this.deps.master.hasActiveTurn || this.deps.master.isAlive) return;
     // Runtime says dead, DB says running — reconcile.
     await this.deps.ctx.companyFiles.updateAgentRunStatus(
       masterRow.id,
@@ -155,16 +156,17 @@ export class RuntimeReconciler {
     const sessionId = this.deps.ctx.companySessionId;
     const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
     for (const r of runs) {
-      if (r.role === 'master') continue;
-      const isRunning = r.status === 'running';
+      if (r.archive_id || r.role === 'master') continue;
+      const isRunning = r.status === 'running' || r.status === 'working';
+      const interrupted = r.status === 'interrupted' && this.deps.ctx.companyFiles.getSession().status === 'running';
       const isWaiting =
         r.status === 'waiting_plan' ||
         r.status === 'waiting_question' ||
         r.status === 'waiting_tasks';
-      if (!isRunning && !isWaiting) continue;
+      if (!isRunning && !isWaiting && !interrupted) continue;
       // Subordinate is "live" if SubordinateLifecycle still tracks it.
       // `statusOf` returns null when the agent isn't in the in-memory map.
-      const tracked = this.deps.subordinates.statusOf(r.id);
+      const tracked = this.deps.subordinates.ownsRuntime(r.id);
       if (tracked) {
         this.reestablishAttempts.delete(r.id); // healthy again — reset the cap
         continue;
@@ -175,27 +177,19 @@ export class RuntimeReconciler {
       // `running` (working) when its runner vanished should be RE-ESTABLISHED so
       // it finishes its task; a `waiting_*` one was merely parked on the master,
       // so just reconcile it to idle (the original behaviour).
-      if (isRunning && autoReestablishEnabled()) {
+      if ((isRunning || interrupted) && autoReestablishEnabled()) {
         const attempts = (this.reestablishAttempts.get(r.id) ?? 0) + 1;
         if (attempts <= REESTABLISH_MAX_ATTEMPTS) {
           this.reestablishAttempts.set(r.id, attempts);
           // Flip off 'running' FIRST: the UI stops showing it running AND resume
           // is permitted (it rejects a 'running' row).
-          await this.deps.ctx.companyFiles.updateAgentRunStatus(
-            r.id,
-            'error',
-            'reconciler: runtime gone — re-establishing',
-          );
-          this.deps.publisher.publish('agent_status', {
-            agentRunId: r.id, role: r.role, status: 'error', message: 're-establishing',
-          });
           const sys =
             `[SYSTEM] Your run stopped unexpectedly (the runtime went away) and was ` +
             `automatically re-established (attempt ${attempts}/${REESTABLISH_MAX_ATTEMPTS}). ` +
             `Continue your task from where you left off; if it was already done, post ` +
             `your deliverable and stop.`;
           try {
-            await this.deps.subordinates.resume(r.id, sys);
+            await this.deps.subordinates.recover(r.id, sys);
             console.log(
               `[company s=${sessionId}] reconciler: subordinate ${r.id} (${r.role}) was 'running' but runtime gone — re-established (attempt ${attempts})`,
             );
@@ -208,6 +202,9 @@ export class RuntimeReconciler {
         }
         // Crash-loop: exhausted attempts. Leave it 'error' (already flipped on a
         // prior attempt) so the UI shows it failed instead of resuming forever.
+        const message = 'Automatic recovery exhausted. Resume this agent to continue its card.';
+        await this.deps.ctx.companyFiles.updateAgentRunStatus(r.id, 'error', message);
+        this.deps.publisher.publish('agent_status', { agentRunId: r.id, role: r.role, status: 'error', message });
         console.warn(
           `[company s=${sessionId}] reconciler: subordinate ${r.id} (${r.role}) crashed ${attempts - 1}× — giving up auto-reestablish, leaving 'error'`,
         );
@@ -215,19 +212,21 @@ export class RuntimeReconciler {
       }
 
       // waiting_* ghost, or auto-reestablish disabled → reconcile to idle.
+      if (interrupted) continue;
+      const status = isRunning ? 'interrupted' : 'idle';
       await this.deps.ctx.companyFiles.updateAgentRunStatus(
         r.id,
-        'idle',
+        status,
         'reconciled',
       );
       this.deps.publisher.publish('agent_status', {
         agentRunId: r.id,
         role: r.role,
-        status: 'idle',
+        status,
         message: 'reconciled',
       });
       console.log(
-        `[company s=${sessionId}] reconciler: subordinate ${r.id} (${r.role}) was '${r.status}' but runtime gone — flipped to idle`,
+        `[company s=${sessionId}] reconciler: subordinate ${r.id} (${r.role}) was '${r.status}' but runtime gone — flipped to ${status}`,
       );
     }
   }
@@ -267,7 +266,7 @@ export class RuntimeReconciler {
     const runs = this.deps.ctx.companyFiles.listCompanyAgentRunsSync?.() ?? ownRuns;
     const ownRunIds = new Set(ownRuns.map(run => run.id));
     const liveRunIds = new Set(
-      runs.filter((r) => ACTIVE_RUN_STATUSES.has(r.status) || r.status === 'paused').map((r) => r.id),
+      runs.filter((r) => ACTIVE_RUN_STATUSES.has(r.status) || ['paused', 'interrupted', 'error', 'aborted'].includes(r.status)).map((r) => r.id),
     );
 
     const schedCards = cardsFull.map((c) => ({

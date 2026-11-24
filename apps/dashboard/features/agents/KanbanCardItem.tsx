@@ -22,6 +22,7 @@ interface KanbanCardItemProps {
    * recomputed priorities at least once this session.
    */
   priorityScore?: number;
+  releaseCount?: number;
   /** C3 — suggested role for this card (suggest-roles endpoint). */
   suggestedRole?: string;
   /** C3 — quick-dispatch this card with the suggested role. */
@@ -47,6 +48,7 @@ export const KanbanCardItem = React.memo(function KanbanCardItem({
   card,
   onClick,
   priorityScore,
+  releaseCount,
   suggestedRole,
   onQuickDispatch,
   dispatching,
@@ -66,9 +68,9 @@ export const KanbanCardItem = React.memo(function KanbanCardItem({
     <WorkBoardCard dragId={card.id} onClick={onClick} blocked={isBlocked}>
       <WorkBoardCardContent
         title={card.title}
-        description={card.description || undefined}
+        description={[card.control?.owner && '@'+card.control.owner,card.control?.projectId && '#'+card.control.projectId,card.description].filter(Boolean).join(' · ') || undefined}
         trailing={priorityScore !== undefined ? (
-          <div className="flex shrink-0 items-center gap-0.5 text-[10px] text-amber-400" title={t('kanban.card.priorityScore', { score: priorityScore.toFixed(3) })}>
+          <div className="flex shrink-0 items-center gap-0.5 text-[10px] text-amber-400" title={releaseCount ? t('designer.blocksCount',{count:releaseCount}) : t('kanban.card.priorityScore', { score: priorityScore.toFixed(3) })}>
             <Sparkles className="h-3 w-3" /><span>{'•'.repeat(scoreToDots(priorityScore))}</span>
           </div>
         ) : undefined}

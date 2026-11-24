@@ -15,6 +15,7 @@ export type RoleToolTier = 'bootstrap' | 'navigate' | 'full';
  * so the spawn path can consume old rows while the public contract evolves.
  */
 export interface PersistedRoleRuntime {
+  readOnly?: boolean;
   role: string;
   enabled?: boolean;
   provider?: string;

@@ -220,11 +220,7 @@ export interface CompanyOrchestratorPort {
   }): KanbanCard | null;
   kanbanDeleteCard(cardId: string): boolean;
   kanbanAddComment(cardId: string, authorRole: string, agentRunId: string | null, content: string): KanbanComment;
-  kanbanUpdateChecklist(cardId: string, items: Array<{
-      id?: string;
-      text: string;
-      checked: boolean;
-  }>): KanbanChecklistItem[];
+  kanbanUpdateChecklist(...args: Parameters<KanbanService['updateChecklist']>): KanbanChecklistItem[];
   kanbanAddDependency(cardId: string, dependsOnId: string): KanbanCardDependency;
   kanbanRemoveDependency(cardId: string, dependsOnId: string): boolean;
   kanbanAssignAgent(cardId: string, agentRunId: string, role: string): KanbanCardAgent;

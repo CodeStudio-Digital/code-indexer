@@ -8,6 +8,7 @@ import {
   asCompanySessionId,
   type JsonValue,
 } from '@mcp/session-storage';
+import { createBus } from '@apps/http-api/coder-bus.js';
 import { ConcurrencyPolicy } from '@mcp/company/ConcurrencyPolicy.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import { SessionContext } from '@mcp/company/services/SessionContext.js';
@@ -116,6 +117,7 @@ describe('App Studio authoritative role runtime acceptance', () => {
                 enabled: true,
                 provider: 'openai-chatgpt',
                 model: 'gpt-5.6-sol',
+                readOnly: true,
                 tier: 'full',
                 projectIds: [project.id],
               },
@@ -189,7 +191,7 @@ describe('App Studio authoritative role runtime acceptance', () => {
         getProject: (projectId: number) =>
           projectId === project.id ? project : null,
       } as never,
-      metaBus: { ended: false } as never,
+      metaBus: createBus(new AbortController()),
       runtimeKind: 'app_studio',
       appStudioSessionId: '00000000-0000-4000-8000-000000000077',
     });
@@ -263,6 +265,7 @@ describe('App Studio authoritative role runtime acceptance', () => {
       },
     ]);
     expect(specialists.some((run) => run.model === 'gpt-5.4-mini')).toBe(false);
+    expect(mocks.runCoder.mock.calls[0][0]).toMatchObject({agent:'explore'});
     expect(mocks.runCoder.mock.calls.map(([options]) => options.profile)).toEqual(['full', 'full']);
   });
 
@@ -297,14 +300,14 @@ describe('App Studio authoritative role runtime acceptance', () => {
         getProject: (projectId: number) =>
           projectId === project.id ? project : null,
       } as never,
-      metaBus: { ended: false } as never,
+      metaBus: createBus(new AbortController()),
       runtimeKind: 'app_studio',
       appStudioSessionId: '00000000-0000-4000-8000-000000000077',
     });
     const deps = {
       ctx,
       board: { post: vi.fn() },
-      status: { setStatus: vi.fn() },
+      status: { setStatus: vi.fn(), publishStatus: vi.fn() },
       master: { notify: vi.fn() },
       humanInLoop: { clearForAgent: vi.fn() },
       wirer: { wire: vi.fn() },

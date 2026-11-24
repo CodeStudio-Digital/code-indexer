@@ -23,6 +23,7 @@ import { ZoneLayout } from './zones/ZoneLayout.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from './zones/types.js';
 import { buildAgentsUrl, parseAgentsParams } from './routing.js';
 import { AgentsSidebar } from './session-view/AgentsSidebar.js';
+import { CompanyDesigner } from './design/CompanyDesigner.js';
 import { SessionHeader } from './session-view/SessionHeader.js';
 import { SessionBanners } from './session-view/SessionBanners.js';
 import { RoleDialog } from './session-view/RoleDialog.js';
@@ -118,6 +119,7 @@ function CompanySessionWorkspace({
   sessionNavigation: { open: boolean; setOpen: (open: boolean) => void; query: string; setQuery: (query: string) => void };
 }) {
   const { t } = useTranslation('agents');
+  const [editingDesign, setEditingDesign] = useState(false);
   const contribWindows = useContributions((s) => s.toolWindows);
   const catalogOpen = workbenchSlots?.catalog.open ?? false;
   const toggleSessions = () => {
@@ -339,10 +341,10 @@ function CompanySessionWorkspace({
   // opens while the master is already blocked on `ask_user` would
   // otherwise show nothing until the user pokes the session.
   useEffect(() => {
-    if (sessionData?.masterPrompts) {
+    if (sessionData?.session.id === activeSessionId && sessionData?.masterPrompts) {
       stream.hydrateMasterPrompts(sessionData.masterPrompts);
     }
-  }, [sessionData?.masterPrompts]);
+  }, [activeSessionId, sessionData?.session.id, sessionData?.masterPrompts, stream.hydrateMasterPrompts]);
 
   // On mount, attempt ONE reattach if the session is already running.
   // We intentionally do NOT put stream.connected in the dep array —
@@ -416,8 +418,9 @@ function CompanySessionWorkspace({
     handleZoneTabChange(nextZone, nextTab);
   };
 
-  // Session already has a run if status is not idle/draft — use sendMessage, not start.
   const sessionAlreadyRan =
+    (sessionData?.session.id === activeSessionId && sessionData.agentRuns.some(run => run.role === 'master')) ||
+    activeSessionStatus === 'interrupted' ||
     activeSessionStatus === 'running' ||
     activeSessionStatus === 'completed' ||
     activeSessionStatus === 'paused' ||
@@ -545,6 +548,7 @@ function CompanySessionWorkspace({
                         of creating a full-width band above the right dock and
                         activity rail. */}
                     <SessionHeader
+                      onDesign={runtimeKind === 'company' ? () => setEditingDesign(true) : undefined}
                       companyName={runtimeKind === 'company' ? sessionName : undefined}
                       sessionName={activeSessionName}
                       sessionStatus={activeSessionStatus}
@@ -573,6 +577,7 @@ function CompanySessionWorkspace({
                         className={`absolute inset-0 flex min-h-0 ${databaseMode ? 'invisible pointer-events-none' : ''}`}
                       >
                         <ZoneLayout
+                          visualQA={config?.visual_qa === true}
                           sessionId={activeSessionId}
                           sessionName={activeSessionName}
                           zone={zone}
@@ -715,6 +720,7 @@ function CompanySessionWorkspace({
         t={t}
       />
 
+      {editingDesign && <CompanyDesigner sourceId={sessionId} onClose={() => setEditingDesign(false)} onApplied={() => {setEditingDesign(false); refetch(); void siblings.refresh();}} />}
       {modalSession && (
         <AgentSessionModal
           coderSessionId={modalSession.coderSessionId}

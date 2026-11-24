@@ -100,7 +100,7 @@ export function RoleDialog({
       }
     }
 
-    const cleaned = isEdit ? { ...draft, role: roleName } : withDefaultQaSkill({ ...draft, role: roleName });
+    const cleaned = isEdit || config.visual_qa !== true ? { ...draft, role: roleName } : withDefaultQaSkill({ ...draft, role: roleName });
     const updatedRoles = isEdit
       ? existing.map((r, i) => (i === editIdx ? cleaned : r))
       : [...existing, cleaned];

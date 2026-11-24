@@ -91,6 +91,7 @@ import {
 import { LocalVectorRouter } from '@mcp/store/local-vector-router.js';
 import { SessionStore } from '@mcp/code-agent/index.js';
 import { resolveProjectWorktree } from './worktree-reads.js';
+import { interruptCompanyWorker } from '../sse/company-worker-exit.js';
 import { asSessionId } from '@mcp/session-storage';
 import {
   FsPipelineTelemetrySink,
@@ -1057,6 +1058,13 @@ export function createDeps(desktopBrowser?: ResearchBrowserHost): ServerDeps {
           }
         : null;
     }),
+    (...args) => interruptCompanyWorker(sessionStore, ...args),
+    async (company, chat, scope) => {
+      const location = sessionStore.locator.locate(scope, chat);
+      await sessionStore.repository.refreshSessionProjectionAsync(location);
+      const entry = sessionStore.catalog.get(chat)?.session;
+      if (entry?.kind !== 'coder' || entry.metadata.company_session_id !== company) throw new Error('Unexpected Company chat identity');
+    },
   );
   setCoderWorkerSessionWriterHandoff(async (context) => {
     const location = await sessionStore.getSessionLocation(context.sessionId);

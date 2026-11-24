@@ -56,6 +56,11 @@ export class CompanyMasterPromptFiles {
     );
   }
 
+  async getMasterPrompt(id: string): Promise<MasterPrompt | null> {
+    const record = await this.context.entities.get('masterPrompt', id);
+    return record ? toMasterPrompt(this.context.companySessionId, record) : null;
+  }
+
   async getPendingMasterPrompt(
     kind?: MasterPromptKind,
   ): Promise<MasterPrompt | null> {

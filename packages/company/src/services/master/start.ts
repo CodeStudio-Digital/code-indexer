@@ -33,7 +33,7 @@ import type { RoleConfig } from './role-config.js';
 import { buildMasterPromptInputs } from '@mcp/company/services/master/prompt-builder.js';
 import { configureMasterSkills } from '@mcp/company/services/master/configure-skills.js';
 import { runWithExplicitMasterFallback } from '@mcp/company/services/master/fallback.js';
-import { createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
+import { announceCompanyChat, createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
 
 export interface MasterStartOpts {
   userMessage: string;
@@ -177,6 +177,7 @@ export async function startMaster(
     ctx.companyFiles.clearRecoveryFlag(),
   ]);
 
+  announceCompanyChat(ctx, masterSession);
   deps.board.post('human', null, 'message', opts.userMessage, undefined, opts.boardAttachments);
   deps.board.post(
     'system',

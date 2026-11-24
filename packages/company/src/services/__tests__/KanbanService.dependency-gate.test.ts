@@ -25,6 +25,13 @@ import {
   type JsonValue,
 } from '@mcp/session-storage';
 import { CompanySessionFiles } from '../CompanySessionFiles.js';
+import { randomUUID } from 'node:crypto';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { isReadOnlySessionInvocation } from '@mcp/code-agent/core/policy.js';
+import type { CompanyOrchestratorPort } from '../../orchestrator-port.js';
+import { buildBoardTools } from '../../tools/board-tools.js';
+import { buildSubordinateKanbanTools } from '../../tools/subordinate-kanban-tools.js';
+import { withCompanyToolMetadata } from '../../tools/metadata.js';
 import { SessionContext } from '../SessionContext.js';
 import { KanbanService } from '../KanbanService.js';
 import type { IMetaBusPublisher } from '../ports.js';
@@ -182,10 +189,48 @@ describe('KanbanService dependency gate', () => {
     expect(moved.column).toBe('in_progress');
   });
 
+  it('records an assigned investigator’s evidence against the current criterion and preserves the checklist', async () => {
+    const run = randomUUID();
+    const card = h.companyFiles.createKanbanCardSync({
+      title: 'Cross-check contract', column: 'in_progress', checklist: ['Read both sources'],
+      control: { owner: 'analyst', projectId: 7, visualQA: false, acceptance: [{ criterion: 'Cite clause', evidence: '' }] },
+    });
+    h.companyFiles.assignKanbanAgentSync(card.id, run, 'analyst', h.companySessionId);
+    const port = {
+      findCardForAgent: h.kanban.findCardForAgent.bind(h.kanban),
+      kanbanGetCard: h.kanban.getCard.bind(h.kanban),
+      kanbanMoveCard: h.kanban.moveCard.bind(h.kanban),
+      kanbanUpdateChecklist: h.kanban.updateChecklist.bind(h.kanban),
+      postToBoard: () => {},
+    } as unknown as CompanyOrchestratorPort;
+    const ctx = { companyContext: { agentRunId: run } } as ToolContext;
+    const sub = buildSubordinateKanbanTools(port, 'analyst', run);
+    const objectives = sub.find(tool => tool.name === 'kanban_update_objectives')!;
+    const wrong = await objectives.handler({ card_id: card.id, evidence: [{ index: 0, criterion: 'Cite clause', evidence: 'wrong card' }] },
+      { companyContext: { agentRunId: randomUUID() } } as ToolContext);
+    expect(wrong.isError).toBe(true);
+    const stale = await objectives.handler({ items: [], evidence: [{ index: 0, criterion: 'old criterion', evidence: 'obsolete' }] }, ctx);
+    expect(stale.isError).toBe(true);
+    expect(h.kanban.getCard(card.id)?.checklist).toHaveLength(1);
+
+    const board = buildBoardTools(port, 'analyst', run).map(withCompanyToolMetadata);
+    const report = board.find(tool => tool.name === 'post_to_board')!;
+    const args = { kind: 'deliverable', content: 'Compared both contracts.',
+      evidence: [{ index: 0, criterion: 'Cite clause', evidence: 'contracts.md §7' }] };
+    expect(isReadOnlySessionInvocation(report, args)).toBe(true);
+    expect((await report.handler(args, ctx)).isError).toBeFalsy();
+    expect(h.kanban.getCard(card.id)?.control?.acceptance[0].evidence).toBe('contracts.md §7');
+    expect(h.kanban.getCardContextForSubordinate(card.id)).toContain('Cite clause — contracts.md §7');
+    expect((await sub.find(tool => tool.name === 'kanban_move_to_review')!.handler({}, ctx)).isError).toBeFalsy();
+    expect(h.kanban.moveCard(card.id, 'done').column).toBe('done');
+    expect((await objectives.handler({ evidence: args.evidence }, ctx)).isError).toBe(true);
+  });
+
   it('does not gate a reorder within the same active column', () => {
-    // Put the dependent in in_progress directly (bypassing the gate), then a
-    // same-column "move" must not be refused even though a blocker is open.
+    // Reopening a completed prerequisite can leave an active card blocked.
+    h.companyFiles.moveKanbanCardSync(h.blockerId, 'done');
     h.companyFiles.moveKanbanCardSync(h.dependentId, 'in_progress');
+    h.companyFiles.moveKanbanCardSync(h.blockerId, 'todo');
     const moved = h.kanban.moveCard(h.dependentId, 'in_progress', 0);
     expect(moved.column).toBe('in_progress');
     const blockedEvent = h.events.find(

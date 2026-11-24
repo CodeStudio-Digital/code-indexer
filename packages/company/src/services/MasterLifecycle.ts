@@ -209,7 +209,8 @@ export class MasterLifecycle implements IMasterNotifier {
   get endedAt(): string | null { return this._endedAt; }
   /** ISO timestamp of when a user message most recently arrived. */
   get lastUserMessageAt(): string | null { return this._lastUserMessageAt; }
-  get canRotateConversation(): boolean { return !this.isAlive && !this.resumingPromise; }
+  get hasActiveTurn(): boolean { return this.isAlive || !!this.resumingPromise; }
+  get canRotateConversation(): boolean { return !this.hasActiveTurn; }
 
   setShouldContinue(value: boolean): void {
     this._shouldContinue = value;
@@ -769,7 +770,7 @@ export class MasterLifecycle implements IMasterNotifier {
       agentRunId: runId,
       companySessionId: this.deps.ctx.companySessionId,
     });
-    const unsubscribe = wireSupervisorToRunner(runner, runId);
+    const unsubscribe = wireSupervisorToRunner(runner, runId, 'master');
     // One-shot cleanup so listeners don't leak when this runner exits (a new
     // runner is created on resurrect). `done` also fires the TERMINAL
     // transition inside wireSupervisorToRunner.

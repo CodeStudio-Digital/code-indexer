@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AgentPreset } from '@mcp/api-bus';
 import { AlertTriangle, CheckCircle2, FileInput, Loader2, Search } from 'lucide-react';
 import { formatDateTime } from '../../lib/datetime.js';
@@ -33,7 +33,7 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   projectId: number;
   projectName: string;
-  projectRoot?: string | null;
+  worktreePath?: string | null;
   provider: string;
   model: string;
   agent: AgentPreset;
@@ -57,6 +57,7 @@ export function SessionImportDialog(props: Props) {
   const { t } = useTranslation(['chat', 'common']);
   const [source, setSource] = useState<'all' | Source>('all');
   const [query, setQuery] = useState('');
+  const [currentFolderOnly, setCurrentFolderOnly] = useState(false);
   const [items, setItems] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -68,6 +69,7 @@ export function SessionImportDialog(props: Props) {
   const [targetModel, setTargetModel] = useState(props.model);
   const [targetAgent, setTargetAgent] = useState<AgentPreset>(props.agent);
   const [confirmMismatch, setConfirmMismatch] = useState(false);
+  const previewRequest = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!props.open) return;
@@ -77,41 +79,56 @@ export function SessionImportDialog(props: Props) {
   }, [props.agent, props.model, props.open, props.provider]);
 
   useEffect(() => {
+    if (!props.open) setPreviewing(false);
+    return () => previewRequest.current?.abort();
+  }, [props.open]);
+
+  useEffect(() => {
     if (!props.open) return;
     const controller = new AbortController();
+    setLoading(true);
+    setError(null);
     const timer = setTimeout(() => {
-      setLoading(true);
-      setError(null);
       const params = new URLSearchParams({ project_id: String(props.projectId), limit: '100' });
       if (source !== 'all') params.set('source', source);
       if (query.trim()) params.set('q', query.trim());
+      if (props.worktreePath) params.set('worktree_path', props.worktreePath);
+      if (currentFolderOnly) params.set('cwd_match', 'match');
       fetch(`/api/coder/session-imports/discover?${params}`, { signal: controller.signal })
         .then(async (response) => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           return response.json() as Promise<{ items: Candidate[] }>;
         })
-        .then((result) => setItems(result.items))
-        .catch((reason) => { if (reason?.name !== 'AbortError') setError(errorText(reason)); })
+        .then((result) => { if (!controller.signal.aborted) setItems(result.items); })
+        .catch((reason) => { if (!controller.signal.aborted) setError(errorText(reason)); })
         .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }, 180);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [props.open, props.projectId, query, source]);
+  }, [currentFolderOnly, props.open, props.projectId, props.worktreePath, query, source]);
 
   const models = useMemo(
     () => props.providerOptions.find((option) => option.id === targetProvider)?.models ?? [],
     [props.providerOptions, targetProvider],
   );
-  const mismatch = preview?.matches_project === false;
+  const mismatch = Boolean(preview?.cwd && preview.matches_project === false);
 
-  async function loadPreview(reference: PreviewReference, candidate?: Candidate): Promise<void> {
+  async function loadPreview(reference: PreviewReference): Promise<void> {
+    previewRequest.current?.abort();
+    const controller = new AbortController();
+    previewRequest.current = controller;
     setPreviewing(true); setError(null); setPreview(null); setConfirmMismatch(false);
     try {
-      const result = await apiPost<Preview>('/coder/session-imports/preview', { ...reference, project_id: props.projectId });
-      const merged = candidate ? { ...result, matches_project: candidate.matches_project } : result;
-      setPreview(merged);
-      setTitle(merged.title);
-    } catch (reason) { setError(errorText(reason)); }
-    finally { setPreviewing(false); }
+      const result = await apiPost<Preview>('/coder/session-imports/preview', {
+        ...reference, project_id: props.projectId, worktree_path: props.worktreePath,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      setPreview(result);
+      setTitle(result.title);
+    } catch (reason) {
+      if (!controller.signal.aborted) setError(errorText(reason));
+    } finally {
+      if (!controller.signal.aborted) setPreviewing(false);
+    }
   }
 
   async function chooseFile(): Promise<void> {
@@ -127,6 +144,7 @@ export function SessionImportDialog(props: Props) {
     try {
       const result = await apiPost<ImportResult>('/coder/session-imports/import', {
         project_id: props.projectId,
+        worktree_path: props.worktreePath,
         ...preview.reference,
         title: title.trim() || preview.title,
         provider: targetProvider,
@@ -149,7 +167,7 @@ export function SessionImportDialog(props: Props) {
         </DialogHeader>
         <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
           <section className="min-h-0 flex flex-col gap-3">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Select value={source} onValueChange={(value) => setSource(value as typeof source)}>
                 <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -158,7 +176,7 @@ export function SessionImportDialog(props: Props) {
                   <SelectItem value="codex">{t('chat:sessionImport.codex')}</SelectItem>
                 </SelectContent>
               </Select>
-              <div className="relative flex-1">
+              <div className="relative min-w-40 flex-1">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input value={query} onChange={(event) => setQuery(event.target.value)} className="pl-8" placeholder={t('chat:sessionImport.search')} />
               </div>
@@ -166,18 +184,25 @@ export function SessionImportDialog(props: Props) {
                 <FileInput className="mr-2 h-4 w-4" />{t('chat:sessionImport.file')}
               </Button>
             </div>
+            <label className="flex w-fit cursor-pointer items-center gap-2 text-sm" title={props.worktreePath ?? undefined}>
+              <input
+                type="checkbox" className="size-4 accent-primary"
+                checked={currentFolderOnly} onChange={(event) => setCurrentFolderOnly(event.target.checked)}
+              />
+              {t('chat:sessionImport.currentFolderOnly')}
+            </label>
             <div className="min-h-[300px] flex-1 overflow-y-auto rounded-md border">
               {loading && <div className="flex h-32 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div>}
-              {!loading && items.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">{t('chat:sessionImport.empty')}</div>}
+              {!loading && items.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">{t(currentFolderOnly ? 'chat:sessionImport.emptyCurrentFolder' : 'chat:sessionImport.empty')}</div>}
               {!loading && items.map((item) => (
                 <div key={`${item.source}:${item.external_id}`} className="flex items-center gap-3 border-b p-3 last:border-b-0">
-                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => void loadPreview(item.reference, item)}>
+                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => void loadPreview(item.reference)}>
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">{item.title}</span>
+                      <span className="truncate text-sm font-medium" title={item.title}>{item.title}</span>
                       <Badge variant="outline" className="shrink-0 text-[10px]">{item.source === 'claude-code' ? 'Claude' : 'Codex'}</Badge>
                       {item.matches_project && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />}
                     </div>
-                    <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">{item.cwd ?? 'cwd —'}</div>
+                    <div className="mt-1 truncate font-mono text-xs text-muted-foreground" title={item.cwd ?? undefined}>{item.cwd ?? t('chat:sessionImport.unknownFolder')}</div>
                     <div className="mt-1 text-[10px] text-muted-foreground">{displayDate(item.updated_at)} · {t('chat:sessionImport.kilobytes', { count: Math.ceil(item.size_bytes / 1024).toLocaleString() })}</div>
                   </button>
                   {item.already_imported_session_id ? (
@@ -197,7 +222,7 @@ export function SessionImportDialog(props: Props) {
               <div className="space-y-4">
                 <div>
                   <div className="flex items-center gap-2"><Badge>{preview.source === 'claude-code' ? t('chat:sessionImport.claudeCode') : t('chat:sessionImport.codex')}</Badge>{preview.has_source_summary && <Badge variant="outline">{t('chat:sessionImport.handoff')}</Badge>}</div>
-                  <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{preview.cwd ?? 'cwd —'}</p>
+                  <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{preview.cwd ?? t('chat:sessionImport.unknownFolder')}</p>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center text-xs">
                   <Stat value={preview.stats.message_count} label={t('chat:sessionImport.messages')} />
@@ -205,7 +230,7 @@ export function SessionImportDialog(props: Props) {
                   <Stat value={preview.warnings.length} label={t('chat:sessionImport.warnings')} />
                 </div>
                 {preview.warnings.map((warning) => <Alert key={warning.code} variant="warning"><AlertTriangle /><AlertDescription>{warning.message}</AlertDescription></Alert>)}
-                {mismatch && <Alert variant="warning"><AlertTriangle /><AlertTitle>{t('chat:sessionImport.mismatchTitle')}</AlertTitle><AlertDescription>{t('chat:sessionImport.mismatch', { project: props.projectName })}</AlertDescription></Alert>}
+                {mismatch && <Alert variant="warning"><AlertTriangle /><AlertTitle>{t('chat:sessionImport.mismatchTitle')}</AlertTitle><AlertDescription>{t('chat:sessionImport.mismatch', { project: props.worktreePath ?? props.projectName })}</AlertDescription></Alert>}
                 <Field label={t('chat:sessionImport.sessionTitle')}><Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} /></Field>
                 <Field label={t('chat:sessionImport.provider')}>
                   <Select value={targetProvider} onValueChange={(value) => { setTargetProvider(value); const first = props.providerOptions.find((option) => option.id === value)?.models[0]; setTargetModel(first ? `${first.id}${first.mode ? `::${first.mode}` : ''}` : ''); }}>

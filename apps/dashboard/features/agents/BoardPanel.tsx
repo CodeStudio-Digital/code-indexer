@@ -50,8 +50,8 @@ interface BoardPanelProps {
    * cancelled entries as part of the permanent history.
    */
   masterPrompts?: MasterPrompt[];
-  onAnswerQuestion?: (promptId: string, answer: string) => void;
-  onRespondPlan?: (promptId: string, approved: boolean, feedback?: string) => void;
+  onAnswerQuestion?: (promptId: string, answer: string) => Promise<void>;
+  onRespondPlan?: (promptId: string, approved: boolean, feedback?: string) => Promise<void>;
   /** Identifies which company session this board belongs to — shown in the header so the user can never confuse boards across sessions. */
   sessionId?: string;
   sessionName?: string;

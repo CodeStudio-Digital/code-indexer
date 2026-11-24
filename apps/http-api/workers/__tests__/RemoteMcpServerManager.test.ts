@@ -57,7 +57,7 @@ describe('RemoteMcpServerManager catalogue refresh', () => {
       2,
       'mcpExt.snapshot',
       {},
-      expect.objectContaining({ timeoutMs: 60_000 }),
+      expect.objectContaining({ timeoutMs: 3_000 }),
     );
   });
 });

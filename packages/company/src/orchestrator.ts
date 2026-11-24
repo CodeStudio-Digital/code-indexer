@@ -375,7 +375,27 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
 
   // ─── Subordinate lifecycle ─────────────────────────────────────
   async spawnSubordinate(spec: SpawnSubordinateSpec): Promise<{ agentRunId: string; coderSessionId: string; status: AgentRunStatus }> {
-    return this.subordinates.spawn(spec);
+    if (!spec.kanbanCardId) return this.subordinates.spawn(spec);
+    const kanban = this.requireCompanyKanban();
+    const card = kanban.getCard(spec.kanbanCardId);
+    const owner = card?.agents.find(a => !a.unassigned_at);
+    if (owner) {
+      const run = this.ctx.companyFiles.getAgentRunSync(owner.agent_run_id);
+      if (!run || run.role !== spec.role || (card?.control?.owner && card.control.owner !== spec.role)) {
+        throw new Error(`Card already assigned to @${owner.role} (run=${owner.agent_run_id})`);
+      }
+      if (card?.column === 'in_progress' && (run.status === 'interrupted' || run.status === 'error')) {
+        return this.subordinates.resume(run.id, spec.task, spec.roleOverride, spec.attachments, spec.thinking);
+      }
+      return { agentRunId: run.id, coderSessionId: run.coder_session_id, status: run.status as AgentRunStatus };
+    }
+    const result = await dispatchCard({
+      sessionId: this.companySessionId, kanban, subordinates: this.subordinates, recommend: null,
+    }, spec.kanbanCardId, { source: 'company', role: spec.role, spec });
+    if (!result.ok || !result.agentRunId || !result.coderSessionId) {
+      throw new Error(`Card ${spec.kanbanCardId}: ${result.error ?? result.reason}. Check the assigned agent before retrying.`);
+    }
+    return { agentRunId: result.agentRunId, coderSessionId: result.coderSessionId, status: 'running' };
   }
   async resumeSubordinate(agentRunId: string, message?: string, thinking?: boolean): Promise<{ agentRunId: string; coderSessionId: string; status: AgentRunStatus }> {
     const agentRun = this.ctx.companyFiles.getAgentRunSync(agentRunId);
@@ -400,14 +420,11 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
     const agentRun = this.ctx.companyFiles.getAgentRunSync(agentRunId);
     if (!agentRun) return { ok: false, detail: `agent run ${agentRunId} not found` };
     if (agentRun.role === 'master') return { ok: false, detail: 'not a subordinate' };
-    try { this.subordinates.abort(agentRunId); } catch { /* best-effort zombie teardown */ }
-    // Flip off the live status so the UI reflects reality AND resume is permitted.
-    this.setAgentStatus(agentRunId, agentRun.role, 'error', `supervisor: ${reason}`);
     const sys =
       `[SYSTEM] Your run stalled (${reason}) and was re-established by the supervisor. ` +
       `Continue your assigned task from where you left off; if it was already done, ` +
       `post your deliverable and stop.`;
-    await this.resumeSubordinate(agentRunId, sys);
+    await this.subordinates.recover(agentRunId, sys);
     return { ok: true, detail: `re-established subordinate ${agentRunId} (${agentRun.role})` };
   }
   pauseSubordinate(agentRunId: string): boolean {
@@ -458,6 +475,10 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
       fallbackReason: run.fallback_reason,
     };
   }
+  hasActiveTurns(): boolean {
+    return this.master.hasActiveTurn || this.subordinates.concurrencyOccupancy > 0;
+  }
+
   hasRunningSubordinates(): boolean { return this.subordinates.runningCount > 0; }
   /** Subscribe to master-attention events (subordinate question/plan/tasks/terminal). */
   onSubordinateAttention(listener: AttentionListener): () => void { return this.attention.on(listener); }
@@ -508,7 +529,9 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
   kanbanUpdateCard(cardId: string, patch: { title?: string; description?: string; tag?: KanbanTag | null }): KanbanCard | null { return this.requireCompanyKanban().updateCard(cardId, patch); }
   kanbanDeleteCard(cardId: string): boolean { return this.requireCompanyKanban().deleteCard(cardId); }
   kanbanAddComment(cardId: string, authorRole: string, agentRunId: string | null, content: string): KanbanComment { return this.requireCompanyKanban().addComment(cardId, authorRole, agentRunId, content); }
-  kanbanUpdateChecklist(cardId: string, items: Array<{ id?: string; text: string; checked: boolean }>): KanbanChecklistItem[] { return this.requireCompanyKanban().updateChecklist(cardId, items); }
+  kanbanUpdateChecklist(...args: Parameters<KanbanService['updateChecklist']>): KanbanChecklistItem[] {
+    return this.requireCompanyKanban().updateChecklist(...args);
+  }
   kanbanAddDependency(cardId: string, dependsOnId: string): KanbanCardDependency { return this.requireCompanyKanban().addDependency(cardId, dependsOnId); }
   kanbanRemoveDependency(cardId: string, dependsOnId: string): boolean { return this.requireCompanyKanban().removeDependency(cardId, dependsOnId); }
   kanbanAssignAgent(cardId: string, agentRunId: string, role: string): KanbanCardAgent { return this.requireCompanyKanban().assignAgent(cardId, agentRunId, role); }

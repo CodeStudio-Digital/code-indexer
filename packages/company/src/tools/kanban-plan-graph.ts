@@ -41,7 +41,7 @@ export function kanbanPlanGraphTool(orchestrator: CompanyOrchestrator): CoderToo
             id: { type: 'string', description: 'Local id, unique in this call (e.g. "auth-api").' },
             title: { type: 'string', description: 'Card title — concise task name.' },
             description: { type: 'string', description: 'Technical description of the task.' },
-            role: { type: 'string', description: 'Suggested role — stored as a [role-hint: @x] comment; the dispatcher prefers it over the recommender.' },
+            role: { type: 'string', description: 'Exact team role responsible for this card.' },
             tag: { type: 'string', enum: ['bug', 'feature', 'refactor', 'documentation'], description: 'Task category tag.' },
             depends_on: { type: 'array', items: { type: 'string' }, description: 'Local ids this card is blocked by.' },
             column: { type: 'string', enum: ['backlog', 'todo'], description: 'Starting column (default: backlog).' },
@@ -83,6 +83,7 @@ export function kanbanPlanGraphTool(orchestrator: CompanyOrchestrator): CoderToo
             column: node.column ?? 'backlog',
             tag: node.tag ?? null,
             created_by: 'master',
+            owner: node.role?.trim(),
           });
           realIds.set(localId, card.id);
           const details: string[] = [];

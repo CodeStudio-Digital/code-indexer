@@ -937,9 +937,12 @@ export class CoderRunner extends EventEmitter {
     // interactive tool_use). Without this, a quit/close before the user
     // approves loses the whole turn — the unflushed pause cannot be resumed
     // (see findPendingInteraction in apps/http-api .../coder/state.ts).
-    this.emit('awaiting_input', { askId: key });
     return new Promise((resolve) => {
-      this.pendingResolves.set(key, resolve);
+      this.pendingResolves.set(key, (value) => {
+        resolve(value);
+        if (key === CoderRunner.DEFAULT_INPUT_KEY) this.emit('default_input_settled');
+      });
+      this.emit('awaiting_input', { askId: key });
     });
   }
 

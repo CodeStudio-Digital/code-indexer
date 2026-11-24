@@ -15,15 +15,12 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
     private readonly bus: IMetaBusPublisher,
   ) {}
 
-  setStatus(agentRunId: string, status: AgentRunStatus, message?: string): void {
-    void this.ctx.companyFiles
-      .updateAgentRunStatus(agentRunId, status, message)
-      .catch((error) => {
-        console.warn(
-          `[company s=${this.ctx.companySessionId}] failed to persist agent ${agentRunId} status:`,
-          error,
-        );
-      });
+  setStatus(agentRunId: string, status: AgentRunStatus, message?: string): Promise<void> {
+    const persisted = this.ctx.companyFiles.updateAgentRunStatus(agentRunId, status, message).then(() => undefined);
+    void persisted.catch((error) => {
+      console.warn(`[company s=${this.ctx.companySessionId}] failed to persist agent ${agentRunId} status:`, error);
+    });
+    return persisted;
   }
 
   /**
@@ -37,11 +34,11 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
     role: string,
     status: AgentRunStatus,
     opts?: { message?: string; coderSessionId?: string },
-  ): void {
-    this.setStatus(agentRunId, status, opts?.message);
+  ): Promise<void> {
+    const persisted = this.setStatus(agentRunId, status, opts?.message);
     if (this.ctx.runtimeKind !== 'app_studio') {
       this.publishStatusEvent(agentRunId, role, status, opts);
-      return;
+      return persisted;
     }
     try {
       const run = this.ctx.companyFiles.getAgentRunSync(agentRunId);
@@ -63,6 +60,7 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
       );
       this.publishStatusEvent(agentRunId, role, status, opts);
     }
+    return persisted;
   }
 
   private publishStatusEvent(

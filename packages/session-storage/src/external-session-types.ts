@@ -73,6 +73,7 @@ export interface ExternalSessionDocument {
 
 export interface ImportExternalSessionInput {
   project_id: number;
+  worktree_path?: string | null;
   provider: string;
   model: string;
   agent: string | null;

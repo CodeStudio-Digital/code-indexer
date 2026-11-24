@@ -98,9 +98,10 @@ export class HeartbeatTracker {
   register(
     args: { agentRunId: string; companySessionId: string; role: string },
     nowMs: number = Date.now(),
+    newInvocation = false,
   ): AgentSupervisionRecord {
     const existing = this.records.get(args.agentRunId);
-    if (existing) return existing;
+    if (existing && !newInvocation) return existing;
     const record: AgentSupervisionRecord = {
       agentRunId: args.agentRunId,
       companySessionId: args.companySessionId,
@@ -111,8 +112,8 @@ export class HeartbeatTracker {
       currentToolUseId: null,
       currentToolName: null,
       stateTimeoutMsOverride: null,
-      recoveryAttempts: 0,
-      incidentCount: 0,
+      recoveryAttempts: existing?.recoveryAttempts ?? 0,
+      incidentCount: existing?.incidentCount ?? 0,
     };
     this.records.set(args.agentRunId, record);
     this.persist(record);
@@ -175,7 +176,7 @@ export class HeartbeatTracker {
     if (toState === 'AWAITING_TOOL') {
       record.currentToolUseId = payload?.toolUseId ?? null;
       record.currentToolName = payload?.toolName ?? null;
-    } else {
+    } else if (toState !== 'STUCK_TOOL') {
       record.currentToolUseId = null;
       record.currentToolName = null;
     }
@@ -286,7 +287,7 @@ export class HeartbeatTracker {
     for (const record of this.records.values()) {
       // Already stuck — don't re-detect (would dedupe at observer level too).
       if (isStuckState(record.state)) continue;
-      if (isTerminalState(record.state)) continue;
+      if (isTerminalState(record.state) || record.state === 'AWAITING_PROVIDER') continue;
       const effective = record.stateTimeoutMsOverride ?? DEFAULT_STATE_TIMEOUT_MS[record.state];
       if (effective === null) continue; // no timeout for this state
       const age = nowMs - record.lastHeartbeatAt;

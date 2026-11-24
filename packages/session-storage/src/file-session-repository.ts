@@ -586,7 +586,7 @@ export class FileSessionRepository {
 
   #writer(
     location: SessionLocation,
-    options: { readonly allowMoving?: boolean } = {},
+    options: { readonly allowMoving?: boolean; readonly onProgress?: () => void } = {},
   ): Promise<SessionWriter> {
     const key = cacheKey(location);
     if (this.#moving.has(key) && options.allowMoving !== true) {
@@ -605,7 +605,7 @@ export class FileSessionRepository {
     const opening = this.#locator
       .assertSafeLocation(location, { mustExist: true })
       .then(async () => {
-        const writer = await SessionWriter.open({ ...writerOptions, coderTranscript: this.readSessionSync(location).kind === 'coder' });
+        const writer = await SessionWriter.open({ ...writerOptions, coderTranscript: this.readSessionSync(location).kind === 'coder' }, options.onProgress);
         try {
           if (!this.#artifactRecoveryRegistry.has(key)) {
             await writer.runExclusive(() =>
@@ -613,6 +613,7 @@ export class FileSessionRepository {
                 bundlePath: location.bundle_path,
                 sessionId: location.session_id,
                 faultInjector: this.#faultInjector,
+                onProgress: options.onProgress,
               }),
             );
             this.#artifactRecoveryRegistry.add(key);
@@ -631,8 +632,8 @@ export class FileSessionRepository {
     return opening;
   }
 
-  async primeSession(location: SessionLocation): Promise<void> {
-    await this.#writer(location);
+  async primeSession(location: SessionLocation, onProgress?: () => void): Promise<void> {
+    await this.#writer(location, { onProgress });
   }
 
   async archiveConversationChapters(location: SessionLocation, spans: readonly ChapterSpan[]): Promise<void> {

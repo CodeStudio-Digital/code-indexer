@@ -234,6 +234,38 @@ describe('CoderWorkerPool', () => {
     expect(mockWorker.state.hosts).toHaveLength(0);
   });
 
+  it('acknowledges preparation and holds a follow-up for the same ready runner', async () => {
+    const p = createPool(), id = sid(91);
+    mockWorker.state.requestImpl = async type => type === 'runFresh'
+      ? { ok: true, preparing: true } : { ok: true, roundMessageId: 42 };
+    const bus = await p.runFresh(id, { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+    const runId = (host.bridge.requests.find(r => r.type === 'runFresh')!.payload as { runId: number }).runId;
+    const followup = p.pushUserMessage(id, 'second');
+    await new Promise(resolve => setImmediate(resolve));
+    expect(host.bridge.requests.some(r => r.type === 'pushUserMessage')).toBe(false);
+    host.bridge.emitToPool('bus.event', { runId: runId + 1, event: 'session', data: {} });
+    host.bridge.emitToPool('bus.event', { runId, event: 'worker_log', data: { message: 'preparing' } });
+    expect(host.bridge.requests.some(r => r.type === 'pushUserMessage')).toBe(false);
+    host.bridge.emitToPool('bus.event', { runId, event: 'session', data: {} });
+    await expect(followup).resolves.toBe(42);
+    expect(host.bridge.requests.filter(r => r.type === 'pushUserMessage')).toHaveLength(1);
+    expect(p.getBus(id)).toBe(bus);
+  });
+
+  it('releases pending input on preparation failure without dispatching it to another turn', async () => {
+    const p = createPool(), id = sid(92);
+    mockWorker.state.requestImpl = async () => ({ ok: true, preparing: true });
+    const bus = await p.runFresh(id, { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+    const runId = (host.bridge.requests.find(r => r.type === 'runFresh')!.payload as { runId: number }).runId;
+    const followup = expect(p.pushUserMessage(id, 'second')).rejects.toMatchObject({ code: 'CODER_TURN_ENDED_BEFORE_INPUT' });
+    host.bridge.emitToPool('bus.end', { runId, event: 'error', data: { message: 'startup failed' } });
+    await followup;
+    expect(bus.endReason?.event).toBe('error');
+    expect(host.bridge.requests.some(r => r.type === 'pushUserMessage')).toBe(false);
+  });
+
   it('routes derived diagnostics to the current owner without starting a new worker', async () => {
     const p = createPool();
     const event = { sessionId: sid(99), stage: 'candidate' };
@@ -351,7 +383,49 @@ describe('CoderWorkerPool', () => {
       payload: {},
       opts: { timeoutMs: SESSION_WRITER_ACQUIRE_TIMEOUT_MS },
     });
-    expect(SESSION_WRITER_ACQUIRE_TIMEOUT_MS).toBe(120_000);
+    expect(SESSION_WRITER_ACQUIRE_TIMEOUT_MS).toBeLessThan(10 * 60_000);
+  });
+
+  it('allows recovery past two minutes with progress, then dispatches the input once after ACK', async () => {
+    vi.useFakeTimers();
+    try {
+      let ready!: () => void;
+      const pending = new Promise<void>(resolve => { ready = resolve; });
+      let acknowledge!: (value: { ok: boolean }) => void;
+      mockWorker.state.acquireWriterImpl = () => new Promise(resolve => { acknowledge = resolve; ready(); });
+      const running = createPool().runFresh(sid(99), { userMessage: 'continue' });
+      await pending;
+      const bridge = mockWorker.state.hosts[0].bridge;
+      for (let i = 0; i < 4; i++) {
+        await vi.advanceTimersByTimeAsync(35_000);
+        bridge.emitToPool('session.writerProgress', {});
+      }
+      expect(bridge.requests.filter(r => r.type === 'runFresh')).toHaveLength(0);
+      acknowledge({ ok: true });
+      await running;
+      expect(bridge.requests.filter(r => r.type === 'runFresh')).toHaveLength(1);
+      expect(bridge.listeners.get('session.writerProgress')?.size).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('retires a stalled writer without dispatching the input and allows the next send', async () => {
+    vi.useFakeTimers();
+    try {
+      let ready!: () => void;
+      const pending = new Promise<void>(resolve => { ready = resolve; });
+      mockWorker.state.acquireWriterImpl = () => { ready(); return new Promise(() => {}); };
+      const pool = createPool();
+      const rejected = expect(pool.runFresh(sid(99), { userMessage: 'first' })).rejects.toThrow('no progress');
+      await pending;
+      await vi.advanceTimersByTimeAsync(45_001);
+      await rejected;
+      const old = mockWorker.state.hosts[0];
+      expect(old.bridge.requests.some(r => r.type === 'runFresh')).toBe(false);
+      expect(old.bridge.listeners.get('session.writerProgress')?.size).toBe(0);
+      mockWorker.state.acquireWriterImpl = null;
+      await pool.runFresh(sid(99), { userMessage: 'next' });
+      expect(mockWorker.state.hosts[1].bridge.requests.filter(r => r.type === 'runFresh')).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it('routes provider persistence through the worker that owns the session', async () => {

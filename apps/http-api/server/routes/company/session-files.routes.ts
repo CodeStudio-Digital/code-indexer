@@ -59,13 +59,17 @@ export function mountCompanyFileSessionRoutes(
   options: { includeDelete?: boolean } = {},
 ): void {
   const sessions = deps.operationalSessionFiles;
+  const visible = (row:CompanySessionFileRow) => {
+    if (!row.config_json?.includes('design_pending')) return true;
+    return !JSON.parse(row.config_json).design_pending;
+  };
 
   app.get('/api/company/sessions', async (c) => {
     const status = c.req.query('status');
     const rows = await sessions.listCompanySessions(
       status ? { status } : {},
     );
-    return c.json(rows.map((row) => ({ ...row, ...runtimeEnvelope(row) })));
+    return c.json(rows.filter(visible).map((row) => ({ ...row, ...runtimeEnvelope(row) })));
   });
 
   app.get('/api/company/companies', async c => {
@@ -80,7 +84,7 @@ export function mountCompanyFileSessionRoutes(
       family.push(row);
       families.set(companyId, family);
     }
-    const rows = all.filter(row => !row.parent_session_id && !row.archived_at).map(row => {
+    const rows = all.filter(row => !row.parent_session_id && !row.archived_at && visible(row)).map(row => {
       const family = families.get(row.id) ?? [row];
       const running_sessions = family.filter(item => item.status === 'running').length;
       const paused_sessions = family.filter(item => item.status === 'paused').length;
@@ -134,7 +138,7 @@ export function mountCompanyFileSessionRoutes(
 
   app.post('/api/company/sessions', async (c) => {
     const body = await parseJsonBody<
-      CreateSessionBody & { runtime_kind?: 'company' | 'app_studio' }
+      CreateSessionBody & { runtime_kind?: 'company' | 'app_studio'; visual_qa?: boolean }
     >(c);
     if (!body.name || !body.project_ids?.length) {
       return c.json({ error: 'name and project_ids required' }, 400);
@@ -144,7 +148,8 @@ export function mountCompanyFileSessionRoutes(
       if (error) return c.json({ error }, 400);
     }
     const roleAssignments = resolveRoleProjectBindings(
-      (body.role_assignments ?? []).map(withDefaultQaSkill),
+      body.visual_qa === true || (body.runtime_kind === 'app_studio' && body.visual_qa === undefined)
+        ? (body.role_assignments ?? []).map(withDefaultQaSkill) : (body.role_assignments ?? []),
       body.project_ids.flatMap((projectId) => {
         const project = deps.db.getProject(projectId);
         return project
@@ -158,6 +163,7 @@ export function mountCompanyFileSessionRoutes(
       }),
     );
     const config = {
+      visual_qa: body.visual_qa === true,
       master_provider: body.master_provider,
       master_model: body.master_model,
       role_assignments: roleAssignments,

@@ -17,6 +17,6 @@ createRoot(document.getElementById('root')).render(h(MemoryRouter, null,
   h(GlobalNotificationListener),
   h(DialogProvider, null, h(TooltipProvider, null,
     h('div', {className:'font-sans',style:{height:'100vh',width:'100vw',display:'flex',flexDirection:'column'}},
-      h(ProjectWorkbench, {projectId:7,projectName:'CodeStudio',projectRoot:'D:/fixture/project',
+      h(ProjectWorkbench, {projectId:Number(new URL(location.href).searchParams.get('projectId') || 7),projectName:'CodeStudio',projectRoot:'D:/fixture/project',
         activeFilePath:null,onOpenFile:()=>{},contribWindows:[],builderJson:null,previewEnabled:false}))))));
 </script></body></html>

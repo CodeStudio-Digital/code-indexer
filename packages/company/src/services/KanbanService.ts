@@ -7,6 +7,7 @@
 
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IMetaBusPublisher, IKanbanNotifier } from '@mcp/company/services/ports.js';
+import type { TaskEvidence } from '@mcp/company-contracts/models/kanban.js';
 import { DispatchClaims } from './scheduler/dispatch-claims.js';
 import type {
   KanbanCard,
@@ -35,6 +36,7 @@ export class KanbanService implements IKanbanNotifier {
     tag?: KanbanTag | null;
     created_by?: string;
     checklist?: string[];
+    owner?: string;
   }): KanbanCardFull {
     const full = this.ctx.effectiveCompanyFiles.createKanbanCardSync({
       title: input.title,
@@ -43,6 +45,7 @@ export class KanbanService implements IKanbanNotifier {
       tag: input.tag,
       createdBy: input.created_by,
       checklist: input.checklist,
+      ...(input.owner && { control: { owner: input.owner, projectId: null, visualQA: false, acceptance: [] } }),
     });
     this.bus.publish('kanban_card_created', full);
     return full;
@@ -190,13 +193,17 @@ export class KanbanService implements IKanbanNotifier {
 
   updateChecklist(
     cardId: string,
-    items: Array<{ id?: string; text: string; checked: boolean }>,
+    items: Array<{ id?: string; text: string; checked: boolean }> | undefined,
+    evidence?: TaskEvidence,
+    agentRunId?: string | null,
   ): KanbanChecklistItem[] {
-    const result = this.ctx.effectiveCompanyFiles.updateKanbanChecklistSync(
-      cardId,
-      items,
-    );
-    this.bus.publish('kanban_checklist_updated', { cardId, items: result });
+    const files = this.ctx.effectiveCompanyFiles;
+    const result = files.updateKanbanChecklistSync(cardId, items, evidence, agentRunId);
+    if (items) this.bus.publish('kanban_checklist_updated', { cardId, items: result });
+    if (evidence?.length) {
+      const control = files.getKanbanCardFullSync(cardId)?.control;
+      this.bus.publish('kanban_card_updated', { cardId, patch: { control } });
+    }
     return result;
   }
 
@@ -229,6 +236,7 @@ export class KanbanService implements IKanbanNotifier {
       cardId,
       agentRunId,
       role,
+      this.ctx.companySessionId,
     );
     this.bus.publish('kanban_agent_assigned', { cardId, assignment });
     return assignment;
@@ -277,6 +285,12 @@ export class KanbanService implements IKanbanNotifier {
     lines.push(`# Kanban Card: ${card.title}`);
     if (card.tag) lines.push(`Tag: ${card.tag}`);
     if (card.description) lines.push(`\n## Description\n${card.description}`);
+    if (card.control?.acceptance.length) {
+      lines.push('\n## Acceptance criteria');
+      for (const [index, item] of card.control.acceptance.entries()) {
+        lines.push(`- [${index}] ${item.criterion}${item.evidence ? ' — ' + item.evidence : ''}`);
+      }
+    }
     if (card.checklist.length > 0) {
       lines.push('\n## Objectives');
       for (const item of card.checklist) {

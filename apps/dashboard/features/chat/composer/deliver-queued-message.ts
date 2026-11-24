@@ -44,7 +44,7 @@ export async function deliverQueuedMessage(options: {
     if (receipt.terminal.event === 'error') {
       const data = receipt.terminal.data;
       const message = formatCoderTerminalError(data);
-      if (data.not_started === true && ['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input'].includes(data.reason ?? '')) {
+      if (data.not_started === true && ['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input', 'session-recovery-timeout'].includes(data.reason ?? '')) {
         throw new MessageNotStartedError(message);
       }
       throw new Error(message);

@@ -91,6 +91,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
         template_id: selectedTemplateId,
         name: name.trim(),
         project_ids: selectedProjectIds,
+        visual_qa: false,
         master_provider: masterProvider,
         master_model: masterModel,
         role_assignments: selectedTemplate?.roles.filter((r) => r.role !== 'master') ?? [],

@@ -39,19 +39,20 @@ export class ConcurrencyPolicy {
       : (opts.maxConcurrent ?? 10);
   }
 
-  check(currentRunning: number): ConcurrencyResult {
-    if (currentRunning >= this.max) {
+  check(currentRunning: number, sessionLimit?: number | null): ConcurrencyResult {
+    const max = sessionLimit && Number.isInteger(sessionLimit) && sessionLimit > 0 ? Math.min(this.max, sessionLimit) : this.max;
+    if (currentRunning >= max) {
       return {
         ok: false,
         current: currentRunning,
-        max: this.max,
+        max,
         message:
-          `Concurrent subordinate cap reached (${currentRunning}/${this.max}). ` +
+          `Concurrent subordinate cap reached (${currentRunning}/${max}). ` +
           `Call wait_for_subordinates to let at least one finish before spawning ` +
           `another, or abort a stuck subordinate with resume_subordinate.`,
       };
     }
-    return { ok: true, current: currentRunning, max: this.max };
+    return { ok: true, current: currentRunning, max };
   }
 
   get limit(): number {

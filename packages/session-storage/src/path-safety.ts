@@ -183,30 +183,33 @@ const WRITER_TRANSIENT_NAME =
  */
 export async function collectSessionTransientFiles(
   trustedRoot: string,
+  onProgress?: () => void,
 ): Promise<number> {
   const root = await assertExistingDirectory(trustedRoot, 'session bundle');
 
   const visit = async (directory: string): Promise<number> => {
     await assertPathHasNoLinks(root, directory);
     let removed = 0;
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    onProgress?.();
+    for (const entry of entries) {
       const child = resolve(directory, entry.name);
       assertContainedPath(root, child);
-      const childStat = await lstat(child);
-      if (childStat.isSymbolicLink()) {
+      if (entry.isSymbolicLink()) {
         throw new UnsafeSessionPathError(
           `Refusing to inspect symbolic link in session bundle: ${child}`,
         );
       }
-      if (childStat.isDirectory()) {
+      if (entry.isDirectory()) {
         removed += await visit(child);
         continue;
       }
       if (
-        childStat.isFile() &&
+        entry.isFile() &&
         (ATOMIC_TEMP_NAME.test(entry.name) ||
           WRITER_TRANSIENT_NAME.test(entry.name))
       ) {
+        await assertPathHasNoLinks(root, child);
         await unlink(child);
         removed += 1;
       }

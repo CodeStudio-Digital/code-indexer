@@ -1,7 +1,8 @@
 import { homedir } from 'node:os';
 import { basename, join, normalize } from 'node:path';
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
-import { readJsonlHead, readStableJsonl, walkFiles } from './jsonl.js';
+import { mapWithConcurrency } from '@mcp/shared/utils/map-with-concurrency.js';
+import { readJsonlEdges, readJsonlHead, readStableJsonl, walkFiles } from './jsonl.js';
 import {
   asRecord,
   asText,
@@ -93,13 +94,17 @@ function contentBlocks(value: unknown): ContentBlock[] {
   return blocks;
 }
 
+function stripClaudeRuntimeTags(text: string): string {
+  return text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '')
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, '')
+    .trim();
+}
+
 function stripClaudeRuntimeText(content: ContentBlock[]): ContentBlock[] {
   return content.flatMap((block): ContentBlock[] => {
     if (block.type !== 'text') return [block];
-    const text = block.text
-      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '')
-      .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, '')
-      .trim();
+    const text = stripClaudeRuntimeTags(block.text);
     return text ? [{ ...block, text }] : [];
   });
 }
@@ -159,17 +164,53 @@ function toMessages(records: Record<string, unknown>[]): ExternalSessionMessage[
   return messages;
 }
 
-function candidateFromHead(path: string, records: unknown[], size: number, title?: string): ExternalSessionCandidate | null {
+function displayTitle(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
+}
+
+function firstUserTitle(rows: Record<string, unknown>[]): string {
+  for (const row of rows) {
+    if (row.type !== 'user' || row.isMeta === true || row.isSidechain === true || row.isCompactSummary === true) continue;
+    const content = asRecord(row.message)?.content;
+    const parts = Array.isArray(content)
+      ? content.flatMap((value) => {
+          const part = asRecord(value);
+          return part?.type === 'text' && typeof part.text === 'string' ? [part.text] : [];
+        })
+      : typeof content === 'string' ? [content] : [];
+    for (const part of parts) {
+      const text = stripClaudeRuntimeTags(part);
+      if (/^<(?:local-command-|command-)/i.test(text)) continue;
+      const title = displayTitle(text);
+      if (title) return title;
+    }
+  }
+  return '';
+}
+
+function candidateFromRecords(
+  path: string,
+  records: unknown[],
+  size: number,
+  history?: ReadonlyMap<string, string>,
+): ExternalSessionCandidate | null {
   const rows = records.map(asRecord).filter((row): row is Record<string, unknown> => row != null);
-  const row = rows.find((item) => typeof item.sessionId === 'string' || typeof item.cwd === 'string');
-  if (!row) return null;
-  const externalId = asText(row.sessionId) || basename(path, '.jsonl');
-  const updated = [...rows].reverse().map(timestamp).find(Boolean) ?? null;
+  const identity = rows.find((row) => typeof row.sessionId === 'string' && row.sessionId);
+  const cwdRow = rows.find((row) => typeof row.cwd === 'string' && row.cwd.trim());
+  if (!identity && !cwdRow) return null;
+  const externalId = asText(identity?.sessionId) || basename(path, '.jsonl');
+  const newest = [...rows].reverse();
+  const title = displayTitle(newest.find((row) => row.type === 'custom-title' && displayTitle(row.customTitle))?.customTitle)
+    || displayTitle(newest.find((row) => row.type === 'ai-title' && displayTitle(row.aiTitle))?.aiTitle)
+    || firstUserTitle(rows)
+    || history?.get(externalId)
+    || `Claude ${externalId.slice(0, 8)}`;
+  const updated = newest.map(timestamp).find(Boolean) ?? null;
   const modelRow = rows.find((item) => item.type === 'assistant' && asRecord(item.message));
   const sourceModel = asText(asRecord(modelRow?.message)?.model ?? modelRow?.model) || null;
   return {
-    source: 'claude-code', external_id: externalId, title: title || `Claude ${externalId.slice(0, 8)}`,
-    cwd: asText(row.cwd) || null, updated_at: updated, source_model: sourceModel, source_path: normalize(path),
+    source: 'claude-code', external_id: externalId, title,
+    cwd: asText(cwdRow?.cwd) || null, updated_at: updated, source_model: sourceModel, source_path: normalize(path),
     size_bytes: size, reference: { source: 'claude-code', source_path: normalize(path), external_id: externalId },
   };
 }
@@ -181,25 +222,38 @@ async function historyTitles(root: string): Promise<Map<string, string>> {
     for (const raw of result.records) {
       const row = asRecord(raw);
       const id = asText(row?.sessionId);
-      const display = asText(row?.display ?? row?.title);
-      if (id && display) titles.set(id, display.replace(/\s+/g, ' ').trim().slice(0, 160));
+      const title = displayTitle(row?.display ?? row?.title);
+      if (id && title) titles.set(id, title);
     }
   } catch { /* history is only a title index */ }
   return titles;
 }
 
 export async function discoverClaudeCode(root = join(homedir(), '.claude')): Promise<ExternalSessionCandidate[]> {
-  const titles = await historyTitles(root);
-  const paths = await walkFiles(join(root, 'projects'), (name, depth) => depth === 1 && name.endsWith('.jsonl'));
-  const candidates: Array<ExternalSessionCandidate | null> = await Promise.all(paths.map(async (path) => {
-    try {
+  const [titles, paths] = await Promise.all([
+    historyTitles(root),
+    walkFiles(join(root, 'projects'), (name, depth) => depth === 1 && name.endsWith('.jsonl'), 1),
+  ]);
+  const candidates = await mapWithConcurrency(paths, 8, async (path) => {
+    const edges = await readJsonlEdges(path);
+    let candidate = candidateFromRecords(path, edges.records, edges.size_bytes, titles);
+    if (!candidate?.cwd) {
       const head = await readJsonlHead(path, 30);
-      const raw = candidateFromHead(path, head.records, head.size_bytes);
-      return raw ? { ...raw, title: titles.get(raw.external_id) ?? raw.title, updated_at: head.modified_at } : null;
-    } catch { return null; }
-  }));
-  return candidates.filter((value): value is ExternalSessionCandidate => value != null)
-    .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+      candidate = candidateFromRecords(path, [...head.records, ...edges.records], edges.size_bytes, titles);
+    }
+    return candidate ? { ...candidate, updated_at: edges.modified_at } : null;
+  });
+  const unique = new Map<string, ExternalSessionCandidate>();
+  const newest = candidates.flatMap((result) => result.status === 'fulfilled' && result.value ? [result.value] : [])
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  for (const candidate of newest) {
+    const previous = unique.get(candidate.external_id);
+    if (!previous || (
+      basename(previous.source_path, '.jsonl') !== previous.external_id &&
+      basename(candidate.source_path, '.jsonl') === candidate.external_id
+    )) unique.set(candidate.external_id, candidate);
+  }
+  return [...unique.values()].sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
 }
 
 export async function readClaudeCode(reference: ExternalSessionReference): Promise<ExternalSessionDocument> {
@@ -208,7 +262,7 @@ export async function readClaudeCode(reference: ExternalSessionReference): Promi
   }
   const read = await readStableJsonl(reference.source_path);
   const records = currentBranch(read.records);
-  const candidate = candidateFromHead(reference.source_path, records, read.size_bytes);
+  const candidate = candidateFromRecords(reference.source_path, read.records, read.size_bytes);
   if (!candidate) throw new ExternalSessionError('unsupported_format', 'File is not a Claude Code session');
   if (reference.external_id && candidate.external_id !== reference.external_id) {
     throw new ExternalSessionError('unsupported_format', 'Claude session id does not match the selected source');

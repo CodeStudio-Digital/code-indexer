@@ -61,6 +61,7 @@ import {
   type SpawnSubordinateSpec,
 } from '@mcp/company/services/subordinate/spec.js';
 import { spawnSubordinate } from '@mcp/company/services/subordinate/spawn.js';
+import { isResumeInFlight } from './subordinate/resume-guard.js';
 import { resumeSubordinate } from '@mcp/company/services/subordinate/resume.js';
 import { resolveBindingForProject } from '@mcp/company/services/subordinate/binding.js';
 
@@ -115,6 +116,7 @@ export interface SubordinateLifecycleDeps {
 export class SubordinateLifecycle implements ISubordinateQuery {
   private readonly subordinates = new Map<string, SubordinateHandle>();
   private readonly runningIds = new Set<string>();
+  private readonly startingIds = new Set<string>();
   /**
    * Synchronous spawn reservations. A spawn passes the concurrency check and
    * then awaits `runCoder` for a beat before `runningIds` gains its id — so
@@ -150,6 +152,9 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   get runningCount(): number { return this.runningIds.size; }
   /** Includes synchronous spawn reservations that have not created a run yet. */
   get concurrencyOccupancy(): number { return this.runningIds.size + this.pendingSpawns.count; }
+  ownsRuntime(agentRunId: string): boolean {
+    return this.runningIds.has(agentRunId) || this.startingIds.has(agentRunId) || isResumeInFlight(agentRunId);
+  }
   isRunning(agentRunId: string): boolean { return this.runningIds.has(agentRunId); }
 
   // ─── Queries ────────────────────────────────────────────────────
@@ -265,9 +270,14 @@ export class SubordinateLifecycle implements ISubordinateQuery {
     );
   }
 
+  recover(agentRunId: string, message: string): ReturnType<SubordinateLifecycle['resume']> {
+    return resumeSubordinate(agentRunId, message, undefined, undefined, undefined, this.buildResumeDeps(), true);
+  }
+
   /** Build the deps bag passed to `spawnSubordinate`. */
   private buildSpawnDeps() {
     return {
+      startingIds: this.startingIds,
       ctx: this.deps.ctx,
       board: this.deps.board,
       status: this.deps.status,
@@ -295,6 +305,8 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   /** Build the deps bag passed to `resumeSubordinate`. */
   private buildResumeDeps() {
     return {
+      pendingSpawns: this.pendingSpawns,
+      concurrencyPolicy: this.concurrencyPolicy,
       ctx: this.deps.ctx,
       board: this.deps.board,
       status: this.deps.status,

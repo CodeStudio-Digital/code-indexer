@@ -1402,6 +1402,28 @@ describe('idempotency and crash recovery', () => {
     await restarted.close();
   });
 
+  it('recovers migrated runtime artifacts without reading the independent stream diagnostics', async () => {
+    const { repository, locator } = await fixture();
+    const { location, session } = await repository.createSession({ kind: 'coder', scope: { kind: 'project', project_id: 1 } });
+    const artifacts = new ArtifactStore({ bundlePath: location.bundle_path, sessionId: session.id });
+    const ref = await artifacts.put({ kind: 'attachment', data: 'legacy event attachment' });
+    const runtime = join(location.bundle_path, 'events', 'runtime');
+    await mkdir(join(runtime, 'stream'), { recursive: true });
+    await writeFile(join(runtime, 'legacy.json'), JSON.stringify({ data: { _legacy_table: 'runtime_events', artifacts: [ref] } }));
+    await writeFile(join(runtime, 'stream', 'diagnostic.json'), 'incomplete diagnostic');
+    await repository.closeSession(location);
+    const restarted = new FileSessionRepository({ locator, artifactRecoveryRegistry: new Set() });
+    const progress = vi.fn();
+    try {
+      await restarted.primeSession(location, progress);
+      expect(progress).toHaveBeenCalled();
+      expect(artifacts.read(ref)).toEqual(Buffer.from('legacy event attachment'));
+      expect(await readFile(join(runtime, 'stream', 'diagnostic.json'), 'utf8')).toBe('incomplete diagnostic');
+    } finally {
+      await restarted.close();
+    }
+  });
+
   it('fails closed on corrupt metadata before deleting any artifact', async () => {
     const { repository, locator } = await fixture();
     const created = await repository.createSession({

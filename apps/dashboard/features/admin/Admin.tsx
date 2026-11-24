@@ -62,6 +62,7 @@ import { PipelineBindingsPanel } from './PipelineBindingsPanel.js';
 import PerfMonitorPanel from './perf/PerfMonitorPanel.js';
 // Pipeline telemetry moved to `/telemetry`; the Pipelines configuration
 // tab remains here.
+import { DecisionSettingsPanel } from '../agents/design/DecisionControl.js';
 import { useAdminProviders } from './hooks/useAdminProviders.js';
 import type { AdminProvider } from './types.js';
 
@@ -113,13 +114,13 @@ export default function Admin() {
 
   const requestedSection = searchParams.get('section');
   const [section, setSection] = useState<SectionId>(() => (
-    requestedSection === 'perf' ? 'perf' : 'providers'
+    requestedSection === 'perf' || requestedSection === 'clef' ? requestedSection : 'providers'
   ));
   // Shift+Esc may navigate here while Admin is already mounted on another
   // section. React Router keeps the component alive, so mirror the explicit
   // task-manager query into local section state.
   useEffect(() => {
-    if (requestedSection === 'perf') setSection('perf');
+    if (requestedSection === 'perf' || requestedSection === 'clef') setSection(requestedSection);
   }, [requestedSection]);
   const [editing, setEditing] = useState<Partial<AdminProvider> | null>(null);
   const [bedrockOpen, setBedrockOpen] = useState(false);
@@ -154,6 +155,7 @@ export default function Admin() {
     // Modelos & IA
     { id: 'providers',         label: t('admin:tabs.providers'),  icon: Plug,          group: 'models',
       hint: 'Conexões com modelos (OpenAI, Anthropic, …)' },
+    { id: 'clef', label: t('admin:tabs.clef'), icon: GitFork, group: 'models' },
     { id: 'pipeline-bindings', label: 'Pipelines',                icon: GitFork,       group: 'models',
       hint: 'Bindings de provider/model por pipeline' },
     { id: 'capabilities',      label: 'Capabilities',             icon: AlertTriangle, group: 'models',
@@ -369,6 +371,7 @@ export default function Admin() {
           {section === 'ai-geral'          && <GeneralAiPanel />}
           {section === 'lsp-servers'       && <LspServersPanel />}
           {section === 'chrome-service'    && <ChromeServicePanel />}
+          {section === 'clef' && <DecisionSettingsPanel />}
           {section === 'pipeline-bindings' && <PipelineBindingsPanel />}
           {section === 'perf'              && <PerfMonitorPanel />}
               </div>

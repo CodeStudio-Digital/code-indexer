@@ -34,9 +34,10 @@ function fnv1aHash(text: string): string {
 export function buildMasterTools(
   orchestrator: CompanyOrchestrator,
   reviewDeps?: MasterReviewDeps,
+  allowCompanyKanban = true,
 ): CoderTool[] {
   return [
-    spawnSubordinateAgent(orchestrator),
+    spawnSubordinateAgent(orchestrator, allowCompanyKanban),
     waitForSubordinates(orchestrator),
     resumeSubordinate(orchestrator),
     approveSubordinatePlan(orchestrator),
@@ -64,7 +65,7 @@ export function buildMasterTools(
 
 // ─── spawn_subordinate_agent ───────────────────────────────────
 
-function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
+function spawnSubordinateAgent(orchestrator: CompanyOrchestrator, allowCompanyKanban: boolean): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
@@ -116,17 +117,9 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
         let task = args.task as string;
         const requestedWait = args.wait === true;
 
-        // P16 — Auto-create a kanban card when the master forgot to
-        // pass `kanban_card_id`. This keeps the board the single
-        // source of truth for "what's in flight" even when the master
-        // skips the discipline. We skip auto-create for trivially
-        // short tasks (likely status checks) so the board doesn't
-        // pollute with one-liners. Creation is intentionally deferred until
-        // AFTER the runner is wired: otherwise a wait=true spawn leaves an
-        // unassigned in_progress card for the whole subordinate run and the
-        // reconciler falsely resets it as a dead worker.
+        // Substantive Company tasks reserve their owner before the runner starts.
         const shouldAutoCreateCard =
-          !kanbanCardId && Boolean(task && task.trim().length >= 20);
+          allowCompanyKanban && !kanbanCardId && Boolean(task && task.trim().length >= 20);
         const autoCardTask = task;
 
         // Inject context only for a card that already existed. An automatic
@@ -148,7 +141,17 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           : undefined;
         const argThinking = args.thinking as boolean | undefined;
 
+        if (shouldAutoCreateCard) {
+          const excerpt = autoCardTask.replace(/\s+/g, ' ').trim().slice(0, 60);
+          kanbanCardId = orchestrator.kanbanCreateCard({
+            title: `${role}: ${excerpt}${autoCardTask.length > 60 ? '…' : ''}`,
+            description: autoCardTask,
+            column: 'todo', created_by: 'master', owner: role,
+          }).id;
+        }
+
         const result = await orchestrator.spawnSubordinate({
+          kanbanCardId,
           role,
           task,
           dispatchSource: 'company',
@@ -157,58 +160,12 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           model: argModel,
           tier: argTier,
           skills: argSkills,
-          // Always get the run id as soon as the runner is wired. We must
-          // assign its Kanban card before performing any long wait.
+          // Dispatch returns the reserved agent identity before the optional long wait.
           wait: false,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
           thinking: argThinking,
         });
 
-        if (shouldAutoCreateCard && result.agentRunId) {
-          try {
-            const excerpt = autoCardTask.replace(/\s+/g, ' ').trim().slice(0, 60);
-            const autoCard = orchestrator.kanbanCreateCard({
-              title: `${role}: ${excerpt}${autoCardTask.length > 60 ? '…' : ''}`,
-              description:
-                autoCardTask.length > 200
-                  ? autoCardTask.slice(0, 200) + '…'
-                  : autoCardTask,
-              column: 'in_progress',
-              tag: null,
-              created_by: 'master',
-            });
-            kanbanCardId = autoCard.id;
-            try {
-              orchestrator.kanbanAddComment(
-                autoCard.id,
-                'system',
-                null,
-                '[AUTO] Card created on spawn because the master did not pass `kanban_card_id`. ' +
-                  'Add detailed context comments BEFORE spawning next time so the subordinate has ' +
-                  'file paths / decisions / acceptance criteria embedded in its briefing.',
-              );
-            } catch { /* comment is a nice-to-have */ }
-          } catch {
-            // Auto-create failures must NOT block a successfully wired agent.
-            kanbanCardId = undefined;
-          }
-        }
-
-        // Auto-assign agent to Kanban card and move to in_progress
-        if (kanbanCardId && result.agentRunId) {
-          try {
-            orchestrator.kanbanAssignAgent(kanbanCardId, result.agentRunId, role);
-            const card = orchestrator.kanbanGetCard(kanbanCardId);
-            if (card && (card.column === 'backlog' || card.column === 'todo')) {
-              orchestrator.kanbanMoveCard(kanbanCardId, 'in_progress');
-            }
-          } catch { /* non-fatal — card ops shouldn't block spawn */ }
-        }
-
-        // FeedbackCollector — backfill any role_pipeline counterfactual
-        // rows whose query_hash matches THIS task. Records the actually-
-        // spawned role + agentRunId as the true outcome so the analytics
-        // can later compare against the shadow recommendations.
         if (result.agentRunId) {
           observeOutcome('role_pipeline', {
             queryHash: fnv1aHash(task),
@@ -218,7 +175,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
         }
 
         if (!requestedWait || !result.agentRunId) {
-          return okStructured(result);
+          return okStructured({ ...result, ...(kanbanCardId && { kanbanCardId }) });
         }
 
         const waitOutcome = await runAgentWaitLoop(orchestrator, {
@@ -234,6 +191,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
 
         return okStructured({
           ...result,
+          ...(kanbanCardId && { kanbanCardId }),
           statusAtReturn: statusAtReturn ?? result.status,
           waitOutcome: waitOutcome.kind,
         });

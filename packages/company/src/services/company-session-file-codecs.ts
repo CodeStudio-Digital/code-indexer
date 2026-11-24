@@ -1,3 +1,4 @@
+import { taskControl } from '@mcp/company-contracts/models/kanban.js';
 import { nullableString, stringValue, dispatchSource, runStatus, nonNegativeSafeInteger, boardKind, stringArray, inboxKind, inboxStatus, inboxPriority, nullableUuid, kanbanColumn, kanbanTag, kanbanChecklist, kanbanComments, kanbanAgents, kanbanDependencies } from './company-session-file-values.js';
 import type { CompanyAgentRunFileRow } from './company-session-file-types.js';
 import { assertUuid, asAgentRunId, asSessionId, type CompanySessionId, type EntityRecord } from '@mcp/session-storage';
@@ -182,6 +183,8 @@ export function toKanbanCard(
       rawArchiveId == null
         ? null
         : assertUuid(rawArchiveId, 'Company archive id'),
+    ...(data.control != null && {control:taskControl.parse(data.control)}),
+    ...(Array.isArray(data.transitions) && { transitions:data.transitions as KanbanCardFull['transitions'] }),
     checklist: kanbanChecklist(id, data.checklist),
     comments: kanbanComments(id, data.comments),
     agents: kanbanAgents(id, data.agents),

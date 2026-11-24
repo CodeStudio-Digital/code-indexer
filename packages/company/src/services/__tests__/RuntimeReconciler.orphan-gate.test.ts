@@ -54,6 +54,33 @@ function makeReconciler(opts: {
   return { sweep, moveCard, unassignAgent };
 }
 
+it('recovers the persisted agent once when the Company is restarted and keeps its card assigned', async () => {
+  vi.stubEnv('MCP_COMPANY_AUTO_REESTABLISH', '1');
+  let company = 'interrupted';
+  let owned = false;
+  const run = { id: DEAD_RUN_ID, role: 'frontend', status: 'interrupted' };
+  const recover = vi.fn(async () => { owned = true; run.status = 'running'; });
+  const moveCard = vi.fn(), unassignAgent = vi.fn();
+  const reconciler = new RuntimeReconciler({
+    ctx: { companySessionId: SESSION_ID, companyFiles: {
+      getSession: () => ({ status: company }), listAgentRunsSync: () => [run], listInboxMessagesSync: () => [],
+    } },
+    subordinates: { ownsRuntime: () => owned, recover },
+    master: { isAlive: false }, autonomy: fakeAutonomy({ orphanReset: true }),
+    kanban: { listCardsFull: () => [{ id: CARD_ID, column: 'in_progress', agents: [{ agent_run_id: run.id }] }], moveCard, unassignAgent },
+  } as unknown as RuntimeReconcilerDeps);
+  try {
+    await reconciler.tick();
+    expect(recover).not.toHaveBeenCalled();
+    company = 'running';
+    await reconciler.tick();
+    await reconciler.tick();
+    expect(recover).toHaveBeenCalledExactlyOnceWith(run.id, expect.any(String));
+    expect(unassignAgent).not.toHaveBeenCalled();
+    expect(moveCard).not.toHaveBeenCalled();
+  } finally { vi.unstubAllEnvs(); }
+});
+
 describe('RuntimeReconciler — C2 orphanReset autonomy gate', () => {
   beforeEach(() => { vi.stubEnv('MCP_COMPANY_SCHEDULER', ''); });
   afterEach(() => { vi.unstubAllEnvs(); });

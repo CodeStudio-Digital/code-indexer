@@ -49,6 +49,7 @@ import { getGlobalToolBaseline } from './tool-duration-baseline.js';
 export function wireSupervisorToRunner(
   runner: CoderRunner,
   agentRunId: string,
+  role: 'master' | 'subordinate' = 'subordinate',
 ): () => void {
   const supervisor = getGlobalAgentSupervisor();
   if (!supervisor) return () => { /* no-op */ };
@@ -72,12 +73,13 @@ export function wireSupervisorToRunner(
     });
   };
 
+  let waitingForHuman = false;
   on('turn_start', () => {
-    supervisor.transition(agentRunId, 'RUNNING_TURN');
+    if (!waitingForHuman) supervisor.transition(agentRunId, 'RUNNING_TURN');
   });
 
   on('provider_call', () => {
-    supervisor.transition(agentRunId, 'AWAITING_PROVIDER');
+    if (!waitingForHuman) supervisor.transition(agentRunId, 'AWAITING_PROVIDER');
   });
 
   // text_delta / thinking_delta fire frequently during a streaming
@@ -90,31 +92,51 @@ export function wireSupervisorToRunner(
   on('message_complete', () => {
     // Provider finished streaming. We're back in RUNNING_TURN
     // (potentially about to dispatch tools or end).
-    supervisor.transition(agentRunId, 'RUNNING_TURN');
+    if (!waitingForHuman) supervisor.transition(agentRunId, 'RUNNING_TURN');
   });
 
   // Phase 3.4 — track tool-call timing for the per-tool baseline.
   // Map keyed by toolUseId so concurrent tool calls in one runner
   // don't trample each other.
-  const toolStartTimes = new Map<string, { startMs: number; toolName: string }>();
+  const toolStartTimes = new Map<string, { startMs: number | null; toolName: string }>();
   const baseline = getGlobalToolBaseline();
+
+  const observeTool = (toolUseId: string | null, toolName: string | null) => {
+    supervisor.transition(agentRunId, 'AWAITING_TOOL', { toolUseId, toolName });
+    supervisor.setStateTimeoutOverride(agentRunId, toolName ? baseline.outlierThresholdMs(toolName) : null);
+  };
+  const observeRemainingWork = () => {
+    const active = Array.from(toolStartTimes).at(-1);
+    if (active) observeTool(active[0], active[1].toolName);
+    else {
+      supervisor.setStateTimeoutOverride(agentRunId, null);
+      supervisor.transition(agentRunId, 'RUNNING_TURN');
+    }
+  };
+  if (role === 'master') {
+    const waitForHuman = () => {
+      waitingForHuman = true;
+      for (const tool of toolStartTimes.values()) tool.startMs = null;
+      supervisor.setStateTimeoutOverride(agentRunId, null);
+      supervisor.transition(agentRunId, 'AWAITING_HUMAN');
+    };
+    on('question_posted', waitForHuman);
+    on('plan_posted', waitForHuman);
+    on('default_input_settled', () => {
+      if (!waitingForHuman) return;
+      waitingForHuman = false;
+      observeRemainingWork();
+    });
+  }
 
   on('tool_call_start', (...args: unknown[]) => {
     // Signature: emit('tool_call_start', toolUseId, toolName, toolInput)
     const toolUseId = typeof args[0] === 'string' ? args[0] : null;
     const toolName = typeof args[1] === 'string' ? args[1] : null;
-    supervisor.transition(agentRunId, 'AWAITING_TOOL', { toolUseId, toolName });
-
     if (toolUseId && toolName) {
-      toolStartTimes.set(toolUseId, { startMs: Date.now(), toolName });
-      // Adaptive timeout: if we have enough samples for this tool,
-      // use baseline.p90 × factor instead of the default 5min. Detects
-      // hangs earlier than the static fallback.
-      const overrideMs = baseline.outlierThresholdMs(toolName);
-      if (overrideMs != null) {
-        supervisor.setStateTimeoutOverride(agentRunId, overrideMs);
-      }
+      toolStartTimes.set(toolUseId, { startMs: waitingForHuman ? null : Date.now(), toolName });
     }
+    if (!waitingForHuman) observeTool(toolUseId, toolName);
   });
 
   on('tool_progress', () => { supervisor.heartbeat(agentRunId); });
@@ -137,18 +159,13 @@ export function wireSupervisorToRunner(
     // the tool returned — that's a valid sample for "didn't hang".
     if (toolUseId) {
       const start = toolStartTimes.get(toolUseId);
-      if (start) {
+      if (start?.startMs != null) {
         const duration = Date.now() - start.startMs;
         baseline.recordSuccess(start.toolName, duration);
-        toolStartTimes.delete(toolUseId);
       }
+      toolStartTimes.delete(toolUseId);
     }
-    // Clear the timeout override now that we're back in RUNNING_TURN
-    // (no tool active → use default RUNNING_TURN timeout).
-    supervisor.setStateTimeoutOverride(agentRunId, null);
-    // Back to RUNNING_TURN — runner continues processing or starts
-    // another tool batch.
-    supervisor.transition(agentRunId, 'RUNNING_TURN');
+    if (!waitingForHuman) observeRemainingWork();
   });
 
   on('tool_call_finalized', () => { supervisor.heartbeat(agentRunId); });

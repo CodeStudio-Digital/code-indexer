@@ -19,6 +19,8 @@ import { setChildAgentCascade } from './child-agent-cascade.js';
 import { createChildChatPort } from './child-chat-caller.js';
 import { validateChildChatTarget } from '@mcp/code-agent/runtime/child-chat-routing.js';
 
+import { companyTeamForChat } from './company-chat-team.js';
+
 export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, runtime: CoderRuntime): void {
   const mailbox = new ChatCollaborationStore(deps.sessionStore.locator.dataDir);
   const ready = mailbox.init();
@@ -87,7 +89,8 @@ export function mountChatCollaborationRoutes(app: HttpRouter, deps: ServerDeps, 
       const entry = project(pid);
       return entry && !entry.is_synthetic ? [{ id: pid, name: entry.name }] : [];
     });
-    return c.json({ self: actor, stopped: directory.self.state === 'stopped', peers, messages: messages.slice(0, 100),
+    const companyTeam = await companyTeamForChat(deps.sessionStore, session);
+    return c.json({ self: actor, companyTeam, stopped: directory.self.state === 'stopped', peers, messages: messages.slice(0, 100),
       candidates: candidates.filter(candidate => candidate.id !== id).map(candidate => ({ id: candidate.id, title: candidate.title })),
       config, links, triggers, wakeCount, rootBudget: root.maxWakeups, chats, projects,
       policy: await mailbox.files.get<ChatNetworkSnapshot['policy']>('policies', id),

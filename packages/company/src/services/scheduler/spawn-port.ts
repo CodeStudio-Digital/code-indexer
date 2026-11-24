@@ -1,11 +1,5 @@
-import type { RoleDispatchSource } from '../subordinate/role-runtime.js';
+import type { SpawnSubordinateSpec } from '../subordinate/spec.js';
 /** Minimal spawn surface the scheduler needs — satisfied by SubordinateLifecycle. */
 export interface SchedulerSpawn {
-  spawn(spec: {
-    role: string;
-    task: string;
-    projectId?: number;
-    dispatchSource?: RoleDispatchSource;
-    reservedAgentRunId?: string;
-  }): Promise<{ agentRunId: string; coderSessionId: string }>;
+  spawn(spec: SpawnSubordinateSpec): Promise<{ agentRunId: string; coderSessionId: string }>;
 }

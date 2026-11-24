@@ -42,6 +42,22 @@ export class CompanyStore {
     return templatesDomain.createTemplate(this.db, name, description, roles);
   }
 
+  /** Persist the reusable template and its retry receipt in the same SQLite transaction. */
+  createTemplateForDraft(draftId:string,name:string,description:string,roles:CompanyRoleConfig[]):CompanyTemplate {
+    return this.db.transaction(() => {
+      const key = 'company.template.draft.' + draftId;
+      const saved = this.db.prepare('SELECT value FROM app_settings WHERE key=?').get(key) as {value:string}|undefined;
+      if (saved) {
+        const template=this.getTemplate(Number(saved.value));
+        if (!template) throw new Error('O template criado por este rascunho foi excluído.');
+        return template;
+      }
+      const template=this.createTemplate(name,description,roles);
+      this.db.prepare('INSERT INTO app_settings (key,value,updated_at) VALUES (?,?,?)').run(key,String(template.id),new Date().toISOString());
+      return template;
+    }).immediate();
+  }
+
   getTemplate(id: number): CompanyTemplate | null {
     return templatesDomain.getTemplate(this.db, id);
   }

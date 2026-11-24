@@ -115,7 +115,9 @@ afterEach(async () => {
 
 describe('filesystem external session import', () => {
   it('imports into a UUID bundle and exposes only the chapter handoff live', async () => {
-    const result = await store.importExternalSession(input());
+    const worktree = join(temporaryRoot, 'checkout');
+    await mkdir(worktree);
+    const result = await store.importExternalSession({ ...input(), worktree_path: worktree });
     expect(result.session_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
@@ -123,6 +125,8 @@ describe('filesystem external session import', () => {
       await store.findImportedSession(7, 'codex', 'external-1'),
     ).toBe(result.session_id);
     expect(await store.getSession(result.session_id)).toMatchObject({
+      worktree_path: worktree,
+      metadata: { worktree_workspace: true },
       import_source: 'codex',
       import_external_id: 'external-1',
       import_fingerprint: 'abc',

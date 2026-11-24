@@ -17,17 +17,18 @@ import { QaAdvancedTools } from './shared/QaAdvancedTools.js';
 
 interface Props {
   sessionId: string;
+  initialPane?: 'history' | 'live';
 }
 
-export function TestsTab({ sessionId }: Props) {
-  return <SessionTestsTab key={sessionId} sessionId={sessionId} />;
+export function TestsTab(props: Props) {
+  return <SessionTestsTab key={props.sessionId + (props.initialPane ?? 'live')} {...props} />;
 }
 
-function SessionTestsTab({ sessionId }: Props) {
+function SessionTestsTab({ sessionId, initialPane='live' }: Props) {
   const [serviceId, setServiceId] = useState<string>('main');
 
   return (
-    <Tabs defaultValue="live" className="flex flex-col h-full">
+    <Tabs defaultValue={initialPane} className="flex flex-col h-full">
       <div className="flex items-center justify-between px-3 mt-2">
         <TabsList className="w-fit">
           <TabsTrigger value="live" className="text-xs">Preview e QA</TabsTrigger>

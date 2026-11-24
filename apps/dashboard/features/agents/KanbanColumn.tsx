@@ -32,6 +32,7 @@ interface KanbanColumnProps {
    * within the column instead of by `position`.
    */
   priorityScores?: Map<string, number>;
+  releaseCounts?: Map<string,number>;
   /** C3 — WIP limit for this column (autonomy.wipLimits). Null/undefined = none. */
   wipLimit?: number | null;
   /** C3 — commit a new WIP limit (null removes it). Enables the inline editor. */
@@ -55,6 +56,7 @@ export const KanbanColumn = React.memo(function KanbanColumn({
   onDrop,
   onCreateCard,
   priorityScores,
+  releaseCounts,
   wipLimit,
   onWipLimitChange,
   roleSuggestions,
@@ -134,13 +136,14 @@ export const KanbanColumn = React.memo(function KanbanColumn({
       onDropItem={(cardId) => { if (cardId) onDrop(cardId, column); }}
     >
         {sorted.map((card) => {
-          const suggestedRole = roleSuggestions?.get(card.id);
+          const suggestedRole = card.control?.owner ?? roleSuggestions?.get(card.id);
           return (
             <KanbanCardItem
               key={card.id}
               card={card}
               onClick={() => onCardClick(card)}
               priorityScore={priorityScores?.get(card.id)}
+              releaseCount={releaseCounts?.get(card.id)}
               suggestedRole={suggestedRole}
               onQuickDispatch={
                 suggestedRole && onQuickDispatch

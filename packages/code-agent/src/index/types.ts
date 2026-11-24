@@ -45,6 +45,8 @@ export interface PreflightSeed {
 }
 
 export interface RunCoderOptions {
+  /** Worker diagnostics before the runner can publish its own events. */
+  onPreparationPhase?: (phase: string) => void;
   /** Durable admission barrier after configuration resolves, before provider execution. */
   admitAttempt?: (
     preparation: import('@mcp/agent-runtime-contracts').CoderAttemptPreparationV1,

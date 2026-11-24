@@ -1201,7 +1201,7 @@ export function mountCoderStreamRoutes(
             body: { error: referenceError, code: 'ATTACHMENT_REFERENCE_NOT_AUTHORIZED' },
           };
         }
-        const waiting = await pool.isWaitingForInput(id).catch(() => false);
+        const waiting = await pool.isWaitingForInput(id, true).catch(() => false);
         if (waiting) {
           if (!body.interject) {
             return {

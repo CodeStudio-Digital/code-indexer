@@ -1,3 +1,4 @@
+import { companyChatParents } from '@mcp/agent-runtime-contracts/company-chat-lineage.js';
 import type { CoderSession } from './types.js';
 
 export interface SessionBranch {
@@ -13,6 +14,8 @@ export function groupSessionBranches(
   fallbackGroup: string,
 ) {
   const nodes = new Map<string, SessionBranch>(sessions.map(session => [session.id, { session, children: [] }]));
+  const companyParents = companyChatParents(sessions);
+  const parentOf = (chat: CoderSession) => companyParents.get(chat.id) ?? chat.parent_session_id ?? '';
   const placements = new Map<string, { group: string; parent?: SessionBranch }>();
 
   for (const session of sessions) {
@@ -22,11 +25,11 @@ export function groupSessionBranches(
     while (node && !placements.has(node.session.id) && !visited.has(node.session.id)) {
       visited.add(node.session.id);
       path.push(node);
-      node = nodes.get(node.session.parent_session_id ?? '');
+      node = nodes.get(parentOf(node.session));
     }
     // Resolve the ancestor first. Missing or cyclic ancestry leaves a root.
     for (const { session: current } of path.reverse()) {
-      const parentId = current.parent_session_id ?? '';
+      const parentId = parentOf(current);
       const parentGroup = placements.get(parentId)?.group;
       const group = explicitGroup(current) ?? parentGroup ?? fallbackGroup;
       placements.set(current.id, { group, parent: parentGroup === group ? nodes.get(parentId) : undefined });

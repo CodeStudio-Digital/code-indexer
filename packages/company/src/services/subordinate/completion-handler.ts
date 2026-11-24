@@ -249,7 +249,7 @@ export async function handleSubordinateFailure(
         console.warn(`[company] auto-retry failed for ${role}#${agentRunId}:`, e);
         deps.master.notify(
           `[SYSTEM] @${role} (agent_run_id=${agentRunId}) auto-retry FAILED to start: ${e instanceof Error ? e.message : String(e)}. ` +
-          `Use resume_subordinate to retry manually or spawn_subordinate_agent for a fresh start.`,
+          `Retry the same agent_run_id with resume_subordinate.`,
         );
       });
     if (delayMs > 0) {
@@ -265,7 +265,7 @@ export async function handleSubordinateFailure(
   // Permanent — notify master with recovery hint.
   deps.master.notify(
     `[SYSTEM] @${role} (agent_run_id=${agentRunId}) ended: ${summary}. ` +
-    `Use resume_subordinate to retry or spawn_subordinate_agent for a fresh start.`,
+    `Retry the same agent_run_id with resume_subordinate.`,
   );
   try {
     const cardId = deps.kanban.findCardForAgent(agentRunId);
@@ -289,7 +289,7 @@ export function isUserStoppedRun(deps: SubordinateCompletionDeps, agentRunId: st
   const status = deps.ctx.companyFiles.getAgentRunSync(agentRunId)?.status;
   // Missing row = the user deleted the agent mid-run → nothing to report
   // as a failure. `paused`/`aborted` = intentional stop.
-  return status == null || status === 'paused' || status === 'aborted';
+  return status == null || status === 'paused' || status === 'aborted' || status === 'interrupted';
 }
 
 /**

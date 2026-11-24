@@ -1,5 +1,8 @@
 import type { HttpContext, HttpRouter } from '@mcp/shared/http/router.js';
 import type { ServerDeps } from '../../deps.js';
+import { z } from 'zod';
+import { taskControl } from '@mcp/company-contracts/models/kanban.js';
+import { sessionRoles } from './session-role-roster.js';
 import { publish } from '../../../coder-bus.js';
 import { activeOrchestrators } from './stream.js';
 import {
@@ -115,6 +118,16 @@ export function mountCompanyKanbanRoutes(app: HttpRouter, deps: ServerDeps): voi
     return null;
   }
 
+  app.get('/api/company/sessions/:id/task-options', async c => {
+    const resolved = await resolveKanban(c);
+    if (!resolved || resolved.unavailable) return notFound(c);
+    const session = resolved.files.getSession();
+    return c.json({
+      roles: sessionRoles(deps,session).filter(r => r.role !== 'master' && r.enabled !== false).map(r => r.role),
+      projects: session.project_ids.map(project_id => ({project_id,project_name:deps.db.getProject(project_id)?.name ?? String(project_id)})),
+    });
+  });
+
   app.get('/api/company/sessions/:id/kanban', async (c) => {
     const resolved = await resolveKanban(c);
     if (!resolved) return notFound(c, 'Session not found');
@@ -206,6 +219,32 @@ export function mountCompanyKanbanRoutes(app: HttpRouter, deps: ServerDeps): voi
     }
   });
 
+  app.post('/api/company/sessions/:id/kanban/:cardId/control', async c => {
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c);
+    if (resolved.unavailable) return companySurfaceConflict(c,'kanban');
+    const id = parseSessionRecordIdParam(c,'cardId');
+    const input = z.object({expectedUpdatedAt:z.string(),control:taskControl}).safeParse(await c.req.json());
+    if (!input.success) return c.json({error:'Revise os critérios, o projeto e o responsável.'},400);
+    const card = resolved.files.getKanbanCardFullSync(id);
+    if (!card) return notFound(c,'Card not found');
+    if (card.updated_at !== input.data.expectedUpdatedAt) return c.json({error:'A tarefa mudou. Reabra a tarefa antes de salvar.'},409);
+    const control = input.data.control;
+    const session = resolved.files.getSession();
+    const roster = sessionRoles(deps,session);
+    const owner = roster.find(r => r.role === control.owner && r.role !== 'master' && r.enabled !== false);
+    if (control.owner && !owner) return c.json({error:'Responsável indisponível.'},400);
+    if (control.projectId && (!session.project_ids.includes(control.projectId)
+      || (owner?.projectIds?.length && !owner.projectIds.includes(control.projectId)))) return c.json({error:'Projeto fora do escopo do papel.'},400);
+    if (card.agents.some(a => !a.unassigned_at) && (control.owner !== (card.control?.owner ?? null) || control.projectId !== (card.control?.projectId ?? null))) {
+      return c.json({error:'A atribuição só pode mudar após encerrar a tentativa ativa.'},409);
+    }
+    if (card.column === 'done' && control.acceptance.some(item => !item.evidence)) return c.json({error:'Reabra a tarefa para alterar o aceite.'},409);
+    const changed = resolved.files.updateKanbanCardSync(id,{control});
+    publishKanbanEvent(resolved.rootId,'kanban_card_updated',{cardId:id,patch:{control}});
+    return c.json(changed);
+  });
+
   app.post('/api/company/sessions/:id/kanban/:cardId/move', async (c) => {
     const resolved = await resolveKanban(c);
     if (!resolved) return notFound(c, 'Session not found');
@@ -214,6 +253,7 @@ export function mountCompanyKanbanRoutes(app: HttpRouter, deps: ServerDeps): voi
     const body = await parseJsonBody<{
       column?: unknown;
       position?: number;
+      reason?: string;
     }>(c);
     try {
       const column = parseColumn(body.column, true)!;
@@ -233,6 +273,8 @@ export function mountCompanyKanbanRoutes(app: HttpRouter, deps: ServerDeps): voi
         cardId,
         column,
         body.position,
+        'human',
+        typeof body.reason === 'string' ? body.reason.slice(0,2000) : undefined,
       )!;
       publishKanbanEvent(resolved.rootId, 'kanban_card_moved', {
         cardId,

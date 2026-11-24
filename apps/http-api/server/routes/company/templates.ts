@@ -5,6 +5,7 @@ import { withDefaultQaSkill } from '@mcp/company-contracts/qa-defaults.js';
 import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 
 interface CreateTemplateBody {
+  visual_qa?: boolean;
   name: string;
   description?: string;
   roles: CompanyRoleConfig[];
@@ -41,7 +42,7 @@ export function mountCompanyTemplateRoutes(app: HttpRouter, deps: ServerDeps): v
     const template = companyStore.createTemplate(
       body.name.trim(),
       body.description?.trim() ?? '',
-      body.roles.map(withDefaultQaSkill),
+      body.visual_qa === true ? body.roles.map(withDefaultQaSkill) : body.roles,
     );
     return c.json(template, 201);
   });

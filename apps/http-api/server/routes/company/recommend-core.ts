@@ -15,12 +15,14 @@ import {
   type RoleDescriptor,
 } from '@mcp/company/role-pipeline/index.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import { sessionRoles } from './session-role-roster.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
 interface RecommendRolesForSessionInput {
   companySessionId: CompanySessionId;
   taskText: string;
   k?: number;
+  projectId?: number | null;
 }
 
 interface RecommendRolesForSessionResult {
@@ -50,7 +52,6 @@ export async function recommendRolesForSession(
   input: RecommendRolesForSessionInput,
 ): Promise<RecommendRolesForSessionResult> {
   const {
-    companyStore,
     sessionStore,
     recommendationEmbed,
     roleEmbeddingStore,
@@ -68,15 +69,14 @@ export async function recommendRolesForSession(
   }
   const session = companyFiles.getSession();
 
-  const template = session.template_id != null
-    ? companyStore.getTemplate(session.template_id)
-    : null;
-  const availableRoles: RoleDescriptor[] = (template?.roles ?? []).map((r) => {
+  const roster = sessionRoles(deps,session);
+  const eligible = roster.filter(r => r.enabled !== false && r.role !== 'master' && (!input.projectId || !r.projectIds?.length || r.projectIds.includes(input.projectId)));
+  const availableRoles: RoleDescriptor[] = eligible.map((r) => {
     const skillsArr = Array.isArray(r.skills) ? r.skills : [];
     const skillsText = skillsArr.join(', ');
     return {
       role: r.role,
-      description: skillsText ? `${r.role}. Skills: ${skillsText}` : `${r.role} role`,
+      description: [r.role, r.systemPromptOverride, skillsText].filter(Boolean).join('. '),
       skills: skillsArr,
       preferredModel: r.model || undefined,
     };
@@ -89,7 +89,7 @@ export async function recommendRolesForSession(
   for (const r of activeRuns) {
     if (RUNNING_STATUSES.has(r.status)) {
       runningByRole[r.role] = (runningByRole[r.role] ?? 0) + 1;
-    } else if (r.status === 'idle') {
+    } else if (r.status === 'idle' && eligible.some(role => role.role === r.role)) {
       idleRuns.push({ agentRunId: r.id, role: r.role });
     }
   }

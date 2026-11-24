@@ -73,7 +73,7 @@ describe('message admission and stream observation', () => {
     expect(options.refresh).toHaveBeenCalledOnce(); expect(post).toHaveBeenCalledOnce();
   });
 
-  it.each(['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input'])('requires proof before resubmitting %s', async reason => {
+  it.each(['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input', 'session-recovery-timeout'])('requires proof before resubmitting %s', async reason => {
     const options = setup();
     post.mockResolvedValueOnce({ accepted: true, terminal: { event: 'error', data: { reason, not_started: true } } });
     await expect(deliverQueuedMessage(options)).rejects.toBeInstanceOf(MessageNotStartedError);

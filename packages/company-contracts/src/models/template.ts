@@ -109,6 +109,8 @@ export interface CompanyRoleConfig {
    * This is a starting preset, not an allowlist: find_tools and direct calls
    * remain available for capabilities outside this list. */
   initialTools?: string[];
+  /** Enforce the runner's read-only explore authority on spawn and resume. */
+  readOnly?: boolean;
   /**
    * Concrete project ids this role is bound to in THIS session. When set,
    * `spawn_subordinate_agent` auto-resolves `project_id` (single binding) or

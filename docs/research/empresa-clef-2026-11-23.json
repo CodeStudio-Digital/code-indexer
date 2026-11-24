@@ -1,0 +1,135 @@
+{
+  "date": "2026-11-23",
+  "model": "@cf/cloudflare/clef-flash",
+  "decisionPolicy": "v1",
+  "remoteDeadlineMs": 800,
+  "observationWindowMs": 15000,
+  "benchmark": {
+    "dataset": "synthetic-v1",
+    "families": [
+      "conciliação de faturas",
+      "catálogo de fornecedores",
+      "histórico de pedidos",
+      "agenda de entregas",
+      "contratos comerciais"
+    ],
+    "live": true,
+    "calls": 220,
+    "maxUsd": 0.1,
+    "upperBoundUsd": 0.002583354,
+    "blocked": null,
+    "diagnostics": {
+      "answerFields": [
+        "type",
+        "choice",
+        "probabilities",
+        "confidence"
+      ]
+    },
+    "embedding": "local:onnx-community/granite-embedding-97m-multilingual-r2-ONNX:24bef4e03777",
+    "surfaces": {
+      "company": {
+        "cases": 100,
+        "ambiguous": 20,
+        "baselineCorrect": 61,
+        "baselineP50Ms": 107.0351999999948,
+        "baselineP95Ms": 128.84760000000097,
+        "clef": {
+          "labeled": 100,
+          "coverage": 0.65,
+          "accuracy": 1,
+          "baselineAccuracy": 0.7538461538461538,
+          "qualified": true
+        },
+        "withinDesktopBudget": {
+          "labeled": 100,
+          "coverage": 0.64,
+          "accuracy": 1,
+          "baselineAccuracy": 0.75,
+          "qualified": true
+        },
+        "within800ms": 98,
+        "displayed": 65,
+        "correctDisplayed": 65,
+        "p50Ms": 239,
+        "p95Ms": 397,
+        "responses": {
+          "abstain": 35,
+          "ok": 65
+        },
+        "reportedInputTokens": 26940,
+        "estimatedUsdFromReportedTokens": 0.00102372,
+        "usdPerMillionInputTokens": 0.038,
+        "tokensUnknown": 0
+      },
+      "chat": {
+        "cases": 120,
+        "ambiguous": 20,
+        "baselineCorrect": 50,
+        "baselineP50Ms": 0.027200000011362135,
+        "baselineP95Ms": 0.04980000000068685,
+        "clef": {
+          "labeled": 120,
+          "coverage": 0.3416666666666667,
+          "accuracy": 0.975609756097561,
+          "baselineAccuracy": 0.14634146341463414,
+          "qualified": false
+        },
+        "withinDesktopBudget": {
+          "labeled": 120,
+          "coverage": 0.3416666666666667,
+          "accuracy": 0.975609756097561,
+          "baselineAccuracy": 0.14634146341463414,
+          "qualified": false
+        },
+        "within800ms": 119,
+        "displayed": 41,
+        "correctDisplayed": 40,
+        "p50Ms": 243,
+        "p95Ms": 379,
+        "responses": {
+          "abstain": 79,
+          "ok": 41
+        },
+        "reportedInputTokens": 41043,
+        "estimatedUsdFromReportedTokens": 0.001559634,
+        "usdPerMillionInputTokens": 0.038,
+        "tokensUnknown": 0
+      }
+    }
+  },
+  "firstTextInChromium": {
+    "transport": "local synthetic SSE",
+    "method": "alternating off and stalled shadow; two warm-up rounds per arm",
+    "results": [
+      {
+        "size": "1280x720-dark",
+        "off": {
+          "samples": 20,
+          "p50Ms": 19.900000035762787,
+          "p95Ms": 22.80000001192093
+        },
+        "stalledShadow": {
+          "samples": 20,
+          "p50Ms": 20.599999964237213,
+          "p95Ms": 22
+        },
+        "p95DeltaMs": -0.800000011920929
+      },
+      {
+        "size": "1920x1080-dark",
+        "off": {
+          "samples": 20,
+          "p50Ms": 20.30000001192093,
+          "p95Ms": 23.700000047683716
+        },
+        "stalledShadow": {
+          "samples": 20,
+          "p50Ms": 21.200000047683716,
+          "p95Ms": 23.80000001192093
+        },
+        "p95DeltaMs": 0.09999996423721313
+      }
+    ]
+  }
+}

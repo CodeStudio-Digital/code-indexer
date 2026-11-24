@@ -7,6 +7,7 @@ import { SessionActionsMenu } from './SessionActionsMenu.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 
 interface SessionHeaderProps {
+  onDesign?: () => void;
   sessionName: string;
   companyName?: string;
   onPause?: () => void;
@@ -53,6 +54,7 @@ export function SessionHeader({
   onResetClick,
   allowAbort = true,
   onReestablishMasterClick,
+  onDesign,
 }: SessionHeaderProps) {
   const { t } = useTranslation('agents');
 
@@ -91,8 +93,9 @@ export function SessionHeader({
             <Pause className="h-3.5 w-3.5 mr-1" /> {t('company.pauseSession', 'Pause session')}
           </Button>
         )}
-        {allowAbort && sessionStatus === 'paused' && !stream.masterAlive && onResume && <Button variant="outline" size="sm" className="h-7 px-2" onClick={onResume}><Play className="mr-1 size-3.5" />{t('company.resumeSession', 'Resume')}</Button>}
+        {allowAbort && (sessionStatus === 'paused' || sessionStatus === 'interrupted') && !stream.masterAlive && onResume && <Button variant="outline" size="sm" className="h-7 px-2" onClick={onResume}><Play className="mr-1 size-3.5" />{t('company.resumeSession', 'Resume')}</Button>}
         <SessionActionsMenu
+          onDesign={onDesign}
           canReconnect={canReconnect}
           onReconnect={() => stream.reattach()}
           onReestablishMaster={onReestablishMasterClick}

@@ -57,6 +57,8 @@ export class McpExternalPool implements IMcpServerManager {
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   private configFingerprint = '';
   private lifecycleTail: Promise<void> = Promise.resolve();
+  private startupRefresh?: Promise<McpExternalSnapshot>;
+  private healthCheckPending = false;
   private booted = false;
   private shuttingDown = false;
 
@@ -165,6 +167,24 @@ export class McpExternalPool implements IMcpServerManager {
       }
       return this.getSnapshot();
     });
+  }
+
+  /** Starting a chat must not depend on every optional MCP finishing its handshake. */
+  async getSnapshotForRun(): Promise<McpExternalSnapshot> {
+    this.startupRefresh ??= this.getReadySnapshot().finally(() => { this.startupRefresh = undefined; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const snapshot = await Promise.race([
+        this.startupRefresh,
+        new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 1_500); }),
+      ]);
+      // Never publish tools from an old endpoint or disabled configuration.
+      // The shared reconciliation can finish after this run seals its catalog.
+      return !this.shuttingDown && !this.needsFullRebuild(this.loadEnabledServers())
+        ? snapshot ?? this.getSnapshot() : this.emptySnapshot();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Dispatch through the cached catalogue; discovery never runs per invocation. */
@@ -481,6 +501,8 @@ export class McpExternalPool implements IMcpServerManager {
    * rebuild the snapshot.
    */
   private async refreshSnapshotFromHealthCheck(): Promise<void> {
+    if (this.healthCheckPending) return;
+    this.healthCheckPending = true;
     try {
       await this.runLifecycle(async () => {
         if (!this.booted || this.shuttingDown) return;
@@ -502,6 +524,8 @@ export class McpExternalPool implements IMcpServerManager {
       console.warn(
         `[mcp-ext-pool] health check failed: ${e instanceof Error ? e.message : String(e)}`,
       );
+    } finally {
+      this.healthCheckPending = false;
     }
   }
 }

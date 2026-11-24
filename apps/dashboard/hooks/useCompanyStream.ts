@@ -18,7 +18,7 @@ import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
 import { apiBaseUrl } from '../lib/api-client.js';
 import { companyStreamError } from './company-stream-error.js';
-import { confirm } from '../components/ui/prompt-dialog.js';
+import { submitMasterReply, type MasterReply } from './company-prompt-response.js';
 
 import type { AgentAttachment } from './agent-stream/types.js';
 import { useAgentControls } from './useAgentControls.js';
@@ -386,7 +386,8 @@ export function useCompanyStream(
       }
       if (eventType === 'error' || eventType === 'master_boot_failed') {
         receivedDoneRef.current = true;
-        setMasterLiveness((current) => ({ ...current, masterAlive: false }));
+        const workerExited = (data as { reason?: string } | null)?.reason === 'worker_crashed';
+        setMasterLiveness(current => workerExited ? unconfirmedCompanyLiveness(current) : { ...current, masterAlive: false });
         streamSetConnected(companySessionId, false);
         streamSetError(
           companySessionId,
@@ -795,7 +796,7 @@ export function useCompanyStream(
     streamSetError(companySessionId, null);
     await loadKanbanFromDB(isCurrent);
     if (!isCurrent()) return;
-    type StateSnapshotLiveness = {
+    type StateSnapshotLiveness = InitialFetchResponse & {
       liveOrchestrator?: boolean;
       masterAlive?: boolean;
       pendingMasterInboxCount?: number;
@@ -811,6 +812,12 @@ export function useCompanyStream(
     // Latch the liveness flags so the UI can read them while deciding
     // whether to show a spinner, the standby badge, or the wake CTA.
     if (snapshot) {
+      if (snapshot.masterPrompts?.length) streamHydrateMasterPromptsAction(companySessionId, snapshot.masterPrompts);
+      const master = snapshot.agentRuns?.filter((run) => run.role === 'master').at(-1);
+      if (master) streamApplyAgentStatus(companySessionId, {
+        agentRunId: master.id, role: 'master', status: master.status, message: master.status_message,
+        coderSessionId: master.coder_session_id,
+      });
       setMasterLiveness({
         masterAlive: !!snapshot.masterAlive,
         liveOrchestrator: !!snapshot.liveOrchestrator,
@@ -862,6 +869,8 @@ export function useCompanyStream(
     transport?.keepAttachedWhileOrchestratorLive,
     routeUrl,
     openStream,
+    streamHydrateMasterPromptsAction,
+    streamApplyAgentStatus,
     streamSetStarted,
     streamSetConnected,
     streamSetError,
@@ -948,139 +957,38 @@ export function useCompanyStream(
     [companySessionId, routeUrl, streamSetError, streamSetStarted, reattach],
   );
 
-  const respondToMasterPlan = useCallback(
-    async (promptId: string, approved: boolean, feedback?: string) => {
-      if (companySessionId == null || !mountedRef.current) return;
-      try {
-        const submit = async (retryOutcomeUnknown = false): Promise<void> => {
-          const res = await fetch(routeUrl('/plan-response'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              approved,
-              feedback,
-              prompt_id: promptId,
-              retry_outcome_unknown: retryOutcomeUnknown || undefined,
-            }),
-          });
-          const responseBody = (await res.json().catch(() => null)) as {
-            prompt?: MasterPrompt;
-            resumed?: boolean;
-            error?: string;
-            code?: string;
-          } | null;
-          if (res.ok) {
-            if (responseBody?.prompt) {
-              streamApplyMasterPrompt(companySessionId, responseBody.prompt);
-            }
-            if (responseBody?.resumed) {
-              streamSetStarted(companySessionId, true);
-              void reattach();
-            }
-            return;
-          }
-          if (responseBody?.code === 'OUTCOME_UNKNOWN' && !retryOutcomeUnknown) {
-            const retry = await confirm({
-              title: 'Plan response delivery is uncertain',
-              description:
-                'The worker may already have received this response, but its acknowledgement ' +
-                'was lost. Retrying can deliver it twice. Retry the identical response?',
-              confirmLabel: 'Retry same response',
-              cancelLabel: 'Keep pending',
-              tone: 'destructive',
-            });
-            if (retry) await submit(true);
-            else {
-              streamSetError(
-                companySessionId,
-                responseBody.error ?? 'Plan response delivery outcome is unknown.',
-              );
-            }
-            return;
-          }
-          if (res.status === 409 && responseBody?.code === 'PROMPT_ALREADY_RESOLVED') return;
-          streamSetError(
-            companySessionId,
-            `Failed to respond to plan (${res.status}): ${
-              responseBody?.error ?? 'unknown error'
-            }`,
-          );
-        };
-        await submit();
-      } catch (e) {
-        console.error('Failed to respond to master plan:', e);
-        streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
-      }
-    },
-    [companySessionId, routeUrl, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
-  );
+  const respondToPrompt = useCallback(async (promptId: string, reply: MasterReply) => {
+    if (companySessionId == null || !mountedRef.current) return;
+    const generation = lifecycleGenerationRef.current;
+    let reattached = false;
+    const followMaster = () => {
+      if (reattached) return;
+      reattached = true;
+      streamSetStarted(companySessionId, true);
+      void reattach();
+    };
+    await submitMasterReply({
+      sessionId: companySessionId,
+      promptId,
+      url: routeUrl,
+      isCurrent: () => mountedRef.current && generation === lifecycleGenerationRef.current,
+      onResolved: (prompt, fromReceipt) => {
+        streamApplyMasterPrompt(companySessionId, prompt);
+        if (fromReceipt && prompt.status === 'answered' && !useCompanyStore.getState().streams.get(companySessionId)?.connected) {
+          followMaster();
+        }
+      },
+      onResumed: followMaster,
+    }, reply);
+  }, [companySessionId, routeUrl, streamApplyMasterPrompt, streamSetStarted, reattach]);
 
+  const respondToMasterPlan = useCallback(
+    (promptId: string, approved: boolean, feedback?: string) => respondToPrompt(promptId, { approved, feedback }),
+    [respondToPrompt],
+  );
   const respondToMasterQuestion = useCallback(
-    async (promptId: string, answer: string) => {
-      if (companySessionId == null || !mountedRef.current) return;
-      try {
-        const submit = async (retryOutcomeUnknown = false): Promise<void> => {
-          const res = await fetch(routeUrl('/answer'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              answer,
-              prompt_id: promptId,
-              retry_outcome_unknown: retryOutcomeUnknown || undefined,
-            }),
-          });
-          const responseBody = (await res.json().catch(() => null)) as {
-            prompt?: MasterPrompt;
-            resumed?: boolean;
-            error?: string;
-            code?: string;
-          } | null;
-          if (res.ok) {
-            if (responseBody?.prompt) {
-              streamApplyMasterPrompt(companySessionId, responseBody.prompt);
-            }
-            // The orchestrator had been evicted/restarted; the backend re-spawned
-            // and resumed the master. Re-establish the SSE so the continuation streams.
-            if (responseBody?.resumed) {
-              streamSetStarted(companySessionId, true);
-              void reattach();
-            }
-            return;
-          }
-          if (responseBody?.code === 'OUTCOME_UNKNOWN' && !retryOutcomeUnknown) {
-            const retry = await confirm({
-              title: 'Answer delivery is uncertain',
-              description:
-                'The worker may already have received this answer, but its acknowledgement ' +
-                'was lost. Retrying can deliver it twice. Retry the identical answer?',
-              confirmLabel: 'Retry same answer',
-              cancelLabel: 'Keep pending',
-              tone: 'destructive',
-            });
-            if (retry) await submit(true);
-            else {
-              streamSetError(
-                companySessionId,
-                responseBody.error ?? 'Answer delivery outcome is unknown.',
-              );
-            }
-            return;
-          }
-          if (res.status === 409 && responseBody?.code === 'PROMPT_ALREADY_RESOLVED') return;
-          const errorMsg = res.status === 404
-            ? 'Session is no longer active. Your answer could not be delivered.'
-            : `Failed to answer (${res.status}): ${
-              responseBody?.error ?? 'unknown error'
-            }`;
-          streamSetError(companySessionId, errorMsg);
-        };
-        await submit();
-      } catch (e) {
-        console.error('Failed to answer master question:', e);
-        streamSetError(companySessionId, `Connection error: ${(e as Error).message}`);
-      }
-    },
-    [companySessionId, routeUrl, streamApplyMasterPrompt, streamSetError, streamSetStarted, reattach],
+    (promptId: string, answer: string) => respondToPrompt(promptId, { answer }),
+    [respondToPrompt],
   );
 
   const switchProvider = useCallback(

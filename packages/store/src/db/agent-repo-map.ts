@@ -46,7 +46,7 @@ export function repoMapPage(db: DB, projectId: number, input: RepoMapPageInput =
           length(coalesce(signature,name)) AS signature_characters,
           row_number() OVER (PARTITION BY file_id ORDER BY line,id) AS rank,
           count(*) OVER (PARTITION BY file_id) AS total
-        FROM symbols WHERE project_id=? AND file_id IN (${placeholders}) AND ${symbolFilter}
+        FROM symbols INDEXED BY idx_symbols_file WHERE project_id=? AND file_id IN (${placeholders}) AND ${symbolFilter}
       ) SELECT file_id,name,kind,line,signature,signature_characters,total FROM ranked WHERE rank<=? ORDER BY file_id,rank`)
         .all(projectId, ...ids, perFile) as Array<RepoMapSymbol & { file_id: number; total: number }>;
       const byId = new Map(files.map(f => { f.symbols = []; return [f.id, f] as const; }));

@@ -5,7 +5,7 @@ import {createRoot} from 'react-dom/client';
 import {Composer} from '/features/chat/composer/Composer.tsx';
 import {ProviderSelectionNotice} from '/features/chat/ProviderSelectionNotice.tsx';
 import {useSessionProvider} from '/features/chat/useSessionProvider.ts';
-import {useAgentStream} from '/hooks/useAgentStream.ts';
+import {useAgentStream,useAgentCurrentTurn} from '/hooks/useAgentStream.ts';
 import {TooltipProvider} from '/components/ui/tooltip.tsx';
 import {DialogProvider} from '/components/ui/dialog-provider.tsx';
 import i18n,{i18nReady} from '/i18n/index.ts';
@@ -20,9 +20,11 @@ function Fixture(){
  const updateSessionData=useCallback(fn=>setData(fn),[]);
  const {onSwitchProvider,providerChange,retryProviderChange}=useSessionProvider({selectedId:id,sessionData:data,setProvider,setModel,updateSessionData,refetchSessions:noop});
  const stream=useAgentStream(id);
+ const turn=useAgentCurrentTurn(id);
  return h('main',{className:'mx-auto max-w-3xl space-y-3 p-6'},
   h('header',{'data-testid':'header'},data.session.provider+' · '+data.session.model),
   h('output',{'data-testid':'selection'},provider+' · '+model),
+  h('output',{'data-testid':'agent-answer'},(turn?.blocks??[]).filter(block=>block.type==='text').map(block=>block.text).join('')),
   h('button',{onClick:()=>{const next=id===sid?'22222222-2222-4222-8222-222222222222':sid;setId(next);setData(row(next));}},'Outra sessão'),
   h(ProviderSelectionNotice,{state:providerChange,onRetry:retryProviderChange}),
   h(Composer,{compact:new URL(location.href).searchParams.has('compact'),sessionId:id,agent:'explore',setAgent:noop,provider,model,setModel,onSwitchProvider,

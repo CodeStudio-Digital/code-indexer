@@ -9,6 +9,7 @@ export function formatCoderTerminalError(data: { message?: unknown; error?: unkn
     case 'worker-draining':
     case 'turn-ended-before-input':
     case 'worker-unavailable-before-input':
+    case 'session-recovery-timeout':
     case 'worker-evicted':
     case 'session-writer-busy':
     case 'request-setup-failed':

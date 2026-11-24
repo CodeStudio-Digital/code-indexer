@@ -379,9 +379,9 @@ export class SessionWriter {
     this.#faultInjector = options.faultInjector;
   }
 
-  static async open(options: SessionWriterOptions): Promise<SessionWriter> {
+  static async open(options: SessionWriterOptions, onProgress?: () => void): Promise<SessionWriter> {
     const writer = new SessionWriter(options);
-    await writer.#initialize();
+    await writer.#initialize(onProgress);
     return writer;
   }
 
@@ -427,26 +427,27 @@ export class SessionWriter {
     }
   }
 
-  async #initialize(): Promise<void> {
+  async #initialize(onProgress?: () => void): Promise<void> {
     await ensureDirectoryTreeNoLinks(this.#bundlePath, join(this.#bundlePath, 'events'));
     await assertPathHasNoLinks(this.#bundlePath, this.#conversationPath);
     await this.#acquireLease();
     try {
       this.#conversationPath = sessionJournalPath(this.#bundlePath);
-      await collectSessionTransientFiles(this.#bundlePath);
+      await collectSessionTransientFiles(this.#bundlePath, onProgress);
       await this.#reloadConversation();
+      onProgress?.();
       if (this.#chat) {
         const spans = this.#chat.checkpoints();
         if (this.#conversationPath === join(this.#bundlePath, CHAT_TRANSCRIPT)) {
           const journal = join(this.#bundlePath, CODER_JOURNAL);
           await archiveChapterMessages(journal, spans, {
             faultInjector: this.#faultInjector, context: { session_id: this.#sessionId },
-          }, async () => { await this.#assertLease(); await this.#assertConversationUnchanged(); }, this.#records);
+          }, async () => { await this.#assertLease(); await this.#assertConversationUnchanged(); }, this.#records, onProgress);
           this.#conversationPath = journal;
           await this.#reloadConversation();
         } else if (spans.length) {
           // A previous process may have committed the checkpoint and exited before moving the records.
-          await this.#archive(spans);
+          await this.#archive(spans, onProgress);
         }
         await this.#chat.rebuild(this.#records);
       }
@@ -715,11 +716,11 @@ export class SessionWriter {
     this.#chatNeedsRepair = false;
   }
 
-  async #archive(spans: readonly ChapterSpan[]): Promise<void> {
+  async #archive(spans: readonly ChapterSpan[], onProgress?: () => void): Promise<void> {
     try {
       if (await archiveChapterMessages(this.#conversationPath, spans, {
         faultInjector: this.#faultInjector, context: { session_id: this.#sessionId },
-      }, async () => { await this.#assertLease(); await this.#assertConversationUnchanged(); })) {
+      }, async () => { await this.#assertLease(); await this.#assertConversationUnchanged(); }, undefined, onProgress)) {
         this.#journalStamp = await lstat(this.#conversationPath);
       }
     } catch (error) {

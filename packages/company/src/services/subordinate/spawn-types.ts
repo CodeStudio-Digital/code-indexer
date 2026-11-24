@@ -8,6 +8,7 @@ import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-p
 import { type SubordinateCompletionDeps } from '@mcp/company/services/subordinate/completion-handler.js';
 export interface SpawnSubordinateDeps {
   onExecutionStarting?: () => void;
+  startingIds?: Set<string>;
   ctx: SessionContext;
   board: IBoardPoster;
   status: IAgentStatusUpdater;

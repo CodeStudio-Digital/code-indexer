@@ -102,6 +102,36 @@ afterEach(async () => {
 });
 
 describe('McpExternalPool readiness reconciliation', () => {
+  it('shares a slow reconciliation and never exposes an edited endpoint through the cached catalog', async () => {
+    vi.useFakeTimers();
+    let config = server();
+    const fake = fakeManager(() => true);
+    const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [config] });
+    pools.push(pool);
+    await pool.boot();
+    const cached = pool.getSnapshot();
+    let release!: () => void;
+    const slow = new Promise<void>(resolve => { release = resolve; });
+    const ready = vi.spyOn(pool, 'getReadySnapshot').mockImplementationOnce(async () => { await slow; return cached; });
+    try {
+      const first = pool.getSnapshotForRun();
+      const second = pool.getSnapshotForRun();
+      await vi.advanceTimersByTimeAsync(1_501);
+      expect(await first).toBe(cached);
+      expect(await second).toBe(cached);
+      config = { ...config, url: 'http://127.0.0.1:8767/mcp' };
+      const edited = pool.getSnapshotForRun();
+      await vi.advanceTimersByTimeAsync(1_501);
+      expect((await edited).tools).toEqual([]);
+      expect(ready).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await ready.mock.results[0].value;
+      ready.mockRestore();
+    }
+    expect((await pool.getSnapshotForRun()).tools[0].catalogueRevision).not.toBe(cached.tools[0].catalogueRevision);
+  });
+
   it('keeps an admitted handler usable after an unchanged server reconnect', async () => {
     const fake = fakeManager(() => true);
     const pool = new McpExternalPool({ dbPath: ':memory:', manager: fake.manager, loadEnabledServers: () => [server()] });

@@ -134,6 +134,8 @@ export interface RunnerEvents {
    * be resumed. Host-internal: not forwarded over the SSE bus.
    */
   awaiting_input: (payload: { askId: string }) => void;
+  /** The shared question/plan input slot was answered, interrupted, or aborted. */
+  default_input_settled: () => void;
   /**
    * Emitted exactly once when the run terminates. `reason` is the most
    * specific applicable value from {@link StopReason}. `error` carries the

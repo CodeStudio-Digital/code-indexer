@@ -7,12 +7,12 @@ import type { Zone } from './types.js';
 const icons = { conversation: MessageSquare, tasks: ClipboardList, changes: GitCompare, qa: MonitorCheck, knowledge: BookOpen };
 
 /** One navigation model; old deep links keep resolving to their current area. */
-export function CompanyNavigation({ tab, onChange }: { tab: string; onChange: (zone: Zone, tab: string) => void }) {
+export function CompanyNavigation({ tab, onChange, visualQA = false }: { visualQA?: boolean; tab: string; onChange: (zone: Zone, tab: string) => void }) {
   const { t } = useTranslation('agents');
   const active = companyAreaForTab(tab);
   return <>
     <nav aria-label={t('company.mainNavigation', 'Session workspace')} className="flex shrink-0 items-center gap-1 overflow-x-auto border-b bg-[var(--workbench-surface)] px-3 py-2">
-      {COMPANY_AREAS.map((area) => {
+      {COMPANY_AREAS.filter(area => area.id !== 'qa' || visualQA || active.id === 'qa').map((area) => {
         const Icon = icons[area.id];
         return <button key={area.id} type="button" aria-current={active.id === area.id ? 'page' : undefined}
           onClick={() => onChange(area.zone, area.tab)}

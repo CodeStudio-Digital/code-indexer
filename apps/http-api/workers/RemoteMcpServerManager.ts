@@ -47,7 +47,9 @@ import { requestMcpCall } from './mcp-call-request.js';
  * Catalogue requests have a 60s ceiling. Tool calls carry independent
  * cancellation and unknown-outcome semantics after dispatch.
  */
-const RPC_TIMEOUT_MS = 60_000;
+// The host has a 1.5s budget to publish a run catalog. A missing read-only
+// snapshot must not stall the worker if the host itself stops answering.
+const SNAPSHOT_TIMEOUT_MS = 3_000;
 
 export class RemoteMcpServerManager implements IMcpServerManager {
   private snapshot: McpExternalSnapshot | null = null;
@@ -79,7 +81,7 @@ export class RemoteMcpServerManager implements IMcpServerManager {
       this.snapshot = await this.bridge.request<McpExternalSnapshot>(
         'mcpExt.snapshot',
         {},
-        { timeoutMs: RPC_TIMEOUT_MS },
+        { timeoutMs: SNAPSHOT_TIMEOUT_MS },
       );
     } catch (e) {
       // Don't bring the run down if the snapshot fails — drop into

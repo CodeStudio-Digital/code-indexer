@@ -7,6 +7,8 @@
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
+import { taskEvidence } from '@mcp/company-contracts/models/kanban.js';
+import { cardEvidenceParameter } from './kanban-tools.js';
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 
@@ -46,6 +48,7 @@ function postToBoard(
           '"blocker" flags an unresolved impediment on the board but does not stop the agent or Company. ' +
           'If human input is required, use kind="question" with awaits_response.',
       },
+      evidence: cardEvidenceParameter,
       // ── Interactive mode ──
       // When set, the post BLOCKS the runner and renders a card with
       // buttons / freeform input. The runner resumes once the user
@@ -130,7 +133,18 @@ function postToBoard(
           ? undefined
           : requestedAwait;
 
-      // ── Fire-and-forget path (current behaviour, byte-identical) ──
+      if (args.evidence !== undefined) {
+        if (kind !== 'deliverable' || !agentRunId) return err('Submit evidence with the deliverable for your assigned card.');
+        try {
+          const cardId = orchestrator.findCardForAgent(agentRunId);
+          if (!cardId) return err('No card is assigned to this run.');
+          orchestrator.kanbanUpdateChecklist(cardId, undefined, taskEvidence.parse(args.evidence), agentRunId);
+        } catch (error) {
+          return err((error as Error).message);
+        }
+      }
+
+      // ── Fire-and-forget path ──
       if (!awaits) {
         try {
           await orchestrator.postToBoard(

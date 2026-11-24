@@ -163,7 +163,9 @@ export async function resumeMaster(
   const ctx = deps.ctx;
   const fsSessionStore = ctx.companyFiles.sessionStore;
   const agentRuns = await ctx.companyFiles.listAgentRuns();
-  const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
+  const masterId = ctx.companyFiles.getSession().master_session_id;
+  const masters = agentRuns.filter(run => run.role === 'master' && !run.archive_id);
+  const masterRun = masterId ? masters.find(run => run.coder_session_id === masterId) : masters.at(-1);
   if (!masterRun) throw new Error('No master agent_run found — use start instead');
 
   // The ack returns the existing master coder-session id; `indexStatus` is

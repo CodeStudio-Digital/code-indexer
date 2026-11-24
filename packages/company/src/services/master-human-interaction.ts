@@ -8,7 +8,7 @@ import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
 
 export class MasterHumanInteraction {
-  constructor(private readonly bus: IMetaBusPublisher, private readonly board: IBoardPoster, private readonly status: IAgentStatusUpdater, private readonly master: IMasterNotifier, private readonly ctx: SessionContext) {}
+  constructor(private readonly bus: IMetaBusPublisher, private readonly board: IBoardPoster, private readonly status: IAgentStatusUpdater, private readonly master: IMasterNotifier, private readonly ctx: Pick<SessionContext, 'companySessionId' | 'companyFiles'>) {}
 
   /** Set while the master itself is waiting on a human plan/question. */
   private masterShouldContinue = false;
@@ -28,7 +28,7 @@ export class MasterHumanInteraction {
   wireMasterPlan(handle: RunCoderHandle): void {
     handle.runner.on('plan_posted', (block: { plan: string }) => {
       if (this.master.agentRunId != null) {
-        this.status.setStatus(this.master.agentRunId, 'waiting_plan');
+        this.status.publishStatus(this.master.agentRunId, 'master', 'waiting_plan');
       }
       void this.ctx.companyFiles.createMasterPrompt({
         agent_run_id: this.master.agentRunId,
@@ -55,7 +55,7 @@ export class MasterHumanInteraction {
       allowFreeform?: boolean;
     }) => {
       if (this.master.agentRunId != null) {
-        this.status.setStatus(this.master.agentRunId, 'waiting_question');
+        this.status.publishStatus(this.master.agentRunId, 'master', 'waiting_question');
       }
       void this.ctx.companyFiles.createMasterPrompt({
         agent_run_id: this.master.agentRunId,
@@ -169,9 +169,7 @@ export class MasterHumanInteraction {
 
     this.masterShouldContinue = true;
     this.master.setShouldContinue(true);
-    if (this.master.agentRunId != null) {
-      this.status.setStatus(this.master.agentRunId, 'running');
-    }
+    this.publishResumedStatus();
     this.board.post('human', null, 'decision',
       `Plan ${approved ? 'APPROVED' : 'REJECTED'}${feedback ? `: ${feedback}` : ''}`);
     this.bus.publish('master_plan_resolved', { prompt: updated });
@@ -263,12 +261,16 @@ export class MasterHumanInteraction {
 
     this.masterShouldContinue = true;
     this.master.setShouldContinue(true);
-    if (this.master.agentRunId != null) {
-      this.status.setStatus(this.master.agentRunId, 'running');
-    }
+    this.publishResumedStatus();
     this.board.post('human', null, 'decision', `Human answered: ${answer}`);
     this.bus.publish('master_question_resolved', { prompt: updated });
     return updated;
+  }
+
+  private publishResumedStatus(): void {
+    if (this.master.agentRunId != null && !this.currentMasterQuestionPromptId && !this.currentMasterPlanPromptId) {
+      this.status.publishStatus(this.master.agentRunId, 'master', 'running');
+    }
   }
 
   private async markOutcomeUnknown(promptId: string, deliveryToken: string): Promise<void> {

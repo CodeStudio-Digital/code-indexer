@@ -16,6 +16,7 @@ import {
   type SessionState,
 } from '@mcp/session-storage';
 import { companySessionIdentity, companyConfigRevision } from '@mcp/company/services/session-identity.js';
+import { toMasterPrompt } from '@mcp/company/services/company-session-file-codecs.js';
 import type { CompanySessionIdentity } from '@mcp/company-contracts';
 
 export type OperationalRuntimeKind = 'company' | 'app_studio';
@@ -61,6 +62,7 @@ interface CompanySessionFullFileRow {
 }
 
 export interface CreateCompanyFileSessionInput {
+  id?: string;
   name: string;
   project_ids: readonly ProjectId[];
   project_labels?: Readonly<Record<number, string | undefined>>;
@@ -282,6 +284,7 @@ export class OperationalSessionFiles {
       ? { revision: companyConfigRevision(input.config_json ?? '{}'), inherited_from: input.parent_session_id }
       : null;
     const entry = await this.#repository.createSession({
+      ...(input.id && { id: asSessionId(input.id) }),
       kind: runtimeKind,
       scope: global
         ? { kind: 'global' }
@@ -346,17 +349,20 @@ export class OperationalSessionFiles {
     const [agentRuns, board, prompts] = await Promise.all([
       repository.list('agentRun', { limit: 500 }),
       repository.list('boardItem', { limit: 50 }),
-      repository.list('masterPrompt', { limit: 50 }),
+      repository.list('masterPrompt', { limit: 50, order: 'desc' }),
     ]);
+    const session = this.#companyRow(entry);
     return {
-      session: this.#companyRow(entry),
+      session,
       projects: this.#companyProjects(entry),
       agentRuns: agentRuns.items.map((item) =>
         entityData(item as EntityRecord<Record<string, unknown>>)),
       recentBoard: board.items.map((item) =>
         entityData(item as EntityRecord<Record<string, unknown>>)),
-      masterPrompts: prompts.items.map((item) =>
-        entityData(item as EntityRecord<Record<string, unknown>>)),
+      masterPrompts: prompts.items.reverse().map((item) => ({
+        ...entityData(item),
+        ...toMasterPrompt(session.id, item),
+      })),
     };
   }
 
@@ -385,6 +391,27 @@ export class OperationalSessionFiles {
       ...entry,
       session,
       state: this.#repository.readStateSync(entry.location),
+    });
+  }
+
+  /** Compare revisions inside the bundle writer. Keep the bundle's original location and owner. */
+  async applyCompanyDesign(id: string, expectedRevision: string, input: {
+    name: string; projectIds: number[]; config: Record<string, unknown>; draftId: string;
+  }): Promise<void> {
+    const entry = await this.#requireEntry(id, ['company']);
+    const projects = await Promise.all(input.projectIds.map(pid => this.#project(pid)));
+    await this.#repository.updateSession(entry.location, current => {
+      const company = asCompanyMetadata(current);
+      if (companyConfigRevision(company.config_json) !== expectedRevision) {
+        throw new Error('A configuração da empresa mudou. Abra um novo rascunho com a revisão atual.');
+      }
+      if (current.owner_project_id != null && !input.projectIds.includes(current.owner_project_id)) {
+        throw new Error('O projeto proprietário do histórico precisa continuar vinculado.');
+      }
+      return { ...current, title: input.name,
+        linked_projects: projects.map(p => ({ project_id: p.id, root_path: p.root_path })),
+        metadata: { ...current.metadata, company: { ...company, name: input.name,
+          config_json: JSON.stringify({ ...input.config, design_applied: input.draftId }) } } } as SessionMetadata;
     });
   }
 

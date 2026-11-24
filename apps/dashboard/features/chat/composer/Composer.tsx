@@ -7,6 +7,7 @@ import { useConfirm } from '../../../components/ui/dialog-provider.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import type { AgentAttachment, EnrichedProviderModel, ExecutionMode, ProviderOption } from '../types.js';
 import { filesToAttachments } from '../utils.js';
+import { DecisionControl } from '../../agents/design/DecisionControl.js';
 import { ComposerToolbar } from './ComposerToolbar.js';
 import { PromptSuggestionChip } from './PromptSuggestionChip.js';
 import { ComposerActionIcons } from './ComposerActionIcons.js';
@@ -369,6 +370,9 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
+      if (props.sessionId && input.trim()) window.dispatchEvent(new CustomEvent('clef:chat-sent',{
+        detail:{id:props.sessionId,text:input.trim().slice(0,1200)},
+      }));
     }, [openSide, input, attachments, picker.picks, resolveTypedSkill, references.commit, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.sendBlocked, confirm, clearDraft, t]);
 
     // Enqueue the composed message while the agent is streaming. Same
@@ -733,6 +737,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             <MicButton onTranscript={appendTranscript} disabled={streaming} />
             <MicDevicePicker disabled={streaming} />
           </div>
+          {props.sessionId && !props.hideAgentPicker && !streaming && <DecisionControl kind="chat" id={props.sessionId} text={input} baseline={props.agent} onChoose={agent=>props.setAgent(agent as typeof props.agent)}/>}
           <ComposerToolbar
             hasInput={hasInput}
             autoSuggestText={debouncedInput}

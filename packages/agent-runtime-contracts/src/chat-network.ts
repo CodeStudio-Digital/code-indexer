@@ -51,6 +51,7 @@ export interface ChatSpawnInput {
 /** HTTP snapshots shared by the host, renderer and acceptance fixtures. */
 export interface ChatNetworkSnapshot {
   self: string;
+  companyTeam?: { masterId: string; members: Array<{ id: string; role: string; state: string; title: string; projectId: number | null; provider: string; model: string }> };
   stopped?: boolean;
   peers: Array<{ id: string; sessionId: string; label: string; profile: string; state: string; parentId?: string }>;
   messages: Array<{ id: string; from: string; to: string; kind: string; body: string; status: string; replyTo?: string; references: string[] }>;

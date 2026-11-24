@@ -148,6 +148,7 @@ export function detectGhostRunning(
     'AWAITING_PROVIDER',
     'AWAITING_TOOL',
     'AWAITING_MASTER_APPROVAL',
+    'AWAITING_HUMAN',
     'AWAITING_INBOX_ANSWER',
     'RESURRECTING',
   ]);

@@ -27,6 +27,19 @@ const baseArgs = {
 };
 
 describe('HeartbeatTracker — register', () => {
+  it('keeps a silent provider alive and starts a new invocation with the same identity and incident history', () => {
+    const tracker = new HeartbeatTracker();
+    tracker.register(baseArgs, 1);
+    expect(tracker.transition(AGENT_1, 'AWAITING_PROVIDER', 2).applied).toBe(true);
+    expect(tracker.detectStuck(24 * 3600_000)).toEqual([]);
+    tracker.recordIncident(AGENT_1);
+    tracker.transition(AGENT_1, 'TERMINAL', 3);
+    tracker.register(baseArgs, 4, true);
+    expect(tracker.all()).toHaveLength(1);
+    expect(tracker.get(AGENT_1)).toMatchObject({ state: 'BOOTING', lastHeartbeatAt: 4, incidentCount: 1 });
+    expect(tracker.transition(AGENT_1, 'RUNNING_TURN', 5).applied).toBe(true);
+  });
+
   it('creates a new record in BOOTING state', () => {
     const t = new HeartbeatTracker();
     const r = t.register(baseArgs, 1000);

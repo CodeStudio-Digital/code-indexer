@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { ExternalSessionError, type ExternalSessionWarning } from './types.js';
 
 const DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
+const DISCOVERY_EDGE_BYTES = 128 * 1024;
 
 interface Snapshot { size: number; mtimeMs: number }
 
@@ -97,6 +98,39 @@ export async function readJsonlHead(path: string, maxLines = 20): Promise<{ reco
     }
   }
   return { records, size_bytes: info.size, modified_at: new Date(info.mtimeMs).toISOString() };
+}
+
+async function readJsonlWindow(file: FileHandle, offset: number, length: number, trimEnd: boolean): Promise<unknown[]> {
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await file.read(buffer, 0, length, offset);
+  let text = buffer.toString('utf8', 0, bytesRead);
+  if (offset > 0) {
+    const firstNewline = text.indexOf('\n');
+    if (firstNewline === -1) return [];
+    text = text.slice(firstNewline + 1);
+  }
+  if (trimEnd) text = text.slice(0, text.lastIndexOf('\n') + 1);
+  return text.split('\n').flatMap((line) => {
+    if (!line.trim()) return [];
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+}
+
+/** Read the opening records and recent metadata without loading large transcripts. */
+export async function readJsonlEdges(path: string): Promise<{ records: unknown[]; size_bytes: number; modified_at: string }> {
+  const file = await open(path, 'r');
+  try {
+    const info = await file.stat();
+    const records = info.size <= 2 * DISCOVERY_EDGE_BYTES
+      ? await readJsonlWindow(file, 0, info.size, false)
+      : [
+          ...await readJsonlWindow(file, 0, DISCOVERY_EDGE_BYTES, true),
+          ...await readJsonlWindow(file, info.size - DISCOVERY_EDGE_BYTES, DISCOVERY_EDGE_BYTES, false),
+        ];
+    return { records, size_bytes: info.size, modified_at: info.mtime.toISOString() };
+  } finally {
+    await file.close();
+  }
 }
 
 export async function walkFiles(

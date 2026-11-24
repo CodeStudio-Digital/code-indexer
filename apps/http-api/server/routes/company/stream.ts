@@ -16,6 +16,7 @@ import {
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import {
   parseCompanySessionIdParam,
+  parseSessionRecordIdParam,
   parseJsonBody,
   notFound,
 } from '../_helpers.js';
@@ -457,6 +458,18 @@ export function mountCompanyStreamRoutes(app: HttpRouter, deps: ServerDeps): voi
       keepBinaryDocuments: binaryDocumentsHandledNatively(fileHandling),
     };
   }
+
+  app.get('/api/company/sessions/:id/master-prompts/:promptId', async (c) => {
+    const id = parseCompanySessionIdParam(c);
+    const promptId = parseSessionRecordIdParam(c, 'promptId');
+    await deps.sessionStore.ensureCatalog();
+    const entry = deps.sessionStore.catalog.get(id);
+    if (entry?.session.kind !== 'company' && entry?.session.kind !== 'app_studio') return notFound(c);
+    const files = new CompanySessionFiles({ companySessionId: id, sessionStore: deps.sessionStore });
+    const prompt = await files.getMasterPrompt(promptId);
+    c.header('Cache-Control', 'no-store');
+    return prompt ? c.json({ prompt }) : notFound(c, 'Question or plan not found in this session');
+  });
 
   app.get('/api/company/sessions/:id/events.jsonl', async (c) => {
     const id = parseCompanySessionIdParam(c);

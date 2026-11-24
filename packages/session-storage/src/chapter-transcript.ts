@@ -225,7 +225,7 @@ export async function detachCommitReplay(bundle: string, commit: ConversationCom
 /** Publish immutable chapter rows first. Replacing the journal is the single commit point. */
 export async function archiveChapterMessages(
   path: string, spans: readonly ChapterSpan[], options: AtomicFileOptions, beforeSwitch: () => Promise<void>,
-  initial?: readonly ConversationCommit[],
+  initial?: readonly ConversationCommit[], onProgress?: () => void,
 ): Promise<boolean> {
   const bundle = dirname(path);
   let lines: string[] = [];
@@ -233,6 +233,7 @@ export async function archiveChapterMessages(
     // Limit the number of outstanding sidecar fsyncs during a legacy migration.
     for (let i = 0; i < initial.length; i += 8) {
       lines.push(...await Promise.all(initial.slice(i, i + 8).map(async c => JSON.stringify(await detachCommitReplay(bundle, c, options)))));
+      onProgress?.();
     }
   } else {
     const text = await readFile(path, 'utf8');
@@ -240,14 +241,14 @@ export async function archiveChapterMessages(
     if (!text.endsWith('\n')) throw new Error('Cannot archive an uncommitted journal suffix');
     lines = text.slice(0, -1).split('\n');
   }
-  const changed = await packChapterLines(bundle, spans, lines, options);
+  const changed = await packChapterLines(bundle, spans, lines, options, onProgress);
   if (!changed && !initial) return false;
   await atomicWriteFile(path, lines.length ? lines.join('\n') + '\n' : '', { ...options, beforePublish: beforeSwitch });
   return true;
 }
 
 /** Also used for late edits or tool records targeting an already archived message. */
-export async function packChapterLines(bundle: string, spans: readonly ChapterSpan[], lines: string[], options: AtomicFileOptions) {
+export async function packChapterLines(bundle: string, spans: readonly ChapterSpan[], lines: string[], options: AtomicFileOptions, onProgress?: () => void) {
   const sorted = [...spans].sort((a, b) => a.end_message_seq - b.end_message_seq);
   for (const s of sorted) {
     if (!isUuid(s.id) || !Number.isSafeInteger(s.start_message_seq) || !Number.isSafeInteger(s.end_message_seq) ||
@@ -295,6 +296,7 @@ export async function packChapterLines(bundle: string, spans: readonly ChapterSp
     for (const src of archive.sources) src.file = file;
     const target = archivePath(bundle, archive.sources[0]!);
     await writeTranscriptFile(bundle, target, bytes, file, options);
+    onProgress?.();
   }
   for (const [i, commit] of changed) {
     stamp(commit);
@@ -306,6 +308,9 @@ export async function packChapterLines(bundle: string, spans: readonly ChapterSp
     if (!group) groups.set(chapter, group = new Map());
     group.set(i, lines[i]!);
   }
-  for (const [chapter, group] of groups) await packChapterRecords(bundle, chapter, group, lines, options);
+  for (const [chapter, group] of groups) {
+    await packChapterRecords(bundle, chapter, group, lines, options);
+    onProgress?.();
+  }
   return true;
 }

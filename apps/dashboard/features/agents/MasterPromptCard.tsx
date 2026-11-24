@@ -1,10 +1,11 @@
-import React, { memo, useState, useRef, useEffect } from 'react';
+import React, { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Crown, HelpCircle, CheckCircle, XCircle, Send, Ban, Loader2 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { formatClock } from '../../lib/datetime.js';
 import { Button } from '../../components/ui/button.js';
 import { cn } from '../../lib/utils.js';
+import { usePromptSubmission } from '../../hooks/agent-stream/usePromptSubmission.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
 
 /**
@@ -23,36 +24,15 @@ export const MasterPromptCard = memo(function MasterPromptCard({
   onRespondPlan,
 }: {
   prompt: MasterPrompt;
-  onAnswerQuestion?: (answer: string) => void;
-  onRespondPlan?: (approved: boolean, feedback?: string) => void;
+  onAnswerQuestion?: (answer: string) => Promise<void>;
+  onRespondPlan?: (approved: boolean, feedback?: string) => Promise<void>;
 }) {
   const { t } = useTranslation(['agents', 'common']);
   const [text, setText] = useState('');
   const [feedback, setFeedback] = useState('');
-  // Defensive submit guard: one click was registering 3× (no in-flight lock),
-  // spawning duplicate "Human answered" board entries. Lock on first submit,
-  // show a processing state, and ignore further clicks until it settles.
-  const [submitting, setSubmitting] = useState(false);
-  const submittingRef = useRef(false);
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
-  const submit = (fn: () => void): void => {
-    if (submittingRef.current || (prompt.kind === 'plan' ? !onRespondPlan : !onAnswerQuestion)) return;
-    submittingRef.current = true;
-    setSubmitting(true);
-    try {
-      fn();
-    } finally {
-      // On success the prompt flips to 'answered' and this whole interactive
-      // block unmounts. This safety reset only matters if the answer FAILED
-      // (card stays pending) so the user can retry after a few seconds. The
-      // backend is also idempotent, so a late click can't double-submit.
-      resetTimer.current = setTimeout(() => {
-        submittingRef.current = false;
-        setSubmitting(false);
-      }, 8000);
-    }
-  };
+  const { submitting, error, submit } = usePromptSubmission();
+  const answer = (value: string) => onAnswerQuestion && void submit(() => onAnswerQuestion(value));
+  const respondToPlan = (approved: boolean) => onRespondPlan && void submit(() => onRespondPlan(approved, feedback || undefined));
 
   const isPlan = prompt.kind === 'plan';
   const interactionAvailable = isPlan ? !!onRespondPlan : !!onAnswerQuestion;
@@ -74,7 +54,7 @@ export const MasterPromptCard = memo(function MasterPromptCard({
     : t('agents:company.masterQuestion');
 
   return (
-    <div className={cn('rounded-lg border-2 p-3 text-xs space-y-2', tone)}>
+    <div aria-busy={isPending && submitting} className={cn('rounded-lg border-2 p-3 text-xs space-y-2', tone)}>
       <div className="flex items-center gap-1.5">
         <Badge variant="outline" className="text-[10px] px-1.5 bg-purple-500/20 text-purple-400 border-purple-500/30">
           @master
@@ -113,9 +93,9 @@ export const MasterPromptCard = memo(function MasterPromptCard({
               size="sm"
               variant="outline"
               disabled={submitting || !interactionAvailable}
-              onClick={() => submit(() => onAnswerQuestion?.(opt.value))}
+              onClick={() => answer(opt.value)}
             >
-              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : opt.label}
+              {opt.label}
             </Button>
           ))}
         </div>
@@ -134,20 +114,18 @@ export const MasterPromptCard = memo(function MasterPromptCard({
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && text.trim() && !submitting) {
                 e.preventDefault();
-                submit(() => onAnswerQuestion?.(text.trim()));
+                answer(text.trim());
               }
             }}
           />
           <Button
             size="sm"
             variant="default"
-            onClick={() => text.trim() && submit(() => onAnswerQuestion?.(text.trim()))}
+            onClick={() => text.trim() && answer(text.trim())}
             disabled={submitting || !interactionAvailable || !text.trim()}
             className="self-end gap-1"
           >
-            {submitting
-              ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('agents:company.answering', 'Enviando…')}</>
-              : <><Send className="h-3.5 w-3.5" /> {t('agents:company.answer')}</>}
+            <Send className="h-3.5 w-3.5" /> {t('agents:company.answer')}
           </Button>
         </div>
       )}
@@ -164,21 +142,26 @@ export const MasterPromptCard = memo(function MasterPromptCard({
             rows={2}
           />
           <div className="flex gap-2">
-            <Button size="sm" variant="default" disabled={submitting || !interactionAvailable} onClick={() => submit(() => onRespondPlan?.(true, feedback || undefined))} className="gap-1">
-              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />} {t('common:actions.approve')}
+            <Button size="sm" variant="default" disabled={submitting || !interactionAvailable} onClick={() => respondToPlan(true)} className="gap-1">
+              <CheckCircle className="h-3.5 w-3.5" /> {t('common:actions.approve')}
             </Button>
-            <Button size="sm" variant="outline" disabled={submitting || !interactionAvailable} onClick={() => submit(() => onRespondPlan?.(false, feedback || undefined))} className="gap-1 text-destructive">
-              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />} {t('common:actions.reject')}
+            <Button size="sm" variant="outline" disabled={submitting || !interactionAvailable} onClick={() => respondToPlan(false)} className="gap-1 text-destructive">
+              <XCircle className="h-3.5 w-3.5" /> {t('common:actions.reject')}
             </Button>
           </div>
         </>
       )}
 
+      {isPending && submitting && <p role="status" className="flex items-center gap-1 text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('agents:company.answering')}
+      </p>}
+      {isPending && error && <p role="alert" className="text-destructive">{error}</p>}
+
       {/* Answered — show what the human chose */}
       {isAnswered && !isPlan && prompt.answer != null && (
         <div className="rounded-md bg-background border px-3 py-2 whitespace-pre-wrap">
           <span className="text-muted-foreground mr-1">›</span>
-          {prompt.answer}
+          {prompt.options?.find((option) => option.value === prompt.answer)?.label ?? prompt.answer}
         </div>
       )}
       {isAnswered && isPlan && (

@@ -40,7 +40,10 @@ export class CoderWorkerBootError extends Error {
   }
 }
 
+export class CoderWriterRecoveryTimeoutError extends Error {}
+
 const setupMessages: Readonly<Record<string, string>> = {
+  'session-recovery-timeout': 'Session history preparation timed out before your message reached the provider. You can retry in this chat.',
   'worker-draining': 'The previous worker is still releasing this conversation. Send the message again in this chat.',
   'turn-ended-before-input': 'The previous turn finished before this message could be queued. Send it again in this chat.',
   'worker-unavailable-before-input': 'The session worker could not start. Your message was not processed. Try again in this chat.',
@@ -53,13 +56,14 @@ const setupMessages: Readonly<Record<string, string>> = {
 export function coderSetupFailure(reason: string, error?: unknown) {
   if (isCoderWorkerStoppingError(error) || error instanceof CoderWorkerDrainError) reason = 'worker-draining';
   else if (error instanceof Error && 'code' in error && error.code === 'CODER_TURN_ENDED_BEFORE_INPUT') reason = 'turn-ended-before-input';
-  else if (error instanceof CoderWorkerBootError) reason = 'worker-unavailable-before-input';
+  else if (error instanceof CoderWorkerBootError) reason = error.cause instanceof CoderWriterRecoveryTimeoutError
+    ? 'session-recovery-timeout' : 'worker-unavailable-before-input';
   else if (error instanceof Error && error.name === 'SessionLeaseHeldError') reason = 'session-writer-busy';
   return {
     reason,
     ...(Object.hasOwn(setupMessages, reason) ? { message: setupMessages[reason] } : {}),
     // Only these worker lifecycle guards provide a negative execution acknowledgement.
-    ...(['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input'].includes(reason) ? { not_started: true } : {}),
+    ...(['worker-draining', 'turn-ended-before-input', 'worker-unavailable-before-input', 'session-recovery-timeout'].includes(reason) ? { not_started: true } : {}),
   };
 }
 

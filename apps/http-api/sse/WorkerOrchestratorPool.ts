@@ -26,6 +26,8 @@
  * delegated to the underlying `WorkerHost` (default 3 retries with
  * exponential backoff).
  */
+import { randomUUID } from 'node:crypto';
+import type { CompanyWorkerExitHandler } from './company-worker-exit.js';
 import { WorkerHost } from '@mcp/orchestrator-host';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
@@ -51,7 +53,8 @@ import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerDiagramRender } from './worker-diagram-render.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
-import type { CompanySessionId, ProjectId } from '@mcp/session-storage';
+import { publishNotificationRuntimeEvent } from './notification-event-bus.js';
+import { asSessionId, isUuid, type SessionId, type SessionStorageScope, type CompanySessionId, type ProjectId } from '@mcp/session-storage';
 
 interface PoolEntry {
   host: WorkerHost;
@@ -69,6 +72,7 @@ interface PoolEntry {
    */
   awaitingHumanSince: number | null;
   /** Aggregated subscription cleanup. */
+  idleCheckPending?: boolean;
   detachBusMirror: () => void;
 }
 
@@ -127,6 +131,8 @@ interface WorkerOrchestratorPoolOpts {
     sessionId: CompanySessionId,
   ) => Promise<CompanySessionRuntimeContext>;
   /** Idle TTL before eviction. Default 5 min. */
+  onWorkerExit?: CompanyWorkerExitHandler;
+  onChatCreated?: CompanyChatCreatedHandler;
   ttlMs?: number;
   /** Logger for diagnostic output. */
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
@@ -140,6 +146,8 @@ interface WorkerOrchestratorPoolOpts {
    */
   docDeps?: CoderWorkerDocDeps;
 }
+
+export type CompanyChatCreatedHandler = (company: CompanySessionId, chat: SessionId, scope: SessionStorageScope) => Promise<void>;
 
 export interface CompanySessionRuntimeContext {
   sessionId: CompanySessionId;
@@ -229,6 +237,8 @@ export type WorkerBackedOrchestrator = {
 
 export class WorkerOrchestratorPool {
   private readonly entries = new Map<CompanySessionId, PoolEntry>();
+  private readonly starting = new Map<CompanySessionId, Promise<PoolEntry>>();
+  private readonly recovering = new Map<CompanySessionId, Promise<void>>();
   private readonly ttlMs: number;
   private readonly log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -253,13 +263,22 @@ export class WorkerOrchestratorPool {
   async getOrSpawn(
     sessionId: CompanySessionId,
   ): Promise<{ orchestrator: WorkerBackedOrchestrator; bus: CoderRunBus }> {
+    await this.recovering.get(sessionId);
     const existing = this.entries.get(sessionId);
     if (existing) {
       existing.lastTouchedAt = Date.now();
       return { orchestrator: existing.orchestrator, bus: existing.bus };
     }
-    const entry = await this.spawn(sessionId);
-    this.entries.set(sessionId, entry);
+    let boot = this.starting.get(sessionId);
+    if (!boot) {
+      boot = this.spawn(sessionId).then(entry => {
+        if (!entry.host.isRunning()) throw new Error('Company worker exited during startup');
+        this.entries.set(sessionId, entry);
+        return entry;
+      }).finally(() => this.starting.delete(sessionId));
+      this.starting.set(sessionId, boot);
+    }
+    const entry = await boot;
     return { orchestrator: entry.orchestrator, bus: entry.bus };
   }
 
@@ -360,9 +379,21 @@ export class WorkerOrchestratorPool {
   /** Gracefully evict a session — sends `stop` and waits for worker exit. */
   async evict(sessionId: CompanySessionId): Promise<void> {
     closeCompanyPreviewSession(sessionId);
+    await this.starting.get(sessionId)?.catch(() => undefined);
+    await this.recovering.get(sessionId);
     const entry = this.entries.get(sessionId);
     if (!entry) return;
+    return this.evictEntry(sessionId, entry);
+  }
+
+  private evictEntry(sessionId: CompanySessionId, entry: PoolEntry): Promise<void> {
     this.entries.delete(sessionId);
+    const eviction = this.stopEntry(sessionId, entry).finally(() => this.recovering.delete(sessionId));
+    this.recovering.set(sessionId, eviction);
+    return eviction;
+  }
+
+  private async stopEntry(sessionId: CompanySessionId, entry: PoolEntry): Promise<void> {
     entry.detachBusMirror();
     const aliveMs = Date.now() - entry.lastTouchedAt;
     try {
@@ -379,8 +410,8 @@ export class WorkerOrchestratorPool {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
     }
-    const ids = Array.from(this.entries.keys());
-    await Promise.all(ids.map((id) => this.evict(id)));
+    const ids = new Set([...this.entries.keys(), ...this.starting.keys(), ...this.recovering.keys()]);
+    await Promise.all(Array.from(ids, id => this.evict(id)));
   }
 
   private sweep(): void {
@@ -396,9 +427,14 @@ export class WorkerOrchestratorPool {
           `[pool] session=${id} awaited human >${Math.round(AWAITING_HUMAN_TTL_MS / 60000)}min with no answer — reclaiming`,
         );
       }
-      if (now - entry.lastTouchedAt > this.ttlMs) {
-        void this.evict(id);
-      }
+      if (now - entry.lastTouchedAt <= this.ttlMs || entry.idleCheckPending) continue;
+      entry.idleCheckPending = true;
+      const lastTouch = entry.lastTouchedAt;
+      void entry.orchestrator.hasActiveTurns().then(active => {
+        if (active || this.entries.get(id) !== entry || entry.lastTouchedAt !== lastTouch) return;
+        return this.evictEntry(id, entry);
+      }).catch(error => this.log('warn', `[pool] failed to check Company activity: ${String(error)}`))
+        .finally(() => { entry.idleCheckPending = false; });
     }
   }
 
@@ -433,11 +469,13 @@ export class WorkerOrchestratorPool {
     // attached SSE stream blocked in `waitEnded` until the client
     // disconnects (the heartbeat keeps the socket warm) — a hung tab.
     const bus = createBus(new AbortController());
+    const writerOwnerId = `company-worker:${randomUUID()}`;
     const host = new WorkerHost({
       name: `company-session-${sessionId}`,
       workerFile: this.opts.workerFile,
       workerData: {
         companySessionId: sessionId,
+        writerOwnerId,
         sessionContext,
         dbPath: this.opts.dbPath,
         // Dev bootstrap reads this to dynamic-import the real TS entry
@@ -445,21 +483,23 @@ export class WorkerOrchestratorPool {
         tsEntry: this.opts.workerDevTsEntry,
       },
       execArgv: this.opts.workerExecArgv,
-      maxRestarts: 3,
+      maxRestarts: 0, // Each generation needs its own RPC subscriptions and writer identity.
       defaultRequestTimeoutMs: DEFAULT_COMPANY_RPC_TIMEOUT_MS,
       onCrash: (err) => {
         this.log('error', `[pool] worker session=${sessionId} crashed permanently: ${err.message}`);
+        const entry = this.entries.get(sessionId);
+        if (entry && entry.host !== host) return;
         closeCompanyPreviewSession(sessionId);
         this.entries.delete(sessionId);
-        // Unblock any SSE stream attached to this session so it closes
-        // cleanly instead of hanging until the client disconnects.
-        try {
-          if (!bus.ended) {
-            markEnded(bus, 'error', { reason: 'worker_crashed', message: err.message });
-          }
-        } catch {
-          /* best-effort */
-        }
+        const cleanup = (async () => {
+          await this.opts.onWorkerExit?.(sessionId, writerOwnerId, (event, data) => publish(bus, event, data));
+        })().finally(() => {
+          if (!bus.ended) markEnded(bus, 'error', { reason: 'worker_crashed', message: err.message });
+          entry?.detachBusMirror();
+          this.recovering.delete(sessionId);
+        });
+        this.recovering.set(sessionId, cleanup);
+        void cleanup.catch(error => this.log('error', `[pool] worker exit recovery session=${sessionId}: ${String(error)}`));
       },
       onError: (err) => {
         this.log('warn', `[pool] worker session=${sessionId} error: ${err.message}`);
@@ -590,6 +630,15 @@ export class WorkerOrchestratorPool {
       } else if (AWAIT_HUMAN_END_EVENTS.has(env.event)) {
         const e = this.entries.get(sessionId);
         if (e) e.awaitingHumanSince = null;
+      }
+      if (env.event === 'chat_session_created' && this.opts.onChatCreated) {
+        const data = env.data as { sessionId?: string; scope?: SessionStorageScope } | null;
+        if (data?.sessionId && isUuid(data.sessionId) && data.scope) {
+          const chat = asSessionId(data.sessionId);
+          void this.opts.onChatCreated(sessionId, chat, data.scope).then(() => {
+            publishNotificationRuntimeEvent({ kind: 'coder', sessionId: chat, event: env.event, data: { sessionId: chat } });
+          }).catch(error => this.log('warn', `[pool] failed to announce Company chat ${chat}: ${String(error)}`));
+        }
       }
       // We don't preserve the worker's seq — `publish` allocates its
       // own monotonic seq on the main bus, which is what SSE clients

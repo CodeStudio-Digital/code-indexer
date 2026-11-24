@@ -40,7 +40,7 @@ import { attachSubordinateCompletionHandler } from '@mcp/company/services/subord
 import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
-import { createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
+import { announceCompanyChat, createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
 
 /**
  * Pure-ish: throws on validation failure, mutates `subordinates`/
@@ -89,7 +89,7 @@ export async function spawnSubordinate(
   // Count in-flight reservations too — concurrent spawns (fan-out) reserve a
   // slot synchronously at this check, before `runningIds` gains their id, so
   // the cap holds even when N spawns race between the check and runCoder.
-  const check = deps.concurrencyPolicy.check(deps.runningIds.size + deps.pendingSpawns.count);
+  const check = deps.concurrencyPolicy.check(deps.runningIds.size + deps.pendingSpawns.count, JSON.parse(companySession?.config_json || '{}').design_concurrency);
   if (!check.ok) {
     const running = deps
       .listRunning()
@@ -121,6 +121,7 @@ export async function spawnSubordinate(
   // Reserve the slot for the whole spawn; released in the `finally` at the end
   // (success transfers the count into `runningIds`, failure just frees it).
   deps.pendingSpawns.count++;
+  let startingId: string | undefined;
   try {
 
   // ── Supervisor role-quarantine check (Phase 2.3) ──────────────────
@@ -236,6 +237,7 @@ export async function spawnSubordinate(
 
   const agentRun = await ctx.companyFiles.createAgentRun({
     id: spec.reservedAgentRunId,
+    status: 'running',
     role: spec.role,
     coder_session_id: subSession.id,
     project_ids: allowedProjectIds,
@@ -246,6 +248,10 @@ export async function spawnSubordinate(
     dispatch_source: roleRuntime.dispatchSource,
     fallback_reason: null,
   });
+  deps.onExecutionStarting?.(); // A durable identity now owns the card even if bootstrap fails.
+  startingId = agentRun.id;
+  announceCompanyChat(ctx, subSession);
+  deps.startingIds?.add(agentRun.id);
   const companyContext: CompanyContext = {
     workspaceMutationGate: ctx.workspaceMutationGate,
     sessionMessenger: ctx.sessionMessenger,
@@ -332,7 +338,7 @@ export async function spawnSubordinate(
   // so what this subordinate learns reaches every future session.
   const memoryPorts = getCompanyMemoryPorts();
 
-  deps.onExecutionStarting?.();
+  await deps.status.publishStatus(agentRun.id, spec.role, 'running', { coderSessionId: subSession.id });
   const handle = await runCoder({
         hostTools: getReadyDocsResearchTools(),
     session: { id: subSession.id },
@@ -340,7 +346,7 @@ export async function spawnSubordinate(
     attachments: spec.attachments,
     maxTurns: 50,
     profile: roleRuntime.tier,
-    agent: spec.agent,
+    agent: runtimePolicy.roleConfig?.readOnly ? 'explore' : spec.agent,
     memoryRetriever: memoryPorts?.memoryRetriever,
     runEndMemory: memoryPorts?.runEndMemory,
     companyContext,
@@ -361,6 +367,9 @@ export async function spawnSubordinate(
     // tool_call_start/result). Without these the supervisor's stuck
     // detection relies on coarse signals only.
     onRunnerReady: (runner) => {
+      getGlobalAgentSupervisor()?.registerSubordinate({
+        agentRunId: agentRun.id, companySessionId: ctx.companySessionId, role: spec.role,
+      });
       wireSubordinateInterceptionsForRunner(runner, agentRun.id, spec.role, deps.wireDeps);
       // docs_deep_research — DocsAgent escalation; per-runner install (the
       // company-worker's docsResearch RPC shim is the other half). Navigate
@@ -376,23 +385,8 @@ export async function spawnSubordinate(
     },
   } as RunCoderOptions & { companyPromptBlock: string });
 
-  // publishStatus (not setStatus) so the dashboard learns about the new
-  // subordinate live — and carries `coderSessionId` so its agent row is
-  // clickable (opens the transcript) from the moment it appears.
-  deps.status.publishStatus(agentRun.id, spec.role, 'running', {
-    coderSessionId: subSession.id,
-  });
   deps.runningIds.add(agentRun.id);
   deps.notifyIdleChanged();
-
-  // Sprint 4 (Phase 1.5) — register with the AgentSupervisor so it
-  // starts tracking heartbeat + state. Null-safe: when supervisor is
-  // disabled via env flag, this is a no-op.
-  getGlobalAgentSupervisor()?.registerSubordinate({
-    agentRunId: agentRun.id,
-    companySessionId: deps.ctx.companySessionId,
-    role: spec.role,
-  });
 
   const subordinateHandle: SubordinateHandle = {
     agentRunId: agentRun.id,
@@ -414,9 +408,7 @@ export async function spawnSubordinate(
   // unwired when the run ends. Independent of the completion handler's
   // own .finally — multiple .finally on the same promise are
   // dispatched independently.
-  handle.done.finally(() => {
-    try { supervisorUnsubscribe(); } catch { /* best-effort */ }
-  });
+  void handle.done.then(supervisorUnsubscribe, supervisorUnsubscribe);
 
   if (spec.wait) await handle.done;
 
@@ -425,10 +417,16 @@ export async function spawnSubordinate(
     coderSessionId: subSession.id,
     status: 'running',
   };
+  } catch (error) {
+    if (startingId && !deps.subordinates.has(startingId)) {
+      await deps.status.publishStatus(startingId, spec.role, 'error', { message: String(error) });
+    }
+    throw error;
   } finally {
     // Release the reservation. On success the run is already in `runningIds`
     // (added above), so the effective count is unchanged; on any throw between
     // the cap check and here, this frees the slot we held.
+    if (startingId) deps.startingIds?.delete(startingId);
     deps.pendingSpawns.count--;
   }
 }

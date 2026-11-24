@@ -536,32 +536,37 @@ function parseMetadata(
   }
 }
 
-async function metadataFiles(bundlePath: string): Promise<string[]> {
+async function metadataFiles(bundlePath: string, onProgress?: () => void): Promise<string[]> {
   const journal = sessionJournalPath(bundlePath);
   const transcript = join(bundlePath, CHAT_TRANSCRIPT);
-  const blobRoots = new Set(
+  const excludedTrees = new Set(
     Object.values(SESSION_ARTIFACT_ROOTS).map((segments) =>
       pathKey(join(bundlePath, ...segments)),
     ),
   );
+  // Native stream diagnostics have their own repository and never own session
+  // artifacts. Migrated runtime entities live one level above this directory.
+  excludedTrees.add(pathKey(join(bundlePath, 'events', 'runtime', 'stream')));
+  excludedTrees.add(pathKey(join(bundlePath, 'provider_replay')));
   const output: string[] = [];
 
   const visit = async (directory: string): Promise<void> => {
     await assertPathHasNoLinks(bundlePath, directory);
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    onProgress?.();
+    for (const entry of entries) {
       const child = join(directory, entry.name);
       assertContainedPath(bundlePath, child);
-      const stats = await lstat(child);
-      if (stats.isSymbolicLink()) {
+      if (entry.isSymbolicLink()) {
         throw new UnsafeSessionPathError(
           `Symbolic link in session metadata tree: ${child}`,
         );
       }
-      if (stats.isDirectory()) {
-        if (!blobRoots.has(pathKey(child)) && child !== join(bundlePath, 'provider_replay')) await visit(child);
+      if (entry.isDirectory()) {
+        if (!excludedTrees.has(pathKey(child))) await visit(child);
         continue;
       }
-      if (!stats.isFile()) {
+      if (!entry.isFile()) {
         throw new UnsafeSessionPathError(
           `Non-regular file in session bundle: ${child}`,
         );
@@ -665,6 +670,7 @@ export async function recoverSessionArtifacts(options: {
   readonly bundlePath: string;
   readonly sessionId: SessionId;
   readonly faultInjector?: SessionStorageFaultInjector;
+  readonly onProgress?: () => void;
 }): Promise<ArtifactRecoveryResult> {
   const bundlePath = resolve(options.bundlePath);
   await options.faultInjector?.({
@@ -673,13 +679,14 @@ export async function recoverSessionArtifacts(options: {
     path: bundlePath,
   });
 
-  const files = await metadataFiles(bundlePath);
+  const files = await metadataFiles(bundlePath, options.onProgress);
   const references = new Map<string, ReferencedArtifact>();
   const referencedToolCallIds = new Set<string>();
   const pendingToolOutputs: PendingToolOutputMetadata[] = [];
   const archive = new ChapterRecordReader();
   const journal = sessionJournalPath(bundlePath);
   for await (const { file, bytes } of readMetadataInOrder(files)) {
+    options.onProgress?.();
     const values = parseMetadata(bytes, file);
     const relativeMetadataPath = posixRelative(bundlePath, file);
     for (let index = 0; index < values.length; index += 1) {
@@ -773,6 +780,7 @@ export async function recoverSessionArtifacts(options: {
         }
         const relativePath = posixRelative(bundlePath, blobPath);
         const hashed = await hashBlob(blobPath);
+        options.onProgress?.();
         scannedBlobs += 1;
         if (hashed.sha256 !== entry.name) {
           throw new ArtifactRecoveryCorruptionError(

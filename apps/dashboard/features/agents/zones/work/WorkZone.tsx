@@ -14,6 +14,7 @@ import type { BoardMessage } from '../../../../state/company/types.js';
 import type { WorkTab } from '../types.js';
 
 interface WorkZoneProps {
+  onValidations?: () => void;
   sessionId: string;
   sessionName: string;
   tab: WorkTab;
@@ -40,6 +41,7 @@ export function WorkZone({
   boardMessages,
   composer,
   readOnly = false,
+  onValidations,
 }: WorkZoneProps) {
   if (tab === 'board') {
     return (
@@ -63,7 +65,7 @@ export function WorkZone({
     );
   }
   if (tab === 'kanban') {
-    return <KanbanTab companySessionId={sessionId} />;
+    return <KanbanTab companySessionId={sessionId} onValidations={onValidations} />;
   }
   return <MemoryPanel sessionId={sessionId} />;
 }

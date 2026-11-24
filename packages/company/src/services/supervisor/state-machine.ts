@@ -31,6 +31,8 @@ export type SupervisionState =
   | 'AWAITING_PROVIDER'
   /** tool_call_start emitted; waiting for tool_call_result. */
   | 'AWAITING_TOOL'
+  /** Master posted a question or plan and is waiting for the user. */
+  | 'AWAITING_HUMAN'
   /** Subordinate is `waiting_plan` / `waiting_question` / `waiting_tasks`. */
   | 'AWAITING_MASTER_APPROVAL'
   /** Send with wait=true; pending inbox answer. */
@@ -67,8 +69,9 @@ export const DEFAULT_STATE_TIMEOUT_MS: Readonly<Record<SupervisionState, number 
   Object.freeze({
     BOOTING: 90_000, // 90s
     RUNNING_TURN: 5 * 60_000, // 5min
-    AWAITING_PROVIDER: 60_000, // 60s
+    AWAITING_PROVIDER: null, // The provider transport owns deadlines and retries, including silent reasoning.
     AWAITING_TOOL: 5 * 60_000, // 5min (tool-tier-aware multiplier applied at observation time)
+    AWAITING_HUMAN: null,
     AWAITING_MASTER_APPROVAL: 30 * 60_000, // 30min
     AWAITING_INBOX_ANSWER: 20 * 60_000, // 20min (= legacy inbox wait timeout)
     IDLE: null,
@@ -98,10 +101,11 @@ export const DEFAULT_STATE_TIMEOUT_MS: Readonly<Record<SupervisionState, number 
  */
 export const LEGAL_TRANSITIONS: Readonly<Record<SupervisionState, ReadonlySet<SupervisionState>>> =
   Object.freeze({
-    BOOTING: new Set<SupervisionState>(['RUNNING_TURN', 'FAILED_BOOT', 'TERMINAL', 'STUCK_BOOT']),
+    BOOTING: new Set<SupervisionState>(['RUNNING_TURN', 'AWAITING_PROVIDER', 'AWAITING_HUMAN', 'FAILED_BOOT', 'TERMINAL', 'STUCK_BOOT']),
     RUNNING_TURN: new Set<SupervisionState>([
       'AWAITING_PROVIDER',
       'AWAITING_TOOL',
+      'AWAITING_HUMAN',
       'AWAITING_MASTER_APPROVAL',
       'AWAITING_INBOX_ANSWER',
       'IDLE',
@@ -110,10 +114,12 @@ export const LEGAL_TRANSITIONS: Readonly<Record<SupervisionState, ReadonlySet<Su
     ]),
     AWAITING_PROVIDER: new Set<SupervisionState>([
       'RUNNING_TURN',
+      'AWAITING_HUMAN',
       'TERMINAL',
       'STUCK_PROVIDER',
     ]),
-    AWAITING_TOOL: new Set<SupervisionState>(['RUNNING_TURN', 'TERMINAL', 'STUCK_TOOL']),
+    AWAITING_TOOL: new Set<SupervisionState>(['RUNNING_TURN', 'AWAITING_HUMAN', 'TERMINAL', 'STUCK_TOOL']),
+    AWAITING_HUMAN: new Set<SupervisionState>(['RUNNING_TURN', 'AWAITING_TOOL', 'TERMINAL']),
     AWAITING_MASTER_APPROVAL: new Set<SupervisionState>([
       'RUNNING_TURN',
       'TERMINAL',
@@ -190,7 +196,6 @@ export const STUCK_VARIANT_OF: Readonly<Partial<Record<SupervisionState, Supervi
   Object.freeze({
     BOOTING: 'STUCK_BOOT',
     RUNNING_TURN: 'STUCK_TURN',
-    AWAITING_PROVIDER: 'STUCK_PROVIDER',
     AWAITING_TOOL: 'STUCK_TOOL',
     AWAITING_MASTER_APPROVAL: 'STUCK_AWAITING_MASTER',
     AWAITING_INBOX_ANSWER: 'INBOX_EXPIRED',

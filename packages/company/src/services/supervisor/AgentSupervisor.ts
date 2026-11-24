@@ -286,7 +286,12 @@ export class AgentSupervisor {
     agentRunId: string;
     companySessionId: string;
     role: string;
-  }): void {
+  }, resumed = false): void {
+    if (resumed) {
+      this.alreadyFlaggedThisRun.delete(args.agentRunId);
+      this.tracker.register(args, Date.now(), true);
+      return;
+    }
     this.observation.registerSpawn(args);
   }
 
@@ -295,7 +300,8 @@ export class AgentSupervisor {
    * tracking it. Called by `MasterLifecycle.start()` in Phase 1.5.
    */
   registerMaster(args: { agentRunId: string; companySessionId: string }): void {
-    this.observation.registerMaster(args);
+    this.alreadyFlaggedThisRun.delete(args.agentRunId);
+    this.tracker.register({ ...args, role: 'master' }, Date.now(), true);
   }
 
   /**

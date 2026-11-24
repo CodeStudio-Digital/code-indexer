@@ -101,6 +101,7 @@ import { setDbToolsStores, setDbSecretDecryptor } from '../../../packages/code-a
 import {
   createBus,
   clearReplayBuffer,
+  emitWorkerLog,
   publish,
   markEnded,
   setBusRunner,
@@ -833,7 +834,7 @@ interface RunFreshPayload {
   runtimePolicy?: ResolvedRuntimePolicyV1;
 }
 
-bridge.handle('runFresh', async (payload) => {
+bridge.handle('runFresh', (payload) => {
   recordRpc('runFresh');
   if (stopping) {
     throw new CoderWorkerStoppingError();
@@ -847,8 +848,22 @@ bridge.handle('runFresh', async (payload) => {
       : Date.now(),
   );
   activeRun = run;
+  // Confirm ownership before doing any filesystem, plugin or provider work.
+  // A lost mutation ACK fences the writer. Slow preparation is a different
+  // state and must remain attachable and cancellable on this same run.
+  setImmediate(() => { void prepareFreshRun(run, opts); });
+  return { ok: true, preparing: true };
+});
+
+async function prepareFreshRun(run: ActiveRunState, opts: RunFreshPayload): Promise<void> {
   let pluginHost: PluginWorkerHost | null = null;
+  const started = performance.now();
+  const onPreparationPhase = (phase: string) => {
+    emitWorkerLog(run.bus, 'info', 'worker', `Preparing turn: ${phase}`, { phase, elapsedMs: Math.round(performance.now() - started) });
+  };
   try {
+    run.ctrl.signal.throwIfAborted();
+    onPreparationPhase('session');
     await materializePendingAgentTransition(
       getSharedSessionStore(dbPath, sessionContext.writerOwnerId),
       sessionId,
@@ -868,6 +883,7 @@ bridge.handle('runFresh', async (payload) => {
     }
     const coderOptions: Parameters<typeof runCoder>[0] = {
       session: { id: sessionId },
+      onPreparationPhase,
       controlPlaneParentAgentRunId: opts.controlPlaneParentAgentRunId,
       admitAttempt: opts.controlPlaneAdmissionRequired
         ? (preparation) => bridge.request('attempt.admit', { runId: run.runId, preparation })
@@ -974,18 +990,19 @@ bridge.handle('runFresh', async (payload) => {
         releaseCompletedRun(run);
       });
 
-    return { ok: true, session: result.session, indexStatus: result.indexStatus };
   } catch (err) {
     void pluginHost?.dispose();
     const message = err instanceof Error ? err.message : String(err);
-    publish(run.bus, 'error', { message });
-    markEnded(run.bus, 'error', { message });
+    const terminal = run.ctrl.signal.aborted && err === run.ctrl.signal.reason
+      ? normalizeCoderTerminalSignal('done', { reason: 'aborted' })
+      : normalizeCoderTerminalSignal('error', { reason: 'worker-runFresh-failed', message });
+    publish(run.bus, terminal.event, terminal.data);
+    markEnded(run.bus, terminal.event, terminal.data);
     releaseCompletedRun(run);
-    throw err;
   } finally {
     run.completePreparation();
   }
-});
+}
 
 bridge.handle('isWaitingForInput', () => {
   recordRpc('isWaitingForInput');
@@ -1277,7 +1294,14 @@ bridge.handle('acquireSessionWriter', async () => {
   if (!location || location.bundle_path !== sessionContext.bundlePath) {
     throw new Error(`Filesystem session ${sessionId} moved before worker writer acquisition`);
   }
-  await sessionStore.repository.primeSession(location);
+  let lastProgressAt = -Infinity;
+  await sessionStore.repository.primeSession(location, () => {
+    const now = performance.now();
+    if (now - lastProgressAt >= 2_000) {
+      lastProgressAt = now;
+      bridge.emit('session.writerProgress', {});
+    }
+  });
   return { ok: true };
 });
 

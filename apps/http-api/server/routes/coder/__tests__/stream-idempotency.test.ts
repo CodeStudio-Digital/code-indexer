@@ -33,7 +33,7 @@ import { mountCoderStreamRoutes } from '../stream.js';
 import { createBus, markEnded, publish, type CoderRunBus } from '../../../../coder-bus.js';
 import { RecentMessageKeys } from '../../recent-message-keys.js';
 import { SessionRecoveryError } from '../../../../control-plane-recovery-error.js';
-import { CoderTurnEndedError, CoderWorkerBootError, CoderWorkerDrainError } from '../../../../sse/coder-runtime-errors.js';
+import { CoderTurnEndedError, CoderWorkerBootError, CoderWorkerDrainError, CoderWriterRecoveryTimeoutError } from '../../../../sse/coder-runtime-errors.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
@@ -1124,18 +1124,20 @@ describe('worker recovery on the same conversation', () => {
   it.each([
     ['messages', 'worker-draining'], ['continue', 'worker-draining'],
     ['messages', 'worker-unavailable-before-input'], ['continue', 'worker-unavailable-before-input'],
+    ['messages', 'session-recovery-timeout'], ['continue', 'session-recovery-timeout'],
   ])('replays a proven pre-start refusal on %s (%s) and accepts the next command', async (path, reason) => {
     const h = setup();
     const url = '/api/coder/sessions/' + SESSION_ID + '/' + path;
     const body = { content: 'same message', client_msg_id: 'first-command', response_mode: 'json' };
     const failure = reason === 'worker-draining' ? new CoderWorkerDrainError(new Error('lost drain acknowledgement'))
+      : reason === 'session-recovery-timeout' ? new CoderWorkerBootError(new CoderWriterRecoveryTimeoutError('history stalled'))
       : new CoderWorkerBootError(new Error('thread exited before ready'));
     poolMock.runFresh.mockRejectedValueOnce(failure);
     async function expectRefusal(response: Response) {
       expect(response.status).toBe(200);
       if (path === 'messages') {
         expect(await response.json()).toMatchObject({ terminal: { event: 'error', data: {
-          reason, not_started: true, message: expect.stringContaining('worker'),
+          reason, not_started: true, message: expect.stringContaining(reason === 'session-recovery-timeout' ? 'history' : 'worker'),
         } } });
       } else {
         const stream = await response.text();

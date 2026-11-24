@@ -1,5 +1,5 @@
 import { lstat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import {
   asSessionId,
   type ProjectId,
@@ -127,7 +127,9 @@ export class SessionLocator {
         : join(canonicalOwner, '.mcp-indexer', 'session');
     await ensureDirectoryTreeNoLinks(canonicalOwner, expectedRoot);
     await assertExistingDirectory(expectedRoot, 'session root');
-    return expectedRoot;
+    // Keep locations identical to locate() when Windows realpath normalizes casing.
+    const registeredRoot = this.sessionRoot(scope);
+    return relative(registeredRoot, expectedRoot) === '' ? registeredRoot : expectedRoot;
   }
 
   async assertSafeLocation(location: SessionLocation, options: { readonly mustExist?: boolean } = {}): Promise<void> {

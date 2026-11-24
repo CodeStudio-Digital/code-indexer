@@ -855,10 +855,10 @@ const SessionRow = memo(function SessionRow({
         <span className="truncate">{s.title}</span>
       </button>
 
-      {/* Metadata and actions share a grid cell so buttons never cover the title. */}
+      {/* Let the controls receive pointer input in the shared grid cell. */}
       <div className="grid shrink-0 items-center justify-items-end">
         <span className={cn(
-          'col-start-1 row-start-1 flex items-center gap-1.5 text-[10px] tabular-nums text-muted-foreground',
+          'pointer-events-none col-start-1 row-start-1 flex items-center gap-1.5 text-[10px] tabular-nums text-muted-foreground',
           !selectMode && 'group-hover/session:opacity-0 group-focus-within/session:opacity-0 pointer-coarse:opacity-0',
         )} aria-hidden="true">
           {!selectMode && s.is_favorite && <Star className="size-2.5 fill-current text-yellow-600 dark:text-yellow-500" />}
@@ -866,7 +866,7 @@ const SessionRow = memo(function SessionRow({
           <span className="hidden @min-[340px]:inline">{updated}</span>
         </span>
         {!selectMode && (
-          <div className="pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-focus-within/session:pointer-events-auto group-focus-within/session:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
+          <div className="col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/session:opacity-100 group-focus-within/session:opacity-100 pointer-coarse:opacity-100">
             <button
               type="button"
               aria-label={s.is_favorite ? t('chat:sidebar.unfavorite') : t('chat:sidebar.favorite')}

@@ -39,6 +39,7 @@ import {
 } from '@mcp/company/services/subordinate/completion-handler.js';
 import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { wireSupervisorToRunner } from '@mcp/company/services/supervisor/wire-runner-events.js';
+import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
 import { tryAcquireResume, releaseResume } from '@mcp/company/services/subordinate/resume-guard.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
@@ -48,6 +49,8 @@ import {
 } from '@mcp/company/services/subordinate/role-runtime.js';
 
 export interface ResumeSubordinateDeps {
+  pendingSpawns?: {count:number};
+  concurrencyPolicy?: import('../../ConcurrencyPolicy.js').ConcurrencyPolicy;
   ctx: SessionContext;
   board: IBoardPoster;
   status: IAgentStatusUpdater;
@@ -86,13 +89,50 @@ export async function resumeSubordinate(
   attachments: CoderAttachment[] | undefined,
   thinking: boolean | undefined,
   deps: ResumeSubordinateDeps,
+  recover = false,
 ): Promise<ResumeResult> {
   if (!tryAcquireResume(agentRunId)) {
     throw new Error(
       `Agent run ${agentRunId} is already being resumed/reactivated — refusing concurrent resume`,
     );
   }
+  let reserved = false;
   try {
+    if (recover) {
+      const run = deps.ctx.companyFiles.getAgentRunSync(agentRunId);
+      if (!run || run.company_session_id !== deps.ctx.companySessionId || run.role === 'master') {
+        throw new Error(`Unknown subordinate ${agentRunId}`);
+      }
+      if (!['running', 'working', 'interrupted', 'error'].includes(run.status)) {
+        throw new Error(`Cannot recover agent in state ${run.status}`);
+      }
+      // The persisted transition must be visible to both completion and resume.
+      await deps.ctx.companyFiles.updateAgentRunStatus(agentRunId, 'interrupted', 'Runner interrupted, resuming the same agent');
+      const previous = deps.subordinates.get(agentRunId);
+      if (previous && deps.runningIds.has(agentRunId)) previous.runner.abort();
+    }
+    const previous = deps.subordinates.get(agentRunId);
+    if (previous && deps.runningIds.has(agentRunId)) {
+      const status = deps.ctx.companyFiles.getAgentRunSync(agentRunId)?.status;
+      if (!['paused', 'aborted', 'interrupted', 'error'].includes(status ?? '')) {
+        throw new Error(`Agent ${agentRunId} already has a running turn`);
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          previous.done.catch(() => undefined),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Previous runner is still stopping')), 10_000); }),
+        ]);
+      } finally { clearTimeout(timer); }
+      deps.runningIds.delete(agentRunId);
+    }
+    if (deps.pendingSpawns && deps.concurrencyPolicy && !deps.runningIds.has(agentRunId)) {
+      const limit = JSON.parse(deps.ctx.companyFiles.getSession()?.config_json || '{}').design_concurrency;
+      const check = deps.concurrencyPolicy.check(deps.runningIds.size + deps.pendingSpawns.count, limit);
+      if (!check.ok) throw new Error(check.message);
+      deps.pendingSpawns.count++;
+      reserved = true;
+    }
     return await resumeSubordinateInner(
       agentRunId,
       message,
@@ -102,6 +142,7 @@ export async function resumeSubordinate(
       deps,
     );
   } finally {
+    if (reserved) deps.pendingSpawns!.count--;
     releaseResume(agentRunId);
   }
 }
@@ -281,6 +322,7 @@ async function resumeSubordinateInner(
 
   let handle: Awaited<ReturnType<typeof runCoder>>;
   try {
+    await deps.status.publishStatus(agentRun.id, agentRun.role, 'running', { coderSessionId: agentRun.coder_session_id });
     handle = await runCoder({
         hostTools: getReadyDocsResearchTools(),
       session: { id: agentRun.coder_session_id },
@@ -288,6 +330,7 @@ async function resumeSubordinateInner(
       attachments,
       maxTurns: 50,
       profile: resumeTier,
+      ...(configuredRole?.readOnly && { agent: 'explore' }),
       memoryRetriever: memoryPorts?.memoryRetriever,
       runEndMemory: memoryPorts?.runEndMemory,
       companyContext,
@@ -299,6 +342,9 @@ async function resumeSubordinateInner(
       reasoningEffort: configuredRole?.reasoningEffort,
       initialPinnedTools: configuredRole?.initialTools,
       onRunnerReady: (runner) => {
+        getGlobalAgentSupervisor()?.registerSubordinate({
+          agentRunId: agentRun.id, companySessionId: ctx.companySessionId, role: agentRun.role,
+        }, true);
         wireSubordinateInterceptionsForRunner(runner, agentRun.id, agentRun.role, deps.wireDeps);
         installDocsDeepResearch(runner);
         supervisorUnsubscribe = wireSupervisorToRunner(runner, agentRun.id);
@@ -306,16 +352,15 @@ async function resumeSubordinateInner(
     } as RunCoderOptions & { companyPromptBlock: string });
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    deps.status.setStatus(agentRun.id, 'error', `Resume failed: ${detail}`);
+    await deps.status.publishStatus(agentRun.id, agentRun.role, 'error', { message: `Resume failed: ${detail}`, coderSessionId: agentRun.coder_session_id });
     deps.board.post('system', agentRun.id, 'message', `@${agentRun.role} resume FAILED: ${detail}`);
     deps.master.notify(
       `[SYSTEM] @${agentRun.role} (agent_run_id=${agentRun.id}) resume FAILED: ${detail}. ` +
-        `Use spawn_subordinate_agent for a fresh start.`,
+        `Use resume_subordinate with this agent_run_id to retry the same task.`,
     );
     throw e;
   }
 
-  deps.status.setStatus(agentRun.id, 'running');
   deps.runningIds.add(agentRun.id);
   deps.notifyIdleChanged();
 
@@ -340,9 +385,7 @@ async function resumeSubordinateInner(
     true,
     deps.completionDeps,
   );
-  handle.done.finally(() => {
-    try { supervisorUnsubscribe(); } catch { /* best-effort */ }
-  });
+  void handle.done.then(supervisorUnsubscribe, supervisorUnsubscribe);
 
   return {
     agentRunId: agentRun.id,

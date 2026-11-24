@@ -1,6 +1,9 @@
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { readClaudeCode } from '../claude-code.js';
+import { discoverClaudeCode, readClaudeCode } from '../claude-code.js';
 import { readCodex } from '../codex.js';
 import { detectExternalSessionSource, previewExternalSession } from '../registry.js';
 
@@ -14,6 +17,7 @@ describe('external session adapters', () => {
     });
 
     expect(document.messages).toHaveLength(4);
+    expect(document.candidate.title).toBe('Build the importer');
     expect(JSON.stringify(document.messages)).not.toContain('Abandoned fork');
     expect(JSON.stringify(document.messages)).not.toContain('private');
     expect(JSON.stringify(document.messages)).toContain('Build the importer');
@@ -24,6 +28,35 @@ describe('external session adapters', () => {
       expect.objectContaining({ code: 'malformed_jsonl_lines' }),
     ]));
     expect(previewExternalSession(document).reference.fingerprint).toHaveLength(64);
+  });
+
+  it('finds the cwd after title metadata and prefers the latest explicit title and canonical file', async () => {
+    const storage = await mkdtemp(join(tmpdir(), 'claude-import-'));
+    try {
+      const folder = join(storage, 'projects', 'G--Example');
+      await mkdir(folder, { recursive: true });
+      const sessionId = 'a44498a7-4acc-4b63-be15-d451fe3db952';
+      const cwd = 'G:/Example';
+      const source = join(folder, `${sessionId}.jsonl`);
+      const user = { type: 'user', sessionId, cwd, message: { role: 'user', content: 'Original prompt' } };
+      const transcript = [
+        { type: 'custom-title', sessionId, customTitle: 'Old name' },
+        user,
+        { type: 'progress', content: 'x'.repeat(300_000), sessionId },
+        { type: 'custom-title', sessionId, customTitle: 'Current title' },
+        { type: 'ai-title', sessionId, aiTitle: 'Generated title' },
+      ];
+      await writeFile(source, transcript.map((row) => JSON.stringify(row)).join('\n'));
+      await utimes(source, 1, 1);
+      await writeFile(join(folder, `${sessionId}-backup.jsonl`), JSON.stringify(user));
+      const [candidate, duplicate] = await discoverClaudeCode(storage);
+      expect(duplicate).toBeUndefined();
+      expect(candidate).toMatchObject({ title: 'Current title', cwd, source_path: source });
+      const preview = previewExternalSession(await readClaudeCode(candidate.reference));
+      expect(preview).toMatchObject({ title: candidate.title, cwd: candidate.cwd });
+    } finally {
+      await rm(storage, { recursive: true, force: true });
+    }
   });
 
   it('reads Codex response items without developer, reasoning, event duplicates or replacement history', async () => {
