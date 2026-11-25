@@ -31,7 +31,7 @@
       },
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "broadcast_to_roles",
@@ -103,7 +103,7 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "kanban_add_dependency",
@@ -279,8 +279,8 @@
       }
     ],
     "system": {
-      "length": 5543,
-      "sha256": "9585ba83a4ec799a8f05123c9f90f829358aa84b1f7f8f05ea359880635237be",
+      "length": 5519,
+      "sha256": "f5b9421b77b6f14d8bd931f80b49f74e21c10b630e39d48908a25abaf25cc6ba",
       "sections": [
         "# Role",
         "# Formatting",
@@ -360,7 +360,7 @@
       },
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "broadcast_to_roles",
@@ -432,7 +432,7 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "kanban_add_dependency",
@@ -608,8 +608,8 @@
       }
     ],
     "system": {
-      "length": 6506,
-      "sha256": "f530c9b50339031ec05deea8272346f87c572cce95afd31664116063792f96c3",
+      "length": 6482,
+      "sha256": "be31a337c7fbb2183aec86d92d869794938e9bc2bc52acfc3c353bceffe72fdf",
       "sections": [
         "# Role",
         "# Formatting",
@@ -673,11 +673,11 @@
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "find_tools",
@@ -697,11 +697,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "list_shared_files",
@@ -729,7 +729,7 @@
       },
       {
         "name": "post_to_board",
-        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+        "sha256": "0a5f033570b861e7bd2748c89c43a5e11ace12905fca4b6f47957ce6fcc728e4"
       },
       {
         "name": "rag_read_doc",
@@ -745,7 +745,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "read_shared_file",
@@ -797,8 +797,8 @@
       }
     ],
     "system": {
-      "length": 6480,
-      "sha256": "ce54df3538bf614aef2587db7e1a28aba2451a50e293ff9b71e64ea1b5bb406f",
+      "length": 6456,
+      "sha256": "de924864af59aa22c7613ac14fd5a3a2f14126acf7f7eb2662d18f9bf3087289",
       "sections": [
         "# Role",
         "# Formatting",
@@ -965,11 +965,11 @@
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "find_tools",
@@ -989,11 +989,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "list_shared_files",
@@ -1021,7 +1021,7 @@
       },
       {
         "name": "post_to_board",
-        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+        "sha256": "0a5f033570b861e7bd2748c89c43a5e11ace12905fca4b6f47957ce6fcc728e4"
       },
       {
         "name": "rag_read_doc",
@@ -1037,7 +1037,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "read_shared_file",
@@ -1089,8 +1089,8 @@
       }
     ],
     "system": {
-      "length": 6480,
-      "sha256": "ce54df3538bf614aef2587db7e1a28aba2451a50e293ff9b71e64ea1b5bb406f",
+      "length": 6456,
+      "sha256": "de924864af59aa22c7613ac14fd5a3a2f14126acf7f7eb2662d18f9bf3087289",
       "sections": [
         "# Role",
         "# Formatting",
@@ -1252,11 +1252,11 @@
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "find_tools",
@@ -1276,11 +1276,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "list_shared_files",
@@ -1308,7 +1308,7 @@
       },
       {
         "name": "post_to_board",
-        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+        "sha256": "0a5f033570b861e7bd2748c89c43a5e11ace12905fca4b6f47957ce6fcc728e4"
       },
       {
         "name": "read_board",
@@ -1316,7 +1316,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "read_shared_file",
@@ -1372,8 +1372,8 @@
       }
     ],
     "system": {
-      "length": 7597,
-      "sha256": "e6f68ff17564e4c45c7dc8e7a3ec8d089efaf065fef432af8c8c2d6694d6dde2",
+      "length": 7573,
+      "sha256": "4f2fc5965b9eb4f9d16b84b0de9147d4171e3505780fdfb51e85e969c6d5f79c",
       "sections": [
         "# Role",
         "# Formatting",
@@ -1534,7 +1534,7 @@
       },
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "code_exec",
@@ -1542,15 +1542,15 @@
       },
       {
         "name": "create_chat",
-        "sha256": "7cd92f3620c5f97c53152a8f84b4435cc32746bca724336bc4a4c7f7a8b45ec9"
+        "sha256": "30a99b11b7b2f36420665bb917168a321bc575c18ce33200e62f97327358d7da"
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "execute_tasks",
@@ -1574,11 +1574,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "mcp__get_file_skeleton",
@@ -1626,7 +1626,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "recall_conversation",
@@ -1658,8 +1658,8 @@
       }
     ],
     "system": {
-      "length": 7458,
-      "sha256": "4ba56eac9c8fb56c8e7faba3c065fd23a5bcaf82045520e1962e5ab2271ddd52",
+      "length": 7434,
+      "sha256": "75d4256c55ce58b8d31cddace2968642d76adf9233c1562efa95ee1cf28671e8",
       "sections": [
         "# Role",
         "# Formatting",
@@ -1796,7 +1796,7 @@
       },
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "code_exec",
@@ -1804,15 +1804,15 @@
       },
       {
         "name": "create_chat",
-        "sha256": "7cd92f3620c5f97c53152a8f84b4435cc32746bca724336bc4a4c7f7a8b45ec9"
+        "sha256": "30a99b11b7b2f36420665bb917168a321bc575c18ce33200e62f97327358d7da"
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "execute_tasks",
@@ -1836,11 +1836,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "mcp__get_file_skeleton",
@@ -1864,7 +1864,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "recall_conversation",
@@ -1896,8 +1896,8 @@
       }
     ],
     "system": {
-      "length": 6894,
-      "sha256": "851ac946122061f846038776dcd7022678ba375b1744bf3d69ecdffa19f1e41c",
+      "length": 6870,
+      "sha256": "30534d0da6f681cbcf92d214f009ea731cbe38e5083875d65ef7cd594621e723",
       "sections": [
         "# Role",
         "# Formatting",
@@ -2036,7 +2036,7 @@
     "tools": [
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "code_exec",
@@ -2060,11 +2060,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "mcp__get_file_skeleton",
@@ -2096,7 +2096,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "recall_conversation",
@@ -2116,8 +2116,8 @@
       }
     ],
     "system": {
-      "length": 6759,
-      "sha256": "9a7f128d77a9f767b793ea4cc88a7373bf26f8364505d1d8b7fd8340881ccf30",
+      "length": 6735,
+      "sha256": "834673a205cf914eb4315ce3069607a1f51bdf6d83bd990c9db58ce6a7ef2cf7",
       "sections": [
         "# Role",
         "# Formatting",
@@ -2264,7 +2264,7 @@
       },
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "code_exec",
@@ -2272,7 +2272,7 @@
       },
       {
         "name": "create_chat",
-        "sha256": "7cd92f3620c5f97c53152a8f84b4435cc32746bca724336bc4a4c7f7a8b45ec9"
+        "sha256": "30a99b11b7b2f36420665bb917168a321bc575c18ce33200e62f97327358d7da"
       },
       {
         "name": "decision_gate",
@@ -2280,11 +2280,11 @@
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "execute_tasks",
@@ -2300,11 +2300,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "mcp__get_file_skeleton",
@@ -2328,7 +2328,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "recall_conversation",
@@ -2364,8 +2364,8 @@
       }
     ],
     "system": {
-      "length": 7810,
-      "sha256": "0893217c48601bc0152d06605f1165561bd0e57d6d27ef5a985cd4c5e8716cbf",
+      "length": 7786,
+      "sha256": "c755b73463fbcf9fe8c9cf2d9cc5c26d1f03cb48c37088e17a30a130a716d91b",
       "sections": [
         "# Role",
         "# Formatting",
@@ -2508,7 +2508,7 @@
       },
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "code_exec",
@@ -2516,15 +2516,15 @@
       },
       {
         "name": "create_chat",
-        "sha256": "7cd92f3620c5f97c53152a8f84b4435cc32746bca724336bc4a4c7f7a8b45ec9"
+        "sha256": "30a99b11b7b2f36420665bb917168a321bc575c18ce33200e62f97327358d7da"
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "execute_tasks",
@@ -2548,11 +2548,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "mcp__get_file_skeleton",
@@ -2600,7 +2600,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "recall_conversation",
@@ -2632,8 +2632,8 @@
       }
     ],
     "system": {
-      "length": 6894,
-      "sha256": "851ac946122061f846038776dcd7022678ba375b1744bf3d69ecdffa19f1e41c",
+      "length": 6870,
+      "sha256": "30534d0da6f681cbcf92d214f009ea731cbe38e5083875d65ef7cd594621e723",
       "sections": [
         "# Role",
         "# Formatting",
@@ -2770,7 +2770,7 @@
       },
       {
         "name": "ask_user",
-        "sha256": "dea9406ee21570cabf2a8e20fb0a3a835d49ab09862c9fe069641b4fc34414a2"
+        "sha256": "0047aa45b4af11a6002a67710a538d31617b32069b85ce4eeeb8954a33566763"
       },
       {
         "name": "code_exec",
@@ -2778,15 +2778,15 @@
       },
       {
         "name": "create_chat",
-        "sha256": "7cd92f3620c5f97c53152a8f84b4435cc32746bca724336bc4a4c7f7a8b45ec9"
+        "sha256": "30a99b11b7b2f36420665bb917168a321bc575c18ce33200e62f97327358d7da"
       },
       {
         "name": "edit_file",
-        "sha256": "04ba7626946c5f8687f28e65b8861664df42b69bf65fd3d6599ad3a24dea8902"
+        "sha256": "6ac0672542b5507fb95a36df249fc6e93f10e41f0d734b4a6f52c94dff59bcc4"
       },
       {
         "name": "exec_command",
-        "sha256": "dbc6a58da50309923de5d0d6a44c915062c9cb346624d5a45e59883f9b276e67"
+        "sha256": "36f75add50e5392eb0627d72c619ecf1c98fc0f35276e9cc14ac2bb9fdf8d9bd"
       },
       {
         "name": "execute_tasks",
@@ -2810,11 +2810,11 @@
       },
       {
         "name": "glob",
-        "sha256": "71cb657c9e66f4289934506e3fb1cd6d9bec7395590dd0edce184f87c92376f0"
+        "sha256": "477c1347a9e16782f7844bf213643e3908bd8053500386bd943e2d95420089bd"
       },
       {
         "name": "list_directory",
-        "sha256": "ea067a39146396565a1c9ef9cd6120daa813f017c52a91a979227df706b8ddd9"
+        "sha256": "a67642ed181f632932485f50981418f32faa2fa08dfa8259c0cb1662691c7afb"
       },
       {
         "name": "mcp__get_file_skeleton",
@@ -2838,7 +2838,7 @@
       },
       {
         "name": "read_file",
-        "sha256": "8986a9a0abd5bed6f1ef1fedae0eafc1279a494605d959442c805c7f91a04790"
+        "sha256": "1ac022b3c46b6f396bde986ee6b8339425c59ef51bedc2b5857458cad8d2e95c"
       },
       {
         "name": "recall_conversation",
@@ -2874,8 +2874,8 @@
       }
     ],
     "system": {
-      "length": 8026,
-      "sha256": "66e79eb1a7cf8e503d2082c4a77cd11afa515fc11bea7f97f9d30192fcea89e1",
+      "length": 8002,
+      "sha256": "e6ad5440b30813ce0a9a2977b8e424af919ccb1ed65fd50ee7a01964e184ec0b",
       "sections": [
         "# Role",
         "# Formatting",
