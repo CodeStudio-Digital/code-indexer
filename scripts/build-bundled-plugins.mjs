@@ -61,7 +61,8 @@ function addInputs(digest, files, directories) {
 
 const sharedFingerprint = addInputs(createHash('sha256'),
   ['pnpm-lock.yaml', 'scripts/build-bundled-plugins.mjs', 'scripts/js-debug-adapter-artifact.mjs'],
-  ['packages/plugin-sdk/src', 'packages/provider-sdk/src', 'packages/provider-runtime/src', 'packages/provider-engine/src/specs']);
+  ['packages/plugin-sdk/src', 'packages/provider-sdk/src', 'packages/provider-runtime/src', 'packages/provider-engine/src/specs',
+    'packages/shared/src/providers']);
 const pluginFingerprints = Object.fromEntries(plugins.map(ns => {
   const base = `extensions/${ns}`;
   const files = [`${base}/plugin.json`, `${base}/THIRD_PARTY_NOTICES.md`];
