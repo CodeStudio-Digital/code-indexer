@@ -541,6 +541,8 @@ export interface BridgeCallbacks {
    * (when the HTTP layer falls back to a fresh run).
    */
   hasPendingMessages?: () => boolean;
+  /** No further input can be consumed once asynchronous terminal cleanup starts. */
+  closeInputQueue?: () => void;
   /**
    * Per-turn telemetry persistence — wraps the pure
    * `core/runner/telemetry/persist-turn.ts` helper. Returns the written turn metric UUID so the

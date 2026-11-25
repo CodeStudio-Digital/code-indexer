@@ -108,6 +108,7 @@ export interface RunnerOptions {
   systemPrompt: string;
   /** Recompose the session prompt when a review changes the active agent mid-run. */
   systemPromptForAgent?: (agent: import('../../agents/index.js').AgentDefinition) => string;
+  systemPromptForPermissionMode?: (mode: 'ask' | 'auto' | 'unrestricted') => string;
   toolContext: ToolContext;
   initialMessages?: AgentMessage[];
   /** Omitted/zero means the top-level run has no turn limit. */

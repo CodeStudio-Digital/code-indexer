@@ -228,7 +228,7 @@ class MutationFenceAuthority implements ToolMutationFence {
           `${invocation.toolName} attempted an unbound ${effect.kind} resource`,
         );
       }
-      if (physicalEffect.kind === 'filesystem' && physicalEffect.resource) {
+      if (physicalEffect.kind === 'filesystem' && physicalEffect.resource && !this.options.unrestrictedFilesystemAccess?.()) {
         const candidate = normalizedAbsolute(physicalEffect.resource);
         const delegated = filesystemRoots(this.options).some((root) => {
           if (root.access !== 'write') return false;

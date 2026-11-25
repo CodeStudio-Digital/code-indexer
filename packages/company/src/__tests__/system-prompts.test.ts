@@ -6,7 +6,8 @@ describe('Company autonomous lifecycle contract', () => {
     const prompt = buildMasterCompanyBlock({ roster: [], projects: [] });
     expect(prompt).not.toContain('Every phase ends with');
     expect(prompt).not.toContain('only after user confirmation');
-    expect(prompt).toContain('wait_for_subordinates');
+    expect(prompt).not.toContain('wait_for_subordinates');
+    expect(prompt).toContain('wakes you automatically in this chat');
     expect(prompt).toContain('configured autonomy limits and approval policy');
     expect(prompt).toContain('reconcile the original result first');
     expect(prompt).toContain('docs_list/docs_search');

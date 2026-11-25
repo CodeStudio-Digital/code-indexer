@@ -7,7 +7,7 @@
  *
  * The policy is advisory: tryAcquire returns a result object; the caller
  * (orchestrator) decides whether to reject with an actionable error so
- * the master can call wait_for_subordinates instead.
+ * the master can resume dispatch when a slot opens.
  */
 
 export interface ConcurrencyOpts {
@@ -48,8 +48,7 @@ export class ConcurrencyPolicy {
         max,
         message:
           `Concurrent subordinate cap reached (${currentRunning}/${max}). ` +
-          `Call wait_for_subordinates to let at least one finish before spawning ` +
-          `another, or abort a stuck subordinate with resume_subordinate.`,
+          `The Company will notify you when a specialist finishes. Dispatch the remaining work then.`,
       };
     }
     return { ok: true, current: currentRunning, max };

@@ -1,26 +1,5 @@
-/**
- * runAgentWaitLoop — the single event-driven wait mechanism shared by the
- * two "wait for agents" tools, which previously duplicated this loop
- * byte-for-byte (and therefore the same deadlock):
- *
- *   - `wait_for_subordinates` (master-only) — waits for the WHOLE running
- *     fleet. Pass `targetIds: null`.
- *   - `wait_agents` (cross-tier) — waits for a FIXED set of target agents.
- *     Pass `targetIds: Set<agentRunId>`.
- *
- * The tools stay thin wrappers: they build the orchestrator + options, call
- * this loop, and format the structured {@link AgentWaitOutcome} with their
- * own copy text. All the tricky concurrency (listener (re)subscription,
- * safety polling, master-vs-subordinate gating) lives here, once.
- *
- * Deadlock fix (the reason this was extracted): the loop sleeps on an
- * `attention` signal, but the listener is torn down + re-subscribed every
- * iteration. If the LAST agent's `finished` signal fires in that gap it is
- * lost, `runningCount` is already 0, and the master would sleep until the
- * 30-min deadline. The `setTimeout` is capped at {@link SAFETY_POLL_MS} so
- * the loop re-checks the done-condition within ~2s regardless — without
- * running the LLM. Event-driven wake still fires instantly via the listener.
- */
+/** Event-driven wait for an explicitly requested synchronous assignment or set of agents.
+ * Recheck state after bounded sleeps to cover events that raced listener registration. */
 import type {
   AttentionEvent,
   AttentionListener,
@@ -75,7 +54,7 @@ export interface AgentWaitLoopOpts {
   now?: () => number;
   /**
    * When set, the loop heartbeats this agent's supervisor record on every
-   * poll. A `wait_for_subordinates` / `wait_agents` call parks the caller in a
+   * poll. An explicit synchronous assignment parks the caller in a
    * single long `AWAITING_TOOL` (up to 30 min) that emits no `tool_progress`,
    * so without this the supervisor would flag a perfectly healthy waiter as
    * `STUCK_TOOL`. No-op when the supervisor is disabled or the agent isn't

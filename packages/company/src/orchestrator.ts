@@ -497,7 +497,7 @@ export class CompanyOrchestrator implements CompanyOrchestratorPort {
   isSubordinateRunning(agentRunId: string): boolean { return this.subordinates.isRunning(agentRunId); }
   /**
    * True when the master runner has buffered user messages not yet consumed.
-   * `wait_for_subordinates` level-triggers off this: if a subordinate
+   * An explicit assignment wait level-triggers off this: if a subordinate
    * notification landed while the master was mid-turn (the edge signal was
    * lost because no listener was subscribed), the master returns from the
    * wait to drain its queue instead of sleeping until the next signal.

@@ -455,7 +455,7 @@
   "toolbar.permissionMode.unrestricted": "Unrestricted",
   "toolbar.permissionModeTip.ask": "every write/execute/admin tool pauses and asks for your approval.",
   "toolbar.permissionModeTip.auto": "file edits run free; shell, git, admin actions and database writes ask for approval.",
-  "toolbar.permissionModeTip.unrestricted": "new actions run without approval, even when an older outcome is pending. Exact replay of an uncertain action and database writes still require specific authorization.",
+  "toolbar.permissionModeTip.unrestricted": "In local sessions, absolute paths reach folders available to your operating system account. New actions run without approval. Exact replay of an uncertain action and database writes require specific authorization.",
   "toolbar.permissionModeCycle": "Click to cycle.",
   "filesystemRoots.title": "External folders",
   "filesystemRoots.description": "Authorize specific directories for this session. Read-only is the safer default; write access must be granted explicitly.",

@@ -46,11 +46,17 @@ describe('provider model reasoning hydration', () => {
     expect(hydrateModel(rawModel({})).can_reason).toBe(false);
   });
 
-  it.each(['', 'coding', 'normal'])('fills the effort levels for a saved GLM-5.3 row in mode %j', (mode) => {
+  it.each([
+    ['glm-5.3', ''],
+    ['glm-5.3', 'coding'],
+    ['glm-5.3', 'normal'],
+    ['glm-5.4', ''],
+    ['glm-5.4', 'coding'],
+  ])('fills the effort levels for a saved %s row in mode %j', (modelId: string, mode: string) => {
     const model = hydrateModel(rawModel({
       provider_kind: 'zai',
       provider_id: 'my-coding-plan',
-      model_id: 'glm-5.3',
+      model_id: modelId,
       mode,
       default_max_tokens: 24_000,
     }));

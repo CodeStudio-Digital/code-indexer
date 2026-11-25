@@ -93,7 +93,7 @@ export const GIT_BRANCH_DESC =
 // ---------- shell (src/core/coder/tools/shell.ts) ----------
 
 export const RUN_COMMAND_DESC =
-  'Execute a shell command in the project root. Default timeout 120s. Returns stdout, stderr, exit code.\n' +
+  'Execute a shell command. The project root is the default working directory. Default timeout 120s. Returns stdout, stderr, exit code.\n' +
   "USE: running tests, builds, linters, formatters, type checks — the kinds of things that verify your work.\n" +
   "USE: shell one-liners for which there is no dedicated tool (tar, curl against localhost, etc.).\n" +
   "USE: for multi-line code (Python, Node, etc.), pass command='python -' (or 'node -', 'bash') with the script in the `stdin` parameter. Avoid embedding code via -c \"...\" or here-strings — quoting rules differ across cmd / bash / PowerShell / sh-in-container, and shells like cmd.exe don't understand PowerShell '@'...'@' or bash '$'...''. Example: { command: \"python -\", stdin: \"import json\\nprint(json.dumps({'ok': True}))\" }.\n" +

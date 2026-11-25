@@ -161,6 +161,7 @@ export async function resumeMaster(
   if (deps.state.hasHandle) throw new Error('Master already started');
 
   const ctx = deps.ctx;
+  const stopped = () => ctx.isAborted || ctx.isBusEnded || ctx.isFinalized;
   const fsSessionStore = ctx.companyFiles.sessionStore;
   const agentRuns = await ctx.companyFiles.listAgentRuns();
   const masterId = ctx.companyFiles.getSession().master_session_id;
@@ -232,6 +233,8 @@ export async function resumeMaster(
     });
   }
 
+  if (stopped()) throw new Error('Company session stopped during Master resume');
+
   // ── Fast path (awaited inside the RPC): cheap DB writes + board post ──
   deps.state.setAgentRunId(masterRun.id);
   deps.state.setRuntimeSnapshot({
@@ -280,6 +283,7 @@ export async function resumeMaster(
       masterSkills: opts.skills,
     });
 
+    if (stopped()) return;
     deps.state.setCompanyContext(inputs.companyContext);
     deps.state.setPromptBlock(inputs.promptBlock);
     deps.state.setLastUserAttachments(opts.attachments ?? []);
@@ -300,13 +304,21 @@ export async function resumeMaster(
         thinkingBudgetTokens: opts.thinkingBudgetTokens,
         reasoningEffort: opts.reasoningEffort,
         initialPinnedTools: opts.initialTools,
-        onRunnerReady: (runner) => deps.wireRunner(runner, masterRun.id),
+        onRunnerReady: (runner) => {
+          if (stopped()) runner.abort();
+          else deps.wireRunner(runner, masterRun.id);
+        },
       } as RunCoderOptions & { companyPromptBlock: string }),
       masterRun.id,
       opts.fallbackModels ?? [],
       { ctx, board: deps.board },
     );
 
+    if (stopped()) {
+      handle.runner.abort();
+      await handle.done.catch(() => undefined);
+      return;
+    }
     deps.state.setHandle(handle);
     deps.state.setRunnerExited(false);
     deps.attachCompletion(handle, masterRun.id);
@@ -324,6 +336,7 @@ export async function resumeMaster(
 
   const promise = doResume()
     .catch(async (e) => {
+      if (stopped()) return;
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[company s=${ctx.companySessionId}] master resume background task failed:`, msg);
       // Surface as a board message instead of an unhandled rejection — the

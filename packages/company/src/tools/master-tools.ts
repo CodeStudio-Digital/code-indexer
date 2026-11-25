@@ -38,7 +38,6 @@ export function buildMasterTools(
 ): CoderTool[] {
   return [
     spawnSubordinateAgent(orchestrator, allowCompanyKanban),
-    waitForSubordinates(orchestrator),
     resumeSubordinate(orchestrator),
     approveSubordinatePlan(orchestrator),
     // C4 — batch companion: resolve N pending plans in one master turn.
@@ -50,8 +49,7 @@ export function buildMasterTools(
     listCompanyProjects(orchestrator),
     forwardToAgent(orchestrator),
     finalizeSubordinates(orchestrator),
-    listContainers(orchestrator),
-    readContainerLogs(orchestrator),
+    ...(containerBindings(orchestrator).length ? [listContainers(orchestrator), readContainerLogs(orchestrator)] : []),
     respondToInbox(orchestrator),
     recommendRole(orchestrator),
     broadcastToRoles(orchestrator),
@@ -89,7 +87,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator, allowCompanyKa
       tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Tool tier for the agent. IGNORED for template-locked roles (template tier wins). Default for untemplated: navigate.' },
       skills: { type: 'array', items: { type: 'string' }, description: 'Optional skill IDs. IGNORED for template-locked roles (template skills win).' },
       kanban_card_id: { type: 'string', description: 'Optional Kanban card UUID. When provided, the card\'s full context (description, checklist, comments) is prepended to the task, the agent is auto-assigned to the card, and the card moves to in_progress.' },
-      wait: { type: 'boolean', description: 'If true, block until this one subordinate completes. This serializes later tool calls; for parallel work spawn every role with false, then call wait_for_subordinates once. Default: false.' },
+      wait: { type: 'boolean', description: 'Default false. The Company delivers the result and wakes the Master automatically. Set true only for an explicitly synchronous assignment.' },
       forward_user_attachments: {
         type: 'boolean',
         description: 'When true, includes the images the user attached to their most recent message (e.g. design inspiration, screenshots) so the subordinate sees them natively. Set this whenever the user shared a visual that informs the task.',
@@ -104,7 +102,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator, allowCompanyKa
 
   return {
     name: 'spawn_subordinate_agent',
-    description: 'Delegate a task to a subordinate agent. The subordinate runs as a full coder session with write access to the role\'s configured project scope. The task MUST contain synthesized findings (specific relative paths, functions, changes), never a raw user-request copy. Omit project_id for bound roles. Parallel fan-out: spawn every independent role with wait=false, then call wait_for_subordinates once; wait=true is only for one blocking task.',
+    description: 'Delegate a task to a subordinate agent in its configured project scope. Include synthesized findings such as paths, functions and required changes. Omit project_id for bound roles. Dispatch independent roles without waiting. The Company wakes you on decisions, failures and results, including after your turn ends.',
     parameters,
     source: 'native',
     // `wait=true` has its own 30-minute deadline below. Keep the runner's
@@ -197,155 +195,6 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator, allowCompanyKa
         });
       } catch (e) {
         return err(`Failed to spawn subordinate: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    },
-  };
-}
-
-// ─── wait_for_subordinates ─────────────────────────────────────
-
-/** Statuses that mean a subordinate ended in a non-clean state: the master
- *  must pick a recovery action (retry / discard) instead of treating it done. */
-const FAILED_SUB_STATUSES = new Set<string>(['error', 'aborted', 'interrupted', 'blocked']);
-
-/**
- * Render the live subordinate roster, calling out failed runs with the recovery
- * tool to use. Keeps failures from hiding inside a flat status list — shared by
- * the soft-timeout continuation and the all-done summary.
- */
-export function summarizeSubordinates(orchestrator: CompanyOrchestrator): string {
-  const subs = orchestrator.listSubordinates();
-  const latestByRole = new Map<string, { agentRunId: string; status: string; order: number }>();
-  subs.forEach((s, index) => {
-    const order = typeof s.seq === 'number' ? s.seq : index;
-    const current = latestByRole.get(s.role);
-    if (!current || order > current.order) {
-      latestByRole.set(s.role, { agentRunId: s.agentRunId, status: s.status, order });
-    }
-  });
-  const isSupersededFailure = (s: (typeof subs)[number], index: number): boolean => {
-    if (!FAILED_SUB_STATUSES.has(s.status)) return false;
-    const latest = latestByRole.get(s.role);
-    const order = typeof s.seq === 'number' ? s.seq : index;
-    return Boolean(
-      latest
-      && latest.agentRunId !== s.agentRunId
-      && latest.order > order
-      && !FAILED_SUB_STATUSES.has(latest.status),
-    );
-  };
-  const lines = subs.map((s, index) => {
-    const latest = latestByRole.get(s.role);
-    const superseded = isSupersededFailure(s, index);
-    const hint = superseded
-      ? ` (superseded by successful run=${latest?.agentRunId})`
-      : FAILED_SUB_STATUSES.has(s.status)
-        ? ' ⚠ recover with resume_subordinate (retry) or abort_subordinate_agent (discard)'
-      : '';
-    return `  - ${s.role} (run=${s.agentRunId}): ${s.status}${hint}`;
-  });
-  const failedCount = subs.filter((s, index) =>
-    FAILED_SUB_STATUSES.has(s.status) && !isSupersededFailure(s, index),
-  ).length;
-  const header =
-    failedCount > 0
-      ? `${failedCount} subordinate(s) ended in a failed state — review before synthesizing:`
-      : 'All subordinates finished:';
-  return `${header}\n${lines.join('\n')}`;
-}
-
-function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
-  return {
-    name: 'wait_for_subordinates',
-    description:
-      'Block your session until ALL currently-running subordinates complete. ' +
-      'ALWAYS call this after spawning subordinates with wait=false — otherwise your session ' +
-      'closes before their results arrive. Returns when all agents are done.',
-    parameters: {
-      type: 'object',
-      properties: {
-        timeout_minutes: {
-          type: 'number',
-          description: 'Max minutes to wait before giving up (default: 30)',
-        },
-      },
-      required: [],
-    },
-    source: 'native',
-    // Event-driven, idempotent poll-wait with its OWN internal deadline
-    // (timeout_minutes, default 30). Like `wait_agents`, it must opt OUT of
-    // the runner's 5-min NORMAL timeout — otherwise the runner kills the wait
-    // at 300000ms while subordinates are still running healthily, and the
-    // master gets a false failure. Re-calling it just reconciles live state.
-    repeatable: true,
-    timeoutMs: Infinity,
-    handler: async (args, ctx) => {
-      const timeoutMs = ((args.timeout_minutes as number | undefined) ?? 30) * 60 * 1000;
-      const deadline = Date.now() + timeoutMs;
-
-      if (!orchestrator.hasRunningSubordinates()) {
-        return ok('No subordinates currently running — all done.');
-      }
-
-      // Shared event-driven wait mechanism (see agent-wait-loop.ts). `targetIds:
-      // null` = wait for the whole running fleet. The loop's safety poll fixes
-      // the deadlock where the LAST subordinate's `finished` signal was lost.
-      const outcome = await runAgentWaitLoop(orchestrator, {
-        signal: ctx.signal,
-        targetIds: null,
-        isMaster: true,
-        deadlineMs: deadline,
-        // Heartbeat the master's supervisor record so a long, healthy wait
-        // isn't misread as a stuck tool (safe master-supervisor wiring).
-        heartbeatAgentRunId: orchestrator.getMasterAgentRunId() ?? undefined,
-      });
-      switch (outcome.kind) {
-        case 'aborted':
-          return okStructured({ schemaVersion: 1, reason: 'aborted', items: [], cursor: null });
-        case 'pending_messages':
-          return ok(
-            'You have queued message(s) to read — handle them now, then call ' +
-            'wait_for_subordinates again to keep waiting for the rest.',
-          );
-        case 'message':
-          return ok(
-            outcome.via === 'user_message'
-              ? 'The human sent you a message while you were waiting — it is already ' +
-                'in your message queue. Read it next and respond now. Subordinates are ' +
-                'still running: call wait_for_subordinates again after you reply to keep ' +
-                'waiting for them.'
-              : 'A new message arrived in your queue while you were waiting — read it ' +
-                'next and act on it now. Subordinates are still running: call ' +
-                'wait_for_subordinates again after you respond to keep waiting for them.',
-          );
-        case 'attention': {
-          const e = outcome.event;
-          return ok(
-            `Subordinate @${e.role} (run=${e.agentRunId}) needs your attention: posted a ${e.kind}. ` +
-            `The notification with full details was already pushed to your message queue — read it next and respond with ` +
-            `${e.kind === 'question' ? 'answer_subordinate_question' : e.kind === 'plan' ? 'approve_subordinate_plan' : 'approve_subordinate_tasks'}. ` +
-            `Call wait_for_subordinates again after you respond to keep waiting for the others.`,
-          );
-        }
-        case 'deadline': {
-          // Soft continuation, NOT an error: subordinates are still running
-          // healthily — only OUR internal wait window elapsed.
-          const stillRunning = orchestrator
-            .listSubordinates()
-            .filter((s) => s.status === 'running')
-            .map((s) => s.role)
-            .join(', ');
-          return ok(
-            `Still running after ${args.timeout_minutes ?? 30}min (this is not a failure): ${stillRunning}. ` +
-            `Call wait_for_subordinates again to keep waiting, or list_subordinates / abort_subordinate_agent to intervene.`,
-          );
-        }
-        case 'all_done':
-        default:
-          return ok(
-            `${summarizeSubordinates(orchestrator)}\n` +
-            `Check the board for their deliverables, then synthesize results.`,
-          );
       }
     },
   };
@@ -770,6 +619,12 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
 
 // ─── list_containers ───────────────────────────────────────────
 
+function containerBindings(orchestrator: CompanyOrchestrator) {
+  const primary = orchestrator.getSandboxBinding?.();
+  const services = orchestrator.sandboxService?.listServiceBindings?.() ?? [];
+  return primary ? [{ serviceId: primary.serviceId ?? 'main', binding: primary }, ...services] : services;
+}
+
 function listContainers(orchestrator: CompanyOrchestrator): CoderTool {
   return {
     name: 'list_containers',
@@ -786,11 +641,7 @@ function listContainers(orchestrator: CompanyOrchestrator): CoderTool {
     },
     source: 'native',
     handler: async () => {
-      const primary = orchestrator.getSandboxBinding();
-      const services = orchestrator.sandboxService.listServiceBindings();
-      const entries: Array<{ serviceId: string; binding: import('@mcp/company/types.js').SandboxBinding }> = [];
-      if (primary) entries.push({ serviceId: primary.serviceId ?? 'main', binding: primary });
-      for (const s of services) entries.push({ serviceId: s.serviceId, binding: s.binding });
+      const entries = containerBindings(orchestrator);
 
       if (entries.length === 0) {
         return ok('No sandbox is active for this session.');
@@ -1025,10 +876,10 @@ function readContainerLogs(orchestrator: CompanyOrchestrator): CoderTool {
         2000,
         Math.max(1, Number.isFinite(rawTail as number) ? (rawTail as number) : 200),
       );
-      const binding =
-        serviceId === 'main' || serviceId === ''
-          ? orchestrator.getSandboxBinding()
-          : orchestrator.getSandboxServiceBinding(serviceId);
+      const primary = orchestrator.getSandboxBinding();
+      const binding = !serviceId ? primary
+        : primary && (serviceId === 'main' || serviceId === primary.serviceId) ? primary
+        : orchestrator.getSandboxServiceBinding(serviceId);
       if (!binding) {
         return err(
           `No container for service_id '${serviceId}'. Use list_containers to see what's available.`,

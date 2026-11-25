@@ -12,6 +12,7 @@ import { defaultLocalFilesystemPort } from '@mcp/code-agent/ports/filesystem-por
 import { defaultLocalShellPort } from '@mcp/code-agent/ports/shell-port.js';
 import { toolSettlementNotifier } from './tool-settlement.js';
 import { asAbortSignal } from './abort-signal.js';
+import { WorkspaceOutcomePendingError } from '@mcp/company/services/workspace-coordinator.js';
 import { runWithSnapshotInvocation } from '../ports/snapshot-invocation.js';
 import { beginInvocation, finishInvocation } from './invocation-evidence.js';
 import { createToolOutcomeScope } from './tool-outcome-observer.js';
@@ -328,6 +329,16 @@ export class ToolRegistry {
       return await saveToolResultImages(result, name, invocationContext.toolOutputStore);
     } catch (e) {
       notify?.({ isError: true });
+      if (!execution.dispatched && e instanceof WorkspaceOutcomePendingError) {
+        const operations = e.owners.map(owner => `${owner.toolName} (session ${owner.sessionId})`).join(', ');
+        return {
+          content: `Project write was not started. An earlier operation awaits review: ${operations}. ` +
+            'Inspect the operation in the Company workspace panel. You can still coordinate agents and update the board.',
+          isError: true,
+          error: { code: 'WORKSPACE_OUTCOME_PENDING', kind: 'conflict', retryable: false,
+            suggestedAction: 'Review the outstanding workspace operation before requesting another project write.' },
+        };
+      }
       if (isUncertainToolOutcomeError(e)) {
         ctx.toolCallLedger?.markOutcomeUnknown(name);
         return unknownToolOutcome(e.message);

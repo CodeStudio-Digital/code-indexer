@@ -616,7 +616,7 @@
   "agentModal.noMessages": "No messages yet for this session.",
   "masterBanner.errorTitle": "Master ended with error",
   "masterBanner.unexpectedTitle": "Master ended unexpectedly",
-  "masterBanner.finishedTitle": "Master finished",
+  "masterBanner.finishedTitle": "Master turn ended",
   "masterBanner.unexpectedHint": "Send a message to resume.",
   "masterBanner.finishedHint": "Send a follow-up to start a new turn.",
   "sessionStalled.title": "Session stalled",

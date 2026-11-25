@@ -112,7 +112,6 @@ export const MASTER_ALLOWED_MCP_SUFFIXES: ReadonlySet<string> = new Set([
 const COMPANY_TOOL_PREFIXES = [
   'preview_',
   'spawn_subordinate',
-  'wait_for_subordinates',
   'resume_subordinate',
   'approve_subordinate',
   'answer_subordinate',

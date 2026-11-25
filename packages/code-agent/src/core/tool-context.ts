@@ -60,6 +60,8 @@ export interface ToolContextServices {
     rootPath: string;
     access: 'read' | 'write';
   }>;
+  /** Reads the current permission mode of a local host session. */
+  unrestrictedFilesystemAccess?: () => boolean;
   /** Persist and activate one user-approved external root during a live run. */
   authorizeFilesystemRoot?: (
     rootPath: string,

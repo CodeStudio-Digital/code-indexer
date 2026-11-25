@@ -351,7 +351,7 @@ function resolveWorkdir(
   if (typeof raw !== 'string' || raw.length === 0) return { ok: true, cwd: ctx.cwd };
   const resolved = resolveWorkspacePath(raw, ctx, 'read');
   if (!resolved.ok) return resolved;
-  if (resolved.external) {
+  if (resolved.external && !ctx.unrestrictedFilesystemAccess?.()) {
     return {
       ok: false,
       reason:
@@ -619,7 +619,7 @@ export const execCommand: CoderTool = {
       },
       workdir: {
         type: 'string',
-        description: 'Working directory. Relative paths resolve against the primary project; in a global session use "<project-slug>/subdir".',
+        description: 'Working directory relative to the primary project. Use "<project-slug>/subdir" in a global session. Unrestricted local sessions accept absolute working directories.',
       },
       tty: {
         type: 'boolean',

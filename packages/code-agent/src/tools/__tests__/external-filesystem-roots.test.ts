@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   mkdtempSync,
   readFileSync,
@@ -15,6 +15,7 @@ import { globTool } from '../glob.js';
 import { shellTools } from '../shell.js';
 
 const readFile = fsTools.find((tool) => tool.name === 'read_file')!;
+const listDirectory = fsTools.find((tool) => tool.name === 'list_directory')!;
 const writeFile = fsTools.find((tool) => tool.name === 'write_file')!;
 const runCommand = shellTools.find((tool) => tool.name === 'run_command')!;
 
@@ -111,5 +112,31 @@ describe('authorized external filesystem roots', () => {
     const result = await runCommand.handler({ cwd: externalRoot, command: 'dir' }, ctx('write'));
     expect(result.isError).toBe(true);
     expect(result.content).toContain('local shell execution stays project-scoped');
+  });
+
+  it('lists, reads and writes outside the project only while local host access is enabled', async () => {
+    let enabled = true;
+    const context = { ...ctx('read'), unrestrictedFilesystemAccess: () => enabled };
+    const target = join(outsideRoot, 'secret.txt');
+    const created = join(outsideRoot, 'created.txt');
+    expect((await listDirectory.handler({ path: outsideRoot }, context)).content).toContain('secret.txt');
+    expect((await readFile.handler({ path: target }, context)).content).toContain('not authorized');
+    expect((await writeFile.handler({ path: created, content: 'created' }, context)).isError).toBeFalsy();
+    expect(readFileSync(created, 'utf8')).toBe('created');
+    enabled = false;
+    expect((await readFile.handler({ path: target }, context)).isError).toBe(true);
+    expect((await writeFile.handler({ path: join(outsideRoot, 'blocked.txt'), content: 'blocked' }, context)).isError).toBe(true);
+  });
+
+  it('uses an external command working directory with unrestricted local access', async () => {
+    const exec = vi.fn(async () => ({ stdout: 'external cwd', stderr: '', exitCode: 0, timedOut: false }));
+    const context = {
+      ...ctx('read'),
+      unrestrictedFilesystemAccess: () => true,
+      ports: { shell: { exec } },
+    } as unknown as ToolContext;
+    const result = await runCommand.handler({ cwd: outsideRoot, command: 'dir' }, context);
+    expect(result.isError).toBeFalsy();
+    expect(exec).toHaveBeenCalledWith('dir', expect.objectContaining({ cwd: outsideRoot }));
   });
 });

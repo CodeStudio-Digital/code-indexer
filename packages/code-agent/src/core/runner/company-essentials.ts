@@ -50,7 +50,6 @@ export function isEssentialCompanyTool(name: string, isMaster: boolean): boolean
       name === 'resume_subordinate' ||
       name === 'list_subordinates' ||
       name === 'list_company_projects' ||
-      name === 'wait_for_subordinates' ||
       name === 'abort_subordinate_agent' ||
       name === 'finalize_subordinates' ||
       name === 'approve_subordinate_plan' ||

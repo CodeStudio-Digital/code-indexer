@@ -616,7 +616,7 @@
   "agentModal.noMessages": "Nenhuma mensagem ainda nessa sessão.",
   "masterBanner.errorTitle": "Master terminou com erro",
   "masterBanner.unexpectedTitle": "Master parou inesperadamente",
-  "masterBanner.finishedTitle": "Master finalizou",
+  "masterBanner.finishedTitle": "Rodada do Master encerrada",
   "masterBanner.unexpectedHint": "Envie uma mensagem para retomar.",
   "masterBanner.finishedHint": "Envie uma mensagem para iniciar uma nova rodada.",
   "sessionStalled.title": "Sessão parada",

@@ -59,10 +59,7 @@ export class RuntimeDecisionNudger {
         const key = `a:${r.id}:${kind}`;
         if (this.recentlyNudged(key, now)) continue;
         this.recordNudge(key, now);
-        // NO LLM, NO re-push: the original notification is still buffered in
-        // pendingUserMessages. Re-emit the wake signal (and defensively break a
-        // waitForUserInput, mirroring HumanInTheLoop's original post).
-        this.deps.master.handle?.runner.interruptWait({ kind, agentRunId: r.id, role: r.role });
+        // The original notice is queued. Wake an optional agent wait without settling human input.
         this.deps.attention.signal({ kind, agentRunId: r.id, role: r.role });
         this.publishNudge({ case: 'decision', agentRunId: r.id, role: r.role, kind, ageMs: now - parsePersistedTimestamp(r.updated_at) });
         console.log(`[company s=${sessionId}] master nudge (decision): re-woke for run=${r.id} kind=${kind}`);

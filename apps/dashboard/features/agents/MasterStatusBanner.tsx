@@ -18,7 +18,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, CheckCircle2, X } from 'lucide-react';
+import { AlertCircle, MessageSquare, X } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { formatClock } from '../../lib/datetime.js';
 
@@ -57,7 +57,7 @@ export function MasterStatusBanner({ endedAt, unexpected, errorDetail }: MasterS
   const isUnexpected = unexpected && !isError;
   const variant = isError ? 'error' : isUnexpected ? 'unexpected' : 'finished';
 
-  const Icon = variant === 'finished' ? CheckCircle2 : AlertCircle;
+  const Icon = variant === 'finished' ? MessageSquare : AlertCircle;
   const time = formatTime(endedAt);
 
   const titleKey =
@@ -71,7 +71,7 @@ export function MasterStatusBanner({ endedAt, unexpected, errorDetail }: MasterS
       ? 'Master ended with error'
       : variant === 'unexpected'
         ? 'Master ended unexpectedly'
-        : 'Master finished';
+        : 'Master turn ended';
 
   const detail =
     variant === 'error'
@@ -86,7 +86,7 @@ export function MasterStatusBanner({ endedAt, unexpected, errorDetail }: MasterS
         'mx-3 mt-3 p-3 rounded-lg border text-xs flex items-start gap-2',
         variant === 'error' && 'border-destructive/30 bg-destructive/5 text-destructive',
         variant === 'unexpected' && 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-        variant === 'finished' && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+        variant === 'finished' && 'border-border bg-muted/30 text-muted-foreground',
       )}
       role={variant === 'error' ? 'alert' : 'status'}
     >

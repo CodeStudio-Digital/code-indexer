@@ -101,6 +101,7 @@ export async function startChildAgentRunGuards(input: {
     cwd: input.toolContext.cwd,
     roots: input.toolContext.roots,
     externalRoots: input.toolContext.externalRoots,
+    unrestrictedFilesystemAccess: input.toolContext.unrestrictedFilesystemAccess,
     provider: input.provider.name,
     model: input.provider.model,
     effort: input.effort,

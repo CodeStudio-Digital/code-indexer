@@ -188,9 +188,6 @@ export class HumanInTheLoop {
         return;
       }
 
-      // Wake the master in real time so `wait_for_subordinates` returns
-      // instead of polling until the subordinate eventually completes.
-      this.master.handle?.runner.interruptWait({ kind: 'plan', agentRunId, role });
       this.master.notify(this.buildSinglePlanNotice(agentRunId, role, block.plan));
       this.attention.signal({ kind: 'plan', agentRunId, role });
     });
@@ -214,11 +211,6 @@ export class HumanInTheLoop {
   private flushPendingPlanSummary(): void {
     const entries = [...this.pendingPlans.values()];
     if (entries.length === 0) return;
-    for (const p of entries) {
-      this.master.handle?.runner.interruptWait({
-        kind: 'plan', agentRunId: p.agentRunId, role: p.role,
-      });
-    }
     this.master.notify(
       entries.length === 1
         ? this.buildSinglePlanNotice(entries[0].agentRunId, entries[0].role, entries[0].planText)
@@ -258,12 +250,6 @@ export class HumanInTheLoop {
         },
       });
 
-      // Interrupt any pending waitForUserInput BEFORE enqueueing the user
-      // message. Otherwise pushUserMessage + interruptWait race and the model
-      // may process the stale ask_user result and the new notification out of
-      // order, leading to a stuck state where the subordinate is never
-      // answered.
-      this.master.handle?.runner.interruptWait({ kind: 'question', agentRunId, role });
       this.master.notify(
         `[SYSTEM] @${role} (agent_run_id=${agentRunId}) is asking a question and BLOCKED waiting for your answer.\n` +
         `Question: "${block.question}"${optionsText}\n` +
@@ -296,8 +282,6 @@ export class HumanInTheLoop {
         },
       });
 
-      // Interrupt FIRST, then notify — see wireSubordinateQuestion for rationale.
-      this.master.handle?.runner.interruptWait({ kind: 'tasks', agentRunId, role });
       this.master.notify(
         `[SYSTEM] @${role} (agent_run_id=${agentRunId}) submitted a task list for approval and is BLOCKED.\n` +
         `Summary: "${summary}"\n` +

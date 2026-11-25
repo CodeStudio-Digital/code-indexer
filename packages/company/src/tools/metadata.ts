@@ -55,6 +55,7 @@ const READ_ONLY_PREFIXES = [
 const CONTROL_NAMES = new Set([
   'abort_subordinate_agent',
   'answer_subordinate_question',
+  'ask_master',
   'approve_subordinate_plan',
   'approve_subordinate_plans',
   'approve_subordinate_tasks',
@@ -71,7 +72,14 @@ const CONTROL_NAMES = new Set([
   'submit_plan_to_master',
   'submit_specification_to_master',
   'submit_tasks_to_master',
-  'wait_for_subordinates',
+]);
+
+// These writes belong to the Company board. They keep their normal mutation,
+// approval and scheduling policies, but do not acquire the project file lock.
+const KANBAN_WRITES = new Set([
+  'kanban_create_card', 'kanban_move_card', 'kanban_move_to_review',
+  'kanban_update_meta', 'kanban_update_objectives', 'kanban_post_comment',
+  'kanban_add_dependency', 'kanban_remove_dependency', 'kanban_assign_agent', 'kanban_plan_graph',
 ]);
 
 const EXECUTE_PREFIXES = ['qa_', 'service_'] as const;
@@ -140,6 +148,8 @@ export function withCompanyToolMetadata(tool: CoderTool): CoderTool {
   const mutates = tool.mutates ?? inferred.mutates;
   return {
     ...tool,
+    ...(tool.source === 'native' && !tool.effectBoundary && (isControl(tool.name) || KANBAN_WRITES.has(tool.name))
+      ? { effectBoundary: 'control' as const } : {}),
     mutates,
     parallelSafe: tool.parallelSafe ?? (mutates ? false : inferred.parallelSafe),
     riskLevel: tool.riskLevel ?? inferred.riskLevel,

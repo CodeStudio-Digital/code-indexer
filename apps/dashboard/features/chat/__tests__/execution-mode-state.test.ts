@@ -125,19 +125,20 @@ describe('execution-mode dashboard state', () => {
       .toEqual(['high', 'xhigh', 'max']);
   });
 
-  it('uses the effort selector for GLM-5.3 Coding Plan and keeps the toggle for earlier GLM', () => {
+  it.each(['glm-5.3', 'glm-5.4'])('uses the effort selector for %s Coding Plan and keeps the toggle for earlier GLM', (modelId: string) => {
     const catalog: ProviderOption[] = [{
       id: 'my-coding-plan', kind: 'zai', label: 'Z.AI Coding Plan',
       capabilities: { supportsThinking: true },
       models: [
-        { id: 'glm-5.3', name: 'GLM-5.3', mode: 'coding', can_reason: true,
+        { id: modelId, name: modelId.toUpperCase(), mode: 'coding', can_reason: true,
           supported_reasoning_levels: ['low', 'high', 'max'] },
         { id: 'glm-5.1', name: 'GLM-5.1', mode: null },
       ],
     }];
 
-    expect(resolveReasoningLevels('my-coding-plan', catalog, 'glm-5.3::coding')).toEqual(['low', 'high', 'max']);
-    expect(providerSupportsThinking('my-coding-plan', catalog, 'glm-5.3::coding')).toBe(false);
+    const selectedModel = `${modelId}::coding`;
+    expect(resolveReasoningLevels('my-coding-plan', catalog, selectedModel)).toEqual(['low', 'high', 'max']);
+    expect(providerSupportsThinking('my-coding-plan', catalog, selectedModel)).toBe(false);
     expect(providerSupportsThinking('my-coding-plan', catalog, 'glm-5.1')).toBe(true);
   });
 

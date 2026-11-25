@@ -2,11 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CompanyWorkspaceCoordinator } from '../workspace-coordinator.js';
+import { CollaborationFiles } from '@mcp/session-storage/collaboration/files.js';
+import { CollaborationRevisions } from '@mcp/session-storage/collaboration/revisions.js';
+import { CompanyWorkspaceCoordinator, type WorkspaceMutationOwner } from '../workspace-coordinator.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
-async function fixture() { const root = await mkdtemp(join(tmpdir(), 'company-workspace-regression-')); roots.push(root); return { a: new CompanyWorkspaceCoordinator(root), b: new CompanyWorkspaceCoordinator(root) }; }
+async function fixture() { const root = await mkdtemp(join(tmpdir(), 'company-workspace-regression-')); roots.push(root); return { root, a: new CompanyWorkspaceCoordinator(root), b: new CompanyWorkspaceCoordinator(root) }; }
 function deferred() { let resolve!: () => void; return { promise: new Promise<void>(done => { resolve = done; }), resolve: () => resolve() }; }
 const owner = (sessionId: string, signal?: AbortSignal) => ({ sessionId, signal, agentRunId: sessionId, toolUseId: 'tool', toolName: 'edit_file' });
 
@@ -27,6 +29,26 @@ describe('Company workspace mutation ownership', () => {
     expect(ran).toBe(false); expect((await b.owners()).map(row => row.sessionId)).toEqual(['a']);
     release.resolve(); await first;
   });
+  it('ignores only the old fleet wait while retaining genuine, unknown and explicitly workspace-scoped effects', async () => {
+    const { a, root } = await fixture();
+    const files = new CollaborationFiles(join(root, 'company', 'workspace-coordination'));
+    await files.ensure('ownership');
+    const base = { sessionId: 's', agentRunId: 'r', toolUseId: 't', startedAt: 1, phase: 'uncertain' as const };
+    const rows: WorkspaceMutationOwner[] = [
+      { ...base, token: 'old', toolName: 'wait_for_subordinates' },
+      { ...base, token: 'edit', toolName: 'edit_file' },
+      { ...base, token: 'unknown', toolName: 'third_party_tool' },
+      { ...base, token: 'explicit', toolName: 'wait_for_subordinates', scope: 'workspace' },
+    ];
+    const journal = new CollaborationRevisions(files);
+    await journal.change('ownership', 'workspace', { holders: rows }, value => value);
+    expect(await a.owners()).toEqual(rows.slice(1));
+    await expect(a.run(owner('new'), async () => 'write', () => false)).rejects.toThrow('WORKSPACE_OUTCOME_PENDING');
+    await expect(a.reconcile(['old'])).rejects.toThrow('WORKSPACE_REVIEW_STALE');
+    await a.reconcile(['edit', 'unknown', 'explicit']);
+    await expect(a.run(owner('new'), async () => 'write', () => false)).resolves.toBe('write');
+  });
+
   it('retains an uncertain effect and requires review of the exact owner before another session writes', async () => {
     const { a, b } = await fixture();
     await a.run(owner('a'), async () => ({ unknown: true }), value => value.unknown);

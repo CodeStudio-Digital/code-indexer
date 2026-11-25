@@ -11,9 +11,8 @@
  * active approval MODE. This fragment closes exactly that gap — nothing more,
  * to avoid duplicating base.txt (sandbox) and plan.txt (plan-mode gating).
  *
- * Session-fixed (writable root + the session's tool_permission_mode) →
- * cache-stable, rendered ABOVE the dynamic boundary. Reflects the mode at
- * session start; live mode flips are enforced by the runtime gate regardless.
+ * Renders above the dynamic boundary. The runner recomposes it when the
+ * session owner changes permission mode.
  */
 
 export type PromptApprovalMode = 'ask' | 'auto' | 'unrestricted';
@@ -29,7 +28,9 @@ export interface PromptPermissions {
   readableRoots?: string[];
   /** Whether ask_user can persist and activate an exact folder grant live. */
   canRequestExternalRoots?: boolean;
-  /** Effective tool-approval mode resolved at session start. */
+  /** Whether native tools can address any absolute path available on the host. */
+  unrestrictedFilesystem?: boolean;
+  /** Effective tool-approval mode. */
   approvalMode: PromptApprovalMode;
 }
 
@@ -60,13 +61,18 @@ export function permissionsSection(p?: PromptPermissions): string {
   const requestLine = p.canRequestExternalRoots
     ? `\n- When the user explicitly asks for an external directory that is not listed, call \`ask_user\` with \`filesystem_access:{path,access}\` and exactly two option values: \`authorize\` and \`deny\`. Prefer \`read\` unless edits are required. Do not ask the user to copy files or create another workspace.`
     : '';
+  const filesystem = p.unrestrictedFilesystem
+    ? `- The local filesystem is available to the tools allowed for this session, subject to operating system permissions.
+- Use absolute paths with native filesystem tools such as \`list_directory\`, \`read_file\` and \`glob\` for folders outside the project. The project index remains project-scoped.
+- Use absolute working directories for external shell commands when shell tools are available. Proceed directly with authorized work on these paths.`
+    : `- Native filesystem tools enforce the authorized roots. ${rootLabel}: ${roots}.${readableLine}
+- Paths inside the project remain project-relative. Explicitly listed external roots use absolute paths and do not become project/configuration roots.
+- Local shell commands start inside the project root but execute on the host unless a container sandbox is attached. Shell cwd stays project-scoped; use native filesystem tools for external roots.
+- External access is granted per saved path (an authorized directory or an exact attached-file reference), never by inferring permission from prose.${requestLine}`;
   return `
 
 # Permissions & execution boundary
-- Native filesystem tools enforce the authorized roots. ${rootLabel}: ${roots}.${readableLine}
-- Paths inside the project remain project-relative. Explicitly listed external roots use absolute paths and do not become project/configuration roots.
-- Local shell commands start inside the project root but execute on the host unless a container sandbox is attached. Shell cwd stays project-scoped; use native filesystem tools for external roots.
-- External access is granted per saved path (an authorized directory or an exact attached-file reference), never by inferring permission from prose.${requestLine}
+${filesystem}
 - Tool approval mode: **${p.approvalMode}**. ${approvalLine(p.approvalMode)}
 - Database writes require their explicit approval or a saved tool grant. ${p.approvalMode === 'unrestricted'
   ? 'Historical unknown outcomes do not revoke unrestricted permission for new work. Continue new authorized edits and commands without another approval. Exact replay of an uncertain operation remains separately guarded.'

@@ -1255,6 +1255,8 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
   const workspace: WorkspaceContext = workspaceFromProject(project, sandboxBinding);
   const effectiveCwd = workspace.rootPath;
+  const resolvedPermissionMode = opts.toolPermissionMode
+    ?? (opts.companyContext ? 'unrestricted' : normalizeToolPermissionMode(session.tool_permission_mode));
   // External host roots are a local-session capability. A container-bound run
   // cannot safely translate host paths into its filesystem namespace. Company
   // agents also run without an interactive session owner, so keep grants scoped
@@ -1354,6 +1356,9 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // orchestration. The Company UI follows agent-run entity links to aggregate
   // master and subordinate snapshots without a cross-session SQL join.
   let runnerRef: import('@mcp/code-agent/core/runner.js').CoderRunner | null = null;
+  const unrestrictedFilesystemAccess = allowExternalFilesystemRoots
+    ? () => (runnerRef?.getToolPermissionMode() ?? resolvedPermissionMode) === 'unrestricted'
+    : undefined;
   const recorder = new SnapshotRecorder({
     sessionKind: 'coder',
     sessionId: session.id,
@@ -1470,6 +1475,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // and company sessions, so the single-root path is unchanged for them.
     roots: secondaryRoots.length > 0 ? secondaryRoots : undefined,
     externalRoots,
+    unrestrictedFilesystemAccess,
     authorizeFilesystemRoot,
     overlayByRoot: secondaryOverlays.size > 0 ? secondaryOverlays : undefined,
     overlay,
@@ -1971,13 +1977,6 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // The current agent loop is the only supported product behavior.
   const agentLoopV2EnvFlag = true;
 
-  // Effective tool-approval mode (mig 131), resolved once here so the system
-  // prompt's `# Permissions & sandbox` block and the runner's PermissionGate
-  // (below) can't diverge. Company runs force 'unrestricted' (no board approval
-  // UI yet); single sessions read the column (NULL → 'auto').
-  const resolvedPermissionMode = opts.toolPermissionMode
-    ?? (opts.companyContext ? 'unrestricted' : normalizeToolPermissionMode(session.tool_permission_mode));
-
   // Hierarchical AGENTS.md instructions for this project (root→cwd). Read-only,
   // budget-capped, safe on missing/malformed files. Our /init generates the
   // file; this finally reads it back into the prompt.
@@ -2042,6 +2041,13 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ),
   );
   const effectiveMcpAvailable = [...availableTools].some((name) => name.startsWith('mcp__'));
+  const promptPermissions = {
+    writableRoots: [effectiveCwd, ...externalRoots.filter((root) => root.access === 'write').map((root) => root.rootPath)],
+    readableRoots: externalRoots.filter((root) => root.access === 'read').map((root) => root.rootPath),
+    canRequestExternalRoots: allowExternalFilesystemRoots,
+    unrestrictedFilesystem: unrestrictedFilesystemAccess?.() ?? false,
+    approvalMode: resolvedPermissionMode,
+  };
   const promptContext: PromptContext = {
     projectName: project.name,
     projectRoot: project.root_path,
@@ -2098,15 +2104,7 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // "Images & vision" section is only rendered when the model can't see
     // images natively (or the composer forces the describe-images path).
     modelCanSeeImages: opts.describeImages ? false : opts.modelSupportsVision,
-    // Effective permission/sandbox policy surfaced to the model: the real
-    // writable root (sandbox workdir or project root) + the approval mode.
-    // Cache-stable axis above SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
-    permissions: {
-      writableRoots: [effectiveCwd, ...externalRoots.filter((root) => root.access === 'write').map((root) => root.rootPath)],
-      readableRoots: externalRoots.filter((root) => root.access === 'read').map((root) => root.rootPath),
-      canRequestExternalRoots: allowExternalFilesystemRoots,
-      approvalMode: resolvedPermissionMode,
-    },
+    permissions: promptPermissions,
     // AGENTS.md project instructions (loaded above). '' when none → block omitted.
     agentsMd,
     // Codex-faithful mode switch: Ultra permits useful, bounded proactive
@@ -2510,6 +2508,12 @@ async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       promptContext.agentId = agent.id;
       promptContext.planMode = agent.planMode;
       promptContext.specMode = !!agent.specMode;
+      systemPrompt = composeSessionPrompt();
+      return systemPrompt;
+    },
+    systemPromptForPermissionMode: (mode) => {
+      promptPermissions.approvalMode = mode;
+      promptPermissions.unrestrictedFilesystem = allowExternalFilesystemRoots && mode === 'unrestricted';
       systemPrompt = composeSessionPrompt();
       return systemPrompt;
     },

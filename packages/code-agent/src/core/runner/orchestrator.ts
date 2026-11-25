@@ -199,6 +199,7 @@ export async function runBehaviorTree(
       }
     }
   } finally {
+    ctx.bridge?.closeInputQueue?.();
     // Lifecycle cleanup — tasks left in `running` (because the BT exited
     // mid-execute_task, was aborted, hit a circuit breaker, or a node
     // threw) get promoted to `interrupted` so the dashboard doesn't show

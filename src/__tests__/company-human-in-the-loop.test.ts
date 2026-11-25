@@ -35,7 +35,7 @@ interface Harness {
   hitl: HumanInTheLoop;
   bus: { publish: ReturnType<typeof vi.fn>; markEnded: ReturnType<typeof vi.fn> };
   board: { post: ReturnType<typeof vi.fn>; read: ReturnType<typeof vi.fn>; lastMasterSeenId: number; advanceMasterWatermark: ReturnType<typeof vi.fn> };
-  status: { setStatus: ReturnType<typeof vi.fn> };
+  status: { setStatus: ReturnType<typeof vi.fn>; publishStatus: ReturnType<typeof vi.fn> };
   store: {
     claimMasterPromptDelivery: ReturnType<typeof vi.fn>;
     completeMasterPromptDelivery: ReturnType<typeof vi.fn>;
@@ -71,7 +71,7 @@ function makeHarness(opts: { masterAlive?: boolean } = {}): Harness {
     lastMasterSeenId: 0,
     advanceMasterWatermark: vi.fn(),
   };
-  const status = { setStatus: vi.fn() };
+  const status = { setStatus: vi.fn(), publishStatus: vi.fn() };
   const store = {
     claimMasterPromptDelivery: vi.fn(async (id: string) => ({
       kind: 'claimed' as const,
@@ -151,7 +151,7 @@ describe('HumanInTheLoop — master plan', () => {
       JSON.stringify({ approved: true, feedback: 'lgtm' }),
     );
     expect(h.master.setShouldContinue).toHaveBeenCalledWith(true);
-    expect(h.status.setStatus).toHaveBeenCalledWith(MASTER_RUN_ID, 'running');
+    expect(h.status.publishStatus).toHaveBeenCalledWith(MASTER_RUN_ID, 'master', 'running');
     expect(h.board.post).toHaveBeenCalledWith('human', null, 'decision', 'Plan APPROVED: lgtm');
     expect(h.bus.publish).toHaveBeenCalledWith('master_plan_resolved', { prompt: resolved });
   });

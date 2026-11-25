@@ -16,8 +16,7 @@ const BOARD_ENTRY_TWO_ID = 'b0000000-0000-4000-8000-000000000101';
 //   - `updateRoleConfigs` / `getRoleDefaults` / `roleConfigs`
 //   - `getAllowedModels` / `getPoolDefault` (empty pool path)
 //   - `abort()` on a master that was never started
-//   - `notify()` when the master has no handle (routes to resurrect which
-//     early-bails) — including `enrichWithBoard` with empty / non-empty / throwing board
+//   - `notify()` before there is a persisted Master, including the board watermark
 //   - `sendUserMessage()` lazy-resurrect path
 //
 // Anything that requires `runCoder` (start/resumeExisting/resurrect actually
@@ -237,15 +236,11 @@ describe('MasterLifecycle — abort without an active handle', () => {
 });
 
 describe('MasterLifecycle — notify with no master handle', () => {
-  it('calls idle.onMasterResurrected before falling through to (no-op) resurrect', () => {
+  it('keeps a never-started Master dormant without announcing a wake', () => {
     const onMasterResurrected = vi.fn();
     const lc = new MasterLifecycle(makeBaseDeps({ onMasterResurrected }));
     lc.notify('hello');
-    expect(onMasterResurrected).toHaveBeenCalledOnce();
-    // resurrect bails out (handle/context/agentRunId all null), so the master
-    // does not transition to ended/running. This is the lazy-start contract:
-    // notify on a never-started master is observable via idle but otherwise
-    // a no-op until something else (start/sendUserMessage) actually boots it.
+    expect(onMasterResurrected).not.toHaveBeenCalled();
     expect(lc.hasEnded).toBe(false);
   });
 
@@ -301,7 +296,7 @@ describe('MasterLifecycle — sendUserMessage with no handle (lazy-resurrect pat
     const post = vi.fn();
     const lc = new MasterLifecycle(makeBaseDeps({ post }));
     lc.sendUserMessage('hello master');
-    expect(post).toHaveBeenCalledWith('human', null, 'message', 'hello master');
+    expect(post).toHaveBeenCalledWith('human', null, 'message', 'hello master', undefined, undefined);
   });
 
   it('notifies idle that a user message was received (resets idle timer)', () => {
@@ -323,10 +318,12 @@ describe('MasterLifecycle — sendUserMessage with no handle (lazy-resurrect pat
     expect(lc.sendUserMessage('hello')).toEqual({ ok: true });
   });
 
-  it('attaches the attachments count to the board message when present', () => {
+  it('passes the original board attachment alongside the unchanged human message', () => {
     const post = vi.fn();
     const lc = new MasterLifecycle(makeBaseDeps({ post }));
+    const boardAttachments = [{ name: 'image.png', size: 1, mediaType: 'image/png', sha256: 'ab'.repeat(32) }];
     lc.sendUserMessage('look at this', {
+      boardAttachments,
       attachments: [
         { kind: 'image', mediaType: 'image/png', source: { type: 'base64', data: 'x' } },
       ] as never,
@@ -335,7 +332,7 @@ describe('MasterLifecycle — sendUserMessage with no handle (lazy-resurrect pat
       'human',
       null,
       'message',
-      expect.stringContaining('[1 attachment]'),
+      'look at this', undefined, boardAttachments,
     );
   });
 

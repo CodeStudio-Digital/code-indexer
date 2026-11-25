@@ -26,6 +26,8 @@ export interface MutationFenceAuthorityOptions {
     aliases?: ReadonlyArray<string>;
     access?: 'read' | 'write';
   }>;
+  /** Live host access for local sessions that selected unrestricted mode. */
+  unrestrictedFilesystemAccess?: () => boolean;
   assertLease: (invocation?: { toolName: string; boundary?: ToolEffectBoundaryKind }) => void;
   snapshot: () => MutationFenceSnapshot;
   bindingTtlMs?: number;

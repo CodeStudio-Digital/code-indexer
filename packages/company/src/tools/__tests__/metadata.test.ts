@@ -27,6 +27,16 @@ describe('company tool metadata normalization', () => {
     }
   });
 
+  it('confines the workspace exemption to native board and orchestration effects', () => {
+    for (const name of ['kanban_create_card', 'post_to_board', 'spawn_subordinate_agent', 'ask_master']) {
+      expect(withCompanyToolMetadata(tool(name)).effectBoundary, name).toBe('control');
+    }
+    for (const name of ['service_restart', 'write_shared_file']) {
+      expect(withCompanyToolMetadata(tool(name)).effectBoundary, name).not.toBe('control');
+    }
+    expect(withCompanyToolMetadata(tool('kanban_create_card', { source: 'mcp' })).effectBoundary).toBeUndefined();
+  });
+
   it('keeps live reads parallel-safe but volatile', () => {
     for (const name of [
       'read_board',

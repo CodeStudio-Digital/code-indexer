@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { askUser } from '../interaction.js';
+
+const projectRoot = resolve(tmpdir(), 'permission-test-project');
+const externalRoot = resolve(tmpdir(), 'permission-test-reference');
 
 function ctx(answer: string, authorize = vi.fn(async (path: string, access: 'read' | 'write') => ({
   rootPath: path,
@@ -11,7 +16,7 @@ function ctx(answer: string, authorize = vi.fn(async (path: string, access: 'rea
     authorize,
     emit,
     context: {
-      cwd: 'D:\\project',
+      cwd: projectRoot,
       projectName: 'test',
       authorizeFilesystemRoot: authorize,
       runner: {
@@ -29,7 +34,7 @@ const input = {
     { label: 'Authorize', value: 'authorize' },
     { label: 'Deny', value: 'deny' },
   ],
-  filesystem_access: { path: 'C:\\reference', access: 'read' },
+  filesystem_access: { path: externalRoot, access: 'read' },
 };
 
 describe('ask_user filesystem access', () => {
@@ -38,9 +43,9 @@ describe('ask_user filesystem access', () => {
     const result = await askUser.handler(input, fixture.context);
 
     expect(result.isError).toBeFalsy();
-    expect(fixture.authorize).toHaveBeenCalledWith('C:\\reference', 'read');
+    expect(fixture.authorize).toHaveBeenCalledWith(externalRoot, 'read');
     expect(fixture.emit).toHaveBeenCalledWith('question_posted', expect.objectContaining({
-      question: expect.stringContaining('C:\\reference'),
+      question: expect.stringContaining(externalRoot),
     }));
     expect(result.content).toContain('Filesystem root authorized');
   });
@@ -64,5 +69,25 @@ describe('ask_user filesystem access', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("'authorize' and 'deny'");
     expect(fixture.authorize).not.toHaveBeenCalled();
+  });
+
+  it('returns an immediate result for a folder already covered by the session', async () => {
+    const fixture = ctx('deny');
+    const current = { ...fixture.context, unrestrictedFilesystemAccess: () => true };
+    const result = await askUser.handler(input, current);
+    expect(result.content).toContain('already allows read access');
+    expect(fixture.emit).not.toHaveBeenCalled();
+    expect(fixture.authorize).not.toHaveBeenCalled();
+  });
+
+  it('requires a new decision for write access on a folder granted only for read', async () => {
+    const fixture = ctx('deny');
+    const current = { ...fixture.context, externalRoots: [{ id: '1', rootPath: tmpdir(), access: 'read' as const }] };
+    const path = join(tmpdir());
+    expect((await askUser.handler({ ...input, filesystem_access: { path, access: 'read' } }, current)).content)
+      .toContain('already allows read access');
+    expect((await askUser.handler({ ...input, filesystem_access: { path, access: 'write' } }, current)).content)
+      .toContain('User answered: deny');
+    expect(fixture.emit).toHaveBeenCalledTimes(1);
   });
 });

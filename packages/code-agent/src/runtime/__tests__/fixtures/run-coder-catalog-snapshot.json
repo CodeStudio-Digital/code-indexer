@@ -115,7 +115,7 @@
       },
       {
         "name": "kanban_create_card",
-        "sha256": "8c11ad09da373ed9e8cfc2adc9e51b76b5081c2cf5d6e56ca59f1f7c0df37fd2"
+        "sha256": "38a757530d98d1435570f382f7fc406222853630aaeebdde9fa02ab579487db0"
       },
       {
         "name": "kanban_get_card",
@@ -131,7 +131,7 @@
       },
       {
         "name": "kanban_plan_graph",
-        "sha256": "6703330326c651dc02a03cfd850e8c46efa78abf0c4b1c1a704633f22574bd3a"
+        "sha256": "e290f5d81bcadf8ca9fe41f1196def4c12f4b55efc8c09a485a28531a64adac0"
       },
       {
         "name": "kanban_post_comment",
@@ -151,7 +151,7 @@
       },
       {
         "name": "kanban_update_objectives",
-        "sha256": "427efe3e587ede70fd90627906dcc246dc9be355ae5164eef7c2b7c186bed1f4"
+        "sha256": "a34f47369fde591379a7abb89c576d5750c2410bf8af7733ec53345379a41ada"
       },
       {
         "name": "list_agents",
@@ -160,10 +160,6 @@
       {
         "name": "list_company_projects",
         "sha256": "063fe39aa6047a01d3bba30ac64a9e8a8a9021bce046a7124020c1a87d4c750b"
-      },
-      {
-        "name": "list_containers",
-        "sha256": "322de30db09695127faaab59a4cd900105c51b56f71631c994e35a8ef7d12bf0"
       },
       {
         "name": "list_shared_files",
@@ -203,7 +199,7 @@
       },
       {
         "name": "post_to_board",
-        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+        "sha256": "0a5f033570b861e7bd2748c89c43a5e11ace12905fca4b6f47957ce6fcc728e4"
       },
       {
         "name": "rag_search_docs",
@@ -212,10 +208,6 @@
       {
         "name": "read_board",
         "sha256": "0812f640f0f569345bd9ca1e80dd7ba49228b1df5c9a91008ad443e3802ac7f7"
-      },
-      {
-        "name": "read_container_logs",
-        "sha256": "4d434dc796fd9779e3617ebe9d884639c30b3e85bdce60112d1d5483815c6230"
       },
       {
         "name": "read_shared_file",
@@ -259,7 +251,7 @@
       },
       {
         "name": "spawn_subordinate_agent",
-        "sha256": "2e82611fd9843e801aef06fce5a156ee33abd6fa59d0199ba6e147eea6b396f5"
+        "sha256": "2a7b72776fc2daaf97c79a9bde2d1a69f6314504965597d31366a87ccf238fc2"
       },
       {
         "name": "task_complete",
@@ -279,11 +271,7 @@
       },
       {
         "name": "wait_agents",
-        "sha256": "238475b286485bc05f3b1eff5fa1dee9109b9ae6c5d0e8393aa2d7d8a61db2a0"
-      },
-      {
-        "name": "wait_for_subordinates",
-        "sha256": "fc56c5043eb2e81d0012f6a6bed1c112db5e0e04b24537da18e56a44b4ee8e2c"
+        "sha256": "7d02dbff1291fa4e7f109ba75dc7bed12e687fd38e8c3cfa75ca9ca20d95fd12"
       },
       {
         "name": "write_shared_file",
@@ -456,7 +444,7 @@
       },
       {
         "name": "kanban_create_card",
-        "sha256": "8c11ad09da373ed9e8cfc2adc9e51b76b5081c2cf5d6e56ca59f1f7c0df37fd2"
+        "sha256": "38a757530d98d1435570f382f7fc406222853630aaeebdde9fa02ab579487db0"
       },
       {
         "name": "kanban_get_card",
@@ -472,7 +460,7 @@
       },
       {
         "name": "kanban_plan_graph",
-        "sha256": "6703330326c651dc02a03cfd850e8c46efa78abf0c4b1c1a704633f22574bd3a"
+        "sha256": "e290f5d81bcadf8ca9fe41f1196def4c12f4b55efc8c09a485a28531a64adac0"
       },
       {
         "name": "kanban_post_comment",
@@ -492,7 +480,7 @@
       },
       {
         "name": "kanban_update_objectives",
-        "sha256": "427efe3e587ede70fd90627906dcc246dc9be355ae5164eef7c2b7c186bed1f4"
+        "sha256": "a34f47369fde591379a7abb89c576d5750c2410bf8af7733ec53345379a41ada"
       },
       {
         "name": "list_agents",
@@ -501,10 +489,6 @@
       {
         "name": "list_company_projects",
         "sha256": "063fe39aa6047a01d3bba30ac64a9e8a8a9021bce046a7124020c1a87d4c750b"
-      },
-      {
-        "name": "list_containers",
-        "sha256": "322de30db09695127faaab59a4cd900105c51b56f71631c994e35a8ef7d12bf0"
       },
       {
         "name": "list_shared_files",
@@ -544,7 +528,7 @@
       },
       {
         "name": "post_to_board",
-        "sha256": "cfe4d8a2fc5fce83044cbc4231c340ba27cab8d538527648759a6d4be58d957b"
+        "sha256": "0a5f033570b861e7bd2748c89c43a5e11ace12905fca4b6f47957ce6fcc728e4"
       },
       {
         "name": "rag_search_docs",
@@ -553,10 +537,6 @@
       {
         "name": "read_board",
         "sha256": "0812f640f0f569345bd9ca1e80dd7ba49228b1df5c9a91008ad443e3802ac7f7"
-      },
-      {
-        "name": "read_container_logs",
-        "sha256": "4d434dc796fd9779e3617ebe9d884639c30b3e85bdce60112d1d5483815c6230"
       },
       {
         "name": "read_shared_file",
@@ -600,7 +580,7 @@
       },
       {
         "name": "spawn_subordinate_agent",
-        "sha256": "2e82611fd9843e801aef06fce5a156ee33abd6fa59d0199ba6e147eea6b396f5"
+        "sha256": "2a7b72776fc2daaf97c79a9bde2d1a69f6314504965597d31366a87ccf238fc2"
       },
       {
         "name": "task_complete",
@@ -620,11 +600,7 @@
       },
       {
         "name": "wait_agents",
-        "sha256": "238475b286485bc05f3b1eff5fa1dee9109b9ae6c5d0e8393aa2d7d8a61db2a0"
-      },
-      {
-        "name": "wait_for_subordinates",
-        "sha256": "fc56c5043eb2e81d0012f6a6bed1c112db5e0e04b24537da18e56a44b4ee8e2c"
+        "sha256": "7d02dbff1291fa4e7f109ba75dc7bed12e687fd38e8c3cfa75ca9ca20d95fd12"
       },
       {
         "name": "write_shared_file",

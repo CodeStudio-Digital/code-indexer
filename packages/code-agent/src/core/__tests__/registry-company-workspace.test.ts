@@ -8,6 +8,23 @@ import { CompanyWorkspaceCoordinator } from '@mcp/company/services/workspace-coo
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 describe('Company registry workspace gate', () => {
+  it('reports the actual uncertain file effect and leaves a conflicting writer undispatched', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'company-registry-blocked-'));
+    roots.push(root);
+    const gate = new CompanyWorkspaceCoordinator(root);
+    await gate.run({ sessionId: 'owner', agentRunId: 'author', toolUseId: 'prior-write', toolName: 'edit_file' }, async () => 'unknown', () => true);
+    const handler = vi.fn(async () => ({ content: 'written' }));
+    const registry = new ToolRegistry();
+    registry.register({ name: 'write_file', source: 'native', description: 'write', mutates: true, effectBoundary: 'filesystem', parameters: { type: 'object', properties: {} }, handler });
+    const result = await registry.invoke('write_file', {}, { cwd: '.', projectName: 'fixture', companyContext: {
+      companySessionId: 'review', agentRunId: 'reviewer', workspaceMutationGate: gate,
+    } as never });
+    expect(result).toMatchObject({ isError: true, error: { code: 'WORKSPACE_OUTCOME_PENDING', kind: 'conflict', retryable: false } });
+    expect(result.content).toContain('edit_file (session owner)');
+    expect(handler).not.toHaveBeenCalled();
+    expect((await gate.owners()).map(owner => owner.toolUseId)).toEqual(['prior-write']);
+  });
+
   it('gates mutations from distinct sessions, reports waiting, permits inspection and releases on physical settlement', async () => {
     const root = await mkdtemp(join(tmpdir(), 'company-registry-gate-')); roots.push(root);
     let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; });

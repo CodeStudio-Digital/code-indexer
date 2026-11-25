@@ -28,23 +28,8 @@ import type {
   IBoardPoster,
 } from '@mcp/company/services/ports.js';
 import type { CompanyContext } from '@mcp/company/types.js';
-import { raceWithTimeout, isMutexTimeout } from '@mcp/company/services/utils/promiseMutex.js';
 import type { MasterRuntimeSnapshot } from '@mcp/company/services/master/start.js';
 import { runWithExplicitMasterFallback } from '@mcp/company/services/master/fallback.js';
-
-/**
- * Hard ceiling on a single resurrect cycle. The cycle spans:
- *   - 1 status flip → 'running'
- *   - 1 board.post (sync)
- *   - runCoder() boot — provider connect, registry build, system
- *     prompt assembly, sandbox check, first turn fire.
- *
- * Healthy boots are <5s. 60s is generous; past it we're almost
- * certainly wedged on the provider side or in a tool init, and the
- * right call is to fail the resurrect, mark the master ended, and
- * let the next user turn try fresh.
- */
-const RESURRECT_TIMEOUT_MS = 60_000;
 
 export interface MasterResurrectStateMutators {
   /** Existing runner handle, or null when never started. */
@@ -93,7 +78,8 @@ export async function resurrectMaster(
   deps: MasterResurrectDeps,
 ): Promise<void> {
   if (!deps.state.handle || !deps.state.companyContext || !deps.state.agentRunId) return;
-  if (deps.ctx.isAborted || deps.ctx.isBusEnded) return;
+  const stopped = () => deps.ctx.isAborted || deps.ctx.isBusEnded || deps.ctx.isFinalized;
+  if (stopped()) return;
 
   if (deps.state.resumingPromise) {
     deps.state.resumeQueue.push({ message, attachments });
@@ -104,19 +90,11 @@ export async function resurrectMaster(
   const masterSessionId = deps.state.handle.session?.id;
 
   const doResume = async (): Promise<void> => {
+    if (stopped()) return;
+    if (!masterSessionId) throw new Error('No persisted Master chat to resume');
+    await deps.ctx.companyFiles.updateSessionStatus('running');
+    if (stopped()) return;
     deps.status.setStatus(agentRunId, 'running');
-
-    deps.board.post(
-      'system',
-      null,
-      'message',
-      'Master reactivated — subordinate reported completion.',
-    );
-
-    if (!masterSessionId) {
-      console.warn('[company] resurrect: no master session id');
-      return;
-    }
 
     const runtime = deps.state.runtimeSnapshot;
     const handle = await runWithExplicitMasterFallback(
@@ -134,13 +112,21 @@ export async function resurrectMaster(
         thinking: thinking ?? runtime.thinking,
         thinkingBudgetTokens: runtime.thinkingBudgetTokens,
         reasoningEffort: runtime.reasoningEffort,
-        onRunnerReady: (runner) => deps.wireRunner(runner, agentRunId),
+        onRunnerReady: (runner) => {
+          if (stopped()) runner.abort();
+          else deps.wireRunner(runner, agentRunId);
+        },
       } as RunCoderOptions & { companyPromptBlock: string }),
       agentRunId,
       runtime.fallbackModels,
       { ctx: deps.ctx, board: deps.board },
     );
 
+    if (stopped()) {
+      handle.runner.abort();
+      await handle.done.catch(() => undefined);
+      return;
+    }
     deps.state.setEnded(false);
     deps.state.setRunnerExited(false);
     deps.state.setEndedWithError(null);
@@ -158,34 +144,23 @@ export async function resurrectMaster(
     }
 
     deps.attachCompletion(handle, agentRunId);
+    try { deps.board.post('system', null, 'message', 'Master resumed in the same chat.'); }
+    catch { /* The runner already owns this turn. */ }
   };
 
-  // Wrap doResume() in raceWithTimeout. If the wrapped promise hits
-  // the ceiling, mark the master as ended-with-error so the next
-  // notify() goes through resurrect again with a fresh attempt instead
-  // of trying to pushUserMessage on a half-built runner that never
-  // materialized. The dangling doResume keeps running in the
-  // background (we can't cancel runCoder mid-boot) but the orchestrator
-  // is no longer waiting on its result.
-  const promise = raceWithTimeout(doResume(), RESURRECT_TIMEOUT_MS, 'master_resurrect')
-    .catch((e) => {
-      if (isMutexTimeout(e)) {
-        console.warn(
-          `[company s=${deps.ctx.companySessionId}] master resurrect timed out (${RESURRECT_TIMEOUT_MS}ms) — flagging master as ended`,
-        );
-        deps.state.setEnded(true);
-        deps.state.setEndedWithError('resurrect_timeout');
-        deps.state.setEndedAt(new Date().toISOString());
-        deps.status.setStatus(agentRunId, 'error');
-        // Don't rethrow — caller is fire-and-forget via notify().
-        // Future notify() now sees `_ended=true` and re-enters resurrect.
-        return;
-      }
-      throw e;
-    })
-    .finally(() => {
-      deps.state.setResumingPromise(null);
-    });
+  // Keep ownership until bootstrap settles. An elapsed timer cannot admit a
+  // second runner into the same chat while the first one is still starting.
+  const promise = Promise.resolve().then(doResume).catch(async error => {
+    if (stopped()) return;
+    const detail = error instanceof Error ? error.message : String(error);
+    deps.state.setRunnerExited(true);
+    deps.state.setEnded(true);
+    deps.state.setEndedWithError(detail);
+    deps.state.setEndedAt(new Date().toISOString());
+    deps.status.setStatus(agentRunId, 'error', detail);
+    try { deps.board.post('system', null, 'blocker', `Master resume failed: ${detail}`); } catch { /* best effort */ }
+    await deps.ctx.companyFiles.updateSessionStatus('error').catch(() => undefined);
+  }).finally(() => { deps.state.setResumingPromise(null); });
   deps.state.setResumingPromise(promise);
   return promise;
 }

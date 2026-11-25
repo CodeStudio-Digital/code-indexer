@@ -26,6 +26,24 @@ class NoopProvider implements ChatProvider {
 }
 
 describe('CoderRunner live settings', () => {
+  it('sends the current scope to the provider when the permission mode changes', async () => {
+    const provider = new NoopProvider();
+    const chat = vi.spyOn(provider, 'chat');
+    const runner = new CoderRunner({
+      provider,
+      registry: new ToolRegistry(),
+      systemPrompt: 'auto scope',
+      systemPromptForPermissionMode: (mode) => `${mode} scope`,
+      toolContext: { cwd: process.cwd(), projectName: 'live-settings-test' },
+    });
+    runner.setToolPermissionMode('unrestricted');
+    await runner.run();
+    expect(chat).toHaveBeenLastCalledWith(expect.objectContaining({ system: expect.stringContaining('unrestricted scope') }));
+    runner.setToolPermissionMode('auto');
+    await runner.run();
+    expect(chat).toHaveBeenLastCalledWith(expect.objectContaining({ system: expect.stringContaining('auto scope') }));
+  });
+
   it('applies permission and output-cap changes without rebuilding the runner', () => {
     const toolContext: ToolContext = {
       cwd: process.cwd(),

@@ -4,7 +4,7 @@
  * Locks in:
  *   - (a) live master + stalled decision → attention.signal re-emitted with the
  *         decision kind; notify() NOT called (the message is already buffered,
- *         re-notifying would duplicate it); interruptWait fired defensively.
+ *         re-notifying would duplicate it); human input remains pending.
  *   - dedup cooldown: a second sweep inside the window does not re-signal.
  *   - in-memory cross-check: DB says waiting but HitL no longer pending → skip.
  *   - not-yet-stalled: age below the threshold → no nudge.
@@ -114,7 +114,7 @@ describe('RuntimeReconciler — master re-nudge', () => {
     await nudge();
     expect(spies.signal).toHaveBeenCalledTimes(1);
     expect(spies.signal).toHaveBeenCalledWith({ kind: 'plan', agentRunId: runId(42), role: 'backend' });
-    expect(spies.interruptWait).toHaveBeenCalledWith({ kind: 'plan', agentRunId: runId(42), role: 'backend' });
+    expect(spies.interruptWait).not.toHaveBeenCalled();
     // Must NOT re-push the message — it's already in pendingUserMessages.
     expect(spies.notify).not.toHaveBeenCalled();
     expect(spies.published.map((p) => p.topic)).toContain('master_nudge');

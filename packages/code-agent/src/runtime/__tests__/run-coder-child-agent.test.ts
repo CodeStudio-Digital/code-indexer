@@ -8,7 +8,7 @@
  * Opens SQLite: runs under the Electron runtime (scripts/test-harness-tools.mjs).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatDelta } from '../../core/messages.js';
@@ -16,7 +16,12 @@ import type { ChatProvider, ChatRequest } from '../../providers/adapter.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'run-coder-child-'));
 const projectRoot = join(tmp, 'project');
+const externalRoot = join(tmp, 'external');
+const externalFile = join(externalRoot, 'reference.txt');
+const writtenFile = join(externalRoot, 'child-output.txt');
 mkdirSync(projectRoot, { recursive: true });
+mkdirSync(externalRoot);
+writeFileSync(externalFile, 'Reference outside the project.\n');
 mkdirSync(join(tmp, 'data', 'sessions', 'global'), { recursive: true });
 process.env.MCP_INDEX_DB = join(tmp, 'index.db');
 process.env.MCP_DATA_DIR = join(tmp, 'data');
@@ -24,6 +29,7 @@ process.env.MCP_RUNTIME_COORDINATION_DIR = join(tmp, 'coordination');
 
 const SALVAGE = 'Salvaged: listed the project three times.';
 const seen: Array<{ label: string; system: string; tools: string[] }> = [];
+const externalResults = new Map<string, string>();
 let label = '';
 
 /** model 'loop' lists the project forever; 'answer' answers at once; 'edit-hang' writes a file, then waits to be stopped. */
@@ -36,6 +42,24 @@ function scripted(model: string): ChatProvider {
       return;
     }
     if (call++ === 0) seen.push({ label, system: request.system ?? '', tools: (request.tools ?? []).map((tool) => tool.name) });
+    if (model === 'external-read' || model === 'external-write') {
+      if (call === 1) {
+        const calls = model === 'external-read'
+          ? [{ name: 'list_directory', input: { path: externalRoot } }, { name: 'read_file', input: { path: externalFile } }]
+          : [{ name: 'write_file', input: { path: writtenFile, content: 'Written outside the project.\n' } }];
+        for (const [index, { name, input }] of calls.entries()) {
+          const id = `external-${index}`;
+          yield { type: 'tool_call_start', id, name };
+          yield { type: 'tool_call_end', id, name, input };
+        }
+        yield { type: 'done', stop_reason: 'tool_use' };
+        return;
+      }
+      const results = request.messages.flatMap((message) => message.content)
+        .filter((block) => block.type === 'tool_result' && block.tool_use_id.startsWith('external-'))
+        .map((block) => block.type === 'tool_result' ? block.content : '');
+      externalResults.set(label, results.join('\n'));
+    }
     if (model === 'edit-hang') {
       if (call === 1) {
         yield { type: 'usage', usage: HALF_USAGE };
@@ -71,7 +95,8 @@ vi.mock('@mcp/services/providers/factory.js', async (importOriginal) => ({
   createCoderProvider: vi.fn(async (_provider: string, model: string) => scripted(model)),
 }));
 
-type Ids = { root: string; explore: string; implement: string; verify: string; queued: string; aborted: string };
+type Ids = { root: string; explore: string; implement: string; verify: string; queued: string; aborted: string;
+  externalParent: string; externalReader: string; externalWriter: string };
 let ids: Ids;
 let projectId: number;
 
@@ -99,8 +124,17 @@ beforeAll(async () => {
   const root = await sessions.createSession({ project_id: projectId, title: 'Root', provider: 'fixture', model: 'answer', agent: 'build' });
   const make = async (profile: string, model: string, key = profile) => (await createChildAgentSession({ sessions, project }, root.id,
     { key, title: `${key} child`, profile, model })).child.id;
+  const externalParent = (await sessions.createSession({
+    project_id: projectId, title: 'Local folders', provider: 'fixture', model: 'external-read', agent: 'build',
+  })).id;
+  await sessions.setSessionToolPermissionMode(externalParent, 'unrestricted');
+  const externalReader = (await createChildAgentSession({ sessions, project }, externalParent,
+    { key: 'read', title: 'External reader', profile: 'explore', model: 'external-read' })).child.id;
+  const externalWriter = (await createChildAgentSession({ sessions, project }, externalParent,
+    { key: 'write', title: 'External writer', profile: 'implement', model: 'external-write' })).child.id;
   ids = { root: root.id, explore: await make('explore', 'loop'), implement: await make('implement', 'answer'), verify: await make('verify', 'answer'),
-    queued: await make('review', 'answer'), aborted: await make('implement', 'edit-hang', 'aborted') };
+    queued: await make('review', 'answer'), aborted: await make('implement', 'edit-hang', 'aborted'),
+    externalParent, externalReader, externalWriter };
   await sessions.close();
 }, 60_000);
 
@@ -167,6 +201,19 @@ describe('runCoder with a child-agent session', () => {
     expect(done.reason).toBe('completed');
     expect(sent.system).not.toContain('# Child agent');
     expect(sent.tools).toContain('create_chat'); expect(sent.tools).not.toContain('spawn_agent');
+  }, 120_000);
+
+  it('opens the external folder for the parent and explore child and allows an implement child to write', async () => {
+    for (const session of ['externalParent', 'externalReader'] as const) {
+      expect((await run(ids[session], session)).reason).toBe('completed');
+      expect(first(session).system).toContain('The local filesystem is available');
+      expect(first(session).system).not.toContain('filesystem_access:{path,access}');
+      expect(externalResults.get(session)).toContain('reference.txt');
+      expect(externalResults.get(session)).toContain('Reference outside the project.');
+    }
+    expect(first('externalReader').tools).not.toContain('write_file');
+    expect((await run(ids.externalWriter, 'externalWriter')).reason).toBe('completed');
+    expect(readFileSync(writtenFile, 'utf8')).toBe('Written outside the project.\n');
   }, 120_000);
 
   it('creates, admits, runs, concludes and the wait returns it (app and worker apart)', async () => {

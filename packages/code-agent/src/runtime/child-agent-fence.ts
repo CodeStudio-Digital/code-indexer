@@ -21,6 +21,7 @@ export interface ChildAgentFenceInput {
   cwd: string;
   roots?: ReadonlyArray<{ rootPath: string; slug?: string; name?: string }>;
   externalRoots?: ReadonlyArray<{ rootPath: string; access?: 'read' | 'write' }>;
+  unrestrictedFilesystemAccess?: () => boolean;
   provider: string;
   model: string;
   effort?: string | null;
@@ -55,6 +56,7 @@ export async function startChildAgentFence(store: ChildAgentFenceStore, input: C
       cwd: input.cwd,
       roots: input.roots?.map((root) => root.rootPath) ?? [],
       externalRoots: input.externalRoots?.map((root) => root.rootPath) ?? [],
+      unrestrictedFilesystem: input.unrestrictedFilesystemAccess?.() === true,
     })).digest('hex'),
     policy_mode: input.run.readOnly ? 'child_session_read_only' : 'child_session',
     max_turns: 0,
@@ -76,6 +78,7 @@ export async function startChildAgentFence(store: ChildAgentFenceStore, input: C
   const mutationFence = createMutationFenceAuthority({
     mode: 'enforce',
     authorizedRoot: input.cwd,
+    unrestrictedFilesystemAccess: input.run.readOnly ? undefined : input.unrestrictedFilesystemAccess,
     filesystemRoots: [
       ...(input.roots ?? []).map((root) => ({
         rootPath: root.rootPath,

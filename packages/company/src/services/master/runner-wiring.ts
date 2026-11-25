@@ -21,7 +21,6 @@ import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { RunCoderHandle } from '@mcp/code-agent/index/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
-import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type {
   IBoardPoster,
   IMetaBusWirer,
@@ -29,10 +28,6 @@ import type {
 import { isTransientError } from '@mcp/company/RetryPolicy.js';
 
 export interface MasterRunnerStateMutators {
-  /** Existing attention-listener unsubscribe (null on first wire). */
-  readonly attentionOff: (() => void) | null;
-  /** Replace the attention-listener unsubscribe slot. */
-  setAttentionOff: (off: (() => void) | null) => void;
   /** Set `_runnerExited` — must happen BEFORE _ended in the completion microtask. */
   setRunnerExited: (value: boolean) => void;
   /** Set `_ended` — happens in `.finally` so notifications route correctly. */
@@ -46,9 +41,6 @@ export interface MasterRunnerStateMutators {
   setEndedAt: (value: string | null) => void;
   /** Record an end-with-error string. Null clears. */
   setEndedWithError: (value: string | null) => void;
-  /** Read `_ended` / `_runnerExited` flags. Needed by the attention listener. */
-  readonly isEnded: boolean;
-  readonly isRunnerExited: boolean;
   /** Emit `master.ended` to the internal event bus / idle controller. */
   notifyIdleEnded: () => void;
 }
@@ -56,15 +48,9 @@ export interface MasterRunnerStateMutators {
 export interface WireMasterRunnerDeps {
   wirer: IMetaBusWirer;
   humanInLoop: HumanInTheLoop;
-  attention: MasterAttention;
-  state: MasterRunnerStateMutators;
 }
 
-/**
- * Plug HumanInTheLoop + meta-bus listeners onto the runner. Idempotent
- * over the attention listener: a previous registration is torn down
- * first so re-wiring on resurrect doesn't pile up handlers.
- */
+/** Attach human input and board listeners before the first provider turn. */
 export function wireMasterRunnerListeners(
   runner: CoderRunner,
   runId: string,
@@ -74,33 +60,6 @@ export function wireMasterRunnerListeners(
   deps.wirer.wire(synthetic, 'master', runId);
   deps.humanInLoop.wireMasterPlan(synthetic);
   deps.humanInLoop.wireMasterQuestion(synthetic);
-
-  // Tear down any prior listener so resurrect doesn't accumulate them.
-  if (deps.state.attentionOff) {
-    try { deps.state.attentionOff(); } catch { /* best-effort */ }
-  }
-
-  // Permanent attention listener: every subordinate transition
-  // (question/plan/tasks/finished) interrupts a pending waitForUserInput
-  // on the master so the message enqueued by `master.notify` actually
-  // gets consumed in the next turn. Cleaned up in the completion
-  // handler's `.finally` callback.
-  const off = deps.attention.on((ev) => {
-    // `inbox_answered` is handled by the InboxQueue; `user_message` and
-    // `notify` are consumed by the `wait_for_subordinates` loop returning and
-    // draining pendingUserMessages on the next turn — not by interrupting a
-    // waitForUserInput here. None is a subordinate event this listener acts on.
-    if (ev.kind === 'inbox_answered' || ev.kind === 'user_message' || ev.kind === 'notify') return;
-    if (deps.state.isEnded || deps.state.isRunnerExited) return;
-    if (runner.isWaitingForInput()) {
-      runner.interruptWait({
-        kind: ev.kind === 'finished' ? 'subordinate_event' : ev.kind,
-        agentRunId: ev.agentRunId,
-        role: ev.role,
-      });
-    }
-  });
-  deps.state.setAttentionOff(off);
 }
 
 export interface AttachMasterCompletionDeps {
@@ -129,17 +88,13 @@ export function attachMasterCompletionHandler(
   deps: AttachMasterCompletionDeps,
 ): void {
   const finalizeTerminalExit = async (): Promise<void> => {
-    deps.state.setEnded(true);
     // Timestamp the exit so the dashboard's session_idle handler can
     // surface "Master finished at HH:MM" or "Master ended unexpectedly"
     // without depending on the SSE delivery time (which can lag by
     // seconds during reconnects).
     deps.state.setEndedAt(new Date().toISOString());
-    if (deps.state.attentionOff) {
-      try { deps.state.attentionOff(); } catch { /* best-effort */ }
-      deps.state.setAttentionOff(null);
-    }
     await deps.humanInLoop.cancelPendingMasterPrompts().catch(() => undefined);
+    deps.state.setEnded(true);
     deps.state.notifyIdleEnded();
   };
 
@@ -178,7 +133,7 @@ export function attachMasterCompletionHandler(
         deps.state.setEndedWithError(`${reason}${detail}`);
       }
       try {
-        deps.board.post('system', null, 'message', `Master finished: ${reason}${detail}`);
+        deps.board.post('system', null, 'message', reason === 'completed' ? 'Master turn ended.' : `Master stopped: ${reason}${detail}`);
       } catch { /* best-effort */ }
     } catch (err) {
       deps.state.setRunnerExited(true);

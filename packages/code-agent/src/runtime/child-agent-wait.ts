@@ -12,7 +12,7 @@ import type { ChatUsage } from '../core/messages.js';
 import { SUBAGENT_TOOL_RESULT_CAP } from '../core/runner.js';
 import type { ChildAgentQueueStore } from './child-agent-queue-store.js';
 
-/** Longest single wait, like Company's wait_for_subordinates. */
+/** Longest single wait for a child agent. */
 export const CHILD_AGENT_WAIT_MAX_MS = 30 * 60_000;
 /** The tool timeout E6 declares on create_chat / send_chat_message / wait_chats (cap + margin). */
 export const CHILD_AGENT_WAIT_TOOL_TIMEOUT_MS = CHILD_AGENT_WAIT_MAX_MS + 60_000;

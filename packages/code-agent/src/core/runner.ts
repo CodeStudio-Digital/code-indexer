@@ -390,6 +390,9 @@ export class CoderRunner extends EventEmitter {
   private readonly inFlightTools: Map<string, AbortController> = new Map();
   private readonly injectedToolErrors: Map<string, string> = new Map();
   private static readonly DEFAULT_INPUT_KEY = '__default__';
+  private inputQueueClosed = false;
+  get isInputQueueClosed(): boolean { return this.inputQueueClosed; }
+
   private pendingUserMessages: Array<{
     content: ContentBlock[];
     selectedSkillIds?: string[];
@@ -1162,7 +1165,7 @@ export class CoderRunner extends EventEmitter {
 
   /**
    * True when there are buffered user messages not yet flushed into a turn.
-   * Lets callers (e.g. the company `wait_for_subordinates` loop) level-trigger
+   * Lets callers (e.g. the Company assignment wait loop) level-trigger
    * off the queue instead of relying solely on an edge signal that may have
    * been emitted while no listener was subscribed.
    */
@@ -1233,7 +1236,11 @@ export class CoderRunner extends EventEmitter {
 
   /** Switch the tool permission mode mid-run (PATCH endpoint / worker RPC). */
   setToolPermissionMode(mode: 'ask' | 'auto' | 'unrestricted'): void {
-    this.opts = { ...this.opts, toolPermissionMode: mode };
+    if (this.getToolPermissionMode() !== mode) {
+      const prompt = this.opts.systemPromptForPermissionMode?.(mode);
+      this.opts.toolPermissionMode = mode;
+      if (prompt != null) this.setSystemPromptForNextTurn(prompt);
+    }
     this.opts.toolContext.permissionGate?.refreshPending?.();
   }
 
@@ -1513,6 +1520,7 @@ export class CoderRunner extends EventEmitter {
         // /inject (or another producer) still has a message buffered for the
         // next Executing boundary.
         hasPendingMessages: () => this.hasPendingUserMessages(),
+        closeInputQueue: () => { this.inputQueueClosed = true; },
         // Per-turn telemetry persistence. The pure insert lives in
         // `core/runner/telemetry/persist-turn.ts`. The wrapper mirrors
         // the inserted id into `this.lastTurnTelemetryId` so the host's
@@ -2039,6 +2047,7 @@ export class CoderRunner extends EventEmitter {
    * exclusively-legacy was removed.
    */
   async run(): Promise<RunResult> {
+    this.inputQueueClosed = false;
     const hookBus = this.opts.hookBus;
 
     const startedAt = Date.now();

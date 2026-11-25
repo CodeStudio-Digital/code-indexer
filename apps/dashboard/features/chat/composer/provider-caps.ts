@@ -27,7 +27,7 @@ export function providerSupportsThinking(
     }
     if (option.kind === 'zai') {
       const selected = model ?? '';
-      // GLM-5.3's reasoning is controlled by the effort selector.
+      // GLM models with discrete effort use the effort selector.
       if (getZaiModelReasoning(selected)) return false;
       const [bare = ''] = selected.split('::');
       return /^glm-(?:5(?:[.\-]|$)|4\.[567])/.test(bare);

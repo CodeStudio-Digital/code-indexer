@@ -95,6 +95,8 @@ export interface WorkspacePathContext {
     projects: ReadonlyArray<WorkspaceProjectRoot>;
   };
   externalRoots?: readonly ExternalFilesystemRoot[];
+  /** Live opt-in to the local host filesystem, supplied by the session owner. */
+  unrestrictedFilesystemAccess?: () => boolean;
 }
 
 export type WorkspacePathResult =
@@ -195,6 +197,7 @@ export function resolveWorkspacePath(
     ctx.cwd,
     ctx.externalRoots,
     intent,
+    ctx.unrestrictedFilesystemAccess?.(),
   );
   if (!resolved.ok) return resolved;
   const primary = projects.find((project) => project.isPrimary)
@@ -208,8 +211,8 @@ export function resolveWorkspacePath(
 }
 
 /**
- * Resolve a native-tool path against the project or an explicitly authorized
- * external root/exact file reference. Relative paths always stay
+ * Resolve a native-tool path against the project, an explicitly authorized
+ * root/file or the unrestricted local filesystem. Relative paths always stay
  * project-relative. External paths require absolute paths so two folders with
  * the same child layout can never be confused.
  *
@@ -223,6 +226,7 @@ export function resolveAuthorizedPath(
   projectRoot: string,
   externalRoots: readonly ExternalFilesystemRoot[] | undefined,
   intent: 'read' | 'write',
+  unrestrictedFilesystemAccess = false,
 ): AuthorizedPathResult {
   const projectPaths = pathFor(projectRoot);
   if (!projectPaths.isAbsolute(inputPath)) {
@@ -256,9 +260,11 @@ export function resolveAuthorizedPath(
     if (!lexical) continue;
     const canonical = canonicalizeCandidate(lexical, root.rootPath);
     if (!canonical) {
+      if (unrestrictedFilesystemAccess) break;
       return { ok: false, reason: `Path '${inputPath}' escapes authorized root through a symlink or junction` };
     }
     if (intent === 'write' && root.access !== 'write') {
+      if (unrestrictedFilesystemAccess) break;
       return { ok: false, reason: `Path '${inputPath}' is under a read-only authorized root` };
     }
     const p = pathFor(root.rootPath);
@@ -270,6 +276,19 @@ export function resolveAuthorizedPath(
       external: true,
       access: root.access,
       rootId: root.id,
+    };
+  }
+
+  if (unrestrictedFilesystemAccess) {
+    const abs = projectPaths.resolve(projectRoot, inputPath);
+    const rootPath = projectPaths.parse(abs).root;
+    return {
+      ok: true,
+      abs,
+      rootPath,
+      relativePath: projectPaths.relative(rootPath, abs).replace(/\\/g, '/') || '.',
+      external: true,
+      access: 'write',
     };
   }
 

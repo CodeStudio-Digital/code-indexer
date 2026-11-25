@@ -42,10 +42,12 @@ function authority(options: {
   linkedRoot?: string;
   owned?: () => boolean;
   epoch?: () => number;
+  unrestrictedFilesystemAccess?: () => boolean;
 }) {
   return createMutationFenceAuthority({
     mode: options.mode ?? 'enforce',
     authorizedRoot: options.root,
+    unrestrictedFilesystemAccess: options.unrestrictedFilesystemAccess,
     filesystemRoots: options.linkedRoot
       ? [{ rootPath: options.linkedRoot, aliases: ['linked'], access: 'write' }]
       : undefined,
@@ -251,6 +253,22 @@ const filesystemTool: CoderTool = {
 };
 
 describe('physical mutation fencing', () => {
+  it('binds an unrestricted external write to its path and rechecks the live permission', () => {
+    let enabled = true;
+    const project = process.cwd();
+    const external = resolve(tmpdir(), 'external-fence-target.txt');
+    const bind = () => authority({ root: project, unrestrictedFilesystemAccess: () => enabled }).bindInvocation({
+      toolName: 'write_file', toolUseId: 'external-write', effectiveInput: { path: external, content: 'x' },
+      boundary: 'filesystem', requiresEffectBoundary: true,
+    });
+    const bound = bind();
+    expect(() => bound.assertMutation({ kind: 'filesystem', operation: 'writeFile', resource: external })).not.toThrow();
+    expect(() => bind().assertMutation({ kind: 'filesystem', operation: 'writeFile', resource: resolve(tmpdir(), 'unbound-target.txt') }))
+      .toThrow('resource_mismatch');
+    enabled = false;
+    expect(() => bound.assertMutation({ kind: 'filesystem', operation: 'writeFile', resource: external })).toThrow('path_escape');
+  });
+
   it('requires a declared physical boundary even for a logically non-mutating approval tool', async () => {
     let observedBinding:
       | Parameters<ToolMutationFence['bindInvocation']>[0]

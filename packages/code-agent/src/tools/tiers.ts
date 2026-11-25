@@ -405,7 +405,6 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
 export const MASTER_TOOLS: ReadonlySet<string> = new Set([
   // Subordinate orchestration
   'spawn_subordinate_agent',
-  'wait_for_subordinates',
   'resume_subordinate',
   'approve_subordinate_plan',
   'approve_subordinate_plans',
@@ -807,7 +806,6 @@ const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
 
   // Company master
   spawn_subordinate_agent: 'Spawn a persistent Company subordinate for a role and task',
-  wait_for_subordinates: 'Wait for persistent Company subordinates to progress or finish',
   resume_subordinate: 'Resume a stopped or failed Company subordinate',
   approve_subordinate_plan: 'Approve or reject one subordinate plan',
   approve_subordinate_plans: 'Resolve multiple pending subordinate plans in one operation',

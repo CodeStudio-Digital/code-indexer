@@ -95,6 +95,7 @@ function resolveFsTarget(
       selected.root,
       selected.root === ctx.cwd ? ctx.externalRoots : undefined,
       intent,
+      selected.root === ctx.cwd ? ctx.unrestrictedFilesystemAccess?.() : false,
     );
     if (!resolved.ok) return { error: err(resolved.reason) };
     return {
@@ -161,7 +162,7 @@ const writeFile: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths require an authorized writable external root.' },
+      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths follow the session filesystem permissions.' },
       content: { type: 'string', description: 'Full new content of the file' },
     },
     required: ['path', 'content'],
@@ -305,7 +306,7 @@ const editFile: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths require an authorized writable external root.' },
+      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths follow the session filesystem permissions.' },
       old_string: { type: 'string', description: 'Text to find. Should match file content closely — minor whitespace differences are tolerated automatically.' },
       new_string: { type: 'string', description: 'Replacement text' },
       replace_all: { type: 'boolean', description: 'Replace all occurrences (default false)' },
@@ -402,7 +403,7 @@ const readFile: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths require an authorized external root.' },
+      path: { type: 'string', description: 'Project-relative path; use "<project-slug>/..." in a global session. Absolute paths follow the session filesystem permissions.' },
       start_line: { type: 'number', description: '1-indexed start line (optional)' },
       end_line: { type: 'number', description: '1-indexed inclusive end line (optional)' },
       symbol: {
@@ -537,7 +538,7 @@ const listDirectory: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path (default: project root); use "<project-slug>/..." in a global session. Absolute paths require an authorized external root.' },
+      path: { type: 'string', description: 'Project-relative path (default: project root); use "<project-slug>/..." in a global session. Absolute paths follow the session filesystem permissions.' },
       recursive: { type: 'boolean', description: 'Recurse into subdirectories (default false)' },
     },
     additionalProperties: false,

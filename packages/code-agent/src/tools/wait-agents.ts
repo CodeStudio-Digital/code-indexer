@@ -3,18 +3,15 @@
  * status. Cross-tier complement to `list_agents`: any agent in the session
  * (master or subordinate) can wait for any subset of subordinate paths.
  *
- * Mirrors codex's `wait_agent` API. The existing master tool
- * `wait_for_subordinates` is kept (it waits for the *whole* fleet); this
- * tool accepts an explicit path list and is available to subordinates too,
- * so peer-to-peer coordination doesn't have to round-trip through the
- * master.
+ * An agent can explicitly wait on a dependency in the same Company.
+ * MasterLifecycle separately delivers specialist outcomes to the Master.
  *
  * Behavior:
  *  - Accepts agent paths (`/root/master/<role>-<agentRunId>`) OR raw
  *    agent_run_ids. At least one entry is required.
  *  - Returns when every targeted agent reaches a terminal status
  *    (completed / failed / aborted / timed-out / finished).
- *  - Returns early — same as `wait_for_subordinates` — when any targeted
+ *  - Returns early when any targeted
  *    agent posts a question/plan/tasks AND the caller is the master (only
  *    the master can resolve those). Subordinates do not get the early-
  *    return; they keep waiting for terminal status because they cannot
@@ -35,7 +32,7 @@ const WAIT_AGENTS_DESC =
   '\n' +
   'Specify targets via paths returned by `list_agents` or raw UUID `agent_run_ids` (or both).\n' +
   '\n' +
-  "USE: master after spawning peers in parallel; subordinate that depends on a sibling's output before continuing.\n" +
+  "USE: for an explicit dependency on specific agents. The Master receives specialist results and decision requests automatically.\n" +
   "USE: with a `timeout_minutes` cap when the agents may stall.\n" +
   "DON'T: wait on the master itself (`/root/master`) — it only completes when the session ends.\n" +
   "DON'T: poll. This tool is event-driven; calling it more than once per dependency turn is wasteful.";
@@ -103,6 +100,7 @@ export const waitAgents: CoderTool = {
   mutates: false,
   // Blocks the runner waiting for events; never run two of these in parallel.
   parallelSafe: false,
+  effectBoundary: 'control',
   riskLevel: 'read',
   // Polling tool — exempt from per-arg dup-call cap and result-content dedup.
   // Repeated calls with the same paths/ids are the legitimate use case while

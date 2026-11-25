@@ -121,7 +121,7 @@ describe('workflow catalog', () => {
     const input = args();
     const companyNames = ['post_to_board', 'read_board', 'write_shared_file', 'read_shared_file', 'list_shared_files',
       'spawn_subordinate_agent', 'forward_to_agent', 'resume_subordinate', 'list_subordinates', 'list_company_projects',
-      'wait_for_subordinates', 'abort_subordinate_agent', 'finalize_subordinates', 'approve_subordinate_plan',
+      'abort_subordinate_agent', 'finalize_subordinates', 'approve_subordinate_plan',
       'approve_subordinate_tasks', 'answer_subordinate_question', 'respond_to_inbox', 'kanban_plan_graph',
       'kanban_list_cards', 'kanban_move_card', 'set_agent_status', 'ask_master', 'submit_plan_to_master', 'submit_tasks_to_master'];
     const expected = companyNames.filter(n => isEssentialCompanyTool(n, isMaster));

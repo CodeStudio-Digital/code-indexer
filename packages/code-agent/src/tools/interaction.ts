@@ -2,6 +2,7 @@ import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { ASK_USER_DESC, DECISION_GATE_DESC } from '@mcp/code-agent/tools/descriptions.js';
 import { toolInteractions } from '../core/tool-interactions.js';
+import { pathFor, resolveWorkspacePath } from './paths.js';
 
 /**
  * Format the tool_result content for an ask_user response. Shared between the
@@ -84,7 +85,7 @@ export const askUser: CoderTool = {
       filesystem_access: {
         type: 'object',
         description:
-          'Optional exact external-folder grant requested from the user. Use only when the user asked to access that folder. ' +
+          'Optional exact external-folder grant requested from the user. Use when the user asked to access a folder and the current mode does not already allow it. ' +
           'When set, options must be exactly authorize/deny and free-form/multi-select are disabled.',
         properties: {
           path: { type: 'string', description: 'Existing absolute directory path requested by the user.' },
@@ -120,6 +121,7 @@ export const askUser: CoderTool = {
       : null;
     if (filesystemAccess) {
       if (!filesystemAccess.path) return err('filesystem_access.path cannot be empty');
+      if (!pathFor(ctx.cwd).isAbsolute(filesystemAccess.path)) return err('filesystem_access.path must be an absolute directory');
       if (filesystemRaw?.access !== 'read' && filesystemRaw?.access !== 'write') {
         return err("filesystem_access.access must be 'read' or 'write'");
       }
@@ -155,6 +157,9 @@ export const askUser: CoderTool = {
       }
       if (args.allow_freeform || args.multi_select) {
         return err('filesystem access questions cannot allow free-form or multi-select answers');
+      }
+      if (resolveWorkspacePath(filesystemAccess.path, ctx, filesystemAccess.access).ok) {
+        return ok(`The current session already allows ${filesystemAccess.access} access to ${filesystemAccess.path}. Continue with its absolute path.`);
       }
     }
     const allowFreeform = filesystemAccess ? false : Boolean(args.allow_freeform);

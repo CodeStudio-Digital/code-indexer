@@ -8,12 +8,6 @@ import { buildOpenAICompat } from '../wires/openai-compat.js';
 import { buildOpenAICompat as buildPluginWire } from '@mcp/provider-runtime/wires/openai-compat.js';
 import { zaiSpec as zaiPluginSpec } from '../../../../extensions/provider-zai/src/spec.js';
 
-const { create, clients } = vi.hoisted(() => ({ create: vi.fn(), clients: [] as Record<string, unknown>[] }));
-vi.mock('openai', () => ({ default: class {
-  chat = { completions: { create } };
-  constructor(options: Record<string, unknown>) { clients.push(options); }
-} }));
-
 const CODING = 'https://api.z.ai/api/coding/paas/v4/';
 const GENERAL = 'https://api.z.ai/api/paas/v4/';
 
@@ -57,14 +51,14 @@ describe('z.ai plan mode (declarative)', () => {
       expect(out.map((m) => m.model_id)).toEqual(['glm-4.6']); // no (normal)/(coding) duplication
     });
 
-    it('enriches bare GLM-5.3 IDs with the Coding Plan effort options', async () => {
+    it('enriches bare GLM IDs with the Coding Plan effort options', async () => {
       vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [{ id: 'glm-5.3' }, { id: 'glm-5.3-flash' }],
+        data: [{ id: 'glm-5.3' }, { id: 'glm-5.3-flash' }, { id: 'glm-5.4' }],
       })));
       const cfg = { id: '1', kind: 'zai', api_key: 'k', base_url: null, extra: { zai_mode: 'coding' } } as unknown as ProviderConfig;
 
       const models = await discoverOpenAIModels(zaiSpec, cfg);
-      expect(models.map(model => model.model_id)).toEqual(['glm-5.3', 'glm-5.3-flash']);
+      expect(models.map(model => model.model_id)).toEqual(['glm-5.3', 'glm-5.3-flash', 'glm-5.4']);
       for (const model of models) {
         expect(model).toMatchObject({ can_reason: true, supported_reasoning_levels: ['low', 'high', 'max'],
           default_reasoning_level: 'max' });
@@ -84,32 +78,42 @@ describe.each([
   ['built-in', buildOpenAICompat, zaiSpec],
   ['plugin runtime', buildPluginWire, zaiPluginSpec],
 ] as const)('%s Z.AI Coding Plan request', (_name, build, spec) => {
-  it.each([
-    { savedDefault: null, selected: 'high', expected: 'high' },
-    { savedDefault: 'high', selected: null, expected: 'high' },
-    { savedDefault: 'high', selected: 'low', expected: 'low' },
-    { savedDefault: null, selected: null, expected: 'max' },
-  ])('sends $expected for session $selected and model default $savedDefault', async ({ savedDefault, selected, expected }) => {
-    clients.length = 0;
-    create.mockReset();
-    create.mockResolvedValueOnce((async function* () {
-      yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
-    })());
+  afterEach(() => vi.unstubAllGlobals());
 
-    const model = 'glm-5.3::coding';
+  it.each([
+    { modelId: 'glm-5.3', savedDefault: null, selected: 'high', expected: 'high' },
+    { modelId: 'glm-5.3', savedDefault: 'high', selected: null, expected: 'high' },
+    { modelId: 'glm-5.3', savedDefault: 'high', selected: 'low', expected: 'low' },
+    { modelId: 'glm-5.3', savedDefault: null, selected: null, expected: 'max' },
+    { modelId: 'glm-5.4', savedDefault: 'high', selected: 'low', expected: 'low' },
+    { modelId: 'glm-5.4', savedDefault: null, selected: 'high', expected: 'high' },
+    { modelId: 'glm-5.4', savedDefault: 'high', selected: 'max', expected: 'max' },
+    { modelId: 'glm-5.4', savedDefault: null, selected: null, expected: 'max' },
+  ])('sends $expected for $modelId with session $selected and model default $savedDefault', async ({
+    modelId, savedDefault, selected, expected,
+  }: { modelId: string; savedDefault: string | null; selected: string | null; expected: string }) => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      requests.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    });
+
+    const model = `${modelId}::coding`;
     const wire = build(spec).createCoder!({ apiKey: 'fixture', baseURL: GENERAL }, model);
     const provider = withReasoningCapabilities(wire, [{
-      model_id: 'glm-5.3', mode: 'coding', can_reason: true,
+      model_id: modelId, mode: 'coding', can_reason: true,
       supported_reasoning_levels: ['low', 'high', 'max'], default_reasoning_level: savedDefault,
     }], model, { useModelDefault: true });
     for await (const _ of provider.chat({ system: '', messages: [], tools: [], thinking: false, reasoningEffort: selected })) {
       // Consume the reply so the SDK receives the body.
     }
 
-    expect(clients[0]?.baseURL).toBe(CODING);
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]?.[0]).toMatchObject({
-      model: 'glm-5.3', thinking: { type: 'enabled' }, reasoning_effort: expected,
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      url: `${CODING}chat/completions`,
+      body: { model: modelId, thinking: { type: 'enabled' }, reasoning_effort: expected },
     });
   });
 });

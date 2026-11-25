@@ -5,6 +5,8 @@ import { CollaborationFiles } from '@mcp/session-storage/collaboration/files.js'
 import { CollaborationRevisions } from '@mcp/session-storage/collaboration/revisions.js';
 
 export interface WorkspaceMutationOwner {
+  /** Older records predate the distinction between project writes and Company control calls. */
+  scope?: 'workspace';
   token: string;
   sessionId: string;
   agentRunId: string;
@@ -14,6 +16,16 @@ export interface WorkspaceMutationOwner {
   startedAt: number;
 }
 interface WorkspaceState { holders: WorkspaceMutationOwner[] }
+
+// This retired native tool only listened for agent events. Older workers could
+// persist its wait as an uncertain writer. Keep the revision as audit evidence.
+function projectOwners(holders: WorkspaceMutationOwner[]): WorkspaceMutationOwner[] {
+  return holders.filter(owner => owner.scope !== undefined || owner.toolName !== 'wait_for_subordinates');
+}
+
+export class WorkspaceOutcomePendingError extends Error {
+  constructor(readonly owners: WorkspaceMutationOwner[]) { super('WORKSPACE_OUTCOME_PENDING'); }
+}
 interface MutationInput {
   sessionId: string; agentRunId: string; toolUseId: string; toolName: string; signal?: AbortSignal;
   onWaiting?: (waiting: boolean) => void;
@@ -34,15 +46,16 @@ export class CompanyWorkspaceCoordinator implements WorkspaceMutationGate {
     this.revisions = new CollaborationRevisions(this.files);
   }
   async owners(): Promise<WorkspaceMutationOwner[]> {
-    return (await this.revisions.read<WorkspaceState>('ownership', 'workspace'))?.value.holders ?? [];
+    return projectOwners((await this.revisions.read<WorkspaceState>('ownership', 'workspace'))?.value.holders ?? []);
   }
   private async change(apply: (value: WorkspaceState) => WorkspaceState): Promise<void> {
     await this.files.ensure('ownership');
-    await this.revisions.change<WorkspaceState>('ownership', 'workspace', { holders: [] }, apply);
+    await this.revisions.change<WorkspaceState>('ownership', 'workspace', { holders: [] },
+      state => apply({ holders: projectOwners(state.holders) }));
   }
   async run<T>(input: MutationInput, effect: () => Promise<T>, unknown: (result: T) => boolean): Promise<T> {
     await this.files.ensure('ownership');
-    const owner: WorkspaceMutationOwner = { sessionId: input.sessionId, agentRunId: input.agentRunId, toolUseId: input.toolUseId, toolName: input.toolName, token: randomUUID(), phase: 'running', startedAt: Date.now() };
+    const owner: WorkspaceMutationOwner = { scope: 'workspace', sessionId: input.sessionId, agentRunId: input.agentRunId, toolUseId: input.toolUseId, toolName: input.toolName, token: randomUUID(), phase: 'running', startedAt: Date.now() };
     let acquired = false;
     let waiting = false;
     while (!acquired) {
@@ -55,7 +68,8 @@ export class CompanyWorkspaceCoordinator implements WorkspaceMutationGate {
       input.signal?.addEventListener('abort', wake, { once: true });
       try {
         await this.change(state => {
-          if (state.holders.some(holder => holder.phase === 'uncertain')) throw new Error('WORKSPACE_OUTCOME_PENDING');
+          const uncertainOwners = state.holders.filter(holder => holder.phase === 'uncertain');
+          if (uncertainOwners.length) throw new WorkspaceOutcomePendingError(uncertainOwners);
           if (state.holders.some(holder => holder.sessionId !== input.sessionId)) throw new Error('WORKSPACE_OWNED');
           return { holders: [...state.holders, owner] };
         });

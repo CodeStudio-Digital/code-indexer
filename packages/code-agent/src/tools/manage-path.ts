@@ -217,7 +217,7 @@ export const managePathTool: CoderTool = {
           "Which args each operation requires — 'mkdir': path; 'move': from_path + to_path; " +
           "'delete': path (+ recursive and confirm for non-empty dirs, delete_mode defaults to trash).",
       },
-      path: { type: 'string', description: 'Project-relative path for mkdir/delete; use "<project-slug>/..." in a global session. Absolute paths require a writable external grant.' },
+      path: { type: 'string', description: 'Project-relative path for mkdir/delete. Use "<project-slug>/..." in a global session. Absolute paths follow the session filesystem permissions.' },
       from_path: { type: 'string', description: 'Project-relative move source; use "<project-slug>/..." in a global session, or an authorized writable external path.' },
       to_path: { type: 'string', description: 'Move destination in the same real project/external root as the source.' },
       recursive: { type: 'boolean', description: 'Required for non-empty directory deletes' },

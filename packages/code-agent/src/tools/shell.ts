@@ -180,7 +180,7 @@ const runCommandTool: CoderTool = {
       },
       cwd: {
         type: 'string',
-        description: 'Optional subdirectory relative to the primary project. In a global session use "<project-slug>/subdir".',
+        description: 'Optional subdirectory relative to the primary project. In a global session use "<project-slug>/subdir". Unrestricted local sessions accept absolute working directories.',
       },
       timeout_ms: {
         type: 'number',
@@ -231,7 +231,7 @@ const runCommandTool: CoderTool = {
             : `cwd '${sub}' rejected: ${resolved.reason}`,
         );
       }
-      if (resolved.external) {
+      if (resolved.external && !ctx.unrestrictedFilesystemAccess?.()) {
         return err(
           `cwd '${sub}' is an authorized external root, but local shell execution stays project-scoped ` +
             'because it cannot yet be confined to one host directory. Use glob/read_file/list_directory ' +

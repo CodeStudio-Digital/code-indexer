@@ -413,6 +413,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     await parent.ctx.collaboration!.store.files.put('checkpoints', 'workspace:' + actor, workspace);
     const isolated = { ...parent, tools: parent.tools.filter(isolatedChildTool), ctx: {
       ...parent.ctx, cwd: workspace.path, roots: undefined, externalRoots: undefined, globalWorkspace: undefined,
+      unrestrictedFilesystemAccess: undefined,
       overlay: undefined, overlayByRoot: undefined, ports: { fs: confinedWorkspaceFilesystem(workspace.path) },
     } };
     const out = settled = await runSubagentTurn(isolated, { ...spec, spawnId,
@@ -606,6 +607,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
     globalWorkspace: parent.ctx.globalWorkspace,
     roots: parent.ctx.roots,
     externalRoots: parent.ctx.externalRoots,
+    unrestrictedFilesystemAccess: parent.ctx.unrestrictedFilesystemAccess,
     overlayByRoot: parent.ctx.overlayByRoot,
     overlay: parent.ctx.overlay,
     projectId: parent.ctx.projectId,
@@ -654,7 +656,10 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
     policyVersion: parent.ctx.ultraPolicy?.presetVersion ?? 'legacy', budgetId: parent.ctx.ultraBudget?.ledger?.rootId,
     exclusions: ['No recursive delegation', 'No authority beyond current parent permissions', 'No optional work after acceptance'],
   };
-  const finalSystemPrompt = spec.systemPrompt + v2Framing + '\n<delegation_context>\n'
+  const filesystemGuidance = subContext.unrestrictedFilesystemAccess?.()
+    ? '\n\nLocal filesystem access allows absolute paths outside the project with the native tools available to this subagent.\n'
+    : '';
+  const finalSystemPrompt = spec.systemPrompt + v2Framing + filesystemGuidance + '\n<delegation_context>\n'
     + JSON.stringify(delegationContext) + '\n</delegation_context>' + (spec.acceptance?.length
       ? WORK_RESULT_INSTRUCTION + '\nCopy the exact evidenceReference printed in each tool result. Never replace it with a tool name, ordinal, or invented friendly ID.' : '');
 
@@ -695,6 +700,7 @@ async function runSubagentTurn(parent: SubagentParent, spec: SubagentSpec): Prom
     ? createMutationFenceAuthority({
         mode: agentRunEnforced ? 'enforce' : 'shadow',
         authorizedRoot: subContext.cwd,
+        unrestrictedFilesystemAccess: subContext.unrestrictedFilesystemAccess,
         authorizedRootAliases: primaryWorkspaceProject
           ? [primaryWorkspaceProject.slug, primaryWorkspaceProject.name]
           : undefined,

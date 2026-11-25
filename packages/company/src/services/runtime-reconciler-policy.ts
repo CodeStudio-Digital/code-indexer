@@ -98,7 +98,7 @@ export interface RuntimeReconcilerDeps {
   /** Source of truth for which subordinates are blocked awaiting a master
    *  decision (plan/question/tasks) — used by the re-nudge sweep. */
   humanInLoop: HumanInTheLoop;
-  /** Attention bus used to re-wake a master parked in `wait_for_subordinates`. */
+  /** Attention bus used to re-wake a Master in an explicit assignment wait. */
   attention: MasterAttention;
   /** Kanban service — when present, the reconciler also frees cards stranded
    *  `in_progress` by a dead agent (Phase 2 self-repair). Optional so existing

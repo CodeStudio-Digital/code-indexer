@@ -26,6 +26,7 @@
 const AGENT_RUN_API_RETIRED = 'The agent-run API was removed together with the MCP server; there is no replacement tool.';
 
 export const RETIRED_TOOL_REPLACEMENTS: Readonly<Record<string, string>> = {
+  wait_for_subordinates: 'Company delivers specialist decisions, results and failures automatically in the same Master chat. Continue other work or end this turn until an event arrives.',
   multi_edit: 'Use edit_file with `edits: [{ old_string, new_string, replace_all? }]` — all edits to one file apply atomically.',
   create_file: 'Use write_file — it creates a new file, and refuses to replace an existing one this session has not read.',
   todo_write: 'Use task_list with `items` (the full checklist).',

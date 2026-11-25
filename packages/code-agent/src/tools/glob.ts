@@ -60,7 +60,7 @@ export const globTool: CoderTool = {
     "USE: with mcp__grep_code when you need files matching a NAME pattern AND a content regex — glob first, then grep.\n" +
     "DON'T: use for content search — use mcp__grep_code (indexer-aware) or Grep.\n" +
     "DON'T: glob for one known path — just read_file it.\n" +
-    "DON'T: pass absolute patterns — patterns stay relative to the selected project or authorized external root.\n" +
+    "DON'T: pass absolute patterns. Patterns are relative to the selected search directory.\n" +
     'Respects .gitignore + .mcpindexignore by default (matching the indexer). Pass respect_ignore:false to bypass.',
   source: 'native',
   parameters: {
@@ -72,7 +72,7 @@ export const globTool: CoderTool = {
       },
       path: {
         type: 'string',
-        description: 'Optional project-relative subdirectory or absolute path under an authorized external root. In a global session use "<project-slug>/subdir".',
+        description: 'Optional project-relative subdirectory or absolute path allowed by the session. In a global session use "<project-slug>/subdir".',
       },
       respect_ignore: {
         type: 'boolean',

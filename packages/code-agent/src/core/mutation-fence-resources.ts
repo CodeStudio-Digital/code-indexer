@@ -3,6 +3,7 @@ import {
   dirname,
   isAbsolute,
   normalize,
+  parse,
   relative,
   resolve,
   sep,
@@ -285,11 +286,14 @@ export function rootForPath(
 ): { rootPath: string; pathWithinRoot: string } {
   const roots = filesystemRoots(options).filter((root) => root.access === 'write');
   if (isAbsolute(rawPath)) {
-    const candidate = normalizedAbsolute(rawPath);
+    const candidate = resolve(options.authorizedRoot, rawPath);
     const matches = roots
       .filter((root) => pathInside(candidate, normalizedAbsolute(root.rootPath)))
       .sort((a, b) => b.rootPath.length - a.rootPath.length);
-    if (matches[0]) return { rootPath: matches[0].rootPath, pathWithinRoot: rawPath };
+    if (matches[0]) return { rootPath: matches[0].rootPath, pathWithinRoot: candidate };
+    if (options.unrestrictedFilesystemAccess?.()) {
+      return { rootPath: parse(candidate).root, pathWithinRoot: candidate };
+    }
     throw new MutationFenceError(
       'path_escape',
       `${rawPath} is outside every delegated writable root`,
@@ -428,12 +432,11 @@ export function derivedFilesystemEffectMatches(
     (resource): resource is Extract<ResourceConstraint, { kind: 'path' }> =>
       resource.kind === 'path' && resource.access === 'write',
   );
-  return filesystemRoots(options).some((root) => {
-    if (root.access !== 'write') return false;
-    const normalizedRoot = normalizedAbsolute(root.rootPath);
-    const trashRoot = resolve(normalizedRoot, '.mcp-indexer', 'trash');
-    const sourceInRoot = sourcePaths.some((source) =>
-      pathInside(normalizedAbsolute(source.root), normalizedRoot));
-    return sourceInRoot && pathInside(candidate, trashRoot);
-  });
+  const source = invocation.effectiveInput.path;
+  if (typeof source !== 'string' || !source.trim()) return false;
+  const root = rootForPath(options, invocation.effectiveInput, source.trim());
+  const { root: canonicalRoot } = canonicalHostPath(root.pathWithinRoot, root.rootPath);
+  const trashRoot = resolve(canonicalRoot, '.mcp-indexer', 'trash');
+  return sourcePaths.some((path) => pathInside(normalizedAbsolute(path.root), canonicalRoot))
+    && pathInside(candidate, trashRoot);
 }

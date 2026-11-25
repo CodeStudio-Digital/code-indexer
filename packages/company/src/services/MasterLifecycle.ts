@@ -127,15 +127,7 @@ export class MasterLifecycle implements IMasterNotifier {
   private _handle: RunCoderHandle | null = null;
   private _agentRunId: string | null = null;
   private _ended = false;
-  /**
-   * Set as soon as `handle.done` settles (in `.then`/`.catch`), one microtask
-   * before `_ended` is set in `.finally`. Closes the race between the runner's
-   * `run()` returning and `attachCompletionHandler` marking the master as
-   * ended: while in that window `_handle?.runner` is still truthy and
-   * `_ended` is false, but the run loop will never consume `pushUserMessage`
-   * again. `notify` checks both flags to route subordinate notifications
-   * to `resurrect` instead of dropping them into a dead buffer.
-   */
+  /** True while terminal persistence and prompt cleanup finish for the old runner. */
   private _runnerExited = false;
   private _endedWithError: string | null = null;
   /**
@@ -153,9 +145,6 @@ export class MasterLifecycle implements IMasterNotifier {
   private _lastUserMessageAt: string | null = null;
   private _companyContext: CompanyContext | null = null;
   private _promptBlock = '';
-  /** Unsubscribe from the permanent `MasterAttention` listener wired in `wireAllForRunner`. */
-  private _attentionOff: (() => void) | null = null;
-
   private _roleConfigs: RoleConfig[] = [];
   /**
    * Curated pool of (provider, model) tuples the master is allowed to
@@ -181,6 +170,8 @@ export class MasterLifecycle implements IMasterNotifier {
   private _lastUserAttachments: CoderAttachment[] = [];
 
   // Resurrection concurrency
+  // Covers the interval before cold resume has loaded its persisted Master and installed the bootstrap promise.
+  private coldResumeAck: Promise<MasterStartResult> | null = null;
   private resumingPromise: Promise<void> | null = null;
   private resumeQueue: Array<{ message: string; attachments?: CoderAttachment[] }> = [];
 
@@ -209,7 +200,10 @@ export class MasterLifecycle implements IMasterNotifier {
   get endedAt(): string | null { return this._endedAt; }
   /** ISO timestamp of when a user message most recently arrived. */
   get lastUserMessageAt(): string | null { return this._lastUserMessageAt; }
-  get hasActiveTurn(): boolean { return this.isAlive || !!this.resumingPromise; }
+  private get closingTurn(): boolean {
+    return !this._ended && (this._runnerExited || this._handle?.runner.isInputQueueClosed === true);
+  }
+  get hasActiveTurn(): boolean { return this.isAlive || !!this.resumingPromise || !!this.coldResumeAck; }
   get canRotateConversation(): boolean { return !this.hasActiveTurn; }
 
   setShouldContinue(value: boolean): void {
@@ -304,42 +298,36 @@ export class MasterLifecycle implements IMasterNotifier {
    * If master is currently resurrecting → queue for flush.
    */
   notify(message: string): void {
+    if (this.deps.ctx.isAborted || this.deps.ctx.isBusEnded || this.deps.ctx.isFinalized) return;
     const enriched = this.enrichWithBoard(message);
 
-    if (this.resumingPromise) {
-      this.resumeQueue.push({ message: enriched });
-      return;
-    }
-    // Route to resurrect not just on `_ended` but also when the run loop
-    // already returned (`_runnerExited`) — otherwise pushUserMessage drops
-    // the notification into a buffer that will never be flushed.
-    if (!this._ended && !this._runnerExited && this._handle?.runner) {
+    if (!this._ended && !this.closingTurn && this._handle?.runner) {
       const runner = this._handle.runner;
-      // Defensive interrupt: if the master is blocked inside a
-      // `waitForUserInput` (ask_user, submit_plan), pushUserMessage queues
-      // the notification but the wait never wakes on its own. Breaking the
-      // wait lets the blocked tool return and the next turn consume the
-      // queued message. Mirrors what HumanInTheLoop already does explicitly
-      // for plan/question/tasks — centralized here so completion and
-      // failure paths (which historically forgot to call interruptWait)
-      // benefit automatically.
-      if (runner.isWaitingForInput()) {
-        runner.interruptWait({ kind: 'subordinate_event' });
-      }
+      // Deliver at the next turn boundary. Only a human response should settle a pending prompt.
       runner.pushUserMessage(enriched);
-      // Wake a master parked in `wait_for_subordinates`. That tool is an
-      // event loop on MasterAttention, NOT a `waitForUserInput`, so the
-      // `interruptWait` above can't break it and `pushUserMessage` alone
-      // leaves the message stranded until the next signal happens to land
-      // while the wait loop is subscribed. Emit AFTER the push (the message
-      // must already be queued when the wait wakes). Mirrors what
-      // `sendUserMessage` does for `user_message`, but covers EVERY notify
-      // path — plan/question/tasks (which also emit their own kind) AND the
-      // inbox / auto-continue paths that previously emitted nothing.
+      // Wake an optional synchronous assignment after its notification is queued.
       this.deps.attention.signal({
         kind: 'notify',
         agentRunId: this._agentRunId,
         role: 'system',
+      });
+      return;
+    }
+    if (this.coldResumeAck || this.resumingPromise || this.closingTurn) {
+      this.resumeQueue.push({ message: enriched });
+      return;
+    }
+    if (!this._handle) {
+      // A fresh worker may receive a specialist's result for a dormant Master.
+      // Only resume a previously finished round in an active Company.
+      const files = this.deps.ctx.companyFiles;
+      const session = files.getSession();
+      if (!session?.master_session_id || !['idle', 'running'].includes(session.status)) return;
+      const run = files.listAgentRunsSync().find(r => r.role === 'master' && !r.archive_id && r.coder_session_id === session.master_session_id);
+      if (run?.status !== 'completed' && run?.status !== 'waiting') return;
+      this.notifyIdleResurrected();
+      void this.resumeExisting({ userMessage: enriched, recordUserMessage: false }).catch(error => {
+        this.deps.board.post('system', null, 'blocker', `Master resume failed: ${String(error)}`);
       });
       return;
     }
@@ -354,6 +342,23 @@ export class MasterLifecycle implements IMasterNotifier {
     else this.deps.idle?.onMasterResurrected();
   }
   private notifyIdleEnded(): void {
+    // Deliver events received during terminal persistence to the successor runner.
+    if (!this.deps.ctx.isAborted && !this.deps.ctx.isBusEnded && !this.deps.ctx.isFinalized) {
+      const starting = this.resumingPromise ?? this.coldResumeAck;
+      if (this.resumeQueue.length && starting) {
+        // A fast runner can finish before its bootstrap releases ownership.
+        void starting.then(() => {
+          if (this._ended && this.resumeQueue.length) this.notifyIdleEnded();
+        }, () => undefined);
+        return;
+      }
+      const next = this.resumeQueue.shift();
+      if (next) {
+        this.notifyIdleResurrected();
+        void this.resurrect(next.message, next.attachments);
+        return;
+      }
+    }
     if (this.deps.eventBus) this.deps.eventBus.emit({ type: 'master.ended' });
     else this.deps.idle?.onMasterEnded();
   }
@@ -434,7 +439,16 @@ export class MasterLifecycle implements IMasterNotifier {
 
   // ─── Resume existing (cold-start) ───────────────────────────────
 
-  async resumeExisting(opts: MasterResumeOpts): Promise<MasterStartResult> {
+  resumeExisting(opts: MasterResumeOpts): Promise<MasterStartResult> {
+    if (this.coldResumeAck) {
+      this.resumeQueue.push({ message: opts.userMessage, attachments: opts.attachments });
+      return this.coldResumeAck;
+    }
+    this.coldResumeAck = this.resumePersisted(opts).finally(() => { this.coldResumeAck = null; });
+    return this.coldResumeAck;
+  }
+
+  private async resumePersisted(opts: MasterResumeOpts): Promise<MasterStartResult> {
     let effectiveOpts = opts;
     if (this.deps.ctx.runtimeKind === 'app_studio') {
       const session = this.deps.ctx.companyFiles.getSession();
@@ -480,8 +494,6 @@ export class MasterLifecycle implements IMasterNotifier {
     if (this._agentRunId != null) {
       try { this.deps.humanInLoop.clearForAgent(this._agentRunId); } catch { /* best-effort */ }
     }
-    try { this._attentionOff?.(); } catch { /* best-effort */ }
-    this._attentionOff = null;
     this._handle = null;
     this._agentRunId = null;
     this._ended = false;
@@ -587,12 +599,7 @@ export class MasterLifecycle implements IMasterNotifier {
    * tool receives `{ interrupted: true }` and reports an error so the master
    * can react), then push the message.
    *
-   * `wait_for_subordinates` is NOT a `waitForUserInput` wait — it's an
-   * event loop on `MasterAttention`, so `isWaitingForInput()` is false and
-   * `interruptWait()` can't break it. Instead, after pushing the message we
-   * fire a `user_message` attention signal (below) which the wait loop
-   * listens for and returns from, so the master reads the message without
-   * waiting for a subordinate to finish.
+   * An explicit synchronous assignment wakes through MasterAttention.
    *
    * Returns a structured result so the HTTP layer can distinguish "queued"
    * from "interaction pending — caller must opt-in to override".
@@ -609,7 +616,7 @@ export class MasterLifecycle implements IMasterNotifier {
     this.deps.board.post('human', null, 'message', message, undefined, options.boardAttachments);
     this.notifyIdleUserMessage();
 
-    if (!this._ended && this._handle?.runner) {
+    if (!this._ended && !this.closingTurn && this._handle?.runner) {
       const runner = this._handle.runner;
       if (runner.isWaitingForInput()) {
         if (!options.interject) {
@@ -631,12 +638,7 @@ export class MasterLifecycle implements IMasterNotifier {
       } else {
         runner.pushUserMessage(this.enrichWithBoard(message));
       }
-      // Wake `wait_for_subordinates` if the master is parked there. The
-      // message is already in pendingUserMessages (pushed above); this signal
-      // makes the wait loop return so the master runs a turn and reads it now
-      // instead of after a subordinate finishes. No-op when no wait loop is
-      // subscribed (master mid-turn / blocked in ask_user) — signal() iterates
-      // an empty listener set.
+      // Wake any explicit synchronous assignment after the message is queued.
       this.deps.attention.signal({
         kind: 'user_message',
         agentRunId: this._agentRunId,
@@ -649,7 +651,7 @@ export class MasterLifecycle implements IMasterNotifier {
     // Queue it; the background start/resume task flushes the queue once the
     // runner exists. Enrich the plain-text turn the same way the live branch
     // does; attachment turns carry their own context.
-    if (this.resumingPromise) {
+    if (this.coldResumeAck || this.resumingPromise || this.closingTurn) {
       this.resumeQueue.push({
         message: attachments && attachments.length > 0 ? message : this.enrichWithBoard(message),
         attachments,
@@ -715,14 +717,10 @@ export class MasterLifecycle implements IMasterNotifier {
   private buildRunnerStateMutators(): MasterRunnerStateMutators {
     const self = this;
     return {
-      get attentionOff() { return self._attentionOff; },
-      setAttentionOff: (off) => { self._attentionOff = off; },
       setRunnerExited: (v) => { self._runnerExited = v; },
       setEnded: (v) => { self._ended = v; },
       setEndedWithError: (v) => { self._endedWithError = v; },
       setEndedAt: (v) => { self._endedAt = v; },
-      get isEnded() { return self._ended; },
-      get isRunnerExited() { return self._runnerExited; },
       notifyIdleEnded: () => self.notifyIdleEnded(),
     };
   }
@@ -731,8 +729,18 @@ export class MasterLifecycle implements IMasterNotifier {
     wireMasterRunnerListeners(runner, runId, {
       wirer: this.deps.wirer,
       humanInLoop: this.deps.humanInLoop,
-      attention: this.deps.attention,
-      state: this.buildRunnerStateMutators(),
+    });
+    // The generic follow-up after a human answer is only for an acknowledgement
+    // with no orchestration. A successful dispatch or decision already continued the work.
+    runner.on('tool_call_result', (_id, name, result) => {
+      if (this._shouldContinue && !result.isError && [
+        'spawn_subordinate_agent', 'resume_subordinate', 'forward_to_agent',
+        'answer_subordinate_question', 'approve_subordinate_plan', 'approve_subordinate_plans',
+        'approve_subordinate_tasks', 'finalize_subordinates',
+      ].includes(name)) {
+        this._shouldContinue = false;
+        this.deps.humanInLoop.consumeMasterShouldContinue();
+      }
     });
     // docs_deep_research — DocsAgent escalation over the indexed doc corpus.
     // Per-runner install (not a static registry tool); the company-worker's
@@ -754,7 +762,7 @@ export class MasterLifecycle implements IMasterNotifier {
    * or env `MCP_SUPERVISOR_MASTER='0'`). Flipping the default is safe TODAY
    * because the long event-driven waits now heartbeat the supervisor:
    * `tools/agent-wait-loop.ts` (`heartbeatAgentRunId`, fed by
-   * `master-tools.ts` for `wait_for_subordinates`) and
+   * `master-tools.ts` for synchronous assignments) and
    * `tools/subordinate/await-master.ts` (interval heartbeat) — so a healthy
    * ~30min wait no longer trips `STUCK_TOOL`. No-op when the supervisor
    * itself is disabled, so the gate stays a true superset.
